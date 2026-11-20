@@ -365,17 +365,36 @@ fn logged<T, E: From<String>>(
     said: impl Fn(&E) -> String,
     build: impl FnOnce(Result<&crate::native_cache::Cache, &str>) -> Result<T, E>,
 ) -> Result<T, E> {
+    logged_then(said, build, |result| result, clean_up)
+}
+
+/// The old-build cleanup after an attempt, inside its lease; what it freed and kept is logged.
+fn clean_up(cache: &crate::native_cache::Cache) {
+    crate::storage::eviction::after_build_logged(cache, append_log, log_warning)
+}
+
+/// [`logged`], handing the result to `deliver` as soon as it is logged, before `cleanup` runs
+/// under the same build lease: the window shows it without waiting for the cleanup (#18669).
+/// Returns what `deliver` returned, once the cleanup has ended.
+fn logged_then<T, E: From<String>, R>(
+    said: impl Fn(&E) -> String,
+    build: impl FnOnce(Result<&crate::native_cache::Cache, &str>) -> Result<T, E>,
+    deliver: impl FnOnce(Result<T, E>) -> R,
+    cleanup: impl FnOnce(&crate::native_cache::Cache),
+) -> R {
     // Another build or a cleanup holds the lease on the same target/: refuse. Any other
     // failure only stops cleanup for explicit builds. Automatic selection requires a held
     // cache for its catalog and can refuse instead of accessing an unsafe tree.
     let cache = match crate::native_cache::Cache::acquire(&backend::build_dir()) {
         Ok(cache) => Ok(cache),
         Err(crate::native_cache::Error::Busy) => {
-            return Err(cache_error(crate::native_cache::Error::Busy).into());
+            return deliver(Err(cache_error(crate::native_cache::Error::Busy).into()));
         }
         Err(error) => Err(cache_error(error)),
     };
-    clear_log()?;
+    if let Err(error) = clear_log() {
+        return deliver(Err(error.into()));
+    }
     if let Err(warning) = &cache {
         log_warning(warning);
     }
@@ -389,12 +408,43 @@ fn logged<T, E: From<String>>(
             let _ = append_log(&format!("The build failed: {}", said(error)));
         }
     }
+    let delivered = deliver(result);
     // Keep this build lease through installation/export, including failed builds. It does not
     // exclude independent game starts; automatic trimming can conservatively retain the cache.
+    // The cleanup only touches the build caches, never `versions/` where a client build is
+    // installed, so a game Build and play starts from the delivered result is out of its reach.
     if let Ok(cache) = cache {
-        crate::storage::eviction::after_build_logged(&cache, append_log, log_warning);
+        cleanup(&cache);
     }
-    result
+    delivered
+}
+
+/// Runs `run`, a build that hands its result to the given function ([`build_then`]), so that
+/// `deliver` gets exactly one result: a panic before the result was handed on still delivers an
+/// error, and its message goes to the build log. The window shows "Building" until a result
+/// arrives (#18669).
+pub fn deliver_once<T>(
+    run: impl FnOnce(&dyn Fn(Result<T, Failed>)),
+    deliver: impl FnOnce(Result<T, Failed>),
+) {
+    let deliver = std::cell::Cell::new(Some(deliver));
+    let send = |result: Result<T, Failed>| {
+        if let Some(deliver) = deliver.take() {
+            deliver(result);
+        }
+    };
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&send)));
+    if let Err(panic) = ran {
+        let reason = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("no message");
+        let _ = append_log(&format!("Internal error: {reason}"));
+        send(Err(Failed::Other(
+            tr("The build stopped on an internal error. The build log has the details.").into(),
+        )));
+    }
 }
 
 /// Dispatch Cargo's discovery-only rustc wrapper before normal launcher startup.
@@ -1014,6 +1064,8 @@ pub enum Step {
         total: usize,
     },
     Install,
+    /// This launcher's last build still cleans up its old files: this one waits for it.
+    Waiting,
     /// This mod was left out of the build.
     LeftOut(LeftOut),
     /// The build ended: seconds it took.
@@ -1067,7 +1119,8 @@ impl Step {
             | Self::Crates
             | Self::LeftOut(_)
             | Self::Checking(_)
-            | Self::BackedUp(_) => (Stage::Prepare, None),
+            | Self::BackedUp(_)
+            | Self::Waiting => (Stage::Prepare, None),
             Self::ToolsKept { .. } => (Stage::Prepare, Some(1.)),
             Self::Tools { done, total, .. } => (
                 Stage::Prepare,
@@ -1157,6 +1210,7 @@ impl Step {
                 ),
             },
             Self::Install => tr("Installing the build").into(),
+            Self::Waiting => tr("Cleaning up the last build…").into(),
             Self::LeftOut(left) => left.label(),
             Self::Done { secs, .. } => trf(
                 "Your mods are built (took {secs} s).",
@@ -2465,19 +2519,85 @@ pub fn build(
     progress: impl Fn(Step),
     registry_consent: impl Fn(&RegistryInventory) -> bool,
 ) -> Result<String, Failed> {
-    let Asked { caller, back_up } = asked;
+    build_then(
+        base,
+        || Ok(folder.to_owned()),
+        folder == installed_incoming(),
+        instance,
+        profile,
+        asked,
+        progress,
+        registry_consent,
+        |result| result,
+    )
+}
+
+/// Held by a build from start to the end of its cleanup, within this launcher (#18669).
+static BUILD_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Waits for this launcher's last build to end its cleanup: it hands its result on before the
+/// cleanup ends, so a build started meanwhile (Try again, or backing up worlds) waits instead
+/// of being refused as busy. Stop ends the wait. Native mods turned off meanwhile are checked
+/// again once the turn is taken, before any build step. Every wait a window build needs
+/// before it starts belongs here.
+fn build_turn(progress: &impl Fn(Step)) -> Result<std::sync::MutexGuard<'static, ()>, Failed> {
+    let mut waiting = false;
+    let turn = loop {
+        match BUILD_TURN.try_lock() {
+            Ok(turn) => break turn,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        if !waiting {
+            waiting = true;
+            progress(Step::Waiting);
+        }
+        check_cancelled()?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
     require_consent()?;
+    Ok(turn)
+}
+
+/// [`build`], handing its result to `deliver` before the old-build cleanup runs (under the same
+/// build lease), so the window need not wait for the cleanup. Returns what `deliver` returned,
+/// once the cleanup has ended. `stage` gives the folder of mods to build; it runs once this build
+/// has its turn and its lease, so what it writes (the shared [`installed_mods`] folder) is not
+/// replaced by a build it waited for. `installed` says whether those are the instance's
+/// installed mods ([`installed_mods`]), whose old-format files the log warns of.
+#[allow(clippy::too_many_arguments)]
+pub fn build_then<R>(
+    base: &str,
+    stage: impl FnOnce() -> Result<PathBuf, String>,
+    installed: bool,
+    instance: &Instance,
+    profile: Option<Profile>,
+    asked: Asked,
+    progress: impl Fn(Step),
+    registry_consent: impl Fn(&RegistryInventory) -> bool,
+    deliver: impl FnOnce(Result<String, Failed>) -> R,
+) -> R {
+    let Asked { caller, back_up } = asked;
+    if let Err(error) = require_consent() {
+        return deliver(Err(error));
+    }
     CANCEL.store(false, Ordering::Relaxed);
+    let _turn = match build_turn(&progress) {
+        Ok(turn) => turn,
+        Err(error) => return deliver(Err(error)),
+    };
     if let Some(error) = backend::native_mod_architecture_error() {
-        return Err(Failed::Other(error));
+        return deliver(Err(Failed::Other(error)));
     }
     let said = |error: &Failed| error.said(caller);
-    logged(said, |cache| {
+    let attempt = |cache: Result<&crate::native_cache::Cache, &str>| {
         // After `logged` empties the log: the player reads it to learn why a mod is missing.
-        if folder == installed_incoming() {
+        if installed {
             warn_legacy(&instance.home);
         }
         let lease = cache.map_err(|error| Failed::Other(error.into()))?;
+        let folder = stage()?;
+        let folder = folder.as_path();
         let profile = select_build_profile(instance.native_profile, profile, || {
             planning::classify(folder, Some(base), lease)
                 .map_err(|error| Failed::Other(error.said(caller)))
@@ -2521,7 +2641,7 @@ pub fn build(
                 meta.version = Some(built.version.clone());
             }
         })?;
-        // logged() runs central eviction under the retained build lease.
+        // logged_then() runs central eviction under the retained build lease.
         if built.plan != Plan::UpToDate {
             progress(Step::Done {
                 secs: built.secs,
@@ -2530,7 +2650,8 @@ pub fn build(
             });
         }
         Ok(built.version)
-    })
+    };
+    logged_then(said, attempt, deliver, clean_up)
 }
 
 /// The release or Nightly `instance` plays now (the one a native build of it started from).
@@ -4360,6 +4481,286 @@ mod tests {
         drop(lease);
         assert_eq!(begin_log(), Ok(true));
         assert_eq!(fs::read(log_path()).unwrap(), b"");
+    }
+
+    /// #18669: the window gets the result while the build still holds its lease, and only then
+    /// does the old-build cleanup run; what the caller gets back waits for the cleanup.
+    #[test]
+    fn the_result_is_handed_on_before_the_cleanup() {
+        let _guard = scratch_state();
+        for outcome in [Ok(7), Err("Could not export the engine".to_string())] {
+            let order = std::cell::RefCell::new(Vec::new());
+            let returned = logged_then(
+                String::clone,
+                |_| outcome.clone(),
+                |result| {
+                    order.borrow_mut().push("result");
+                    // The lease is still held: a new attempt is refused as busy.
+                    assert_eq!(begin_log(), Ok(false));
+                    result
+                },
+                |_| order.borrow_mut().push("cleanup"),
+            );
+            assert_eq!(returned, outcome);
+            assert_eq!(*order.borrow(), ["result", "cleanup"]);
+            let log = fs::read_to_string(log_path()).unwrap();
+            let line = match &outcome {
+                Ok(_) => "Build completed.".to_string(),
+                Err(error) => format!("The build failed: {error}"),
+            };
+            assert_eq!(log.lines().last(), Some(line.as_str()), "{log}");
+        }
+    }
+
+    /// #18669: a build started while this launcher's last build still cleans up says so and
+    /// waits, rather than being refused as busy; Stop ends the wait.
+    #[test]
+    fn a_build_waits_for_the_last_cleanup_and_stop_ends_the_wait() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let cleaning = BUILD_TURN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let steps = std::cell::RefCell::new(Vec::new());
+        let result = build_then(
+            "v0.0.0-not-installed",
+            || Ok(dir("waits")),
+            false,
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: false,
+            },
+            |step| {
+                if matches!(step, Step::Waiting) {
+                    cancel();
+                }
+                steps.borrow_mut().push(step.label());
+            },
+            |_| false,
+            |result| result,
+        );
+        drop(cleaning);
+        CANCEL.store(false, Ordering::Relaxed);
+        original.save().unwrap();
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if error == CANCELLED),
+            "{:?}",
+            result.map_err(String::from)
+        );
+        assert_eq!(*steps.borrow(), [Step::Waiting.label()]);
+    }
+
+    /// #18669: native mods turned off in Storage while a build waits for the last cleanup stop
+    /// that build once it takes its turn, before any build step.
+    #[test]
+    fn a_waiting_build_checks_consent_again_once_it_takes_its_turn() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (held, holding) = std::sync::mpsc::channel();
+        // The last build's cleanup, holding the turn until it is told to end.
+        let cleanup = std::thread::spawn(move || {
+            let _turn = BUILD_TURN
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            held.send(()).unwrap();
+            let _ = released.recv();
+        });
+        holding.recv().unwrap();
+        let steps = std::cell::RefCell::new(Vec::new());
+        let result = build_then(
+            "v0.0.0-not-installed",
+            || -> Result<PathBuf, String> { panic!("staged without consent") },
+            false,
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: false,
+            },
+            |step| {
+                if matches!(step, Step::Waiting) {
+                    let mut settings = backend::Settings::load();
+                    settings.native_mods_allowed_at = None;
+                    settings.save().unwrap();
+                    release.send(()).unwrap();
+                }
+                steps.borrow_mut().push(step.label());
+            },
+            |_| false,
+            |result| result,
+        );
+        cleanup.join().unwrap();
+        original.save().unwrap();
+        assert!(
+            matches!(result, Err(Failed::NoConsent)),
+            "{:?}",
+            result.map_err(String::from)
+        );
+        assert_eq!(*steps.borrow(), [Step::Waiting.label()]);
+    }
+
+    /// #18669 with #18659: a window build that waited for its base's Prepare then waits for the
+    /// last build's cleanup, and builds the instance and base its request captured.
+    #[test]
+    fn a_build_that_waited_for_prepare_waits_for_the_cleanup_then_builds_what_it_captured() {
+        use prepare_first::{Next, Now, Snapshot, Waiting};
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let instance = instances::selected();
+        let base = "v0.0.0-captured-base";
+        let waiting = Waiting {
+            snapshot: Snapshot::of(&instance, None, base.into(), false, true),
+            needs: base.into(),
+            started: true,
+        };
+        let now = |preparing, ended| Now {
+            snapshot: Some(waiting.snapshot.clone()),
+            preparing,
+            installing: None,
+            ended,
+        };
+        let unprepared = |tag: &str| Err(backend::NotReady::Unprepared(tag.into()));
+        assert_eq!(
+            prepare_first::next(&waiting, &now(true, None), unprepared),
+            Next::Wait
+        );
+        assert_eq!(
+            prepare_first::next(&waiting, &now(false, Some((base, None))), |_| Ok(())),
+            Next::Build
+        );
+        // Prepare ended, but the last build still cleans up: the worker waits for its turn.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (held, holding) = std::sync::mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            let _turn = BUILD_TURN
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            held.send(()).unwrap();
+            let _ = released.recv();
+        });
+        holding.recv().unwrap();
+        let folder = dir("waited-for-prepare");
+        write_bundle(&folder, "hello", "fn hook() {}");
+        let steps = std::cell::RefCell::new(Vec::new());
+        let result = build_then(
+            &waiting.snapshot.base,
+            // The shared staging folder is written only once this build has its turn.
+            || {
+                steps.borrow_mut().push("staged".to_string());
+                Ok(folder.clone())
+            },
+            false,
+            &instance,
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: waiting.snapshot.back_up,
+            },
+            |step| {
+                if matches!(step, Step::Waiting) {
+                    release.send(()).unwrap();
+                }
+                steps.borrow_mut().push(step.label());
+            },
+            |_| false,
+            |result| result,
+        );
+        cleanup.join().unwrap();
+        original.save().unwrap();
+        assert_eq!(
+            steps.borrow().get(..2),
+            Some(&[Step::Waiting.label(), "staged".to_string()][..])
+        );
+        // It went on to build the captured base, which isn't installed here: the build names it.
+        let error = String::from(result.unwrap_err());
+        assert!(error.contains(base), "{error}");
+    }
+
+    /// #18669: the command line's build of the installed mods whose lease can't be taken (not
+    /// busy) still warns of the old-format mods it leaves out, before the lease failure.
+    #[test]
+    fn a_failed_lease_still_warns_of_old_format_installed_mods() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let home = dir("legacy-lease-home");
+        fs::create_dir_all(home.join(INSTALLED)).unwrap();
+        write_legacy_hmod(&home.join(INSTALLED).join("fps_counter.hmod"));
+        let instance = Instance {
+            home: home.clone(),
+            ..instances::selected()
+        };
+        // A folder where the lease file should be: the lease fails, not as busy.
+        struct Folder(PathBuf);
+        impl Drop for Folder {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let lock = Folder(backend::build_dir().join("native/.build.lock"));
+        let _ = fs::remove_file(&lock.0);
+        fs::create_dir_all(&lock.0).unwrap();
+        let result = build(
+            "v0.0.0-not-installed",
+            &installed_incoming(),
+            &instance,
+            None,
+            Asked {
+                caller: Caller::CommandLine,
+                back_up: false,
+            },
+            |_| {},
+            |_| false,
+        );
+        drop(lock);
+        original.save().unwrap();
+        let log = fs::read_to_string(log_path()).unwrap();
+        let error = String::from(result.unwrap_err());
+        assert_ne!(error, cache_error(crate::native_cache::Error::Busy));
+        let warned = log.find("fps_counter.hmod").expect(&log);
+        let failed = log.find("The build failed:").expect(&log);
+        assert!(warned < failed, "{log}");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    /// #18669: a build that panics still gives the window a result, with the panic in the log;
+    /// one that panics after handing its result on gives no second one.
+    #[test]
+    fn a_panicking_build_still_delivers_one_result() {
+        let _guard = scratch_state();
+        clear_log().unwrap();
+        let got = std::cell::RefCell::new(Vec::new());
+        deliver_once::<String>(
+            |_| panic!("the build broke"),
+            |result| got.borrow_mut().push(result),
+        );
+        assert!(
+            matches!(got.borrow().as_slice(), [Err(Failed::Other(_))]),
+            "{:?}",
+            got.borrow().iter().map(|r| r.is_ok()).collect::<Vec<_>>()
+        );
+        let log = fs::read_to_string(log_path()).unwrap();
+        assert!(log.contains("Internal error: the build broke"), "{log}");
+
+        got.borrow_mut().clear();
+        deliver_once(
+            |deliver| {
+                deliver(Ok("built".to_string()));
+                panic!("the cleanup broke");
+            },
+            |result| got.borrow_mut().push(result),
+        );
+        assert!(
+            matches!(got.borrow().as_slice(), [Ok(version)] if version == "built"),
+            "{:?}",
+            got.borrow().iter().map(|r| r.is_ok()).collect::<Vec<_>>()
+        );
     }
 
     /// The build's result is written before the cache cleanup (#18469), so it is the build's

@@ -389,6 +389,30 @@ pub(crate) fn delete_game_unit_with(path: &Path, links: Links) -> Result<(), Err
     delete_unit(path, links, Proof::Lease, no_veto, || {})
 }
 
+/// [`delete_game_unit_with`] for a unit in the instance folder `instance`. A launch claims its
+/// instance's folder before the game starts and holds it while the game runs
+/// (`run_leases::shared`), but the inventory that chose this unit saw the instance idle and it
+/// may have started since (#18669). The instance is claimed exclusively through the delete: a
+/// game started meanwhile keeps the unit (busy), and a launch while the unit is detached is
+/// refused as busy until the delete ends. The claim is the launch's own cross-process lock.
+pub(crate) fn delete_game_unit_in(
+    path: &Path,
+    links: Links,
+    instance: Option<&Path>,
+) -> Result<(), Error> {
+    let _instance = instance
+        .filter(|home| home.is_dir())
+        .map(claim_instance)
+        .transpose()?;
+    delete_game_unit_with(path, links)
+}
+
+/// An exclusive claim on the instance folder `home`, refused as busy while a launch holds it.
+fn claim_instance(home: &Path) -> Result<crate::run_leases::Claim, Error> {
+    let directory = Dir::open_ambient_dir(home, cap_std::ambient_authority())?;
+    crate::run_leases::Registry::open()?.lock(&directory, LockMode::Exclusive)
+}
+
 pub(crate) fn delete_game_unit_observed(
     path: &Path,
     after_classification: impl FnOnce(),

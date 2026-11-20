@@ -98,6 +98,8 @@ struct Entry {
     relative: PathBuf,
     path: PathBuf,
     links: Links,
+    /// The instance folder this unit is in: its delete holds that instance against launches.
+    instance: Option<PathBuf>,
 }
 
 impl Entry {
@@ -121,6 +123,7 @@ impl Entry {
             relative: relative.to_owned(),
             path,
             links: Links::Refused,
+            instance: None,
         })
     }
 
@@ -273,7 +276,11 @@ impl Entry {
         };
         let access = self.access()?;
         if matches!(access, Access::LeasedGame) {
-            return crate::cache_cleanup::delete_game_unit_with(&self.path, self.links);
+            return crate::cache_cleanup::delete_game_unit_in(
+                &self.path,
+                self.links,
+                self.instance.as_deref(),
+            );
         }
         access.check(crate::cache_cleanup::Proof::Lease)?;
         let mut parent = root.try_clone()?;
@@ -436,6 +443,7 @@ impl Storage {
                 continue;
             }
             let root = Root::configured(&instance.home)?;
+            let start = entries.len();
             old_logs(&mut entries, &root)?;
             unused_jars(&mut entries, &root)?;
             // The game links what a resource pack leaves untouched into the pack's mirror
@@ -446,6 +454,10 @@ impl Storage {
             entries.push(cache);
             for relative in ["wasm-cache", "cache"] {
                 add(&mut entries, &root, relative, Category::OtherCaches)?;
+            }
+            // The instance was idle here; it may start before its units are deleted (#18669).
+            for entry in &mut entries[start..] {
+                entry.instance = Some(root.path.clone());
             }
         }
         // Detached trees can remain beside any managed cache after an interrupted removal.

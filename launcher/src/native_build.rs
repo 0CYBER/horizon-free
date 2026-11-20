@@ -139,14 +139,6 @@ impl Launcher {
 
     /// Starts building `instance`'s native mods on `base`, on a thread; `Msg::Native` ends it.
     fn start_native_build(&mut self, instance: instances::Instance, base: String, back_up: bool) {
-        let folder = match native_mods_to_build(&instance.home) {
-            Ok(folder) => folder,
-            Err(e) => {
-                self.native_log_preflight(&e);
-                self.native_error = Some(e);
-                return;
-            }
-        };
         // The mods this build is given: its failure is read against them, even if another
         // instance is selected by the time it ends.
         self.native_built_mods = native_status::enabled(&instance.home)
@@ -162,27 +154,40 @@ impl Launcher {
             .flatten();
         self.native_done = None;
         let tx = self.tx.clone();
+        let done = self.tx.clone();
+        // The worker builds the instance and base the request captured, staging its mods into
+        // the shared folder only once it has its turn and lease. The result goes to the window
+        // as soon as the build ends, before the old-build cleanup that follows on this thread;
+        // a panic still sends one (#18669).
         std::thread::spawn(move || {
-            let result = native_mods::build(
-                &base,
-                &folder,
-                &instance,
-                None,
-                native_mods::Asked {
-                    caller: native_mods::Caller::Window,
-                    back_up,
+            native_mods::deliver_once(
+                |deliver| {
+                    native_mods::build_then(
+                        &base,
+                        || native_mods_to_build(&instance.home),
+                        true,
+                        &instance,
+                        None,
+                        native_mods::Asked {
+                            caller: native_mods::Caller::Window,
+                            back_up,
+                        },
+                        |step| {
+                            let _ = tx.send(Msg::NativeProgress(step.shown(), step.progress()));
+                        },
+                        |inventory| {
+                            let (reply, answer) = std::sync::mpsc::channel();
+                            tx.send(Msg::NativeRegistryConsent(inventory.clone(), reply))
+                                .is_ok()
+                                && answer.recv().unwrap_or(false)
+                        },
+                        deliver,
+                    )
                 },
-                |step| {
-                    let _ = tx.send(Msg::NativeProgress(step.shown(), step.progress()));
-                },
-                |inventory| {
-                    let (reply, answer) = std::sync::mpsc::channel();
-                    tx.send(Msg::NativeRegistryConsent(inventory.clone(), reply))
-                        .is_ok()
-                        && answer.recv().unwrap_or(false)
+                |result| {
+                    let _ = done.send(Msg::Native(result));
                 },
             );
-            let _ = tx.send(Msg::Native(result));
         });
     }
 

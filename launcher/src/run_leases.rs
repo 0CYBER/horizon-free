@@ -121,8 +121,19 @@ pub(crate) fn shared(command: &Command) -> Result<Vec<Claim>, Error> {
                 .filter(|folder| launcher_owned(folder))
         });
     let mut paths = argument_paths(command)?;
+    let registry = Registry::open()?;
+    let mut claims = Vec::new();
     if let Some(home) = command.get_current_dir() {
         let home = home.canonicalize()?;
+        // Claimed before its caches are stamped: a cleanup deleting one of them holds this
+        // folder (#18669), so the launch is refused as busy rather than meeting a folder
+        // detached mid-stamp.
+        claims.push(
+            Dir::open_ambient_dir(&home, cap_std::ambient_authority())
+                .map_err(Error::from)
+                .and_then(|directory| registry.lock(&directory, LockMode::Shared))
+                .map_err(|error| naming(&home, error))?,
+        );
         for relative in [".horizon-cache", "wasm-cache", "cache"] {
             stamp(&home.join(relative))?;
         }
@@ -155,7 +166,6 @@ pub(crate) fn shared(command: &Command) -> Result<Vec<Claim>, Error> {
         .into_iter()
         .map(|path| path.canonicalize())
         .collect::<Result<_, _>>()?;
-    let registry = Registry::open()?;
     let data = crate::backend::data_dir().canonicalize()?;
     for leaf in paths.clone() {
         if leaf.starts_with(&data) && leaf != data {
@@ -167,20 +177,20 @@ pub(crate) fn shared(command: &Command) -> Result<Vec<Claim>, Error> {
     paths.sort();
     paths.dedup();
     if paths.is_empty() {
-        return Ok(Vec::new());
+        return Ok(claims);
     }
     for path in &paths {
         stamp(path)?;
     }
-    paths
-        .into_iter()
-        .map(|path| {
+    for path in paths {
+        claims.push(
             Dir::open_ambient_dir(&path, cap_std::ambient_authority())
                 .map_err(Error::from)
                 .and_then(|directory| registry.lock(&directory, LockMode::Shared))
-                .map_err(|error| naming(&path, error))
-        })
-        .collect()
+                .map_err(|error| naming(&path, error))?,
+        );
+    }
+    Ok(claims)
 }
 
 /// The folders the game's own arguments name, against the command's folder: the game and home

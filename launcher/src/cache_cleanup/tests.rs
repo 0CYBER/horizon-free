@@ -338,3 +338,33 @@ fn package_cache_leases_refuse_pinning_and_late_clear() {
         owner.unlock().unwrap();
     }
 }
+
+/// #18669: eviction chose an instance's cache while the instance was idle. A launch that
+/// claimed the instance since keeps the cache, and a launch while a unit of it is being deleted
+/// is refused as busy until the delete ends.
+#[test]
+fn a_launch_and_a_delete_in_one_instance_never_overlap() {
+    let home = Home::new();
+    home.file(".horizon-cache/resourcepacks/0123456789abcdef/pack.json");
+    let cache = home.0.join(".horizon-cache");
+    let launch = || {
+        let mut game = std::process::Command::new("game");
+        game.current_dir(&home.0);
+        crate::run_leases::shared(&game)
+    };
+    // The launch's claims, taken before the game starts and held while it runs.
+    let running = launch().unwrap();
+    assert!(matches!(
+        delete_game_unit_in(&cache, Links::GameMade, Some(&home.0)),
+        Err(Error::Busy)
+    ));
+    assert!(cache
+        .join("resourcepacks/0123456789abcdef/pack.json")
+        .is_file());
+    drop(running);
+    // A delete under way holds the instance: the launch is refused until it ends.
+    let deleting = claim_instance(&home.0).unwrap();
+    assert!(matches!(launch(), Err(Error::Busy)));
+    drop(deleting);
+    drop(launch().unwrap());
+}
