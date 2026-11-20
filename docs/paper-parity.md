@@ -81,24 +81,8 @@ python tools/paper_parity.py report .local/paper-parity/<printed-directory>
 
 Main writes `chunk-load-*` directories; the extension writes `run-*` with child
 scenario directories and an aggregate `run.json`. Keep local worlds if you need
-to repeat the moisture final-block checks; those worlds are deliberately excluded
-from CI artifacts, so an artifact alone cannot replay that check.
+to repeat the moisture final-block checks.
 The CLI returns 0 for matches and 1 for mismatches, including caught harness errors.
-
-[Paper event parity CI](../.github/workflows/paper-parity.yml) runs manually or
-nightly at 04:37 UTC, never on pushes or pull requests. Like the existing parity
-jobs, it uses a self-hosted macOS `horizon-game` runner, the runner's pinned JDK,
-imported Mojang files and version-keyed `horizon-prepare` resource cache via
-`tools/ci/runner-env.sh` and `tools/ci/vanilla-data.sh`. Checkout preserves local
-caches; it does not fetch Mojang jars or upload them.
-
-CI puts report lines in the job summary and uploads only shallow JSONL/JSON/log
-copies from this invocation, under `.local/paper-parity/run-ci-*` (seven days).
-Exit 1 is informational if manifests are complete and error-free and both traces
-have valid event fields, observations and ordered join/quit markers. Incomplete
-runs, invalid/missing inputs, unexpected exit codes and build/setup failures fail
-the job. A completed comparison's event, cancellation, timing or state difference
-stays informational. This workflow is not a required parity gate.
 
 ## Known differences
 

@@ -175,13 +175,13 @@ client/server output, compiled oracle, and `report.json`. The report records
 source/input/output hashes, reference identities, tool versions, and matched
 line counts. A prior success report is removed before a new run can fail.
 CI runs the same comparison in addition to offline Rust and Python checks.
-The checked-in [scoped validation report](../benchmarks/rust-core-2026-10-05/scoped-parity.json)
+The scoped validation report
 contains only metadata and digests from the local run, not game code or artifacts.
 
 The additional [world-data suite](world-data.md) checks NBT and region
 interoperability, saved palettes, all 35,723 registered block-state IDs, and
 resident sections after repeated mutation. The corresponding
-[scoped report](../benchmarks/rust-world-2026-10-05/scoped-parity.json)
+scoped report
 records client/server reference hashes and the tested source hashes.
 
 The [scheduled-tick suite](scheduled-ticks.md) adds 25,815 commands including
@@ -189,25 +189,25 @@ The [scheduled-tick suite](scheduled-ticks.md) adds 25,815 commands including
 It also verifies block/fluid tick save codecs and a persisted region chunk.
 The [geometry and cached-collision suites](collision-geometry.md) check numerical
 boundaries and runtime block-state shape data, with separate
-[geometry](../benchmarks/rust-geometry-2026-10-05/scoped-parity.json) and
-[cached-collision](../benchmarks/rust-collision-2026-10-05/scoped-parity.json)
+geometry and
+cached-collision
 metadata reports. All differential runners reject changed source hashes during a run before publishing
 a success report. Historic reports describe their own recorded source versions.
 
 The [noise suite](noise-generation.md) checks base sampling, derivative and bulk
 arithmetic, nested/flattened stacks, normal-noise normalization and both modern
-and legacy Nether initialization. Its [scoped report](../benchmarks/rust-noise-2026-10-05/scoped-parity.json)
+and legacy Nether initialization. Its scoped report
 records the tested sources and both reference artifacts.
 
 The [density suite](density-functions.md) checks compiled scalar and bulk samplers,
 including gradients, nested shifted noise, arithmetic, caching, axis slicing and
 coarse-grid interpolation, surface searches and nested splines with range analysis;
 it also compares the initial graph compiler with vanilla's compiler. Its
-[scoped report](../benchmarks/rust-density-2026-10-05/scoped-parity.json) records
+scoped report records
 **15,524,627 matching output lines per reference JAR**. That suite constructs graphs through its transport. Serialized registry
 comparisons are covered separately below; generated terrain remains pending.
 
-The [float-log report](../benchmarks/rust-float-log-2026-10-05/scoped-parity.json)
+The float-log report
 records exhaustive compiled scalar comparisons for all **4,294,967,296 float bit
 patterns** against both JARs on the local Linux/JDK runtime, with canonical NaN
 results. Double-precision logarithms and other-platform math remain separate
@@ -218,7 +218,7 @@ normal-noise JSON definition and all 55 bundled density definitions against
 vanilla's actual registry-aware codecs. It compares decoded octave metadata,
 graph ranges and axes, raw and optimized compilation, cache allocation and
 seeded scalar and strided bulk sampling. Its
-[scoped report](../benchmarks/rust-worldgen-2026-10-06/scoped-parity.json) records
+scoped report records
 **961,693 matching output lines per reference JAR**. All seven bundled eight-field
 routers and their climate samplers are also
 compared, including quart-coordinate wrapping and float/long quantization.
@@ -489,9 +489,9 @@ accumulates success, sharing the placer and random stream across siblings.
 Named holders and placed-feature tags use the same catalog resolution as other
 compositions. Empty named tags produce false; empty direct lists fail decoding.
 
-The expanded [inline graph comparison](../benchmarks/rust-feature-graph-2026-10-06/scoped-parity.json)
+The expanded inline graph comparison
 matches **1,146,057 output lines per reference JAR**, and the expanded
-[named catalog comparison](../benchmarks/rust-feature-catalog-2026-10-06/scoped-parity.json)
+named catalog comparison
 matches **2,528,704 lines per reference JAR**. These include partial failures,
 rejected writes, nested modifiers, repeated calls, random-stream tails and both
 Java random modes. This verifies scoped composition behavior; complete chunk
@@ -503,7 +503,7 @@ also pass for this implementation.
 Rust block piles preserve radius and sparse-candidate random draws, air checks,
 dirt-path acceptance, state-aware FULL upper support, provider fallback reads,
 and update flags 260. Previously read support states are evaluated without an
-extra world read. The [native comparison](../benchmarks/rust-block-pile-2026-10-06/scoped-parity.json)
+extra world read. The native comparison
 matches **11,995,254 lines per reference JAR**, covering every candidate and
 supporting registry state, partial failures, rejected writes, repeated placement,
 and overlay/modifier composition. Workspace tests and all-target Clippy pass.
@@ -521,7 +521,7 @@ blocks above each replacement run. Failed target predicates end a run; empty
 optional providers preserve it. Postprocessing requests resolve the containing
 resident chunk and retain duplicate marks and prior effects after a failure.
 
-The [disk comparison](../benchmarks/rust-disk-2026-10-06/scoped-parity.json)
+The disk comparison
 matches **2,816,586 output lines per reference JAR** across **76,409 fixtures**.
 Every candidate state and every possible above-state is covered, alongside
 random providers, rejected writes, partial failures, wrapped coordinates and
@@ -536,7 +536,7 @@ write three overlapping randomized shapes with flags 3. Radius calculations
 retain native float precision while position distances use double precision;
 even the last shape consumes its three origin-offset draws.
 
-The [block-blob comparison](../benchmarks/rust-block-blob-2026-10-06/scoped-parity.json)
+The block-blob comparison
 matches **2,387,914 lines per reference JAR** over **77,686 fixtures**, including
 every candidate/supporting state, repeated calls, early returns, failed queries,
 rejected writes, partial failures and overlay/modifier composition. Workspace
@@ -550,7 +550,7 @@ Missing properties retain the pinned defaults (`falling=true`, flowing level 1);
 invalid property values are ignored, while unknown fluid identifiers fail.
 Integer levels share the Java-compatible decimal parser with block properties.
 
-The expanded [fluid comparison](../benchmarks/rust-fluid-2026-10-06/scoped-parity.json)
+The expanded fluid comparison
 matches **243,331 lines per reference JAR**, including all 37 fluid states,
 2,432 codec fixtures, encoding, legacy block conversion, and the existing
 contained-fluid/height tests. Workspace tests and all-target Clippy pass.
@@ -563,7 +563,7 @@ south/below rock and air-count passes, fluid-to-block conversion, writes with
 flags 2, and immediate fluid tick requests after accepted or rejected writes.
 Fluid tick execution is still separate simulation work.
 
-The [spring comparison](../benchmarks/rust-spring-2026-10-06/scoped-parity.json)
+The spring comparison
 matches **3,649,087 lines per reference JAR** across **172,141 fixtures**. It
 covers every state in the gating and neighbor roles, all five-neighbor air/rock/
 other combinations and count pairs, all 37 fluid states, malformed fields, tags,
@@ -577,7 +577,7 @@ attachment in Up/North/South/West/East order. They evaluate actual support and
 collision shapes and return success after the write request, including when the
 world rejects that write. Feature and world random streams are unchanged.
 
-The [vine comparison](../benchmarks/rust-vines-2026-10-06/scoped-parity.json)
+The vine comparison
 matches **4,315,682 lines per reference JAR** across **224,743 fixtures**, covering
 every origin state and every state on each candidate face, support combinations,
 wrapped positions, partial failures and composed placement. Workspace tests and
@@ -591,7 +591,7 @@ sharing calculations for identical imported shapes. These results use native
 occlusion rules independently of collision or support geometry. Unknown state
 IDs produce an error.
 
-The expanded [block-property comparison](../benchmarks/rust-block-properties-2026-10-06/scoped-parity.json)
+The expanded block-property comparison
 matches **197,180 lines per reference JAR**, including all 35,723 states and
 18,096 synthetic shape/flag combinations. Workspace tests and all-target Clippy
 pass. Lighting and renderer integration remain separate work.
@@ -603,7 +603,7 @@ scan before the lower scan and repeated boundary reads. Each cube position draws
 a probability value before testing block identity and the five required full
 occlusion faces. Rejected writes still count as successful placements.
 
-The [underwater magma comparison](../benchmarks/rust-underwater-magma-2026-10-06/scoped-parity.json)
+The underwater magma comparison
 matches **6,523,072 lines per reference JAR** over **253,252 fixtures**. Both RNG
 modes cover the complete radius-64 cube, consuming **2,146,689 draws** with zero
 placement probability. Every state in the origin/floor/neighbor roles, scan
@@ -623,7 +623,7 @@ random draw order and six-direction adjacency. World sea level can differ from
 the generation context's sea level. Rejected writes preserve native success and
 subsequent attempts observe the actual mutable world.
 
-The [blue-ice comparison](../benchmarks/rust-blue-ice-2026-10-06/scoped-parity.json)
+The blue-ice comparison
 matches **8,954,666 lines per reference JAR** across **79,944 fixtures**, covering
 every origin/candidate state through failure-terminated prefixes, full spreading
 runs, all packed-ice neighbor masks, extreme sea levels, wrapped positions,
@@ -637,7 +637,7 @@ height and radius, rare elevated spikes, float taper calculations and independen
 upper/lower replacement tests. Roots retain the native fixed Y=50 boundary,
 corner-specific random lengths, gaps, and exact-state replacement exception.
 
-The [spike comparison](../benchmarks/rust-spike-2026-10-06/scoped-parity.json)
+The spike comparison
 matches **8,859,761 lines per reference JAR** over **113,127 fixtures**. Every
 output/origin/candidate state is covered by failure-terminated prefixes; complete
 runs include 1,024 seeds per RNG, replacement and support predicates, repeated
@@ -653,7 +653,7 @@ Active replacement reads block identity, requests destruction with drops and no
 responsible entity, then writes the replacement even if destruction was rejected.
 Matching blocks skip both requests.
 
-The [End podium comparison](../benchmarks/rust-end-podium-2026-10-06/scoped-parity.json)
+The End podium comparison
 matches **3,309,219 lines per reference JAR** over **38,207 fixtures**. All states
 reach active replacement prefixes; full runs cover representative blocks, repeated
 construction, rejected destruction/writes, partial failures, composition and
@@ -669,7 +669,7 @@ height, descends to a matching block, samples three independent radii and visits
 clipped Manhattan shells in native order. Target matching uses block identity
 regardless of state properties; rejected writes still produce success.
 
-The [replacement-blob comparison](../benchmarks/rust-replace-blobs-2026-10-06/scoped-parity.json)
+The replacement-blob comparison
 matches **5,538,034 lines per reference JAR** over **109,003 fixtures**, including
 every target/output state, all candidate states through failure-terminated
 prefixes, every constant radius, six provider families, both RNGs, height
@@ -685,7 +685,7 @@ height requests and the native replacement tag. Stalks preserve random draws and
 leaf states, including the first cap overwriting the stopping position when at
 least three stalk positions were attempted.
 
-The [bamboo comparison](../benchmarks/rust-bamboo-2026-10-06/scoped-parity.json)
+The bamboo comparison
 matches **3,485,027 lines per reference JAR** over **144,452 fixtures**. Every
 origin/support/podzol state has a failure-terminated prefix; every obstacle state
 has a complete no-podzol run. Tests include both RNGs, signed-zero decoding,
@@ -702,7 +702,7 @@ checks block identity and ordered air/nonair neighbors, writes the rim, then
 checks shifted contents against the mutated world. A zero rim component still
 shifts contents even when it disables the rim write.
 
-The [delta comparison](../benchmarks/rust-delta-2026-10-06/scoped-parity.json)
+The delta comparison
 matches **13,418,994 lines per reference JAR** across **324,269 fixtures**,
 covering every origin/content/rim state and all six neighbor roles, every air
 mask, radius limits, six provider families, both RNGs, repeated mutations,
@@ -719,7 +719,7 @@ source water from flowing water, requires a liquid block and optionally checks
 water neighbors in west/east/north/south order. Snow accepts air or existing snow
 and evaluates the default snow state's actual survival rules.
 
-The [biome-weather comparison](../benchmarks/rust-biome-weather-2026-10-06/scoped-parity.json)
+The biome-weather comparison
 matches **4,071,594 lines per reference JAR** across **326,057 fixtures**,
 covering all states in block/fluid/snow/support/neighbor roles, neighbor masks,
 float thresholds and nonfinite temperatures, both temperature modifiers, light
@@ -737,7 +737,7 @@ order, queries motion-blocking height and retains the selected biome for both
 weather checks. Ice is attempted before snow eligibility. Snow attempts are
 followed by snowy ground-property updates even if the snow write was rejected.
 
-The [snow/freezing feature comparison](../benchmarks/rust-snow-freeze-2026-10-06/scoped-parity.json)
+The snow/freezing feature comparison
 matches **7,764,082 lines per reference JAR** over **108,339 fixtures**. Every
 ground/candidate/fluid state has a failure-terminated prefix; full runs cover
 climate thresholds and NaN, both modifiers, precipitation, light gates, repeated
@@ -754,7 +754,7 @@ retain their saved delay. Generation tick access routes requests to the selected
 container and reports no currently executing ticks or aggregate count. Snapshots
 can be promoted into the existing level tick queue.
 
-The [generation-tick comparison](../benchmarks/rust-generation-ticks-2026-10-06/scoped-parity.json)
+The generation-tick comparison
 matches **101,784 lines per reference JAR**, covering duplicates, saved entries,
 snapshot independence, mixed proto/level routing, lookup failures, promotion,
 priority boundaries and integer/time extremes. Workspace tests, all-target Clippy
@@ -769,7 +769,7 @@ Feature-world scheduling normalizes block states to block identity, routes to th
 chunk containing the original position and advances the region's tick order even
 for duplicate requests or missing chunks. Time and order use Java wrapping rules.
 
-The [resident queue comparison](../benchmarks/rust-feature-region-ticks-2026-10-06/scoped-parity.json)
+The resident queue comparison
 matches **28,985,883 lines per reference JAR** across **192 fixtures**, with nine
 resident chunks each, **2,688 requested feature placements** and **14,784 direct
 tick requests**. Both references agree on final sections, heightmaps and saved
@@ -787,7 +787,7 @@ features and rejects bindings from a different block registry. Feature access
 forwards fluid, water-tag and block-tag queries against current resident storage.
 Missing tags have no members; missing chunks remain query errors.
 
-The [resident query comparison](../benchmarks/rust-feature-region-queries-2026-10-06/scoped-parity.json)
+The resident query comparison
 matches **29,312,766 lines per reference JAR**, retaining the 192 multi-chunk
 feature/tick fixtures and adding insertion/removal probes for **all 35,723 block
 states**. Each probe checks fluid identity, amount, falling/source/full flags,
@@ -804,7 +804,7 @@ box order. A configured exit triggers a block-entity lookup even when the gatewa
 write was rejected. Missing or unrelated entities are no-ops; a gateway receives
 its exit/exact fields before its dirty notification.
 
-The [gateway comparison](../benchmarks/rust-end-gateway-2026-10-06/scoped-parity.json)
+The gateway comparison
 matches **754,877 lines per reference JAR** across **5,820 fixtures**, including
 every world-call failure boundary, rejected writes, repeated updates, both random
 streams, placement composition, codec edge cases and bounded prefixes of wrapped
@@ -824,7 +824,7 @@ After a chest write it looks up a randomizable container, consuming a loot seed
 only when one exists, then checks torch survival in native horizontal order.
 Rejected writes retain the subsequent entity and torch operations.
 
-The [bonus-chest comparison](../benchmarks/rust-bonus-chest-2026-10-06/scoped-parity.json)
+The bonus-chest comparison
 matches **1,505,542 lines per reference JAR** across **42,396 fixtures**. All
 35,723 states participate in collision prefixes; complete searches cover both
 random streams, missing/unrelated/chest entities, sole viable columns, exhausted
@@ -841,7 +841,7 @@ refreshes connection states, branches recursively within the native depth and
 distance bounds, and places age-five terminal flowers. Clearance checks exclude
 the parent branch, and rejected writes retain native subsequent reads and draws.
 
-The [chorus comparison](../benchmarks/rust-chorus-plant-2026-10-06/scoped-parity.json)
+The chorus comparison
 matches **8,083,367 lines per reference JAR** across **254,296 fixtures**. Every
 state participates in origin/support gates and five neighbor-connection prefixes.
 Full growth covers 1,024 seeds per random generator, early failure boundaries,
@@ -858,7 +858,7 @@ and writes waterlogged tip/frustum states. Configured base and pointed states
 select block identities; placement uses their defaults. Unsupported pointed-block
 properties fail during placement after the preceding patch operations.
 
-The [speleothem comparison](../benchmarks/rust-speleothem-2026-10-06/scoped-parity.json)
+The speleothem comparison
 matches **2,752,289 lines per reference JAR** across **145,473 fixtures**, including
 all states in support, taller-growth and contained-fluid roles; optional float
 defaults and boundaries; both random streams; rejected writes; partial failures;
@@ -873,7 +873,7 @@ air and update flags `3`. Air is an immediate false result. This follows
 `WorldGenRegion.destroyBlock`, whose generation-time path does not evaluate drops;
 live-level destruction remains separate work.
 
-The [resident destruction comparison](../benchmarks/rust-feature-region-destroy-2026-10-06/scoped-parity.json)
+The resident destruction comparison
 matches **29,502,523 lines per reference JAR** across **192 fixtures**, adding
 active/inactive End podiums to the resident feature corpus. The reference invokes
 the actual WorldGenRegion method through a subclass that transports reads/writes
@@ -889,7 +889,7 @@ calling the mutation policy. Ordinary writes and destruction share the guard;
 queries and tick scheduling retain their independent routing. The predicate uses
 Java wrapping subtraction and absolute value, including integer-minimum cases.
 
-The [write-zone comparison](../benchmarks/rust-feature-region-write-zone-2026-10-06/scoped-parity.json)
+The write-zone comparison
 matches **29,231,123 lines per reference JAR**. It adds **20,125 direct zone cases**
 for both chunk and block coordinates, then exercises unrestricted, zero-radius,
 shifted-center and negative-radius policies across the 192 resident fixtures.
@@ -908,7 +908,7 @@ pending coordinate fields retains the existing map key. Coordinate resolution
 matches NumericTag integer narrowing and floating-point flooring before saturating
 conversion, then relocates mismatched X/Z into the owning chunk.
 
-The [block-entity storage comparison](../benchmarks/rust-block-entity-storage-2026-10-06/scoped-parity.json)
+The block-entity storage comparison
 matches **78,251 lines per reference JAR** across **28,511 commands**, using actual
 native ProtoChunks and chest entities. Cases cover replacement, removal, position
 unions, save selection, missing/nonnumeric coordinates, infinities/NaNs, integer
@@ -926,7 +926,7 @@ through -1, inclusive. Ordinary generation has no vertical policy gate; storage
 bounds remain separate. Reads and tick scheduling keep their existing behavior,
 and generation-time destruction shares the write guard.
 
-The [upgrade-height comparison](../benchmarks/rust-feature-region-upgrade-height-2026-10-06/scoped-parity.json)
+The upgrade-height comparison
 matches **29,247,433 lines per reference JAR**, including **10,098 height cases**,
 20,125 horizontal zone cases and all 192 resident fixtures. The reference calls
 actual `WorldGenRegion.ensureCanWrite` with a native ProtoChunk before and after
@@ -945,7 +945,7 @@ heightmaps. Existing pre-light chunks use these definitions for their names and
 heightmap groups. Direct name lookup retains vanilla's `empty` fallback; NBT
 codec lookup rejects unknown names and writes canonical namespaced identifiers.
 
-The [chunk-status comparison](../benchmarks/rust-chunk-status-2026-10-06/scoped-parity.json)
+The chunk-status comparison
 matches **4,232 lines per reference JAR** across all 100 ordered status pairs and
 **2,065 codec inputs**. Inputs include qualified/unqualified names, empty
 namespaces, obsolete and malformed names, random strings and nonstring NBT.
@@ -966,11 +966,11 @@ empty mask when saving. Hole queries wrap local X/Z coordinates. Resident
 transformations replace bedrock in the old Y = 0 through 4 band with default
 deepslate and clear marked columns through the chunk's current generation height.
 
-The [upgrade-data comparison](../benchmarks/rust-retrogen-data-2026-10-06/scoped-parity.json)
+The upgrade-data comparison
 matches **20,626 lines per reference JAR** across **5,114 codec inputs**, including
 canonical output, all 256 column bits, out-of-footprint bits, signed numeric
 streams, malformed optional fields and random masks. Codec error text is normalized.
-The [resident upgrade comparison](../benchmarks/rust-retrogen-chunk-2026-10-06/scoped-parity.json)
+The resident upgrade comparison
 matches **3,028,057 lines per reference JAR** across **138 fixtures**. It checks all
 nine nonempty targets against the six pre-light stages, repeated/backward stage
 assignments, complete stored sections and heightmap words after replacement and
@@ -992,11 +992,11 @@ their current persisted stage and retained upgrade target. Region biome reads us
 this status, allowing access to old biomes while below-zero regeneration is still
 at an earlier stage. Removing upgrade metadata restores the persisted-stage gate.
 
-The [live region comparison](../benchmarks/rust-live-upgrade-region-2026-10-06/scoped-parity.json)
+The live region comparison
 matches **29,248,297 lines per reference JAR**, extending the 192 resident fixtures
 with **54 lifecycle cases**. It compares native write permission, highest status
 and actual ProtoChunk biome-read availability across all six pre-light stages and
-nine nonempty upgrade targets. The [retained-status comparison](../benchmarks/rust-retained-upgrade-status-2026-10-06/scoped-parity.json)
+nine nonempty upgrade targets. The retained-status comparison
 also matches **3,028,057 lines per JAR** across 138 upgrade fixtures. Seven focused
 region tests, all-target Clippy and the region corpus test pass. These checks do
 not yet cover the biome resolver's cave-biome retention, structure restrictions,
@@ -1010,9 +1010,9 @@ column at quart Y = 0. The resolver captures upgrade activation at construction;
 candidate failures precede fallback reads. Section fills preserve native commit
 ordering and partial-failure behavior while allowing access to old biome storage.
 
-The [retention/fill comparison](../benchmarks/rust-retrogen-biome-fill-2026-10-06/scoped-parity.json)
+The retention/fill comparison
 matches **593,152 lines per JAR** across 740 fills and 2,800 direct queries. The
-[generation integration](../benchmarks/rust-retrogen-biome-generation-2026-10-06/scoped-parity.json)
+generation integration
 matches **834,080 lines per JAR** across 396 fixtures and 610 fills, including 144
 upgrading chunks alongside the ordinary-generation cases. It executes actual
 native `ChunkGenerator.doCreateBiomes`, including retained-status old biome reads,
@@ -1030,7 +1030,7 @@ transfer, callback order, and mutations made while callbacks are running. Cleari
 copies the map before removing live entries and reports effects in the copied
 map's iteration order.
 
-The [active-effect comparison](../benchmarks/rust-active-effects-2026-10-07/scoped-parity.json)
+The active-effect comparison
 matches **535,063 lines per reference JAR** across **1,266 fixtures**, using actual
 vanilla entity storage methods, status instances and JDK maps. Native holder hash
 and identity-hash values are captured separately for each reference process.
@@ -1047,7 +1047,7 @@ ordinary status-instance copies, then execute the entity's eligibility, update
 and notification sequence. Sound and RNG services receive access to live storage
 so callback mutations affect subsequent operations.
 
-The [combined comparison](../benchmarks/rust-stored-consume-2026-10-07/scoped-parity.json)
+The combined comparison
 matches **1,214,124 lines per reference JAR**, executing actual native consume
 effects and inherited entity storage together. It covers both random generators,
 probability boundaries, duplicate inputs, hidden chains, colliding holder keys,
@@ -1072,7 +1072,7 @@ particle/ambience data, apply the invisibility-dependent random interval, and
 select particles from the captured list. Position queries and the destination
 level preserve native evaluation order.
 
-The [effect-loop comparison](../benchmarks/rust-active-effect-tick-2026-10-07/scoped-parity.json)
+The effect-loop comparison
 matches **1,732,406 client-JAR lines** and **1,732,849 server-JAR lines** across
 **4,036 fixtures**. Each reference exports its own holder identity hashes; those
 hashes can change iteration order and subsequent callback paths between JVMs.
@@ -1091,7 +1091,7 @@ wrapped clusters. Iterators read the live slot array and retain their original
 remaining count; external mutations have native failure prefixes rather than
 HashMap-style concurrent-modification checks.
 
-The [set comparison](../benchmarks/rust-object-open-set-2026-10-07/scoped-parity.json)
+The set comparison
 matches **611,998 lines per reference classpath** against the pinned fastutil
 8.5.18 library. Library and fixture Clippy pass. The gate covers default set
 operations and live iteration; alternate constructors, bulk methods, and external
@@ -1110,7 +1110,7 @@ and clears that same set only after every callback succeeds. Passenger lists
 remain captured while later connection fields and packet data are read at their
 native evaluation points.
 
-The [notification comparison](../benchmarks/rust-effect-notifications-2026-10-07/scoped-parity.json)
+The notification comparison
 matches **1,667,616 lines per reference JAR**, exercising inherited native
 eligibility, notification, refresh and passenger methods together with effect
 storage. The fixtures use actual status instances, pending sets, immutable
@@ -1127,7 +1127,7 @@ lookup. Health synchronization retains its selected data object through later
 callbacks. Waypoint changes capture the server manager before reading the
 actor's direct attribute-map field, and track only a strictly positive range.
 
-The [combined attribute-update comparison](../benchmarks/rust-attribute-updates-2026-10-07/scoped-parity.json)
+The combined attribute-update comparison
 matches **3,111,429 lines per reference JAR**, including the notification corpus,
 finite/nonfinite limits, signed zero, dirty health callbacks, map/manager changes
 and failure prefixes. Actual native effect notifications, attribute-update
@@ -1145,7 +1145,7 @@ reading the live arrays at their stored indexes. Callback traversal captures the
 key array but reads values from the current array, including after a rehash.
 Writes through a stale entry into an empty slot do not make that key present.
 
-The [map comparison](../benchmarks/rust-object-open-map-2026-10-07/scoped-parity.json)
+The map comparison
 matches **1,142,630 lines per reference classpath** against pinned fastutil
 8.5.18. Library and fixture Clippy pass. The gate includes collision clusters,
 equal-key identity retention, entry mutation/invalidation and traversal callback
@@ -1164,7 +1164,7 @@ permanent modifier. This preserves callback changes between those operations.
 Missing attribute instances skip template access, and failures retain preceding
 map and attribute writes.
 
-The [modifier comparison](../benchmarks/rust-effect-attribute-modifiers-2026-10-07/scoped-parity.json)
+The modifier comparison
 matches **1,421,730 lines per reference JAR** across **3,317 fixtures**. It executes
 native effect modifier methods with real attribute instances, including cached
 values, permanent membership, dirty observers, nonfinite arithmetic, identity,
@@ -1185,7 +1185,7 @@ lookups can create a second instance while the first remains queued. Successful
 creation uses an ordinary map insertion after the callback, preserving callback
 replacement, resize and alias behavior.
 
-The [stored-attribute comparison](../benchmarks/rust-stored-effect-attributes-2026-10-07/scoped-parity.json)
+The stored-attribute comparison
 matches **4,543,569 lines per reference JAR**. It combines actual native effect
 modifier methods, attribute-map lookup, supplier creation, attribute-instance
 replacement and permanent modifiers with real pending sets. Native instance
@@ -1205,7 +1205,7 @@ update/synchronization sets, preserving queued instance identity after lookup
 aliasing or removal. Refresh clears the pending update set only after every
 attribute callback succeeds.
 
-The [combined notification comparison](../benchmarks/rust-stored-effect-notifications-2026-10-07/scoped-parity.json)
+The combined notification comparison
 matches **21,117,051 lines per reference JAR**. It includes the full previous
 stored-attribute corpus plus inherited native entity notification and private
 refresh methods, client guards, dirty state, optional reapplication, empty
@@ -1226,7 +1226,7 @@ lookup failures. Base reset checks supplier membership before looking up the
 current instance, then retains that instance across the supplier base lookup.
 Resetting a supported attribute with no instance leaves it uncreated.
 
-The [query comparison](../benchmarks/rust-attribute-map-queries-2026-10-07/scoped-parity.json)
+The query comparison
 matches **34,531,715 lines per reference JAR**. It includes the full stored
 notification corpus, actual native map query/reset methods, mutable supplier
 prototypes, reference-sharing modifiers, alias/null lookup entries, prototype
@@ -1245,7 +1245,7 @@ independently of pending queue membership. Queries and base resets leave absent
 instances uncreated; effect application uses the same stored instance and queues
 as direct edits.
 
-The [live attribute comparison](../benchmarks/rust-live-attributes-2026-10-07/scoped-parity.json)
+The live attribute comparison
 matches **8,350,018 lines per reference JAR**. Client and server exports agree on
 all **40 attributes and 93 entity suppliers**. The gate includes the previous
 entity-attribute corpus, range boundaries, null lookups, modifier identities and
@@ -1262,7 +1262,7 @@ Linux build remain unfinished.
 The production health binding now accepts the live component through computed
 attribute queries. Healing, health and base absorption limits, synchronized
 health storage and hunger regeneration therefore share its stored values and
-modifier engine. The [health integration comparison](../benchmarks/rust-live-attribute-health-2026-10-07/scoped-parity.json)
+modifier engine. The health integration comparison
 matches **666,082 lines per reference JAR for each storage backend**, including
 all 93 entity suppliers and observer failure prefixes. All `horizon-world`
 targets compile, and library/affected fixture Clippy checks pass. This borrowed
@@ -1279,7 +1279,7 @@ only on success. Health and absorption consequences read actual computed limits;
 waypoint updates retain their manager before reading the direct attribute-map
 field. Scale changes dispatch dimension refresh.
 
-The [combined live update comparison](../benchmarks/rust-live-attribute-updates-2026-10-07/scoped-parity.json)
+The combined live update comparison
 matches **2,836,190 client-reference lines and 2,836,234 server-reference lines**.
 It executes actual native notifications, modifier loops, registered attribute
 queries, private refresh, health/absorption update bodies and synchronized Float
@@ -1309,12 +1309,12 @@ updates. Constant options retain identity. Synchronized storage now supports
 shared list values as well as scalar fields, preserving callback and dirty-flag
 ordering.
 
-The [effect synchronization comparison](../benchmarks/rust-effect-sync-2026-10-07/scoped-parity.json)
+The effect synchronization comparison
 matches **2,754,744 lines per reference JAR**, including repeated updates,
 ambient/visible combinations, callback map changes, captured data objects,
 reentrant writes/packing and failure prefixes. The
-[byte](../benchmarks/rust-effect-sync-2026-10-07/synced-bytes-regression.json) and
-[float](../benchmarks/rust-effect-sync-2026-10-07/synced-floats-regression.json)
+byte and
+float
 storage regressions also pass against both JARs. Library and affected fixture
 Clippy checks pass, and all world targets compile.
 
