@@ -1,6 +1,10 @@
+import contextlib
 import copy
 import datetime as dt
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -352,7 +356,8 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(run_name, "nightly build"
                          f"${{{{ ({self.dry}) && ' (dry run)' || ' (real)' }}}}"
                          "${{ inputs.request && format(' (request {0})', inputs.request) || '' }}"
-                         "${{ inputs.base && format(' on {0}', inputs.base) || '' }}")
+                         "${{ inputs.base && format(' on {0}', inputs.base) || '' }}"
+                         "${{ inputs.off_main && ' (off main)' || '' }}")
 
     def test_dispatch_finds_its_own_run_not_one_whose_base_names_its_request(self):
         runs = [
@@ -504,3 +509,133 @@ class SdkPairTests(unittest.TestCase):
                         if repo == "horizon-rust/horizon":
                             state.assert_not_called()
                             requested.assert_not_called()
+
+
+def repository(folder: Path) -> tuple[Path, dict[str, str]]:
+    """An origin with main, a dry-run/* branch, ordinary branches (a person's fix, a fork snapshot under union/, a
+    Dependabot bump), refs/pull/1/head (a fork's pull request), a Nightly build branch and a merge queue branch,
+    each with a commit of its own; and a clone that has every one of those commits locally, as a fork's commit is
+    there for anyone who asks GitHub for its SHA."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+
+    def run(*args, cwd=folder):
+        return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True,
+                              input="").stdout.strip()
+
+    origin = str(folder / "origin")
+    run("init", "-q", "--bare", origin)
+    tree = run("--git-dir", origin, "mktree")
+    main = run("--git-dir", origin, "commit-tree", tree, "-m", "main")
+    run("--git-dir", origin, "update-ref", "refs/heads/main", main)
+    run("--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main")
+    shas = {"main": main}
+    for name, ref in [("branch", "refs/heads/dry-run/release-path"), ("fix", "refs/heads/fix/release-path"),
+                      ("union", "refs/heads/union/x"), ("dependabot", "refs/heads/dependabot/cargo/x"),
+                      ("pull", "refs/pull/1/head"),
+                      ("nightly", "refs/heads/nightly/build-2026-11-20-1"),
+                      ("queue", "refs/heads/gh-readonly-queue/main/pr-1-abc")]:
+        shas[name] = run("--git-dir", origin, "commit-tree", tree, "-p", main, "-m", name)
+        run("--git-dir", origin, "update-ref", ref, shas[name])
+    clone = folder / "clone"
+    run("clone", "-q", origin, str(clone))
+    run("fetch", "-q", "origin", "+refs/pull/1/head:refs/pull-1", "+refs/heads/*:refs/remotes/origin/*", cwd=clone)
+    return clone, shas
+
+
+class OffMainDryRunTests(unittest.TestCase):
+    """A dry run may build a commit off main (`off_main`), so a fix to the release path is tried before it merges;
+    never a real cut, never a fork's commit, never with a signing key."""
+
+    def base(self, clone: Path, sha: str, dry: bool, off_main: bool):
+        def stop(repo, issue, text):
+            raise SystemExit(text)
+
+        environ = {"NIGHTLY_BASE": sha, "DRY_RUN": "true" if dry else "false",
+                   "NIGHTLY_OFF_MAIN": "true" if off_main else "false",
+                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+        with contextlib.chdir(clone), mock.patch.dict(os.environ, environ), \
+                mock.patch.object(nightly, "stop", side_effect=stop):
+            return nightly.green_base("horizon-rust/horizon", "")
+
+    def test_only_a_dry_run_marked_off_main_builds_a_dry_run_branch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            clone, shas = repository(Path(folder))
+            self.assertEqual(self.base(clone, shas["branch"], dry=True, off_main=True).sha, shas["branch"])
+            self.assertEqual(self.base(clone, shas["branch"][:12], dry=True, off_main=True).sha, shas["branch"])
+            # A real cut keeps the on-main check, `off_main` or not.
+            for off_main in (False, True):
+                with self.assertRaisesRegex(SystemExit, "is not on main"):
+                    self.base(clone, shas["branch"], dry=False, off_main=off_main)
+            # A dry run off main without the input is refused as before: its run's name would not say so.
+            with self.assertRaisesRegex(SystemExit, "is not on main"):
+                self.base(clone, shas["branch"], dry=True, off_main=False)
+            # The input with a base on main is refused too, so the name never says "off main" wrongly.
+            with self.assertRaisesRegex(SystemExit, "off_main is set"):
+                self.base(clone, shas["main"], dry=True, off_main=True)
+            self.assertEqual(self.base(clone, shas["main"], dry=True, off_main=False).sha, shas["main"])
+
+    def test_a_commit_no_dry_run_branch_holds_is_refused_though_the_clone_has_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            clone, shas = repository(Path(folder))
+            # Each commit is in the clone (every branch and refs/pull/1/head were fetched), yet no dry-run/* branch
+            # holds it: ordinary branches, a fork snapshot, Dependabot's, a pull request's head, the Nightly's own
+            # build branch and the merge queue's. The refusal says what to do instead.
+            for name in ("fix", "union", "dependabot", "pull", "nightly", "queue"):
+                with self.subTest(name=name), self.assertRaisesRegex(
+                        SystemExit, r"no dry-run/\* branch .* Push the commit to dry-run/<name>, dispatch the workflow "
+                                    r"from main with base=<full sha> and off_main=true, and delete the branch"):
+                    self.base(clone, shas[name], dry=True, off_main=True)
+            for name in ("refs/pull-1", "f" * 40, "nonsense"):
+                with self.subTest(name=name), self.assertRaises(SystemExit):
+                    self.base(clone, name, dry=True, off_main=True)
+
+    def test_an_off_main_base_cannot_reach_a_publishing_step_or_a_key(self):
+        build = (WORKFLOWS / "nightly-build.yml").read_text()
+        jobs = yaml.safe_load(build)["jobs"]
+        dry = "needs.pick.outputs.dry_run != 'true'"
+        # One dry-run value: the one `pick` checks an off-main base against is the one every later job reads.
+        pick = jobs["pick"]
+        step = next(s for s in pick["steps"] if s.get("id") == "pick")
+        self.assertEqual(step["env"]["DRY_RUN"], "${{ steps.mode.outputs.dry_run }}")
+        self.assertEqual(step["env"]["NIGHTLY_OFF_MAIN"], "${{ inputs.off_main }}")
+        self.assertEqual(pick["outputs"]["dry_run"], "${{ steps.mode.outputs.dry_run }}")
+        # Every step that publishes, tags, rotates or prunes runs only when it isn't a dry run.
+        publishing = ("gh release", "nightly.py rotate", "keep-source", "nightly.py prune ", "git/refs")
+        steps = 0
+        for name, job in jobs.items():
+            if name == "dry-run-cleanup":
+                continue
+            for s in job.get("steps", []):
+                if any(word in s.get("run", "") for word in publishing):
+                    steps += 1
+                    self.assertIn(dry, str(s.get("if", "")) + str(job.get("if", "")), (name, s.get("name")))
+        self.assertEqual(steps, 1)  # the publish step; prune-builds runs on a schedule only (no schedule now)
+        # Every secret and the `release` environment only off a dry run, and sdk-publish only publishes then.
+        for line in build.splitlines():
+            if "secrets." in line or "'release'" in line:
+                self.assertIn(dry, line)
+        self.assertEqual(set(jobs["sdk-publish"]["secrets"]), {"RELEASE_SIGNING_KEY", "RELEASE_SIGNING_KEY_NEXT"})
+        self.assertIn(dry, jobs["sdk-publish"]["with"]["publish"])
+        sdk = yaml.safe_load((WORKFLOWS / "sdk-publish.yml").read_text())["jobs"]
+        self.assertIn("inputs.publish", sdk["publish"]["if"])
+        self.assertIn("inputs.publish", sdk["sign"]["environment"])
+        keys = next(s for s in sdk["sign"]["steps"] if "RELEASE_SIGNING_KEY" in s.get("env", {}))["env"]
+        for key in ("RELEASE_SIGNING_KEY", "RELEASE_SIGNING_KEY_NEXT"):
+            self.assertIn("inputs.publish &&", keys[key])
+        # A dry run's own branch goes at the end, whatever happened before, by its exact name: never in a real run,
+        # never a pattern, never another run's.
+        cleanup = jobs["dry-run-cleanup"]
+        self.assertEqual(cleanup["if"], "always() && needs.pick.outputs.dry_run == 'true' && "
+                                        "needs.pick.outputs.pushed != ''")
+        self.assertEqual(set(cleanup["needs"]), set(jobs) - {"dry-run-cleanup"})
+        self.assertEqual(cleanup["permissions"], {"contents": "write"})
+        self.assertEqual(pick["outputs"]["pushed"], "${{ steps.pick.outputs.pushed }}")
+        (clean,) = cleanup["steps"]
+        self.assertEqual(clean["env"]["NAME"], "${{ needs.pick.outputs.pushed }}")
+        self.assertIn('[[ "$NAME" =~ ^nightly/dry-run-${GITHUB_RUN_ID}-[0-9]+$ ]] ||', clean["run"])
+        self.assertIn('gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$NAME"', clean["run"])
+        self.assertNotIn("*", clean["run"].replace("[0-9]+", ""))
+        # The build legs, which run the commit's code, get no secrets at all.
+        for name in ("build", "sdk"):
+            self.assertNotIn("secrets", jobs[name])

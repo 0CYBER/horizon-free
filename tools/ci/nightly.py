@@ -211,6 +211,8 @@ def build_set(main: Ref, prs: list[dict], left_out: list[str], today: str, force
             name = ns.next_build(today, done)
         if not ns.push(sha, name, token):
             stop(repo, issue, f"could not push {name}")
+        if dry_run:  # at once, so the workflow's cleanup deletes it even if pick fails after this
+            output(pushed=name)
         record = {"ref": name, "sha": sha, "main": main.sha, "at": dt.datetime.now(dt.timezone.utc).isoformat(
             timespec="seconds"), "event": event, "dry_run": dry_run, "run": os.environ.get("GITHUB_RUN_ID", ""),
             "prs": [{k: e[k] for k in ("number", "head", "title", "author", "asked_by")} for e in kept],
@@ -336,15 +338,51 @@ def require_sdk(sha: str) -> None:
 
 def green_base(repo: str, issue: str) -> Ref:
     """The main commit a nightly builds on: NIGHTLY_BASE, else main's newest commit where checks and parity-main
-    passed (what releases ship), so a merge that breaks main never reaches a nightly: it builds on the commit before."""
+    passed (what releases ship), so a merge that breaks main never reaches a nightly: it builds on the commit before.
+    Only a dry run with NIGHTLY_OFF_MAIN (the `off_main` input) builds a base off main, from a dry-run/* branch
+    ([`off_main_base`]); the input set with a base on main stops too, so the run's name never says "off main"
+    wrongly."""
     sha = os.environ.get("NIGHTLY_BASE", "").strip() or train.green_main_head(parity=True)
     if not sha:
         stop(repo, issue, "the build stopped: no recent commit of main passed both checks and parity-main, so "
                           "none is green to build on. The next build after they pass takes it.")
-    if not is_ancestor(sha, "refs/remotes/origin/main"):
-        stop(repo, issue, f"the build stopped: {sha[:9]} is not on main.")
+    off_main = os.environ.get("NIGHTLY_OFF_MAIN") == "true"
+    if is_ancestor(sha, "refs/remotes/origin/main"):
+        if off_main:
+            stop(repo, issue, f"the build stopped: off_main is set, but {sha[:9]} is on main.")
+    elif not (off_main and os.environ.get("DRY_RUN") == "true"):
+        stop(repo, issue, f"the build stopped: {sha[:9]} is not on main."
+             + (f" A dry run can build it with off_main=true: {HOW}" if os.environ.get("DRY_RUN") == "true" else ""))
+    else:
+        return off_main_base(repo, issue, sha)
     sha = git("rev-parse", sha)
     return Ref("main", sha, dt.datetime.fromisoformat(git("show", "-s", "--format=%cI", sha)))
+
+
+DRY_RUN_PREFIX = "dry-run/"
+BRANCHES = "refs/nightly-base/"
+HOW = (f"Push the commit to {DRY_RUN_PREFIX}<name>, dispatch the workflow from main with base=<full sha> and "
+       "off_main=true, and delete the branch afterwards.")
+
+
+def off_main_base(repo: str, issue: str, base: str) -> Ref:
+    """A dry run's base off main (the `off_main` input): a commit a dry-run/* branch holds. Only people with push
+    rights create those, and pushing there is them saying "this commit may be dry-run built"; other branches don't
+    count, since some hold outside code nobody reviewed (fork snapshots, Dependabot's). GitHub serves a fork's commits
+    by SHA from this repository too, so having or fetching the commit proves nothing: only the dry-run/* heads are
+    fetched, fresh, and one of them must contain it; the SHA itself and refs/pull/* are never fetched."""
+    git("fetch", "--quiet", "--no-tags", "--prune", "origin", f"+refs/heads/{DRY_RUN_PREFIX}*:{BRANCHES}*")
+    found = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+                           capture_output=True, text=True)
+    sha = found.stdout.strip()
+    branches = [] if found.returncode else [
+        DRY_RUN_PREFIX + ref.removeprefix(BRANCHES) for ref in git(
+            "for-each-ref", "--contains", sha, "--format=%(refname)", BRANCHES).splitlines()]
+    if not branches:
+        stop(repo, issue, f"the build stopped: no {DRY_RUN_PREFIX}* branch of {repo or 'this repository'} holds "
+                          f"{base[:9]}, so a dry run does not build it. {HOW}")
+    print(f"dry run off main: base {sha} is not on main; branch `{branches[0]}` holds it")
+    return Ref("off main", sha, dt.datetime.fromisoformat(git("show", "-s", "--format=%cI", sha)))
 
 
 def pick(force: bool) -> None:

@@ -9,6 +9,11 @@ on:
       publish:
         type: boolean
         default: false
+    secrets:
+      RELEASE_SIGNING_KEY:
+        required: false
+      RELEASE_SIGNING_KEY_NEXT:
+        required: false
 permissions:
   contents: read
   actions: read

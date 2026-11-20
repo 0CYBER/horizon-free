@@ -34,6 +34,9 @@ class DryStateTests(unittest.TestCase):
                 expected = "nightly/dry-run-123-2" if dry else "nightly/build-2026-11-10-1"
                 self.assertEqual(push.call_args.args[:2], ("a" * 40, expected))
                 self.assertEqual(output.call_args.kwargs["source"], expected)
+                # A dry run names its branch for the workflow's cleanup first, so a later failure still deletes it.
+                self.assertEqual([c.kwargs for c in output.call_args_list if "pushed" in c.kwargs],
+                                 [{"pushed": expected}] if dry else [])
                 if dry:
                     quota.assert_not_called()
                     update.assert_not_called()
