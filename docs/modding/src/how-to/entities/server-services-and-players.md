@@ -177,6 +177,14 @@ read the distances in chunks; `host.server_set_view_distance(d)` and
 dedicated server and return `false` otherwise. `server.properties` is not
 written.
 
+Mob and packet diagnostics are separate switches that are off by default.
+`host.mob_cost_sampling(true)` times each mob's own tick, riders included, summed
+by level and mob type; `host.take_mob_costs()` returns what was sampled since the
+last call, costliest first, and clears it. `host.count_packets(true)` counts every
+player's play packets by id and direction, for the whole server;
+`player.take_packet_counts(host)` returns one player's counts since the last call
+and clears them. Both switches return `false` on a client.
+
 ## World mutation: chunks, blocks shown and placed as a player
 
 For mods that write blocks by other means (an editor's own section writes, a schematic) and then have to make the game and the client agree. Server only. Each method returns `Result` and names every refusal; a refusal changes nothing.

@@ -1110,10 +1110,12 @@ pub(super) struct ServerOptions {
 impl Game<'_> {
     /// IntegratedServer.teardownPublishedState, also reached when a shutdown
     /// callback unwinds before the normal stop path can retire the server.
-    pub(super) fn stop_serving(&mut self) {
+    pub(in crate::game) fn stop_serving(&mut self) {
         if let Some(s) = self.serving.take() {
             s.flags.published.store(0, Ordering::Relaxed);
         }
+        // What a mod switched on for this server (packet counting, mob sampling) ends with it.
+        self.stop_mod_diagnostics();
     }
 
     /// Whether this game is an integrated server's.

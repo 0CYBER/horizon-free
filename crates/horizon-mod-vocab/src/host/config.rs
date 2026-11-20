@@ -102,6 +102,25 @@ pub trait ConfigServerHost {
     #[access(WorldOnly)]
     fn tick_times(&self) -> Vec<u64>;
     /// Side: server.
+    /// Times every mob's own tick (its riders inside it) from now on, or no longer, summed by
+    /// level and mob type for `take_mob_costs`, as a profiler samples them: while on, two
+    /// clock reads and a map update a mob; off, one thread-local read. Apart from the server's
+    /// own performance report, so both can run. Off drops what was sampled. False on a client.
+    #[access(WorldOnly)]
+    fn mob_cost_sampling(&mut self, on: bool) -> bool;
+    /// Side: server.
+    /// The mob tick costs sampled since the last call (`mob_cost_sampling`), costliest first;
+    /// clears them. Empty while nothing was sampled and on a client.
+    #[access(WorldOnly)]
+    fn take_mob_costs(&mut self) -> Vec<MobTickCost>;
+    /// Side: server.
+    /// Counts every player's play packets by id and direction from now on, or no longer, for
+    /// `player_take_packet_counts`. While on, each packet costs its connection a lock and a
+    /// map update; off, one atomic read. One switch for the whole server, shared by every
+    /// mod. False on a client.
+    #[access(WorldOnly)]
+    fn count_packets(&mut self, on: bool) -> bool;
+    /// Side: server.
     /// The server's view distance in chunks (`PlayerList.getViewDistance`, `view-distance`):
     /// how far players are sent chunks at most. None off a server open to players.
     #[access(WorldOnly)]

@@ -4,6 +4,8 @@
 //! Off, a mob costs one thread-local read; sampled, two clock reads and a map update.
 //! A mob's riders tick inside its own tick, so they count for it. The server tick's
 //! spans stay enabled while the report or slow-tick ring needs them ([`want_spans`]).
+//! A server mod samples apart from the report (`mob_cost_sampling`), into sums of its own, so both
+//! can run.
 use horizon_client::{fast_hash::FxHashMap, mobs::MobType};
 use std::{
     cell::{Cell, RefCell},
@@ -20,6 +22,9 @@ pub const SAMPLE_EVERY: usize = 4;
 /// The report sampling bit.
 const REPORT: u8 = 1;
 
+/// The mod sampling bit (`mob_cost_sampling`), apart from the report's.
+const MOD: u8 = 2;
+
 /// The time and the ticks of one mob type in one level.
 #[derive(Default)]
 struct Cost {
@@ -31,10 +36,10 @@ struct Cost {
 type Totals = FxHashMap<&'static str, FxHashMap<String, Cost>>;
 
 thread_local! {
-    /// The report bit, set while it samples.
+    /// The report and mod bits, set while each samples.
     static SAMPLING: Cell<u8> = const { Cell::new(0) };
-    /// The report's sums.
-    static COSTS: RefCell<[Totals; 1]> = RefCell::default();
+    /// The report's sums, then the mod's.
+    static COSTS: RefCell<[Totals; 2]> = RefCell::default();
 }
 
 /// Who wants the tick's spans recorded besides nobody: `HORIZON_SPIKES` (the slow ring's steps),
@@ -66,6 +71,15 @@ pub fn set_sampling(on: bool) {
     set(REPORT, on);
 }
 
+/// Sample (or stop sampling) the mob ticks this thread runs next, for a mod, apart from the
+/// report; off drops what it sampled.
+pub fn set_mod_sampling(on: bool) {
+    set(MOD, on);
+    if !on {
+        COSTS.with(|c| c.borrow_mut()[1] = Totals::default());
+    }
+}
+
 fn set(who: u8, on: bool) {
     SAMPLING.with(|s| s.set(if on { s.get() | who } else { s.get() & !who }));
 }
@@ -78,7 +92,7 @@ pub fn sampling() -> u8 {
 
 /// A helper thread's sums, for the thread whose mob loop it ran part of ([`merge`]).
 #[cfg(any(test, feature = "upstream-parallel-mobs"))]
-pub struct Sums([Totals; 1]);
+pub struct Sums([Totals; 2]);
 
 /// This helper thread samples for `who` ([`sampling`] of the thread it helps), from empty sums.
 #[cfg(any(test, feature = "upstream-parallel-mobs"))]
@@ -144,7 +158,7 @@ fn add_kind(dim: &'static str, id: &str, started: Instant) {
     let who = SAMPLING.with(Cell::get);
     COSTS.with(|c| {
         let mut costs = c.borrow_mut();
-        for (sums, bit) in costs.iter_mut().zip([REPORT]) {
+        for (sums, bit) in costs.iter_mut().zip([REPORT, MOD]) {
             if who & bit == 0 {
                 continue;
             }
@@ -172,6 +186,11 @@ pub struct MobCost {
 /// The report's costs sampled since the last call, costliest first; clears them.
 pub fn take() -> Vec<MobCost> {
     take_of(0)
+}
+
+/// [`take`] of the mod's own samples.
+pub fn take_mod() -> Vec<MobCost> {
+    take_of(1)
 }
 
 fn take_of(sums: usize) -> Vec<MobCost> {
@@ -247,6 +266,35 @@ mod tests {
             ("minecraft:zombie", 1)
         );
         assert!(take().is_empty());
+    }
+
+    /// A mod's sampling is kept apart from the report's: each takes only its own, and turning
+    /// the mod's off drops what it had.
+    #[test]
+    fn a_mods_sampling_is_apart_from_the_reports() {
+        let pig = "minecraft:pig";
+        set_sampling(false);
+        set_mod_sampling(true);
+        add(
+            "minecraft:overworld",
+            pig,
+            start().expect("sampled for the mod"),
+        );
+        assert!(take().is_empty(), "the report sampled nothing");
+        set_sampling(true);
+        add("minecraft:overworld", pig, Instant::now());
+        set_sampling(false);
+        assert_eq!(take().len(), 1);
+        let costs = take_mod();
+        assert_eq!(costs.len(), 1);
+        assert_eq!(
+            (costs[0].kind.as_str(), costs[0].mob_ticks),
+            ("minecraft:pig", 2)
+        );
+        add("minecraft:overworld", pig, Instant::now());
+        set_mod_sampling(false);
+        assert!(take_mod().is_empty());
+        assert!(start().is_none());
     }
 
     /// A helper thread running part of the mob loop samples for whoever samples on the thread

@@ -1089,6 +1089,14 @@ pub trait PlayersBackendMut {
     #[access(WorldOnly)]
     fn player_respawn(&mut self, player: PlayerRef) -> Result<(), RespawnRefusal>;
     /// Side: server.
+    /// The play packets the player's connection sent and received since the last call while
+    /// packets were counted (`count_packets`), by direction (sent first) then id; clears them.
+    /// Keep-alives and the disconnect are counted; packets of the login and configuration
+    /// phases are not. Empty while nothing was counted. None for a stale or unavailable
+    /// player, one with no connection (a fake player), and on a client.
+    #[access(WorldOnly)]
+    fn player_take_packet_counts(&mut self, player: PlayerRef) -> Option<Vec<PacketCount>>;
+    /// Side: server.
     /// Acknowledges the player's block actions up to `sequence`
     /// (`ServerGamePacketListenerImpl.ackBlockChangesUpTo`), for a mod that handled one itself,
     /// such as an editor's own message: the client's predicted blocks settle on the server's

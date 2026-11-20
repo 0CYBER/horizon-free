@@ -18,6 +18,7 @@ pub(crate) mod datapack_registry;
 pub(crate) mod datapack_registry_set;
 pub(crate) mod datapack_snapshot;
 pub(crate) mod density_function;
+pub(crate) mod diagnostics;
 pub(crate) mod dimension;
 pub(crate) mod dimension_transition;
 pub(crate) mod explosion_settings;
