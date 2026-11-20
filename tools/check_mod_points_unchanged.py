@@ -74,8 +74,10 @@ STRICT_FILES = {"loops.json", INTERNALS}
 HOOK_CATALOG = "catalog.json"
 GUEST_WIRE = "wire_guest_generated.rs"
 HOOK_FILES = {HOOK_CATALOG, "hook-notes.md", GUEST_WIRE}
-GUEST_HOOK_ARM = re.compile(
-    r"^\d+ => \{ let receiver = super::hooks\(\); .*?(?=^\d+ => \{|^_ =>)", re.MULTILINE | re.DOTALL)
+# The guest's `hook` function and its arms, one per export a mod is called through, in the generator's method order.
+GUEST_DISPATCH = "pub fn hook(id: u32,"
+GUEST_ARM = re.compile(r"^\d+ => \{.*?(?=^\d+ => \{|^_ =>)", re.MULTILINE | re.DOTALL)
+GUEST_HOOK_ARM = re.compile(r"\d+ => \{ let receiver = super::hooks\(\); ")
 GUEST_HOOK_CALL = re.compile(r"\blet answer = receiver\.([a-zA-Z0-9_]+)\(")
 WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
 # Where a mod, a fixture or a doc may name a point.
@@ -160,24 +162,64 @@ def added_catalog_hooks(base_dir, head_dir):
     return after - before if {**head, "hooks": retained} == base else set()
 
 
-def guest_wire_without_hooks(guest, hooks):
-    """Remove the new entries and close the gaps in the generator's private record numbers."""
+def guest_wire_without_hooks(guest, hooks, base):
+    """The head's guest wire with the added hooks' names and dispatch arms removed and the generator's private record
+    numbers they consumed closed, or None where no such removal turns it into `base`.
+
+    A record number is the generator's index of a named type in the order it first meets them, method by method, and
+    the dispatch arms follow that order. A new hook's types take the numbers between the arms around its own: those its
+    arm references and, for an owned event (which has no record constructor), numbers no arm references. Each number the
+    head has more than the base below a retained reference must lie between the records of the arms before and after an
+    added one's; the retained text then has to match the base exactly.
+
+    Owned types are invisible here: an owned event or answer has no record constructor, and an answer's type is not
+    even written in its arm. So an owned type an existing hook gains or loses inside an added hook's window is absorbed
+    with the added hook's numbers, and the surface report (tools/ci/surface_report.py) is what fails it: a hook that
+    gains an output or changes its signature is breaking there. An added hook that is the first to use an owned type a
+    later hook already used moves that type's number, so the later numbers shift by less than the ones just after it.
+    That fails here: a number missing after the window looks the same as a later hook losing an owned type."""
     for name in hooks:
         guest, count = re.subn(rf'crate::HookId::\w+ => "{re.escape(name)}",', "", guest)
         if count != 1:
             return None
-    removed_records = set()
+    arms = list(GUEST_ARM.finditer(guest, max(guest.find(GUEST_DISPATCH), 0)))
+    references = [set(map(int, WIRE_RECORD.findall(arm[0]))) for arm in arms]
 
-    def remove_arm(match):
-        arm = match[0]
-        call = GUEST_HOOK_CALL.search(arm)
-        if call is None or call[1] not in hooks:
-            return arm
-        removed_records.update(map(int, WIRE_RECORD.findall(arm)))
-        return ""
+    def added(arm):
+        call = GUEST_HOOK_CALL.search(arm[0])
+        return GUEST_HOOK_ARM.match(arm[0]) is not None and call is not None and call[1] in hooks
 
-    guest = GUEST_HOOK_ARM.sub(remove_arm, guest)
-    gaps = sorted(removed_records - set(map(int, WIRE_RECORD.findall(guest))))
+    removed = [index for index, arm in enumerate(arms) if added(arm)]
+    windows = []
+    for index in removed:
+        low = max((n for j in range(index) if j not in removed for n in references[j]), default=-1)
+        high = min((n for j in range(index + 1, len(arms)) if j not in removed for n in references[j] if n > low),
+                   default=float("inf"))
+        windows.append((low, high))
+    for index in reversed(removed):
+        guest = guest[:arms[index].start()] + guest[arms[index].end():]
+
+    head_parts, base_parts = WIRE_RECORD.split(guest), WIRE_RECORD.split(base)
+    if len(head_parts) != len(base_parts) or head_parts[::2] != base_parts[::2]:
+        return None
+    pairs = {}
+    for head_number, base_number in zip(map(int, head_parts[1::2]), map(int, base_parts[1::2])):
+        if pairs.setdefault(head_number, base_number) != base_number:
+            return None
+    used = sorted(pairs)
+    gaps = set().union(*(references[index] for index in removed)) - set(used)
+    # Each retained number still above its base number absorbs the unreferenced numbers just below it. Which owned
+    # types those were is not in this file: one an existing hook started to use there passes here, and only the
+    # surface report sees it. A number the head lacks (a surplus below zero) fails, never absorbed.
+    for previous, number in zip([-1] + used, used):
+        surplus = number - sum(gap < number for gap in gaps) - pairs[number]
+        free = [n for n in range(number - 1, previous, -1) if n not in gaps][:max(surplus, 0)]
+        if surplus < 0 or len(free) < surplus:
+            return None
+        gaps.update(free)
+    if not all(any(low < gap < high for low, high in windows) for gap in gaps):
+        return None
+    gaps = sorted(gaps)
 
     def renumber(match):
         number = int(match[1])
@@ -194,7 +236,7 @@ def explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root):
     if hooks and GUEST_WIRE in changed:
         base = read_text(base_dir / GUEST_WIRE, [base_root] if base_root else [])
         head = read_text(head_dir / GUEST_WIRE, [head_root] if head_root else [])
-        if guest_wire_without_hooks(head, hooks) != base:
+        if guest_wire_without_hooks(head, hooks, base) != base:
             return set()
     return hooks
 
