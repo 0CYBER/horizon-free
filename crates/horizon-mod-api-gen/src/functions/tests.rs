@@ -228,6 +228,101 @@ fn the_copy_reads_the_index_and_refuses_a_stale_source() {
 }
 
 #[test]
+fn a_lower_crates_mirror_keeps_the_root_names_its_kept_imports_go_through() {
+    let root = fixture();
+    let write = |path: &str, text: &str| {
+        let path = root.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    // `crate::command` is a re-export of the crate root, as horizon-client-render's is; the
+    // copy's module imports through it, and the root's other re-export is nothing a copy needs.
+    write(
+        "crates/horizon-low/src/lib.rs",
+        "pub use horizon_other as command;
+pub use horizon_other as unrelated;
+pub mod chat;
+",
+    );
+    write(
+        "crates/horizon-low/src/chat.rs",
+        "use crate::command::Tool;
+pub struct Chat;
+impl Chat {
+    #[horizon_mod_api_macros::replaceable]
+    pub fn add(&self) {
+        let _ = Tool;
+    }
+}
+",
+    );
+    let index = index(root.path(), &BTreeSet::new()).unwrap();
+    let generated = crate::patch::generate(
+        root.path(),
+        "horizon_patch",
+        &["horizon_low::chat::Chat::add".to_owned()],
+        &Default::default(),
+        &index,
+    )
+    .unwrap();
+    let lib = &generated.libs[0].1;
+    assert!(lib.contains("use horizon_other as command;"), "{lib}");
+    assert!(!lib.contains("unrelated"), "{lib}");
+}
+
+/// The mirror of `horizon_low::chat::Chat::add`, whose module is `chat_rs` and whose crate root is `lib_rs`.
+fn low_mirror(lib_rs: &str, chat_rs: &str, extra: &[(&str, &str)]) -> String {
+    let root = fixture();
+    let write = |path: &str, text: &str| {
+        let path = root.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write("crates/horizon-low/src/lib.rs", lib_rs);
+    write("crates/horizon-low/src/chat.rs", chat_rs);
+    for (path, text) in extra {
+        write(&format!("crates/horizon-low/src/{path}"), text);
+    }
+    let index = index(root.path(), &BTreeSet::new()).unwrap();
+    let generated = crate::patch::generate(
+        root.path(),
+        "horizon_patch",
+        &["horizon_low::chat::Chat::add".to_owned()],
+        &Default::default(),
+        &index,
+    )
+    .unwrap();
+    generated.libs[0].1.clone()
+}
+
+const CHAT_USING_COMMAND: &str = "use crate::command::Tool;\npub struct Chat;\nimpl Chat {\n    #[horizon_mod_api_macros::replaceable]\n    pub fn add(&self) {\n        let _ = Tool;\n    }\n}\n";
+
+#[test]
+fn a_root_name_kept_for_an_import_does_not_keep_an_unused_import_of_that_name() {
+    // `command` is wanted at the root, but a module's unused `use crate::hidden::command;` binds the
+    // same name: it stays dropped, as before, since the mirror does not emit the private `hidden`.
+    let chat = format!("use crate::hidden::command;\n{CHAT_USING_COMMAND}");
+    let lib = low_mirror(
+        "pub use horizon_other as command;\npub mod chat;\nmod hidden;\n",
+        &chat,
+        &[("hidden.rs", "pub mod command {}\n")],
+    );
+    assert!(lib.contains("use horizon_other as command;"), "{lib}");
+    assert!(!lib.contains("crate::hidden"), "{lib}");
+}
+
+#[test]
+fn a_root_re_export_keeps_the_re_exports_it_goes_through() {
+    let lib = low_mirror(
+        "pub use horizon_other as backend;\npub use crate::backend as command;\npub mod chat;\n",
+        CHAT_USING_COMMAND,
+        &[],
+    );
+    assert!(lib.contains("use crate::backend as command;"), "{lib}");
+    assert!(lib.contains("use horizon_other as backend;"), "{lib}");
+}
+
+#[test]
 fn every_file_the_copy_reads_is_checked_not_only_the_span() {
     let root = fixture();
     let index = index(root.path(), &BTreeSet::new()).unwrap();

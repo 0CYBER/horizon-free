@@ -1076,12 +1076,33 @@ pub fn generate(
     let mut libs = Vec::new();
     for (source_crate, tree) in &mut trees {
         let bridges = source_crate == "horizon_client" && !bridge_traits.is_empty();
-        let used = (source_crate != "horizon_client").then(|| {
+        let (used, roots) = if source_crate != "horizon_client" {
             let mut used = extras.idents.clone();
             idents_in(&tree_tokens(tree), &mut used);
-            used
-        });
-        let body = match crate_mirror(&mut source, source_crate, tree, bridges, used.as_ref()) {
+            // The `use`s of the copies' modules stay in the mirror, and a path in them can go
+            // through a re-export of the crate root (`use crate::command::Dispatcher;` with
+            // `pub use horizon_command as command;`): the root keeps that one too, and the
+            // re-exports it goes through in turn. These names only keep root items; they do not
+            // select the imports of the modules below.
+            let mut roots = BTreeSet::new();
+            if let Err(why) = root_names(&mut source, source_crate, tree, &used, &mut roots) {
+                return Err(targets
+                    .iter()
+                    .map(|t| refuse(t, "E_MIXIN_SOURCE", why.clone()))
+                    .collect());
+            }
+            (Some(used), Some(roots))
+        } else {
+            (None, None)
+        };
+        let body = match crate_mirror_rooted(
+            &mut source,
+            source_crate,
+            tree,
+            bridges,
+            used.as_ref(),
+            roots.as_ref(),
+        ) {
             Ok(body) => body,
             Err(why) => {
                 return Err(targets
@@ -1289,6 +1310,110 @@ fn tree_tokens(tree: &Tree) -> proc_macro2::TokenStream {
     quote!(#(#copies)* #(#children)*)
 }
 
+/// The crate-root names the mirror's root must keep for the imports its copies' modules keep, into
+/// `roots`: the names `use` items kept by `used` go through ([`module_root_imports`]), and, until
+/// no more are found, those the root `use`s that bind a name already wanted go through in turn
+/// (`pub use crate::backend as command;` wants `backend` once `command` is wanted).
+fn root_names(
+    source: &mut Source,
+    krate: &str,
+    tree: &Tree,
+    used: &BTreeSet<String>,
+    roots: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    module_root_imports(source, krate, tree, used, roots)?;
+    let items = source.module(krate)?.items.clone();
+    loop {
+        let before = roots.len();
+        for item in uses(&items) {
+            let mut names = Vec::new();
+            collect_names(&item.tree, &mut names);
+            if names
+                .iter()
+                .any(|name| roots.contains(name) || used.contains(name))
+            {
+                root_dependencies(&item.tree, roots);
+            }
+        }
+        if roots.len() == before {
+            return Ok(());
+        }
+    }
+}
+
+/// The crate-root names (`command` in `use crate::command::Dispatcher;`) that the `use` items of
+/// module `path` and of its children in `tree` go through, into `out`: those the mirror keeps, by
+/// the same test [`mirror`] applies, are the ones whose names `used` holds.
+fn module_root_imports(
+    source: &mut Source,
+    path: &str,
+    tree: &Tree,
+    used: &BTreeSet<String>,
+    out: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let items = source.module(path)?.items.clone();
+    for item in uses(&items) {
+        let mut names = Vec::new();
+        collect_names(&item.tree, &mut names);
+        if names.is_empty() || names.iter().any(|name| used.contains(name)) {
+            crate_root_names(&item.tree, false, out);
+        }
+    }
+    for (segment, child) in &tree.children {
+        module_root_imports(source, &format!("{path}::{segment}"), child, used, out)?;
+    }
+    Ok(())
+}
+
+/// What a root `use` goes through, into `out`: the names after `crate::`, and a first segment
+/// that is itself a root name (`use backend as command;`).
+fn root_dependencies(tree: &syn::UseTree, out: &mut BTreeSet<String>) {
+    match tree {
+        syn::UseTree::Path(path) if path.ident == "crate" => {
+            crate_root_names(&path.tree, true, out);
+        }
+        syn::UseTree::Path(path) if path.ident != "self" && path.ident != "super" => {
+            out.insert(path.ident.to_string());
+        }
+        syn::UseTree::Name(name) if name.ident != "self" => {
+            out.insert(name.ident.to_string());
+        }
+        syn::UseTree::Rename(rename) if rename.ident != "self" => {
+            out.insert(rename.ident.to_string());
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                root_dependencies(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The first name after `crate::` in each path of `tree`, into `out`.
+fn crate_root_names(tree: &syn::UseTree, after_crate: bool, out: &mut BTreeSet<String>) {
+    match tree {
+        syn::UseTree::Path(path) if after_crate => {
+            out.insert(path.ident.to_string());
+        }
+        syn::UseTree::Path(path) if path.ident == "crate" => {
+            crate_root_names(&path.tree, true, out);
+        }
+        syn::UseTree::Name(name) if after_crate => {
+            out.insert(name.ident.to_string());
+        }
+        syn::UseTree::Rename(rename) if after_crate => {
+            out.insert(rename.ident.to_string());
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                crate_root_names(item, after_crate, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The identifiers in `tokens`, into `out`.
 pub fn idents_in(tokens: &proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
     for tree in tokens.clone() {
@@ -1433,6 +1558,7 @@ fn original_path(libraries: &BTreeMap<String, String>, path: &str) -> String {
 /// The mirror of crate `krate`, whose copies are in `tree`. The game crate's mirror takes in the
 /// modules its copies reach through imports first ([`reach`]). A lower crate's keeps only the
 /// imports its copies name (`used`): only the game crate's modules are all widened.
+#[cfg(test)]
 fn crate_mirror(
     source: &mut Source,
     krate: &str,
@@ -1440,20 +1566,47 @@ fn crate_mirror(
     bridges: bool,
     used: Option<&BTreeSet<String>>,
 ) -> Result<proc_macro2::TokenStream, String> {
+    crate_mirror_rooted(source, krate, tree, bridges, used, None)
+}
+
+/// [`crate_mirror`] whose crate root also keeps the `use`s that bind a name in `roots`.
+fn crate_mirror_rooted(
+    source: &mut Source,
+    krate: &str,
+    tree: &mut Tree,
+    bridges: bool,
+    used: Option<&BTreeSet<String>>,
+    roots: Option<&BTreeSet<String>>,
+) -> Result<proc_macro2::TokenStream, String> {
     if krate == "horizon_client" {
         reach::extend(source, krate, tree);
     }
-    mirror(source, krate, tree, bridges, used, None)
+    mirror_rooted(source, krate, tree, bridges, used, roots, None)
 }
 
 /// The mirror of module `path` and its children in `tree`; of the items of `files` alone when
 /// they are one of several declarations of the module ([`Variant`]).
+#[cfg(test)]
 fn mirror(
     source: &mut Source,
     path: &str,
     tree: &Tree,
     bridges: bool,
     used: Option<&BTreeSet<String>>,
+    files: Option<&[PathBuf]>,
+) -> Result<proc_macro2::TokenStream, String> {
+    mirror_rooted(source, path, tree, bridges, used, None, files)
+}
+
+/// [`mirror`] whose crate root also keeps the `use`s that bind a name in `roots`: the re-exports
+/// the kept imports of the modules below go through, which no copy names itself.
+fn mirror_rooted(
+    source: &mut Source,
+    path: &str,
+    tree: &Tree,
+    bridges: bool,
+    used: Option<&BTreeSet<String>>,
+    roots: Option<&BTreeSet<String>>,
     files: Option<&[PathBuf]>,
 ) -> Result<proc_macro2::TokenStream, String> {
     let items = match files {
@@ -1536,7 +1689,12 @@ fn mirror(
         collect_names(&pruned, &mut names);
         // In a lower crate only the listed functions' modules are widened, so an import of a
         // private item elsewhere would not resolve: keep only what the copies and helpers name.
-        if used.is_none_or(|used| names.is_empty() || names.iter().any(|name| used.contains(name)))
+        // The crate root also keeps the re-exports the kept imports below it go through (`roots`).
+        let rooted =
+            root && roots.is_some_and(|roots| names.iter().any(|name| roots.contains(name)));
+        if rooted
+            || used
+                .is_none_or(|used| names.is_empty() || names.iter().any(|name| used.contains(name)))
         {
             uses.push(syn::ItemUse {
                 tree: pruned,
@@ -1550,12 +1708,13 @@ fn mirror(
         let child_path = format!("{path}::{name}");
         for variant in variants(source, &child_path) {
             let guard = variant.cfg.map(|cfg| quote!(#[cfg(#cfg)]));
-            let inner = mirror(
+            let inner = mirror_rooted(
                 source,
                 &child_path,
                 child,
                 bridges,
                 used,
+                roots,
                 variant.files.as_deref(),
             )?;
             children.push(quote!(#guard pub mod #ident { #inner }));
