@@ -16,7 +16,8 @@ impl Game<'_> {
         let Some(index) = self.dropped.iter().position(|item| item.id == id) else {
             return false;
         };
-        let Some(kind) = self.motion.health.damage.id(damage_type) else {
+        let registry = &self.health_resources.damage;
+        let Some(kind) = registry.id(damage_type) else {
             return false;
         };
         let creative = self.creative_source_of(causing);
@@ -42,7 +43,6 @@ impl Game<'_> {
         ) {
             return false;
         }
-        let registry = &self.motion.health.damage;
         if !self
             .ui
             .rules

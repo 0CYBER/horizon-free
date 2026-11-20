@@ -135,6 +135,102 @@ fn mob(game: &super::Game<'_>, id: u32, kind: &str) -> Mob {
 
 #[test]
 #[ignore = "daily"]
+fn packaged_damage_type_reaches_the_api_and_damage_command() {
+    use horizon_mod_package::Package;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let package = scratch.path().join("damage_fixture.hmod");
+    let manifest_text = "
+id = 'damage_fixture'
+name = 'Damage fixture'
+version = '1'
+api = '0.2'
+capabilities = ['registries']
+";
+    let files: &[(&str, &[u8])] = &[
+        (
+            "data/damage_fixture/damage_type/shock.json",
+            br#"{"message_id":"damage_fixture.shock","scaling":"never","exhaustion":0.1}"#,
+        ),
+        (
+            "data/minecraft/tags/damage_type/bypasses_invulnerability.json",
+            br#"{"values":["damage_fixture:shock"]}"#,
+        ),
+    ];
+    std::fs::write(
+        &package,
+        Package::write_files(manifest_text, files).unwrap(),
+    )
+    .unwrap();
+    let manifest = Package::read(&package).unwrap().manifest;
+    horizon_mod_package::Content::read(&package, &manifest).unwrap();
+
+    with_game(|game| {
+        // Publish the admitted archive's data as the content loader does.
+        game.pack.data_changes =
+            horizon_assets::resource_source::ResourceSource::archive(&package).unwrap();
+        let mut request = super::world_loading::WorldRequest::new(
+            "registered damage",
+            Some("registered damage"),
+            Some(1),
+            false,
+            None,
+            Arc::new(horizon_client::gamerules::RuleRegistry::vanilla()),
+        )
+        .unwrap();
+        request.save_root = scratch.path().join("world");
+        game.load_world(request).unwrap();
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+        bind_local_player(game, 20, 123);
+        game.set_allow_commands(true);
+
+        let shock = "damage_fixture:shock";
+        assert!(
+            game.health_resources.damage.id(shock).is_some(),
+            "the world loaded the packaged type"
+        );
+
+        game.mobs.push(mob(game, 225015, "minecraft:pig"));
+        let victim = game.entity(225015).unwrap();
+        assert!(game.entity_set_invulnerable(victim, true));
+        assert_eq!(
+            victim.hurt(game, "minecraft:generic", 1.0, None, None),
+            Some(false)
+        );
+        assert!(!game.run_command("damage @s 1 damage_fixture:missing"));
+
+        game.spawn_item(
+            horizon_client::items::ItemStack::new("minecraft:stone", 1),
+            [0.0; 3],
+            [0.0; 3],
+            0,
+        );
+        let item_id = game.just_spawned_item().unwrap().id;
+        let item = game.entity(item_id).unwrap();
+        let native_hit = victim.hurt(game, shock, 1.0, None, None);
+        let command_hit = game.run_command("damage @s 1 damage_fixture:shock");
+        let item_hit = item.hurt(game, shock, 1.0, None, None);
+        assert_eq!(
+            (native_hit, command_hit, item_hit),
+            (Some(true), true, Some(true))
+        );
+        assert_eq!(game.mobs[0].health, 9.0, "the custom tag bypassed the flag");
+        assert_eq!(game.dropped[0].health, 4);
+        assert_eq!(victim.invulnerable_to_damage(game, shock), Some(false));
+
+        let player = game.player.as_mut().unwrap();
+        assert_eq!(player.health.health(), 19.0);
+        assert_eq!(player.health.food.exhaustion, 0.1);
+        let events = std::mem::take(&mut player.events);
+        game.record_combat(&events);
+        let name = horizon_client::text::Text::literal("Player");
+        let death = game.combat_death_message_for(name).component();
+        assert_eq!(death["translate"], "death.attack.damage_fixture.shock");
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn the_original_damage_is_the_hit_before_the_incoming_hook() {
     let heard = heard(|game| {
         let mut pig = mob(game, 225001, "minecraft:pig");

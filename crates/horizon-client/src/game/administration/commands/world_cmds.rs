@@ -197,9 +197,9 @@ impl Game<'_> {
         cause: Option<Target>,
         from: Option<[f64; 3]>,
     ) -> bool {
-        // Resolve the damage registry at the shared command/API boundary before
-        // any target-specific path can mutate state or map it to a DamageKind.
-        if self.motion.health.damage.id(ty).is_none() {
+        // Check the world's damage registry before a target-specific path can
+        // mutate state or map the source to a DamageKind.
+        if self.health_resources.damage.id(ty).is_none() {
             return false;
         }
         let attacker = cause.or(by).and_then(|t| self.network_entity_id(t));
@@ -301,7 +301,7 @@ impl Game<'_> {
                     _ => None,
                 };
                 let damage = Damage {
-                    kind: Self::damage_kind(&self.motion.health.damage, ty),
+                    kind: Self::damage_kind(&self.health_resources.damage, ty),
                     attacker,
                     from,
                     attacker_species,
@@ -335,7 +335,7 @@ impl Game<'_> {
                 id,
                 amount,
                 ty,
-                Self::damage_kind(&self.motion.health.damage, ty),
+                Self::damage_kind(&self.health_resources.damage, ty),
                 (
                     by,
                     cause.or(by),
@@ -345,7 +345,7 @@ impl Game<'_> {
             Target::Crystal(id) => self.command_damage_crystal(
                 id,
                 ty,
-                Self::damage_kind(&self.motion.health.damage, ty),
+                Self::damage_kind(&self.health_resources.damage, ty),
                 by,
                 cause.or(by),
                 from,
@@ -366,7 +366,7 @@ impl Game<'_> {
         causing: Option<Target>,
         position: Option<[f64; 3]>,
     ) -> bool {
-        let registry = &self.motion.health.damage;
+        let registry = &self.health_resources.damage;
         let Some(kind) = registry.id(damage_type) else {
             return false;
         };

@@ -1,0 +1,2 @@
+# Damage from a packaged mod's world registry through EntityRef::hurt and /damage.
+horizon-client game::native_damage_tests::packaged_damage_type_reaches_the_api_and_damage_command lib daily resources

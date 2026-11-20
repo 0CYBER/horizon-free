@@ -1445,11 +1445,10 @@ impl Game<'_> {
         let Some(i) = self.armor_stands.iter().position(|a| a.id == id) else {
             return false;
         };
-        let registry = &self.motion.health.damage;
+        let registry = &self.health_resources.damage;
         let Some(kind) = registry.id(damage_type) else {
             return false;
         };
-        let tagged = |tag: &str| registry.in_tag(kind, tag);
         if !self
             .ui
             .rules
@@ -1458,7 +1457,7 @@ impl Game<'_> {
         {
             return false;
         }
-        if tagged("minecraft:bypasses_invulnerability") {
+        if registry.in_tag(kind, "minecraft:bypasses_invulnerability") {
             self.kill_target(Target::Stand(id));
             return false;
         }
@@ -1488,6 +1487,8 @@ impl Game<'_> {
             Some(Target::Player | Target::Guest(_) | Target::Mob(_)) => causing,
             _ => None,
         };
+        let registry = &self.health_resources.damage;
+        let tagged = |tag: &str| registry.in_tag(kind, tag);
         let (explosion, ignites, burns) = (
             tagged("minecraft:is_explosion"),
             tagged("minecraft:ignites_armor_stands"),

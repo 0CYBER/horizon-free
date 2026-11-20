@@ -6,6 +6,7 @@ use horizon_client::motion::MotionEvent;
 
 impl Game<'_> {
     /// Run equipment continuations with the acting player installed on the real host.
+    /// The source ID belongs to the world's damage catalog throughout the hit.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn hurt_player_equipment(
         &mut self,
@@ -28,7 +29,7 @@ impl Game<'_> {
             .ok_or("missing damage target")?
             .start_hurt(
                 crate::game::entity::damage_level_of!(self, attack),
-                &self.motion.health,
+                &self.health_resources,
                 rules,
                 source,
                 amount,
@@ -51,7 +52,7 @@ impl Game<'_> {
             .ok_or("missing damage target")?
             .select_equipment_hurt(
                 crate::game::entity::damage_level_of!(self, attack),
-                &self.motion.health,
+                &self.health_resources,
                 rules,
                 &mut hit,
             )?;
@@ -65,7 +66,7 @@ impl Game<'_> {
             .ok_or("missing damage target")?
             .finish_hurt(
                 crate::game::entity::damage_level_of!(self, attack),
-                &self.motion.health,
+                &self.health_resources,
                 rules,
                 hit,
             )

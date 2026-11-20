@@ -450,7 +450,7 @@ impl Game<'_> {
                 // LivingEntity.hurtServer reached resolvePlayerResponsibleForDamage:
                 // every hit that got past the cooldown, absorbed or blocked too.
                 MotionEvent::Health(HealthEvent::Criterion { source, .. }) => {
-                    if let Some(d) = self.motion.health.damage.definition(*source) {
+                    if let Some(d) = self.health_resources.damage.definition(*source) {
                         let attacker = match recorded.take() {
                             Some((t, id)) if t == d.name => Some(id),
                             _ => {
