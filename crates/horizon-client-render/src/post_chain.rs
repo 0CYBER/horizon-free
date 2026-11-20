@@ -1118,22 +1118,9 @@ impl PostEffects {
         Ok(pass)
     }
 
-    /// `textures/effect/<location>.png` as a texture (`PostChain.createPass`'s `TextureInput`).
-    fn image(
-        root: &ResourceSource,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        location: &str,
-    ) -> Result<(wgpu::Texture, wgpu::TextureView, [u32; 2]), String> {
-        let (ns, path) = location.split_once(':').unwrap_or(("minecraft", location));
-        let file = format!("assets/{ns}/textures/effect/{path}.png");
-        let bytes = root.read(&file).map_err(|e| format!("{file}: {e}"))?;
-        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-        // As the other resource-pack images: stb_image never checks chunk CRCs.
-        decoder.ignore_checksums(true);
-        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-        let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
-        let mut data = vec![0; reader.output_buffer_size().ok_or("a huge image")?];
+    /// A post effect image's PNG `bytes` as its frame and RGBA pixels.
+    fn decode_image(bytes: Vec<u8>) -> Result<(png::OutputInfo, Vec<u8>), String> {
+        let (mut reader, mut data) = crate::hud::read_png(bytes)?;
         let info = reader.next_frame(&mut data).map_err(|e| e.to_string())?;
         let rgba: Vec<u8> = match info.color_type {
             png::ColorType::Rgba => data[..info.buffer_size()].to_vec(),
@@ -1155,6 +1142,20 @@ impl PostEffects {
                 .collect(),
             png::ColorType::Indexed => return Err("an indexed image".into()),
         };
+        Ok((info, rgba))
+    }
+
+    /// `textures/effect/<location>.png` as a texture (`PostChain.createPass`'s `TextureInput`).
+    fn image(
+        root: &ResourceSource,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        location: &str,
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, [u32; 2]), String> {
+        let (ns, path) = location.split_once(':').unwrap_or(("minecraft", location));
+        let file = format!("assets/{ns}/textures/effect/{path}.png");
+        let bytes = root.read(&file).map_err(|e| format!("{file}: {e}"))?;
+        let (info, rgba) = Self::decode_image(bytes)?;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Post effect image"),
             size: wgpu::Extent3d {
@@ -2586,6 +2587,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod effect_image_size_tests {
+    /// A post effect image whose header claims more pixels than a full atlas fails the chain as
+    /// an undecodable one does, before memory for its pixels is reserved.
+    #[test]
+    fn an_effect_image_claiming_a_huge_size_is_refused() {
+        let png = crate::hud::claimed_size_png(16_385, 16_384);
+        let error = super::PostEffects::decode_image(png).unwrap_err();
+        assert!(error.contains("16385x16384 PNG is larger"), "{error}");
+    }
+
+    #[test]
+    fn an_effect_image_still_decodes() {
+        let (info, rgba) = super::PostEffects::decode_image(crate::hud::grey_png(4, 2)).unwrap();
+        assert_eq!((info.width, info.height), (4, 2));
+        assert_eq!(rgba, [128, 128, 128, 255].repeat(8));
     }
 }
 

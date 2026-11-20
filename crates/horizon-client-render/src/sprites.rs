@@ -790,11 +790,12 @@ impl Sprites {
         // Layers are square; a frame of another shape is nearest-resampled to
         // its longer side so UVs (normalized per layer) are unchanged.
         let side = width.max(height);
+        check_frames(side, count).map_err(|e| format!("sprite {name}: {e}"))?;
         let mut frames = Vec::new();
         for index in 0..count {
             let x = index % columns * width;
             let y = index / columns * height;
-            let mut frame = Vec::with_capacity((side * side * 4) as usize);
+            let mut frame = Vec::with_capacity(side as usize * side as usize * 4);
             for row in 0..side {
                 let source_row = y + row * height / side;
                 for column in 0..side {
@@ -927,6 +928,21 @@ impl Sprites {
     }
 }
 
+/// Refuses a sprite's frames before their square layers are made. A frame of any shape becomes a
+/// `side` x `side` layer, so a 32768x1 image of a few hundred bytes would otherwise ask for 4 GiB.
+/// A side may be at most [`MAX_ATLAS_SIZE`](crate::hud::MAX_ATLAS_SIZE), and all `count` squares
+/// together at most a full atlas, the ceiling [`crate::hud::read_png`] puts on the image.
+pub(crate) fn check_frames(side: u32, count: u32) -> std::result::Result<(), String> {
+    let atlas = u128::from(crate::hud::MAX_ATLAS_SIZE);
+    let texels = u128::from(count) * u128::from(side) * u128::from(side);
+    if u128::from(side) > atlas || texels > atlas * atlas {
+        return Err(format!(
+            "{count} frames of {side}x{side} are larger than any atlas"
+        ));
+    }
+    Ok(())
+}
+
 /// A PNG's width, height and pixels as RGBA. From the prepared data file
 /// when it holds the texture: no file opened per texture, nor for its absent
 /// LabPBR maps.
@@ -934,16 +950,7 @@ fn read_rgba(source: &ResourceSource, path: &str) -> Result<(u32, u32, Vec<u8>)>
     decode_rgba(&source.read(path)?)
 }
 pub(crate) fn decode_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    decoder.ignore_checksums(true);
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info()?;
-    let mut bytes = vec![
-        0;
-        reader
-            .output_buffer_size()
-            .ok_or("sprite exceeds decoder limits")?
-    ];
+    let (mut reader, mut bytes) = crate::hud::read_png(bytes)?;
     let info = reader.next_frame(&mut bytes)?;
     let channels = info.color_type.samples();
     let mut pixels = Vec::with_capacity(info.width as usize * info.height as usize * 4);
@@ -1002,11 +1009,12 @@ fn pbr_map(
         return None;
     }
     let side = w.max(h);
+    check_frames(side, columns * rows).ok()?;
     let output_side = side_within(side, LAYERS_AT_LEAST, max_map_bytes()).min(side);
     let frames = (0..columns * rows)
         .map(|index| {
             let (x, y) = (index % columns * w, index / columns * h);
-            let mut frame = Vec::with_capacity((side * side * 4) as usize);
+            let mut frame = Vec::with_capacity(side as usize * side as usize * 4);
             for row in 0..side {
                 for column in 0..side {
                     let offset =
@@ -1858,5 +1866,91 @@ mod tests {
         let stepped = test_clip(16, 0, r#"{"frametime":4}"#);
         assert_eq!(stepped.blend(1), blend(0, 0, 0));
         assert_eq!(stepped.blend(5), blend(1, 1, 0));
+    }
+}
+
+#[cfg(test)]
+mod png_size_tests {
+    use crate::hud::{claimed_size_png, grey_png};
+
+    /// A block texture whose header claims more pixels than a full atlas is refused from its
+    /// header, as an undecodable one is, before memory for its pixels is reserved.
+    #[test]
+    fn a_sprite_claiming_a_huge_size_is_refused() {
+        let error = super::decode_rgba(&claimed_size_png(16_385, 16_384)).unwrap_err();
+        assert!(
+            error.to_string().contains("16385x16384 PNG is larger"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_sprite_at_the_side_limit_still_decodes() {
+        let side = crate::atlas_sources::MAX_SPRITE_SIDE as u32;
+        let (width, height, rgba) = super::decode_rgba(&grey_png(side, 1)).unwrap();
+        assert_eq!((width, height, rgba.len()), (side, 1, side as usize * 4));
+    }
+
+    fn decode_sprite(
+        png: &[u8],
+        mcmeta: Option<&str>,
+    ) -> crate::Result<crate::sprite_cache::Decoded> {
+        let path = "assets/minecraft/textures/block/test.png";
+        let files = mcmeta.map(|text| {
+            (
+                format!("{path}.mcmeta"),
+                horizon_assets::resource_source::Resource::bytes(text.as_bytes().to_vec()),
+            )
+        });
+        let source = super::ResourceSource::indexed(files.into_iter().collect());
+        super::Sprites::decode_file_data(&source, path, "minecraft:block/test", Some(png))
+    }
+
+    /// A real 32768x1 (or 1x32768) PNG is a few hundred bytes, decodes to 128 KiB, and its
+    /// square layer would be 4 GiB: it is refused before the square is made.
+    #[test]
+    fn a_sprite_whose_square_frame_no_atlas_holds_is_refused() {
+        let side = crate::atlas_sources::MAX_SPRITE_SIDE as u32;
+        for (width, height) in [(side, 1), (1, side)] {
+            let error = decode_sprite(&grey_png(width, height), None).err().unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("1 frames of 32768x32768 are larger"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tall_animation_strip_still_loads() {
+        let decoded = decode_sprite(&grey_png(16, 64), Some(r#"{"animation":{}}"#)).unwrap();
+        assert_eq!((decoded.side, decoded.frames.len()), (16, 4));
+        assert_eq!(decoded.frames[3], [128, 128, 128, 255].repeat(256));
+    }
+
+    /// A strip of 16x16 frames a little over 32768 pixels tall (about 2 MiB) loads in the Java
+    /// game: its sheet is longer than any texture side, its frames are small.
+    #[test]
+    fn a_strip_longer_than_any_texture_side_loads() {
+        let height = crate::atlas_sources::MAX_SPRITE_SIDE as u32 + 16;
+        let decoded = decode_sprite(&grey_png(16, height), Some(r#"{"animation":{}}"#)).unwrap();
+        assert_eq!(
+            (decoded.side, decoded.frames.len()),
+            (16, height as usize / 16)
+        );
+    }
+
+    /// The largest frame the check lets through is 1 GiB, too heavy to decode in CI: its edges
+    /// are tested on the check alone.
+    #[test]
+    fn frames_are_bounded_by_the_atlas() {
+        let atlas = crate::hud::MAX_ATLAS_SIZE;
+        assert_eq!(super::check_frames(atlas, 1), Ok(()));
+        assert!(super::check_frames(atlas + 1, 1).is_err());
+        assert!(super::check_frames(atlas, 2).is_err());
+        assert_eq!(super::check_frames(16, atlas * atlas / 256), Ok(()));
+        assert!(super::check_frames(16, atlas * atlas / 256 + 1).is_err());
+        assert!(super::check_frames(u32::MAX, u32::MAX).is_err());
     }
 }
