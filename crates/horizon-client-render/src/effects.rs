@@ -687,6 +687,14 @@ pub fn effect_modifier(effect: &str) -> Option<(&'static str, &'static str, f64,
             -1.0,
             "add_value",
         )),
+        // MobEffects.INVISIBILITY: MobEffects.java:58-67. -1.0 multiplied
+        // total drops waypoint_transmit_range to zero (+1 per level).
+        "invisibility" => Some((
+            "minecraft:waypoint_transmit_range",
+            "minecraft:effect.waypoint_transmit_range_hide",
+            -1.0,
+            "add_multiplied_total",
+        )),
         _ => None,
     }
 }
@@ -993,5 +1001,25 @@ mod tests {
                 "add_value",
             )]
         );
+    }
+
+    /// `MobEffects.INVISIBILITY` hides the player from locator bars through a
+    /// -1.0 multiplied-total modifier on waypoint_transmit_range, scaled by
+    /// amplifier + 1 (`MobEffect.AttributeTemplate.create`).
+    #[test]
+    fn invisibility_modifier_hides_the_waypoint_transmit_range() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("invisibility", 600, 0));
+        assert_eq!(
+            fx.modifiers(),
+            vec![(
+                "minecraft:waypoint_transmit_range",
+                "minecraft:effect.waypoint_transmit_range_hide",
+                -1.0,
+                "add_multiplied_total",
+            )]
+        );
+        fx.add(EffectInstance::new("invisibility", 600, 2));
+        assert_eq!(fx.modifiers()[0].2, -3.0);
     }
 }
