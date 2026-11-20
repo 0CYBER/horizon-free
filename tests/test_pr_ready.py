@@ -335,7 +335,7 @@ class PrReadyTests(unittest.TestCase):
                 self.assertLess(steps.index(actor), next(i for i, step in enumerate(steps)
                                 if step.name.startswith("tests")))
                 self.assertLess(steps.index(actor), steps.index(by_name["launcher tests"]))
-        for path in ("README.md", "crates/horizon-core/src/lib.rs"):
+        for path in ("README.md", "crates/horizon-client/src/lib.rs"):
             with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, packages,
                                       LIBRARIES, DEPENDENCIES)
@@ -744,7 +744,8 @@ class PrReadyTests(unittest.TestCase):
         self.assertIn("2 affected, to run in CI (--quick): food, light", harness.detail)
         by_name = {step.name: step for step in steps}
         self.assertIn("tests: horizon-world", by_name)
-        self.assertEqual(by_name["launcher clippy"].status, "skip")
+        # horizon-world is built into the launcher (horizon-platform's world feature), so its checks run too.
+        self.assertIsNone(by_name["launcher clippy"].status)
         self.assertIsNone(by_name["clippy"].status)
         with mock.patch.object(pr_ready, "affected_here", return_value=["food"]):
             steps = pr_ready.plan(args(host="macmini", harnesses=True), "origin/main", changed, {"horizon-world": "crates/horizon-world"}, {"horizon-world"}, {})
