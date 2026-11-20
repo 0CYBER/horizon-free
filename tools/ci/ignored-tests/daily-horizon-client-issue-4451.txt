@@ -508,6 +508,7 @@ horizon-client game::dispenser::tests::the_faced_block_answers_before_the_item_a
 horizon-client game::dragon::dragon_fireball_spawn_tests::the_dragons_fireball_direction_is_normalized_twice lib daily resources
 horizon-client game::dragon::dragon_fireball_spawn_tests::the_dragons_fireball_first_world_tick lib daily resources
 horizon-client game::dragon::dragon_fireball_spawn_tests::the_dragons_fireball_starts_at_its_start_with_a_tenth_of_its_direction lib daily resources
+horizon-client game::dragon::egg_tests::every_win_asks_dragon_fight_won_and_dragon_egg_form_keeps_to_the_first lib daily resources
 horizon-client game::dragon::residency_tests::singleton_client_dragon_install_explicitly_replaces_network_owner lib daily resources
 horizon-client game::dragon::residency_tests::singleton_death_fight_scan_and_resets_discard_owners lib daily resources
 horizon-client game::dragon::residency_tests::singleton_dragon_load_keeps_state_and_reserves_nine_ids lib daily resources

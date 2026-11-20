@@ -127,6 +127,21 @@ impl GameLevel<'_> {
         self.fire_dragon_egg_form(dimension, pos, cancel);
     }
 
+    /// The Ender Dragon fight is won, on every win: `pos` is where its egg forms, `won_before`
+    /// whether the fight was won before, `forms` whether an egg forms unless a mod answers.
+    /// A mod's answer in `egg` places one or leaves the block. Server-side.
+    #[inline(always)]
+    pub(in crate::game) fn native_dragon_fight_won(
+        &self,
+        dimension: LevelDimension,
+        pos: BlockPos,
+        won_before: bool,
+        forms: bool,
+        egg: &mut Option<bool>,
+    ) {
+        self.fire_dragon_fight_won(dimension, pos, won_before, forms, egg);
+    }
+
     /// An authoritative server is about to deliver `neighborChanged`.
     /// State and block IDs are valid in this level's registries for this call.
     /// The host is the level with its ticks, as vanilla's `neighborChanged` gets the
