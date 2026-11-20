@@ -1,0 +1,4 @@
+# Client quit tests use prepared resources.
+horizon-client game::window_handler::tests::client_mod_quit_refuses_inactive_host_contexts lib daily resources
+horizon-client game::window_handler::tests::client_mod_quit_saves_and_unlocks_the_integrated_world_before_exit lib daily resources
+horizon-client game::window_handler::tests::client_mod_quit_waits_for_the_title_hook_and_runs_normal_shutdown lib daily resources

@@ -2,7 +2,27 @@
 //! and the idle step (`about_to_wait`).
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClientQuit {
+    Running,
+    Queued,
+    ShuttingDown,
+}
+
 impl Game<'_> {
+    /// Record the request without saving or entering other mod hooks from this hook.
+    pub(super) fn request_client_quit(&self) -> bool {
+        if !self.options.is_client_start()
+            || self.options.headless
+            || self.error.is_some()
+            || self.client_quit.get() != ClientQuit::Running
+        {
+            return false;
+        }
+        self.client_quit.set(ClientQuit::Queued);
+        true
+    }
+
     /// A run that a person's stray key, click or mouse move would spoil: a screenshot sequence, a
     /// `HORIZON_TICK_SCRIPT` scenario or a `record-replay`. While one runs, the keyboard, mouse
     /// and pad at this computer don't reach the game (`locks_out`, `poll_pads`), the window's
@@ -235,6 +255,7 @@ impl Game<'_> {
 
     /// The loop ended: close the pads' output, save the world.
     pub(super) fn shut_down(&mut self) {
+        self.client_quit.set(ClientQuit::ShuttingDown);
         if self.error.is_none()
             && let Some(renderer) = &mut self.renderer
         {
@@ -258,11 +279,12 @@ impl Game<'_> {
     /// save, world entry, the control socket, pads), then the next frame.
     pub(super) fn idle(&mut self, event_loop: &dyn EventLoopCtl) {
         // A splitscreen player's game has nothing to save: P1's shuts the process down.
-        if horizon_threads::stop_requests() > 0
-            && !self.options.split_guest
-            && self.pending_save.as_ref().is_none_or(|save| !save.quit)
+        let client_quit = self.client_quit.get();
+        if !self.options.split_guest
+            && client_quit != ClientQuit::ShuttingDown
+            && (client_quit == ClientQuit::Queued || horizon_threads::stop_requests() > 0)
         {
-            // SIGTERM, SIGINT or SIGHUP: the shutdown hook's server halt, as a window close.
+            // A mod hook or a signal requested the normal closing save.
             if let Err(error) = self.begin_closing_save(true) {
                 self.error = Some(error);
                 event_loop.exit();
@@ -504,9 +526,182 @@ impl ApplicationHandler for Game<'_> {
 mod tests {
     use super::*;
     use input_trace::InputOrigin;
+    use std::cell::Cell;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
     use winit::event::{Ime, Modifiers, TouchPhase};
     use winit::keyboard::ModifiersState;
+
+    #[derive(Default)]
+    struct TestLoop {
+        exit_requested: Cell<bool>,
+    }
+    impl EventLoopCtl for TestLoop {
+        fn exit(&self) {
+            self.exit_requested.set(true);
+        }
+        fn set_control_flow(&self, _: ControlFlow) {}
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn client_mod_quit_waits_for_the_title_hook_and_runs_normal_shutdown() {
+        use mod_api::{
+            ClientHost, ClientStoppingEvent, Flow, Hooks, ModEntry, ScreenKeyPressedPreEvent,
+        };
+        use std::sync::Mutex;
+
+        struct QuitMod(Arc<Mutex<Vec<(&'static str, bool)>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for QuitMod {
+            fn screen_key_pressed_pre(
+                &self,
+                host: &dyn ClientHost,
+                event: &mut ScreenKeyPressedPreEvent<'_>,
+            ) -> Flow {
+                if event.screen.id != "title" || event.key != "key.keyboard.enter" {
+                    return Flow::Continue;
+                }
+                let accepted = host.request_client_quit();
+                let duplicate = host.request_client_quit();
+                self.0
+                    .lock()
+                    .unwrap()
+                    .extend([("confirm", accepted), ("duplicate", duplicate)]);
+                Flow::Cancel
+            }
+            fn client_stopping(&self, host: &mut dyn ClientHost, _: &mut ClientStoppingEvent) {
+                let accepted = host.request_client_quit();
+                self.0.lock().unwrap().push(("stopping", accepted));
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![ModEntry::new("quit", Box::new(QuitMod(log.clone())))].into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                game.title = Some(game.new_title(game.save.root.join("saves")));
+                let batch = HudBatch::scratch([854, 480]);
+                let screen = game.title_screen_view(&batch).unwrap();
+                let event_loop = TestLoop::default();
+                let mut canceled = false;
+                game.native_screen_key_pressed_pre(
+                    &screen,
+                    "key.keyboard.enter",
+                    false,
+                    0,
+                    &mut canceled,
+                );
+                assert!(canceled, "the mod handled the confirmation");
+                assert_eq!(
+                    *log.lock().unwrap(),
+                    [("confirm", true), ("duplicate", false)]
+                );
+                assert!(
+                    game.pending_save.is_none(),
+                    "the hook must not start saving"
+                );
+                assert!(!event_loop.exit_requested.get());
+
+                game.idle(&event_loop);
+                assert!(
+                    event_loop.exit_requested.get(),
+                    "the idle loop must request exit"
+                );
+                assert!(game.error.is_none());
+                game.shut_down();
+                assert_eq!(
+                    *log.lock().unwrap(),
+                    [("confirm", true), ("duplicate", false), ("stopping", false)]
+                );
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn client_mod_quit_saves_and_unlocks_the_integrated_world_before_exit() {
+        use horizon_client::save::{Level, SessionLock, WorldPreset};
+        use horizon_client::title::WorldOptions;
+        use mod_api::ClientHost;
+
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                let world = game.save.root.join("quit-test");
+                let create = WorldOptions {
+                    world_type: WorldPreset::Flat,
+                    structures: false,
+                    ..WorldOptions::default()
+                };
+                game.options.player_name = Some("QuitTester".into());
+                game.settings.simulation_distance = 2;
+                game.settings.render_distance = 2;
+                game.open_integrated(
+                    world.to_str().unwrap(),
+                    Some("Before quit"),
+                    Some(42),
+                    false,
+                    Some(&create),
+                )
+                .unwrap();
+                let server = game.integrated.as_ref().unwrap();
+                assert!(SessionLock::is_locked(&world));
+                server
+                    .call(|server_game| server_game.level.name = "Saved on quit".into())
+                    .expect("the active integrated server must take the change");
+
+                assert!((game as &dyn ClientHost).request_client_quit());
+                let event_loop = TestLoop::default();
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !event_loop.exit_requested.get() {
+                    game.idle(&event_loop);
+                    assert!(game.error.is_none(), "{:?}", game.error);
+                    assert!(
+                        Instant::now() < deadline,
+                        "the integrated save did not finish"
+                    );
+                    if !event_loop.exit_requested.get() {
+                        std::thread::sleep(Duration::from_millis(4));
+                    }
+                }
+
+                assert!(game.integrated.is_none());
+                assert_eq!(Level::read(&world).unwrap().name, "Saved on quit");
+                assert!(!SessionLock::is_locked(&world));
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn client_mod_quit_refuses_inactive_host_contexts() {
+        use crate::game::execution_role::ExecutionRole;
+        use mod_api::__private::{ModPhase, PhaseOwner};
+        use mod_api::ClientHost;
+
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                game.options.headless = true;
+                assert!(!(game as &dyn ClientHost).request_client_quit());
+                game.options.headless = false;
+                game.options.split_guest = true;
+                assert!(!(game as &dyn ClientHost).request_client_quit());
+                game.options.split_guest = false;
+                for role in [
+                    ExecutionRole::IntegratedServer,
+                    ExecutionRole::DedicatedServer,
+                ] {
+                    game.options.execution_role = role;
+                    assert!(!(game as &dyn ClientHost).request_client_quit());
+                }
+                game.options.execution_role = ExecutionRole::Client;
+                {
+                    let _reload = PhaseOwner::scope(ModPhase::Reloading);
+                    assert!(!(game as &dyn ClientHost).request_client_quit());
+                }
+                assert!((game as &dyn ClientHost).request_client_quit());
+            });
+        });
+    }
 
     // A key's `KeyEvent` can't be made outside winit; these are the person's other inputs.
     fn inputs() -> Vec<WindowEvent> {

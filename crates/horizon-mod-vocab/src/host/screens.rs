@@ -86,6 +86,17 @@ pub trait ScreensClientHost {
     /// cannot act).
     #[access(WorldOnly)]
     fn close_screen(&mut self) -> bool;
+    /// Queues the primary window's normal Quit Game action after the current
+    /// hook dispatch. The game follows its usual shutdown path, including
+    /// saving and stopping an integrated server when one is open.
+    /// Returns true when the request is queued. Returns false for a headless
+    /// client, a splitscreen guest, a server, a load phase without client
+    /// services, or a quit already queued or in progress.
+    ///
+    /// Not on wasm: process-wide quit is a native client action.
+    #[access(ClientSetup)]
+    #[default_on_unavailable]
+    fn request_client_quit(&self) -> bool;
     /// Side: client.
     /// Opens the player's inventory as the inventory key does: locally, with
     /// no packet (the player menu is always open on the server). Riding a

@@ -1,6 +1,6 @@
 //! The save screen freezes simulation, but keeps pumping window events while
 //! snapshots are prepared in small batches and the region workers drain.
-use super::{Game, loading_frame};
+use super::{ClientQuit, Game, loading_frame};
 use horizon_client::{Result, hud::HudBatch};
 use std::{
     collections::{HashSet, VecDeque},
@@ -40,6 +40,9 @@ impl Game<'_> {
             })
     }
     pub(super) fn begin_closing_save(&mut self, quit: bool) -> Result<()> {
+        if quit {
+            self.client_quit.set(ClientQuit::ShuttingDown);
+        }
         if let Some(save) = &mut self.pending_save {
             save.quit |= quit;
             return Ok(());

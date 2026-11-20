@@ -39,3 +39,12 @@ with its own inventory (a tamed mount or a chest boat), it sends the open-invent
 the sign's block position and whether its front side is being edited. It returns `None` with no sign
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
+
+## Quit Game
+
+A native client mod with its own Quit Game confirmation can call `host.request_client_quit()`
+after the player confirms. The call works from a title input hook's shared `ClientHost`.
+It returns `true` when queued, then the client starts its normal shutdown after the hook
+dispatch returns. This includes saving and stopping an open integrated server.
+It returns `false` if a quit is already queued or underway, or when the host cannot quit
+the primary window, for example on a headless client or a splitscreen guest.
