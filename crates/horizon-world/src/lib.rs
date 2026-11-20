@@ -66,6 +66,7 @@ pub mod food;
 pub mod food_properties;
 pub mod food_storage;
 pub mod free_space;
+pub mod fs_sync;
 pub mod ground_support;
 pub mod heightmap;
 pub mod holder_set;

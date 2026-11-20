@@ -422,6 +422,39 @@ impl RegionFile {
         )
     }
 
+    /// The chunk as [`read`](Self::read) would give it with its `c.X.Z.mcc`
+    /// taken from `directory`: `None` unless its stub marks it as stored in
+    /// that file (and that file is there).
+    pub fn read_external_from(
+        &mut self,
+        chunk: ChunkPos,
+        directory: &Path,
+    ) -> io::Result<Option<ChunkRecord>> {
+        if !self.is_external(chunk)? {
+            return Ok(None);
+        }
+        let i = slot(self.position, chunk)?;
+        read_record(
+            &mut self.file,
+            directory,
+            chunk,
+            self.offsets[i],
+            self.timestamps[i],
+        )
+    }
+
+    /// Whether the chunk's stub marks it as stored in its own `c.X.Z.mcc`.
+    pub fn is_external(&mut self, chunk: ChunkPos) -> io::Result<bool> {
+        let offset = self.offsets[slot(self.position, chunk)?];
+        if offset == 0 {
+            return Ok(false);
+        }
+        self.file
+            .seek(SeekFrom::Start(u64::from(offset >> 8) * SECTOR as u64))?;
+        let mut header = [0; 5];
+        Ok(self.file.read(&mut header)? == header.len() && header[4] & 128 != 0)
+    }
+
     /// Export all chunks, preserving untouched compressed bytes and timestamps.
     /// Overrides are keyed by chunk position; None deletes a chunk in the export.
     pub fn export(
@@ -616,6 +649,12 @@ impl RegionWriter {
         self.timestamps[i] = record.timestamp;
         self.next_sector += sectors;
         Ok(())
+    }
+
+    /// The `c.X.Z.mcc` files written so far beside the destination, one per
+    /// oversized chunk.
+    pub fn external_files(&self) -> &[PathBuf] {
+        &self.externals
     }
 
     pub fn finish(mut self) -> io::Result<()> {
