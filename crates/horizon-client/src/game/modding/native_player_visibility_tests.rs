@@ -209,6 +209,20 @@ fn player_sees_follows_the_trackers_rules() {
         guests.update_connection(13, |g| g.game_mode = 3);
         assert_eq!(a.sees(game, b), Ok(false), "a spectator");
         assert_eq!(b.sees(game, a), Ok(true));
+        // A player being sent again is out of the tracker's world and the Tab list: not seen meanwhile,
+        // whatever the viewer's level, and seen again (at the level a mod hid them at) when it ends.
+        let guests = &mut game.lan.as_mut().unwrap().hub.guests;
+        guests.update_connection(13, |g| g.game_mode = 0);
+        assert_eq!(a.sees(game, b), Ok(true));
+        assert!(game.player_refresh(b));
+        assert_eq!(a.sees(game, b), Ok(false), "refreshing");
+        assert_eq!(b.sees(game, a), Ok(true), "the others are unaffected");
+        let like_the_list = game.lan.as_ref().unwrap().hub.sees(3, 13);
+        assert_eq!(a.sees(game, b), Ok(like_the_list));
+        let hub = &mut game.lan.as_mut().unwrap().hub;
+        hub.ticks += 2;
+        hub.end_refreshes();
+        assert_eq!(a.sees(game, b), Ok(true));
     });
 }
 

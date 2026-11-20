@@ -14,8 +14,8 @@ use horizon_client::server_perf::{
     world::{LevelCounts, MobCost, MobCosts, WorkerJobs},
 };
 use horizon_client::{spans, streaming::job_stats};
-pub(super) use horizon_gameplay::dedicated::report::{Command, MAX_SECONDS, parse, parse_trace};
 pub(in crate::game) use horizon_gameplay::dedicated::report::LOOSE_ENTITIES;
+pub(super) use horizon_gameplay::dedicated::report::{Command, MAX_SECONDS, parse, parse_trace};
 use horizon_perf_format::{
     files,
     v1::{GpuMode, HorizonOptions, Start, StopReason, Trigger},

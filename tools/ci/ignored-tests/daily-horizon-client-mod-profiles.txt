@@ -1,0 +1,3 @@
+# horizon-rust/horizon#17887: these tests read the prepared 26.3 data.
+horizon-client game::native_profile_skin_tests::a_new_skin_is_set_and_the_player_sent_again lib daily resources
+horizon-client game::native_profiles_tests::profiles_come_from_the_players_on_without_a_lookup lib daily resources

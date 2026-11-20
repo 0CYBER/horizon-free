@@ -199,8 +199,11 @@ pub struct Guest {
     pub personal_sidebar: bool,
     pub uuid: u128,
     pub name: String,
-    /// The profile's properties, for the player list (skins).
+    /// The properties the player logged in with (`ServerPlayer.getGameProfile`).
     pub properties: Vec<horizon_protocol::packets::login::Property>,
+    /// The properties a native mod set (`player_set_profile_property`): overrides by name over the login
+    /// ones in what is published (the player list, the profile lookups), never in `properties` itself.
+    pub profile_overrides: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -717,6 +720,7 @@ impl Guest {
             uuid: j.uuid,
             name: j.name,
             properties: j.properties,
+            profile_overrides: Vec::new(),
             entity_id,
             sender: j.sender,
             latency: j.latency,

@@ -369,6 +369,9 @@ pub struct Hub {
     /// only players of at least that permission level see them, in the
     /// player list, the world and their joining and leaving.
     pub hidden: crate::fast_hash::FxHashMap<u128, u8>,
+    /// Players `refresh_player` hid from everyone: the level a mod hid them
+    /// at before (`hidden`), and the tick it began.
+    refreshing: Vec<(u128, u64)>,
     pub lan: Lan,
     pub config: HubConfig,
     /// What the hooks fired inside a click or a name format are given; the
@@ -857,6 +860,7 @@ impl Hub {
             native_reload_pending: false,
             mods_loaded: false,
             hidden: Default::default(),
+            refreshing: Vec::new(),
             teams: Vec::new(),
             nicknames: std::collections::HashMap::new(),
             list_names: std::collections::HashMap::new(),
@@ -1342,9 +1346,13 @@ impl Hub {
     /// Whether a player of `permission` sees the player `uuid`: not one a
     /// native mod hid from players below a higher level.
     pub fn sees(&self, permission: u8, uuid: u128) -> bool {
-        self.hidden
-            .get(&uuid)
-            .is_none_or(|&level| permission >= level)
+        // A player being sent again (`refresh_player`) is out of everyone's lists for that time; the level a
+        // mod hid them at is a separate thing and stays what the mod set.
+        !self.refreshing.iter().any(|r| r.0 == uuid)
+            && self
+                .hidden
+                .get(&uuid)
+                .is_none_or(|&level| permission >= level)
     }
 
     /// The player lists after `hidden` or a permission changed: each placed
@@ -1353,7 +1361,10 @@ impl Hub {
     /// checks the client's entity pairs again, so the tracker follows too.
     /// Nothing runs while nobody is hidden.
     fn sync_hidden(&mut self) {
-        if self.hidden.is_empty() && self.guests.iter().all(|g| g.tab_hidden.is_empty()) {
+        if self.hidden.is_empty()
+            && self.refreshing.is_empty()
+            && self.guests.iter().all(|g| g.tab_hidden.is_empty())
+        {
             return;
         }
         let candidates: Vec<usize> = (0..self.guests.len())
@@ -1362,11 +1373,15 @@ impl Hub {
                 self.guests[j].placed
                     && self.guests[j].participates_online()
                     && (self.hidden.contains_key(&u)
+                        || self.refreshing.iter().any(|r| r.0 == u)
                         || self.guests.iter().any(|g| g.tab_hidden.contains(&u)))
             })
             .collect();
         for i in 0..self.guests.len() {
-            if !self.guests[i].placed || !self.guests[i].participates_online() {
+            // A held client (waiting for its hand-over) keeps a picture of the players, the refresh included.
+            if !(self.guests[i].placed || self.guests[i].held)
+                || !self.guests[i].participates_online()
+            {
                 continue;
             }
             for &j in &candidates {
@@ -1419,6 +1434,7 @@ impl Hub {
                 .map(|g| {
                     listed_properties(
                         &g.properties,
+                        &g.profile_overrides,
                         self.singleplayer_owner == Some(g.uuid),
                         self.lan.shared.config.owner_profile.as_deref(),
                     )
@@ -1449,6 +1465,18 @@ impl Hub {
     }
     /// ClientboundPlayerInfoUpdatePacket.createPlayerInitializing: every action.
     const INFO_ACTIONS: u8 = 0xFF;
+
+    /// The player list entries to the guest at `i`, in as many packets as the frame limit needs: several
+    /// players with profiles of 16 properties each can pass it together, and a frame too large closes
+    /// the connection (`info_batches`).
+    fn send_player_list(&self, i: usize, entries: Vec<play::PlayerInfo>) {
+        for entries in info_batches(Self::INFO_ACTIONS, entries) {
+            self.guests[i].send(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
+                actions: Self::INFO_ACTIONS,
+                entries,
+            }));
+        }
+    }
 
     // ---- joining -------------------------------------------------------
 
@@ -1599,10 +1627,7 @@ impl Hub {
             ));
         }
         self.guests.update(i, |g| g.tab_hidden.extend(hidden));
-        self.guests[i].send(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
-            actions: Self::INFO_ACTIONS,
-            entries,
-        }));
+        self.send_player_list(i, entries);
         let newcomer = C::PlayerInfoUpdate(play::PlayerInfoUpdate {
             actions: Self::INFO_ACTIONS,
             entries: vec![self.player_info(uuid, &name, mode, 0)],
@@ -1720,10 +1745,7 @@ impl Hub {
                 )
             })
             .collect();
-        self.guests[i].send(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
-            actions: Self::INFO_ACTIONS,
-            entries,
-        }));
+        self.send_player_list(i, entries);
         recentered
     }
 
@@ -2320,6 +2342,7 @@ impl Hub {
     /// packets queued for its own level's pass.
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
+        self.end_refreshes();
         self.anticheat_tick(ctx.tick_rate);
         let mut events = self.begin_payload_poll();
         self.finish_fake_kicks(&mut events);
@@ -3363,7 +3386,7 @@ impl Hub {
                 );
                 state.spectator = g.spectator();
                 state.watching = g.watching;
-                state.hidden = self.hidden.get(&g.uuid).copied();
+                state.hidden = self.tracker_hidden(g.uuid);
                 stuck_meta(&mut state.meta, &mut state.defaults, g.stuck);
                 frozen_meta(&mut state, g.motion.as_ref().map_or(0, |m| m.ticks_frozen));
                 // Entity.getDeltaMovement: the server copy's, which a glide sends.
@@ -4729,6 +4752,50 @@ impl Hub {
     /// A player's nickname changed (None: their name again): kept for chat,
     /// and the Tab list shows it (PlayerInfo UPDATE_DISPLAY_NAME for
     /// everyone).
+    /// Paper's `hidePlayer` then `showPlayer` for every other player (as
+    /// SkinsRestorer refreshes a skin): the next tick takes the player out of
+    /// their Tab lists and worlds (`sync_hidden`, the entity tracker), the one
+    /// after brings them back with their profile as it is then. A level a mod
+    /// hid them at is kept.
+    pub fn refresh_player(&mut self, uuid: u128) {
+        if let Some(pending) = self.refreshing.iter_mut().find(|r| r.0 == uuid) {
+            pending.1 = self.ticks;
+            return;
+        }
+        self.refreshing.push((uuid, self.ticks));
+    }
+
+    /// The permission level the entity tracker hides a player from: everyone's while the player is
+    /// being sent again (`refresh_player`, so watching clients get the removal and the respawn around the
+    /// profile update), else the level a mod hid them at.
+    pub fn tracker_hidden(&self, uuid: u128) -> Option<u8> {
+        if self.refreshing.iter().any(|r| r.0 == uuid) {
+            return Some(u8::MAX);
+        }
+        self.hidden.get(&uuid).copied()
+    }
+    /// The profile properties the player list gives the guest at `i` now: those it logged in with, or for
+    /// the integrated server's owner the signed-in account's once fetched, with a mod's overrides by name.
+    pub fn listed_profile_properties(
+        &self,
+        i: usize,
+    ) -> Vec<horizon_protocol::packets::login::Property> {
+        let g = &self.guests[i];
+        listed_properties(
+            &g.properties,
+            &g.profile_overrides,
+            self.singleplayer_owner == Some(g.uuid),
+            self.lan.shared.config.owner_profile.as_deref(),
+        )
+    }
+
+    /// Shows the players `refresh_player` took out of the lists a whole tick ago again, at the level a mod
+    /// hides them at (or to everyone): the refresh never touched that level.
+    pub fn end_refreshes(&mut self) {
+        let ticks = self.ticks;
+        self.refreshing.retain(|r| r.1 + 1 >= ticks);
+    }
+
     pub fn set_nickname(&mut self, uuid: u128, nickname: Option<String>) {
         match nickname {
             Some(n) => self.nicknames.insert(uuid, n),
@@ -5231,18 +5298,92 @@ fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
     shared
 }
 
+/// What the entries of one `PlayerInfoUpdate` may add up to: the frame limit less room for the packet
+/// id, the actions byte and the entry count.
+const INFO_BATCH_LIMIT: usize = horizon_protocol::frame::MAX_FRAME - 1024;
+
+/// `entries` split, in order, into packets whose frames stay under the frame limit: a batch ends before
+/// the entry that would pass `INFO_BATCH_LIMIT` (an entry is measured as it is encoded, which is
+/// above the frame's compressed size). One entry alone is under the limit (a profile holds at most 16
+/// properties of at most 32767 characters), so a batch is never empty, except for no entries at all:
+/// that gives one empty batch, as the join always sent its list.
+fn info_batches(actions: u8, entries: Vec<play::PlayerInfo>) -> Vec<Vec<play::PlayerInfo>> {
+    use horizon_protocol::buf::{Codec, Writer};
+    let mut batches = vec![Vec::new()];
+    let mut size = 0;
+    for entry in entries {
+        let mut one = play::PlayerInfoUpdate {
+            actions,
+            entries: vec![entry],
+        };
+        let mut w = Writer::new();
+        play::PlayerInfoUpdate::write(&one, &mut w);
+        let entry_size = w.data.len();
+        let entry = one.entries.pop().expect("the entry just put in");
+        let batch = batches.last_mut().expect("a batch is always open");
+        if !batch.is_empty() && size + entry_size > INFO_BATCH_LIMIT {
+            batches.push(vec![entry]);
+            size = entry_size;
+        } else {
+            batch.push(entry);
+            size += entry_size;
+        }
+    }
+    batches
+}
+
+/// `ExtraCodecs.PROPERTY_MAP`'s limit: a client rejects a player list update with more properties.
+pub const MAX_LISTED_PROPERTIES: usize = 16;
+
 /// The profile properties the player list gives a player: those it logged
 /// in with, or for the integrated server's owner (who logs in with none) the
-/// signed-in account's, once fetched (`IntegratedServer.getSingleplayerProfile`).
+/// signed-in account's, once fetched (`IntegratedServer.getSingleplayerProfile`),
+/// with the properties a mod set (`overrides`) over them by name. An override neither takes the
+/// account's other properties away nor, set before the fetch finished, keeps the fetched skin
+/// from showing. At most 16 are listed (a client refuses more): the overrides win, and the
+/// properties that are not overridden fill the slots left, in their order.
 fn listed_properties(
     logged_in: &[horizon_protocol::packets::login::Property],
+    overrides: &[horizon_protocol::packets::login::Property],
     owner: bool,
     profile: Option<&super::OwnerProfile>,
 ) -> Vec<horizon_protocol::packets::login::Property> {
-    match profile {
-        Some(profile) if owner && logged_in.is_empty() => profile.properties().to_vec(),
-        _ => logged_in.to_vec(),
+    type Property = horizon_protocol::packets::login::Property;
+    let base: &[Property] = match profile {
+        Some(profile) if owner => profile.properties(),
+        _ => logged_in,
+    };
+    // The overrides, one a name (the later wins), at most 16.
+    let mut wins: Vec<&Property> = Vec::new();
+    for property in overrides {
+        match wins.iter_mut().find(|p| p.name == property.name) {
+            Some(old) => *old = property,
+            None => wins.push(property),
+        }
     }
+    wins.truncate(MAX_LISTED_PROPERTIES);
+    let mut room = MAX_LISTED_PROPERTIES - wins.len();
+    let mut listed: Vec<Property> = Vec::with_capacity(MAX_LISTED_PROPERTIES);
+    for property in base {
+        match wins.iter().find(|p| p.name == property.name) {
+            Some(win) => {
+                if !listed.iter().any(|p| p.name == win.name) {
+                    listed.push((*win).clone());
+                }
+            }
+            None if room > 0 => {
+                room -= 1;
+                listed.push(property.clone());
+            }
+            None => {}
+        }
+    }
+    for win in wins {
+        if !listed.iter().any(|p| p.name == win.name) {
+            listed.push(win.clone());
+        }
+    }
+    listed
 }
 
 /// The source in wire slot order: hands, armor feet..head, body, saddle.
@@ -7709,6 +7850,28 @@ mod tests {
         }
     }
 
+    /// While a player is sent again the entity tracker hides them from everyone (watching clients get the
+    /// removal and the respawn around the profile update); afterwards it hides them at the level a mod set.
+    #[test]
+    fn a_refresh_hides_the_player_from_the_entity_tracker_and_gives_back_the_mods_level() {
+        let (mut hub, _rx) = hub_with_a_guest();
+        assert_eq!(hub.tracker_hidden(1), None);
+        hub.hidden.insert(1, 3);
+        assert_eq!(hub.tracker_hidden(1), Some(3));
+        hub.refresh_player(1);
+        assert_eq!(
+            hub.tracker_hidden(1),
+            Some(u8::MAX),
+            "out of every client's tracking"
+        );
+        assert!(!hub.sees(255, 1));
+        hub.ticks += 2;
+        hub.end_refreshes();
+        assert_eq!(hub.tracker_hidden(1), Some(3), "the mod's level again");
+        hub.hidden.remove(&1);
+        assert_eq!(hub.tracker_hidden(1), None);
+    }
+
     /// The owner is listed with the account's skin once the fetch answered,
     /// with none before (no wait) or when it failed; other players keep the
     /// properties they logged in with, and none of the owner's.
@@ -7717,11 +7880,21 @@ mod tests {
         let (answer, fetched) = std::sync::mpsc::channel();
         let profile = super::super::OwnerProfile::new(move || fetched.recv().unwrap_or_default());
         let start = std::time::Instant::now();
-        assert!(listed_properties(&[], true, Some(&profile)).is_empty());
+        assert!(listed_properties(&[], &[], true, Some(&profile)).is_empty());
         assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        // A property a mod set before the fetch answered is listed alone, and gives way to nothing later.
+        let badge = horizon_protocol::packets::login::Property {
+            name: "example:badge".into(),
+            value: "1".into(),
+            signature: None,
+        };
+        assert_eq!(
+            listed_properties(&[], std::slice::from_ref(&badge), true, Some(&profile)),
+            vec![badge.clone()]
+        );
         answer.send(vec![textures("owner")]).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while listed_properties(&[], true, Some(&profile)).is_empty() {
+        while listed_properties(&[], &[], true, Some(&profile)).is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "the fetch never landed"
@@ -7729,17 +7902,26 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(
-            listed_properties(&[], true, Some(&profile)),
+            listed_properties(&[], &[], true, Some(&profile)),
             vec![textures("owner")]
+        );
+        // A mod's property is an override by name: the account's others stay, its own textures replace.
+        assert_eq!(
+            listed_properties(&[], std::slice::from_ref(&badge), true, Some(&profile)),
+            vec![textures("owner"), badge.clone()]
+        );
+        assert_eq!(
+            listed_properties(&[], &[textures("mod")], true, Some(&profile)),
+            vec![textures("mod")]
         );
         // A guest: its own properties (online mode), or none (offline mode).
         assert_eq!(
-            listed_properties(&[textures("guest")], false, Some(&profile)),
+            listed_properties(&[textures("guest")], &[], false, Some(&profile)),
             vec![textures("guest")]
         );
-        assert!(listed_properties(&[], false, Some(&profile)).is_empty());
+        assert!(listed_properties(&[], &[], false, Some(&profile)).is_empty());
         // No signed-in account (no fetch): as before.
-        assert!(listed_properties(&[], true, None).is_empty());
+        assert!(listed_properties(&[], &[], true, None).is_empty());
         let failed = super::super::OwnerProfile::new(Vec::new);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while failed.properties.get().is_none() {
@@ -7747,7 +7929,135 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
-        assert!(listed_properties(&[], true, Some(&failed)).is_empty());
+        assert!(listed_properties(&[], &[], true, Some(&failed)).is_empty());
+    }
+
+    fn property(name: &str, value: &str) -> horizon_protocol::packets::login::Property {
+        horizon_protocol::packets::login::Property {
+            name: name.into(),
+            value: value.into(),
+            signature: None,
+        }
+    }
+
+    /// An owner profile whose fetch has answered with `properties`.
+    fn fetched(
+        properties: Vec<horizon_protocol::packets::login::Property>,
+    ) -> super::super::OwnerProfile {
+        let profile = super::super::OwnerProfile::new(move || properties.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while profile.properties().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the fetch never landed"
+            );
+            std::thread::yield_now();
+        }
+        profile
+    }
+
+    fn names(listed: &[horizon_protocol::packets::login::Property]) -> Vec<&str> {
+        listed.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    /// A client refuses a player list update with a 17th property: when a mod set 16 before the owner's
+    /// account arrived, the late merge lists the mod's 16 only, and in general the overrides win and the
+    /// account's other properties fill what is left, in their order.
+    #[test]
+    fn a_late_account_fetch_never_lists_more_than_16_properties() {
+        let account = fetched(vec![
+            property("textures", "owner"),
+            property("cape", "owner"),
+            property("extra", "owner"),
+        ]);
+        let mods: Vec<_> = (0..16).map(|i| property(&format!("m{i}"), "v")).collect();
+        let listed = listed_properties(&[], &mods, true, Some(&account));
+        assert_eq!(listed, mods, "16 overrides leave no slot for the account");
+        // 15 overrides leave one slot: the account's first property that is not overridden.
+        let listed = listed_properties(&[], &mods[..15], true, Some(&account));
+        assert_eq!(listed.len(), 16);
+        assert_eq!(names(&listed)[..2], ["textures", "m0"]);
+        // An overridden property of the account takes its place and costs no extra slot.
+        let mut overrides = vec![property("cape", "mod")];
+        overrides.extend(mods[..14].iter().cloned());
+        let listed = listed_properties(&[], &overrides, true, Some(&account));
+        assert_eq!(listed.len(), 16);
+        assert_eq!(names(&listed)[..2], ["textures", "cape"]);
+        assert_eq!(listed[1].value, "mod");
+        assert!(
+            !names(&listed).contains(&"extra"),
+            "the account's last gave way"
+        );
+        // Overrides over the 16 are cut (the setter refuses them, so only a stale list is cut).
+        let many: Vec<_> = (0..20).map(|i| property(&format!("m{i}"), "v")).collect();
+        assert_eq!(
+            listed_properties(&[], &many, true, Some(&account)),
+            many[..16]
+        );
+        // A name set twice is listed once, as the later one.
+        let twice = [property("textures", "a"), property("textures", "b")];
+        assert_eq!(
+            listed_properties(&[], &twice, true, Some(&account))[0],
+            property("textures", "b")
+        );
+        // A guest's login properties are cut at 16 too, and overridden by name.
+        let login: Vec<_> = (0..20).map(|i| property(&format!("l{i}"), "v")).collect();
+        let listed = listed_properties(&login, &[property("l3", "mod")], false, None);
+        assert_eq!(listed.len(), 16);
+        assert_eq!(listed[3].value, "mod");
+        assert_eq!(names(&listed)[..3], ["l0", "l1", "l2"]);
+    }
+
+    /// Several valid profiles of 16 properties each pass the frame limit in one `PlayerInfoUpdate`; the
+    /// batches keep the order and each encodes under the limit, so no connection is closed by the framing.
+    #[test]
+    fn a_player_list_is_split_into_packets_that_fit_the_frame() {
+        let entry = |i: u128| play::PlayerInfo {
+            uuid: i,
+            name: Some(format!("player{i}")),
+            properties: (0..16)
+                .map(|n| horizon_protocol::packets::login::Property {
+                    name: format!("p{n}"),
+                    value: "v".repeat(32767),
+                    signature: Some("s".repeat(1024)),
+                })
+                .collect(),
+            game_mode: Some(0),
+            listed: Some(true),
+            latency: Some(0),
+            display_name: Some(None),
+            list_order: Some(0),
+            show_hat: Some(true),
+            ..Default::default()
+        };
+        let entries: Vec<_> = (0..40).map(entry).collect();
+        let batches = info_batches(Hub::INFO_ACTIONS, entries.clone());
+        assert!(batches.len() > 1, "{} batches", batches.len());
+        for batch in &batches {
+            assert!(!batch.is_empty());
+            let bytes = C::PlayerInfoUpdate(play::PlayerInfoUpdate {
+                actions: Hub::INFO_ACTIONS,
+                entries: batch.clone(),
+            })
+            .encode();
+            assert!(
+                bytes.len() <= horizon_protocol::frame::MAX_FRAME,
+                "a batch of {} entries is {} bytes",
+                batch.len(),
+                bytes.len()
+            );
+        }
+        let flat: Vec<_> = batches.into_iter().flatten().collect();
+        assert_eq!(flat, entries, "every entry once, in order");
+        // A short list stays one packet, and no entries still give the empty list the join always sent.
+        assert_eq!(
+            info_batches(Hub::INFO_ACTIONS, entries[..3].to_vec()).len(),
+            1
+        );
+        assert_eq!(
+            info_batches(Hub::INFO_ACTIONS, Vec::new()),
+            vec![Vec::<play::PlayerInfo>::new()]
+        );
     }
 
     /// `requeue` as it was, scanning the queue for each chunk of the view.

@@ -100,10 +100,12 @@ impl Game<'_> {
         if v.uuid == t.uuid {
             return Ok(true);
         }
+        // The tracker's own level (`Hub::tracker_hidden`): also everyone's while the target is being sent
+        // again, as the player list (`Hub::sees`) hides it then.
         let hidden = self
             .lan
             .as_ref()
-            .and_then(|lan| lan.hub.hidden.get(&t.uuid).copied());
+            .and_then(|lan| lan.hub.tracker_hidden(t.uuid));
         Ok(player_shown(
             v.spectator(),
             v.permission,
