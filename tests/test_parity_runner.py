@@ -762,12 +762,13 @@ class OracleReuseTests(unittest.TestCase):
         def hashed_then_changed(path):
             result = hash_file(path)
             if os.path.realpath(path) == os.path.realpath(vm):
-                vm.write_text("vM")  # the link's target replaced between the stats
+                # Another size: a rewrite of equal size within one timestamp tick of the first stat shows in no field.
+                vm.write_text("the vm replaced between the stats")
             return result
 
         def probed_then_changed(*arguments, **options):
             result = run(*arguments, **options)
-            vm.write_text("VM")
+            vm.write_text("the vm replaced while the launcher was probed")
             return result
 
         with mock.patch.object(shim, "bytes_digest", hashed_then_changed), self.assertRaises(shim.Unkeyed):
