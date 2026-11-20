@@ -12554,10 +12554,11 @@ mod tests {
         use wgpu::Backends;
         let (v, d, g) = (Backends::VULKAN, Backends::DX12, Backends::GL);
         let search = |api, os, arch| device_search(api, os, arch, false);
-        // #5185: DirectX 12 chosen on an Intel HD 2500 (WARP only): OpenGL's GPU before WARP.
+        // #18291: DirectX 12, which the launcher picks after Vulkan or OpenGL crashed in the
+        // driver, never goes back to either: its GPU, then WARP.
         assert_eq!(
             search(GraphicsApi::Dx12, "windows", "x86_64"),
-            [(vec![d], false), (vec![g], false), (vec![d], true)]
+            [(vec![d], false), (vec![d], true)]
         );
         assert_eq!(
             search(GraphicsApi::Vulkan, "windows", "x86_64"),

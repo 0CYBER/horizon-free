@@ -82,9 +82,9 @@ impl wgpu::rwh::HasDisplayHandle for WindowDisplay {
 /// then Vulkan, based on the device losses seen there (#7513). Other
 /// Windows systems try Vulkan, then DirectX 12, then OpenGL; Linux tries Vulkan then
 /// OpenGL. Each is tried when the one before has no surface, adapter or device. A native
-/// crash in the driver can't be
-/// caught in the game; the launcher switches the setting to DirectX 12 after one at
-/// the renderer's start (#746). macOS has Metal only.
+/// crash in the driver can't be caught in the game; the launcher switches the setting to
+/// DirectX 12 after one at the renderer's start on Vulkan (#746) or, on Windows, OpenGL
+/// (#18291). macOS has Metal only.
 pub(crate) fn backend_order(
     api: GraphicsApi,
     os: &str,
@@ -385,10 +385,12 @@ pub(super) fn device_search_timed_out(waited: Duration) -> String {
 /// The tries `open_device` makes, in turn: the chosen API's backends (`backend_order`) on a
 /// real GPU; when the player chose one API, the other backends `Auto` would try, on a real
 /// GPU; and last the chosen backends with a software adapter (WARP, llvmpipe) allowed.
-/// Software rendering takes most of a weak CPU even on the title screen: an Intel HD 2500 has
-/// DirectX 12 only through WARP and its GPU through OpenGL (#5185), and a Fermi GPU has no
-/// Vulkan or DirectX 12 driver but OpenGL (#3978). DirectX 12 never falls back to Vulkan: the
-/// launcher chooses it after Vulkan crashed in the driver (#746), which the game can't catch.
+/// Software rendering takes most of a weak CPU even on the title screen, so Auto and the
+/// other choices try every GPU first: an Intel HD 2500 has DirectX 12 only through WARP and
+/// its GPU through OpenGL (#5185), and a Fermi GPU has no Vulkan or DirectX 12 driver but
+/// OpenGL (#3978). DirectX 12 tries nothing else: the launcher chooses it after Vulkan or
+/// OpenGL crashed in the driver at the renderer's start (#746, #18291), which the game can't
+/// catch, so going back to either would crash again; WARP is slow but runs.
 pub(crate) fn device_search(
     api: GraphicsApi,
     os: &str,
@@ -396,14 +398,15 @@ pub(crate) fn device_search(
     wgpu_backend: bool,
 ) -> Vec<(Vec<wgpu::Backends>, bool)> {
     let chosen = backend_order(api, os, arch, wgpu_backend);
-    let others: Vec<_> = backend_order(GraphicsApi::Auto, os, arch, wgpu_backend)
-        .into_iter()
-        .filter(|b| !chosen.contains(b))
-        .filter(|&b| !(api == GraphicsApi::Dx12 && b == wgpu::Backends::VULKAN))
-        .collect();
     let mut tries = vec![(chosen.clone(), false)];
-    if !others.is_empty() {
-        tries.push((others, false));
+    if chosen != [wgpu::Backends::DX12] {
+        let others: Vec<_> = backend_order(GraphicsApi::Auto, os, arch, wgpu_backend)
+            .into_iter()
+            .filter(|b| !chosen.contains(b))
+            .collect();
+        if !others.is_empty() {
+            tries.push((others, false));
+        }
     }
     tries.push((chosen, true));
     tries
@@ -558,12 +561,12 @@ async fn open_backend(
             },
         );
     }
-    // Adapters that could not present to the window: the next one of this backend
-    // that can is tried before the next backend (#13493).
+    // An adapter that gives way (`gives_way`): the next one of this backend that presents is
+    // tried before the next backend (#13493).
     let mut tried = Vec::new();
     let mut adapter = adapter;
     loop {
-        let why = match open_adapter(name, window, surface.as_ref(), &adapter, needs).await {
+        let failure = match open_adapter(name, window, surface.as_ref(), &adapter, needs).await {
             Ok(adapted) => {
                 return Ok(Opened {
                     instance,
@@ -575,8 +578,14 @@ async fn open_backend(
                     configured: adapted.configured,
                 });
             }
-            Err(AdapterFailure::Failed(e)) => return Err(NoDevice::Failed(e)),
-            Err(AdapterFailure::CannotPresent(why)) => why,
+            Err(failure) => failure,
+        };
+        let gives_way = gives_way(&failure, allow_cpu);
+        let failed_to_open = matches!(failure, AdapterFailure::Failed(_));
+        let (what, why) = match failure {
+            AdapterFailure::CannotPresent(why) => ("it can't present to the window", why),
+            AdapterFailure::Failed(e) if !gives_way => return Err(NoDevice::Failed(e)),
+            AdapterFailure::Failed(e) => ("its device failed to open", e),
         };
         let info = adapter.get_info();
         tried.push(info.clone());
@@ -593,22 +602,33 @@ async fn open_backend(
             .collect();
         let Some(next) = pick_adapter(&choices, allow_cpu) else {
             log::warn!(
-                "Horizon renderer: skipping {} on {name}: it can't present to the window \
-                 ({why}), and no other {name} adapter can",
+                "Horizon renderer: skipping {} on {name}: {what} ({why}), and no other {name} \
+                 adapter can stand in",
                 info.name
             );
-            return Err(NoDevice::Failed(format!(
-                "{name}: {} can't present to the window ({why})",
-                info.name
-            )));
+            return Err(NoDevice::Failed(match failed_to_open {
+                true => why,
+                false => format!("{name}: {} can't present to the window ({why})", info.name),
+            }));
         };
         adapter = others[next].clone();
         log::warn!(
-            "Horizon renderer: skipping {} on {name}: it can't present to the window ({why}); \
-             trying {}",
+            "Horizon renderer: skipping {} on {name}: {what} ({why}); trying {}",
             info.name,
             adapter.get_info().name
         );
+    }
+}
+/// Whether `open_backend` tries another adapter of the backend after `failure`; otherwise the
+/// failure ends the backend. One that can't present to the window gives way (#13493). One whose
+/// device failed to open gives way only on the search's last, software-allowed try:
+/// `request_adapter` hands back the same GPU there, and DirectX 12 tries no other backend
+/// (`device_search`), so without this WARP never stands in for a GPU whose DirectX 12 device
+/// fails to open (#18291).
+fn gives_way(failure: &AdapterFailure, allow_cpu: bool) -> bool {
+    match failure {
+        AdapterFailure::CannotPresent(_) => true,
+        AdapterFailure::Failed(_) => allow_cpu,
     }
 }
 /// A surface for `window` (none `offscreen`) and the adapter `open_backend`
@@ -690,3 +710,18 @@ const NO_GPU_DRIVER: &str = "No Metal graphics device found";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const NO_GPU_DRIVER: &str = "No Vulkan or OpenGL graphics driver found: Horizon needs the Vulkan loader \
      (libvulkan.so.1) and a Vulkan driver for your GPU (Mesa's, or NVIDIA's), or OpenGL through EGL";
+#[cfg(test)]
+mod tests {
+    use super::{AdapterFailure, gives_way};
+    /// #18291: on DirectX 12's software-allowed last try a GPU whose device fails to open gives way
+    /// to another adapter (WARP); on the GPU tries it ends the backend as before. One that can't
+    /// present always gives way (#13493).
+    #[test]
+    fn a_device_that_fails_to_open_gives_way_only_on_the_software_try() {
+        let failed = || AdapterFailure::Failed("E_INVALIDARG".into());
+        assert!(gives_way(&failed(), true));
+        assert!(!gives_way(&failed(), false));
+        let cannot_present = AdapterFailure::CannotPresent("no formats".into());
+        assert!(gives_way(&cannot_present, false));
+    }
+}

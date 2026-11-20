@@ -432,7 +432,12 @@ impl Launcher {
                             self.native_look_again(ended.as_deref(), error.as_deref());
                         }
                         Job::Client => {
-                            self.client = None;
+                            // The exit thread reaped the game; its child keeps the status.
+                            let native_crash = self
+                                .client
+                                .take()
+                                .and_then(|client| client.child.lock().ok()?.try_wait().ok()?)
+                                .is_some_and(backend::native_crash_exit);
                             // Any session file the game didn't read (it crashed first).
                             account::discard_unread_sessions();
                             self.come_back(cx);
@@ -460,17 +465,17 @@ impl Launcher {
                                 .client_started
                                 .take()
                                 .and_then(|since| backend::crash_report_since(&home, since));
-                            let switched = if error.is_some() && report.is_none() {
-                                self.switched_from_vulkan()
+                            let switched = if native_crash && report.is_none() {
+                                self.switched_after_start_crash()
                             } else {
                                 None
                             };
-                            if let Some(api) = switched {
+                            if let Some((crashed, api)) = switched {
                                 self.client_error = Some(trf(
-                                    "Horizon's Vulkan renderer crashed while starting on this \
+                                    "Horizon's {crashed} renderer crashed while starting on this \
                                      graphics card, so the game now uses {api}. Press Play to \
                                      start it again. Video Settings > Graphics API switches back.",
-                                    &[("api", api)],
+                                    &[("crashed", crashed), ("api", api)],
                                 ));
                             } else if error.is_some() || report.is_some() {
                                 let summary = report

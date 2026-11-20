@@ -407,7 +407,7 @@
   "Horizon runs a data pack's functions, function tags, predicates, item modifiers, recipes, loot tables, advancements, villager trades, damage types, most tags and most worldgen (biomes, features, structures, dimensions). Other files, such as world presets, are not read yet.": "Horizon はデータパックの関数、関数タグ、条件、アイテム修飾、レシピ、ルートテーブル、進捗、村人の取引、ダメージ種別、ほとんどのタグ、ワールド生成の大部分（バイオーム、地物、構造物、ディメンション）を実行します。ワールドプリセットなど、その他のファイルはまだ読み込みません。",
   "Horizon will download the Rust compiler ({size}) to build them. You can turn this off in Settings, Storage.": "Horizon はビルドのために Rust コンパイラー（{size}）をダウンロードします。設定のストレージで無効にできます。",
   "Horizon's Nightly builds, newest first. Your worlds live in the game folder, so removing a version never touches them.": "HorizonのNightlyビルド、新しい順。ワールドはゲームフォルダーにあるので、バージョンを削除しても影響しません。",
-  "Horizon's Vulkan renderer crashed while starting on this graphics card, so the game now uses {api}. Press Play to start it again. Video Settings > Graphics API switches back.": "このグラフィックスカードでHorizonのVulkanレンダラーが起動中にクラッシュしたため、ゲームは{api}を使用します。「プレイ」を押すと再起動します。ビデオ設定 > グラフィックスAPIで戻せます。",
+  "Horizon's {crashed} renderer crashed while starting on this graphics card, so the game now uses {api}. Press Play to start it again. Video Settings > Graphics API switches back.": "このグラフィックスカードでHorizonの{crashed}レンダラーが起動中にクラッシュしたため、ゲームは{api}を使用します。「プレイ」を押すと再起動します。ビデオ設定 > グラフィックスAPIで戻せます。",
   "Horizon's cosmetics service had a problem. Try again later.": "Horizon のコスメティックサービスで問題が発生しました。後でもう一度お試しください。",
   "Horizon's landscape. Pick a PNG, JPEG or WebP picture of your own.": "Horizonの背景画像。PNG、JPEG、WebP形式の好きな画像を選べます。",
   "Horizon's violet by default. Every colour keeps text as easy to read.": "デフォルトはHorizonのバイオレット。どの色でもテキストの読みやすさを維持します。",

@@ -2,27 +2,27 @@
 use super::*;
 
 impl Launcher {
-    /// After a crash with no report: when the game's output ends while its Vulkan renderer
-    /// started, a native crash in the graphics driver (arismoko/horizon#746), switches the game to
-    /// `backend::vulkan_crash_fallback` (DirectX 12 on Windows, OpenGL on Linux; only where the
-    /// player left the graphics API on Auto). The API's label when it did.
-    pub(crate) fn switched_from_vulkan(&self) -> Option<&'static str> {
-        let (api, label) = backend::vulkan_crash_fallback(std::env::consts::OS)?;
-        if !backend::vulkan_start_crashed(&self.prepare_log) {
-            return None;
-        }
-        // The GPU is the same for every profile: the game home's setting and the crashed run's.
-        let home = backend::game_home();
-        let mut homes = vec![home.clone()];
-        homes.extend(self.client_home.clone().filter(|h| *h != home));
-        let mut switched = false;
-        for home in homes {
-            match backend::switch_from_auto(&home, api) {
-                Ok(changed) => switched |= changed,
-                Err(e) => eprintln!("Horizon launcher: could not switch to {label}: {e}"),
+    /// After a native crash with no report (`backend::native_crash_exit`): when the game's output
+    /// ends while its Vulkan or OpenGL renderer started, a crash in the graphics driver
+    /// (arismoko/horizon#746, #18291), switches the game to `backend::start_crash_fallback`
+    /// (DirectX 12 on Windows, OpenGL after Vulkan on Linux; only where the crashed run left the
+    /// graphics API on Auto, `backend::switch_after_start_crash`). The crashed API's label and the
+    /// new one's when it did.
+    pub(crate) fn switched_after_start_crash(&self) -> Option<(&'static str, &'static str)> {
+        let crashed = backend::renderer_start_crash(&self.prepare_log)?;
+        let (api, label) = backend::start_crash_fallback(crashed, std::env::consts::OS)?;
+        let game_home = backend::game_home();
+        let run_home = self
+            .client_home
+            .clone()
+            .unwrap_or_else(|| game_home.clone());
+        match backend::switch_after_start_crash(&run_home, &game_home, api) {
+            Ok(switched) => switched.then_some((crashed.label(), label)),
+            Err(e) => {
+                eprintln!("Horizon launcher: could not switch to {label}: {e}");
+                None
             }
         }
-        switched.then_some(label)
     }
 
     /// The version Play starts: the selected instance's own, else the launcher's.
