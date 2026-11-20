@@ -6,9 +6,8 @@
 //! naga, checked against its signature and the API's rules (no bindings, no
 //! entry points, no `horizon_` names; in 0.2 none of the structs Horizon hands it
 //! constructed), then translated to SPIR-V, Metal and HLSL with its options at their
-//! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]`, and its
-//! material stage where that traces, is checked twice: as every device runs it, where `trace`
-//! misses, and against the scene.
+//! defaults, minimums and maximums. With `[ray_tracing]`, post passes and the other stages that
+//! trace are checked twice: with the stub where rays miss and against the scene.
 use crate::inputs::{
     COMPUTE_INPUT, DISPLACEMENT_INPUT, ENTITY_LIGHT_SOURCE, Frame, LIT_TINT, RAY_HIT, SHADED_TINT,
 };
@@ -69,8 +68,8 @@ pub struct CheckedStage {
     pub label: String,
     pub module: naga::Module,
     pub info: ModuleInfo,
-    /// A post stage of a pack with `[ray_tracing]`, or its material stage where that calls
-    /// a trace function, built against the scene (`compose_scene`): what the renderer runs
+    /// A post pass of a pack with `[ray_tracing]`, or another stage that calls a trace function,
+    /// built against the scene (`compose_scene`): what the renderer runs
     /// while it binds the scene, on a device with ray queries. `module` is the same stage with a
     /// `trace` that misses, which every device takes.
     pub scene: Option<naga::Module>,
@@ -583,7 +582,7 @@ fn check_entry(
     if !problems.is_empty() {
         return Err(problems);
     }
-    // A stage the scene changes nothing in (a material stage that doesn't trace) is built once.
+    // A stage whose composition is unchanged is built once.
     let traced =
         Some(compose_traced(pack, kind, file, at, true)).filter(|s| s.text != composed.text);
     let scene = match traced {

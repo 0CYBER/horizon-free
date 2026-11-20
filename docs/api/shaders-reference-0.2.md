@@ -348,11 +348,11 @@ pass reads a blank one in place of the target it writes).
 
 ### Ray tracing
 
-With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[[before_world]]` pass or a
-`[material]` stage) the post stage's prelude also has `RayHit` and the functions and constants below, so do the
-material, compute and `[[before_world]]` stages' where their files name one of the four trace functions, and the
-`Frame` of every stage of the pack has `has_ray_tracing` and `ray_distance`. A pack without the key has none of
-them, and a material, compute or `[[before_world]]` stage that names no trace function is built as without it.
+With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[[before_world]]` pass, a
+`[material]` or an `[entity]` stage), post passes get `RayHit` and the functions and constants below. So do the
+material, entity, compute and `[[before_world]]` stages whose files name one of the four trace functions.
+Every stage of the pack has `frame.has_ray_tracing` and `frame.ray_distance`. A pack without the key has none of
+these. A material, entity, compute or `[[before_world]]` stage that names no trace function is built as without it.
 
 The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it
 ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a
@@ -383,7 +383,7 @@ asks for ray queries and keeps the scene with any pack or none; any other value 
 - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource
   packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`
   and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.
-- In the post, compute and `[[before_world]]` stages, `fn block_pbr_maps() -> bool`: whether the resource packs
+- In the post, entity, compute and `[[before_world]]` stages, `fn block_pbr_maps() -> bool`: whether the resource packs
   ship LabPBR maps, as the material stage's.
 
 A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what
@@ -410,6 +410,10 @@ pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn'
 glass or entities) and has no albedo, so direct light that must be right there is traced in `material`. With
 `[material] reads`, a pack can also trace in a compute or `[[before_world]]` pass and apply the result in
 `material`.
+
+In the entity stage `entity` traces as `material` does, in the world's colour pass only (the shadow map's
+entities don't run the stage). A ray it casts with `RAY_ENTITY` in its layers can hit the entity it starts on:
+move its origin off the surface, as from terrain.
 
 ### `RayHit`
 
@@ -439,7 +443,7 @@ The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `
 
 Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 63 the entity layer, for a pack that names it), and in a post, compute or `[[before_world]]` pass bindings
-12 and 13 the LabPBR maps (the material stage has them there already).
+12 and 13 the LabPBR maps (the material and entity stages have them there already).
 Binding 81 holds terrain hit looks for a stage that reads `RayHit.tint`, `shade` or `ao` from its entry point.
 These bindings are Horizon's, as their `horizon_` names say, and change with the renderer.
 

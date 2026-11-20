@@ -1598,3 +1598,108 @@ fn a_hit_s_look_fields_bring_the_scene_s_looks() {
     }
     assert!(!ray_looks(&none[0], looked), "uncalled look helper");
 }
+
+/// A 0.2 pack with `[ray_tracing]` and the entity stage `entity` (no post pass, no material),
+/// its manifest's other `keys` and `files` added.
+fn traced_entity(
+    entity: &str,
+    keys: &str,
+    files: &[(&str, &str)],
+) -> Result<horizon_shader_api::Report, Vec<Problem>> {
+    let manifest = format!(
+        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+         [entity]\nfile = \"entity.wgsl\"\n[ray_tracing]\n{keys}"
+    );
+    let files = [(MANIFEST, manifest.as_str()), ("entity.wgsl", entity)]
+        .into_iter()
+        .chain(files.iter().copied())
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .collect();
+    check(&Pack::from_files(files).unwrap())
+}
+
+/// A mob in the sun's shadow where a ray toward it meets terrain, its rim lit by what a ray
+/// along its normal sees.
+const ENTITY_SUNLIT: &str = "fn entity(input: EntityInput) -> Surface {
+    let start = input.position + input.normal * 0.05;
+    let shadowed = trace_any(start, frame.sun_direction, frame.ray_distance);
+    let hit = trace(start, input.normal, 16.0);
+    let rough = select(0.5, 1.0 - hit_specular_map(hit).r, block_pbr_maps());
+    let rim = hit.albedo.rgb * hit.tint.rgb * rough * hit_normal_map(hit).b;
+    let lit = input.albedo.rgb * input.tint.rgb * input.lightmap * select(1.0, 0.4, shadowed);
+    return Surface(vec4<f32>(lit + rim * 0.1, input.albedo.a * input.tint.a));
+}
+";
+
+/// An entity stage traces as the material stage does: checked without the scene and with it,
+/// in a pack whose only stage it is.
+#[test]
+fn a_traced_entity_stage_is_checked_without_the_scene_and_with_it() {
+    let report = traced_entity(ENTITY_SUNLIT, "", &[]).unwrap();
+    let stage = &report.stages[0];
+    assert_eq!(stage.kind, StageKind::Entity);
+    assert!(!ray_queries(&stage.module));
+    let plain = naga::valid::Capabilities::default();
+    assert!(valid(&stage.module, plain));
+    let scene = stage.scene.as_ref().expect("the stage against the scene");
+    assert!(ray_queries(scene));
+    assert!(valid(scene, plain | naga::valid::Capabilities::RAY_QUERY));
+    assert!(!valid(scene, plain));
+    assert!(!stage.traces_entities());
+    assert!(stage.traces_looks());
+    // The renderer builds its entities from the source, the directive first.
+    let source = stage.scene_source.as_deref().unwrap();
+    assert!(source.starts_with("enable wgpu_ray_query;\n"));
+    assert!(!stage.source.contains("enable wgpu_ray_query"));
+    // The entity layer, a mob's ray meeting the other mobs, where the pack names it.
+    let layered = ENTITY_SUNLIT.replace(
+        "trace_any(start, frame.sun_direction, frame.ray_distance)",
+        "trace_any_layers(start, frame.sun_direction, frame.ray_distance, RAY_SOLID | RAY_ENTITY)",
+    );
+    let report = traced_entity(&layered, "", &[]).unwrap();
+    assert!(report.stages[0].traces_entities());
+    // Its files name no ray query of their own, as every traced stage's.
+    let own = format!("fn mine(s: acceleration_structure) {{}}\n{ENTITY_SUNLIT}");
+    let problems = traced_entity(&own, "", &[]).unwrap_err();
+    assert!(
+        problems[0].message.contains("`acceleration_structure`"),
+        "{problems:#?}"
+    );
+    // Without the key the names aren't there.
+    let p = entity_pack(ENTITY_SUNLIT).expect_err("should fail");
+    assert_eq!(p[0].file, "entity.wgsl", "{p:#?}");
+}
+
+/// An entity stage that names no trace function, in a traced pack, composes as it did before
+/// the entity stage traced, byte for byte, with the scene and without it.
+#[test]
+fn an_entity_stage_that_doesn_t_trace_is_built_as_before() {
+    let quiet = "// Not traced: trace only in a comment.\n\
+                 fn entity(input: EntityInput) -> Surface { return Surface(input.albedo); }\n";
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                    [entity]\nfile = \"entity.wgsl\"\n[[post]]\nfile = \"post.wgsl\"\n\
+                    [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
+    let files = [
+        (MANIFEST, manifest),
+        ("entity.wgsl", quiet),
+        ("post.wgsl", ENTITY_SHADOWED),
+        ("tonemap.wgsl", TONEMAP),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    let pack = Pack::from_files(files).unwrap();
+    let hashes: Vec<String> = [
+        horizon_shader_api::compose(&pack, StageKind::Entity, "entity.wgsl"),
+        horizon_shader_api::compose_scene(&pack, StageKind::Entity, "entity.wgsl"),
+    ]
+    .iter()
+    .map(|c| horizon_shader_api::package::sha256_hex(c.text.as_bytes()))
+    .collect();
+    assert_eq!(hashes, [ENTITY_UNTRACED; 2]);
+    // Nor does it trace in a pack whose only stage it is.
+    let report = traced_entity(quiet, "", &[]).unwrap();
+    assert!(report.stages[0].scene.is_none() && report.stages[0].scene_source.is_none());
+}
+
+/// The SHA-256 of the entity stage above, composed on main before entity tracing.
+const ENTITY_UNTRACED: &str = "e7a641d743807343540ca08b7c56a10d606b123ab3c682be0398bb089bab23ca";

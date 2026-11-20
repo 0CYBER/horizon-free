@@ -13,7 +13,7 @@ use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 use super::displace::{Displacement, MAX_SECTIONS};
 use super::external::{DisplacementPrepare, Near, OpaqueCopy, TerrainLayers};
 use super::native_post::kept::StageReads;
-use super::native_post::trace::{TerrainTrace, Traced};
+use super::native_post::trace::{TerrainTrace, TraceShape, Traced};
 use super::native_post::{NativeFrame, NativePost, present_constants};
 use super::wgsl_prefix::{TERRAIN, prefixed, section};
 
@@ -675,7 +675,8 @@ impl NativeMaterial {
         }
         let pipelines = built?;
         let scene = stage.scene_source.as_deref().and_then(|source| {
-            let terrain = (shape, (stage.traces_entities(), stage.traces_looks()));
+            let traced = TraceShape::of(shape, stage.traces_entities());
+            let terrain = (&terrain_entries()[..], &traced, stage.traces_looks());
             let own = kept.as_ref().map_or(&[][..], |k| &k.entries);
             TerrainTrace::new(device, frame, terrain, own, |group| build(source, group))
         });

@@ -262,6 +262,7 @@ fn frame(
     );
     let mut encoder = device.create_command_encoder(&Default::default());
     pack.before_world(device, &mut encoder, scene);
+    pack.bind_terrain(device, scene);
     let screen = &world.screen;
     let view = screen.create_view(&Default::default());
     let world = (&world.color, &world.depth, &pack.frame.surface_view);
@@ -896,4 +897,47 @@ fn a_pass_that_skips_hit_looks_keeps_its_storage_buffer_budget() {
         shows(got, [0.5, 1.0, (64.0_f32 / 255.0).powf(2.2)]),
         "{got:?}"
     );
+}
+
+/// Both stages fit with the scene's two storage buffers. Binding terrain hit looks takes a
+/// third slot, which the entity stage cannot use on this device.
+#[test]
+fn refusing_entity_look_bindings_makes_the_post_stage_miss_too() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some((_, device, queue)) = ray_device_with_storage_limit(2) else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let world = World::new(&device);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let manifest = "[ray_tracing]\n[entity]\nfile = \"e.wgsl\"\n[[post]]\nfile = \"p.wgsl\"\n";
+    let post = "fn post(input: PostInput) -> vec4<f32> {
+        let hit = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0);
+        return vec4<f32>(select(0.25, hit.distance / 8.0, hit.distance >= 0.0),
+                        f32(frame.has_ray_tracing), 0.0, 1.0);
+    }";
+    let entity = "fn entity(input: EntityInput) -> Surface {
+        let hit = trace(input.position, input.normal, 16.0);
+        return Surface(vec4<f32>(vec3<f32>(hit.distance), 1.0));
+    }";
+    let looks = entity.replace("vec3<f32>(hit.distance)", "hit.tint.rgb");
+    let traced = scene.traced();
+    for (entity, enabled) in [(entity, true), (&looks, false)] {
+        let (mut pack, _) = super::material_tests::built(
+            &device,
+            &queue,
+            Some(&scene),
+            manifest,
+            &[("e.wgsl", entity), ("p.wgsl", post)],
+        )
+        .unwrap();
+        let pixel = frame((&device, &queue, &world), &mut pack, 1, Some(&traced));
+        let expected = hit_shown(enabled.then_some(4.0));
+        assert!(shows(pixel, expected), "{pixel:?}, expected {expected:?}");
+        let stage = pack.entity.as_ref().unwrap();
+        let selected = stage.scene.as_ref().and_then(|trace| trace.drawn(0));
+        assert_eq!(selected.is_some(), enabled);
+    }
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
 }

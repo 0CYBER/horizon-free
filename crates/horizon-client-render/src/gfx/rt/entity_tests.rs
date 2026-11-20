@@ -138,7 +138,7 @@ fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
 }
 
 /// A device with ray queries, if this machine has one.
-pub(super) fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(in crate::gfx) fn ray_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = crate::gfx::test_gpu::instance();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
     ray_device_of(&adapter)

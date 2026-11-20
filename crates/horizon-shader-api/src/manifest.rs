@@ -153,8 +153,8 @@ pub struct Manifest {
     pub shadow: Option<Shadow>,
     /// Relief as geometry near the camera, if the pack asks for it; needs `[material]`.
     pub displacement: Option<Displacement>,
-    /// 0.2: the scene the post and material stages' `trace` reads, if the pack asks for it;
-    /// needs `[[post]]` or `[material]`.
+    /// 0.2: the scene that tracing stages read, if the pack asks for it; needs `[[post]]`,
+    /// `[[before_world]]`, `[material]` or `[entity]`.
     pub ray_tracing: Option<RayTracing>,
     /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
     /// needs `[[post]]`.
@@ -163,7 +163,7 @@ pub struct Manifest {
     pub kept: crate::kept::Kept,
 }
 
-/// `[ray_tracing]` (0.2): the pack's post passes, and its material, compute and `[[before_world]]`
+/// `[ray_tracing]` (0.2): the pack's post passes, and its material, entity, compute and `[[before_world]]`
 /// stages where they call them, get `trace`, `trace_layers` and the other trace functions, which read the terrain around the
 /// camera where the device traces rays (`frame.has_ray_tracing`) and miss where it doesn't. No
 /// keys yet.
@@ -915,12 +915,14 @@ impl Manifest {
             }
         }
         check_post_targets(&raw.post, traced, moving, &kept.resources).map_err(err)?;
-        let tracer =
-            !raw.post.is_empty() || raw.material.is_some() || !kept.before_world.is_empty();
+        let tracer = !raw.post.is_empty()
+            || raw.material.is_some()
+            || raw.entity.is_some()
+            || !kept.before_world.is_empty();
         if raw.ray_tracing.is_some() && !tracer {
             return Err(err(
-                "[ray_tracing] needs a [[post]] pass, a [[before_world]] pass or a [material] \
-                 stage: `trace` is theirs"
+                "[ray_tracing] needs a [[post]] pass, a [[before_world]] pass, a [material] or an \
+                 [entity] stage: `trace` is theirs"
                     .into(),
             ));
         }

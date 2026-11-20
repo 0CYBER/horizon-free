@@ -220,11 +220,10 @@ changes, from at most 2048 sources, the nearest first.
 
 ## Ray tracing
 
-A pack of API 0.2 can trace rays through the world from its post passes, its material stage and its compute passes. It
-asks with an empty `[ray_tracing]` table (the pack needs a `[[post]]` pass, a `[[before_world]]` pass or a `[material]`
-stage), and its post stage gets the trace functions, as do its material stage and its compute and `[[before_world]]`
-passes where their files call one ([the reference](api/shaders-reference-0.2.md#ray-tracing) has
-`RayHit`'s fields):
+A pack of API 0.2 can trace rays through the world from its post, material, entity and compute stages. The pack
+declares an empty `[ray_tracing]` table and includes a `[[post]]` pass, a `[[before_world]]` pass, a `[material]` or an
+`[entity]` stage. Post passes get the trace functions. The other supported stages get them where their files name
+one. See the [reference](api/shaders-reference-0.2.md#ray-tracing) for `RayHit`'s fields:
 
 ```toml
 api = "0.2"
@@ -368,6 +367,17 @@ if input.translucent && frame.has_ray_tracing == 1u {
 
 `crates/horizon-shader-api/packs/traced_water` is the smallest pack that traces from `material`: water that mixes in
 what a reflected ray hits.
+
+**In the entity stage.** `entity` traces as `material` does, with the same functions, the same cost per fragment and
+the same rule: an entity stage whose files name no trace function is built as without `[ray_tracing]`. Its rays run
+in the world's colour pass only; the shadow map's entities don't run the stage. `input.position` and `input.normal`
+are camera-relative and in world axes, and a ray with `RAY_ENTITY` in its layers can hit the entity it starts on, so
+start it off the surface as from terrain:
+
+```wgsl
+let start = input.position + input.normal * 0.05;
+let shadowed = frame.has_ray_tracing == 1u && trace_any(start, frame.sun_direction, 64.0);
+```
 
 ## Compute passes and kept resources
 

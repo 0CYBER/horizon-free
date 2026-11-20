@@ -5,7 +5,9 @@
 //! material's tests do. The sky's is drawn right after `before_world`, where its timed pass draws
 //! (`draw_sky_pass`), the others' after `bind_terrain`.
 use super::super::super::native_pack::NativePack;
+use super::super::trace::Traced;
 use super::material_tests::{COUNTER, COUNTS, PROBE, SHOWS_COUNT, built, device, shown, texel};
+use super::trace_tests::{Scene, ray_device};
 use horizon_shader_api::StageKind;
 use horizon_shader_api::kept::Keep;
 
@@ -25,8 +27,8 @@ fn drawn(
     let frame = &pack.frame;
     let (text, layout, group) = match kind {
         StageKind::Entity => {
-            let (entity, group) = pack.entities()?;
-            let kept = entity.kept.as_ref();
+            let (_, group) = pack.entities()?;
+            let kept = pack.entity.as_ref()?.kept.as_ref();
             (
                 source.to_owned(),
                 kept.map_or(&frame.layout, |k| &k.layout),
@@ -396,4 +398,71 @@ fn the_entity_and_sky_stages_make_their_kept_groups_once() {
     // pipelines as many.
     assert_eq!(with[0][0], without[0][0] + 2);
     assert_eq!(with[0][2], without[0][2]);
+}
+
+/// The entity stage draws with the bound scene and a kept buffer, then falls back to the stub
+/// and the same kept resource when the next frame has no scene.
+#[test]
+fn the_entity_stage_draws_with_ray_hits_and_kept_reads() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some((_, device, queue)) = ray_device() else {
+        return;
+    };
+    let scene = Scene::new(&device, &queue, 4.0, 1);
+    let traced = scene.traced();
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let manifest =
+        format!("{COUNTER}[ray_tracing]\n[entity]\nfile = \"e.wgsl\"\nreads = [\"count\"]\n");
+    let entity = "fn shown() -> vec4<f32> {
+        let hit = trace(vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), 64.0);
+        return vec4<f32>(hit.distance, f32(count[0]), f32(frame.has_ray_tracing), 1.0);
+    }";
+    let entity = entity.to_owned() + ENTITY;
+    let (mut pack, sources) = built(
+        &device,
+        &queue,
+        Some(&scene),
+        &manifest,
+        &[("w.wgsl", COUNTS), ("e.wgsl", &entity)],
+    )
+    .unwrap();
+    let (_, stub, with_scene) = sources
+        .iter()
+        .find(|(kind, ..)| *kind == StageKind::Entity)
+        .unwrap();
+    let mut draw = |n: u32, scene: Option<&Traced<'_>>| {
+        let hud = crate::hud::HudBatch::scratch([4, 4]);
+        let mut inputs = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        inputs.pack.frame_timing = Some(crate::gfx::pack_uniforms::FrameTiming::nth(n, 50.0));
+        pack.write(
+            &queue,
+            &inputs,
+            [4, 4],
+            crate::gfx::output::DisplayValues::SDR,
+            scene,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        pack.before_world(&device, &mut encoder, scene);
+        pack.bind_terrain(&device, scene);
+        let entity = pack.entity.as_ref().unwrap();
+        let trace = entity.scene.as_ref().unwrap();
+        let (source, layout) = if trace.drawn(pack.post.parity()).is_some() {
+            (with_scene.as_ref().unwrap(), trace.layout())
+        } else {
+            (stub, &entity.kept.as_ref().unwrap().layout)
+        };
+        let group = pack.entity_layers().unwrap().frame;
+        let target = shown(
+            &device,
+            &mut encoder,
+            &(source.to_owned() + PROBE),
+            layout,
+            group,
+        );
+        texel((&device, &queue), encoder, &target)
+    };
+    assert_eq!(draw(1, Some(&traced)), [4.0, 1.0, 1.0, 1.0]);
+    assert_eq!(draw(2, None), [-1.0, 2.0, 0.0, 1.0]);
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
 }
