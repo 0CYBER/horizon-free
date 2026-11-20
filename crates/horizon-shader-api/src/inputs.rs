@@ -93,9 +93,9 @@ uniform! {
     /// stay precise far from the world's origin; depth is reversed (1 near,
     /// 0 at the far plane and in the sky).
     Frame {
-        /// Camera-relative world to view space: the camera's rotation.
+        /// Camera-relative world to view space: yaw and pitch rotation only; excludes view bob and nausea spin.
         view: [[f32; 4]; 4],
-        /// View to clip space (reversed depth, wgpu's clip space: z 0..1).
+        /// View to clip space (reversed depth, wgpu's clip space: z 0..1), including view bob and nausea spin when active.
         projection: [[f32; 4]; 4],
         /// View to camera-relative world space.
         view_inverse: [[f32; 4]; 4],

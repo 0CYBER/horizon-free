@@ -544,7 +544,23 @@ pub fn markdown() -> String {
         if kind == StageKind::Post {
             out += "- `fn depth_at(uv: vec2<f32>) -> f32`: the world's depth at `uv`.\n\
                     - `fn view_position(uv: vec2<f32>, depth: f32) -> vec3<f32>`: the camera-relative position, in blocks, of\n  \
-                    the point at `uv` and `depth`.\n\
+                    the point at `uv` and `depth`. With view bob or nausea spin active, the ray through this point need not\n  \
+                    pass through `(0, 0, 0)`. Get its direction from two positions at the same `uv` and different depths;\n  \
+                    for example, `normalize(view_position(uv, depth_far) - view_position(uv, depth_near))`, where\n  \
+                    `depth_far < depth_near` because depth is reversed.\n\
+\n  \
+                    For a perspective projection's finite optical origin, column 2 of `frame.projection_inverse` gives\n  \
+                    that origin as a homogeneous view-space point. Transform it to camera-relative world axes:\n\
+\n  \
+                    ```wgsl\n  \
+                    let optical_h = frame.projection_inverse[2];\n  \
+                    if optical_h.w != 0.0 {\n    \
+                        let optical_view = optical_h.xyz / optical_h.w;\n    \
+                        let optical_origin = (frame.view_inverse * vec4<f32>(optical_view, 0.0)).xyz;\n  \
+                    }\n  \
+                    ```\n\
+\n  \
+                    An orthographic projection has no finite optical origin (`optical_h.w == 0.0`); do not divide by zero.\n\
                     - `fn surface_at(texel: vec2<i32>) -> SurfaceData`: the solid terrain's surface at a pixel, as the \
                     material stage's `set_surface` left it: `present` (false where the sky, an entity, water, glass or a \
                     particle shows instead), `normal` (world axes), `smoothness` and `data`.\n";
