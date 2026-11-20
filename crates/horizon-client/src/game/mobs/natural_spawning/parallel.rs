@@ -3,6 +3,7 @@
 //! them, and the server thread then commits what they proposed in the pass's chunk order.
 use super::*;
 use crate::game::creatures::prep;
+use crate::game::structures::structures_reaching_in;
 use horizon_client::mobs::{
     finalize::{self, FinalizeLevel},
     spawn_selection::{self, Lane, Pack},

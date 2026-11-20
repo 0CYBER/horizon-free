@@ -598,6 +598,15 @@ impl VanillaTerrain {
         let worker = worker.get_or_insert_with(|| self.generator.worker());
         worker.structure_starts(ChunkPos::new(x, z))
     }
+    /// The structure starts a chunk owns when the generator holds them already, else None:
+    /// nothing is read from the save and nothing is built.
+    pub fn cached_starts_at(
+        &self,
+        x: i32,
+        z: i32,
+    ) -> Option<Vec<Arc<horizon_world::worldgen::structure::start::StructureStart>>> {
+        self.generator.cached_structure_starts(ChunkPos::new(x, z))
+    }
     /// `/place structure`: `Structure.generate` for `structure` in chunk
     /// `(x, z)`, whatever the chunk's structure sets place there.
     pub fn structure_start(

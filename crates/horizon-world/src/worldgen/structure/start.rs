@@ -823,6 +823,13 @@ impl Piece {
             Self::Legacy(p) => p.bounding_box(),
         }
     }
+    /// The box once placed ([`LegacyPiece::placed_bounding_box`]).
+    pub fn placed_bounding_box(&self) -> BoundingBox {
+        match self {
+            Self::Pool(p) => p.bounding_box,
+            Self::Legacy(p) => p.placed_bounding_box(),
+        }
+    }
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Pool(_) => "minecraft:jigsaw",

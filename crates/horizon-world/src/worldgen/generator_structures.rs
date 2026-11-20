@@ -488,6 +488,11 @@ impl StructureState {
         self.build_starts(context, chunk, true)
             .expect("waits for another worker's build")
     }
+    /// The starts a chunk owns when they are cached already, else None: nothing is read from
+    /// the save and nothing is built, for a read that may load no chunk.
+    pub(super) fn cached_starts_at(&self, chunk: ChunkPos) -> Option<Starts> {
+        self.starts.get((chunk.x, chunk.z))
+    }
     /// The starts a chunk saved (`structures.starts`), which vanilla loads with their pieces
     /// (`StructureStart.loadStaticStart`) so that the neighbours place the parts that cross
     /// into them and the beardifier shapes the terrain around them. A jigsaw start (villages,

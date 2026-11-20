@@ -1642,6 +1642,7 @@ horizon-client game::native_level_refs::environment_read_tests::floor_reads_real
 horizon-client game::native_level_refs::environment_read_tests::level_environment_reads_match_vanilla_vectors lib daily resources
 horizon-client game::native_level_refs::environment_read_tests::nearest_structure_uses_the_named_generator_without_loading_resident_chunks lib daily resources
 horizon-client game::native_level_refs::environment_read_tests::sky_and_logical_height_read_the_named_dimension_and_client_state lib daily resources
+horizon-client game::native_level_refs::environment_read_tests::structures_at_names_the_starts_whose_box_holds_a_position lib daily resources
 horizon-client game::native_level_refs::tests::a_level_ref_draws_from_its_levels_own_stream lib daily resources
 horizon-client game::native_level_refs::tests::a_level_with_its_own_clock_counts_apart_from_the_overworlds lib daily resources
 horizon-client game::native_level_refs::tests::a_mod_ticket_keeps_a_parked_level_active lib daily resources

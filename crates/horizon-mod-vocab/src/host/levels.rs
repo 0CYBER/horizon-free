@@ -61,6 +61,17 @@ pub trait LevelsBackend {
         structure: &str,
         parameters: StructureSearch,
     ) -> Option<StructureSearchResult>;
+    /// Side: server.
+    /// `StructureManager.getStructureAt` and `getStructureWithPieceAt` in one read: every
+    /// structure the chunk at `pos` refers to whose start's box or one of whose pieces, as
+    /// placed, holds `pos`, with which of the two (`in_box`, `in_piece`). Reads the level in place or
+    /// parked from the starts the generator holds: loads no chunk and builds no start. Empty
+    /// for a chunk that refers to no structure there; None on a client, for a stale or
+    /// unavailable level, for a chunk that isn't loaded and for one whose references the level
+    /// can't resolve now (a level without generated terrain, or starts the generator no longer
+    /// holds).
+    #[access(WorldOnly)]
+    fn level_structures_at(&self, level: LevelRef, pos: [i32; 3]) -> Option<Vec<StructureAt>>;
     /// Side: both.
     /// `Level.getSkyDarken`: the sky-light reduction from dimension, time and weather.
     /// Reads any loaded server level, including parked levels, or the current client level.

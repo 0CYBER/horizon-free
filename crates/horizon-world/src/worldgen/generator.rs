@@ -1879,6 +1879,11 @@ trait SeededPipeline: Send + Sync {
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
+    /// `structure_starts` from the cache alone: None when they aren't cached.
+    fn cached_structure_starts(
+        &self,
+        pos: ChunkPos,
+    ) -> Option<Vec<Arc<super::structure::start::StructureStart>>>;
     /// `Structure.generate` for one structure in one chunk (`/place
     /// structure`), outside any structure set's placement.
     fn structure_start(
@@ -2041,6 +2046,17 @@ where
                 )
                 .to_vec(),
             None => Vec::new(),
+        }
+    }
+    fn cached_structure_starts(
+        &self,
+        pos: ChunkPos,
+    ) -> Option<Vec<Arc<super::structure::start::StructureStart>>> {
+        match &self.structures {
+            Some(structures) => structures
+                .cached_starts_at(pos)
+                .map(|starts| starts.to_vec()),
+            None => Some(Vec::new()),
         }
     }
     fn structure_start(
@@ -2701,6 +2717,14 @@ pub struct OverworldGenerator {
     noise_clamped: Option<(NoiseSettings, NoiseSettings)>,
 }
 impl OverworldGenerator {
+    /// The structure starts a chunk owns when they are cached already, else None: no save is
+    /// read and nothing is built, for reads that may load no chunk.
+    pub fn cached_structure_starts(
+        &self,
+        pos: ChunkPos,
+    ) -> Option<Vec<Arc<super::structure::start::StructureStart>>> {
+        self.pipeline.cached_structure_starts(pos)
+    }
     /// Install before workers run, so every cache miss can consult the save before generation.
     pub fn set_saved_starts(&self, source: Arc<SavedStructureStarts>) {
         self.pipeline.set_saved_starts(source);

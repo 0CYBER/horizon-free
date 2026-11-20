@@ -358,6 +358,12 @@ pub fn write_block(
 /// A placed structure piece.
 pub trait LegacyPiece: std::fmt::Debug + Send + Sync {
     fn bounding_box(&self) -> BoundingBox;
+    /// The box once placed, as `StructureManager.structureHasPieceAt` reads it:
+    /// `TemplateStructurePiece.postProcess` moves the box of a piece that settles on the terrain
+    /// (shipwrecks, ocean ruins, igloos). The box it was made with otherwise.
+    fn placed_bounding_box(&self) -> BoundingBox {
+        self.bounding_box()
+    }
     /// Cached terrain override for a mod piece; vanilla pieces use their structure's rule.
     fn beardifier(&self) -> Option<horizon_core::density::RigidPiece> {
         None
