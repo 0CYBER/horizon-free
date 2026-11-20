@@ -36,8 +36,10 @@ jobs:
   parity:
     runs-on: ${{ inputs.full && fromJSON('["self-hosted", "horizon-game", "playhorizon"]') || fromJSON('["self-hosted", "horizon-game"]') }}
     # A change to core crates reruns ~350 harnesses: ~60-90 min on the Mac mini; on playhorizon (4 of its 8 vCPUs, 4
-    # harnesses at a time) up to a few hours, and any pull request's job may land there.
-    timeout-minutes: ${{ inputs.full && 360 || 180 }}
+    # harnesses at a time) up to a few hours, and any pull request's job may land there. 180 min cut one off on the
+    # Mac mini on 2026-11-20 (#18551). After the oracle shim's key changes, its records are rebuilt once, which adds
+    # up to ~23 min.
+    timeout-minutes: ${{ inputs.full && 360 || 240 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
