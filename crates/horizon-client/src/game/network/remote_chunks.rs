@@ -5,13 +5,15 @@
 use super::Game;
 use horizon_client::{
     chunk::{
-        BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy, known_blocks_only,
+        BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy, known_block_state,
+        known_blocks_only, shared_generation,
     },
     streaming::Streaming,
 };
-use horizon_core::paletted::{PalettedContainer, Strategy};
+use horizon_core::paletted::{PalettedContainer, Strategy, storage_len};
 use horizon_mod_runtime::attachments::Holder;
 use horizon_protocol::{
+    buf::{Reader, bit},
     chunk::{LightData, Paletted, SectionLight},
     packets::play::{self, Clientbound as C},
     registry::DimensionType,
@@ -40,6 +42,207 @@ pub(super) struct ChunkFormat {
     biome_bits: u8,
 }
 
+/// Per-worker reusable scratch buffers for [`ChunkFormat::column_with_scratch`].
+#[derive(Default)]
+struct DecodeScratch {
+    sections: Vec<Section>,
+}
+
+#[derive(Clone, Copy)]
+enum RawSky<'a> {
+    Absent,
+    Empty,
+    Layer(&'a [u8]),
+}
+
+static ZERO_LIGHT_LAYER: [u8; 2048] = [0u8; 2048];
+
+#[inline]
+fn all_distinct(s: &[u32]) -> bool {
+    for i in 1..s.len() {
+        if s[..i].contains(&s[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+#[inline]
+fn biome_container_from_cells(cells: &[u32; 64]) -> PalettedContainer {
+    let first = cells[0];
+    if cells.iter().all(|&c| c == first) {
+        PalettedContainer::new(BIOME_STRATEGY, first)
+    } else {
+        PalettedContainer::from_values(BIOME_STRATEGY, cells)
+    }
+}
+
+fn repeat_biome_layer(source: &PalettedContainer, layer: usize) -> PalettedContainer {
+    if source.bits() == 0 {
+        return PalettedContainer::new(BIOME_STRATEGY, source.get(0));
+    }
+    let base = layer * 16;
+    let cells: [u32; 64] = std::array::from_fn(|j| source.get(base + (j & 15)));
+    biome_container_from_cells(&cells)
+}
+
+fn unpack_wire_biomes(words: &[u64], bits: u8, out: &mut [u32; 64]) {
+    let per = 64 / usize::from(bits);
+    let mask = (1u64 << bits) - 1;
+    let mut idx = 0;
+    for &w in words {
+        let mut word = w;
+        let end = (idx + per).min(64);
+        while idx < end {
+            out[idx] = (word & mask) as u32;
+            word >>= bits;
+            idx += 1;
+        }
+    }
+}
+
+fn unpack_wire_biomes_be(raw_words: &[u8], bits: u8, out: &mut [u32; 64]) {
+    let per = 64 / usize::from(bits);
+    let mask = if bits == 32 {
+        u64::from(u32::MAX)
+    } else {
+        (1u64 << bits) - 1
+    };
+    let mut idx = 0;
+    let (raw_chunks, _) = raw_words.as_chunks::<8>();
+    for chunk in raw_chunks {
+        let mut word = u64::from_be_bytes(*chunk);
+        let end = (idx + per).min(64);
+        while idx < end {
+            out[idx] = (word & mask) as u32;
+            word >>= bits;
+            idx += 1;
+        }
+    }
+}
+
+fn decode_block_container(
+    r: &mut Reader<'_>,
+    ours: Strategy,
+    keep: bool,
+) -> Result<Option<PalettedContainer>, String> {
+    let wire = r.u8().map_err(|e| e.to_string())?;
+    if wire == 0 {
+        let raw = r.varint().map_err(|e| e.to_string())? as u32;
+        if !keep {
+            return Ok(None);
+        }
+        let v = if known_block_state(raw) && u64::from(raw) >> ours.global_bits == 0 {
+            raw
+        } else {
+            0
+        };
+        return Ok(Some(PalettedContainer::new(ours, v)));
+    }
+    let (has_palette, bits) = if wire <= 4 {
+        (true, 4)
+    } else if wire <= 8 {
+        (true, wire)
+    } else {
+        (false, 16u8.max(wire))
+    };
+    if bits > 32 {
+        return Err(format!("{bits} bits per entry, more than 32"));
+    }
+    let word_count = storage_len(bits, 4096);
+    if !keep {
+        if has_palette {
+            let n = r.count(1 << bits).map_err(|e| e.to_string())?;
+            for _ in 0..n {
+                let _ = r.varint().map_err(|e| e.to_string())?;
+            }
+        }
+        let _ = r.bytes(word_count * 8).map_err(|e| e.to_string())?;
+        return Ok(None);
+    }
+    let palette = if has_palette {
+        let n = r.count(1 << bits).map_err(|e| e.to_string())?;
+        let mut palette = Vec::with_capacity(n);
+        for _ in 0..n {
+            palette.push(r.varint().map_err(|e| e.to_string())? as u32);
+        }
+        palette
+    } else {
+        Vec::new()
+    };
+    let raw_words = r.bytes(word_count * 8).map_err(|e| e.to_string())?;
+    let (raw_chunks, _) = raw_words.as_chunks::<8>();
+    let words: Vec<u64> = raw_chunks.iter().map(|b| u64::from_be_bytes(*b)).collect();
+    // A global section is as wide as the server's registry: 16 bits from a
+    // vanilla server, wider from a Horizon host with the same content mods.
+    // Read it at that width, then widen or narrow it to ours.
+    let strategy = if ours.wire_has_palette(bits) {
+        ours
+    } else {
+        Strategy::blocks(bits)
+    };
+    let mut blocks = known_blocks_only(
+        PalettedContainer::from_wire(strategy, bits, palette, words).map_err(|e| e.to_string())?,
+    );
+    if blocks.bits() != 0
+        && let Some(v) = blocks.uniform()
+    {
+        blocks = PalettedContainer::new(ours, v);
+    }
+    Ok(Some(blocks))
+}
+
+#[inline]
+fn uniform_nibble_layer(slice: &[u8]) -> Option<u8> {
+    let first = *slice.first()?;
+    if (first & 15) != (first >> 4) {
+        return None;
+    }
+    let word = u64::from_ne_bytes([first; 8]);
+    let (chunks, rem) = slice.as_chunks::<8>();
+    if chunks.iter().all(|c| u64::from_ne_bytes(*c) == word) && rem.iter().all(|&b| b == first) {
+        Some(first & 15)
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn copy_nibble_layer(slice: &[u8]) -> Box<[u8; 2048]> {
+    let mut out = Box::new([0u8; 2048]);
+    out.copy_from_slice(slice);
+    out
+}
+
+#[inline]
+fn unpack_bottom_row(slice: &[u8], above: &mut [u8; 256]) -> Option<u8> {
+    let row = &slice[..128];
+    if let Some(u) = uniform_nibble_layer(row) {
+        return Some(u);
+    }
+    let (pairs, _) = above.as_chunks_mut::<2>();
+    for (pair, &byte) in pairs.iter_mut().zip(row) {
+        pair[0] = byte & 15;
+        pair[1] = byte >> 4;
+    }
+    None
+}
+
+#[inline]
+fn nibble_slice(slice: &[u8], i: usize) -> u8 {
+    (slice[i >> 1] >> ((i & 1) << 2)) & 15
+}
+
+fn combine_sky_and_block(sky: &[u8], block: &[u8]) -> Box<[u8; 4096]> {
+    let mut out = Box::new([0u8; 4096]);
+    let (pairs, _) = out.as_chunks_mut::<2>();
+    for (pair, (&s, &b)) in pairs.iter_mut().zip(sky.iter().zip(block)) {
+        pair[0] = ((s & 0x0F) << 4) | (b & 0x0F);
+        pair[1] = (s & 0xF0) | (b >> 4);
+    }
+    out
+}
+
 impl ChunkFormat {
     pub(super) fn new(dimension: &DimensionType, biome_map: Vec<u16>, biome_bits: u8) -> Self {
         Self {
@@ -66,49 +269,331 @@ impl ChunkFormat {
         }
     }
 
+    #[inline]
+    fn map_biome(&self, raw: i32) -> u32 {
+        u32::from(self.biome_map.get(raw as usize).copied().unwrap_or(0))
+    }
+
+    fn decode_biome_container(
+        &self,
+        r: &mut Reader<'_>,
+        keep: bool,
+    ) -> Result<Option<PalettedContainer>, String> {
+        let wire = r.u8().map_err(|e| e.to_string())?;
+        if wire == 0 {
+            let raw = r.varint().map_err(|e| e.to_string())?;
+            if !keep {
+                return Ok(None);
+            }
+            return Ok(Some(PalettedContainer::new(
+                BIOME_STRATEGY,
+                self.map_biome(raw),
+            )));
+        }
+        let (has_palette, bits) = if wire <= 3 {
+            (true, wire)
+        } else {
+            (false, self.biome_bits.max(wire))
+        };
+        if bits > 32 {
+            return Err(format!("{bits} bits per entry, more than 32"));
+        }
+        let word_count = storage_len(bits, 64);
+        if !keep {
+            if has_palette {
+                let n = r.count(1 << bits).map_err(|e| e.to_string())?;
+                for _ in 0..n {
+                    let _ = r.varint().map_err(|e| e.to_string())?;
+                }
+            }
+            let _ = r.bytes(word_count * 8).map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+        if has_palette {
+            let n = r.count(1 << bits).map_err(|e| e.to_string())?;
+            let mut mapped = [0u32; 8];
+            for slot in &mut mapped[..n] {
+                *slot = self.map_biome(r.varint().map_err(|e| e.to_string())?);
+            }
+            let raw_words = r.bytes(word_count * 8).map_err(|e| e.to_string())?;
+            let mut words = [0u64; 4];
+            let (raw_chunks, _) = raw_words.as_chunks::<8>();
+            for (dst, chunk) in words[..word_count].iter_mut().zip(raw_chunks) {
+                *dst = u64::from_be_bytes(*chunk);
+            }
+            if n >= 2
+                && all_distinct(&mapped[..n])
+                && let Ok(c) = PalettedContainer::from_wire(
+                    BIOME_STRATEGY,
+                    bits,
+                    mapped[..n].to_vec(),
+                    words[..word_count].to_vec(),
+                )
+            {
+                return Ok(Some(if let Some(v) = c.uniform() {
+                    PalettedContainer::new(BIOME_STRATEGY, v)
+                } else {
+                    c
+                }));
+            }
+            let default_biome = self.map_biome(0);
+            let mut cells = [0u32; 64];
+            unpack_wire_biomes(&words[..word_count], bits, &mut cells);
+            if n == 0 {
+                for c in &mut cells {
+                    *c = self.map_biome(*c as i32);
+                }
+            } else {
+                for c in &mut cells {
+                    *c = mapped[..n]
+                        .get(*c as usize)
+                        .copied()
+                        .unwrap_or(default_biome);
+                }
+            }
+            return Ok(Some(biome_container_from_cells(&cells)));
+        }
+        let raw_words = r.bytes(word_count * 8).map_err(|e| e.to_string())?;
+        let mut cells = [0u32; 64];
+        unpack_wire_biomes_be(raw_words, bits, &mut cells);
+        for c in &mut cells {
+            *c = self.map_biome(*c as i32);
+        }
+        Ok(Some(biome_container_from_cells(&cells)))
+    }
+
+    fn decode_light_into(&self, light: &LightData, sections: &mut [Section]) {
+        let column = sections.len();
+        let column_i32 = column as i32;
+        let sky_enabled = self.has_skylight;
+        let mut above = [if sky_enabled { 15u8 } else { 0 }; 256];
+        let mut above_uniform = Some(if sky_enabled { 15u8 } else { 0 });
+
+        let mut stack_layers: [(RawSky<'_>, Option<&[u8]>); 32] = [(RawSky::Absent, None); 32];
+        let mut heap_layers;
+        let layers: &mut [(RawSky<'_>, Option<&[u8]>)] = if column <= stack_layers.len() {
+            &mut stack_layers[..column]
+        } else {
+            heap_layers = vec![(RawSky::Absent, None); column];
+            &mut heap_layers
+        };
+
+        // Light section b is the dimension's section b - 1.
+        let first = (self.min_y - self.column.min_y()).div_euclid(16) - 1;
+        let mut sky_iter = light.sky.iter();
+        let mut block_iter = light.block.iter();
+        for b in 0..self.sections + 2 {
+            let s = if bit(&light.sky_mask, b) {
+                sky_iter
+                    .next()
+                    .map_or(RawSky::Absent, |v| RawSky::Layer(v.as_slice()))
+            } else if bit(&light.empty_sky_mask, b) {
+                RawSky::Empty
+            } else {
+                RawSky::Absent
+            };
+            // In a full chunk packet, absent and empty block light are both all zero.
+            let bl = if bit(&light.block_mask, b) {
+                block_iter.next().map(Vec::as_slice)
+            } else {
+                None
+            };
+            let si = first + b as i32;
+            if (0..column_i32).contains(&si) {
+                layers[si as usize] = (if sky_enabled { s } else { RawSky::Absent }, bl);
+            } else if si == column_i32 && sky_enabled {
+                match s {
+                    RawSky::Empty => above_uniform = Some(0),
+                    RawSky::Layer(l) if l.len() >= 128 => {
+                        above_uniform = unpack_bottom_row(l, &mut above);
+                    }
+                    RawSky::Layer(l) => {
+                        for (i, a) in above.iter_mut().enumerate() {
+                            *a = nibble_slice(l, i);
+                        }
+                        above_uniform = None;
+                    }
+                    RawSky::Absent => {}
+                }
+            }
+        }
+
+        for (section, &(sky, block)) in sections.iter_mut().zip(layers.iter()).rev() {
+            section.light = match (sky, block, above_uniform) {
+                (RawSky::Empty, None, _) => {
+                    above_uniform = Some(0);
+                    Light::Uniform(0)
+                }
+                (RawSky::Empty, Some(bl), _) if bl.len() == 2048 => {
+                    above_uniform = Some(0);
+                    match uniform_nibble_layer(bl) {
+                        Some(bv) => Light::Uniform(bv),
+                        None => Light::Block(copy_nibble_layer(bl), 0),
+                    }
+                }
+                (RawSky::Absent, None, Some(sv)) => Light::Uniform(sv << 4),
+                (RawSky::Absent, Some(bl), Some(sv)) if bl.len() == 2048 => {
+                    match uniform_nibble_layer(bl) {
+                        Some(bv) => Light::Uniform(sv << 4 | bv),
+                        None => Light::Block(copy_nibble_layer(bl), sv),
+                    }
+                }
+                (RawSky::Layer(sl), None, _) if sl.len() == 2048 => {
+                    if let Some(sv) = uniform_nibble_layer(sl) {
+                        above_uniform = Some(sv);
+                        Light::Uniform(sv << 4)
+                    } else {
+                        above_uniform = unpack_bottom_row(sl, &mut above);
+                        Light::Sky(copy_nibble_layer(sl), 0)
+                    }
+                }
+                (RawSky::Layer(sl), Some(bl), _) if sl.len() == 2048 && bl.len() == 2048 => {
+                    match (uniform_nibble_layer(sl), uniform_nibble_layer(bl)) {
+                        (Some(sv), Some(bv)) => {
+                            above_uniform = Some(sv);
+                            Light::Uniform(sv << 4 | bv)
+                        }
+                        (Some(sv), None) => {
+                            above_uniform = Some(sv);
+                            Light::Block(copy_nibble_layer(bl), sv)
+                        }
+                        (None, Some(bv)) => {
+                            above_uniform = unpack_bottom_row(sl, &mut above);
+                            Light::Sky(copy_nibble_layer(sl), bv)
+                        }
+                        (None, None) => {
+                            above_uniform = unpack_bottom_row(sl, &mut above);
+                            Light::Full(combine_sky_and_block(sl, bl))
+                        }
+                    }
+                }
+                (sky, block, above_u) => {
+                    let mut data = [0u8; 4096];
+                    if let Some(sv) = above_u {
+                        above.fill(sv);
+                    }
+                    match sky {
+                        RawSky::Empty => {
+                            above.fill(0);
+                            above_uniform = Some(0);
+                            if let Some(bl) = block {
+                                for (i, packed) in data.iter_mut().enumerate() {
+                                    *packed = nibble_slice(bl, i);
+                                }
+                            }
+                        }
+                        RawSky::Layer(sl) => {
+                            for (i, packed) in data.iter_mut().enumerate() {
+                                let s = nibble_slice(sl, i);
+                                let b = block.map_or(0, |a| nibble_slice(a, i));
+                                *packed = s << 4 | b;
+                            }
+                            for (a, &p) in above.iter_mut().zip(&data[..256]) {
+                                *a = p >> 4;
+                            }
+                            above_uniform = None;
+                        }
+                        RawSky::Absent => {
+                            for (i, packed) in data.iter_mut().enumerate() {
+                                let s = above[i & 255];
+                                let b = block.map_or(0, |a| nibble_slice(a, i));
+                                *packed = s << 4 | b;
+                            }
+                        }
+                    }
+                    Light::from_slice(&data)
+                }
+            };
+        }
+    }
+
     /// LevelChunkSection data into the client's column.
     pub(super) fn column(&self, p: &play::LevelChunkWithLight) -> Result<Chunk, String> {
-        let sections = p
-            .chunk
-            .sections(self.sections, 16, self.biome_bits)
-            .map_err(|e| e.to_string())?;
-        let mut chunk = Chunk::with_layout(p.x, p.z, self.column);
+        let mut scratch = DecodeScratch::default();
+        self.column_with_scratch(p, &mut scratch)
+    }
+
+    fn column_with_scratch(
+        &self,
+        p: &play::LevelChunkWithLight,
+        scratch: &mut DecodeScratch,
+    ) -> Result<Chunk, String> {
+        let generation = shared_generation();
+        let ours = block_strategy();
         let offset = (self.min_y - self.column.min_y()).div_euclid(16);
-        let column = self.column.sections() as i32;
-        for (i, s) in sections.iter().enumerate() {
+        let column = self.column.sections();
+        let column_i32 = column as i32;
+        let need_below = self.sections > 0 && offset > 0;
+        let need_above = self.sections > 0 && (offset + self.sections as i32) < column_i32;
+
+        scratch.sections.clear();
+        scratch.sections.resize_with(column, || Section {
+            blocks: PalettedContainer::new(ours, 0),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
+            light: Light::Uniform(0xF0),
+        });
+
+        let mut r = Reader::new(&p.chunk.buffer);
+        let mut first_biomes: Option<PalettedContainer> = None;
+        let mut last_biomes: Option<PalettedContainer> = None;
+        for i in 0..self.sections {
+            let _ = r.bytes(4).map_err(|e| e.to_string())?;
             let target = offset + i as i32;
-            if !(0..column).contains(&target) {
-                continue;
+            let in_column = (0..column_i32).contains(&target);
+            let blocks = decode_block_container(&mut r, ours, in_column)?;
+            let keep_first = need_below && i == 0;
+            let keep_last = need_above && i == self.sections - 1;
+            let biomes =
+                self.decode_biome_container(&mut r, in_column || keep_first || keep_last)?;
+            if in_column {
+                let slot = &mut scratch.sections[target as usize];
+                if let Some(blocks) = blocks {
+                    slot.blocks = blocks;
+                }
+                if let Some(biomes) = biomes {
+                    if keep_first {
+                        first_biomes = Some(repeat_biome_layer(&biomes, 0));
+                    }
+                    if keep_last {
+                        last_biomes = Some(repeat_biome_layer(&biomes, 3));
+                    }
+                    slot.biomes = biomes;
+                }
+            } else if let Some(biomes) = biomes {
+                if keep_first {
+                    first_biomes = Some(repeat_biome_layer(&biomes, 0));
+                }
+                if keep_last {
+                    last_biomes = Some(repeat_biome_layer(&biomes, 3));
+                }
             }
-            // A global section is as wide as the server's registry: 16 bits
-            // from a vanilla server, wider from a Horizon host with the same
-            // content mods. Read it at that width, then widen it to ours.
-            let ours = block_strategy();
-            let strategy = if ours.wire_has_palette(s.states.bits) {
-                ours
-            } else {
-                Strategy::blocks(s.states.bits)
-            };
-            let palette = s.states.palette.iter().map(|&p| p as u32).collect();
-            let words = s.states.data.iter().map(|&w| w as u64).collect();
-            let blocks = known_blocks_only(
-                PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
-                    .map_err(|e| e.to_string())?,
-            );
-            let mut section = Section {
-                blocks,
-                biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
-                light: Light::Uniform(0xF0),
-            };
-            section.compact();
-            chunk.sections[target as usize] = Arc::new(section);
         }
-        let biomes: Vec<_> = sections.iter().map(|s| &s.biomes).collect();
-        self.put_biomes(&mut chunk, &biomes);
+        if let Some(edge) = first_biomes {
+            let end = (offset as usize).min(column);
+            for slot in &mut scratch.sections[..end] {
+                slot.biomes = edge.clone();
+            }
+        }
+        if let Some(edge) = last_biomes {
+            let start = (offset + self.sections as i32).max(0) as usize;
+            if start < column {
+                for slot in &mut scratch.sections[start..] {
+                    slot.biomes = edge.clone();
+                }
+            }
+        }
         // ClientPacketListener.applyLightData: the column keeps the light
         // the server sent; nothing is relit.
-        let (layers, above) = self.light(&p.light);
-        horizon_client::light::light_from_layers(&mut chunk, &layers, above, self.has_skylight);
+        self.decode_light_into(&p.light, &mut scratch.sections);
+        let mut chunk = Chunk::from_sections_with_generation(
+            p.x,
+            p.z,
+            self.column,
+            &mut scratch.sections,
+            generation,
+        );
+        chunk.lit = true;
+        chunk.light_loaded = true;
         // From the single-player server thread: its own sections where they
         // are the same.
         horizon_client::lan::handoff::take(&mut chunk);
@@ -119,6 +604,7 @@ impl ChunkFormat {
     /// registry) into the column's sections. Sections outside the
     /// dimension's range take its nearest biomes (the column's top or bottom
     /// cell layer repeated).
+    #[allow(dead_code)]
     fn put_biomes(&self, chunk: &mut Chunk, biomes: &[&Paletted]) {
         if biomes.is_empty() {
             return;
@@ -157,10 +643,56 @@ impl ChunkFormat {
         chunk: &mut Chunk,
         data: &play::ChunkBiomeData,
     ) -> Result<(), String> {
-        let biomes = data
-            .biomes(self.sections, self.biome_bits)
-            .map_err(|e| e.to_string())?;
-        self.put_biomes(chunk, &biomes.iter().collect::<Vec<_>>());
+        if self.sections == 0 {
+            return Ok(());
+        }
+        let offset = (self.min_y - self.column.min_y()).div_euclid(16);
+        let column = self.column.sections();
+        let column_i32 = column as i32;
+        let need_below = offset > 0;
+        let need_above = (offset + self.sections as i32) < column_i32;
+
+        let mut r = Reader::new(&data.buffer);
+        let mut parsed: Vec<(usize, PalettedContainer)> =
+            Vec::with_capacity(self.sections.min(column));
+        let mut first_biomes: Option<PalettedContainer> = None;
+        let mut last_biomes: Option<PalettedContainer> = None;
+        for i in 0..self.sections {
+            let target = offset + i as i32;
+            let in_column = (0..column_i32).contains(&target);
+            let keep_first = need_below && i == 0;
+            let keep_last = need_above && i == self.sections - 1;
+            let biomes =
+                self.decode_biome_container(&mut r, in_column || keep_first || keep_last)?;
+            if let Some(biomes) = biomes {
+                if keep_first {
+                    first_biomes = Some(repeat_biome_layer(&biomes, 0));
+                }
+                if keep_last {
+                    last_biomes = Some(repeat_biome_layer(&biomes, 3));
+                }
+                if in_column {
+                    parsed.push((target as usize, biomes));
+                }
+            }
+        }
+        for (si, biomes) in parsed {
+            Arc::make_mut(&mut chunk.sections[si]).biomes = biomes;
+        }
+        if let Some(edge) = first_biomes {
+            let end = (offset as usize).min(column);
+            for section in &mut chunk.sections[..end] {
+                Arc::make_mut(section).biomes = edge.clone();
+            }
+        }
+        if let Some(edge) = last_biomes {
+            let start = (offset + self.sections as i32).max(0) as usize;
+            if start < column {
+                for section in &mut chunk.sections[start..] {
+                    Arc::make_mut(section).biomes = edge.clone();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -189,6 +721,38 @@ impl ChunkFormat {
             }
         }
         (layers, above)
+    }
+
+    /// Borrowed zero-allocation slice view of a light update packet's layers.
+    fn light_slices<'a>(&self, light: &'a LightData) -> Vec<(Option<&'a [u8]>, Option<&'a [u8]>)> {
+        let column = self.column.sections() as i32;
+        let mut layers: Vec<(Option<&'a [u8]>, Option<&'a [u8]>)> =
+            vec![(None, None); self.column.sections()];
+        // Light section b is the dimension's section b - 1.
+        let first = (self.min_y - self.column.min_y()).div_euclid(16) - 1;
+        let mut sky_iter = light.sky.iter();
+        let mut block_iter = light.block.iter();
+        for b in 0..self.sections + 2 {
+            let s = if bit(&light.sky_mask, b) {
+                sky_iter.next().map(Vec::as_slice)
+            } else if bit(&light.empty_sky_mask, b) {
+                Some(&ZERO_LIGHT_LAYER[..])
+            } else {
+                None
+            };
+            let bl = if bit(&light.block_mask, b) {
+                block_iter.next().map(Vec::as_slice)
+            } else if bit(&light.empty_block_mask, b) {
+                Some(&ZERO_LIGHT_LAYER[..])
+            } else {
+                None
+            };
+            let si = first + b as i32;
+            if (0..column).contains(&si) {
+                layers[si as usize] = (s, bl);
+            }
+        }
+        layers
     }
 }
 
@@ -266,6 +830,7 @@ impl ChunkDecoder {
                 .name(format!("Chunk decoder {i}"))
                 .spawn(move || {
                     horizon_threads::chunk_decoder_current();
+                    let mut scratch = DecodeScratch::default();
                     'worker: loop {
                         let job = {
                             let mut q = match queue.0.lock() {
@@ -285,14 +850,26 @@ impl ChunkDecoder {
                                 };
                             }
                         };
-                        let column =
+                        let result =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &*job
                                 .packet
                             {
-                                C::LevelChunkWithLight(p) => job.format.column(p),
+                                C::LevelChunkWithLight(p) => {
+                                    job.format.column_with_scratch(p, &mut scratch)
+                                }
                                 _ => Err("not a chunk packet".into()),
-                            }))
-                            .unwrap_or_else(|_| Err("chunk decoding panicked".into()));
+                            }));
+                        let column = match result {
+                            Ok(Ok(column)) => Ok(column),
+                            Ok(Err(err)) => {
+                                scratch.sections.clear();
+                                Err(err)
+                            }
+                            Err(_) => {
+                                scratch.sections.clear();
+                                Err("chunk decoding panicked".into())
+                            }
+                        };
                         if finished
                             .send(WorkResult {
                                 seq: job.seq,
@@ -564,7 +1141,7 @@ impl Game<'_> {
         if !self.world.chunks.contains_key(&(p.x, p.z)) {
             return;
         }
-        let (layers, _) = format.light(&p.light);
+        let layers = format.light_slices(&p.light);
         let Some(chunk) = self.world.chunks.get_mut(&(p.x, p.z)) else {
             return;
         };
@@ -711,5 +1288,79 @@ mod tests {
         let mut other = Chunk::empty(2, -3);
         assert!(format.replace_biomes(&mut other, &short).is_err());
         assert_eq!(other.biome(8, 70, 8), 0);
+    }
+
+    #[test]
+    fn decoder_recovers_after_truncated_packet_and_preserves_fifo_order() {
+        let overworld = DimensionType::vanilla("minecraft:overworld");
+        let format = Arc::new(ChunkFormat::new(&overworld, vec![0, 7, 9], 2));
+        let mixed_states: [i32; 4096] = std::array::from_fn(|i| (i & 3) as i32);
+        let mixed_section = Wire {
+            non_empty: 3072,
+            fluids: 0,
+            states: Paletted::from_values(&mixed_states, Wiring::Blocks, 16),
+            biomes: Paletted::from_values(&[1; 64], Wiring::Biomes, 2),
+        };
+        let truncated = Box::new(C::LevelChunkWithLight(play::LevelChunkWithLight {
+            x: 1,
+            z: -3,
+            chunk: ChunkData {
+                heightmaps: Vec::new(),
+                // Only 4 of 24 sections so column_with_scratch populates scratch.sections before failing.
+                buffer: ChunkData::from_sections(&vec![mixed_section; 4]),
+                block_entities: Vec::new(),
+            },
+            light: LightData {
+                sky_mask: Vec::new(),
+                block_mask: Vec::new(),
+                empty_sky_mask: Vec::new(),
+                empty_block_mask: Vec::new(),
+                sky: Vec::new(),
+                block: Vec::new(),
+            },
+        }));
+
+        let decoder = ChunkDecoder::new();
+        assert!(decoder.submit(format.clone(), packet(0, 1)).is_none());
+        assert!(decoder.submit(format.clone(), truncated).is_none());
+        assert!(decoder.submit(format.clone(), packet(2, 3)).is_none());
+
+        let mut results = Vec::new();
+        for _ in 0..3 {
+            let (pkt, col) = loop {
+                match decoder.next() {
+                    Next::Ready(decoded) => break decoded,
+                    Next::Decoding => std::thread::yield_now(),
+                    Next::Lost => panic!("the decoder stopped"),
+                }
+            };
+            let C::LevelChunkWithLight(p) = *pkt else {
+                panic!("not a chunk packet");
+            };
+            results.push((p.x, col));
+        }
+        assert_eq!(results[0].0, 0);
+        assert_eq!(results[0].1.as_ref().unwrap().get(0, 0, 0), 1);
+        assert_eq!(results[1].0, 1);
+        assert!(results[1].1.is_err());
+        assert_eq!(results[2].0, 2);
+        assert_eq!(results[2].1.as_ref().unwrap().get(0, 0, 0), 3);
+
+        // Borrowed light_slices matches the owned mod-point ChunkFormat::light layers.
+        let light = LightData {
+            sky_mask: vec![0b0000_0010],
+            block_mask: vec![0b0000_0100],
+            empty_sky_mask: vec![0b0000_0100],
+            empty_block_mask: vec![0b0000_0010],
+            sky: vec![vec![0x5A; 2048]],
+            block: vec![vec![0x3C; 2048]],
+        };
+        let (owned, _) = format.light(&light);
+        let borrowed = format.light_slices(&light);
+        assert_eq!(owned.len(), borrowed.len());
+        for (a, b) in owned.iter().zip(&borrowed) {
+            assert_eq!(a.0.as_deref(), b.0);
+            assert_eq!(a.1.as_deref(), b.1);
+        }
     }
 }

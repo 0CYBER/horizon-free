@@ -219,26 +219,31 @@ impl ColumnLayout {
             sections: (height / 16) as usize,
         })
     }
+    #[inline(always)]
     pub fn min_y(self) -> i32 {
         self.min_y
     }
     /// One above the highest block.
+    #[inline(always)]
     pub fn max_y(self) -> i32 {
         self.min_y + self.height()
     }
+    #[inline(always)]
     pub fn height(self) -> i32 {
         self.sections as i32 * 16
     }
+    #[inline(always)]
     pub fn sections(self) -> usize {
         self.sections
     }
     /// The index of the section holding block `y`, if the column holds it.
+    #[inline(always)]
     pub fn section_index(self, y: i32) -> Option<usize> {
-        usize::try_from((i64::from(y) - i64::from(self.min_y)) >> 4)
-            .ok()
-            .filter(|&s| s < self.sections)
+        let s = (y.wrapping_sub(self.min_y) as u32 >> 4) as usize;
+        (s < self.sections).then_some(s)
     }
     /// The minimum block Y of section `index`.
+    #[inline(always)]
     pub fn section_y(self, index: usize) -> i32 {
         self.min_y + index as i32 * 16
     }
@@ -265,16 +270,34 @@ pub const BIOME_STRATEGY: Strategy = Strategy::biomes(16);
 static BLOCK_BITS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(16);
 /// States in the registry, set with [`BLOCK_BITS`].
 static BLOCK_STATES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+/// Incremented in [`set_block_states`] whenever the block-state palette
+/// configuration changes and the shared uniform section pool is cleared.
+static SHARED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Global palette bit width for block states.
+#[inline(always)]
+pub fn block_state_bits() -> u8 {
+    BLOCK_BITS.load(Ordering::Acquire)
+}
+
+/// Generation counter incremented whenever [`set_block_states`] updates the
+/// block-state palette configuration and clears the shared uniform section pool.
+#[inline(always)]
+pub fn shared_generation() -> u64 {
+    SHARED_GENERATION.load(Ordering::Acquire)
+}
 
 /// Block states are `PalettedContainer`s over the registry: vanilla's 16-bit
 /// global palette, wider with enough content mods.
+#[inline(always)]
 pub fn block_strategy() -> Strategy {
-    Strategy::blocks(BLOCK_BITS.load(std::sync::atomic::Ordering::Relaxed))
+    Strategy::blocks(block_state_bits())
 }
 
 /// Whether the registry has this state. Every id is known until the registry is loaded.
+#[inline(always)]
 pub fn known_block_state(id: u32) -> bool {
-    id < BLOCK_STATES.load(std::sync::atomic::Ordering::Relaxed)
+    id < BLOCK_STATES.load(Ordering::Acquire)
 }
 
 /// A server's block container in our palette width. Ids past our registry (a
@@ -282,7 +305,9 @@ pub fn known_block_state(id: u32) -> bool {
 /// indexed by them, and a palette's unused entries are scanned too.
 pub fn known_blocks_only(blocks: PalettedContainer) -> PalettedContainer {
     let ours = block_strategy();
-    let unknown = |id: u32| !known_block_state(id) || u64::from(id) >> ours.global_bits != 0;
+    let limit = BLOCK_STATES.load(Ordering::Acquire);
+    let max_valid = u64::from(limit).min(1u64 << ours.global_bits.min(32));
+    let unknown = |id: u32| u64::from(id) >= max_valid;
     let any_unknown = if blocks.is_global() {
         blocks.has(unknown)
     } else {
@@ -290,6 +315,10 @@ pub fn known_blocks_only(blocks: PalettedContainer) -> PalettedContainer {
     };
     if !any_unknown && blocks.strategy().global_bits == ours.global_bits {
         return blocks;
+    }
+    if blocks.bits() == 0 {
+        let v = blocks.get(0);
+        return PalettedContainer::new(ours, if unknown(v) { 0 } else { v });
     }
     let mut values = [0u32; 4096];
     blocks.unpack(&mut values);
@@ -318,52 +347,122 @@ pub fn free_columns<T: Send + 'static>(columns: T, count: usize) {
 /// Sizes the block states' global palette for a registry of `states`.
 pub fn set_block_states(states: usize) {
     let bits = horizon_core::paletted::ceil_log2(states).max(16);
-    BLOCK_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
-    BLOCK_STATES.store(
-        u32::try_from(states).unwrap_or(u32::MAX),
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    forget_shared();
+    let mut shared = SHARED
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    BLOCK_BITS.store(bits, Ordering::Release);
+    BLOCK_STATES.store(u32::try_from(states).unwrap_or(u32::MAX), Ordering::Release);
+    SHARED_GENERATION.fetch_add(1, Ordering::AcqRel);
+    *shared = None;
 }
 
 /// One allocation per kind of uniform section (a single block, a single
-/// biome and one light value), shared by every column that has it, keyed by
-/// (block, biome, light). A tall column is mostly such sections: air with
-/// full sky light above the terrain. Edits copy them (`Arc::make_mut`).
-type SharedSections = std::collections::HashMap<(u32, u32, u8), Arc<Section>>;
-static SHARED: std::sync::Mutex<Option<SharedSections>> = std::sync::Mutex::new(None);
+/// biome, one light value and the block palette's global bit width), shared
+/// by every column that has it. A tall column is mostly such sections: air
+/// with full sky light above the terrain. Edits copy them (`Arc::make_mut`).
+type UniformKey = (u32, u32, u8, u8);
+type SharedSections = crate::fast_hash::FxHashMap<UniformKey, Arc<Section>>;
+static SHARED: std::sync::RwLock<Option<SharedSections>> = std::sync::RwLock::new(None);
 
-/// Replaces the uniform sections of `sections` with the shared ones.
-pub fn share_uniform(sections: &mut [Arc<Section>]) {
-    let key = |s: &Section| -> Option<(u32, u32, u8)> {
-        let Light::Uniform(light) = s.light else {
-            return None;
-        };
-        if s.blocks.bits() != 0 || s.biomes.bits() != 0 {
-            return None;
-        }
-        Some((s.blocks.uniform()?, s.biomes.uniform()?, light))
+#[inline]
+fn uniform_key(s: &Section) -> Option<UniformKey> {
+    let Light::Uniform(light) = s.light else {
+        return None;
     };
-    let Ok(mut shared) = SHARED.lock() else {
+    if s.blocks.bits() != 0 || s.biomes.bits() != 0 {
+        return None;
+    }
+    Some((
+        s.blocks.uniform()?,
+        s.biomes.uniform()?,
+        light,
+        s.blocks.strategy().global_bits,
+    ))
+}
+
+/// The shared all-air, biome-0, full-sky-light section.
+fn shared_empty_section() -> Arc<Section> {
+    if let Ok(shared) = SHARED.read() {
+        let key = (0, 0, 0xF0, block_state_bits());
+        if let Some(one) = shared.as_ref().and_then(|map| map.get(&key)) {
+            return Arc::clone(one);
+        }
+    }
+    let Ok(mut shared) = SHARED.write() else {
+        return Arc::new(Section::default());
+    };
+    let key = (0, 0, 0xF0, block_state_bits());
+    let map = shared.get_or_insert_with(Default::default);
+    Arc::clone(
+        map.entry(key)
+            .or_insert_with(|| Arc::new(Section::default())),
+    )
+}
+
+fn insert_shared_uniform(sections: &mut [Arc<Section>], expected_generation: Option<u64>) {
+    let Ok(mut shared) = SHARED.write() else {
         return;
     };
+    if let Some(expected) = expected_generation
+        && SHARED_GENERATION.load(Ordering::Acquire) != expected
+    {
+        return;
+    }
+    let current_bits = block_state_bits();
+    if !sections
+        .iter()
+        .any(|s| uniform_key(s).is_some_and(|k| k.3 == current_bits))
+    {
+        return;
+    }
     let shared = shared.get_or_insert_with(Default::default);
     for section in sections {
-        let Some(k) = key(section) else {
+        let Some(k) = uniform_key(section) else {
             continue;
         };
-        let one = shared.entry(k).or_insert_with(|| section.clone());
+        if k.3 != current_bits {
+            continue;
+        }
+        let one = shared.entry(k).or_insert_with(|| Arc::clone(section));
         if !Arc::ptr_eq(one, section) {
-            *section = one.clone();
+            *section = Arc::clone(one);
         }
     }
 }
 
-/// Forgets the shared sections, when the palette changes.
-fn forget_shared() {
-    if let Ok(mut shared) = SHARED.lock() {
-        *shared = None;
+/// Replaces the uniform sections of `sections` with the shared ones.
+pub fn share_uniform(sections: &mut [Arc<Section>]) {
+    let current_bits = block_state_bits();
+    if !sections
+        .iter()
+        .any(|s| uniform_key(s).is_some_and(|k| k.3 == current_bits))
+    {
+        return;
     }
+    if let Ok(shared) = SHARED.read() {
+        let current_bits = block_state_bits();
+        let map = shared.as_ref();
+        let mut need_write = false;
+        for section in sections.iter_mut() {
+            let Some(k) = uniform_key(section) else {
+                continue;
+            };
+            if k.3 != current_bits {
+                continue;
+            }
+            if let Some(one) = map.and_then(|m| m.get(&k)) {
+                if !Arc::ptr_eq(one, section) {
+                    *section = Arc::clone(one);
+                }
+            } else {
+                need_write = true;
+            }
+        }
+        if !need_write {
+            return;
+        }
+    }
+    insert_shared_uniform(sections, None);
 }
 /// Packed light per block: sky light in the high nibble, block light in the
 /// low one. A section keeps only the kind of light that varies in it
@@ -379,12 +478,12 @@ pub enum Light {
     Block(Box<[u8; 2048]>, u8),
     Full(Box<[u8; 4096]>),
 }
-#[inline]
+#[inline(always)]
 fn nibble(layer: &[u8; 2048], i: usize) -> u8 {
-    layer[i >> 1] >> ((i & 1) << 2) & 15
+    (layer[i >> 1] >> ((i & 1) << 2)) & 15
 }
 impl Light {
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, i: usize) -> u8 {
         match self {
             Self::Uniform(v) => *v,
@@ -397,8 +496,8 @@ impl Light {
     pub fn packed(light: Box<[u8; 4096]>) -> Self {
         match Self::classify(&light) {
             (false, false, first) => Self::Uniform(first),
-            (true, false, first) => Self::Sky(Self::pack_layer(&light, 4), first & 15),
-            (false, true, first) => Self::Block(Self::pack_layer(&light, 0), first >> 4),
+            (true, false, first) => Self::Sky(Self::pack_sky(&light), first & 15),
+            (false, true, first) => Self::Block(Self::pack_block(&light), first >> 4),
             (true, true, _) => Self::Full(light),
         }
     }
@@ -407,25 +506,57 @@ impl Light {
     pub fn from_slice(light: &[u8; 4096]) -> Self {
         match Self::classify(light) {
             (false, false, first) => Self::Uniform(first),
-            (true, false, first) => Self::Sky(Self::pack_layer(light, 4), first & 15),
-            (false, true, first) => Self::Block(Self::pack_layer(light, 0), first >> 4),
+            (true, false, first) => Self::Sky(Self::pack_sky(light), first & 15),
+            (false, true, first) => Self::Block(Self::pack_block(light), first >> 4),
             (true, true, _) => Self::Full(Box::new(*light)),
         }
     }
     fn classify(light: &[u8; 4096]) -> (bool, bool, u8) {
         let first = light[0];
-        let (mut sky_varies, mut block_varies) = (false, false);
-        for &v in light.iter() {
-            let d = v ^ first;
-            sky_varies |= d & 0xF0 != 0;
-            block_varies |= d & 15 != 0;
+        let pattern = u64::from_ne_bytes([first; 8]);
+        let mut diff = 0u64;
+        let (words, _) = light.as_chunks::<8>();
+        for line in words.as_chunks::<8>().0 {
+            let mut d = 0u64;
+            for w in line {
+                d |= u64::from_ne_bytes(*w) ^ pattern;
+            }
+            diff |= d;
+            if (diff & 0xF0F0_F0F0_F0F0_F0F0) != 0 && (diff & 0x0F0F_0F0F_0F0F_0F0F) != 0 {
+                return (true, true, first);
+            }
         }
-        (sky_varies, block_varies, first)
+        (
+            (diff & 0xF0F0_F0F0_F0F0_F0F0) != 0,
+            (diff & 0x0F0F_0F0F_0F0F_0F0F) != 0,
+            first,
+        )
     }
-    fn pack_layer(light: &[u8; 4096], shift: u32) -> Box<[u8; 2048]> {
+    fn pack_sky(light: &[u8; 4096]) -> Box<[u8; 2048]> {
         let mut layer = Box::new([0u8; 2048]);
-        for (out, pair) in layer.iter_mut().zip(light.as_chunks::<2>().0) {
-            *out = (pair[0] >> shift & 15) | (pair[1] >> shift & 15) << 4;
+        for (out, src) in layer
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(light.as_chunks::<16>().0)
+        {
+            for k in 0..8 {
+                out[k] = (src[k * 2] >> 4) | (src[k * 2 + 1] & 0xF0);
+            }
+        }
+        layer
+    }
+    fn pack_block(light: &[u8; 4096]) -> Box<[u8; 2048]> {
+        let mut layer = Box::new([0u8; 2048]);
+        for (out, src) in layer
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(light.as_chunks::<16>().0)
+        {
+            for k in 0..8 {
+                out[k] = (src[k * 2] & 0x0F) | (src[k * 2 + 1] << 4);
+            }
         }
         layer
     }
@@ -436,13 +567,45 @@ impl Light {
             Self::Uniform(v) => out.fill(*v),
             Self::Full(a) => out.copy_from_slice(&a[at..at + out.len()]),
             Self::Sky(layer, block) => {
-                for (k, o) in out.iter_mut().enumerate() {
-                    *o = nibble(layer, at + k) << 4 | block;
+                let block = *block;
+                let mut dst = out;
+                let mut idx = at;
+                if idx & 1 != 0 && !dst.is_empty() {
+                    let (first, rest) = dst.split_first_mut().unwrap();
+                    *first = (layer[idx >> 1] & 0xF0) | block;
+                    idx += 1;
+                    dst = rest;
+                }
+                let (pairs, rem) = dst.as_chunks_mut::<2>();
+                let start = idx >> 1;
+                let n = pairs.len();
+                for (pair, &byte) in pairs.iter_mut().zip(&layer[start..start + n]) {
+                    pair[0] = (byte << 4) | block;
+                    pair[1] = (byte & 0xF0) | block;
+                }
+                if let Some(last) = rem.first_mut() {
+                    *last = (layer[start + n] << 4) | block;
                 }
             }
             Self::Block(layer, sky) => {
-                for (k, o) in out.iter_mut().enumerate() {
-                    *o = sky << 4 | nibble(layer, at + k);
+                let sky_hi = *sky << 4;
+                let mut dst = out;
+                let mut idx = at;
+                if idx & 1 != 0 && !dst.is_empty() {
+                    let (first, rest) = dst.split_first_mut().unwrap();
+                    *first = sky_hi | (layer[idx >> 1] >> 4);
+                    idx += 1;
+                    dst = rest;
+                }
+                let (pairs, rem) = dst.as_chunks_mut::<2>();
+                let start = idx >> 1;
+                let n = pairs.len();
+                for (pair, &byte) in pairs.iter_mut().zip(&layer[start..start + n]) {
+                    pair[0] = sky_hi | (byte & 0x0F);
+                    pair[1] = sky_hi | (byte >> 4);
+                }
+                if let Some(last) = rem.first_mut() {
+                    *last = sky_hi | (layer[start + n] & 0x0F);
                 }
             }
         }
@@ -452,27 +615,68 @@ impl Light {
         match self {
             Self::Full(a) => a.clone(),
             Self::Uniform(v) => Box::new([*v; 4096]),
-            _ => Box::new(std::array::from_fn(|i| self.get(i))),
+            _ => {
+                let mut out = Box::new([0u8; 4096]);
+                self.copy_run(0, &mut out[..]);
+                out
+            }
         }
     }
     /// Whether any block's packed light has a bit of `mask` set.
     pub fn any(&self, mask: u8) -> bool {
-        let layer_any = |layer: &[u8; 2048]| layer.iter().any(|&v| v != 0);
+        let layer_any = |layer: &[u8; 2048]| {
+            layer
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .any(|w| u64::from_ne_bytes(*w) != 0)
+        };
         match self {
             Self::Uniform(v) => v & mask != 0,
             Self::Sky(layer, block) => block & mask != 0 || (mask & 0xF0 != 0 && layer_any(layer)),
             Self::Block(layer, sky) => {
                 (sky << 4) & mask != 0 || (mask & 15 != 0 && layer_any(layer))
             }
-            Self::Full(a) => a.iter().any(|v| v & mask != 0),
+            Self::Full(a) => {
+                let mask64 = u64::from_ne_bytes([mask; 8]);
+                a.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .any(|w| u64::from_ne_bytes(*w) & mask64 != 0)
+            }
         }
     }
     /// Whether any block's packed light differs from `v` in the bits of `mask`.
     pub fn any_not(&self, mask: u8, v: u8) -> bool {
+        let layer_any_not = |layer: &[u8; 2048], nibble_mask: u8, nibble_v: u8| {
+            let bm = nibble_mask | (nibble_mask << 4);
+            let bv = nibble_v | (nibble_v << 4);
+            let bm64 = u64::from_ne_bytes([bm; 8]);
+            let bv64 = u64::from_ne_bytes([bv; 8]);
+            layer
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .any(|w| (u64::from_ne_bytes(*w) ^ bv64) & bm64 != 0)
+        };
         match self {
             Self::Uniform(u) => (u ^ v) & mask != 0,
-            Self::Full(a) => a.iter().any(|u| (u ^ v) & mask != 0),
-            _ => (0..4096).any(|i| (self.get(i) ^ v) & mask != 0),
+            Self::Sky(layer, block) => {
+                (*block ^ v) & (mask & 0x0F) != 0
+                    || (mask & 0xF0 != 0 && layer_any_not(layer, mask >> 4, v >> 4))
+            }
+            Self::Block(layer, sky) => {
+                ((*sky << 4) ^ v) & (mask & 0xF0) != 0
+                    || (mask & 0x0F != 0 && layer_any_not(layer, mask & 0x0F, v & 0x0F))
+            }
+            Self::Full(a) => {
+                let mask64 = u64::from_ne_bytes([mask; 8]);
+                let v64 = u64::from_ne_bytes([v; 8]);
+                a.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .any(|w| (u64::from_ne_bytes(*w) ^ v64) & mask64 != 0)
+            }
         }
     }
     /// Heap bytes it holds.
@@ -490,6 +694,12 @@ impl Light {
             (Self::Full(a), Self::Full(b)) => a == b,
             (Self::Sky(a, x), Self::Sky(b, y)) | (Self::Block(a, x), Self::Block(b, y)) => {
                 x == y && a == b
+            }
+            (Self::Uniform(v), other) | (other, Self::Uniform(v)) => !other.any_not(0xFF, *v),
+            (Self::Sky(_, block), Self::Block(_, sky))
+            | (Self::Block(_, sky), Self::Sky(_, block)) => {
+                let v = sky << 4 | block;
+                !self.any_not(0xFF, v) && !other.any_not(0xFF, v)
             }
             _ => (0..4096).all(|i| self.get(i) == other.get(i)),
         }
@@ -533,11 +743,11 @@ impl Clone for Heights {
         copy
     }
 }
-#[inline]
+#[inline(always)]
 fn column(x: i32, z: i32) -> usize {
     ((z & 15) << 4 | (x & 15)) as usize
 }
-#[inline]
+#[inline(always)]
 pub fn index(x: i32, y: i32, z: i32) -> usize {
     ((y & 15) << 8 | (z & 15) << 4 | (x & 15)) as usize
 }
@@ -558,14 +768,16 @@ impl Default for Section {
     }
 }
 impl Section {
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, i: usize) -> u32 {
         self.blocks.get(i)
     }
+    #[inline]
     pub fn set(&mut self, i: usize, v: u32) -> u32 {
         self.blocks.set(i, v)
     }
     /// All 4,096 block states in index order.
+    #[inline]
     pub fn unpack(&self, out: &mut [u32; 4096]) {
         self.blocks.unpack(out);
     }
@@ -573,10 +785,11 @@ impl Section {
     pub fn from_blocks(values: &[u32; 4096]) -> PalettedContainer {
         PalettedContainer::from_values(block_strategy(), values)
     }
-    #[inline]
+    #[inline(always)]
     pub fn light(&self, i: usize) -> u8 {
         self.light.get(i)
     }
+    #[inline]
     pub fn is_uniform(&self, v: u32) -> bool {
         self.blocks.is_uniform(v)
     }
@@ -696,14 +909,77 @@ impl Chunk {
         Self::with_layout(x, z, ColumnLayout::VANILLA)
     }
     pub fn with_layout(x: i32, z: i32, layout: ColumnLayout) -> Self {
-        let mut one = [Arc::new(Section::default())];
-        share_uniform(&mut one);
-        let [empty] = one;
+        let empty = shared_empty_section();
+        Self::new_with_sections(x, z, layout, vec![empty; layout.sections()])
+    }
+    /// Builds a chunk directly from owned sections, resolving uniform sections
+    /// from the shared pool without allocating throwaway `Arc<Section>`s.
+    pub fn from_sections(
+        x: i32,
+        z: i32,
+        layout: ColumnLayout,
+        sections: &mut Vec<Section>,
+    ) -> Self {
+        Self::from_sections_with_generation(x, z, layout, sections, shared_generation())
+    }
+
+    /// Like [`Self::from_sections`], but skips the shared pool if
+    /// [`set_block_states`] has incremented [`shared_generation`] since
+    /// `generation` was captured (e.g. before a background decode started).
+    pub fn from_sections_with_generation(
+        x: i32,
+        z: i32,
+        layout: ColumnLayout,
+        sections: &mut Vec<Section>,
+        generation: u64,
+    ) -> Self {
+        debug_assert_eq!(sections.len(), layout.sections());
+        let mut out = Vec::with_capacity(sections.len());
+        let mut had_miss = false;
+        let current_bits = block_state_bits();
+        let can_share = SHARED_GENERATION.load(Ordering::Acquire) == generation
+            && sections
+                .iter()
+                .any(|s| uniform_key(s).is_some_and(|k| k.3 == current_bits));
+        if can_share
+            && let Ok(shared) = SHARED.read()
+            && SHARED_GENERATION.load(Ordering::Acquire) == generation
+        {
+            let current_bits = block_state_bits();
+            let map = shared.as_ref();
+            for section in sections.drain(..) {
+                if let Some(k) = uniform_key(&section)
+                    && k.3 == current_bits
+                {
+                    if let Some(one) = map.and_then(|m| m.get(&k)) {
+                        out.push(Arc::clone(one));
+                    } else {
+                        out.push(Arc::new(section));
+                        had_miss = true;
+                    }
+                } else {
+                    out.push(Arc::new(section));
+                }
+            }
+        } else {
+            out.extend(sections.drain(..).map(Arc::new));
+        }
+        if had_miss {
+            insert_shared_uniform(&mut out, Some(generation));
+        }
+        Self::new_with_sections(x, z, layout, out)
+    }
+    fn new_with_sections(
+        x: i32,
+        z: i32,
+        layout: ColumnLayout,
+        sections: Vec<Arc<Section>>,
+    ) -> Self {
         Self {
             x,
             z,
             min_y: layout.min_y(),
-            sections: (0..layout.sections()).map(|_| empty.clone()).collect(),
+            sections,
             surface: Heights::default(),
             motion_blocking: Heights::default(),
             lit: false,
@@ -736,11 +1012,12 @@ impl Chunk {
         }
     }
     /// The minimum block Y of the column.
-    #[inline]
+    #[inline(always)]
     pub fn min_y(&self) -> i32 {
         self.min_y
     }
     /// The column the chunk holds.
+    #[inline(always)]
     pub fn layout(&self) -> ColumnLayout {
         ColumnLayout {
             min_y: self.min_y,
@@ -748,25 +1025,25 @@ impl Chunk {
         }
     }
     /// One above the column's highest block.
-    #[inline]
+    #[inline(always)]
     pub fn max_y(&self) -> i32 {
         self.min_y + self.sections.len() as i32 * 16
     }
     /// The index of the section holding block `y`, if the column holds it.
-    #[inline]
+    #[inline(always)]
     pub fn section_index(&self, y: i32) -> Option<usize> {
-        usize::try_from((i64::from(y) - i64::from(self.min_y)) >> 4)
-            .ok()
-            .filter(|&s| s < self.sections.len())
+        let s = (y.wrapping_sub(self.min_y) as u32 >> 4) as usize;
+        (s < self.sections.len()).then_some(s)
     }
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, x: i32, y: i32, z: i32) -> u32 {
-        match self.section_index(y) {
-            Some(s) => self.sections[s].get(index(x, y, z)),
+        let s = (y.wrapping_sub(self.min_y) as u32 >> 4) as usize;
+        match self.sections.get(s) {
+            Some(section) => section.get(index(x, y, z)),
             None => 0,
         }
     }
-    #[inline]
+    #[inline(always)]
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         BlockStateId(self.get(x, y, z))
     }
@@ -777,19 +1054,31 @@ impl Chunk {
         matches: impl Fn(BlockStateId) -> bool,
     ) -> Vec<horizon_core::position::BlockPos> {
         let mut out = Vec::new();
+        let (base_x, base_z) = (self.x * 16, self.z * 16);
+        let mut values = [0u32; 4096];
         for (s, section) in self.sections.iter().enumerate() {
             if !section.blocks.maybe_has(|v| matches(BlockStateId(v))) {
                 continue;
             }
-            let base = self.min_y + 16 * s as i32;
-            for y in base..base + 16 {
-                for lz in 0..16 {
-                    for lx in 0..16 {
-                        let (wx, wz) = (self.x * 16 + lx, self.z * 16 + lz);
-                        if matches(self.block(wx, y, wz)) {
-                            out.push(horizon_core::position::BlockPos::new(wx, y, wz));
-                        }
-                    }
+            let base_y = self.min_y + 16 * s as i32;
+            if section.blocks.bits() == 0 {
+                for i in 0..4096i32 {
+                    out.push(horizon_core::position::BlockPos::new(
+                        base_x + (i & 15),
+                        base_y + (i >> 8),
+                        base_z + ((i >> 4) & 15),
+                    ));
+                }
+                continue;
+            }
+            section.unpack(&mut values);
+            for (i, &state) in values.iter().enumerate() {
+                if matches(BlockStateId(state)) {
+                    out.push(horizon_core::position::BlockPos::new(
+                        base_x + (i & 15) as i32,
+                        base_y + (i >> 8) as i32,
+                        base_z + ((i >> 4) & 15) as i32,
+                    ));
                 }
             }
         }
@@ -812,18 +1101,24 @@ impl Chunk {
         let Some(s) = self.section_index(y) else {
             return v;
         };
-        let previous = Arc::make_mut(&mut self.sections[s]).set(index(x, y, z), v);
+        let i = index(x, y, z);
+        let previous = if let Some(section) = Arc::get_mut(&mut self.sections[s]) {
+            section.set(i, v)
+        } else if self.sections[s].get(i) == v {
+            return v;
+        } else {
+            Arc::make_mut(&mut self.sections[s]).set(i, v)
+        };
         // `Heightmap.update`: a write two or more below a map's height can't
         // move it. Any other change rebuilds that map on the next read.
         if previous != v {
             // A part's answer was for the state the cell held.
             if !self.dynamic_emission.is_empty() {
-                self.dynamic_emission
-                    .remove(&((s as u32) << 12 | index(x, y, z) as u32));
+                self.dynamic_emission.remove(&((s as u32) << 12 | i as u32));
             }
-            for map in [&mut self.surface, &mut self.motion_blocking] {
-                map.write(column(x, z), y);
-            }
+            let col = column(x, z);
+            self.surface.write(col, y);
+            self.motion_blocking.write(col, y);
         }
         previous
     }
@@ -859,10 +1154,7 @@ impl Chunk {
     /// One column's height in `map`: the whole map built on its first read, a column a write
     /// marked found again down that column alone.
     fn height(&self, map: &Heights, x: i32, z: i32, counts: impl Fn(u32) -> bool) -> i32 {
-        let heights = map.heights.get_or_init(|| {
-            let built = self.prime(&counts);
-            Box::new(std::array::from_fn(|i| AtomicI16::new(built[i])))
-        });
+        let heights = map.heights.get_or_init(|| self.prime(&counts));
         let i = column(x, z);
         let (word, bit) = (i >> 6, 1u64 << (i & 63));
         if map.stale[word].load(Ordering::Acquire) & bit != 0 {
@@ -891,34 +1183,50 @@ impl Chunk {
     }
     /// `Heightmap.primeHeightmaps`: each section from the top, skipping
     /// those of one state that doesn't count, until every column is found.
-    fn prime(&self, counts: impl Fn(u32) -> bool) -> Box<[i16; 256]> {
-        let mut surface = Box::new([self.min_y as i16; 256]);
+    fn prime(&self, counts: impl Fn(u32) -> bool) -> Box<[AtomicI16; 256]> {
+        let mut surface = [self.min_y as i16; 256];
         let mut found = [false; 256];
-        let mut left = 256;
+        let mut left = 256usize;
         let mut values = [0u32; 4096];
         for (s, section) in self.sections.iter().enumerate().rev() {
             if left == 0 {
                 break;
             }
+            let base = self.min_y + s as i32 * 16;
+            if section.blocks.bits() == 0 {
+                if counts(section.blocks.get(0)) {
+                    let top = (base + 16) as i16;
+                    for i in 0..256 {
+                        if !found[i] {
+                            surface[i] = top;
+                        }
+                    }
+                    break;
+                }
+                continue;
+            }
             if section.blocks.uniform().is_some_and(|v| !counts(v)) {
                 continue;
             }
             section.unpack(&mut values);
-            let base = self.min_y + s as i32 * 16;
-            for i in 0..256 {
-                if found[i] {
-                    continue;
+            for dy in (0..16).rev() {
+                if left == 0 {
+                    break;
                 }
-                if let Some(dy) = (0..16).rev().find(|&dy| counts(values[dy << 8 | i])) {
-                    surface[i] = (base + dy as i32 + 1) as i16;
-                    found[i] = true;
-                    left -= 1;
+                let row = &values[dy << 8..(dy << 8) + 256];
+                let h = (base + dy as i32 + 1) as i16;
+                for i in 0..256 {
+                    if !found[i] && counts(row[i]) {
+                        surface[i] = h;
+                        found[i] = true;
+                        left -= 1;
+                    }
                 }
             }
         }
-        surface
+        Box::new(surface.map(AtomicI16::new))
     }
-    #[inline]
+    #[inline(always)]
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
         match self.section_at(y) {
             Ok(section) => section.light(index(x, y, z)),
@@ -927,12 +1235,15 @@ impl Chunk {
     }
     /// The section holding block height `y`, or the light of the air outside the
     /// column's sections there: none below them, full sky above.
-    #[inline]
+    #[inline(always)]
     pub fn section_at(&self, y: i32) -> Result<&Section, u8> {
-        match self.section_index(y) {
-            Some(s) => Ok(&self.sections[s]),
-            None if y < self.min_y => Err(0),
-            None => Err(0xF0),
+        let s = (y.wrapping_sub(self.min_y) as u32 >> 4) as usize;
+        if let Some(section) = self.sections.get(s) {
+            Ok(section)
+        } else if y < self.min_y {
+            Err(0)
+        } else {
+            Err(0xF0)
         }
     }
     /// Heap bytes held by the sections (benchmark accounting).
@@ -977,7 +1288,7 @@ impl Chunk {
     }
     /// Biome table index at a block position (`ChunkAccess.getNoiseBiome` with
     /// the quart y clamped to the column).
-    #[inline]
+    #[inline(always)]
     pub fn biome(&self, x: i32, y: i32, z: i32) -> u16 {
         let qy = ((y - self.min_y) >> 2).clamp(0, self.sections.len() as i32 * 4 - 1);
         self.sections[(qy >> 2) as usize]
@@ -1431,5 +1742,93 @@ mod tests {
         assert_eq!(chunk.light(0, -65, 0), 0);
         chunk.set_biome_cell(0, 130 * 4 + 3, 0, 9);
         assert_eq!(chunk.biome(0, 5000, 0), 9);
+    }
+
+    #[test]
+    fn shared_uniform_sections_reject_stale_palette_width_and_generation() {
+        let layout = ColumnLayout::new(0, 32).unwrap();
+        let current_bits = block_state_bits();
+        let stale_bits = current_bits + 1;
+        let stale_block = 0x7FFF_1111;
+        let stale_section = Section {
+            blocks: PalettedContainer::new(Strategy::blocks(stale_bits), stale_block),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 3),
+            light: Light::Uniform(0xF0),
+        };
+        let current_section = Section {
+            blocks: PalettedContainer::new(Strategy::blocks(current_bits), stale_block),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 3),
+            light: Light::Uniform(0xF0),
+        };
+        assert_eq!(
+            uniform_key(&stale_section),
+            Some((stale_block, 3, 0xF0, stale_bits))
+        );
+        assert_eq!(
+            uniform_key(&current_section),
+            Some((stale_block, 3, 0xF0, current_bits))
+        );
+
+        // Stale palette width must never enter SHARED via share_uniform or from_sections.
+        let mut single = [Arc::new(stale_section.clone())];
+        share_uniform(&mut single);
+        let mut stale_vec = vec![stale_section.clone(); layout.sections()];
+        let stale_chunk = Chunk::from_sections(0, 0, layout, &mut stale_vec);
+        assert!(stale_vec.is_empty());
+        assert_eq!(
+            stale_chunk.sections[0].blocks.strategy().global_bits,
+            stale_bits
+        );
+        if let Ok(shared) = SHARED.read()
+            && let Some(map) = shared.as_ref()
+        {
+            assert!(!map.contains_key(&(stale_block, 3, 0xF0, stale_bits)));
+        }
+
+        // Current-width sections share with each other and never adopt the stale-width section.
+        let mut current_a = vec![current_section.clone(); layout.sections()];
+        let chunk_a = Chunk::from_sections(1, 0, layout, &mut current_a);
+        let mut current_b = vec![current_section; layout.sections()];
+        let chunk_b = Chunk::from_sections(2, 0, layout, &mut current_b);
+        assert_eq!(
+            chunk_a.sections[0].blocks.strategy().global_bits,
+            current_bits
+        );
+        assert!(!Arc::ptr_eq(&chunk_a.sections[0], &stale_chunk.sections[0]));
+        assert!(Arc::ptr_eq(&chunk_a.sections[0], &chunk_b.sections[0]));
+
+        // A decode started under an older generation must not insert into SHARED even if its
+        // palette width happens to match the current width.
+        let gen_block = 0x7FFF_2222;
+        let gen_section = Section {
+            blocks: PalettedContainer::new(block_strategy(), gen_block),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 5),
+            light: Light::Uniform(0xA0),
+        };
+        let current_gen = shared_generation();
+        let stale_gen = current_gen.wrapping_sub(1);
+        let mut stale_gen_vec = vec![gen_section.clone(); layout.sections()];
+        let stale_gen_chunk =
+            Chunk::from_sections_with_generation(3, 0, layout, &mut stale_gen_vec, stale_gen);
+        assert!(stale_gen_vec.is_empty());
+        if let Ok(shared) = SHARED.read()
+            && let Some(map) = shared.as_ref()
+        {
+            assert!(!map.contains_key(&(gen_block, 5, 0xA0, current_bits)));
+        }
+        let mut fresh_a = vec![gen_section.clone(); layout.sections()];
+        let fresh_chunk_a =
+            Chunk::from_sections_with_generation(4, 0, layout, &mut fresh_a, current_gen);
+        let mut fresh_b = vec![gen_section; layout.sections()];
+        let fresh_chunk_b =
+            Chunk::from_sections_with_generation(5, 0, layout, &mut fresh_b, current_gen);
+        assert!(!Arc::ptr_eq(
+            &fresh_chunk_a.sections[0],
+            &stale_gen_chunk.sections[0]
+        ));
+        assert!(Arc::ptr_eq(
+            &fresh_chunk_a.sections[0],
+            &fresh_chunk_b.sections[0]
+        ));
     }
 }
