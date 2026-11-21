@@ -11306,6 +11306,13 @@ impl Renderer {
         // Frame generation presents its own frames (`frame_gen.present` below).
         // A `screenshot-sequence` frame is submitted here, so it can wait for it to
         // finish.
+        // Background screenshots read back on an earlier frame are collected on every frame:
+        // below, a frame without a readback of its own goes to the submit thread and returns
+        // before the collection after the submission, so a finished screenshot waited for the
+        // next screenshot's frame (#19213).
+        if self.screenshot_result.is_none() {
+            self.screenshot_result = self.screenshot_readbacks.poll();
+        }
         let (encoder, surface_frame, after) = if readback.is_none()
             && frame.pack.frame_timing.is_none()
             && fg_frames.is_none()
