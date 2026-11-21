@@ -40,19 +40,40 @@ pub(in crate::gfx) fn arena_input(device: &wgpu::Device) -> wgpu::BufferUsages {
     }
 }
 
+/// The label those buffers carry in wgpu's messages, and the one the crash report shows.
+const QUAD_INDICES: &str = "Quad indices";
+
 /// The index buffer of `quads` quads (triangles 0 1 2 and 0 2 3), which the terrain draws
-/// and BLAS builds both read.
-pub(in crate::gfx) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
-    use wgpu::util::DeviceExt;
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Quad indices"),
-        contents: bytemuck::cast_slice(&quad_index_data(quads)),
-        usage: wgpu::BufferUsages::INDEX | blas_input(device),
-    })
+/// and BLAS builds both read. `None` when the device would not take it: a lost device, and
+/// one out of memory, answer the creation with a buffer that is already invalid, and
+/// wgpu's `DeviceExt::create_buffer_init` panics on the mapped range of one (#15464). The
+/// caller leaves the draw it was for out, or reports the loss, rather than the render
+/// thread dying.
+pub(in crate::gfx) fn quad_indices(device: &wgpu::Device, quads: u32) -> Option<wgpu::Buffer> {
+    let indices = quad_index_data(quads);
+    // The scopes hold what the device made of the creation: outside them wgpu reports an
+    // invalid buffer as an uncaptured error, which panics.
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let buffer = filled(
+        device,
+        QUAD_INDICES,
+        bytemuck::cast_slice(&indices),
+        wgpu::BufferUsages::INDEX | blas_input(device),
+    );
+    let error = pollster::block_on(memory.pop()).or_else(|| pollster::block_on(validation.pop()));
+    match error {
+        None => buffer,
+        Some(e) => {
+            log::warn!("Horizon renderer: no {QUAD_INDICES} buffer ({e})");
+            None
+        }
+    }
 }
 
 /// `quad_indices` for a frame that grows them (#13624): made unmapped and written through
-/// `queue`, as a buffer mapped at creation that found no room panics instead of reporting it.
+/// `queue`, so `frame_targets::made` sees what the device made of it — a buffer mapped at
+/// creation fails before a scope can — and the frame is given up where there was no room.
 pub(in crate::gfx) fn written_quad_indices(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -60,7 +81,7 @@ pub(in crate::gfx) fn written_quad_indices(
 ) -> wgpu::Buffer {
     let indices = quad_index_data(quads);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Quad indices"),
+        label: Some(QUAD_INDICES),
         size: std::mem::size_of_val(indices.as_slice()) as u64,
         usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | blas_input(device),
         mapped_at_creation: false,
@@ -78,6 +99,41 @@ fn quad_index_data(quads: u32) -> Vec<u32> {
         .collect()
 }
 
+/// `contents` in a buffer of `usage`, made as `DeviceExt::create_buffer_init` makes it: the
+/// size rounded up to `COPY_BUFFER_ALIGNMENT`, the data written through the mapping the
+/// creation takes. `None` when the device refuses the buffer, which `create_buffer_init`
+/// reports by panicking on the mapped range instead.
+fn filled(
+    device: &wgpu::Device,
+    label: &str,
+    contents: &[u8],
+    usage: wgpu::BufferUsages,
+) -> Option<wgpu::Buffer> {
+    let unpadded_size = contents.len() as wgpu::BufferAddress;
+    if unpadded_size == 0 {
+        return Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: 0,
+            usage,
+            mapped_at_creation: false,
+        }));
+    }
+    // Valid Vulkan usage: a size that is a multiple of `COPY_BUFFER_ALIGNMENT`, above zero.
+    let align_mask = wgpu::COPY_BUFFER_ALIGNMENT - 1;
+    let padded_size = (unpadded_size + align_mask) & !align_mask;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: padded_size,
+        usage,
+        mapped_at_creation: true,
+    });
+    let mut view = buffer.slice(..).get_mapped_range_mut().ok()?;
+    view.slice(..unpadded_size as usize)
+        .copy_from_slice(contents);
+    drop(view);
+    buffer.unmap();
+    Some(buffer)
+}
 /// Who turns ray tracing on (`HORIZON_RAY_TRACING`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::gfx) enum Switch {
@@ -221,5 +277,41 @@ mod tests {
         assert!(pick(false, all).is_empty());
         assert!(pick(true, all - RAY_QUERY).is_empty());
         assert!(!experimental(wgpu::Features::empty()).is_enabled());
+    }
+
+    /// #15464: 65,536 quads is the terrain's first index buffer, 1.5 MiB (the one the crash
+    /// report names). A device that will not take it — a lost one and one out of memory
+    /// answer the same way — makes `quad_indices` report it, where
+    /// `DeviceExt::create_buffer_init` panics on the mapped range of the invalid buffer, on
+    /// the render thread.
+    #[test]
+    fn a_quad_index_buffer_the_device_will_not_take_is_reported_not_panicked_on() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let instance = crate::gfx::test_gpu::instance();
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&Default::default())).ok()
+        else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        // Every limit the adapter has, but buffers of 1 MiB: the creation below is refused
+        // the way a lost device refuses it, with an invalid buffer rather than an error.
+        let mut limits = adapter.limits();
+        limits.max_buffer_size = 1 << 20;
+        limits.max_storage_buffer_binding_size =
+            limits.max_storage_buffer_binding_size.min(1 << 20);
+        let desc = wgpu::DeviceDescriptor {
+            label: Some("Quad indices test"),
+            required_limits: limits,
+            ..Default::default()
+        };
+        let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&desc)) else {
+            eprintln!("no GPU device: skipped");
+            return;
+        };
+        // 65,536 quads at 6 indices of 4 bytes each: 1.5 MiB, past the device's 1 MiB.
+        assert!(quad_indices(&device, 1 << 16).is_none());
+        // A buffer that fits is still made: the refusal above is the device's, not a call
+        // that never works.
+        assert!(quad_indices(&device, 4).is_some());
     }
 }

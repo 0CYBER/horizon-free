@@ -202,7 +202,7 @@ fn separate_draws_match_combined_celestial_pixels() {
             },
         ],
     });
-    let indices = Renderer::quad_indices(&device, VERTICES / 4 + 1);
+    let indices = Renderer::quad_indices(&device, VERTICES / 4 + 1).expect("quad indices");
     let mut resident = EndSky::default();
     let uv = [0.125, 0.25, 0.375, 0.5];
     resident.prepare(&device, Some(uv));

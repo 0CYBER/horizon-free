@@ -3538,7 +3538,7 @@ struct Quad {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let indices = super::super::Renderer::quad_indices(device, 4);
+        let indices = super::super::Renderer::quad_indices(device, 4).expect("quad indices");
         let mut uploads = Uploads::new(device);
         // The first frame's planes reject nothing: it keeps every section within
         // the distance, and draws all their quads. The second, from another

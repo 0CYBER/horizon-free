@@ -222,7 +222,8 @@ fn trace(
         let unpack = unpack_pipeline(device);
         unpack_page(device, &mut pass, &unpack, &page, &[job], &store);
     }
-    let indices = super::super::query::quad_indices(device, solid.max(translucent));
+    let indices =
+        super::super::query::quad_indices(device, solid.max(translucent)).expect("quad indices");
     let (solid_size, solid_blas) = new_blas(device, solid).unwrap();
     let (glass_size, glass_blas) = new_blas(device, translucent).unwrap();
     let builds = [

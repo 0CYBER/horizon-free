@@ -424,7 +424,7 @@ fn rays_reach_the_entity_layer_through_its_three_bases() {
     };
     let mut entities = Entities::new(&device, &stream);
     assert!(!entities.fit(&device, &stream));
-    let indices = crate::gfx::rt::query::quad_indices(&device, 5);
+    let indices = crate::gfx::rt::query::quad_indices(&device, 5).expect("quad indices");
     let mut tlas = create_tlas(&device, 1);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     tlas[0] = Some(wgpu::TlasInstance::new(
@@ -560,7 +560,7 @@ fn rays_reach_retained_block_entities_through_their_sections() {
     };
     let mut entities = Entities::new(&device, &stream);
     entities.fit(&device, &stream);
-    let indices = crate::gfx::rt::query::quad_indices(&device, 4);
+    let indices = crate::gfx::rt::query::quad_indices(&device, 4).expect("quad indices");
     let (store, layers) = (empty(&device, 24), empty(&device, 8));
     // Builds the frame's sections (`update`, `builds`), the stream's instance and theirs after
     // it, and runs the probe.
@@ -702,7 +702,7 @@ fn an_entity_hit_has_vanilla_s_shade_and_says_when_the_ray_met_its_back() {
     };
     let mut entities = Entities::new(&device, &stream);
     assert!(!entities.fit(&device, &stream));
-    let indices = crate::gfx::rt::query::quad_indices(&device, 4);
+    let indices = crate::gfx::rt::query::quad_indices(&device, 4).expect("quad indices");
     let mut tlas = create_tlas(&device, 1);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     tlas[0] = Some(wgpu::TlasInstance::new(

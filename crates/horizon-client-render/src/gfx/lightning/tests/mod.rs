@@ -397,7 +397,7 @@ fn retained_gpu_draw_matches_transient_additive_draw() {
     bolts[1].seed = -456;
     bolts[1].at[0] -= 32.0;
     bolts[2].at[2] += 20.0;
-    let indices = crate::gfx::Renderer::quad_indices(&device, QUADS * 3);
+    let indices = crate::gfx::Renderer::quad_indices(&device, QUADS * 3).expect("quad indices");
     for frame in 0..4 {
         let camera = DVec3::new(29_999_997.125 + frame as f64, 62.75, -29_999_998.875);
         if frame == 2 {
@@ -640,7 +640,7 @@ fn bolt_through_the_atlas_white_sprite_is_fully_drawn() {
     let atlas = texture(ATLAS, &texels);
     // The atlas sampler (gfx.rs): wgpu's default, nearest.
     let sampler = device.create_sampler(&Default::default());
-    let indices = crate::gfx::Renderer::quad_indices(&device, QUADS);
+    let indices = crate::gfx::Renderer::quad_indices(&device, QUADS).expect("quad indices");
     let size = 256;
     let extent = wgpu::Extent3d {
         width: size,

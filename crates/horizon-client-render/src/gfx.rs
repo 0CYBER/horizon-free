@@ -2552,6 +2552,12 @@ impl Renderer {
                 open_device(&window, offscreen, api, request.needs(layers)).await?
             }
         };
+        // A device that is already lost, one `previous` handed over included, makes every
+        // resource built below invalid, so building them is work nobody can use (#15464).
+        // Report the loss, which the game answers with a renderer on a new device.
+        if device_lost.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("the graphics device was lost".into());
+        }
         // Computed once: the sprite arrays, the shaders' constants and the
         // shader pack atlas all cut the sprites by it.
         let split = check_layers(&adapter, layers)?;
@@ -3374,7 +3380,8 @@ impl Renderer {
             &emission_stats.view,
         );
         let index_quads = 1 << 16;
-        let indices = Self::quad_indices(&device, index_quads);
+        let indices = Self::quad_indices(&device, index_quads)
+            .ok_or("the graphics device did not take the terrain's index buffer")?;
         let instance_capacity = 4096;
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section origins"),
@@ -4300,7 +4307,8 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let static_entity_index_quads = 1 << 14;
-        let static_entity_indices = Self::quad_indices(&device, static_entity_index_quads);
+        let static_entity_indices = Self::quad_indices(&device, static_entity_index_quads)
+            .ok_or("the graphics device did not take the block entities' index buffer")?;
         let indirect_execution = adapter
             .get_downlevel_capabilities()
             .flags
@@ -4989,7 +4997,9 @@ impl Renderer {
         let first = if high_contrast { edges } else { 0 };
         pass.draw(0..4, first..first + edges);
     }
-    fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
+    /// The terrain's `quads` quad indices: `None` when the device would not make the
+    /// buffer, a lost or full one (#15464).
+    fn quad_indices(device: &wgpu::Device, quads: u32) -> Option<wgpu::Buffer> {
         rt::query::quad_indices(device, quads)
     }
 
@@ -5556,9 +5566,12 @@ impl Renderer {
             return None;
         }
         let max = solid.max(translucent);
+        // A device that would not take the bigger buffer leaves the section undrawn, as
+        // one out of video memory does; `render` reports the loss that causes it.
         if max > self.index_quads {
-            self.index_quads = max.next_power_of_two();
-            self.indices = Self::quad_indices(&self.device, self.index_quads);
+            let quads = max.next_power_of_two();
+            self.indices = Self::quad_indices(&self.device, quads)?;
+            self.index_quads = quads;
         }
         let encoder = self.section_copies.get_or_insert_with(|| {
             self.device
