@@ -26,7 +26,7 @@ class EntityLifts(unittest.TestCase):
             # only by the unsupported upstream-parallel-mobs retention feature.
             if path == source / "game/creatures/mob_islands.rs":
                 continue
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             for match in RAW_TAKE.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
                 violations.append(f"{path.relative_to(ROOT)}:{line}")

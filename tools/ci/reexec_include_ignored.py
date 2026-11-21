@@ -71,7 +71,7 @@ def sources():
 def main(check):
     problems = 0
     for path in sources():
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if "current_exe" not in text:
             continue
         lines = text.split("\n")
@@ -81,7 +81,7 @@ def main(check):
             print(f"{path.relative_to(ROOT)}:{start + 1}: reruns its test executable by --exact without "
                   "--include-ignored (or --ignored), so the child runs nothing once the test is ignored")
         if found and not check:
-            path.write_text("\n".join(fix(lines)))
+            path.write_text("\n".join(fix(lines)), encoding="utf-8")
     print(f"{problems} reruns {'lack' if check else 'gained'} --include-ignored")
     return 1 if check and problems else 0
 

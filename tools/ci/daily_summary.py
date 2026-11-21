@@ -415,7 +415,7 @@ def main(call=api, run_git=contains_fix, query=graphql):
     # Only main writes, whatever the input says: a branch's run is always a dry run.
     writes = env.get("GITHUB_REF") == "refs/heads/main" and env.get("DRY_RUN") == "false"
     run_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}"
-    reports = [json.loads(path.read_text()) for path in sorted(Path(env["REPORTS"]).glob("*/*.json"))] \
+    reports = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(Path(env["REPORTS"]).glob("*/*.json"))] \
         if Path(env.get("REPORTS", "")).is_dir() else []
     jobs = pages(call, f"actions/runs/{env['GITHUB_RUN_ID']}/jobs?filter=latest", "jobs")
     tests, unfinished, passed, green_legs = verdicts(jobs, reports, json.loads(env["RESULTS"]))
@@ -428,7 +428,7 @@ def main(call=api, run_git=contains_fix, query=graphql):
     text = render(actions, writes)
     print(text)
     if env.get("GITHUB_STEP_SUMMARY"):
-        with open(env["GITHUB_STEP_SUMMARY"], "a") as summary:
+        with open(env["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
             summary.write(text)
     if writes:
         apply(actions, call, run_url)

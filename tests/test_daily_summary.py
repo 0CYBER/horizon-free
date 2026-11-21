@@ -103,14 +103,14 @@ class DailySummaryTests(unittest.TestCase):
             for index, report in enumerate(reports):
                 path = Path(folder, "reports", f"daily-report-{index}")
                 path.mkdir(parents=True)
-                (path / "daily-report.json").write_text(json.dumps(report))
+                (path / "daily-report.json").write_text(json.dumps(report), encoding="utf-8")
             env = {"GITHUB_REPOSITORY": "horizon-rust/horizon", "GITHUB_RUN_ID": "77", "GITHUB_REF": ref,
                    "GITHUB_SERVER_URL": "https://github.com", "COMMIT": COMMIT, "DRY_RUN": dry_run,
                    "RESULTS": json.dumps(results), "REPORTS": str(Path(folder, "reports")),
                    "GITHUB_STEP_SUMMARY": str(Path(folder, "summary"))}
             with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
                 summary.main(api, contained(ancestors, git_error), closers(fixes or {}))
-            return Path(folder, "summary").read_text()
+            return Path(folder, "summary").read_text(encoding="utf-8")
 
     def test_all_green_closes_issues_that_went_green(self):
         api = Api(GREEN_JOBS, issues=[{"number": 5, "title": "Daily: horizon-world a::b"},

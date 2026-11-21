@@ -14,7 +14,7 @@ def api_files():
 def fragment_scope(path, scope):
     """Read the generator's restricted use/mod fragments at one lexical scope."""
     stack, lines = [], []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         module = re.fullmatch(r"\s*(?:pub(?:\([^)]*\))? )?mod (\w+) \{", line)
         if module:
             stack.append(module[1])
@@ -26,7 +26,7 @@ def fragment_scope(path, scope):
 
 
 def api_source(path):
-    return fragment_scope(path, ()) if path.parent.name == "exports" else path.read_text()
+    return fragment_scope(path, ()) if path.parent.name == "exports" else path.read_text(encoding="utf-8")
 
 
 def api_text():
@@ -35,7 +35,7 @@ def api_text():
 
 def pub_items(path):
     """Names of the top-level `pub` items of a rustfmt-formatted Rust file, `pub use` names included."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     declared = re.findall(r"^pub (?:unsafe )?(?:struct|enum|union|trait|type|fn|const|static|mod|macro) (\w+)", text, re.M)
     return set(declared) | use_names(text, path.parent.parent)
 
@@ -71,7 +71,7 @@ def domain_export_collisions(src):
     for path in sorted((src / "exports").glob("*.rs")):
         glob_domains.update(re.findall(r"pub use (\w+)::types::\*;", fragment_scope(path, ())))
     for path in [src / "lib.rs", *sorted((src / "exports").glob("*.rs"))]:
-        text = fragment_scope(path, ()) if path.parent.name == "exports" else path.read_text()
+        text = fragment_scope(path, ()) if path.parent.name == "exports" else path.read_text(encoding="utf-8")
         for domain in re.findall(r"pub use (\w+)::types::\*;", text):
             types = src / domain / "types.rs"
             for name in pub_items(types):
@@ -84,7 +84,7 @@ def domain_export_collisions(src):
         for name in names:
             explicit.setdefault(name, []).append(str(path))
     for path in sorted((src / "hooks").glob("*.rs")):
-        for name in re.findall(r"^    fn (\w+)\(", path.read_text(), re.M):
+        for name in re.findall(r"^    fn (\w+)\(", path.read_text(encoding="utf-8"), re.M):
             event = "".join(word[:1].upper() + word[1:] for word in name.split("_")) + "Event"
             explicit.setdefault(event, []).append(str(path) + " (generated event)")
     problems = []
@@ -153,12 +153,13 @@ class ModApiBoundaryTests(unittest.TestCase):
 
     def test_the_game_side_is_reached_only_through_private(self):
         # `built` holds copies under the API's own names, so it is left out.
-        private = re.sub(r"\npub mod built \{.*?\n\}\n", "\n", (API / "__private.rs").read_text(), flags=re.S)
+        private = re.sub(r"\npub mod built \{.*?\n\}\n", "\n", (API / "__private.rs").read_text(encoding="utf-8"),
+                         flags=re.S)
         fragments = sorted((API / "exports").glob("*.rs"))
         private += "\n" + "\n".join(fragment_scope(path, scope) for path in fragments
                                     for scope in [("__private",), ("__private", "game"),
                                                   ("__private", "reload"), ("__private", "wasm_host")])
-        api = (API / "lib.rs").read_text() + "\n" + "\n".join(api_source(p) for p in fragments)
+        api = (API / "lib.rs").read_text(encoding="utf-8") + "\n" + "\n".join(api_source(p) for p in fragments)
         self.assertEqual(game_side_api_names(api, private, API), set(), "a game-side item is re-exported as API")
 
     def test_a_game_side_name_behind_a_types_glob_is_caught(self):
@@ -187,14 +188,15 @@ class ModApiBoundaryTests(unittest.TestCase):
         self.assertEqual(unexplained, [], "move the item into `__private`, or add `// hidden: <why>`")
 
     def test_world_fluid_registration_uses_api_owned_values(self):
-        source = (API / "parts/fluids.rs").read_text()
+        source = (API / "parts/fluids.rs").read_text(encoding="utf-8")
         registrar = source.split("pub trait FluidsRegistrar {", 1)[1].split("\n}", 1)[0]
         # The generator consumes the trait signature as the mod-facing contract.
         self.assertNotIn("horizon_mod_package::", registrar)
         self.assertRegex(api_text(), r"pub struct WorldFluid\b")
 
     def test_fluid_model_collection_uses_api_owned_values(self):
-        source = (ROOT / "crates/horizon-client/src/game/native_hooks/register_fluid_models.rs").read_text()
+        source = (ROOT / "crates/horizon-client/src/game/native_hooks/register_fluid_models.rs").read_text(
+            encoding="utf-8")
         signature = source.split("fn native_register_fluid_models(", 1)[1].split(") {", 1)[0]
         # Collected hook fields are generated directly from this signature.
         self.assertNotIn("horizon_mod_package::", signature)
@@ -202,15 +204,15 @@ class ModApiBoundaryTests(unittest.TestCase):
 
     def test_surfaces_stay_in_area_fragments(self):
         for name in ["lib.rs", "__private.rs"]:
-            source = (API / name).read_text()
+            source = (API / name).read_text(encoding="utf-8")
             self.assertNotRegex(source, r"(?m)^\s*pub(?:\(crate\))? use ")
             self.assertIn('include!(concat!(env!("OUT_DIR"), "/mod_api_exports_', source)
-        self.assertNotRegex((API / "lib.rs").read_text(), r"(?m)^(?:pub(?:\(crate\))? )?mod \w+;")
+        self.assertNotRegex((API / "lib.rs").read_text(encoding="utf-8"), r"(?m)^(?:pub(?:\(crate\))? )?mod \w+;")
 
     def test_unhandled_arms_name_a_non_exhaustive_enum(self):
         text = api_text()
         for path in ROOT.glob("crates/horizon-client*/src/**/*.rs"):
-            for name in re.findall(r'unreachable!\("(\w+): unhandled variant"\)', path.read_text()):
+            for name in re.findall(r'unreachable!\("(\w+): unhandled variant"\)', path.read_text(encoding="utf-8")):
                 self.assertRegex(
                     text,
                     rf"#\[non_exhaustive\]\s*(?:#\[[^\n]*\]\s*)*pub enum {name}\b",

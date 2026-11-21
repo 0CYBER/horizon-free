@@ -257,7 +257,7 @@ def repository_violations(root=ROOT):
         for path in sorted(api.rglob('*.rs')):
             if path.name == '__private.rs' or path.name.endswith('_tests.rs'):
                 continue
-            sources[str(path.relative_to(root))] = path.read_text()
+            sources[str(path.relative_to(root))] = path.read_text(encoding="utf-8")
     result = []
     for path, source in sources.items():
         result.extend(f'{path}:{line}: {name}' for line, name in violations(source))
@@ -269,11 +269,11 @@ def repository_violations(root=ROOT):
     runtime = root / 'crates/horizon-mod-runtime/src'
     for path in sorted(runtime.rglob('*.rs')):
         result.extend(f'{path.relative_to(root)}:{line}: {name}'
-                      for line, name in violations(path.read_text()) if name in runtime_names)
+                      for line, name in violations(path.read_text(encoding="utf-8")) if name in runtime_names)
     gen = root / 'crates/horizon-mod-api-gen/src'
     for relative in API_TEMPLATE_FILES:
         path = gen / relative
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         # Only production string literals, never Rust generator implementation
         # types or cfg(test) fixture programs, are emitted API templates.
         production = source.split('#[cfg(test)]', 1)[0]

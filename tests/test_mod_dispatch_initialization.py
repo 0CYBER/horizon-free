@@ -37,7 +37,7 @@ def violations(root):
                   'horizon-client-lib'):
         for path in (root / 'crates' / crate).rglob('*.rs'):
             relative = path.relative_to(root).as_posix()
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             # Strip comments so explanatory mentions cannot satisfy initialization.
             source = re.sub(r'//[^\n]*|/\*.*?\*/', '', source, flags=re.S)
             bodies = list(test_bodies(source))
