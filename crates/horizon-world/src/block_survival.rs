@@ -668,26 +668,19 @@ impl<'r> BlockSurvivalRegistry<'r> {
     fn fluid_matches(&self, tag: usize, fluid: FluidState) -> bool {
         self.fluid_tags[tag] & fluid.kind().mask() != 0
     }
-    /// The plant's own ground rule for the plant `state` standing at `position`, as the live
-    /// game's `VegetationBlock.mayPlaceOn` asks it: the parts of the soil under it first, the
+    /// The plant's own ground rule for the plant `state` on `ground`, read at `ground_pos`, as
+    /// the live game's `VegetationBlock.mayPlaceOn` asks it: the parts of the soil first, the
     /// parts of the plant's own block second (`Survive::may_place_on`, `level/survive.rs`), and
-    /// `None` when neither answered, leaving the caller's own rule to decide.
-    fn plant_place_on<W: SurvivalWorld>(
-        &self,
-        world: &mut W,
+    /// `None` when neither answered, leaving the caller's own rule to decide. The caller hands
+    /// in the ground it already read: vanilla reads it once, and the parity traces count
+    /// every level read.
+    fn plant_place_on(
         state: BlockStateId,
-        position: [i32; 3],
-    ) -> Result<Option<bool>, SurvivalError<W::Error>> {
-        let below = relative(position, Direction::Down);
-        let ground = self.read(world, below)?;
-        if let Some(sustains) =
-            crate::native_worldgen_hooks::can_sustain_plant(state, ground, below)
-        {
-            return Ok(Some(sustains));
-        }
-        Ok(crate::native_worldgen_hooks::may_place_on(
-            state, ground, below,
-        ))
+        ground: BlockStateId,
+        ground_pos: [i32; 3],
+    ) -> Option<bool> {
+        crate::native_worldgen_hooks::can_sustain_plant(state, ground, ground_pos)
+            .or_else(|| crate::native_worldgen_hooks::may_place_on(state, ground, ground_pos))
     }
     pub fn can_survive<W: SurvivalWorld>(
         &self,
@@ -712,7 +705,9 @@ impl<'r> BlockSurvivalRegistry<'r> {
             if !self.asks_their_ground.contains(&state) {
                 return Err(SurvivalError::Unsupported(state));
             }
-            return match self.plant_place_on(world, state, position)? {
+            let below = relative(position, Direction::Down);
+            let ground = self.read(world, below)?;
+            return match Self::plant_place_on(state, ground, below) {
                 Some(survives) => Ok(survives),
                 None => Err(SurvivalError::Unsupported(state)),
             };
@@ -778,7 +773,7 @@ impl<'r> BlockSurvivalRegistry<'r> {
                 }
                 // `MushroomBlock.canSurvive` below 13 asks `mayPlaceOn`, which a mod may
                 // replace: the soil's parts first, the plant's second (#17943).
-                if let Some(may) = self.plant_place_on(world, state, position)? {
+                if let Some(may) = Self::plant_place_on(state, neighbor, below) {
                     return Ok(may);
                 }
                 Ok(self.solid_render.contains(neighbor))
@@ -869,13 +864,13 @@ impl<'r> BlockSurvivalRegistry<'r> {
                             .is_some_and(|value| value == "8")))
             }
             Rule::SeaPickle => {
-                // `SeaPickleBlock.canSurvive` asks `mayPlaceOn`, which a mod may replace: the
-                // soil's parts first, the plant's second (#17943).
-                if let Some(may) = self.plant_place_on(world, state, position)? {
-                    return Ok(may);
-                }
                 let at = relative(position, Direction::Down);
                 let neighbor = self.read(world, at)?;
+                // `SeaPickleBlock.canSurvive` asks `mayPlaceOn`, which a mod may replace: the
+                // soil's parts first, the plant's second (#17943).
+                if let Some(may) = Self::plant_place_on(state, neighbor, at) {
+                    return Ok(may);
+                }
                 let shape = self
                     .collision
                     .collision_shape(world, neighbor, at)
@@ -1125,14 +1120,15 @@ impl<'r> BlockSurvivalRegistry<'r> {
                 world.fluid_state(position).map_err(SurvivalError::World)?,
             )),
             Rule::SmallDripleaf(upper) => {
-                let neighbor = self.read(world, relative(position, Direction::Down))?;
+                let below = relative(position, Direction::Down);
+                let neighbor = self.read(world, below)?;
                 if upper {
                     return Ok(self.is_lower_half(neighbor, state));
                 }
                 // The lower half's `canSurvive` asks the ground its template asks
                 // (`SmallDripleafBlock` reaches `VegetationBlock.mayPlaceOn`), where a mod
                 // may replace the plant's rule, before the table's tags decide (#17943).
-                if let Some(may) = self.plant_place_on(world, state, position)? {
+                if let Some(may) = Self::plant_place_on(state, neighbor, below) {
                     return Ok(may);
                 }
                 Ok(self.small_dripleaf.contains(&neighbor)
@@ -1195,19 +1191,21 @@ impl<'r> BlockSurvivalRegistry<'r> {
                 }
                 // `CropBlock.mayPlaceOn`: the plant's own rule, which a mod may replace — the
                 // soil's parts first, as the live game asks them, then the plant's.
-                if let Some(may) = self.plant_place_on(world, state, position)? {
+                let below = relative(position, Direction::Down);
+                let ground = self.read(world, below)?;
+                if let Some(may) = Self::plant_place_on(state, ground, below) {
                     return Ok(may);
                 }
-                let ground = self.read(world, relative(position, Direction::Down))?;
                 Ok(self.crops.contains(&ground))
             }
             Rule::DoublePlant(upper) => {
-                let below = self.read(world, relative(position, Direction::Down))?;
+                let below_pos = relative(position, Direction::Down);
+                let below = self.read(world, below_pos)?;
                 if !upper {
                     // The lower half's `canSurvive` goes on to the plant's ground rule
                     // (`VegetationBlock.mayPlaceOn`), where a mod may replace the tag the
                     // table holds, before that tag decides (#17943).
-                    if let Some(may) = self.plant_place_on(world, state, position)? {
+                    if let Some(may) = Self::plant_place_on(state, below, below_pos) {
                         return Ok(may);
                     }
                     return Ok(self.vegetation.contains(&below));
@@ -1235,12 +1233,13 @@ impl<'r> BlockSurvivalRegistry<'r> {
                 // replace before the tag the table holds for it decides. Only a template
                 // that asks its ground asks it here: soul fire shares this rule and keeps
                 // its own base-block tag (#17943).
+                let below = relative(position, Direction::Down);
+                let ground = self.read(world, below)?;
                 if self.asks_their_ground.contains(&state)
-                    && let Some(may) = self.plant_place_on(world, state, position)?
+                    && let Some(may) = Self::plant_place_on(state, ground, below)
                 {
                     return Ok(may);
                 }
-                let ground = self.read(world, relative(position, Direction::Down))?;
                 Ok(self.bound_tags[index].contains(&ground))
             }
             Rule::CactusFlower => {
@@ -1690,6 +1689,8 @@ mod part_hook_tests {
     struct TestWorld {
         blocks: BTreeMap<[i32; 3], BlockStateId>,
         light: i32,
+        /// Every block read, in order, as the parity harnesses log them.
+        reads: Vec<[i32; 3]>,
     }
     impl TestWorld {
         /// A world with the plant at [`PLANT`] and its ground at [`GROUND`].
@@ -1697,6 +1698,7 @@ mod part_hook_tests {
             Self {
                 blocks: BTreeMap::from([(PLANT, plant), (GROUND, ground)]),
                 light: 15,
+                reads: Vec::new(),
             }
         }
         /// The same world under `light` everywhere, as a cave or a lit room has.
@@ -1724,6 +1726,7 @@ mod part_hook_tests {
     }
     impl SurvivalWorld for TestWorld {
         fn block_state(&mut self, position: [i32; 3]) -> io::Result<BlockStateId> {
+            self.reads.push(position);
             Ok(*self.blocks.get(&position).unwrap_or(&AIR))
         }
         fn fluid_state(&mut self, _: [i32; 3]) -> io::Result<FluidState> {
@@ -2488,5 +2491,35 @@ mod part_hook_tests {
             before,
             "the upper halves ask no part"
         );
+    }
+
+    /// Each plant rule reads its ground once, as vanilla's `canSurvive` does before it asks
+    /// `mayPlaceOn`, and hands that state to the parts: the parity harnesses compare every
+    /// level read, and a second read of the ground broke four of them.
+    #[test]
+    fn the_plant_rules_read_their_ground_once() {
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+        install_hooks();
+        let tags = tags();
+        let survival = survival(&tags);
+        for (plant, ground, light) in [
+            (WHEAT, FARMLAND, 15),
+            (SHORT_GRASS, GRASS, 15),
+            (SOUL_FIRE, SAND, 15),
+            (MUSHROOM, GRASS, 0),
+            (SEA_PICKLE, GRASS, 15),
+            (CRYSTAL, GRASS, 15),
+        ] {
+            let mut world = TestWorld::new(plant, ground).with_light(light);
+            // The mod plant no part answers for is unsupported, after its one read.
+            let _ = survival.can_survive(&mut world, plant, PLANT);
+            assert_eq!(world.reads, [GROUND], "{plant:?} reads its ground once");
+        }
+        let survival = halves();
+        for plant in [DRIPLEAF_LOWER, TALL_LOWER] {
+            let mut world = TestWorld::new(plant, GRASS);
+            assert!(survives(&survival, &mut world, plant));
+            assert_eq!(world.reads, [GROUND], "{plant:?} reads its ground once");
+        }
     }
 }
