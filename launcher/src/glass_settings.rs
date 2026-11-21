@@ -26,10 +26,6 @@ const SECTIONS: [(&str, &str); 10] = [
     ("About", "information-circle"),
 ];
 
-/// Who made the launcher's look, credited in About.
-const CREDIT: &str = "Xmilon";
-const CREDIT_URL: &str = horizon_addresses::LAUNCHER_LOOK_CREDIT;
-
 /// What the search finds in each section, in [`SECTIONS`]' order: its rows' names and words a
 /// player may look for them by. English; a query matches them and their translation.
 const INDEX: [&[&str]; 10] = [
@@ -78,7 +74,6 @@ const INDEX: [&[&str]; 10] = [
     &["Data collection", "Telemetry", "Crash reports"],
     &["No AI", "Agents", "MCP"],
     &[
-        "UI made by Xmilon",
         "Credits",
         "GitHub",
         "Version",
@@ -680,7 +675,6 @@ impl Launcher {
                 .into_any_element()
         };
         let about = section(9)
-            .child(self.credit_row(cx))
             .child(self.version_row(&t))
             .child(self.location_row(0, cx).mb(px(0.)))
             .child(index_row(
@@ -727,71 +721,6 @@ impl Launcher {
             ai,
             about,
         ]
-    }
-
-    /// About's credit: who made the launcher's look, their GitHub picture and profile.
-    fn credit_row(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        if !self.credit_asked {
-            self.credit_asked = true;
-            let picture = cx.background_spawn(async {
-                backend::get_bytes(&format!("{CREDIT_URL}.png?size=96"))
-            });
-            cx.spawn(async move |this, cx| {
-                if let Ok(bytes) = picture.await {
-                    let _ = this.update(cx, |this, cx| {
-                        // GitHub answers with a JPEG (or PNG for some accounts): decode what came.
-                        if let Some(format) = picture_format(&bytes) {
-                            this.credit_picture =
-                                Some(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)));
-                        }
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
-        }
-        let picture = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .size(px(44.))
-            .rounded(px(11.))
-            .overflow_hidden()
-            .border_1()
-            .border_color(white(ui::edge::REST))
-            .bg(white(0.06))
-            .child(match self.credit_picture.clone() {
-                Some(image) => gpui::img(image).size_full().into_any_element(),
-                None => ui::icon("github", 22., white(ink::BODY)).into_any_element(),
-            });
-        let open = button("credit-github", "Open GitHub profile", Kind::Secondary, &t)
-            .on_click(|_, _, cx| cx.open_url(CREDIT_URL));
-        div()
-            .flex()
-            .items_center()
-            .gap(px(16.))
-            .px(px(14.))
-            .py(px(12.))
-            .child(picture)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        ui::text(14., FontWeight::MEDIUM, ink::FULL)
-                            .child(trf("UI made by {name}", &[("name", CREDIT)])),
-                    )
-                    .child(
-                        ui::text(13., FontWeight::NORMAL, ink::QUIET)
-                            .mt(px(2.))
-                            .child(CREDIT_URL.trim_start_matches("https://")),
-                    ),
-            )
-            .child(open)
     }
 
     /// About's version line, with a button that copies it (for a bug report).
@@ -1057,37 +986,5 @@ mod tests {
     fn a_pane_that_does_not_scroll_marks_the_first() {
         assert_eq!(spy(&[0., 200.], 600., 0., 0.), 0);
         assert_eq!(spy(&[], 600., 0., 0.), 0);
-    }
-}
-
-/// A downloaded picture's format, by its first bytes; `None` for anything else (an HTML error
-/// page), which leaves the GitHub mark in its place.
-fn picture_format(bytes: &[u8]) -> Option<gpui::ImageFormat> {
-    match bytes {
-        [0xFF, 0xD8, 0xFF, ..] => Some(gpui::ImageFormat::Jpeg),
-        [0x89, b'P', b'N', b'G', ..] => Some(gpui::ImageFormat::Png),
-        [b'G', b'I', b'F', b'8', ..] => Some(gpui::ImageFormat::Gif),
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => {
-            Some(gpui::ImageFormat::Webp)
-        }
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod picture_tests {
-    use super::picture_format;
-
-    #[test]
-    fn a_picture_is_read_as_the_format_its_bytes_say() {
-        assert_eq!(
-            picture_format(&[0xFF, 0xD8, 0xFF, 0xE0]),
-            Some(gpui::ImageFormat::Jpeg)
-        );
-        assert_eq!(
-            picture_format(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A]),
-            Some(gpui::ImageFormat::Png)
-        );
-        assert_eq!(picture_format(b"<html>"), None);
     }
 }

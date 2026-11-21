@@ -78,10 +78,6 @@ pub const HOSTING_PARTNER: &str = "https://my.sculkhosting.com/ref/horizon";
 /// The official cosmetics shop.
 pub const SHOP: &str = "https://playhorizon.dev/shop";
 
-/// The GitHub profile of who made the launcher's look, credited in Settings' About (its picture is
-/// `<this>.png`).
-pub const LAUNCHER_LOOK_CREDIT: &str = "https://github.com/Xmilon";
-
 /// The official launcher installer's product home.
 pub const LAUNCHER_ABOUT: &str = "https://playhorizon.dev";
 
