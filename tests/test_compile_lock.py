@@ -4,6 +4,7 @@ where the system has them (Linux CI), a temporary folder."""
 import ast
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -136,8 +137,14 @@ class CompileLockTests(unittest.TestCase):
         # server or a lingering cargo would: the turn is free all the same.
         turn = self.turn("main")
         self.assertTrue(turn.acquire())
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], close_fds=False)
-        self.addCleanup(lambda: (child.kill(), child.wait()))
+        self.addCleanup(turn.release)
+        child = subprocess.Popen([sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"],
+                                 close_fds=False, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (child.kill(), child.wait(), child.stdout.close()))
+        # Popen can return before the kernel has closed the child's close-on-exec descriptors, and until then the
+        # child's copies keep the locks. The child's own first line says its exec is over.
+        self.assertTrue(select.select([child.stdout], [], [], 60)[0], "the child never started")
+        self.assertEqual(child.stdout.readline().strip(), "up")
         turn.release()
         self.assertIsNone(child.poll())
         self.assertTrue(self.turn("pr").acquire())
