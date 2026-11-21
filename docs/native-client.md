@@ -165,19 +165,20 @@ if your audio server underruns (e.g. PipeWire with `min-quantum` ≥ 1024), set
 `HORIZON_AUDIO_BUFFER=2048` or `HORIZON_AUDIO_BUFFER=default` to use the backend's
 default buffer size.
 
-### Experimental older servers
+### Older servers
 
 The native Rust adapter recognizes 26.2, 26.1.x, 1.21.11, 1.21.9/1.21.10,
 1.21.7/1.21.8, 1.21.6, 1.21.5, 1.21.4, 1.21.2/1.21.3, 1.21/1.21.1,
-1.20.5/1.20.6, 1.20.3/1.20.4 and 1.20.2. It is off by default while compatibility is incomplete. Set
-`HORIZON_OLDER_SERVERS=1` before starting the game; the server's status ping selects
-the adapter. The client still needs its prepared **26.3** resources.
+1.20.5/1.20.6, 1.20.3/1.20.4 and 1.20.2. It is on by default: the server's status ping selects the adapter. Set
+`HORIZON_OLDER_SERVERS=0` before starting the game to turn it off. The client still needs its prepared **26.3** resources.
+
+To turn it off for one run:
 
 ```sh
-HORIZON_OLDER_SERVERS=1 cargo run --profile fast -p horizon-game -- --server 127.0.0.1:25565
+HORIZON_OLDER_SERVERS=0 cargo run --profile fast -p horizon-game -- --server 127.0.0.1:25565
 ```
 
-In PowerShell, set `$env:HORIZON_OLDER_SERVERS = '1'`, then run the same Cargo
+In PowerShell, set `$env:HORIZON_OLDER_SERVERS = '0'`, then run the same Cargo
 command without the environment assignment at its start.
 
 This does not load Fabric JARs or emulate every older version's movement and

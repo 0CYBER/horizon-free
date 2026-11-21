@@ -904,10 +904,15 @@ fn connect_tcp(
     Ok((c, host, port))
 }
 
-/// Whether joining servers of older releases is on (roadmap `older-servers`): off by default while the
-/// adapter is incomplete; `HORIZON_OLDER_SERVERS=1` turns it on.
+/// Whether joining servers of older releases is on (roadmap `older-servers`): on by default;
+/// `HORIZON_OLDER_SERVERS=0` turns it off.
 pub fn older_servers_enabled() -> bool {
-    std::env::var_os("HORIZON_OLDER_SERVERS").is_some_and(|v| v == "1")
+    older_servers_setting(std::env::var_os("HORIZON_OLDER_SERVERS").as_deref())
+}
+
+/// [`older_servers_enabled`] for a given `HORIZON_OLDER_SERVERS` value: only `0` turns it off.
+fn older_servers_setting(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none_or(|v| v != "0")
 }
 
 /// The older release a server speaks, by its status ping, when Horizon can translate it; `None` for the
@@ -1891,6 +1896,14 @@ fn continues_after_failed_join(lan: bool, signed_in: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn older_servers_are_on_unless_the_variable_is_zero() {
+        use std::ffi::OsStr;
+        assert!(super::older_servers_setting(None));
+        assert!(super::older_servers_setting(Some(OsStr::new("1"))));
+        assert!(!super::older_servers_setting(Some(OsStr::new("0"))));
+    }
+
     use super::*;
     use horizon_world::native_load_context::DataLoadOrigin;
 
@@ -2403,6 +2416,20 @@ mod tests {
                 Arc::clone(&data),
             );
             let (stream, _) = listener.accept().unwrap();
+            // Older-server detection pings the address on a second connection before the login
+            // handshake goes out; dropping that one leaves the release unknown, so this one
+            // (the login) is the one under test. With detection off no second one arrives.
+            listener.set_nonblocking(true).unwrap();
+            let waited = std::time::Instant::now();
+            while waited.elapsed() < Duration::from_secs(2) {
+                match listener.accept() {
+                    Ok(_) => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            }
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
