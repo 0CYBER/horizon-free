@@ -211,6 +211,8 @@ struct Crash {
     /// One line on what went wrong: the report's error, else how the process ended.
     summary: String,
     copied: bool,
+    /// The game refused its folder leases before it started (exit 78): no game log exists.
+    leases_refused: bool,
 }
 
 /// What the Prepare error's notice offers to do about it.

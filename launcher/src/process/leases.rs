@@ -131,7 +131,7 @@ fn error(error: Error) -> io::Error {
         Error::Busy | Error::UnprovenExclusion | Error::IncompleteUnit => {
             io::ErrorKind::WouldBlock.into()
         }
-        Error::UnsupportedFilesystem => io::ErrorKind::Unsupported.into(),
+        Error::UnsupportedFilesystem(_) => io::ErrorKind::Unsupported.into(),
         Error::Unsafe(_) | Error::Dependent(_) => io::ErrorKind::InvalidInput.into(),
         Error::Io(error) => error,
     }

@@ -548,11 +548,11 @@ impl Launcher {
                 },
             )),
         );
-        let help = tr(if crash.report.is_some() {
-            "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing."
-        } else {
-            "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing."
-        });
+        let help = horizon_launcher::refusals::crash_help(
+            crash.report.is_some(),
+            crash.leases_refused,
+            t.glass,
+        );
         let mut body = div()
             .flex_1()
             .min_w_0()

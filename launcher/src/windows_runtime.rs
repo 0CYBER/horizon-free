@@ -5,7 +5,7 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::{fs, io, path::Path, process::Command};
 
 use crate::run_leases::SOURCE;
-const SLOT: &str = "HORIZON_WINDOWS_RUNTIME_SLOT";
+pub(crate) const SLOT: &str = "HORIZON_WINDOWS_RUNTIME_SLOT";
 
 pub(crate) struct Guard {
     _slot: fs::File,

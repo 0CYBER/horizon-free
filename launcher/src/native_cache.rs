@@ -14,11 +14,23 @@ pub enum Error {
     Busy,
     UnprovenExclusion,
     IncompleteUnit,
-    UnsupportedFilesystem,
+    /// The folder whose file system was refused, once a caller knows it.
+    UnsupportedFilesystem(Option<PathBuf>),
     Unsafe(PathBuf),
     /// An installed native build takes its resources from this unit; name it.
     Dependent(String),
     Io(io::Error),
+}
+
+impl Error {
+    /// The same error, naming `path` as the refused folder when it names none yet: the shared
+    /// check only sees a directory handle.
+    pub(crate) fn on(self, path: &Path) -> Self {
+        match self {
+            Self::UnsupportedFilesystem(None) => Self::UnsupportedFilesystem(Some(path.to_owned())),
+            error => error,
+        }
+    }
 }
 
 impl From<io::Error> for Error {
@@ -44,7 +56,7 @@ impl From<horizon_platform::mod_package::runtime_leases::Error> for Error {
         use horizon_platform::mod_package::runtime_leases::Error as Shared;
         match error {
             Shared::Busy => Self::Busy,
-            Shared::UnsupportedFilesystem => Self::UnsupportedFilesystem,
+            Shared::UnsupportedFilesystem => Self::UnsupportedFilesystem(None),
             Shared::Unsafe(path) => Self::Unsafe(path),
             Shared::Io(error) => Self::Io(error),
         }

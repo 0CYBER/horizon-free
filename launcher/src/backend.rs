@@ -3608,13 +3608,13 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
         releases
             .iter()
             .find(|r| r.asset.is_some() && !r.prerelease)
-            .ok_or("No release has a build for this platform yet.")?
+            .ok_or_else(|| crate::refusals::no_build(None))?
     } else {
         release_selection::by_tag(&releases, tag)
             .ok_or_else(|| format!("No Horizon release is tagged {tag}."))?
     };
     if release.asset.is_none() {
-        return Err(format!("{} has no build for this platform.", release.tag));
+        return Err(crate::refusals::no_build(Some(&release.tag)));
     }
     let before = installed();
     let downgrade = nightly_downgrade(release, &before);
@@ -4389,6 +4389,8 @@ pub enum Job {
 pub struct Running {
     pub child: Arc<Mutex<Child>>,
     pub stdin: Option<ChildStdin>,
+    /// Set before `Msg::Exit` when the game refused its folder leases (exit 78).
+    pub leases_refused: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Launcher-owned tree-lock primitives and optional Windows runtime state.
@@ -4422,9 +4424,10 @@ pub fn prepare_command(cmd: Command) -> Result<(Command, RuntimeGuard), String> 
             Vec::new()
         }
         Err(error @ crate::native_cache::Error::Io(_)) => {
-            return Err(crate::i18n::trf(
-                "{error}. Make sure your account can write to the game's and the launcher's folders, then try again.",
-                &[("error", &crate::native_mods::cache_error(error))],
+            return Err(crate::refusals::unwritable(
+                &crate::native_mods::cache_error(error),
+                cmd.get_current_dir(),
+                &data_dir(),
             ));
         }
         Err(error) => return Err(crate::native_mods::cache_error(error)),
@@ -4474,6 +4477,7 @@ pub fn spawn(job: Job, cmd: Command, tx: Sender<Msg>) -> Result<Running, String>
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let direct = job == Job::Client && crate::refusals::runs_horizon_directly(&cmd);
     let mut child = play_log::spawn(&mut cmd)?;
     let stdin = child.stdin.take();
     let mut readers = Vec::new();
@@ -4495,6 +4499,8 @@ pub fn spawn(job: Job, cmd: Command, tx: Sender<Msg>) -> Result<Running, String>
     }
     let child = Arc::new(Mutex::new(child));
     let waited = child.clone();
+    let leases_refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let refused = leases_refused.clone();
     std::thread::spawn(move || {
         for r in readers {
             let _ = r.join();
@@ -4507,13 +4513,22 @@ pub fn spawn(job: Job, cmd: Command, tx: Sender<Msg>) -> Result<Running, String>
         };
         let result = match status {
             Ok(s) if s.success() => Ok(()),
-            Ok(s) => Err(format!("Exited with {s}")),
+            Ok(s) => {
+                let exit = crate::refusals::exit_error(direct, s);
+                // Ordered before the send: the window reads it when the exit arrives.
+                refused.store(exit.leases_refused, std::sync::atomic::Ordering::SeqCst);
+                Err(exit.text)
+            }
             Err(e) => Err(e.to_string()),
         };
         drop(runtime);
         let _ = tx.send(Msg::Exit(job, result));
     });
-    Ok(Running { child, stdin })
+    Ok(Running {
+        child,
+        stdin,
+        leases_refused,
+    })
 }
 
 /// The launcher's appearance, as older launchers saved it: a theme is one look now, and a saved

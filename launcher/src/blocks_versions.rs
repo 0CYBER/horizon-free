@@ -400,10 +400,16 @@ impl Launcher {
                 } else if installed {
                     self.version_actions(&tag, selected, cx).into_any_element()
                 } else if release.asset.is_none() {
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .child(tr("No build for this platform"))
-                        .into_any_element()
+                    let (line, download) = horizon_launcher::refusals::no_build_card();
+                    let line = text(theme::CAPTION).text_color(t.muted).child(line);
+                    match download {
+                        Some(url) => line
+                            .id(SharedString::from(format!("no-build-{tag}")))
+                            .cursor_pointer()
+                            .on_click(move |_: &ClickEvent, _, cx| cx.open_url(&url))
+                            .into_any_element(),
+                        None => line.into_any_element(),
+                    }
                 } else {
                     let mut b = button(format!("install-{tag}"), "Install", Kind::Secondary, &t);
                     if self.installing.is_some() {

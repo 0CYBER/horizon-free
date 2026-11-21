@@ -100,13 +100,15 @@ fn acquire_snapshots(
             registry
                 .lock(&snapshot.directory, LockMode::Shared)
                 .map_err(|error| match error {
+                    // Usually the game was started without the launcher's Play (a shortcut, or
+                    // the executable under versions/), so the launcher never registered it.
                     crate::runtime_leases::Error::Io(error)
                         if error.kind() == io::ErrorKind::NotFound =>
                     {
-                        io::Error::new(
-                            io::ErrorKind::NotFound,
-                            "this managed installation has unregistered cache directories; use Horizon Launcher Play from the same launcher data directory with the intended instance and installed version (horizon-launcher play --instance <instance> --version <tag>)",
-                        )
+                        refusal(io::ErrorKind::NotFound, unregistered(&snapshot.tree.path))
+                    }
+                    crate::runtime_leases::Error::Busy => {
+                        refusal(io::ErrorKind::WouldBlock, busy(Some(&snapshot.tree.path)))
                     }
                     error => lease_error(error),
                 })
@@ -277,9 +279,48 @@ pub fn enter() {
     // These claims are deliberately still owned when ExitProcess/exit closes the process.
     std::process::exit(result.map_or(78, |status| status.code().unwrap_or(1)));
 }
+/// A refusal the player reads as it is: the game prints it without the generic lease prefix.
+#[derive(Debug)]
+struct Refusal(String);
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Refusal {}
+fn refusal(kind: io::ErrorKind, text: String) -> io::Error {
+    io::Error::new(kind, Refusal(text))
+}
+fn is_refusal(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<Refusal>())
+}
+/// A path as the player knows it: canonical Windows paths lose their `\\?\` prefix.
+fn shown(path: &Path) -> String {
+    let text = path.display().to_string();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}");
+    }
+    text.strip_prefix(r"\\?\")
+        .map_or_else(|| text.clone(), str::to_owned)
+}
+fn unregistered(path: &Path) -> String {
+    format!(
+        "{} isn't registered by the launcher. Start Horizon with the launcher's Play button.",
+        shown(path)
+    )
+}
+fn busy(path: Option<&Path>) -> String {
+    let what = path.map_or_else(
+        || "The game's folders are".to_owned(),
+        |path| format!("{} is", shown(path)),
+    );
+    format!(
+        "{what} being cleaned up by the launcher. Wait for it to finish, then start Horizon again."
+    )
+}
 fn lease_error(error: crate::runtime_leases::Error) -> io::Error {
     match error {
-        crate::runtime_leases::Error::Busy => io::ErrorKind::WouldBlock.into(),
+        crate::runtime_leases::Error::Busy => refusal(io::ErrorKind::WouldBlock, busy(None)),
         crate::runtime_leases::Error::Io(error) => error,
         _ => io::ErrorKind::InvalidInput.into(),
     }

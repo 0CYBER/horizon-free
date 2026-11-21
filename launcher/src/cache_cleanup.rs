@@ -410,7 +410,9 @@ pub(crate) fn delete_game_unit_in(
 /// An exclusive claim on the instance folder `home`, refused as busy while a launch holds it.
 fn claim_instance(home: &Path) -> Result<crate::run_leases::Claim, Error> {
     let directory = Dir::open_ambient_dir(home, cap_std::ambient_authority())?;
-    crate::run_leases::Registry::open()?.lock(&directory, LockMode::Exclusive)
+    crate::run_leases::Registry::open()?
+        .lock(&directory, LockMode::Exclusive)
+        .map_err(|error| error.on(home))
 }
 
 pub(crate) fn delete_game_unit_observed(
@@ -461,7 +463,8 @@ fn delete_unit(
         .filter(|_| data != real_data)
         .map(|relative| real_data.join(relative));
     let path = rebased.as_deref().unwrap_or(path);
-    let registry = Registry::with_release(&real_data, Release::Close)?;
+    let registry = Registry::with_release(&real_data, Release::Close)
+        .map_err(|error| Error::from(error).on(&data))?;
     registry.remove_unit(path, |directory, is_directory| {
         Access::for_unit(path)?.check(proof)?;
         veto()?;

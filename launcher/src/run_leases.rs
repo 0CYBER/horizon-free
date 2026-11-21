@@ -32,7 +32,7 @@ impl Registry {
     pub(crate) fn with_release(data: &Path, release: Release) -> Result<Arc<Self>, Error> {
         horizon_platform::mod_package::runtime_leases::Registry::with_release(data, release)
             .map(|registry| Arc::new(Self(registry)))
-            .map_err(Into::into)
+            .map_err(|error| Error::from(error).on(data))
     }
     pub(crate) fn open() -> Result<Arc<Self>, Error> {
         Self::at(&crate::backend::data_dir())
@@ -44,7 +44,7 @@ impl Registry {
 
 /// The game's own command, as `snapshot` recorded it before wrappers: its program and
 /// arguments, with the working directory and environment of `command`.
-fn game_snapshot(command: &Command) -> std::io::Result<Option<Command>> {
+pub(crate) fn game_snapshot(command: &Command) -> std::io::Result<Option<Command>> {
     let Some(encoded) = override_value(command, GAME).flatten() else {
         return Ok(None);
     };
@@ -258,7 +258,7 @@ fn naming(path: &Path, error: Error) -> Error {
                 crate::backend::plain(path.to_owned()).display()
             ),
         )),
-        error => error,
+        error => error.on(path),
     }
 }
 
@@ -549,7 +549,11 @@ pub(crate) fn publish(path: &Path) -> Result<(), Error> {
     }
     for unit in units {
         let directory = Dir::open_ambient_dir(&unit, cap_std::ambient_authority())?;
-        drop(registry.lock(&directory, LockMode::Shared)?);
+        drop(
+            registry
+                .lock(&directory, LockMode::Shared)
+                .map_err(|error| error.on(&unit))?,
+        );
     }
     Ok(())
 }
@@ -613,7 +617,9 @@ pub(crate) fn installation(
         locks::{LockMode, Release},
         runtime_leases::Registry,
     };
-    Registry::with_release(&crate::backend::data_dir(), Release::Close)?
+    let data = crate::backend::data_dir();
+    Registry::with_release(&data, Release::Close)
+        .map_err(|error| Error::from(error).on(&data))?
         .publication(LockMode::Shared)
         .map_err(Into::into)
 }

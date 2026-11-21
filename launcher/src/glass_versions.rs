@@ -500,9 +500,16 @@ impl Launcher {
             return self.glass_version_actions(&tag, cx).into_any_element();
         }
         if release.asset.is_none() {
-            return ui::text(13., FontWeight::NORMAL, ink::QUIET)
-                .child(tr("No build for this platform"))
-                .into_any_element();
+            let (line, download) = horizon_launcher::refusals::no_build_card();
+            let line = ui::text(13., FontWeight::NORMAL, ink::QUIET).child(line);
+            return match download {
+                Some(url) => line
+                    .id(SharedString::from(format!("no-build-{tag}")))
+                    .cursor_pointer()
+                    .on_click(move |_: &ClickEvent, _, cx| cx.open_url(&url))
+                    .into_any_element(),
+                None => line.into_any_element(),
+            };
         }
         // After a failed attempt the card says to try again: the button says so too.
         let failed = self.install_error.as_ref().is_some_and(|(t, _)| *t == tag);

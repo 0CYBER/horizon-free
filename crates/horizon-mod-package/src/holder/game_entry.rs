@@ -30,7 +30,11 @@ pub fn acquire(selection: &LaunchArguments) -> Option<Capture> {
             Ok(())
         })();
         if let Err(error) = result {
-            eprintln!("Horizon: cannot acquire launcher cache leases: {error}");
+            if is_refusal(&error) {
+                eprintln!("Horizon: {error}");
+            } else {
+                eprintln!("Horizon: cannot acquire launcher cache leases: {error}");
+            }
             std::process::exit(78);
         }
         return None;
@@ -315,11 +319,18 @@ mod tests {
         let output = run("game");
         assert_eq!(output.status.code(), Some(78));
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("unregistered"), "{stderr}");
+        let line = stderr
+            .lines()
+            .find(|line| line.starts_with("Horizon: "))
+            .unwrap_or_else(|| panic!("{stderr}"));
         assert!(
-            stderr.contains("this managed installation has unregistered cache directories; use Horizon Launcher Play from the same launcher data directory with the intended instance and installed version (horizon-launcher play --instance <instance> --version <tag>)"),
+            line.ends_with(
+                " isn't registered by the launcher. Start Horizon with the launcher's Play button."
+            ),
             "{stderr}"
         );
+        assert!(line.contains("fast") && !line.contains(r"\\?\"), "{stderr}");
+        assert!(!stderr.contains("cannot acquire"), "{stderr}");
         assert!(!stderr.contains("start the launcher once"), "{stderr}");
     }
 
@@ -490,12 +501,14 @@ mod tests {
         ));
         drop(ownership);
         let cleanup = registry.lock(&directory, LockMode::Exclusive).unwrap();
-        assert_eq!(
-            acquire_standalone(&executable, &selection)
-                .err()
-                .unwrap()
-                .kind(),
-            io::ErrorKind::WouldBlock
+        let error = acquire_standalone(&executable, &selection).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(is_refusal(&error));
+        assert!(
+            error.to_string().ends_with(
+                "game is being cleaned up by the launcher. Wait for it to finish, then start Horizon again."
+            ),
+            "{error}"
         );
         std::fs::remove_file(install.join(".installed")).unwrap();
         drop(cleanup);
@@ -680,6 +693,21 @@ mod tests {
             std::fs::write(install.join(".installed"), b"").unwrap();
             assert!(acquire_snapshots(&registry, &[snapshot]).is_err());
         }
+    }
+
+    #[test]
+    fn refusals_name_the_folder_as_the_player_knows_it() {
+        let folder = Path::new(r"\\?\C:\Horizon\versions\nightly");
+        assert_eq!(
+            unregistered(folder),
+            r"C:\Horizon\versions\nightly isn't registered by the launcher. Start Horizon with the launcher's Play button."
+        );
+        assert_eq!(
+            busy(Some(Path::new(r"\\?\UNC\server\share\game"))),
+            r"\\server\share\game is being cleaned up by the launcher. Wait for it to finish, then start Horizon again."
+        );
+        assert!(is_refusal(&lease_error(crate::runtime_leases::Error::Busy)));
+        assert!(!is_refusal(&io::ErrorKind::NotFound.into()));
     }
 
     #[test]

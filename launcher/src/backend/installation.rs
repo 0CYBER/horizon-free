@@ -13,7 +13,7 @@ pub(crate) fn install_as(
     let (url, size) = release
         .asset
         .clone()
-        .ok_or_else(|| format!("{tag} has no build for this platform."))?;
+        .ok_or_else(|| crate::refusals::no_build(Some(tag)))?;
     let root = versions_dir();
     let partial = root.join(format!(".{tag}.partial"));
     let _ = fs::remove_dir_all(&partial);
