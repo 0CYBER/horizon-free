@@ -8,7 +8,8 @@ use horizon_protocol::{
 };
 use mod_api::{
     HandlerThread, Hooks, IPayloadContext, IPayloadHandler, ModEntry, PayloadBytes, PayloadId,
-    PlayerKickedEvent, PlayerLoggedOutEvent, Registrar, ServerHost, Text, text::TextFormError,
+    PlayerKickedEvent, PlayerLeavingEvent, PlayerLoggedOutEvent, Registrar, ServerHost, Text,
+    text::TextFormError,
 };
 use std::{
     sync::{Arc, Mutex},
@@ -33,6 +34,10 @@ struct Probe {
     kicked: Mutex<Vec<(u128, String)>>,
     second: Mutex<Vec<Option<Result<bool, TextFormError>>>>,
     logged_out: Mutex<Vec<u128>>,
+    /// (player, reason, still in `server_players()`) when `player_leaving` was heard.
+    leaving: Mutex<Vec<(u128, String, bool)>>,
+    /// Whether the player was still in `server_players()` at `player_logged_out`.
+    listed_at_logout: Mutex<Vec<bool>>,
 }
 impl IPayloadHandler for Probe {
     /// The payload's one byte names the player to disconnect.
@@ -79,7 +84,27 @@ impl Hooks for Registration {
             .unwrap()
             .push((event.player, event.reason.to_string()));
     }
-    fn player_logged_out(&self, _: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
+    fn player_leaving(&self, host: &mut dyn ServerHost, event: &mut PlayerLeavingEvent<'_>) {
+        let listed = |host: &dyn ServerHost, uuid| {
+            host.players()
+                .server_players()
+                .iter()
+                .any(|p| p.uuid() == uuid)
+        };
+        let here = listed(host, event.player);
+        self.0
+            .leaving
+            .lock()
+            .unwrap()
+            .push((event.player, event.reason.to_string(), here));
+    }
+    fn player_logged_out(&self, host: &mut dyn ServerHost, event: &mut PlayerLoggedOutEvent<'_>) {
+        let here = host
+            .players()
+            .server_players()
+            .iter()
+            .any(|p| p.uuid() == event.player);
+        self.0.listed_at_logout.lock().unwrap().push(here);
         self.0.logged_out.lock().unwrap().push(event.player);
     }
 }
@@ -212,6 +237,16 @@ fn a_payload_handler_disconnects_once_and_the_poll_logs_out_once() {
                 [Some(Ok(false)), Some(Ok(false))]
             );
             assert_eq!(*probe.logged_out.lock().unwrap(), [uuid_two, uuid_one]);
+            // `player_leaving` came first for each, with the player still listed; at logout
+            // they were gone from the list.
+            assert_eq!(
+                *probe.leaving.lock().unwrap(),
+                [
+                    (uuid_two, REASONS[1].to_owned(), true),
+                    (uuid_one, REASONS[0].to_owned(), true),
+                ]
+            );
+            assert_eq!(*probe.listed_at_logout.lock().unwrap(), [false, false]);
             game.leave_server(None).unwrap();
         });
     });

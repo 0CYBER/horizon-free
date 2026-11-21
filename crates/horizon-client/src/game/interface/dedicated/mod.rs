@@ -2566,12 +2566,15 @@ impl Game<'_> {
     }
 
     /// `Hub::kick`, with the server's `kick` event recorded. Whether it started the guest's
-    /// disconnect: false for a missing guest and one whose disconnect is already pending.
+    /// disconnect: false for a missing guest and one whose disconnect is already pending or who is hearing `player_leaving`.
     pub(super) fn kick_conn(&mut self, conn: u32, reason: Tag) -> bool {
         let Some(h) = self.lan.as_mut() else {
             return false;
         };
-        if h.hub.guest(conn).is_none_or(|g| g.disconnect_pending) {
+        if h.hub
+            .guest(conn)
+            .is_none_or(|g| g.disconnect_pending || g.leaving)
+        {
             return false;
         }
         h.hub.kick(conn, reason);

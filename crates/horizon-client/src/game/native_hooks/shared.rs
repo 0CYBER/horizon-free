@@ -2705,14 +2705,32 @@ impl Game<'_> {
         if std::mem::replace(&mut host.players_told_left, true) {
             return;
         }
-        let players: Vec<(u128, String)> = host
+        let players: Vec<(u32, u128, String, crate::game::Dim)> = host
             .hub
             .guests
             .iter()
             .filter(|g| g.placed && g.participates_online())
-            .map(|g| (g.uuid, g.name.clone()))
+            .map(|g| {
+                (
+                    g.conn,
+                    g.uuid,
+                    g.name.clone(),
+                    crate::game::Dim::from_id(&g.dimension),
+                )
+            })
             .collect();
-        for (player, name) in players {
+        // They are all still here: each hears of its leave first, then of its logout, in the
+        // level they are in.
+        let back = self.dim;
+        for (conn, player, name, level) in &players {
+            if self.enter_level(*level).is_ok() {
+                self.announce_player_leaving(*conn, *player, name, "Server closed");
+            }
+        }
+        if let Err(e) = self.enter_level(back) {
+            log::error!("could not reopen {}: {e}", back.id());
+        }
+        for (_, player, name, _) in players {
             self.native_player_logged_out(player, &name);
         }
     }

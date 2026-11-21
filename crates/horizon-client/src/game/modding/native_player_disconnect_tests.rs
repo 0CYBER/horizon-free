@@ -273,3 +273,93 @@ fn wasm_disconnect_crosses_the_generated_forwarder() {
         });
     });
 }
+
+mod leaving {
+    use super::*;
+    use mod_api::{Hooks, ModEntry, PlayerLeavingEvent, ServerHost};
+    use std::sync::Mutex;
+
+    /// What `player_leaving` heard, and whether a disconnect asked for inside it was taken.
+    #[derive(Default)]
+    struct Heard {
+        leaving: Mutex<Vec<u128>>,
+        kicked_inside: Mutex<Vec<bool>>,
+    }
+    struct Probe(Arc<Heard>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Probe {
+        fn player_leaving(&self, host: &mut dyn ServerHost, event: &mut PlayerLeavingEvent<'_>) {
+            self.0.leaving.lock().unwrap().push(event.player);
+            let player = host
+                .players()
+                .server_players()
+                .into_iter()
+                .find(|p| p.uuid() == event.player)
+                .unwrap();
+            let taken = player
+                .disconnect(host, Text::literal("From the hook"))
+                .unwrap();
+            self.0.kicked_inside.lock().unwrap().push(taken);
+        }
+    }
+
+    fn with_probe(test: impl FnOnce(&mut super::super::Game<'_>, &Heard)) {
+        let heard = Arc::new(Heard::default());
+        let mods = vec![ModEntry::new(
+            "leaving_probe",
+            Box::new(Probe(heard.clone())),
+        )];
+        mod_platform::testing::with_mods(mods.into(), || {
+            with_guests(|game| test(game, &heard));
+        });
+    }
+
+    /// A guest a proxy transfer released is not told of: the destination owns their state.
+    #[test]
+    #[ignore = "daily"]
+    fn a_released_guest_does_not_fire_player_leaving() {
+        with_probe(|game, heard| {
+            let uuid = game.players().server_players()[0].uuid();
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.update_guest(12, |g| g.released = true);
+            game.announce_player_leaving(12, uuid, "Guest12", "moved to another server");
+            assert!(heard.leaving.lock().unwrap().is_empty());
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.update_guest(12, |g| g.released = false);
+            // An export whose freeze ran out is still unsettled: the destination may own them.
+            hub.update_guest(12, |g| g.transfer_unresolved = vec![1]);
+            game.announce_player_leaving(12, uuid, "Guest12", "Disconnected");
+            assert!(heard.leaving.lock().unwrap().is_empty());
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.update_guest(12, |g| g.transfer_unresolved.clear());
+            // Freeze, abort, then an ordinary leave: the aborted transfer is settled and the
+            // player stayed, so the leave is heard.
+            let i = hub.guests.iter().position(|g| g.conn == 12).unwrap();
+            let record =
+                horizon_client::lan::arrivals::export_record(hub, i, true, Default::default())
+                    .unwrap();
+            let h = record["handover"].as_str().unwrap().to_owned();
+            let reply = horizon_client::lan::arrivals::release_request(
+                hub,
+                &format!("{:032x} {h} abort", hub.guests[i].uuid),
+            );
+            assert_eq!(reply["released"], "abort", "{reply}");
+            game.announce_player_leaving(12, uuid, "Guest12", "Disconnected");
+            assert_eq!(*heard.leaving.lock().unwrap(), [uuid]);
+        });
+    }
+
+    /// Inside the hook a disconnect of the leaving player is refused though none is pending.
+    #[test]
+    #[ignore = "daily"]
+    fn a_disconnect_inside_player_leaving_is_refused() {
+        with_probe(|game, heard| {
+            let uuid = game.players().server_players()[0].uuid();
+            game.announce_player_leaving(12, uuid, "Guest12", "Disconnected");
+            assert_eq!(*heard.kicked_inside.lock().unwrap(), [false]);
+            let guest = game.lan.as_ref().unwrap().hub.guest(12).unwrap();
+            assert!(!guest.disconnect_pending && !guest.leaving);
+            assert_eq!(left_reason(game, 12), "");
+        });
+    }
+}

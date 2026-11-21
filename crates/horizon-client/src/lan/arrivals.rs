@@ -494,6 +494,9 @@ pub fn export_record(
     if let Some(id) = id {
         let since = hub.ticks;
         hub.guests.update(i, |g| {
+            if !g.transfer_unresolved.contains(&id) {
+                g.transfer_unresolved.push(id);
+            }
             g.handover = Some(Handover {
                 id,
                 since,
@@ -842,7 +845,11 @@ pub fn release_request(hub: &mut Hub, args: &str) -> serde_json::Value {
     }
     match hub.handover_of(uuid, id) {
         Ok(i) => {
-            hub.guests.update(i, |g| g.handover = None);
+            // The player stays here: this hand-over is settled, an earlier unsettled one is not.
+            hub.guests.update(i, |g| {
+                g.handover = None;
+                g.transfer_unresolved.retain(|&u| u != id);
+            });
             serde_json::json!({ "ok": true, "released": "abort" })
         }
         Err(why) => error(why),
@@ -1772,6 +1779,10 @@ mod hub_tests {
             stats: serde_json::json!({"stats": {"minecraft:custom": {"minecraft:jump": 3}}}),
         };
         let record = super::export_record(&mut hub, i, false, records).unwrap();
+        assert!(
+            hub.guests[i].transfer_unresolved.is_empty(),
+            "a plain export is no hand-over"
+        );
         assert_eq!(record["version"], 1);
         assert_eq!(record["data_version"], horizon_world::DATA_VERSION);
         assert_eq!(record["uuid"], UUID);
@@ -1819,6 +1830,7 @@ mod hub_tests {
         let record = super::export_record(&mut hub, i, true, Default::default()).unwrap();
         let handover = hub.guests[i].handover.clone().unwrap();
         assert_eq!(handover.since, hub.ticks);
+        assert_eq!(hub.guests[i].transfer_unresolved, [handover.id]);
         assert_eq!(
             record["handover"].as_str(),
             Some(super::handover_text(handover.id).as_str())
@@ -1862,6 +1874,10 @@ mod hub_tests {
         assert!(hub.guests[i].handover.is_some());
         assert!(hub.poll(&mut ctx).iter().any(|e| is_warn(e, "frozen")));
         assert_eq!(hub.guests[i].handover, None, "the hand-over is over");
+        assert!(
+            !hub.guests[i].transfer_unresolved.is_empty(),
+            "a freeze running out does not say who owns the player"
+        );
     }
 
     #[test]
@@ -2036,8 +2052,15 @@ mod hub_tests {
     #[test]
     fn an_aborted_hand_over_lets_the_player_go_on_as_it_was() {
         let (mut hub, seen, mine, h) = frozen_with_a_watcher();
+        // An earlier hand-over whose freeze ran out unsettled stays unsettled.
+        hub.guests.update(1, |g| g.transfer_unresolved.insert(0, 7));
         let reply = super::release_request(&mut hub, &format!("{UUID} {h} abort"));
         assert_eq!(reply, serde_json::json!({"ok": true, "released": "abort"}));
+        assert_eq!(
+            hub.guests[1].transfer_unresolved,
+            [7],
+            "the abort settles its own only"
+        );
         assert_eq!(hub.guests.len(), 2);
         assert!(hub.guests[1].handover.is_none() && hub.guests[1].placed);
         assert_eq!(ids(&seen), Vec::<i32>::new());
