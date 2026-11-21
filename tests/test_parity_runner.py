@@ -338,7 +338,8 @@ class ParityRunnerTests(unittest.TestCase):
         build error) and passes without, "sleep" sleeps a minute, "missing" is no program at all.
 
         Returns the prebuild's result (or the exception it raised), the runs' arguments, the events (("print",
-        line), ("released",) when the compile turn ends, ("finish",)), the state folder and the target folder."""
+        line), ("yield",) at each check for a priority job between runs, ("released",) when the compile turn ends,
+        ("finish",)), the state folder and the target folder."""
         temp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, temp, True)
         cargo, argv = temp / "cargo.py", temp / "argv.txt"
@@ -389,6 +390,10 @@ class ParityRunnerTests(unittest.TestCase):
             def __enter__(self):
                 return self
 
+            def yield_if_ahead(self):
+                events.append(("yield",))
+                return False
+
             def __exit__(self, *exception):
                 events.append(("released",))
 
@@ -435,6 +440,15 @@ class ParityRunnerTests(unittest.TestCase):
         self.assertEqual(printed[3:], ["  compiler cache: not in use, or its counts could not be read"])
         self.assertNotIn(("finish",), events)
         self.assertEqual(sorted(path.name for path in state.iterdir()), ["prebuild-timings-6-1"])
+
+    def test_the_prebuild_checks_for_a_priority_job_between_its_cargo_runs(self):
+        (built, _), _, events, _, _ = self.prebuild_with_fake_cargo(["one", "two", "three"], switch=False)
+        self.assertTrue(built)
+        order = ["yield" if event == ("yield",) else untimed(event[1]) for event in events
+                 if event == ("yield",) or event[0] == "print" and event[1].startswith("  cargo ")]
+        self.assertEqual(order, ["  cargo 1/3: dev one: Ns, 0 crates compiled", "yield",
+                                 "  cargo 2/3: dev two: Ns, 0 crates compiled", "yield",
+                                 "  cargo 3/3: dev three: Ns, 0 crates compiled"])
 
     def test_parity_mains_prebuild_keeps_each_runs_timing_report(self):
         (built, _), runs, events, state, _ = self.prebuild_with_fake_cargo(["one", "none", "three"])

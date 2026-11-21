@@ -4,28 +4,39 @@
 parity-main, pull requests' parity jobs and the Nightly's and releases' Mac legs ran on one machine and compiled
 side by side. Each takes a turn around its heavy compile.
 
-Two lock files in LOCK_DIR, held with flock, so the kernel ends a turn the moment its holder dies:
+Lock files in LOCK_DIR, held with flock, so the kernel ends a turn the moment its holder dies:
   - `turn`: held exclusively by the job compiling.
   - `priority`: parity-main and the Mac builds (PRIORITY roles) hold it shared from their arrival until their compile
     ends. A pull request's job (role `pr`, also the nightly parity audit) takes `turn` only while it holds
     `priority` exclusively, then lets `priority` go again.
+  - `waiting` (optional): a priority job holds it shared only while it waits for `turn`, from its first refused try
+    until it takes `turn` or stops waiting. Where it can't be used, said once, everything else works as before and
+    no pull request gives the turn back.
 
 Admission order of a `pr` job, all non-blocking: (1) flock(priority, EX); if refused, a priority job is here: wait.
 (2) flock(turn, EX). (3) flock(priority, UN), whether (2) succeeded or not. A priority job's arrival is its shared
 lock on `priority`, which it keeps. An exclusive and a shared lock on one file never coexist, so in the instant a
-`pr` job takes `turn` no priority job has arrived; one that arrives later waits for `turn` like anybody. A pull
-request's job is admitted when it takes the turn; nothing here says when its cargo starts.
+`pr` job takes `turn` no priority job has arrived. One that arrives later waits for `turn`, and a `pr` job holding it
+gives it back at its next cargo-call boundary (Turn.yield_if_ahead, which tools/parity.py's prebuild calls between
+its Cargo runs; a wrapped command gives nothing back) when `waiting` is refused to it exclusively: a priority job
+waits for the turn. A granted try is let go at once, and no `pr` job locks `waiting` otherwise. A priority job that
+stopped waiting and compiles without the turn holds `priority` but not `waiting`, so it takes nobody's turn away. A
+waiting priority job takes `turn` before it lets `waiting` go; a `pr` job that gave the turn back can't take it
+meanwhile anyway, as `priority` (held shared by that priority job until its compile ends) refuses its step (1). It
+waits as any `pr` job does, admitted again only once no priority job is here. Priority jobs never give the turn back.
+A pull request's job is admitted when it takes the turn; nothing here says when its cargo starts.
 
 Priority jobs among themselves, and pull requests among themselves, poll `turn` every POLL seconds with a bounded
 wait: whoever polls first after a release gets the turn, which is no queue. Every wait is bounded (WAIT, by
 time.monotonic): then the job compiles anyway and says who held the turn. A priority job that goes ahead keeps its `priority` lock, so no pull
 request is admitted beside it meanwhile. A priority job's waits share one budget per job (WAIT[role] in all): each
 records what it waited in BUDGET_FILE under RUNNER_TEMP, and a later wait in the same job gets only what is left
-(its preparer, game and packaging compiles, say). A pull request's job has WAIT["pr"] per wait. A holder that hangs is only ever met by these bounds: nothing is taken over,
-renamed or deleted here, ever.
+(its preparer, game and packaging compiles, say). A pull request's job has WAIT["pr"] per Turn (a prebuild, a
+wrapped command), in memory: its first wait and those after giving the turn back share it. A holder that hangs is
+only ever met by these bounds: nothing is taken over, renamed or deleted here, ever.
 
 Fail open: a folder or lock file that can't be opened, isn't a real directory or regular file, or a system without
-fcntl (Windows): said once, and the job compiles without the lock. The folder and both lock files may already exist
+fcntl (Windows): said once, and the job compiles without the lock. The folder and the lock files may already exist
 and be read-only to the job: they are opened as they are, and made only where missing and allowed.
 
 The `holder` file is display only: who holds the turn and since when, for the waiters' log lines. Nothing is
@@ -53,9 +64,9 @@ import time
 
 LOCK_DIR = "/Users/Shared/horizon-compile-lock"
 # Each role's longest wait, in seconds: for a priority role, all of a job's waits together (BUDGET_FILE); for a pull
-# request, each wait. parity-main 20 min of its job's 360; a Mac build job 60 (Mac build legs 180, exporters 150, the
-# launcher's Mac leg on main 90); a pull request's parity job 60 per prebuild of its 240 (the frame_identity step is a
-# second prebuild).
+# request, all waits of one Turn (a prebuild's first and those after giving the turn back). parity-main 20 min of its
+# job's 360; a Mac build job 60 (Mac build legs 180, exporters 150, the launcher's Mac leg on main 90); a pull
+# request's parity job 60 per prebuild of its 240 (the frame_identity step is a second prebuild).
 WAIT = {"main": 20 * 60, "build": 60 * 60, "pr": 60 * 60}
 PRIORITY = {"main", "build"}
 BUDGET_FILE = "horizon-compile-lock-waited"  # under RUNNER_TEMP: the seconds this job's priority waits took
@@ -138,7 +149,8 @@ def open_entry(folder, name, write=False):
 
 
 class Turn:
-    """The lock as a context manager: entering waits for a turn (bounded), leaving releases it.
+    """The lock as a context manager: entering waits for a turn (bounded), leaving releases it. A pull request's
+    job may give it back and wait again between its compiles (yield_if_ahead).
 
     clock and sleep are time.monotonic and time.sleep unless a test passes its own."""
 
@@ -157,10 +169,11 @@ class Turn:
         self.me = clean(f"{environ.get('GITHUB_WORKFLOW') or '?'} / {environ.get('GITHUB_JOB') or '?'} - role {role} "
                         f"run {environ.get('GITHUB_RUN_ID') or '?'} runner {environ.get('RUNNER_NAME') or '?'} pid "
                         f"{os.getpid()}", 200)
-        self.fcntl = self.folder = self.turn = self.priority = None
-        self.held = self.arrived = self.ahead = False
+        self.fcntl = self.folder = self.turn = self.priority = self.waiting = None
+        self.held = self.arrived = self.ahead = self.waiting_held = False
         self.complained = False
         self.taken_at = None
+        self.waited = 0  # seconds this Turn's waits took (a pull request's budget)
 
     def say(self, line):
         try:
@@ -223,6 +236,11 @@ class Turn:
         self.folder = open_folder(self.path)
         self.turn = open_entry(self.folder, "turn")
         self.priority = open_entry(self.folder, "priority")
+        try:
+            self.waiting = open_entry(self.folder, "waiting")
+        except Exception as error:
+            self.say(f"the waiting lock file can't be used ({clean(f'{type(error).__name__}: {error}', 160)}): pull "
+                     "requests keep the turn while jobs ahead of them wait")
 
     def arrive(self):
         """A priority job's arrival: True once it holds `priority` shared."""
@@ -263,7 +281,47 @@ class Turn:
             self.close()
             return False
         finally:
-            self.record(spent + self.clock() - started)
+            self.stop_waiting()  # after `turn` was taken, if it was (see the module's text)
+            self.waited = self.clock() - started
+            self.record(spent + self.waited)
+
+    def stop_waiting(self):
+        """A priority job lets `waiting` go: it took the turn, or stopped waiting for it."""
+        if self.waiting_held and self.waiting is not None:
+            try:
+                self.fcntl.flock(self.waiting, self.fcntl.LOCK_UN)
+            except OSError:
+                pass  # closing the descriptor unlocks it
+        self.waiting_held = False
+
+    def yield_if_ahead(self):
+        """At a cargo-call boundary: a pull request's job holding the turn gives it back while a priority job waits
+        (see the module's text), then waits for it again with what is left of WAIT["pr"]. True when it gave the turn
+        back. Without the turn held (the lock off or failed open included), without `waiting`, or for a priority role,
+        it does nothing."""
+        if not self.held or self.role in PRIORITY or self.waiting is None:
+            return False
+        try:
+            if self.lock(self.waiting, self.fcntl.LOCK_EX):
+                self.fcntl.flock(self.waiting, self.fcntl.LOCK_UN)
+                return False
+            held_for = self.clock() - self.taken_at
+            self.clear_holder()
+            self.fcntl.flock(self.turn, self.fcntl.LOCK_UN)
+            self.held = False
+            self.say(f"gave the turn back after {held_for / 60:.1f} min: a job ahead of pull requests is waiting")
+            started = self.clock()
+            try:
+                self.wait(max(0, WAIT[self.role] - self.waited), int(self.waited))
+            finally:
+                self.waited += self.clock() - started
+        except Exception as error:
+            self.fail_open(f"{self.path} can't be used ({type(error).__name__}: {error})")
+            if self.held:
+                self.clear_holder()
+            self.held = False
+            self.close()
+        return True
 
     def spent(self):
         """Seconds this job's earlier priority waits took: 0 without a budget file or for one that isn't a number."""
@@ -292,8 +350,9 @@ class Turn:
     def wait(self, limit, spent=0):
         started = self.clock()
         total = WAIT[self.role]
+        whose = "this job's" if self.role in PRIORITY else "this prebuild's"
         if limit <= 0:
-            self.say(f"this job's {total // 60:.0f} min of waiting are used up: one try for the turn, else compiling "
+            self.say(f"{whose} {total // 60:.0f} min of waiting are used up: one try for the turn, else compiling "
                      "without it")
         if self.role in PRIORITY:
             while not self.arrive():
@@ -319,9 +378,14 @@ class Turn:
                 if limit <= 0:
                     self.say(f"compiling without the turn while {blocker}")
                 else:
-                    share = "this job's limit" if not spent else f"the rest of this job's {total // 60:.0f} min"
+                    share = f"{whose} limit" if not spent else f"the rest of {whose} {total // 60:.0f} min"
                     self.say(f"waited {limit / 60:.0f} min, {share}; compiling without the turn while {blocker}")
                 return False
+            if self.role in PRIORITY and not self.waiting_held and self.waiting is not None:
+                try:
+                    self.waiting_held = self.lock(self.waiting, self.fcntl.LOCK_SH)  # refused only for an instant
+                except OSError:
+                    pass  # optional, as at open: this job waits as on main, unseen by pull requests
             self.sleep(POLL)
         self.write_holder()
         waited = self.taken_at - started
@@ -332,7 +396,8 @@ class Turn:
         return True
 
     def close(self):
-        for name in ("turn", "priority", "folder"):
+        self.waiting_held = False
+        for name in ("turn", "priority", "waiting", "folder"):
             descriptor = getattr(self, name)
             setattr(self, name, None)
             if descriptor is not None:

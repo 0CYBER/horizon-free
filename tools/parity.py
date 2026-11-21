@@ -770,7 +770,8 @@ def prebuild(artifacts, jobs):
     """Build the recorded probes before the harnesses start, so they don't serialise on Cargo's lock.
 
     On the self-hosted Mac the Cargo runs wait for a turn on the machine (tools/compile_lock.py), as the job's
-    HORIZON_COMPILE_LOCK_ROLE says: `main` for parity-main, else `pr`."""
+    HORIZON_COMPILE_LOCK_ROLE says: `main` for parity-main, else `pr`. A `pr` job gives the turn back between its runs
+    while a priority job waits."""
     environment = run_environment()
     environment["CARGO_BUILD_JOBS"] = str(jobs)
     errors = ""
@@ -779,7 +780,7 @@ def prebuild(artifacts, jobs):
     role = os.environ.get("HORIZON_COMPILE_LOCK_ROLE") or "pr"
     timings = PrebuildTimings(environment) if os.environ.get(PREBUILD_TIMINGS) == "1" else None
     try:
-        with compile_lock.Turn(role):
+        with compile_lock.Turn(role) as turn:
             limit = PREBUILD_LIMIT.get(role)
             deadline = time.monotonic() + limit if limit else None
             expired = threading.Event()
@@ -829,6 +830,9 @@ def prebuild(artifacts, jobs):
                 timings.stats = stats
             failed = False  # with the switch on: a call's last attempt exited nonzero
             for number, command in enumerate(commands, 1):
+                if number > 1:
+                    # A pull request's job lets a waiting parity-main or Mac build go first, outside the call's time.
+                    turn.yield_if_ahead()
                 if timings:
                     timings.before_call()
                 started = time.monotonic()

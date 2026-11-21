@@ -183,7 +183,8 @@ which runs them on main a batch of merges at a time, on the Mac mini's runner:
 - Jobs on the self-hosted Mac take turns at compiling (`tools/compile_lock.py`, flock on files in
   `/Users/Shared/horizon-compile-lock`): parity-main's probe prebuild, pull requests' parity prebuilds and the
   Nightly's, releases' and the launcher's Mac compiles. A pull request's job is not given the turn while parity-main
-  or a Mac build is waiting or compiling; those wait only for the turn's holder. A holder that dies frees the turn at
+  or a Mac build is waiting or compiling; those wait only for the turn's holder, and a pull request's prebuild that
+  holds it gives it back after its current Cargo run. A holder that dies frees the turn at
   once (the kernel drops its lock). Waits are bounded (parity-main 20 min and the Mac builds 60, each for all its
   compiles together; pull requests 60 per prebuild), then the job compiles anyway and says who held the turn. parity-main's prebuild then has 240 minutes (`PREBUILD_LIMIT`),
   past which its Cargo process group is stopped and the run fails.

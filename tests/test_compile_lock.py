@@ -11,6 +11,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -106,7 +107,7 @@ class CompileLockTests(unittest.TestCase):
         turn.release()
         self.assertEqual(self.lines, ["  compile lock: taken, no wait", "  compile lock: released after 1.5 min"])
         self.assertEqual(Path(self.folder, "holder").read_text(), "")
-        self.assertEqual(sorted(os.listdir(self.folder)), ["holder", "priority", "turn"])
+        self.assertEqual(sorted(os.listdir(self.folder)), ["holder", "priority", "turn", "waiting"])
         self.assertTrue(self.turn("pr").acquire(), "free again")
 
     @needs_flock
@@ -229,6 +230,280 @@ class CompileLockTests(unittest.TestCase):
         self.assertIn("jobs ahead of pull requests", self.lines[-1])
         main.release()
 
+    # A pull request's job gives the turn back between its compiles
+
+    def scripted(self, *steps):
+        """A sleep that moves the fake clock and runs each (minutes from now, action) once the clock is past it."""
+        start, steps = self.clock.now, list(steps)
+
+        def sleep(seconds):
+            self.clock.sleep(seconds)
+            while steps and self.clock.now - start >= steps[0][0] * 60:
+                steps.pop(0)[1]()
+        return sleep
+
+    def waits(self, job):
+        """A priority job in its wait for the turn, as Turn.wait leaves it: arrived, and `waiting` held shared."""
+        if job.folder is None:
+            job.open()
+        self.assertTrue(job.arrive())
+        job.waiting_held = job.lock(job.waiting, job.fcntl.LOCK_SH)
+        self.assertTrue(job.waiting_held)
+
+    def takes(self, job):
+        """That job's poll that finds the turn free, as Turn.wait does it: `turn` first, then `waiting` let go."""
+        self.assertTrue(job.try_turn())
+        job.stop_waiting()
+        job.write_holder()
+
+    def someone_waits(self):
+        """Whether a priority job holds `waiting`: an exclusive try through a descriptor of its own."""
+        probe = self.turn("pr", job="probe")
+        probe.open()
+        try:
+            return not probe.lock(probe.waiting, probe.fcntl.LOCK_EX)
+        finally:
+            probe.close()
+
+    @needs_flock
+    def test_a_pull_request_gives_the_turn_back_to_a_waiting_priority_job_and_takes_it_again(self):
+        main, shown = self.turn("main", job="parity-main"), []
+
+        def main_takes_the_turn():
+            self.takes(main)
+            shown.extend([Path(self.folder, "holder").read_text(), self.someone_waits()])
+        # parity-main takes the free turn at its next poll and keeps it 10 min from the pull request's yield.
+        pr = self.turn("pr", sleep=self.scripted((5.1, main_takes_the_turn), (15, main.release)))
+        self.assertTrue(pr.acquire())
+        self.clock.now += 5 * 60  # a cargo call
+        self.waits(main)
+        self.assertFalse(main.try_turn(), "mid-call, the pull request keeps the turn")
+        self.assertTrue(pr.yield_if_ahead())
+        self.assertEqual(self.lines, [
+            "  compile lock: taken, no wait",
+            "  compile lock: gave the turn back after 5.0 min: a job ahead of pull requests is waiting",
+            "  compile lock: waiting: jobs ahead of pull requests (parity-main, a Mac build) are here",
+            "  compile lock: released after 9.9 min",  # parity-main's
+            "  compile lock: taken after waiting 10.0 min"])
+        self.assertIn("role main", shown[0])
+        self.assertFalse(shown[1], "parity-main no longer waits once it has the turn")
+        self.assertIn("role pr", Path(self.folder, "holder").read_text())
+        self.assertTrue(pr.held)
+        late = self.turn("build", job="build macos")
+        late.open()
+        self.assertFalse(late.try_turn(), "the pull request goes on in its turn")
+        self.assertFalse(pr.yield_if_ahead(), "nobody waits")
+        pr.release()
+
+    @needs_flock
+    def test_without_a_waiting_priority_job_a_pull_request_keeps_its_turn(self):
+        pr = self.turn("pr")
+        self.assertTrue(pr.acquire())
+        holder = Path(self.folder, "holder").read_text()
+        self.assertFalse(pr.yield_if_ahead())
+        self.assertEqual(self.lines, ["  compile lock: taken, no wait"])
+        self.assertTrue(pr.held)
+        self.assertEqual(Path(self.folder, "holder").read_text(), holder)
+        self.assertFalse(self.someone_waits(), "`waiting` was let go")
+        # Another pull request's step (1) holds `priority` for an instant: no priority job, no yield.
+        other = self.turn("pr", job="other")
+        other.open()
+        self.assertTrue(other.lock(other.priority, other.fcntl.LOCK_EX))
+        self.assertFalse(pr.yield_if_ahead())
+        self.assertEqual(self.clock.slept, 0)
+        self.assertTrue(pr.held)
+        self.assertEqual(len(self.lines), 1)
+        pr.release()
+
+    @needs_flock
+    def test_priority_jobs_never_give_the_turn_back(self):
+        for role, other_role in (("main", "build"), ("build", "main")):
+            with self.subTest(role):
+                self.lines.clear()
+                holder, other = self.turn(role), self.turn(other_role)
+                self.assertTrue(holder.acquire())
+                self.waits(other)
+                self.assertFalse(holder.yield_if_ahead())
+                self.assertTrue(holder.held)
+                self.assertFalse(other.try_turn())
+                self.assertEqual(self.clock.slept, 0)
+                self.assertEqual(self.lines, ["  compile lock: taken, no wait"])
+                other.release()
+                holder.release()
+
+    @needs_flock
+    def test_a_priority_job_counts_as_waiting_only_while_it_waits(self):
+        # parity-main waits behind a pull request's long cargo call, holding `waiting` throughout. Its 20 min over, it
+        # compiles without the turn, keeping `priority` but not `waiting`: the pull request keeps its turn.
+        pr = self.turn("pr")
+        self.assertTrue(pr.acquire())
+        seen = []
+        main = self.turn("main", job="parity-main",
+                         sleep=lambda seconds: (self.clock.sleep(seconds), seen.append(self.someone_waits())))
+        self.assertFalse(main.acquire())
+        self.assertEqual(set(seen), {True})
+        self.assertFalse(self.someone_waits())
+        self.clock.slept, count = 0, len(self.lines)
+        self.assertFalse(pr.yield_if_ahead())
+        self.assertTrue(pr.held)
+        self.assertEqual((self.clock.slept, len(self.lines)), (0, count))
+        other = self.turn("pr", job="other")
+        other.open()
+        self.assertFalse(other.try_turn())
+        self.assertTrue(other.ahead, "parity-main still keeps pull requests out")
+        main.release()
+        pr.release()
+        # A wait that ends with the turn lets `waiting` go only once `turn` is taken.
+        build = self.turn("build", job="build macos")
+        self.assertTrue(build.acquire())
+        main = self.turn("main", job="parity-main", sleep=self.scripted((1, build.release)))
+        real, order = main.try_turn, []
+
+        def try_turn():
+            taken = real()
+            if taken:
+                order.append(self.someone_waits())
+            return taken
+        main.try_turn = try_turn
+        self.assertTrue(main.acquire())
+        self.assertEqual(order, [True])
+        self.assertFalse(self.someone_waits())
+        main.release()
+
+    @needs_flock
+    def test_a_pull_requests_waits_share_one_budget(self):
+        # parity-main holds the turn for the pull request's first 40 min. Later a Mac build waits, takes the turn the
+        # pull request gives back and keeps it: the pull request waits the 20 min left of its 60, then compiles
+        # without the turn; its later boundaries do nothing.
+        main = self.turn("main", job="parity-main")
+        self.assertTrue(main.acquire())
+        pr = self.turn("pr", sleep=self.scripted((40, main.release)))
+        self.assertTrue(pr.acquire())
+        self.assertEqual(self.lines[-1], "  compile lock: taken after waiting 40.0 min")
+        self.clock.now += 30 * 60
+        build = self.turn("build", job="build macos")
+        self.waits(build)
+        pr.sleep = self.scripted((0.05, lambda: self.takes(build)))
+        self.lines.clear()
+        self.clock.slept = 0
+        self.assertTrue(pr.yield_if_ahead())
+        self.assertFalse(pr.held)
+        self.assertAlmostEqual(self.clock.slept, 20 * 60, delta=compile_lock.POLL)
+        blocker = "jobs ahead of pull requests (parity-main, a Mac build) are here"
+        self.assertEqual(self.lines[:2], [
+            "  compile lock: gave the turn back after 30.0 min: a job ahead of pull requests is waiting",
+            f"  compile lock: waiting: {blocker}"])
+        self.assertTrue(self.lines[2].startswith(f"  compile lock: waited 20 min, the rest of this prebuild's 60 min; "
+                                                 f"compiling without the turn while {blocker}; parity / build macos - "
+                                                 "role build"), self.lines)
+        self.assertEqual(len(self.lines), 3)
+        self.lines.clear()
+        self.clock.slept = 0
+        self.assertFalse(pr.yield_if_ahead())
+        pr.release()
+        self.assertEqual((self.lines, self.clock.slept), ([], 0))
+        build.release()
+
+    @needs_flock
+    def test_a_pull_requests_second_yield_gets_what_its_first_left(self):
+        # parity-main takes 40 min after the first yield; a Mac build then keeps the turn: the second yield waits the
+        # 20 min left of the pull request's 60.
+        main, build = self.turn("main", job="parity-main"), self.turn("build", job="build macos")
+        pr = self.turn("pr")
+        self.assertTrue(pr.acquire())
+        for job, minutes in ((main, 40), (build, None)):
+            self.lines.clear()
+            self.clock.slept = 0
+            self.waits(job)
+            pr.sleep = self.scripted((0.05, lambda job=job: self.takes(job)),
+                                     *([(minutes, job.release)] if minutes else []))
+            self.assertTrue(pr.yield_if_ahead())
+        self.assertTrue(self.lines[-1].startswith("  compile lock: waited 20 min, the rest of this prebuild's 60 min; "
+                                                  "compiling without the turn while"), self.lines)
+        self.assertAlmostEqual(self.clock.slept, 20 * 60, delta=compile_lock.POLL)
+        build.release()
+
+    @needs_flock
+    def test_an_unusable_waiting_file_leaves_the_rest_of_the_lock_as_it_was(self):
+        os.mkdir(self.folder)
+        os.mkdir(os.path.join(self.folder, "waiting"))
+        pr = self.turn("pr")
+        self.assertTrue(pr.acquire())
+        self.assertTrue(self.lines[0].startswith("  compile lock: the waiting lock file can't be used (Odd: "),
+                        self.lines)
+        self.assertEqual(self.lines[1:], ["  compile lock: taken, no wait"])
+        main = self.turn("main", job="parity-main")
+        self.assertFalse(main.acquire(), "waits its 20 min, then compiles beside the pull request")
+        self.assertEqual(self.clock.slept, WAIT["main"])
+        self.clock.slept = 0
+        self.assertFalse(pr.yield_if_ahead())
+        self.assertTrue(pr.held)
+        self.assertEqual(self.clock.slept, 0)
+        self.assertFalse([line for line in self.lines if "gave the turn back" in line])
+        other = self.turn("pr", job="other")
+        other.open()
+        self.assertFalse(other.try_turn())
+        self.assertTrue(other.ahead, "`priority` works as before")
+        main.release()
+        pr.release()
+
+    @needs_flock
+    def test_a_lock_failing_while_giving_back_fails_open_and_leaves_nothing_held(self):
+        import fcntl
+        pr = self.turn("pr")
+        self.assertTrue(pr.acquire())
+
+        def flock(descriptor, mode):
+            if descriptor == pr.waiting:
+                raise OSError(5, "Input/output error")
+            return fcntl.flock(descriptor, mode)
+        pr.fcntl = types.SimpleNamespace(flock=flock, LOCK_EX=fcntl.LOCK_EX, LOCK_SH=fcntl.LOCK_SH,
+                                         LOCK_UN=fcntl.LOCK_UN, LOCK_NB=fcntl.LOCK_NB)
+        self.assertTrue(pr.yield_if_ahead())
+        self.assertFalse(pr.held)
+        self.assertEqual((pr.folder, pr.turn, pr.priority, pr.waiting), (None,) * 4)
+        self.assertEqual(Path(self.folder, "holder").read_text(), "")
+        self.assertTrue(self.lines[-1].endswith("; compiling without it"), self.lines)
+        self.assertFalse(self.someone_waits())
+        fresh = self.turn("pr")
+        self.assertTrue(fresh.acquire(), "`turn` and `priority` are free")
+        fresh.release()
+
+    @needs_flock
+    def test_an_interrupt_while_waiting_after_giving_back_releases_everything(self):
+        for interrupt in (KeyboardInterrupt, SystemExit):
+            with self.subTest(interrupt.__name__):
+                main, pr = self.turn("main", job="parity-main"), self.turn("pr")
+
+                def sleep(seconds, interrupt=interrupt):
+                    raise interrupt()
+                with self.assertRaises(interrupt):
+                    with pr:
+                        self.assertTrue(pr.held)
+                        self.waits(main)
+                        pr.sleep = sleep
+                        pr.yield_if_ahead()
+                self.assertEqual((pr.folder, pr.turn, pr.priority, pr.waiting), (None,) * 4)
+                self.assertEqual(Path(self.folder, "holder").read_text(), "")
+                self.assertTrue(main.try_turn(), "the turn is free")
+                main.release()
+                self.assertFalse(self.someone_waits())
+                fresh = self.turn("pr")
+                self.assertTrue(fresh.acquire(), "`priority` is free")
+                fresh.release()
+
+    def test_giving_the_turn_back_does_nothing_where_no_turn_was_taken(self):
+        blocker = Path(self.temp.name, "a-file")
+        blocker.write_text("")
+        off_the_mac = Turn("pr", environ={}, platform="linux", clock=self.clock, sleep=self.clock.sleep,
+                           say=self.lines.append)
+        for turn in (self.turn("off"), off_the_mac, self.turn("pr", folder=str(blocker / "lock"))):
+            with turn:
+                self.assertFalse(turn.yield_if_ahead())
+        self.assertEqual(self.clock.slept, 0)
+        self.assertEqual(len(self.lines), 1, self.lines)  # failing open says so once
+        self.assertTrue(self.lines[0].endswith("; compiling without it"))
+
     # Fail open, and what the folder may hold
 
     @needs_flock
@@ -299,7 +574,10 @@ class CompileLockTests(unittest.TestCase):
             self.assertTrue(turn.held)
             self.assertEqual(self.turn("main").holder(), "", "no `holder` could be made: nothing to show")
         self.assertEqual(sorted(os.listdir(self.folder)), ["priority", "turn"])
-        self.assertEqual(self.lines[0], "  compile lock: taken, no wait")
+        # Nor `waiting`: said once, and the turn works as before.
+        self.assertTrue(self.lines[0].startswith("  compile lock: the waiting lock file can't be used "
+                                                 "(PermissionError"), self.lines)
+        self.assertEqual(self.lines[1], "  compile lock: taken, no wait")
         # A lock file missing there can't be made: fail open, once.
         os.chmod(self.folder, 0o755)
         os.unlink(os.path.join(self.folder, "priority"))
@@ -352,7 +630,7 @@ class CompileLockTests(unittest.TestCase):
                 self.assertEqual(self.turn("build", environ=environ).spent(), 0)
         budget.write_bytes(b"125\n")
         self.assertEqual(self.turn("build", environ=environ).spent(), 125)
-        # A pull request's job keeps its own limit per wait and leaves the record alone.
+        # A pull request's job keeps its own limit per Turn and leaves the record alone.
         budget.write_text("3600")
         self.clock.slept = 0
         self.assertFalse(self.turn("pr", environ=environ).acquire())
