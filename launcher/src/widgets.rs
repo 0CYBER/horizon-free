@@ -531,6 +531,14 @@ pub(crate) fn sign_in_change(
 
 /// `owner`: whether an account here owns the game, by the keychain (`Launcher::owner`).
 pub(crate) fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
+    // Horizon-free: no account is needed to prepare the game either, since the preparation
+    // comes from the player's own Minecraft install: Play prepares and then plays in one press,
+    // even with no owner (and before the keychain has answered).
+    let owner = if backend::OFFLINE_PLAY {
+        Some(true)
+    } else {
+        owner
+    };
     match (prepared, owner) {
         _ if busy => PlayPress::Nothing,
         (true, _) => PlayPress::Play,
@@ -541,7 +549,8 @@ pub(crate) fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> Pla
 
 /// What Play's button says for `press`, so its label is what a click does: "Prepare & play"
 /// when it prepares first, "Sign in to play" when no account here owns the game (it does
-/// nothing then), "Play" otherwise (dimmed while the keychain is still being read).
+/// nothing then; Horizon-free prepares instead, see [`play_press`]), "Play" otherwise (dimmed
+/// while the keychain is still being read).
 pub(crate) fn play_label(press: PlayPress, owner: Option<bool>) -> &'static str {
     match (press, owner) {
         (PlayPress::PrepareThenPlay, _) => "Prepare & play",

@@ -6,6 +6,7 @@ use super::*;
 use crate::glass_ui::{self as ui, white, Tone};
 use crate::instances_page::java_line;
 use gpui::{anchored, canvas, deferred, point};
+use horizon_launcher::account::Player;
 use horizon_launcher::instances::{Icon, Instance, Kind as InstanceKind};
 use horizon_theme::glass::{fill, ink, radius};
 use std::cell::RefCell;
@@ -681,7 +682,12 @@ impl Launcher {
             foot = foot.children(self.rail_update_card(soft, cx));
             // Sculk's card (a sponsor), only where the rail is wide enough to show it.
             // When the instances already overflow the rail, the list keeps the room.
-            if !self.settings.partner_hidden && p > 0.98 && !overflows {
+            // Horizon-free has no sponsor: the plate never draws.
+            if crate::backend::PARTNER_BANNERS
+                && !self.settings.partner_hidden
+                && p > 0.98
+                && !overflows
+            {
                 let free = f32::from(window.viewport_size().height) - 420. - 52. * rows as f32;
                 let mut side = div().relative().mb(px(6.)).child(partner::card(
                     "partner-side",
@@ -702,6 +708,18 @@ impl Launcher {
             }
         }
 
+        // Horizon-free: the fork's repository, above the Discord button.
+        if backend::OFFLINE_PLAY {
+            foot = foot.child(
+                button(
+                    "horizon-free".into(),
+                    "globe-02",
+                    "Horizon-Free".into(),
+                    false,
+                )
+                .on_click(move |_, _, cx| cx.open_url("https://github.com/0CYBER/horizon-free")),
+            );
+        }
         // Discord keeps its own blurple in every theme, as the icon at rest and the fill under the
         // pointer, so it never reads as the selected page. No pulse.
         if !self.links.discord.is_empty() {
@@ -838,7 +856,12 @@ impl Launcher {
                                 "Launcher {version}",
                                 &[("version", backend::VERSION)],
                             )))
-                        }),
+                        })
+                        // Horizon-free: seven clicks reveal the developer options (`dev_options`).
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.version_clicked();
+                            cx.notify();
+                        })),
                 ),
         );
 
@@ -1009,7 +1032,10 @@ impl Launcher {
         let strip = self.nav_strip.render(tabs, &t, performance, window);
 
         let (name, how) = self.who_plays();
-        let face = self.accounts.selected().map(|a| a.uuid.clone());
+        let face = match self.accounts.player() {
+            Player::Microsoft(_) => self.accounts.selected().map(|a| a.uuid.clone()),
+            _ => Some(profile_heads::offline_key(&name)),
+        };
         let open = self.account_menu;
         // Signed out, the chip is only the face: the Sign in with Microsoft button beside it
         // says it once, and the page tabs keep their room.
@@ -1075,8 +1101,11 @@ impl Launcher {
             .child(keyboard(chip, &t))
             .children(self.glass_account_menu(cx));
 
-        // Signing in with Microsoft, while nobody is: the mockup's button.
-        let sign_in = self.accounts.selected().is_none().then(|| {
+        // Signing in with Microsoft, while nobody is: the mockup's button. Horizon-free has no
+        // Microsoft sign-in (offline play is the whole point), so the button stays out.
+        let sign_in = (!backend::OFFLINE_PLAY
+            && !matches!(self.accounts.player(), Player::Microsoft(_)))
+        .then(|| {
             keyboard(
                 div()
                     .id("topbar-sign-in")
@@ -1198,7 +1227,7 @@ impl Launcher {
         }
         let t = self.theme;
         let soft = self.look.accent_soft;
-        let now = self.accounts.selected().map(|a| a.uuid.clone());
+        let now = self.accounts.player();
         let mut menu = ui::popover(250.)
             .id("account-menu")
             .occlude()
@@ -1208,7 +1237,13 @@ impl Launcher {
                 cx.notify();
             }));
         for (i, (who, name, how)) in self.players().into_iter().enumerate() {
-            let chosen = Some(&who) == now.as_ref();
+            let chosen = who == now;
+            // The mockup's rows say only "Offline"; the old menu's longer line stays there.
+            let how = if who == Player::GameName {
+                tr("Offline")
+            } else {
+                how
+            };
             let id = SharedString::from(format!("account-pick-{i}"));
             menu = menu.child(keyboard(
                 track_hover(
@@ -1229,12 +1264,18 @@ impl Launcher {
                                 .size(px(30.))
                                 .rounded(px(8.))
                                 .overflow_hidden()
-                                .child(self.profile_heads.draw(
-                                    Some(who.as_str()),
-                                    30.,
-                                    self.scale,
-                                    &t,
-                                )),
+                                .child(
+                                    self.profile_heads.draw(
+                                        match &who {
+                                            Player::Microsoft(uuid) => Some(uuid.clone()),
+                                            _ => Some(profile_heads::offline_key(&name)),
+                                        }
+                                        .as_deref(),
+                                        30.,
+                                        self.scale,
+                                        &t,
+                                    ),
+                                ),
                         )
                         .child(
                             div()
@@ -1254,7 +1295,7 @@ impl Launcher {
                             d.child(ui::icon("tick-02", 16., ui::color(soft)).relative())
                         })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.play_as(&who);
+                            this.play_as(who.clone());
                             cx.notify();
                         })),
                     id,

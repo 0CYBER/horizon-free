@@ -17,6 +17,13 @@ pub const REPO: &str = "horizon-rust/horizon";
 pub fn issues_url() -> String {
     format!("https://github.com/{REPO}/issues")
 }
+pub const LAUNCHER_REPO: &str = "0CYBER/horizon-free";
+/// Horizon-free: the game starts without a Microsoft account that owns it, in the window and on
+/// the command line. Downloads still need an owner, so the game comes from the player's own install.
+pub const OFFLINE_PLAY: bool = true;
+/// Horizon-free: the partner/sponsor plate (Sculk's card in the sidebar and banner on the Servers
+/// page) stays off, and its `partner_seen_secs` timer never runs. Horizon-free has no sponsor.
+pub const PARTNER_BANNERS: bool = false;
 pub const README_URL: &str = "https://github.com/horizon-rust/horizon/blob/main/launcher/README.md";
 /// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
@@ -682,8 +689,123 @@ pub fn releases_from_network() -> Result<Vec<Release>, String> {
     ))
 }
 
+/// Launcher releases live in the fork's own repository.
+fn launcher_release_list() -> Result<serde_json::Value, String> {
+    crate::github::json(&format!(
+        "https://api.github.com/repos/{LAUNCHER_REPO}/releases?per_page=100"
+    ))
+}
+
+/// The fork's releases, from the API when GitHub answers and from its Atom feed when it doesn't.
+///
+/// GitHub's anonymous API allows 60 reads an hour per address, and Horizon's mirror (which carries
+/// the game's repository through that limit) does not carry the fork's: a launcher behind a busy
+/// address would find no update at all. The feed is not rate limited, and names every tag.
+fn launcher_releases() -> Result<Vec<Release>, String> {
+    match launcher_release_list() {
+        Ok(list) => Ok(launcher_releases_in(&list)),
+        Err(api) => launcher_feed().map_err(|feed| format!("{api}, and {feed}")),
+    }
+}
+
+/// The fork's releases from its Atom feed (`releases.atom`), read when the API refuses.
+fn launcher_feed() -> Result<Vec<Release>, String> {
+    let url = format!("https://github.com/{LAUNCHER_REPO}/releases.atom");
+    let mut text = String::new();
+    get(&url)?
+        .into_reader()
+        .read_to_string(&mut text)
+        .map_err(|e| e.to_string())?;
+    let releases = feed_releases(&text);
+    if releases.is_empty() {
+        return Err(format!("{url} names no launcher release"));
+    }
+    Ok(releases)
+}
+
+/// The launcher releases in GitHub's Atom feed: each entry's tag, title and date, with this
+/// platform's file at its download address. The feed gives no file size, which `download` reads
+/// from the server instead.
+fn feed_releases(feed: &str) -> Vec<Release> {
+    let mut out: Vec<Release> = feed
+        .split("<entry>")
+        .skip(1)
+        .filter_map(|entry| {
+            let link = entry.split("/releases/tag/").nth(1)?.split('"').next()?;
+            let tag = percent_decode(link);
+            if !is_launcher_tag(&tag) {
+                return None;
+            }
+            let between = |open: &str, close: &str| {
+                entry
+                    .split(open)
+                    .nth(1)?
+                    .split(close)
+                    .next()
+                    .map(str::to_owned)
+            };
+            let published = between("<updated>", "</updated>").unwrap_or_default();
+            Some(Release {
+                name: between("<title>", "</title>").unwrap_or_default(),
+                body: String::new(),
+                date: published.chars().take(10).collect(),
+                time: published.get(11..16).unwrap_or_default().to_owned(),
+                asset: launcher_asset().map(|file| {
+                    (
+                        format!(
+                            "https://github.com/{LAUNCHER_REPO}/releases/download/{tag}/{file}"
+                        ),
+                        0,
+                    )
+                }),
+                tag,
+                prerelease: false,
+                nightly: None,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
+    out
+}
+
+/// `launcher%400.2.17` from a feed link as `launcher@0.2.17`.
+fn percent_decode(text: &str) -> String {
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let (bytes, mut out, mut i) = (text.as_bytes(), Vec::with_capacity(text.len()), 0);
+    while i < bytes.len() {
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(high), Some(low)) => {
+                out.push(high * 16 + low);
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
 pub(crate) fn parse_releases(
+    list: &serde_json::Value,
+    asset: Option<&str>,
+    keep: fn(&str) -> bool,
+) -> Vec<Release> {
+    parse_releases_from(REPO, list, asset, keep)
+}
+
+/// [`parse_releases`] for a list read from `repo`: its releases' files download from there, never
+/// from the provider URL the list names. Horizon's own builds live in [`REPO`]; the launcher's
+/// releases in the fork ([`LAUNCHER_REPO`]), so an update downloads the fork's file and not
+/// Horizon's launcher of the same version, which would replace the fork with the official build.
+fn parse_releases_from(
+    repo: &str,
     list: &serde_json::Value,
     asset: Option<&str>,
     keep: fn(&str) -> bool,
@@ -696,8 +818,12 @@ pub(crate) fn parse_releases(
         }
         let found = r["assets"].as_array().into_iter().flatten().find_map(|a| {
             let name = a["name"].as_str()?;
-            (Some(name) == asset)
-                .then(|| Some((crate::signed::asset_url(tag, name), a["size"].as_u64()?)))?
+            (Some(name) == asset).then(|| {
+                Some((
+                    crate::signed::asset_url_in(repo, tag, name),
+                    a["size"].as_u64()?,
+                ))
+            })?
         });
         out.push(Release {
             tag: tag.into(),
@@ -792,11 +918,11 @@ fn launcher_releases_in_with(
     list: &serde_json::Value,
     json: impl Fn(String) -> Result<Option<serde_json::Value>, String>,
 ) -> Vec<Release> {
-    let found = parse_releases(list, launcher_asset(), is_launcher_tag);
+    let found = parse_releases_from(LAUNCHER_REPO, list, launcher_asset(), is_launcher_tag);
     if found.iter().any(|r| r.asset.is_some()) {
         return found;
     }
-    let api = format!("https://api.github.com/repos/{REPO}");
+    let api = format!("https://api.github.com/repos/{LAUNCHER_REPO}");
     let mut tags = Vec::new();
     for prefix in [LAUNCHER_TAG_PREFIX, OLD_LAUNCHER_TAG_PREFIX] {
         // Every `launcher@` tag is newer than every `launcher-v` one: those only when there is none.
@@ -808,7 +934,8 @@ fn launcher_releases_in_with(
     }
     for tag in tags.into_iter().take(3) {
         if let Ok(Some(release)) = json(format!("{api}/releases/tags/{tag}")) {
-            let one = parse_releases(
+            let one = parse_releases_from(
+                LAUNCHER_REPO,
                 &serde_json::json!([release]),
                 launcher_asset(),
                 is_launcher_tag,
@@ -1261,7 +1388,14 @@ fn write_checked(
         done += n as u64;
         progress((done as f32 / size.max(1) as f32).min(1.0) * 0.9);
     }
-    horizon_release_sign::check(name, sha256, &hash.hex())
+    // Fork releases are not signed by Horizon's key: an empty digest skips the check.
+    if sha256.is_empty() {
+        Ok(())
+    } else {
+        horizon_release_sign::check(name, sha256, &hash.hex()).inspect_err(|_| {
+            let _ = fs::remove_file(to);
+        })
+    }
 }
 
 fn unpack(archive: &Path, url: &str, to: &Path) -> Result<(), String> {
@@ -2139,7 +2273,8 @@ fn download_for_owner(
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let mut accounts = account::Accounts::load();
-    // Any account that owns the game may download it (`launch`), not only the one that plays.
+    // The strict gate, never `launch_for_game`: the developer option that lets offline names
+    // play without an owner must not download the game for them.
     let pass = account::launch(
         &account::Endpoints::live(),
         account::client_id().as_deref(),
@@ -2715,15 +2850,33 @@ pub fn prepare_in_process(options: &prepare::Options, log: &dyn Fn(String)) -> R
     .map(|_| ())
 }
 
-/// Where the game keeps saves and options.txt: `HORIZON_HOME`, else `horizon` in the platform's
-/// data folder (~/.local/share/horizon on Linux, as the release folders' horizon.sh uses). It is
-/// never inside a version folder, so installing, updating or removing a version keeps the saves.
+/// Horizon-free: `Settings::game_dir`, read once and forgotten when the settings are saved.
+/// `game_home` runs from every page's drawing, so a settings.json read per call would be a file
+/// read per frame.
+static GAME_DIR: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
+
+/// Horizon-free: the game folder the player chose in Settings > Game, if any.
+fn chosen_game_dir() -> Option<PathBuf> {
+    GAME_DIR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(|| Settings::load().game_dir)
+        .clone()
+}
+
+/// Where the game keeps saves and options.txt: `HORIZON_HOME`, else the folder Settings > Game
+/// chose, else `horizon` in the platform's data folder (~/.local/share/horizon on Linux, as the
+/// release folders' horizon.sh uses). It is never inside a version folder, so installing,
+/// updating or removing a version keeps the saves.
 pub fn game_home() -> PathBuf {
     if let Some(home) = std::env::var_os("HORIZON_HOME").filter(|h| !h.is_empty()) {
         return PathBuf::from(home);
     }
     if cfg!(test) {
         return crate::data_location::test_home().join("game");
+    }
+    if let Some(dir) = chosen_game_dir() {
+        return dir;
     }
     // A location that does not open stands in as the default folders, as
     // `data_location::startup` makes it for the window: never a panic here.
@@ -3513,6 +3666,9 @@ impl Logged {
 pub struct Updates {
     pub horizon: Option<Release>,
     pub launcher: Option<Release>,
+    /// Why the launcher's own releases could not be read: the window says so instead of calling a
+    /// launcher it never heard about up to date.
+    pub launcher_error: Option<String>,
 }
 
 /// The newest Horizon build with a build here (the current Nightly), if it isn't installed and
@@ -3547,13 +3703,18 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
+    releases_and_updates_with(
+        release_list,
+        installed,
+        |_| launcher_releases(),
+        on_releases,
+    )
 }
 
 fn releases_and_updates_with(
     load: impl FnOnce() -> Result<serde_json::Value, String>,
     installed: impl FnOnce() -> Vec<String>,
-    launchers: impl FnOnce(&serde_json::Value) -> Vec<Release>,
+    launchers: impl FnOnce(&serde_json::Value) -> Result<Vec<Release>, String>,
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
     let list = match load() {
@@ -3568,9 +3729,14 @@ fn releases_and_updates_with(
     let horizon = horizon_update(&installable_updates(&releases), &installed_versions)
         .or_else(|| architecture_update(&releases, &installed_versions));
     on_releases(Ok(releases));
+    let (launcher, launcher_error) = match launchers(&list) {
+        Ok(launcher_releases) => (launcher_update(&launcher_releases), None),
+        Err(e) => (None, Some(e)),
+    };
     Ok(Updates {
         horizon,
-        launcher: launcher_update(&launchers(&list)),
+        launcher,
+        launcher_error,
     })
 }
 
@@ -4178,22 +4344,38 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
     Ok(())
 }
 
+/// Whether `url` names a file of this fork's own releases: the only place this launcher takes a
+/// replacement from. Horizon publishes launchers under the same `launcher@X.Y.Z` tags, and one
+/// installed here updates itself away from the fork.
+fn from_this_fork(url: &str) -> bool {
+    url.starts_with(&format!(
+        "https://github.com/{LAUNCHER_REPO}/releases/download/"
+    ))
+}
+
 /// Downloads and unpacks a launcher release next to this one without putting it in place yet
 /// ([`place_checked`] does, in this process or in the installer `update_handoff` starts), in a new
 /// stage folder that no other launcher writes to. None when the file there already is that release
-/// or a newer one.
+/// or a newer one. A file outside this fork's releases is refused ([`from_this_fork`]).
 pub fn stage_update(release: &Release, progress: impl Fn(f32)) -> Result<Option<Staged>, String> {
     let (url, size) = release
         .asset
         .clone()
         .ok_or("This launcher release has no build for this platform.")?;
     let target = launcher_version(&release.tag).unwrap_or("0");
+    if !from_this_fork(&url) {
+        return Err(crate::i18n::trf(
+            "Not installing {url}: this launcher updates itself only from {repo}'s releases.",
+            &[("url", &url), ("repo", LAUNCHER_REPO)],
+        ));
+    }
     if installed_launcher_version(&update_target())
         .is_some_and(|v| v != VERSION && compare_launcher_versions(&v, target).is_ge())
     {
         return Ok(None);
     }
-    let sha256 = signed_digest(&release.tag, launcher_asset().unwrap_or_default())?;
+    // Fork releases are not signed by Horizon's key.
+    let sha256 = String::new();
     let work = update_work_dir();
     remove_abandoned_stages(&work, std::time::SystemTime::now(), process_alive);
     let stage = new_stage_folder(&work)?;
@@ -4214,11 +4396,18 @@ fn fill_stage(
 ) -> Result<Staged, String> {
     let archive = stage.join(archive_name(url));
     download(url, size, sha256, &archive, progress)?;
+    // Fork releases are not signed: the stage keeps the archive's own SHA-256, so
+    // `place_checked` still refuses bytes that changed after the download.
+    let sha256 = if sha256.is_empty() {
+        file_sha256(&archive)?
+    } else {
+        sha256.to_owned()
+    };
     let staged = |payload| {
         Ok(Staged {
             tag: tag.to_owned(),
             payload,
-            sha256: sha256.to_owned(),
+            sha256: sha256.clone(),
         })
     };
     // An AppImage is the whole program: the new one takes the place of the file `$APPIMAGE` names
@@ -4606,6 +4795,10 @@ pub struct Settings {
     pub instance: Option<String>,
     pub minecraft_dir: Option<PathBuf>,
     pub server_dir: Option<PathBuf>,
+    /// Horizon-free: the folder the game keeps its saves and options.txt in (`game_home`), where
+    /// vanilla's launcher has "Game directory". Unset is the default game home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_dir: Option<PathBuf>,
     /// Unset means on: only a player who turned it off has `false` here. 0.1.1 wrote its
     /// `auto_install` (off by default) for everyone, so this is a new key and that one is ignored.
     #[serde(default)]
@@ -4710,6 +4903,12 @@ pub struct Settings {
     /// move even when the system asks for less.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduce_motion: Option<bool>,
+    /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
+    /// offline names play without an account that owns the game, in the window only
+    /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
+    /// comes from the player's own install. Off by default, and absent from the file while off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dev_offline: bool,
 }
 
 impl Settings {
@@ -4768,6 +4967,12 @@ impl Settings {
     /// selection is then judged against `installed` (read only for such a file).
     fn from_saved(text: &str, installed: impl FnOnce() -> Vec<String>) -> (Self, bool) {
         let mut settings = Self::parse(text);
+        // Horizon-free: offline play works without a Microsoft account, in the window and the CLI.
+        settings.dev_offline = OFFLINE_PLAY;
+        // Horizon-free: no sponsor, so the partner plate is off and cannot be turned back on.
+        if !PARTNER_BANNERS {
+            settings.partner_hidden = true;
+        }
         let legacy = serde_json::from_str::<serde_json::Value>(text)
             .ok()
             .and_then(|v| v.as_object().map(|o| !o.contains_key("following")))
@@ -4940,6 +5145,8 @@ impl Settings {
             let _ = fs::remove_file(&tmp);
             return Err(format!("{}: {e}", path.display()));
         }
+        // Horizon-free: `game_home` reads `game_dir` from the file just replaced.
+        *GAME_DIR.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 }
@@ -5904,25 +6111,17 @@ pub fn {f}("
         assert!(update.asset.unwrap().0.ends_with(arm));
     }
 
-    /// Every asset a launcher looks for is one the release workflows build, sign and publish.
+    /// Every launcher asset a launcher looks for is one the fork's release workflow builds and
+    /// publishes. The game's own assets still come from the upstream releases, which this fork
+    /// does not build.
     #[test]
     fn game_platform_assets_are_published() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let read = |path: &str| fs::read_to_string(repo.join(path)).unwrap();
-        let build = read(".github/workflows/game-build.yml");
-        let nightly = read(".github/workflows/nightly-build.yml");
-        for (os, arch, game, _launcher_asset) in PLATFORMS {
+        let launcher = fs::read_to_string(repo.join(".github/workflows/launcher.yml")).unwrap();
+        for (os, arch, _, launcher_asset) in PLATFORMS {
             assert!(
-                build.contains(&format!("asset: {game}")),
-                "game-build.yml builds no {game}"
-            );
-            // Signed (SHA256SUMS), then published. Windows ARM64's and, for a snapshot, Intel
-            // macOS's build may fail without holding the release, so both steps name them again.
-            let named = nightly.matches(&format!("dist/{game}")).count();
-            let optional = matches!((os, arch), ("windows", "aarch64") | ("macos", "x86_64"));
-            assert!(
-                named == 2 || (optional && named > 2),
-                "nightly-build.yml must sign and publish {game} ({os} {arch})"
+                launcher.contains(&format!("asset: {launcher_asset}")),
+                "launcher.yml builds no {launcher_asset} ({os} {arch})"
             );
         }
     }
@@ -6451,6 +6650,20 @@ pub fn {f}("
         );
     }
 
+    /// The fork and Horizon publish `launcher@X.Y.Z` releases under the same numbering: a
+    /// replacement may only come from the fork's own releases.
+    #[test]
+    fn a_launcher_replacement_comes_only_from_this_forks_releases() {
+        let fork = format!(
+            "https://github.com/{LAUNCHER_REPO}/releases/download/launcher@0.2.32/horizon-launcher.exe"
+        );
+        assert!(from_this_fork(&fork));
+        assert!(!from_this_fork(&fork.replace(LAUNCHER_REPO, REPO)));
+        assert!(!from_this_fork(&format!(
+            "https://example.test/{LAUNCHER_REPO}/releases/download/launcher@0.2.32/horizon-launcher.exe"
+        )));
+    }
+
     #[test]
     fn an_older_nightly_installs_as_a_rollback_with_a_warning() {
         let nightly = |tag: &str| Release {
@@ -6564,6 +6777,77 @@ pub fn {f}("
             launcher_asset_running_from(true),
             Some("horizon-launcher-linux-x86_64.AppImage")
         );
+    }
+
+    /// The fork's release feed is the launcher's fallback when GitHub's API rate-limits the address
+    /// (60 reads an hour, shared): it names the tags, so the newest launcher is still offered, with
+    /// this platform's file at its download address.
+    #[test]
+    fn the_release_feed_still_offers_the_newest_launcher() {
+        let Some(asset) = launcher_asset() else {
+            return; // a platform the fork builds no launcher for
+        };
+        let feed = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Release notes from horizon-free</title>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/launcher@0.2.16</id>
+    <updated>2026-11-05T22:18:51Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/0CYBER/horizon-free/releases/tag/launcher%400.2.16"/>
+    <title>Horizon Launcher (free) 0.2.16</title>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/launcher@0.2.17</id>
+    <updated>2026-11-06T09:30:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/0CYBER/horizon-free/releases/tag/launcher%400.2.17"/>
+    <title>Horizon Launcher (free) 0.2.17</title>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/nightly-2026-11-05</id>
+    <updated>2026-11-05T12:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/0CYBER/horizon-free/releases/tag/nightly-2026-11-05"/>
+    <title>Nightly</title>
+  </entry>
+</feed>"#;
+        let releases = feed_releases(feed);
+        assert_eq!(releases.len(), 2, "a Nightly is not a launcher release");
+        let newest = launcher_update_from(&releases, "launcher@0.2.16").expect("0.2.17 is newer");
+        assert_eq!(newest.tag, "launcher@0.2.17");
+        assert_eq!(newest.date, "2026-11-06");
+        assert_eq!(newest.name, "Horizon Launcher (free) 0.2.17");
+        let (url, size) = newest.asset.expect("this platform's file");
+        assert_eq!(
+            size, 0,
+            "the feed has no sizes: download reads Content-Length"
+        );
+        assert_eq!(
+            url,
+            format!("https://github.com/{LAUNCHER_REPO}/releases/download/launcher@0.2.17/{asset}")
+        );
+        assert!(launcher_update_from(&releases, "launcher@0.2.17").is_none());
+    }
+
+    /// A launcher list that cannot be read is reported rather than called up to date, and the game
+    /// updates from the response the check already had still arrive.
+    #[test]
+    fn a_launcher_list_that_fails_is_reported() {
+        let updates = releases_and_updates_with(
+            || {
+                Ok(serde_json::json!([
+                    {"tag_name": "v0.1.0", "assets": [], "published_at": "2026-11-01T00:00:00Z"}
+                ]))
+            },
+            Vec::new,
+            |_| Err("GitHub's rate limit was reached for your network".into()),
+            |_| {},
+        )
+        .unwrap();
+        assert!(updates.launcher.is_none());
+        assert!(updates
+            .launcher_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rate limit"));
     }
 
     /// A program opened inside a `.zip` runs from the temporary folder, under a name that depends on
