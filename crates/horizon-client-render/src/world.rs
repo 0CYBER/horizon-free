@@ -431,9 +431,10 @@ impl World {
     /// cell above or below the level reads its top or bottom cells, not the cells the chunks'
     /// widened column holds there (vanilla's Nether and End save none, and read back they
     /// hold the table's first biome). `None` where the chunk isn't loaded.
+    #[inline]
     pub fn noise_biome(&self, x: i32, y: i32, z: i32) -> Option<u16> {
         let y = y.clamp(self.shape.min_y, self.shape.max_y() - 1);
-        Some(self.chunks.get(&(x >> 4, z >> 4))?.biome(x, y, z))
+        Some(self.chunks.get_chunk(x >> 4, z >> 4)?.biome(x, y, z))
     }
     /// One above the highest block Y the level's chunks hold.
     pub fn top_y(&self) -> i32 {
@@ -444,14 +445,15 @@ impl World {
     /// write, which `set` makes real at the root commit or which this takes back on an abort,
     /// so nothing outside sees it. False outside the resident chunks or the world's height.
     pub fn set_stored(&mut self, x: i32, y: i32, z: i32, state: BlockStateId) -> bool {
-        let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
-            return false;
-        };
-        if chunk.section_index(y).is_none() {
-            return false;
-        }
-        Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
-        true
+        self.chunks
+            .mutate_chunk((x >> 4, z >> 4), |chunk| {
+                if chunk.section_index(y).is_none() {
+                    return false;
+                }
+                Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
+                true
+            })
+            .unwrap_or(false)
     }
     /// Resident storage write; marks the touched sections (and neighbours on
     /// section borders) for remeshing and the surrounding chunks for relighting.
@@ -468,14 +470,19 @@ impl World {
         state: BlockStateId,
         notify: bool,
     ) -> crate::Result<()> {
-        let Some(chunk) = self.chunks.get_mut(&(x >> 4, z >> 4)) else {
+        let Some(write) = self.chunks.mutate_chunk((x >> 4, z >> 4), |chunk| {
+            let min_y = chunk.min_y();
+            let sections = chunk.sections.len() as i32;
+            if chunk.section_index(y).is_none() {
+                return Err("write outside world height");
+            }
+            let lit = chunk.lit;
+            let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
+            Ok((min_y, sections, lit, previous))
+        }) else {
             return Err("write outside resident chunks".into());
         };
-        let (min_y, sections) = (chunk.min_y(), chunk.sections.len() as i32);
-        if chunk.section_index(y).is_none() {
-            return Err("write outside world height".into());
-        }
-        let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
+        let (min_y, sections, lit, previous) = write?;
         if previous != state.0 {
             self.block_entities
                 .state_changed((x, y, z), previous, state.0);
@@ -528,7 +535,7 @@ impl World {
                     if bz == 0 { z - 1 } else { z + 1 },
                 );
             }
-            if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
+            if lit {
                 self.light_edits.push(((x, y, z), previous, state.0));
             } else {
                 for dz in -1..=1 {
@@ -543,26 +550,33 @@ impl World {
     /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
     /// block that isn't `air`, or the column's minimum Y (also where the chunk
     /// isn't loaded).
+    #[inline]
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
         let bottom = self.layout().min_y();
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
-            chunk.world_surface(x, z, |v| air(BlockStateId(v)))
-        })
+        self.chunks
+            .get_chunk(x >> 4, z >> 4)
+            .map_or(bottom, |chunk| {
+                chunk.world_surface(x, z, |v| air(BlockStateId(v)))
+            })
     }
     /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
     /// highest block where `blocks` (motion blocking or holding a fluid),
     /// or the column's minimum Y (also where the chunk isn't loaded).
+    #[inline]
     pub fn motion_blocking(&self, x: i32, z: i32, blocks: impl Fn(BlockStateId) -> bool) -> i32 {
         let bottom = self.layout().min_y();
-        self.chunks.get(&(x >> 4, z >> 4)).map_or(bottom, |chunk| {
-            chunk.motion_blocking(x & 15, z & 15, |v| blocks(BlockStateId(v)))
-        })
-    }
-    #[inline]
-    pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.chunks
-            .get(&(x >> 4, z >> 4))
-            .map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
+            .get_chunk(x >> 4, z >> 4)
+            .map_or(bottom, |chunk| {
+                chunk.motion_blocking(x & 15, z & 15, |v| blocks(BlockStateId(v)))
+            })
+    }
+    #[inline(always)]
+    pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        match self.chunks.get_chunk(x >> 4, z >> 4) {
+            Some(chunk) => chunk.block(x & 15, y, z & 15),
+            None => self.air,
+        }
     }
     /// Whether a block of the box `lo..=hi` may match, from the palettes of
     /// the sections it reaches (a palette of the whole registry may hold
@@ -583,7 +597,7 @@ impl World {
         let sections = (lo[1].max(bottom) - bottom) >> 4..=(hi[1].min(top) - bottom) >> 4;
         for cx in lo[0] >> 4..=hi[0] >> 4 {
             for cz in lo[2] >> 4..=hi[2] >> 4 {
-                let Some(chunk) = self.chunks.get(&(cx, cz)) else {
+                let Some(chunk) = self.chunks.get_chunk(cx, cz) else {
                     if matches(self.air) {
                         return true;
                     }
@@ -606,19 +620,23 @@ impl World {
         let (chunks, air) = (&self.chunks, self.air);
         self.block_entities.tickers(|(x, y, z)| {
             chunks
-                .get(&(x >> 4, z >> 4))
+                .get_chunk(x >> 4, z >> 4)
                 .map_or(air, |chunk| chunk.block(x & 15, y, z & 15))
                 .0
         })
     }
+    #[inline(always)]
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
-        self.chunks
-            .get(&(x >> 4, z >> 4))
-            .map_or(0xF0, |chunk| chunk.light(x & 15, y, z & 15))
+        match self.chunks.get_chunk(x >> 4, z >> 4) {
+            Some(chunk) => chunk.light(x & 15, y, z & 15),
+            None => 0xF0,
+        }
     }
+    #[inline(always)]
     pub fn is_air(&self, state: BlockStateId) -> bool {
         state == self.air
     }
+    #[inline(always)]
     pub fn loaded(&self, x: i32, z: i32) -> bool {
         self.chunks.contains_key(&(x >> 4, z >> 4))
     }
@@ -630,13 +648,14 @@ impl World {
     }
     /// `Level.isLoaded`: `y` is inside the build height and the chunk of `(x, z)` is loaded.
     /// Never loads a chunk.
+    #[inline(always)]
     pub fn is_loaded_at(&self, x: i32, y: i32, z: i32) -> bool {
         self.shape.contains_y(y) && self.loaded(x, z)
     }
     /// Persisted container capacity override; absence preserves vanilla capacity.
     pub fn container_stack_limit(&self, key: (i32, i32, i32)) -> Option<u32> {
         self.chunks
-            .get(&(key.0 >> 4, key.2 >> 4))
+            .get_chunk(key.0 >> 4, key.2 >> 4)
             .and_then(|c| c.container_stack_limits.get(&key).copied())
     }
     /// Store with the authoritative saved block entity fields.
@@ -662,7 +681,7 @@ impl World {
     /// model holds no field for it).
     pub fn block_lock(&self, key: (i32, i32, i32)) -> Option<&horizon_core::nbt::Tag> {
         self.chunks
-            .get(&(key.0 >> 4, key.2 >> 4))?
+            .get_chunk(key.0 >> 4, key.2 >> 4)?
             .saved
             .as_ref()?
             .block_entity_sources
@@ -716,7 +735,7 @@ impl World {
     pub fn block_entity_extras(&self, key: (i32, i32, i32)) -> BlockEntityExtras {
         let saved = self
             .chunks
-            .get(&(key.0 >> 4, key.2 >> 4))
+            .get_chunk(key.0 >> 4, key.2 >> 4)
             .and_then(|chunk| chunk.saved.as_ref());
         BlockEntityExtras {
             source: saved.and_then(|s| {
@@ -758,35 +777,39 @@ impl World {
         f: impl FnOnce(&mut crate::chunk::ChunkExtras),
     ) {
         let chunk_key = (key.0 >> 4, key.2 >> 4);
-        let Some(chunk) = self.chunks.get_mut(&chunk_key) else {
-            return;
-        };
-        let chunk = Arc::make_mut(chunk);
-        let mut extras = chunk
-            .saved
-            .take()
-            .map(Arc::unwrap_or_clone)
-            .unwrap_or_default();
-        f(&mut extras);
-        let limit = extras
-            .block_entity_sources
-            .iter()
-            .find(|(p, _)| *p == key)
-            .and_then(|(_, tag)| tag.get("horizon:stack_limit"))
-            .and_then(|tag| match tag {
-                horizon_core::nbt::Tag::Int(n) if (1..=99).contains(n) => Some(*n as u32),
-                _ => None,
-            });
-        match limit {
-            Some(limit) => {
-                chunk.container_stack_limits.insert(key, limit);
-            }
-            None => {
-                chunk.container_stack_limits.remove(&key);
-            }
+        if self
+            .chunks
+            .mutate_chunk(chunk_key, |chunk| {
+                let chunk = Arc::make_mut(chunk);
+                let mut extras = chunk
+                    .saved
+                    .take()
+                    .map(Arc::unwrap_or_clone)
+                    .unwrap_or_default();
+                f(&mut extras);
+                let limit = extras
+                    .block_entity_sources
+                    .iter()
+                    .find(|(p, _)| *p == key)
+                    .and_then(|(_, tag)| tag.get("horizon:stack_limit"))
+                    .and_then(|tag| match tag {
+                        horizon_core::nbt::Tag::Int(n) if (1..=99).contains(n) => Some(*n as u32),
+                        _ => None,
+                    });
+                match limit {
+                    Some(limit) => {
+                        chunk.container_stack_limits.insert(key, limit);
+                    }
+                    None => {
+                        chunk.container_stack_limits.remove(&key);
+                    }
+                }
+                chunk.saved = Some(Arc::new(extras));
+            })
+            .is_some()
+        {
+            self.modified.insert(chunk_key);
         }
-        chunk.saved = Some(Arc::new(extras));
-        self.modified.insert(chunk_key);
     }
 }
 
