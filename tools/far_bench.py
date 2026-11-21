@@ -115,8 +115,10 @@ def run(binary, label, bots, layout, distance, world, scratch, out, dump, bots_b
         pid = s.process.pid
         far0, cpu0 = thread_cpu(pid, 'Far terrain')
         t0 = time.time()
-        bots_proc = subprocess.Popen([str(c) for c in command], stdout=subprocess.PIPE, text=True,
-                                     stderr=open(out / f'{name}-bots.err', 'w'))
+        # The bots write to their own copy of the handle: this one closes once they started.
+        with open(out / f'{name}-bots.err', 'w') as errors:
+            bots_proc = subprocess.Popen([str(c) for c in command], stdout=subprocess.PIPE, text=True,
+                                         stderr=errors)
         done = threading.Event()
 
         def watch():
