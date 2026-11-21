@@ -20,6 +20,7 @@ mod management_tls;
 mod mcp;
 mod panel;
 mod process;
+mod proxy;
 mod prune;
 mod query;
 mod rcon;

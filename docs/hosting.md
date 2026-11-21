@@ -455,6 +455,23 @@ new engine put in place beforehand (`engine.path`, or the release `current` poin
 there with `mv` or `install`, which swap the file: copying over the running program fails or corrupts it.
 Players are disconnected for now; [#16251](https://github.com/horizon-rust/horizon/issues/16251) is about holding them through it.
 
+### Behind the server's own proxy: `[proxy]`
+
+    [proxy]
+    enabled = true
+
+Off by default. With it on, `horizon-server` listens on `server.port` itself and runs the game on 127.0.0.1, on
+`game_port` (0: a free port), with Velocity forwarding and a secret it makes (`forwarding.secret`, kept in
+`.horizon/`; a `forwarding.secret` you wrote for a Velocity of your own stops the start). It logs each player in
+itself, with `online_mode` as set (the account check and the encryption), then logs into the game as that player
+and passes the packets along as they are. The game sees the player's real UUID, name, skin and address, and its own
+whitelist, bans and player limit apply as always. The server list is the game's own, or says "restarting" while the
+game is down. It is read when `horizon-server` starts, not when the game does.
+
+It is not a general proxy: one game, the one this server runs, and no routing (for several servers, see
+[#7484](https://github.com/horizon-rust/horizon/issues/7484)). Clients of an older release (`accept_older_clients`)
+can't join through it. The game's own port is private: a login that doesn't come from the proxy is refused.
+
 The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
 minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.
 

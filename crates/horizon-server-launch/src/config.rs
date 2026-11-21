@@ -230,6 +230,27 @@ pub struct Config {
     /// `[entities]` (docs/server.md): mob settings passed to the game; written only when it isn't the default.
     #[serde(default, skip_serializing_if = "Entities::is_default")]
     pub entities: Entities,
+    /// `[proxy]` (docs/hosting.md): the supervisor owns the public port and the game listens behind it;
+    /// written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "Proxy::is_default")]
+    pub proxy: Proxy,
+}
+
+/// `[proxy]`: the supervisor listens on `server.port` and signs players in itself (proxy/mod.rs), and the
+/// game listens on 127.0.0.1 behind it, with Velocity forwarding. Off by default. Read when horizon-server
+/// starts: turning it on or off needs a restart of horizon-server, not only of the game.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Proxy {
+    pub enabled: bool,
+    /// The port the game listens on, on 127.0.0.1; 0 takes a free one at every start of horizon-server.
+    pub game_port: u16,
+}
+
+impl Proxy {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// `[entities]`: `villager_lobotomize = true` skips the brain of villagers that cannot move (stuck in a cell,
@@ -759,6 +780,9 @@ impl Config {
         self.chat_filter.check()?;
         self.prune_chunks.check()?;
         self.entities.check()?;
+        if self.proxy.enabled && self.proxy.game_port == self.server.port {
+            return Err("proxy.game_port is server.port: the game listens behind the proxy, on its own port".into());
+        }
         // The game opens these as given, appending player text or rewriting them, so they stay
         // in the server folder: not absolute, not up a level, no drive (`C:x`) on Windows.
         for (what, path) in [
@@ -817,6 +841,19 @@ impl Config {
                 .iter()
                 .map(|(k, v)| (k.clone(), property_text(v))),
         );
+        // Behind the proxy the game listens where only it goes (`game_port` is set once the proxy runs).
+        if self.proxy.enabled && self.proxy.game_port != 0 {
+            for (key, value) in [
+                ("server-ip".to_owned(), "127.0.0.1".to_owned()),
+                ("server-port".to_owned(), self.proxy.game_port.to_string()),
+                ("online-mode".to_owned(), "false".to_owned()),
+            ] {
+                match out.iter_mut().find(|(k, _)| *k == key) {
+                    Some(slot) => slot.1 = value,
+                    None => out.push((key, value)),
+                }
+            }
+        }
         out
     }
 
@@ -877,6 +914,16 @@ impl Config {
         }
         ServerProperties::new(properties, &mut SystemEntropy::default())
             .map_or(4, |p| p.op_permission_level)
+    }
+
+    /// A key as the game reads it at its next start: `server.properties` with this configuration's keys
+    /// written over it (as [`Config::write_properties`] does), so a key only the file sets counts too.
+    pub fn effective_property(&self, dir: &Path, key: &str) -> Option<String> {
+        let mut properties = read_properties(&dir.join(PROPERTIES)).unwrap_or_default();
+        for (k, value) in self.vanilla() {
+            properties.put(&k, value);
+        }
+        properties.get(key).map(str::to_owned)
     }
 
     /// A configuration from a vanilla `server.properties`: typed settings from their keys, and every other
@@ -959,6 +1006,7 @@ pub fn render(config: &Config) -> String {
         "combat",
         "biome_regions",
         "entities",
+        "proxy",
     ] {
         if let Some(settings) = table.get(section) {
             let mut only = toml::Table::new();
@@ -1561,6 +1609,33 @@ keep = {keep}
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn the_proxy_is_off_by_default_and_moves_the_game_behind_it_when_on() {
+        let config = Config::default();
+        assert!(!config.proxy.enabled);
+        let key = |c: &Config, k: &str| c.vanilla().into_iter().find(|(key, _)| key == k);
+        // Off, the game keeps the owner's port and online mode.
+        assert_eq!(key(&config, "server-port").unwrap().1, "25565");
+        assert_eq!(key(&config, "online-mode").unwrap().1, "true");
+
+        let on = Config::parse("[proxy]\nenabled = true\ngame_port = 25999\n").unwrap();
+        assert!(on.proxy.enabled);
+        assert_eq!(key(&on, "server-port").unwrap().1, "25999");
+        assert_eq!(key(&on, "server-ip").unwrap().1, "127.0.0.1");
+        // The proxy signs players in: the game trusts what it forwards.
+        assert_eq!(key(&on, "online-mode").unwrap().1, "false");
+        // The owner's own port is where the proxy listens, and the file keeps it.
+        assert_eq!(on.server.port, 25565);
+        assert!(render(&on).contains("[proxy]"));
+        assert!(!render(&config).contains("[proxy]"));
+    }
+
+    #[test]
+    fn the_games_port_behind_the_proxy_is_not_the_public_one() {
+        let err = Config::parse("[proxy]\nenabled = true\ngame_port = 25565\n").unwrap_err();
+        assert!(err.contains("proxy.game_port"), "{err}");
+        assert!(Config::parse("[proxy]\nunknown = 1\n").is_err());
+    }
     /// One bad escape in an owner's server.properties: the start refuses with the file and line instead of
     /// writing server.toml's keys over a file that lost every other key (the game refuses the file too).
     #[test]
@@ -1637,6 +1712,32 @@ keep = {keep}
         let e = Config::default().write_properties(&dir).unwrap_err();
         assert!(e.to_string().contains(PROPERTIES), "{e}");
         assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A key only `server.properties` sets reaches whoever asks as the game would read it, and server.toml
+    /// wins where both set it.
+    #[test]
+    fn an_effective_property_includes_keys_only_the_file_sets() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-effective-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(PROPERTIES),
+            "enable-status=false\nnetwork-compression-threshold=64\n",
+        )
+        .unwrap();
+        let config = Config::parse("[properties]\nnetwork-compression-threshold = 512\n").unwrap();
+        assert_eq!(
+            config.effective_property(&dir, "enable-status").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            config
+                .effective_property(&dir, "network-compression-threshold")
+                .as_deref(),
+            Some("512")
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
