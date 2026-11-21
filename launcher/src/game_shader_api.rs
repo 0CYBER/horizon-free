@@ -629,7 +629,10 @@ pub mod tests {
                 );
                 assert!(started.elapsed() < Duration::from_secs(15));
                 let started = Instant::now();
-                let answer = reply(game("leave"), Duration::from_secs(3), whole).unwrap();
+                // The stand-in has to start, start its child and answer before the wait ends: 3 s
+                // was too little for an Intel build under Rosetta on a busy Mac. Still well under
+                // the child's 20 s, so an answer that waited for it fails the check below.
+                let answer = reply(game("leave"), Duration::from_secs(10), whole).unwrap();
                 assert!(whole(&answer));
                 assert!(started.elapsed() < Duration::from_secs(15));
             }
