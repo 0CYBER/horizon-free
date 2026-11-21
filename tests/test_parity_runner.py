@@ -167,8 +167,8 @@ class ParityRunnerTests(unittest.TestCase):
                 parity.prebuild([], 2)
         self.assertEqual(stopped.exception.code, 1)
         self.assertLess(time.monotonic() - started, 30)
-        self.assertTrue(printed.call_args_list[-1].args[0].startswith(
-            "::error::The probe prebuild passed its 0 min limit at cargo 1/2"))
+        self.assertEqual(printed.call_args_list[-1].args[0],
+                         "::error::The probe prebuild passed its 0 min limit at cargo 1/2 and was stopped there.")
         if os.name == "posix":
             from tests.test_compile_lock import process_gone
             pid = int(pid_file.read_text())
@@ -176,8 +176,9 @@ class ParityRunnerTests(unittest.TestCase):
             if not gone:
                 os.kill(pid, 9)
             self.assertTrue(gone, "the child outlived the run's limit")
-        # A pull request's prebuild has no limit of its own (its job's 240 min is the limit).
-        self.assertNotIn("pr", parity.PREBUILD_LIMIT)
+        # Only parity-main's prebuild has a limit of its own, 240 min: a full prebuild takes over 2 hours even alone.
+        # A pull request's has its job's timeout.
+        self.assertEqual(parity.PREBUILD_LIMIT, {"main": 240 * 60})
 
     @unittest.skipUnless(os.name == "posix", "process groups")
     def test_a_cargo_that_closes_its_stderr_still_meets_the_limit(self):

@@ -30,15 +30,16 @@ jobs:
     # A batch reruns up to ~670 harnesses: 89-234 min in the nine runs logged up to 2026-11-20 (then with the merge
     # search), the longest on a loaded Mac (an 85 min probe prebuild). After the oracle shim's key changes, its
     # records are rebuilt once, which adds up to ~23 min to the first full run.
-    timeout-minutes: 300
+    timeout-minutes: 360
     env:
       # This run's identity: tools/parity.py records it with the harnesses that failed (last-run.json), and the verdict
       # judges only a list this run wrote, never one an earlier run left when this batch stopped before writing its own.
       PARITY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       # The probe prebuild's turn on the self-hosted Mac (tools/compile_lock.py), and the preparer build's in
       # vanilla-data.sh: a pull request's parity job takes the turn only while this run neither waits for it nor holds
-      # it. This run waits at most 20 min in all, and its prebuild has 120 min (tools/parity.py PREBUILD_LIMIT), which
-      # leaves the harnesses at least 160 of the job's 300 min.
+      # it. This run waits at most 20 min in all, and its prebuild has 240 min (tools/parity.py PREBUILD_LIMIT): a
+      # prebuild that builds everything takes over 2 hours even alone. Of the job's 360 min, 120 remain beyond the
+      # prebuild's limit; after a full 20 min wait, 100 remain for setup and the harnesses.
       HORIZON_COMPILE_LOCK_ROLE: main
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

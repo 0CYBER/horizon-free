@@ -2,8 +2,7 @@
 """Turns at compiling for the jobs on the self-hosted Mac (#19151).
 
 parity-main, pull requests' parity jobs and the Nightly's and releases' Mac legs ran on one machine and compiled
-side by side: parity-main's probe prebuild took 2 h and more where it takes well under one on a quiet Mac. Each
-takes a turn around its heavy compile.
+side by side. Each takes a turn around its heavy compile.
 
 Two lock files in LOCK_DIR, held with flock, so the kernel ends a turn the moment its holder dies:
   - `turn`: held exclusively by the job compiling.
@@ -53,12 +52,16 @@ import threading
 import time
 
 LOCK_DIR = "/Users/Shared/horizon-compile-lock"
-# Each role's longest wait, in seconds. parity-main 20 min of its 300; the Mac builds 60 min of their 120; a pull
-# request's parity job 60 min per prebuild of its 240 (the frame_identity step is a second prebuild).
+# Each role's longest wait, in seconds: for a priority role, all of a job's waits together (BUDGET_FILE); for a pull
+# request, each wait. parity-main 20 min of its job's 360; a Mac build job 60 (Mac build legs 180, exporters 150, the
+# launcher's Mac leg on main 90); a pull request's parity job 60 per prebuild of its 240 (the frame_identity step is a
+# second prebuild).
 WAIT = {"main": 20 * 60, "build": 60 * 60, "pr": 60 * 60}
 PRIORITY = {"main", "build"}
 BUDGET_FILE = "horizon-compile-lock-waited"  # under RUNNER_TEMP: the seconds this job's priority waits took
 BUDGET_MAX = 16  # bytes a budget record may have
+PROBE_TIMEOUT = 5.0  # seconds a ps listing of a process group may take
+HURRIED_KILL_WAIT = 2.0  # seconds a hurried group stop waits after SIGKILL, its probes included
 POLL = 2.0
 ARRIVE_POLL = 0.1  # a pull request holds `priority` exclusively only for an instant
 INFO_MAX = 300
@@ -392,16 +395,28 @@ class Hurry:
         return False
 
 
-def group_alive(pgid):
+def group_alive(pgid, timeout=PROBE_TIMEOUT, hurry=None):
     """Whether anything but a zombie is left in the process group. ps (macOS and Linux) lists the group's processes
-    with their state; without ps, kill(-pgid, 0), which a zombie leader alone still answers."""
+    with their state; it is given up after `timeout` seconds, or as soon as `hurry` is set. Without its answer,
+    kill(-pgid, 0), which a zombie leader alone still answers."""
     try:
-        listing = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True, text=True, timeout=5)
-        if listing.returncode == 0:
-            return any(fields[0] == str(pgid) and not fields[1].startswith("Z")
-                       for fields in (line.split() for line in listing.stdout.splitlines()) if len(fields) >= 2)
-    except (OSError, subprocess.SubprocessError):
-        pass
+        probe = subprocess.Popen(["ps", "-A", "-o", "pgid=,stat="], stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        probe = None
+    if probe:
+        with probe:
+            end, listing = time.monotonic() + timeout, None
+            while listing is None:
+                try:
+                    listing, _ = probe.communicate(timeout=max(0, min(0.1, end - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= end or (hurry is not None and hurry.is_set()):
+                        probe.kill()
+                        break
+            if listing is not None and probe.returncode == 0:
+                return any(fields[0] == str(pgid) and not fields[1].startswith("Z")
+                           for fields in (line.split() for line in listing.splitlines()) if len(fields) >= 2)
     try:
         os.killpg(pgid, 0)
         return True
@@ -437,15 +452,28 @@ def stop_group(process, grace=None):
             return
         deadline = time.monotonic() + (GRACE if grace is None else grace)
         while time.monotonic() < deadline and not hurry.is_set():
-            if not group_alive(process.pid):
+            if not group_alive(process.pid, hurry=hurry):
                 return
             hurry.wait(0.2)
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             return
-        deadline = time.monotonic() + KILL_WAIT
-        while time.monotonic() < deadline and group_alive(process.pid):
+        # Up to KILL_WAIT for the group to go. Once hurried, HURRIED_KILL_WAIT from then, probes included: a probe
+        # that doesn't answer falls back to kill(-pgid, 0), which the unreaped leader keeps answering.
+        deadline, hurried = time.monotonic() + KILL_WAIT, False
+        while True:
+            now = time.monotonic()
+            if not hurried and hurry.is_set():
+                deadline, hurried = min(deadline, now + HURRIED_KILL_WAIT), True
+            if now >= deadline:
+                return
+            if hurried:
+                alive = group_alive(process.pid, timeout=deadline - now)
+            else:
+                alive = group_alive(process.pid, hurry=hurry)
+            if not alive:
+                return
             time.sleep(0.1)
 
 
