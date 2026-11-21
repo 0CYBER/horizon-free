@@ -1020,9 +1020,16 @@ impl Game<'_> {
         horizon_client::widgets::narratable(|| {
             horizon_client::widgets::Narratable::button(done_label(), [bx, by, 200.0, 20.0], true)
         });
+        // AbstractButton.renderDefaultSprite: the highlighted sprite while hovered.
+        let (mx, my) = self.cursor;
+        let hovered = mx >= bx && mx < bx + 200.0 && my >= by && my < by + 20.0;
         batch.sprite_scaled(
             atlas,
-            "gui/sprites/widget/button",
+            if hovered {
+                "gui/sprites/widget/button_highlighted"
+            } else {
+                "gui/sprites/widget/button"
+            },
             bx,
             by,
             200.0,
