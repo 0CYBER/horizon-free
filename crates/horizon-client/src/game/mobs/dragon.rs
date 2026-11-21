@@ -3144,7 +3144,9 @@ impl Game<'_> {
             )
             .collect();
         let id = self.take_entity_id();
-        let feet = [next.x, next.y - 0.5, next.z];
+        // `next` is the projectile box's bottom (its position), already the
+        // hit location vanilla uses; the old -0.5 was for a box-center position.
+        let feet = [next.x, next.y, next.z];
         let at = fireball_cloud_origin(feet, &snap_targets);
         self.breath_clouds.push(Breath {
             attachment_lifetime: Default::default(),
@@ -5523,6 +5525,19 @@ mod tests {
         // Box overlaps but the centre is outside the radius.
         assert!(!hit([3.2, 64.0, 0.0], 3.0));
         assert!(hit([3.0, 64.0, 0.0], 3.0));
+    }
+
+    /// `DragonFireball.onHit` creates the cloud at the fireball's hit position.
+    /// The shared projectile engine stores the box bottom there, so no -0.5.
+    #[test]
+    #[ignore = "daily"]
+    fn a_fireballs_breath_cloud_starts_at_its_hit_position() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let at = Vec3::new(0.5, 120.0, 0.5);
+            game.dragon_fireball_on_hit(at);
+            let cloud = game.breath_clouds.last().expect("one breath cloud");
+            assert_eq!(cloud.at, [at.x, at.y, at.z]);
+        });
     }
 
     #[test]
