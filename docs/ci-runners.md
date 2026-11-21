@@ -120,6 +120,19 @@ git push origin --delete try/<name>                           # when done
 - The run uses the branch's own copy of `ci.yml`: a branch from before 2026-11-19 has no inputs and always starts the
   ARM64 and JFR jobs. Rebase it on main first.
 
+## Testbox
+
+`testbox.yml` gives a maintainer a Blacksmith runner for building, linting and testing local changes before pushing:
+`blacksmith testbox warmup testbox.yml --ref testbox/<name> --idle-timeout 5`. The CLI syncs unpushed code to the
+runner and runs commands there over SSH, so the job runs code nobody reviewed. It therefore runs only on `testbox/*`
+branches and fails on any other ref: on main or a tag it could write Actions cache entries that release builds
+restore, and on a branch another workflow builds (`launcher-*`) entries that a build holding a secret restores.
+Cargo's settings (the build folder, mold, `HORIZON_NO_AUDIO`, `HORIZON_TELEMETRY_URL=off`) are in the runner's
+`~/.cargo/config.toml`, so they reach only processes Cargo starts. The build folder is a sticky disk of its own
+(`-testbox-target`) that is never saved, so each session builds from scratch and stays fast after that: a saved disk
+would restore the dates of the checkout over files a session had edited, and the next session could reuse what
+someone else's unpushed code built.
+
 ## Hosted parity
 
 `.github/workflows/parity-hosted.yml` runs vanilla harnesses on Blacksmith's 16-vCPU runners, outside the Mac mini.
