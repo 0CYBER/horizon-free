@@ -273,6 +273,10 @@ impl Game<'_> {
         if counts_openers && !spectator && self.container_openers_changed(pos, true) {
             self.container_edge_sound(pos, true);
         }
+        // The menu is installed: only now does the guest hold the ender chest.
+        if matches!(slots, Slots::Ender) {
+            self.native_ender_chest_opened(uuid, [pos.0, pos.1, pos.2]);
+        }
         self.player_menu_opening(conn);
         MenuOpen::Opened
     }
