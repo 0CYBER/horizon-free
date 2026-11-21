@@ -317,12 +317,15 @@ impl Launcher {
                     native_registry_consent::show(window, inventory, reply, cx)
                 }
                 Msg::NativeProgress(step, progress) => {
-                    self.native_step = Some(step);
-                    self.native_progress = Some(progress);
+                    if !self.native_stopping {
+                        self.native_step = Some(step);
+                        self.native_progress = Some(progress);
+                    }
                 }
                 Msg::Native(result) => {
                     // The last step of a build that worked says how it went.
-                    let last = self.native_step.take();
+                    let stopping = std::mem::take(&mut self.native_stopping);
+                    let last = self.native_step.take().filter(|_| !stopping);
                     self.native_progress = None;
                     self.first_build = None;
                     // Build and play: the game starts once the build worked, and only for the

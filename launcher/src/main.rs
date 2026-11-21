@@ -330,6 +330,9 @@ struct Launcher {
     /// Native mods (`native_mods`, on the Mods page): the build's step while it runs, why it
     /// failed, and the warning before a build while it is open, with the mods it names.
     native_step: Option<String>,
+    /// The player pressed Stop on the build under way: the card says it is stopping, and its
+    /// Stop buttons wait, until the build ends (#19300).
+    native_stopping: bool,
     /// A build waiting for its base version's preparation, or for an install of it, kept as it
     /// was started (#18659).
     native_prepare_first: Option<native_mods::prepare_first::Waiting>,

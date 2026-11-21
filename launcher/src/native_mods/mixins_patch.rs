@@ -127,10 +127,12 @@ fn install(
 /// The tool built from its pinned source with the carried patch, into `dir`.
 fn build(rust: &Toolchain, dir: &Path) -> Result<(), String> {
     let partial = dir.join(".source");
-    let top = super::unpack_archive(
+    // Built only during a native build: a stop ends its source download too.
+    let top = super::unpack_archive_until(
         &format!("{}/{MIXINS_REV}", horizon_addresses::HORIZON_MIXINS_SOURCE),
         &partial,
         256 << 20,
+        &super::check_cancelled,
     )?;
     mixins_tool::apply(&top, PATCH).map_err(|why| {
         format!("E_MIXINS_PATCH: {PATCH_NAME} does not apply to horizon-mixins {MIXINS_REV}: {why}")

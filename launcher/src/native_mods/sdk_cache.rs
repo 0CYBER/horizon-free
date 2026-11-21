@@ -61,6 +61,9 @@ pub enum Refusal {
     Host,
     /// Reading or writing the launcher's copy failed.
     Cache(String),
+    /// The player stopped the build: said as [`super::CANCELLED`], word for word, so the card
+    /// shows no error for it.
+    Cancelled,
 }
 
 /// What a player can do about a refusal other than waiting.
@@ -151,6 +154,7 @@ impl std::fmt::Display for Refusal {
                 "Could not keep the mod tools: {why}",
                 &[("why", why)],
             ),
+            Self::Cancelled => super::CANCELLED.into(),
         };
         f.write_str(&text)
     }
@@ -506,12 +510,17 @@ pub(super) fn surface(sdk: &Sdk, base: &Base) -> Result<mod_surface::Surface, Re
 }
 
 /// The folder of `sdk`'s build data (`points.json`, `internals.json`, `loops.json`,
-/// `functions.json`): unpacked once, then used again on its stamp.
-pub(super) fn build_data(sdk: &Sdk, base: &Base) -> Result<PathBuf, Refusal> {
+/// `functions.json`): unpacked once, then used again on its stamp. `stop` as [`slices`] asks it
+/// (a build's own check; planning outside a build never stops).
+pub(super) fn build_data(
+    sdk: &Sdk,
+    base: &Base,
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<PathBuf, Refusal> {
     const NAME: &str = "build-data.tar.xz";
     let into = sdk.dir.join("build-data");
     let mut fetched = Fetched::default();
-    fetch_into(sdk, base, NAME, &into, &mut fetched, &|_| {})?;
+    fetch_into(sdk, base, NAME, &into, &mut fetched, &|_| {}, stop)?;
     Ok(into)
 }
 
@@ -526,7 +535,9 @@ pub(super) struct Fetched {
 /// own folder ([`Package`]): one whose stamp holds is used as it is; any other is fetched from
 /// `base`, unpacked by [`sdk::unpack`] (which checks it against the index first) and stamped.
 /// `lease` is the build lease: the slices and their stamps change only while it is held.
-/// `progress` hears the bytes fetched of all that must be fetched, before and while.
+/// `progress` hears the bytes fetched of all that must be fetched, before and while. `stop` is
+/// asked before each download, for each chunk and before each unpack: an error from it ends the
+/// fetch as [`Refusal::Cancelled`], with no download kept.
 pub(super) fn slices(
     _lease: &crate::native_cache::Cache,
     sdk: &Sdk,
@@ -534,6 +545,7 @@ pub(super) fn slices(
     route: Route,
     target: Target,
     progress: &dyn Fn(Fetched),
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<Package, Refusal> {
     let host = rust_toolchain::host().ok_or(Refusal::Host)?;
     let side = match target {
@@ -541,7 +553,16 @@ pub(super) fn slices(
         Target::Server => Side::Server,
     };
     let prebuilt = super::root().join("prebuilt");
-    let package = slices_in(&prebuilt, sdk, base, route, host.target, side, progress)?;
+    let package = slices_in(
+        &prebuilt,
+        sdk,
+        base,
+        route,
+        host.target,
+        side,
+        progress,
+        stop,
+    )?;
     crate::storage::mark_used(&prebuilt.join(unit(sdk.commit(), host.target, side)))
         .map_err(|error| Refusal::Cache(super::cache_error(error)))?;
     Ok(package)
@@ -555,6 +576,7 @@ pub(super) fn unit(commit: &str, triple: &str, side: Side) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn slices_in(
     prebuilt: &Path,
     sdk: &Sdk,
@@ -563,6 +585,7 @@ fn slices_in(
     triple: &str,
     side: Side,
     progress: &dyn Fn(Fetched),
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<Package, Refusal> {
     let build = sdk.shown();
     let refused = |why: String| Refusal::Refused {
@@ -606,7 +629,7 @@ fn slices_in(
     }
     progress(fetched);
     for (name, into) in &wanted {
-        fetch_into(sdk, base, name, into, &mut fetched, progress)?;
+        fetch_into(sdk, base, name, into, &mut fetched, progress, stop)?;
     }
     Ok(package)
 }
@@ -678,9 +701,14 @@ fn fetch_into(
     into: &Path,
     fetched: &mut Fetched,
     progress: &dyn Fn(Fetched),
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<(), Refusal> {
     if stamp_holds(sdk, name, into) {
         return Ok(());
+    }
+    let stopped = || stop().is_err();
+    if stopped() {
+        return Err(Refusal::Cancelled);
     }
     let build = sdk.shown();
     let refused = |why: String| Refusal::Refused {
@@ -712,8 +740,12 @@ fn fetch_into(
     let (archive, downloaded) = match base.local(&tag, name) {
         Some(path) => (path, None),
         None => {
-            let body = base
-                .open(&tag, name)
+            let opened = base.open(&tag, name);
+            // A request that failed while Stop was pending ends as the stop, not as its error.
+            if !matches!(opened, Ok(Some(_))) && stopped() {
+                return Err(Refusal::Cancelled);
+            }
+            let body = opened
                 .map_err(|unread| match unread {
                     Unread::Offline => Refusal::Offline {
                         build: build.clone(),
@@ -725,7 +757,7 @@ fn fetch_into(
             let file = parent.join(format!("{name}.download"));
             let listed = sdk.index.asset(name).map_err(|r| refused(r.to_string()))?;
             let total = fetched.total;
-            crate::backend::save_checked(
+            crate::backend::save_checked_until(
                 body,
                 size,
                 name,
@@ -739,11 +771,22 @@ fn fetch_into(
                         total,
                     });
                 },
+                stop,
             )
-            .map_err(refused)?;
+            .map_err(|why| match stopped() {
+                true => Refusal::Cancelled,
+                false => refused(why),
+            })?;
             (file.clone(), Some(file))
         }
     };
+    // `sdk::unpack` can't be stopped part way: a stop that came during the download ends here.
+    if stopped() {
+        if let Some(file) = downloaded {
+            let _ = fs::remove_file(file);
+        }
+        return Err(Refusal::Cancelled);
+    }
     let unpacked = sdk::unpack(&sdk.index, name, &archive, into, UNPACKED_LIMIT);
     if let Some(file) = downloaded {
         let _ = fs::remove_file(file);

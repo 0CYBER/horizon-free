@@ -1170,10 +1170,24 @@ pub(crate) fn save_checked(
     to: &Path,
     progress: &impl Fn(f32),
 ) -> Result<(), String> {
+    save_checked_until(reader, size, name, sha256, to, progress, &|| Ok(()))
+}
+
+/// [`save_checked`] that asks `stop` before each chunk it reads: its error ends the download at
+/// once, word for word, and the temporary file is removed.
+pub(crate) fn save_checked_until(
+    reader: impl Read,
+    size: u64,
+    name: &str,
+    sha256: &str,
+    to: &Path,
+    progress: &impl Fn(f32),
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     let mut temp = to.as_os_str().to_owned();
     temp.push(format!(".part-{}", std::process::id()));
     let temp = PathBuf::from(temp);
-    let saved = write_checked(reader, size, name, sha256, &temp, progress)
+    let saved = write_checked(reader, size, name, sha256, &temp, progress, stop)
         .and_then(|()| fs::rename(&temp, to).map_err(|e| e.to_string()));
     if saved.is_err() {
         let _ = fs::remove_file(&temp);
@@ -1188,11 +1202,13 @@ fn write_checked(
     sha256: &str,
     to: &Path,
     progress: &impl Fn(f32),
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<(), String> {
     let mut file = fs::File::create(to).map_err(|e| e.to_string())?;
     let mut hash = horizon_release_sign::Sha256::default();
     let (mut done, mut buf) = (0u64, vec![0u8; 1 << 16]);
     loop {
+        stop()?;
         let n = reader
             .read(&mut buf)
             .map_err(|e| format!("Download interrupted: {e}"))?;
@@ -6579,6 +6595,40 @@ pub fn {f}("
         save_checked(bytes, 0, "asset", &right, &to, &|_: f32| {}).unwrap();
         assert_eq!(fs::read(&to).unwrap(), bytes);
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A stopped download reads nothing after the stop, ends with the stop's words and keeps
+    /// no temporary file (#19300).
+    #[test]
+    fn a_stopped_download_reads_no_further_and_keeps_nothing() {
+        struct Endless<'a>(&'a std::cell::Cell<u32>);
+        impl Read for Endless<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0.set(self.0.get() + 1);
+                buf.fill(7);
+                Ok(buf.len())
+            }
+        }
+        let dir = scratch("save-stopped");
+        let to = dir.join("download.zip");
+        let reads = std::cell::Cell::new(0);
+        let stop = || match reads.get() >= 3 {
+            true => Err("stopped".to_string()),
+            false => Ok(()),
+        };
+        let result = save_checked_until(
+            Endless(&reads),
+            1 << 30,
+            "asset",
+            &horizon_release_sign::sha256_hex(b""),
+            &to,
+            &|_: f32| {},
+            &stop,
+        );
+        assert_eq!(result.unwrap_err(), "stopped");
+        assert_eq!(reads.get(), 3);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
         let _ = fs::remove_dir_all(dir);
     }
 

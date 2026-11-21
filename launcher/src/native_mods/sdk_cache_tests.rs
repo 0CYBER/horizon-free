@@ -231,6 +231,113 @@ fn an_index_is_refused_by_name_when_its_signature_or_contents_do_not_hold() {
     assert!(!fixture.kept().join(COMMIT).join(INDEX).exists());
 }
 
+/// A stop during a slice's download ends the fetch as cancelled, its words the build's own, with
+/// the download removed and nothing stamped (#19300).
+#[test]
+fn a_stopped_download_ends_as_cancelled_and_keeps_nothing() {
+    use std::io::Write;
+    let fixture = Fixture::new();
+    let sdk = fixture.sdk(&[]).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = Base::Url(format!("http://{}", listener.local_addr().unwrap()));
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.read(&mut [0; 4096]);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                SLICE.len()
+            );
+            let _ = stream.write_all(SLICE);
+        }
+    });
+    let prebuilt = fixture.scratch.path().join("prebuilt");
+    let unit = prebuilt.join(format!("{COMMIT}-{TRIPLE}"));
+    let downloaded = || {
+        fs::read_dir(&unit)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".download"))
+    };
+    // The player stops the build the moment the first slice has arrived.
+    let stop = || match downloaded() {
+        true => Err(super::super::CANCELLED.to_string()),
+        false => Ok(()),
+    };
+    let refusal = slices_in(
+        &prebuilt,
+        &sdk,
+        &base,
+        Route::Api,
+        TRIPLE,
+        Side::Client,
+        &|_| {},
+        &stop,
+    )
+    .unwrap_err();
+    assert_eq!(refusal, Refusal::Cancelled);
+    assert_eq!(refusal.to_string(), super::super::CANCELLED);
+    assert!(!downloaded());
+    let package = Package::at(&unit);
+    for slice in [&package.runtime, &package.api] {
+        assert!(!stamp_path(slice).exists());
+    }
+}
+
+/// A slice request that fails while Stop is pending ends as cancelled, not as the server's
+/// answer (#19300).
+#[test]
+fn a_failed_request_while_stopping_ends_as_cancelled() {
+    use std::io::Write;
+    let fixture = Fixture::new();
+    let sdk = fixture.sdk(&[]).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = Base::Url(format!("http://{}", listener.local_addr().unwrap()));
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.read(&mut [0; 4096]);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+    });
+    let asked = std::cell::Cell::new(0);
+    // Stop is pressed once the request is under way.
+    let stop = || {
+        asked.set(asked.get() + 1);
+        match asked.get() > 1 {
+            true => Err(super::super::CANCELLED.to_string()),
+            false => Ok(()),
+        }
+    };
+    let refusal = slices_in(
+        &fixture.scratch.path().join("prebuilt"),
+        &sdk,
+        &base,
+        Route::Api,
+        TRIPLE,
+        Side::Client,
+        &|_| {},
+        &stop,
+    )
+    .unwrap_err();
+    assert_eq!(refusal, Refusal::Cancelled);
+}
+
+/// The build data a build reads to judge its mods stops with the build (#19300).
+#[test]
+fn a_stopped_build_data_fetch_ends_as_cancelled() {
+    let fixture = Fixture::new();
+    let sdk = fixture.sdk(&[]).unwrap();
+    let stop = || Err(super::super::CANCELLED.to_string());
+    assert_eq!(
+        build_data(&sdk, &fixture.base(), &stop).unwrap_err(),
+        Refusal::Cancelled
+    );
+}
+
 #[test]
 fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
     let fixture = Fixture::new();
@@ -249,6 +356,7 @@ fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
         TRIPLE,
         Side::Client,
         &|fetched| heard.borrow_mut().push(fetched),
+        &|| Ok(()),
     )
     .unwrap();
     assert_eq!(
@@ -272,6 +380,7 @@ fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
         TRIPLE,
         Side::Client,
         &|_| {},
+        &|| Ok(()),
     )
     .unwrap_err();
     assert!(refused.to_string().contains(&engine), "{refused}");
@@ -286,6 +395,7 @@ fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
         TRIPLE,
         Side::Client,
         &|fetched| heard.borrow_mut().push(fetched),
+        &|| Ok(()),
     )
     .unwrap();
     assert_eq!(again, package);
@@ -305,6 +415,7 @@ fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
             TRIPLE,
             Side::Client,
             &|_| {},
+            &|| Ok(()),
         );
         assert!(fresh.is_ok());
         change(&package.api);
@@ -316,6 +427,7 @@ fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
             TRIPLE,
             Side::Client,
             &|_| {},
+            &|| Ok(()),
         );
         assert!(matches!(stale, Err(Refusal::Refused { .. })), "{stale:?}");
         // What failed its stamp is gone, never used half-checked.
@@ -346,6 +458,7 @@ fn a_stamp_from_another_index_is_not_trusted() {
         TRIPLE,
         Side::Client,
         &|_| {},
+        &|| Ok(()),
     )
     .unwrap();
     let other = Sdk {

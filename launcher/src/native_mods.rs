@@ -1382,6 +1382,13 @@ fn check_cancelled() -> Result<(), String> {
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
+/// Clears an earlier build's Stop. A build's starter calls it before the build's Stop can be
+/// pressed (the window, before it shows the card and spawns the worker), so a Stop pressed
+/// before the worker runs still ends that build; [`build_then`] doesn't clear it.
+pub fn arm_cancel() {
+    CANCEL.store(false, Ordering::Relaxed);
+}
+
 /// Stops the build under way: its command is killed and the build ends with [`CANCELLED`].
 pub fn cancel() {
     CANCEL.store(true, Ordering::Relaxed);
@@ -1569,6 +1576,12 @@ fn read_lock(dir: &Path) -> Result<String, String> {
 }
 
 fn source(revision: &str) -> Result<PathBuf, String> {
+    source_until(revision, &|| Ok(()))
+}
+
+/// [`source`] that asks `stop` before the download and for each file unpacked (a build passes
+/// [`check_cancelled`]; internals sync, outside a build, never stops).
+fn source_until(revision: &str, stop: &dyn Fn() -> Result<(), String>) -> Result<PathBuf, String> {
     let dir = root().join("source").join(revision);
     if dir.join(".horizon-revision").is_file() {
         crate::storage::mark_used(&dir).map_err(cache_error)?;
@@ -1579,7 +1592,7 @@ fn source(revision: &str) -> Result<PathBuf, String> {
         horizon_platform::mod_package::index::native::PREBUILT_REPO
     );
     let partial = root().join("source").join(format!(".{revision}.partial"));
-    let top = unpack_archive(&archive, &partial, u64::MAX)?;
+    let top = unpack_archive_until(&archive, &partial, u64::MAX, stop)?;
     fs::write(top.join(".horizon-revision"), revision).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&dir);
     fs::rename(&top, &dir).map_err(|e| e.to_string())?;
@@ -1590,9 +1603,16 @@ fn source(revision: &str) -> Result<PathBuf, String> {
 
 /// GitHub's archive (`.tar.gz`) at `url`, unpacked into the fresh folder `partial`: the archive's
 /// one top folder, which is returned. Links are left out; at most `limit` bytes are unpacked.
-fn unpack_source(reader: impl std::io::Read, partial: &Path) -> Result<(), String> {
+/// Unpacks the tar `reader` into `partial`, asking `stop` before each entry: its error ends the
+/// unpack word for word.
+fn unpack_source(
+    reader: impl std::io::Read,
+    partial: &Path,
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     let mut archive = tar::Archive::new(reader);
     for entry in archive.entries().map_err(|e| e.to_string())? {
+        stop()?;
         let mut entry =
             entry.map_err(|e| trf("Source interrupted: {error}", &[("error", &e.to_string())]))?;
         let kind = entry.header().entry_type();
@@ -1613,11 +1633,31 @@ fn unpack_source(reader: impl std::io::Read, partial: &Path) -> Result<(), Strin
 }
 
 pub(crate) fn unpack_archive(url: &str, partial: &Path, limit: u64) -> Result<PathBuf, String> {
+    unpack_archive_until(url, partial, limit, &|| Ok(()))
+}
+
+/// [`unpack_archive`] that asks `stop` before the download and for each file unpacked: its
+/// error ends it word for word, and `partial` is removed with what was unpacked so far.
+pub(super) fn unpack_archive_until(
+    url: &str,
+    partial: &Path,
+    limit: u64,
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<PathBuf, String> {
     use std::io::Read;
+    stop()?;
     let _ = fs::remove_dir_all(partial);
     fs::create_dir_all(partial).map_err(|e| e.to_string())?;
-    let reader = flate2::read::GzDecoder::new(backend::get(url)?.into_reader()).take(limit);
-    unpack_source(reader, partial)?;
+    let unpacked = backend::get(url).and_then(|response| {
+        let reader = flate2::read::GzDecoder::new(response.into_reader()).take(limit);
+        unpack_source(reader, partial, stop)
+    });
+    if let Err(error) = unpacked {
+        let _ = fs::remove_dir_all(partial);
+        // A request that failed while Stop was pending ends as the stop, not as its error.
+        stop()?;
+        return Err(error);
+    }
     // The archive's one top folder (<repo>-<commit>/) is the source's root.
     fs::read_dir(partial)
         .map_err(|e| e.to_string())?
@@ -1818,6 +1858,7 @@ fn judge_all(
     projects: &[api::Project<'_>],
     sdk: &sdk_cache::Sdk,
     base: &sdk_cache::Base,
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<Vec<(String, fit::Verdict)>, sdk_cache::Refusal> {
     let mut surface: Option<std::rc::Rc<mod_surface::Surface>> = None;
     let mut catalog: Option<std::rc::Rc<internals::Catalog>> = None;
@@ -1834,7 +1875,7 @@ fn judge_all(
             },
             &mut || {
                 if catalog.is_none() {
-                    let dir = sdk_cache::build_data(sdk, base)?;
+                    let dir = sdk_cache::build_data(sdk, base, stop)?;
                     let read = internals::Catalog::read(&dir).map_err(|why| {
                         sdk_cache::Refusal::Refused {
                             build: sdk.shown(),
@@ -1849,6 +1890,15 @@ fn judge_all(
         verdicts.push((project.bundle.manifest.id.clone(), verdict));
     }
     Ok(verdicts)
+}
+
+/// [`refused`], unless the player stopped the build while the request ran: then [`CANCELLED`],
+/// so the card shows no error for it.
+fn refused_unless_stopped(refusal: sdk_cache::Refusal) -> String {
+    match check_cancelled() {
+        Err(stopped) => stopped,
+        Ok(()) => refused(refusal),
+    }
 }
 
 /// A build's refusal of the mod tools, as the player reads it. A refused signature is short on
@@ -2111,12 +2161,14 @@ fn pipeline(
         }
         None
     } else {
-        Some(sdk_cache::index(&sdk_base, &revision, &keys).map_err(refused)?)
+        check_cancelled()?;
+        Some(sdk_cache::index(&sdk_base, &revision, &keys).map_err(refused_unless_stopped)?)
     };
     let mut fitted: Vec<String> = Vec::new();
     if let Some(sdk) = &sdk {
         progress(Step::Checking(projects.len()));
-        let verdicts = judge_all(&projects, sdk, &sdk_base).map_err(|r| r.to_string())?;
+        let verdicts =
+            judge_all(&projects, sdk, &sdk_base, &check_cancelled).map_err(|r| r.to_string())?;
         let mut unusable = Vec::new();
         for (id, verdict) in verdicts {
             match verdict {
@@ -2272,7 +2324,9 @@ fn pipeline(
                 let sdk = match sdk {
                     Some(sdk) => sdk,
                     None => {
-                        fetched = sdk_cache::index(&sdk_base, &revision, &keys).map_err(refused)?;
+                        check_cancelled()?;
+                        fetched = sdk_cache::index(&sdk_base, &revision, &keys)
+                            .map_err(refused_unless_stopped)?;
                         &fetched
                     }
                 };
@@ -2297,6 +2351,7 @@ fn pipeline(
                             },
                         })
                     },
+                    &check_cancelled,
                 )
                 .map_err(refused)?
             }
@@ -2364,7 +2419,7 @@ fn pipeline(
     if let Some(game) = &prebuilt {
         let checking = std::time::Instant::now();
         linker()?;
-        let rust = rust_toolchain::install(|f| progress(Step::Rust(f)))?;
+        let rust = rust_toolchain::install_until(|f| progress(Step::Rust(f)), &check_cancelled)?;
         timed("Checking the Rust toolchain", checking)?;
         progress(Step::PrebuiltMods);
         let compiling = std::time::Instant::now();
@@ -2519,6 +2574,7 @@ pub fn build(
     progress: impl Fn(Step),
     registry_consent: impl Fn(&RegistryInventory) -> bool,
 ) -> Result<String, Failed> {
+    arm_cancel();
     build_then(
         base,
         || Ok(folder.to_owned()),
@@ -2555,6 +2611,8 @@ fn build_turn(progress: &impl Fn(Step)) -> Result<std::sync::MutexGuard<'static,
         check_cancelled()?;
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
+    // A Stop pressed before this build's worker ran ends it here, not at its first command.
+    check_cancelled()?;
     require_consent()?;
     Ok(turn)
 }
@@ -2581,7 +2639,6 @@ pub fn build_then<R>(
     if let Err(error) = require_consent() {
         return deliver(Err(error));
     }
-    CANCEL.store(false, Ordering::Relaxed);
     let _turn = match build_turn(&progress) {
         Ok(turn) => turn,
         Err(error) => return deliver(Err(error)),
@@ -2599,7 +2656,7 @@ pub fn build_then<R>(
         let folder = stage()?;
         let folder = folder.as_path();
         let profile = select_build_profile(instance.native_profile, profile, || {
-            planning::classify(folder, Some(base), lease)
+            planning::classify_until(folder, Some(base), lease, &check_cancelled)
                 .map_err(|error| Failed::Other(error.said(caller)))
         })?;
         let built = isolated(
@@ -2711,7 +2768,7 @@ pub fn build_server(
         }
         let lease = cache.map_err(str::to_owned)?;
         let profile = select_build_profile(Profile::default(), profile, || {
-            planning::classify(folder, Some(base), lease)
+            planning::classify_until(folder, Some(base), lease, &check_cancelled)
         })?;
         let built = pipeline(
             lease,
@@ -2884,6 +2941,113 @@ mod tests {
         assert_eq!(done.shown(), done.label());
     }
 
+    /// A stop during a source's unpack ends it before the next file, as a cancelled build
+    /// (#19300).
+    #[test]
+    fn a_stopped_source_unpack_writes_no_further_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut archive = tar::Builder::new(Vec::new());
+        for path in ["top/one", "top/two"] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(1);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, path, &b"x"[..]).unwrap();
+        }
+        let bytes = archive.into_inner().unwrap();
+        let asked = std::cell::Cell::new(0);
+        let stop = || {
+            asked.set(asked.get() + 1);
+            match asked.get() > 1 {
+                true => Err(CANCELLED.to_string()),
+                false => Ok(()),
+            }
+        };
+        let result = unpack_source(bytes.as_slice(), folder.path(), &stop);
+        assert_eq!(result.unwrap_err(), CANCELLED);
+        assert!(folder.path().join("top/one").is_file());
+        assert!(!folder.path().join("top/two").exists());
+    }
+
+    /// A stop during a downloaded archive's unpack removes what was unpacked of it (#19300).
+    #[test]
+    fn a_stopped_archive_download_keeps_no_partial_folder() {
+        use std::io::{Read, Write};
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        for path in ["top/one", "top/two"] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(1);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, path, &b"x"[..]).unwrap();
+        }
+        let body = archive.into_inner().unwrap().finish().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/source.tar.gz", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.read(&mut [0; 4096]);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(&body);
+            }
+        });
+        let folder = tempfile::tempdir().unwrap();
+        let partial = folder.path().join(".source.partial");
+        let asked = std::cell::Cell::new(0);
+        // Asked once before the download, then before each entry: stops at the second entry
+        // (and is asked once more after the cleanup).
+        let stop = || {
+            asked.set(asked.get() + 1);
+            match asked.get() > 2 {
+                true => Err(CANCELLED.to_string()),
+                false => Ok(()),
+            }
+        };
+        let result = unpack_archive_until(&url, &partial, u64::MAX, &stop);
+        assert_eq!(result.unwrap_err(), CANCELLED);
+        assert_eq!(asked.get(), 4);
+        assert!(!partial.exists());
+    }
+
+    /// A request that fails while Stop is pending ends as the stop, with no partial folder
+    /// (#19300).
+    #[test]
+    fn a_failed_request_while_stopping_ends_as_the_stop() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/source.tar.gz", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.read(&mut [0; 4096]);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+        });
+        let folder = tempfile::tempdir().unwrap();
+        let partial = folder.path().join(".source.partial");
+        let asked = std::cell::Cell::new(0);
+        // Stop is pressed once the request is under way.
+        let stop = || {
+            asked.set(asked.get() + 1);
+            match asked.get() > 1 {
+                true => Err(CANCELLED.to_string()),
+                false => Ok(()),
+            }
+        };
+        let result = unpack_archive_until(&url, &partial, u64::MAX, &stop);
+        assert_eq!(result.unwrap_err(), CANCELLED);
+        assert!(!partial.exists());
+    }
+
     #[test]
     fn source_archive_escape_is_refused_without_writing_outside() {
         let folder = tempfile::tempdir().unwrap();
@@ -2897,7 +3061,7 @@ mod tests {
         let bytes = archive.into_inner().unwrap();
         let inside = folder.path().join("inside");
         fs::create_dir(&inside).unwrap();
-        assert!(unpack_source(bytes.as_slice(), &inside).is_err());
+        assert!(unpack_source(bytes.as_slice(), &inside, &|| Ok(())).is_err());
         assert!(!folder.path().join("outside").exists());
     }
 
@@ -4551,6 +4715,56 @@ mod tests {
             result.map_err(String::from)
         );
         assert_eq!(*steps.borrow(), [Step::Waiting.label()]);
+    }
+
+    /// #19300: a Stop pressed after the window started a build but before its worker ran ends
+    /// that build before any step, rather than being cleared by it.
+    #[test]
+    fn a_stop_pressed_before_the_worker_runs_ends_the_build() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        arm_cancel();
+        cancel();
+        let steps = std::cell::RefCell::new(Vec::new());
+        let result = build_then(
+            "v0.0.0-not-installed",
+            || -> Result<PathBuf, String> { panic!("staged after Stop") },
+            false,
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: false,
+            },
+            |step| steps.borrow_mut().push(step.label()),
+            |_| false,
+            |result| result,
+        );
+        arm_cancel();
+        original.save().unwrap();
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if error == CANCELLED),
+            "{:?}",
+            result.map_err(String::from)
+        );
+        assert!(steps.borrow().is_empty(), "{:?}", steps.borrow());
+    }
+
+    /// #19300: an SDK index request that failed while Stop was pending ends as the stop.
+    #[test]
+    fn a_failed_index_request_while_stopping_ends_as_the_stop() {
+        let _guard = scratch_state();
+        let offline = || sdk_cache::Refusal::Offline {
+            build: "the Nov 13 update".into(),
+            bytes: None,
+        };
+        arm_cancel();
+        assert_ne!(refused_unless_stopped(offline()), CANCELLED);
+        cancel();
+        let stopped = refused_unless_stopped(offline());
+        arm_cancel();
+        assert_eq!(stopped, CANCELLED);
     }
 
     /// #18669: native mods turned off in Storage while a build waits for the last cleanup stop

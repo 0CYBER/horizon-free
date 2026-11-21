@@ -447,7 +447,7 @@ pub(super) fn prepare<'a>(
     } else {
         Some(super::mixins_patch::tool(rust, &|_| {})?)
     };
-    let source = super::source(sdk.commit())?;
+    let source = super::source_until(sdk.commit(), &super::check_cancelled)?;
     let started = std::time::Instant::now();
     let index = function_index(game, sdk.commit())?;
     // A filled loop's entry, or one whose loop function has rows, is copied like a mixin's target,

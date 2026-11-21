@@ -607,7 +607,9 @@ fn download_archive(
     sha256: &str,
     to: &Path,
     progress: &impl Fn(f32),
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<(), String> {
+    stop()?;
     save_archive(
         backend::get(url)?.into_reader(),
         url,
@@ -615,6 +617,7 @@ fn download_archive(
         sha256,
         to,
         progress,
+        stop,
     )
 }
 
@@ -625,14 +628,16 @@ fn save_archive(
     sha256: &str,
     to: &Path,
     progress: &impl Fn(f32),
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<(), String> {
-    backend::save_checked(
+    backend::save_checked_until(
         PinnedArchive(reader.take(bytes)),
         bytes,
         name,
         sha256,
         to,
         progress,
+        stop,
     )?;
     let actual = fs::metadata(to).map_err(|error| error.to_string())?.len();
     if actual != bytes {
@@ -650,6 +655,16 @@ fn save_archive(
 
 /// Downloads, checks and unpacks the pinned toolchain (once); `progress` gets the fraction done.
 pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
+    install_until(progress, &|| Ok(()))
+}
+
+/// [`install`] that asks `stop` before each download, for each chunk downloaded and each file
+/// unpacked: its error ends the install word for word, and nothing downloaded or half unpacked
+/// is kept.
+pub fn install_until(
+    progress: impl Fn(f32),
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<Toolchain, String> {
     if let Some(done) = installed() {
         return Ok(done);
     }
@@ -669,46 +684,11 @@ pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
     let partial = root().join(format!(".{VERSION}-{}.partial", host.target));
     let _ = fs::remove_dir_all(&partial);
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
-    let count = (host.components.len() + usize::from(host.c_toolchain.is_some())) as f32;
-    for (i, &(name, sha256, bytes)) in host.components.iter().enumerate() {
-        let file = format!("{name}-{VERSION}-{}.tar.gz", host.target);
-        let archive = root().join(format!(".{file}"));
-        let step = |f: f32| progress((i as f32 + f) / count);
-        download_archive(&format!("{DIST}/{file}"), bytes, sha256, &archive, &step)
-            .map_err(|e| format!("Rust {VERSION} ({name}): {e}"))?;
-        let unpacked = unpack(&archive, &partial);
-        let _ = fs::remove_file(&archive);
-        unpacked.map_err(|e| format!("Rust {VERSION} ({name}): {e}"))?;
+    let unpacked = unpack_all(host, &partial, &progress, stop);
+    if unpacked.is_err() {
+        let _ = fs::remove_dir_all(&partial);
     }
-    if let Some(compiler) = host.c_toolchain {
-        let archive = root().join(format!(".{}.zip", compiler.directory));
-        let done = host.components.len() as f32;
-        let step = |f: f32| progress((done + f) / count);
-        download_archive(
-            compiler.url,
-            compiler.bytes,
-            compiler.sha256,
-            &archive,
-            &step,
-        )
-        .map_err(|e| format!("{}: {e}", compiler.version))?;
-        let unpacked = match compiler.kind {
-            CToolchainKind::WinLibs => unpack_mingw(&archive, &partial),
-            CToolchainKind::LlvmMingw => unpack_llvm_mingw(&archive, &partial),
-        };
-        let _ = fs::remove_file(&archive);
-        unpacked.map_err(|e| format!("{}: {e}", compiler.version))?;
-        let toolchain = Toolchain {
-            dir: partial.clone(),
-            host,
-        };
-        if !toolchain.compiler_available() {
-            return Err(format!(
-                "{} did not contain the compiler and linker files the launcher needs.",
-                compiler.version
-            ));
-        }
-    }
+    unpacked?;
     let toolchain = Toolchain {
         dir: partial.clone(),
         host,
@@ -721,13 +701,82 @@ pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
     Ok(Toolchain { dir, host })
 }
 
+/// Each of `host`'s archives downloaded and unpacked into `partial`, removed once unpacked. A
+/// stop ends it with `stop`'s own error, never one naming the component.
+fn unpack_all(
+    host: &'static Host,
+    partial: &Path,
+    progress: &impl Fn(f32),
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    let failed = |what: &str, error: String| match stop() {
+        Err(stopped) => stopped,
+        Ok(()) => format!("{what}: {error}"),
+    };
+    let count = (host.components.len() + usize::from(host.c_toolchain.is_some())) as f32;
+    for (i, &(name, sha256, bytes)) in host.components.iter().enumerate() {
+        let file = format!("{name}-{VERSION}-{}.tar.gz", host.target);
+        let archive = root().join(format!(".{file}"));
+        let step = |f: f32| progress((i as f32 + f) / count);
+        let what = format!("Rust {VERSION} ({name})");
+        download_archive(
+            &format!("{DIST}/{file}"),
+            bytes,
+            sha256,
+            &archive,
+            &step,
+            stop,
+        )
+        .map_err(|e| failed(&what, e))?;
+        let unpacked = unpack(&archive, partial, stop);
+        let _ = fs::remove_file(&archive);
+        unpacked.map_err(|e| failed(&what, e))?;
+    }
+    if let Some(compiler) = host.c_toolchain {
+        let archive = root().join(format!(".{}.zip", compiler.directory));
+        let done = host.components.len() as f32;
+        let step = |f: f32| progress((done + f) / count);
+        download_archive(
+            compiler.url,
+            compiler.bytes,
+            compiler.sha256,
+            &archive,
+            &step,
+            stop,
+        )
+        .map_err(|e| failed(compiler.version, e))?;
+        let unpacked = match compiler.kind {
+            CToolchainKind::WinLibs => unpack_mingw(&archive, partial, stop),
+            CToolchainKind::LlvmMingw => unpack_llvm_mingw(&archive, partial, stop),
+        };
+        let _ = fs::remove_file(&archive);
+        unpacked.map_err(|e| failed(compiler.version, e))?;
+        let toolchain = Toolchain {
+            dir: partial.to_path_buf(),
+            host,
+        };
+        if !toolchain.compiler_available() {
+            return Err(format!(
+                "{} did not contain the compiler and linker files the launcher needs.",
+                compiler.version
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Unpacks one component archive into `prefix`, as its installer would: an archive holds
 /// `<top>/<component>/<files>` per component, and each component's files go under `prefix`. Its
 /// installer script, lists and `manifest.in` stay out.
-fn unpack(archive: &Path, prefix: &Path) -> Result<(), String> {
+fn unpack(
+    archive: &Path,
+    prefix: &Path,
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
     for entry in tar.entries().map_err(|e| e.to_string())? {
+        stop()?;
         let mut entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?.into_owned();
         let Some(relative) = component_path(&path) else {
@@ -764,10 +813,15 @@ fn component_path(path: &Path) -> Option<PathBuf> {
 }
 
 /// Unpacks MinGW-w64's zip into `prefix`: its `mingw64/` folder, documentation left out.
-fn unpack_mingw(archive: &Path, prefix: &Path) -> Result<(), String> {
+fn unpack_mingw(
+    archive: &Path,
+    prefix: &Path,
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
+        stop()?;
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let Some(relative) = entry.enclosed_name().and_then(|p| mingw_path(&p)) else {
             continue;
@@ -788,10 +842,15 @@ fn unpack_mingw(archive: &Path, prefix: &Path) -> Result<(), String> {
 
 /// Unpacks LLVM-MinGW under `llvm-mingw/`. Release archives have either a versioned top folder or
 /// the toolchain folders at their root; both layouts are accepted, but paths may never escape it.
-fn unpack_llvm_mingw(archive: &Path, prefix: &Path) -> Result<(), String> {
+fn unpack_llvm_mingw(
+    archive: &Path,
+    prefix: &Path,
+    stop: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     for i in 0..zip.len() {
+        stop()?;
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let Some(relative) = entry.enclosed_name().and_then(|p| llvm_mingw_path(&p)) else {
             continue;
@@ -1052,6 +1111,7 @@ mod tests {
                 "521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3",
                 &archive,
                 &|_| {},
+                &|| Ok(()),
             );
             assert_eq!(result.is_ok(), accepted, "{result:?}");
             assert_eq!(archive.exists(), accepted);
@@ -1276,6 +1336,40 @@ mod tests {
         }
     }
 
+    /// A stop during an unpack ends it before the next file, with the stop's own words (#19300).
+    #[test]
+    fn a_stopped_unpack_writes_no_further_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("cargo.tar.gz");
+        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+            fs::File::create(&archive).unwrap(),
+            flate2::Compression::fast(),
+        ));
+        for path in [
+            "cargo-1.99.1-x/cargo/bin/one",
+            "cargo-1.99.1-x/cargo/bin/two",
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(1);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, path, &b"x"[..]).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap().flush().unwrap();
+        let prefix = dir.path().join("prefix");
+        let asked = std::cell::Cell::new(0);
+        let stop = || {
+            asked.set(asked.get() + 1);
+            match asked.get() > 1 {
+                true => Err("stopped".to_string()),
+                false => Ok(()),
+            }
+        };
+        assert_eq!(unpack(&archive, &prefix, &stop).unwrap_err(), "stopped");
+        assert!(prefix.join("bin/one").is_file());
+        assert!(!prefix.join("bin/two").exists());
+    }
+
     #[test]
     fn a_component_archive_unpacks_as_its_installer_would() {
         let dir = std::env::temp_dir().join(format!("horizon-rust-unpack-{}", std::process::id()));
@@ -1299,7 +1393,7 @@ mod tests {
         }
         tar.into_inner().unwrap().finish().unwrap().flush().unwrap();
         let prefix = dir.join("prefix");
-        unpack(&archive, &prefix).unwrap();
+        unpack(&archive, &prefix, &|| Ok(())).unwrap();
         assert_eq!(
             fs::read_to_string(prefix.join("bin/cargo")).unwrap(),
             "binary"
@@ -1482,7 +1576,7 @@ mod tests {
         }
         zip.finish().unwrap();
         let prefix = dir.join("prefix");
-        unpack_mingw(&archive, &prefix).unwrap();
+        unpack_mingw(&archive, &prefix, &|| Ok(())).unwrap();
         assert_eq!(
             fs::read_to_string(prefix.join("mingw64/bin/gcc.exe")).unwrap(),
             "gcc"
@@ -1523,7 +1617,7 @@ mod tests {
         }
         zip.finish().unwrap();
         let prefix = dir.join("prefix");
-        unpack_llvm_mingw(&archive, &prefix).unwrap();
+        unpack_llvm_mingw(&archive, &prefix, &|| Ok(())).unwrap();
         assert_eq!(
             fs::read_to_string(prefix.join("llvm-mingw/bin/clang.exe")).unwrap(),
             "clang"

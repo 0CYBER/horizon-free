@@ -16,7 +16,18 @@ pub(super) fn classify(
     folder: &Path,
     base: Option<&str>,
     // Held while the SDK's index, surface and build data are read and kept.
+    lease: &crate::native_cache::Cache,
+) -> Result<Routes, Failed> {
+    classify_until(folder, base, lease, &|| Ok(()))
+}
+
+/// [`classify`] for a build: `stop` (its [`check_cancelled`]) is asked while the build data
+/// downloads, and a stop ends the classification as [`CANCELLED`] rather than as a mod's route.
+pub(super) fn classify_until(
+    folder: &Path,
+    base: Option<&str>,
     _lease: &crate::native_cache::Cache,
+    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<Routes, Failed> {
     let found = scan_bundles(folder)?;
     let mut result = Routes::default();
@@ -72,7 +83,8 @@ pub(super) fn classify(
             *slot = route;
         }
     };
-    match judge_all(&projects, &sdk, &sdk_base) {
+    match judge_all(&projects, &sdk, &sdk_base, stop) {
+        Err(sdk_cache::Refusal::Cancelled) => return Err(Failed::Other(CANCELLED.into())),
         Ok(verdicts) => {
             for (id, verdict) in verdicts {
                 let route = match &verdict {
@@ -148,7 +160,7 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
     let sdk_base = sdk_cache::Base::from_env();
     let keys = horizon_release_sign::sdk_keys_for(backend::REPO);
     let sdk = sdk_cache::index(&sdk_base, &revision, &keys).map_err(|r| r.to_string())?;
-    let verdicts = judge_all(&projects, &sdk, &sdk_base).map_err(|r| r.to_string())?;
+    let verdicts = judge_all(&projects, &sdk, &sdk_base, &|| Ok(())).map_err(|r| r.to_string())?;
     let shown = sdk.shown();
     let unfit: Vec<LeftOut> = verdicts
         .iter()

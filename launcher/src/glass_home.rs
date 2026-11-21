@@ -454,7 +454,10 @@ impl Launcher {
                 // This instance's mods building (Build and play): the build's overall progress,
                 // the same figure as its card.
                 _ if building => Some((
-                    tr("Building mods").into(),
+                    match self.native_stopping {
+                        true => tr("Stopping the build…").into(),
+                        false => tr("Building mods").into(),
+                    },
                     self.native_progress
                         .map(|p| build_mode::percent(Some(p)) as f32 / 100.),
                 )),
@@ -534,7 +537,10 @@ impl Launcher {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     if building {
-                        this.stop_native_build();
+                        // A second press while it stops would only stop it again.
+                        if !this.native_stopping {
+                            this.stop_native_build();
+                        }
                     } else {
                         this.stop_pre_launch();
                     }

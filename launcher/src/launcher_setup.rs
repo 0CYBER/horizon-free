@@ -136,6 +136,7 @@ impl Launcher {
             importing_build: false,
             import_error: None,
             native_step: None,
+            native_stopping: false,
             native_prepare_first: None,
             native_progress: None,
             first_build: None,
