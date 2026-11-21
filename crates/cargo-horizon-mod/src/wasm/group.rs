@@ -7,24 +7,45 @@ struct Member {
     stage: PathBuf,
     manifest: toml_edit::DocumentMut,
     krate: String,
+    /// The library's crate root, relative to the package.
+    lib: PathBuf,
     package: String,
     registrations: String,
     points: String,
 }
 
-fn copy(source: &Path, destination: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+/// The wrapper config a member was last built with, beside it in the stage ([`track_wrapper`]).
+const WRAPPER_RECORD: &str = ".horizon-wrapper.json";
+
+/// Mirrors `source` into `destination` in place, so an unchanged file keeps its time and cargo
+/// doesn't rebuild its unit. What `source` no longer has goes; `generated` names at this level are
+/// the caller's to write and are neither copied nor removed.
+fn copy(source: &Path, destination: &Path, generated: &[&str]) -> Result<(), String> {
+    stage_dir(destination)?;
+    let mut entries = Vec::new();
     for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        if ["target", ".git", "mod.wasm"].iter().any(|n| name == *n) {
-            continue;
+        if !["target", ".git", "mod.wasm"]
+            .iter()
+            .chain(generated)
+            .any(|n| name == *n)
+        {
+            entries.push(entry);
         }
+    }
+    // By exact name and before anything is written: on a case-insensitive drive, a staged
+    // `Logo.json` would take a renamed `logo.json`'s write and then be removed as obsolete.
+    prune(destination, |name| {
+        entries.iter().any(|e| e.file_name() == name) || generated.iter().any(|n| name == *n)
+    })?;
+    for entry in entries {
         let ty = entry.file_type().map_err(|e| e.to_string())?;
+        let to = destination.join(entry.file_name());
         if ty.is_dir() {
-            copy(&entry.path(), &destination.join(name))?;
+            copy(&entry.path(), &to, &[])?;
         } else if ty.is_file() {
-            std::fs::copy(entry.path(), destination.join(name)).map_err(|e| e.to_string())?;
+            copy_file(&entry.path(), &to)?;
         } else {
             return Err(format!(
                 "{}: cannot stage a symlink",
@@ -33,6 +54,176 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Removes what `destination` has that `keep` doesn't name.
+fn prune(destination: &Path, keep: impl Fn(&std::ffi::OsStr) -> bool) -> Result<(), String> {
+    for entry in std::fs::read_dir(destination).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !keep(&entry.file_name()) {
+            remove(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+/// Removes `path` without following it: a symlink goes, not what it points at.
+fn remove(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        // A Windows symlink to a directory is removed as a directory.
+        std::fs::remove_file(path).or_else(|e| {
+            if metadata.file_type().is_symlink() {
+                std::fs::remove_dir(path)
+            } else {
+                Err(e)
+            }
+        })
+    }
+    .map_err(|e| e.to_string())
+}
+
+/// Makes `path` a real directory. A file or symlink there is removed first, so nothing is staged
+/// through a link out of the stage.
+fn stage_dir(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => {
+            remove(path)?;
+            std::fs::create_dir(path).map_err(|e| e.to_string())
+        }
+        Err(_) => std::fs::create_dir_all(path).map_err(|e| e.to_string()),
+    }
+}
+
+/// Stages one file. A changed file is written anew, so it gets the current time: a copy would
+/// keep the source's, which is older than the last build's output when the source was edited
+/// during that build, and cargo would keep the old code. The staged file is writable even when the
+/// source is read-only; on Unix it has the source's executable bits.
+fn copy_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
+    write_changed(destination, &bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let exec = std::fs::metadata(source)
+            .map_err(|e| e.to_string())?
+            .permissions()
+            .mode()
+            & 0o111;
+        let mut permissions = std::fs::metadata(destination)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        if permissions.mode() & 0o111 != exec {
+            permissions.set_mode(permissions.mode() & !0o111 | exec);
+            std::fs::set_permissions(destination, permissions).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Writes `bytes` to `path` unless that file already holds them; answers whether it wrote.
+/// Existing entries (a changed file, a directory, or a symlink) are removed before writing so
+/// neither symlinks nor hard links are written through.
+fn write_changed(path: &Path, bytes: &[u8]) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            if std::fs::read(path).map_err(|e| e.to_string())? == bytes {
+                return Ok(false);
+            }
+            writable(path)?;
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+        Ok(_) => remove(path)?,
+        Err(_) => {}
+    }
+    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Makes a staged file writable: an earlier tool copied a read-only source's permissions.
+fn writable(path: &Path) -> Result<(), String> {
+    let mut permissions = std::fs::metadata(path)
+        .map_err(|e| e.to_string())?
+        .permissions();
+    if !permissions.readonly() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(permissions.mode() | 0o200);
+    }
+    // Only the Windows attribute: there is no other writer bit to widen.
+    #[cfg(not(unix))]
+    #[allow(clippy::permissions_set_readonly_false)]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions).map_err(|e| e.to_string())
+}
+
+/// Cargo doesn't see what the wrapper hands a member's rustc (its registrations, points, and the
+/// id and version in its metadata): an edit of only an `[[inject]]` priority changes none of the
+/// member's sources. The member's config is recorded beside it, and a changed one gives the crate
+/// root a fresh time, so cargo rebuilds the member.
+fn track_wrapper(stage: &Path, crate_root: &Path, config: &Value) -> Result<(), String> {
+    let record = serde_json::to_vec(config).map_err(|e| e.to_string())?;
+    let record_path = stage.join(WRAPPER_RECORD);
+    let unchanged = std::fs::symlink_metadata(&record_path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+        && std::fs::read(&record_path)
+            .map(|existing| existing == record)
+            .unwrap_or(false);
+    if !unchanged {
+        writable(crate_root)?;
+        std::fs::File::options()
+            .write(true)
+            .open(crate_root)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()))
+            .map_err(|e| format!("{}: {e}", crate_root.display()))?;
+        write_changed(&record_path, &record)?;
+    }
+    Ok(())
+}
+
+/// What the wrapper passes `member`'s rustc ([`rustc`]); `crates` are the group's library crates.
+fn wrapper_config(member: &Member, crates: &[String]) -> Value {
+    serde_json::json!({
+        "id": member.manifest["id"].as_str(),
+        "version": member.manifest["version"].as_str(),
+        "stage": member.stage,
+        "registrations": member.registrations,
+        "points": member.points,
+        "provided": crates
+            .iter()
+            .filter(|c| **c != member.krate)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(","),
+    })
+}
+
+/// The library target's crate root relative to its package directory `source`.
+fn lib_src_path(package: &Value) -> Result<PathBuf, String> {
+    let target = package["targets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|t| {
+            t["kind"].as_array().is_some_and(|kinds| {
+                kinds
+                    .iter()
+                    .any(|k| k == "lib" || k == "cdylib" || k == "rlib")
+            })
+        })
+        .ok_or("mod has no library")?;
+    Ok(PathBuf::from(
+        target["src_path"]
+            .as_str()
+            .ok_or("library has no src_path")?,
+    ))
 }
 
 // Preserve all Cargo dependency attributes and aliases; only relocate local paths.
@@ -220,6 +411,7 @@ pub(super) fn build(
             root: dunce::canonicalize(source).map_err(|e| e.to_string())?,
             stage: stage.join(id),
             krate: lib_name(package).ok_or("mod has no library")?,
+            lib: lib_src_path(package)?,
             package: package["name"].as_str().ok_or("no package name")?.into(),
             manifest,
             registrations: String::new(),
@@ -281,18 +473,25 @@ pub(super) fn build(
         if !ids.insert(member.manifest["id"].as_str().ok_or("no id")?) {
             return Err("duplicate mod id in Cargo group".into());
         }
+        let canonical_lib = dunce::canonicalize(&member.lib).unwrap_or_else(|_| member.lib.clone());
+        member.lib = canonical_lib
+            .strip_prefix(&member.root)
+            .map(Path::to_path_buf)
+            .map_err(|_| format!("{}: library root outside its package", member.lib.display()))?;
     }
     let staged: BTreeMap<_, _> = members
         .iter()
         .map(|m| (m.root.clone(), m.stage.clone()))
         .collect();
     let crates: Vec<_> = members.iter().map(|m| m.krate.clone()).collect();
-    if stage.exists() {
-        std::fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
-    }
-    for member in &members {
-        std::fs::create_dir_all(&member.stage).map_err(|e| e.to_string())?;
-    }
+    // Kept between builds: a fresh copy would rebuild every member. What a member or the group
+    // no longer has is removed below and in `copy`.
+    stage_dir(&stage)?;
+    prune(&stage, |name| {
+        name == "Cargo.toml"
+            || name == "Cargo.lock"
+            || members.iter().any(|m| m.stage.file_name() == Some(name))
+    })?;
     for member in &mut members {
         let mut manifest = member.manifest.clone();
         manifest["wasm"]["sha512"] = toml_edit::value("0".repeat(128));
@@ -305,12 +504,13 @@ pub(super) fn build(
     let mut features = Vec::new();
     let mut point_names = std::collections::BTreeSet::<String>::new();
     for member in &members {
-        copy(&member.root, &member.stage)?;
+        copy(&member.root, &member.stage, &["Cargo.toml", WRAPPER_RECORD])?;
         let path = member.stage.join("Cargo.toml");
-        let mut cargo: toml_edit::DocumentMut = std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())?
-            .parse()
-            .map_err(|e| format!("Cargo.toml: {e}"))?;
+        let mut cargo: toml_edit::DocumentMut =
+            std::fs::read_to_string(member.root.join("Cargo.toml"))
+                .map_err(|e| e.to_string())?
+                .parse()
+                .map_err(|e| format!("Cargo.toml: {e}"))?;
         // Expand workspace inheritance before moving this package into the group workspace.
         let member_metadata = metadatas
             .iter()
@@ -399,12 +599,18 @@ pub(super) fn build(
         mod_dependencies(cargo.as_table_mut(), &mod_paths);
         cargo.remove("workspace");
         paths(cargo.as_table_mut(), &member.root, &staged)?;
+        if cargo.get("lib").and_then(|l| l.get("path")).is_some() {
+            cargo["lib"]["path"] = toml_edit::value(member.lib.to_string_lossy().as_ref());
+        }
         cargo["lib"]["crate-type"] =
             toml_edit::value(["rlib", "cdylib"].into_iter().collect::<toml_edit::Array>());
-        std::fs::write(path, cargo.to_string()).map_err(|e| e.to_string())?;
-        let (registrations, points) = (&member.registrations, &member.points);
-        point_names.extend(serde_json::from_str::<Vec<String>>(points).map_err(|e| e.to_string())?);
-        configs.insert(member.package.clone(), serde_json::json!({"id":member.manifest["id"].as_str(), "version":member.manifest["version"].as_str(), "stage":member.stage, "registrations":registrations,"points":points,"provided":crates.iter().filter(|c| **c != member.krate).map(String::as_str).collect::<Vec<_>>().join(",")}));
+        write_changed(&path, cargo.to_string().as_bytes())?;
+        point_names.extend(
+            serde_json::from_str::<Vec<String>>(&member.points).map_err(|e| e.to_string())?,
+        );
+        let config = wrapper_config(member, &crates);
+        track_wrapper(&member.stage, &member.stage.join(&member.lib), &config)?;
+        configs.insert(member.package.clone(), config);
         if let Some(deps) = member
             .manifest
             .get("dependencies")
@@ -429,7 +635,9 @@ pub(super) fn build(
     )
     .join("Cargo.lock");
     if lock.is_file() {
-        std::fs::copy(lock, stage.join("Cargo.lock")).map_err(|e| e.to_string())?;
+        copy_file(&lock, &stage.join("Cargo.lock"))?;
+    } else if std::fs::symlink_metadata(stage.join("Cargo.lock")).is_ok() {
+        remove(&stage.join("Cargo.lock"))?;
     }
     let mut workspace = toml_edit::DocumentMut::new();
     for metadata in &metadatas {
@@ -468,7 +676,7 @@ pub(super) fn build(
             .collect::<toml_edit::Array>(),
     );
     workspace["workspace"]["resolver"] = toml_edit::value("3");
-    std::fs::write(stage.join("Cargo.toml"), workspace.to_string()).map_err(|e| e.to_string())?;
+    write_changed(&stage.join("Cargo.toml"), workspace.to_string().as_bytes())?;
     let mut command = cargo_command("build", "member", &stage, &target, &toolchain)?;
     command.env(
         "HORIZON_POINT_NAMES",
@@ -726,6 +934,236 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    fn set_time(path: &Path, time: std::time::SystemTime) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+    }
+
+    fn modified(path: &Path) -> std::time::SystemTime {
+        std::fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    fn set_readonly(path: &Path, readonly: bool) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(readonly);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// The second build of a member whose `src/lib.rs` was edited while the first ran: older
+    /// than the first build's output, newer content.
+    #[test]
+    fn a_staged_member_is_synced_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, stage) = (dir.path().join("mod"), dir.path().join("stage"));
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+        let built = old + std::time::Duration::from_secs(60);
+        for (root, files) in [
+            (
+                &source,
+                &[
+                    ("Cargo.toml", "source"),
+                    ("src/lib.rs", "new"),
+                    ("src/kept.rs", "same"),
+                    ("assets/a.json", "{}"),
+                ][..],
+            ),
+            (
+                &stage,
+                &[
+                    ("Cargo.toml", "generated"),
+                    ("src/lib.rs", "old"),
+                    ("src/kept.rs", "same"),
+                    ("src/gone.rs", ""),
+                    ("assets", ""),
+                ][..],
+            ),
+        ] {
+            for (path, text) in files {
+                let path = root.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, text).unwrap();
+                set_time(&path, if root == &source { old } else { built });
+            }
+        }
+
+        copy(&source, &stage, &["Cargo.toml"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(stage.join("src/lib.rs")).unwrap(),
+            "new"
+        );
+        assert!(modified(&stage.join("src/lib.rs")) > built);
+        assert_eq!(modified(&stage.join("src/kept.rs")), built);
+        assert!(!stage.join("src/gone.rs").exists());
+        assert_eq!(
+            std::fs::read_to_string(stage.join("assets/a.json")).unwrap(),
+            "{}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stage.join("Cargo.toml")).unwrap(),
+            "generated"
+        );
+        assert_eq!(modified(&stage.join("Cargo.toml")), built);
+    }
+
+    #[test]
+    fn a_read_only_source_is_staged_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, staged) = (dir.path().join("lib.rs"), dir.path().join("staged.rs"));
+        std::fs::write(&source, "first").unwrap();
+        set_readonly(&source, true);
+        copy_file(&source, &staged).unwrap();
+        assert_eq!(std::fs::read_to_string(&staged).unwrap(), "first");
+        assert!(!std::fs::metadata(&staged).unwrap().permissions().readonly());
+
+        // A read-only staged file an earlier tool copied with the source's permissions.
+        set_readonly(&staged, true);
+        set_readonly(&source, false);
+        std::fs::write(&source, "second").unwrap();
+        copy_file(&source, &staged).unwrap();
+        assert_eq!(std::fs::read_to_string(&staged).unwrap(), "second");
+    }
+
+    #[test]
+    fn a_case_only_rename_is_staged_by_its_new_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, stage) = (dir.path().join("mod"), dir.path().join("stage"));
+        for (root, name) in [(&source, "logo.json"), (&stage, "Logo.json")] {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join(name), "{}").unwrap();
+        }
+        copy(&source, &stage, &[]).unwrap();
+        let names: Vec<_> = std::fs::read_dir(&stage)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["logo.json"]);
+        assert_eq!(
+            std::fs::read_to_string(stage.join("logo.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    /// Answers false where this account may not make symlinks (Windows without Developer Mode).
+    fn symlink(target: &Path, link: &Path, dir: bool) -> bool {
+        #[cfg(unix)]
+        {
+            let _ = dir;
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            if dir {
+                std::os::windows::fs::symlink_dir(target, link)
+            } else {
+                std::os::windows::fs::symlink_file(target, link)
+            }
+            .is_ok()
+        }
+    }
+
+    #[test]
+    fn a_staged_symlink_is_replaced_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, stage, outside) = (
+            dir.path().join("mod"),
+            dir.path().join("stage"),
+            dir.path().join("outside"),
+        );
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        std::fs::write(source.join("lib.rs"), "mod").unwrap();
+        std::fs::write(source.join("assets/a.json"), "{}").unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("victim"), "kept").unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        for (name, target, is_dir) in [
+            ("lib.rs", outside.join("victim"), false),
+            ("assets", outside.clone(), true),
+            ("Cargo.toml", outside.join("victim"), false),
+        ] {
+            if !symlink(&target, &stage.join(name), is_dir) {
+                return;
+            }
+        }
+
+        copy(&source, &stage, &["Cargo.toml"]).unwrap();
+        write_changed(&stage.join("Cargo.toml"), b"generated").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(outside.join("victim")).unwrap(),
+            "kept"
+        );
+        assert!(!outside.join("a.json").exists());
+        for name in ["lib.rs", "assets", "Cargo.toml"] {
+            let metadata = std::fs::symlink_metadata(stage.join(name)).unwrap();
+            assert!(!metadata.file_type().is_symlink(), "{name}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(stage.join("lib.rs")).unwrap(),
+            "mod"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stage.join("assets/a.json")).unwrap(),
+            "{}"
+        );
+    }
+
+    /// An `[[inject]]` priority edit changes only the registrations the wrapper hands rustc.
+    #[test]
+    fn a_changed_wrapper_config_rebuilds_the_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let stage = dir.path();
+        let crate_root = stage.join("lib.rs");
+        std::fs::write(&crate_root, "mod").unwrap();
+        let mut member = Member {
+            root: stage.to_path_buf(),
+            stage: stage.to_path_buf(),
+            manifest: "id = 'm'\nversion = '1.0.0'\n".parse().unwrap(),
+            krate: "m".into(),
+            lib: "lib.rs".into(),
+            package: "mod-m".into(),
+            registrations: "listen(\"m:tick\", 0)".into(),
+            points: "[]".into(),
+        };
+        let built = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+        let track = |member: &Member| {
+            track_wrapper(stage, &crate_root, &wrapper_config(member, &["m".into()])).unwrap();
+        };
+
+        track(&member);
+        set_time(&crate_root, built);
+        track(&member);
+        assert_eq!(modified(&crate_root), built);
+        member.registrations = "listen(\"m:tick\", 5)".into();
+        track(&member);
+        assert!(modified(&crate_root) > built);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_executable_bit_change_is_staged_with_unchanged_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (source, staged) = (dir.path().join("run.sh"), dir.path().join("staged.sh"));
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o111;
+        let set = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        for path in [&source, &staged] {
+            std::fs::write(path, "true").unwrap();
+        }
+        set(&source, 0o755);
+        set(&staged, 0o644);
+        copy_file(&source, &staged).unwrap();
+        assert_eq!(mode(&staged), 0o111);
+        set(&source, 0o644);
+        copy_file(&source, &staged).unwrap();
+        assert_eq!(mode(&staged), 0);
     }
 
     #[test]
