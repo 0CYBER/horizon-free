@@ -9,9 +9,93 @@ use std::path::Path;
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
+enum AnimationFrames {
+    Raw(Arc<Vec<Vec<u8>>>),
+    Packed(Arc<PackedFrames>),
+}
+struct PackedFrames {
+    frame_lens: Vec<usize>,
+    compressed: Vec<u8>,
+    /// Decompressed lazily if [`SpriteAnimation::pixels`] is ever called after
+    /// [`SpriteAnimation::pack`] (for example, on renderer rebuild after device loss).
+    unpacked: std::sync::OnceLock<Vec<Vec<u8>>>,
+}
+impl PackedFrames {
+    fn compress(frames: &[Vec<u8>]) -> Self {
+        let frame_lens: Vec<usize> = frames.iter().map(Vec::len).collect();
+        let total: usize = frame_lens.iter().sum();
+        let mut flat = Vec::with_capacity(total);
+        for frame in frames {
+            flat.extend_from_slice(frame);
+        }
+        let mut compressed = lz4_flex::compress_prepend_size(&flat);
+        compressed.shrink_to_fit();
+        Self {
+            frame_lens,
+            compressed,
+            unpacked: std::sync::OnceLock::new(),
+        }
+    }
+    fn frames(&self) -> &[Vec<u8>] {
+        self.unpacked.get_or_init(|| {
+            let expected: usize = self.frame_lens.iter().sum();
+            let raw = lz4_flex::decompress_size_prepended(&self.compressed)
+                .ok()
+                .filter(|b| b.len() == expected)
+                .unwrap_or_else(|| vec![0; expected]);
+            let mut out = Vec::with_capacity(self.frame_lens.len());
+            let mut offset = 0;
+            for &len in &self.frame_lens {
+                out.push(raw[offset..offset + len].to_vec());
+                offset += len;
+            }
+            out
+        })
+    }
+}
+impl AnimationFrames {
+    fn len(&self) -> usize {
+        match self {
+            Self::Raw(frames) => frames.len(),
+            Self::Packed(packed) => packed.frame_lens.len(),
+        }
+    }
+    fn pixels(&self, frame: usize) -> &[u8] {
+        match self {
+            Self::Raw(frames) => &frames[frame],
+            Self::Packed(packed) => &packed.frames()[frame],
+        }
+    }
+    fn is_packed(&self) -> bool {
+        matches!(self, Self::Packed(_))
+    }
+    fn ram_bytes(&self) -> usize {
+        match self {
+            Self::Raw(frames) => frames.iter().map(Vec::capacity).sum(),
+            Self::Packed(packed) => {
+                let base = packed.compressed.capacity()
+                    + packed.frame_lens.capacity() * std::mem::size_of::<usize>();
+                let unpacked = packed
+                    .unpacked
+                    .get()
+                    .map_or(0, |v| v.iter().map(Vec::capacity).sum());
+                base + unpacked
+            }
+        }
+    }
+    #[cfg(test)]
+    fn raw_arc(&self) -> Option<&Arc<Vec<Vec<u8>>>> {
+        match self {
+            Self::Raw(frames) => Some(frames),
+            Self::Packed(_) => None,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct SpriteAnimation {
     pub layer: u32,
-    frames: Arc<Vec<Vec<u8>>>,
+    frames: AnimationFrames,
     clip: Arc<AnimationClip>,
     materials: [Option<Arc<Vec<Vec<u8>>>>; 2],
     /// The frames' width and height when they are not square; `None` for square frames. Frames
@@ -88,22 +172,38 @@ impl SpriteAnimation {
         let [fw, fh] = self
             .shape
             .unwrap_or_else(|| [(source.len() / 4).isqrt() as u32; 2]);
+        if width == 0 || height == 0 || fw == 0 || fh == 0 {
+            return Vec::new();
+        }
+        if fw == fh {
+            if width == fw && height == fh {
+                return source.to_vec();
+            }
+            if width == height {
+                let mut out = Vec::with_capacity(width as usize * height as usize * 4);
+                resample_into(source, fw, width, &mut out);
+                return out;
+            }
+        }
         let side = u64::from(fw.max(fh));
         let pick = |i: u32, extent: u32, along: u32| {
-            u64::from(i) * side / u64::from(extent) * u64::from(along) / side
+            (u64::from(i) * side / u64::from(extent) * u64::from(along) / side) as usize
         };
+        let col_map: smallvec::SmallVec<[usize; 64]> =
+            (0..width).map(|x| pick(x, width, fw)).collect();
+        let fw_usize = fw as usize;
         let mut out = Vec::with_capacity(width as usize * height as usize * 4);
         for y in 0..height {
-            let row = pick(y, height, fh) * u64::from(fw);
-            for x in 0..width {
-                let offset = ((row + pick(x, width, fw)) * 4) as usize;
+            let row = pick(y, height, fh) * fw_usize;
+            for &sx in &col_map {
+                let offset = (row + sx) * 4;
                 out.extend_from_slice(&source[offset..offset + 4]);
             }
         }
         out
     }
     pub fn pixels(&self, frame: usize) -> &[u8] {
-        &self.frames[frame]
+        self.frames.pixels(frame)
     }
     /// A frame as its layer shows it at `side` x `side`: its square of its longer side,
     /// nearest-resampled to `side` (the texels squaring then `resample` picked).
@@ -116,6 +216,21 @@ impl SpriteAnimation {
     }
     pub fn frame_count(&self) -> usize {
         self.frames.len()
+    }
+    /// Compress CPU frame buffers with LZ4 once the GPU holds the animation frames.
+    /// Subsequent [`Self::pixels`] calls transparently decompress on demand.
+    pub fn pack(&mut self) {
+        if let AnimationFrames::Raw(frames) = &self.frames {
+            self.frames = AnimationFrames::Packed(Arc::new(PackedFrames::compress(frames)));
+        }
+    }
+    /// Whether this animation's CPU frame buffers are LZ4-packed.
+    pub fn is_packed(&self) -> bool {
+        self.frames.is_packed()
+    }
+    /// Heap bytes currently retained by this animation's colour frames.
+    pub fn frame_ram_bytes(&self) -> usize {
+        self.frames.ram_bytes()
     }
 }
 
@@ -151,7 +266,7 @@ pub struct Sprites {
     shapes: std::collections::HashMap<u32, [u32; 2]>,
     /// Each layer's LabPBR maps (`_n` normals, `_s` specular) beside its texture: their
     /// frames at their own resolution (square).
-    pbr: Vec<[Option<(u32, Vec<Vec<u8>>)>; 2]>,
+    pbr: Vec<[Option<(u32, Arc<Vec<Vec<u8>>>)>; 2]>,
     /// The layers' normal and specular maps at `pbr_size`, layer after layer, set by
     /// [`Sprites::finish`]: empty when no texture has either.
     pub normals: Vec<u8>,
@@ -261,6 +376,13 @@ fn hash_square(frame: &[u8], [w, h]: [u32; 2], hasher: &mut impl std::hash::Hash
     }
     hasher.write_u8(0);
     hasher.write_u64(side);
+    if w == h {
+        let row_bytes = w as usize * 4;
+        for r in 0..w as usize {
+            hasher.write(&frame[r * row_bytes..(r + 1) * row_bytes]);
+        }
+        return;
+    }
     let mut row = Vec::with_capacity(side as usize * 4);
     for r in 0..side {
         let source_row = (r * u64::from(h) / side) as usize * w as usize;
@@ -272,45 +394,129 @@ fn hash_square(frame: &[u8], [w, h]: [u32; 2], hasher: &mut impl std::hash::Hash
         hasher.write(&row);
     }
 }
+/// Stream the `size` x `size` layer of the `w` x `h` region at `x, y` of RGBA `pixels` (`stride`
+/// pixels wide) directly into `out`.
+fn region_layer_into(
+    pixels: &[u8],
+    stride: u32,
+    [x, y, w, h]: [u32; 4],
+    size: u32,
+    out: &mut Vec<u8>,
+) {
+    if size == 0 || w == 0 || h == 0 {
+        return;
+    }
+    if w == h {
+        if x == 0 && y == 0 && stride == w {
+            let frame_bytes = w as usize * h as usize * 4;
+            resample_into(&pixels[..frame_bytes], w, size, out);
+            return;
+        }
+        if w == size {
+            let row_bytes = w as usize * 4;
+            let stride_bytes = stride as usize * 4;
+            let x_bytes = x as usize * 4;
+            for row in 0..h as usize {
+                let start = (y as usize + row) * stride_bytes + x_bytes;
+                out.extend_from_slice(&pixels[start..start + row_bytes]);
+            }
+            return;
+        }
+    }
+    let side = u64::from(w.max(h));
+    let pick = |i: u32, extent: u32| {
+        (u64::from(i) * side / u64::from(size) * u64::from(extent) / side) as usize
+    };
+    let col_map: smallvec::SmallVec<[usize; 64]> = (0..size)
+        .map(|column| x as usize + pick(column, w))
+        .collect();
+    let stride_usize = stride as usize;
+    for row in 0..size {
+        let row_base = (y as usize + pick(row, h)) * stride_usize;
+        for &col in &col_map {
+            let at = (row_base + col) * 4;
+            out.extend_from_slice(&pixels[at..at + 4]);
+        }
+    }
+}
 /// The `size` x `size` layer of the `w` x `h` region at `x, y` of RGBA `pixels`, `stride` pixels
 /// wide. Its texels are those of the region nearest-resampled to a square of its longer side and
 /// that square nearest-resampled to `size` (`resample`), picked in one pass, so the square of
 /// the longer side is never made.
 fn region_layer(pixels: &[u8], stride: u32, [x, y, w, h]: [u32; 4], size: u32) -> Vec<u8> {
-    let side = u64::from(w.max(h));
-    let pick = |i: u32, extent: u32| {
-        (u64::from(i) * side / u64::from(size) * u64::from(extent) / side) as usize
-    };
-    let mut out = Vec::with_capacity(size as usize * size as usize * 4);
-    for row in 0..size {
-        let source_row = y as usize + pick(row, h);
-        for column in 0..size {
-            let at = (source_row * stride as usize + x as usize + pick(column, w)) * 4;
-            out.extend_from_slice(&pixels[at..at + 4]);
-        }
+    if w == h && w == size && x == 0 && y == 0 && stride == w {
+        return pixels[..w as usize * h as usize * 4].to_vec();
     }
+    let mut out = Vec::with_capacity(size as usize * size as usize * 4);
+    region_layer_into(pixels, stride, [x, y, w, h], size, &mut out);
     out
 }
 /// Reduce data maps by selecting whole texels: material IDs and sentinel bytes cannot be averaged.
+#[allow(dead_code)]
 fn shrink_map(frame: Vec<u8>, side: u32, max: u32) -> (u32, Vec<u8>) {
     if side <= max || !side.is_power_of_two() || !max.is_power_of_two() {
         return (side, frame);
     }
     (max, resample(&frame, side, max))
 }
+/// Nearest-resample a square RGBA frame directly into `out`.
+fn resample_into(frame: &[u8], from: u32, to: u32, out: &mut Vec<u8>) {
+    if from == to {
+        out.extend_from_slice(frame);
+        return;
+    }
+    if from == 0 || to == 0 {
+        return;
+    }
+    let from_usize = from as usize;
+    let to_usize = to as usize;
+    if to > from && to.is_multiple_of(from) {
+        let scale = to_usize / from_usize;
+        let row_bytes = to_usize * 4;
+        for src_row in 0..from_usize {
+            let row_start = out.len();
+            let base = src_row * from_usize * 4;
+            for src_col in 0..from_usize {
+                let px = &frame[base + src_col * 4..base + src_col * 4 + 4];
+                for _ in 0..scale {
+                    out.extend_from_slice(px);
+                }
+            }
+            for _ in 1..scale {
+                out.extend_from_within(row_start..row_start + row_bytes);
+            }
+        }
+        return;
+    }
+    if from > to && from.is_multiple_of(to) {
+        let step = from_usize / to_usize;
+        for row in 0..to_usize {
+            let row_base = row * step * from_usize;
+            for column in 0..to_usize {
+                let offset = (row_base + column * step) * 4;
+                out.extend_from_slice(&frame[offset..offset + 4]);
+            }
+        }
+        return;
+    }
+    let col_map: smallvec::SmallVec<[usize; 64]> = (0..to)
+        .map(|column| (u64::from(column) * u64::from(from) / u64::from(to)) as usize)
+        .collect();
+    for row in 0..to {
+        let row_base = (u64::from(row) * u64::from(from) / u64::from(to)) as usize * from_usize;
+        for &src_col in &col_map {
+            let offset = (row_base + src_col) * 4;
+            out.extend_from_slice(&frame[offset..offset + 4]);
+        }
+    }
+}
 /// Nearest-resample a square RGBA frame to another square size.
 pub(crate) fn resample(frame: &[u8], from: u32, to: u32) -> Vec<u8> {
     if from == to {
         return frame.to_vec();
     }
-    let mut out = Vec::with_capacity((to * to * 4) as usize);
-    for row in 0..to {
-        let source_row = row * from / to;
-        for column in 0..to {
-            let offset = ((source_row * from + column * from / to) * 4) as usize;
-            out.extend_from_slice(&frame[offset..offset + 4]);
-        }
-    }
+    let mut out = Vec::with_capacity(to as usize * to as usize * 4);
+    resample_into(frame, from, to, &mut out);
     out
 }
 impl Sprites {
@@ -416,23 +622,25 @@ impl Sprites {
             self.size = size;
             return;
         }
+        let layer_count = self.native.len();
+        let layer_bytes = size as usize * size as usize * 4;
         self.pixels.clear();
-        // Only the frame each layer shows first is made at the layers' size. Animations keep
-        // their frames as decoded (shared, not copied); the animator makes them at its own edge
-        // and charges what it builds first (`gfx::animate`).
+        self.pixels.reserve_exact(layer_count * layer_bytes);
+        // Only the frame each layer shows first is made at the layers' size, streamed directly
+        // into `self.pixels` without intermediate per-layer allocations. Animations keep their
+        // frames as decoded (shared, not copied); the animator makes them at its own edge and
+        // charges what it builds first (`gfx::animate`).
         for (layer, (from, frames, initial)) in self.native.iter().enumerate() {
             let frame = &frames[*initial];
             match self.shapes.get(&(layer as u32)) {
-                Some(&[w, h]) => self
-                    .pixels
-                    .extend(region_layer(frame, w, [0, 0, w, h], size)),
+                Some(&[w, h]) => region_layer_into(frame, w, [0, 0, w, h], size, &mut self.pixels),
                 None if *from == size => self.pixels.extend_from_slice(frame),
-                None => self.pixels.extend(resample(frame, *from, size)),
+                None => resample_into(frame, *from, size, &mut self.pixels),
             }
         }
         for animation in &mut self.animations {
             let layer = animation.layer;
-            animation.frames = Arc::clone(&self.native[layer as usize].1);
+            animation.frames = AnimationFrames::Raw(Arc::clone(&self.native[layer as usize].1));
             animation.shape = self.shapes.get(&layer).copied();
         }
         self.size = size;
@@ -445,31 +653,45 @@ impl Sprites {
         if largest_map.is_some() {
             let pbr_size = self.pbr_size;
             log::info!("Horizon: LabPBR maps at {pbr_size} px, {layers} layers");
-            // Only each layer's initial frame is made at the shared size here. Animations keep
-            // the companion frames as stored; the material animator resamples the one frame it
-            // shows from its own side (`gfx::material_animate`), as it does for colour frames.
-            let mut stored = Vec::with_capacity(self.pbr.len());
-            for (layer, maps) in std::mem::take(&mut self.pbr).into_iter().enumerate() {
-                let mut kept: [Option<Arc<Vec<Vec<u8>>>>; 2] = [None, None];
-                for ((map, kept), (out, none)) in maps.into_iter().zip(&mut kept).zip([
+            // Only each layer's initial frame is made at the shared size here, streamed directly
+            // into pre-reserved buffers. Animations share the companion frames as stored without
+            // moving `self.pbr` out, so repeated layouts keep every map aligned with its layer.
+            let map_layer_bytes = pbr_size as usize * pbr_size as usize * 4;
+            self.normals.reserve_exact(self.pbr.len() * map_layer_bytes);
+            self.specular
+                .reserve_exact(self.pbr.len() * map_layer_bytes);
+            for (layer, maps) in self.pbr.iter().enumerate() {
+                for (map, (out, none)) in maps.iter().zip([
                     (&mut self.normals, FLAT_NORMAL),
                     (&mut self.specular, NO_SPECULAR),
                 ]) {
                     match map {
                         Some((from, frames)) => {
                             let initial = self.native[layer].2 % frames.len();
-                            let (from, pixels) =
-                                shrink_map(frames[initial].clone(), from, pbr_size);
-                            out.extend(resample(&pixels, from, pbr_size));
-                            *kept = Some(Arc::new(frames));
+                            resample_into(&frames[initial], *from, pbr_size, out);
                         }
-                        None => out.extend(none.repeat((pbr_size * pbr_size) as usize)),
+                        None => {
+                            let start = out.len();
+                            out.resize(start + map_layer_bytes, 0);
+                            if none != [0, 0, 0, 0] {
+                                for px in out[start..].as_chunks_mut::<4>().0 {
+                                    *px = none;
+                                }
+                            }
+                        }
                     }
                 }
-                stored.push(kept);
             }
             for animation in &mut self.animations {
-                animation.materials = stored[animation.layer as usize].clone();
+                if let Some(maps) = self.pbr.get(animation.layer as usize) {
+                    animation.materials = maps
+                        .each_ref()
+                        .map(|map| map.as_ref().map(|(_, frames)| Arc::clone(frames)));
+                }
+            }
+        } else {
+            for animation in &mut self.animations {
+                animation.materials = [None, None];
             }
         }
     }
@@ -876,7 +1098,11 @@ impl Sprites {
         } else {
             (png_width, png_height)
         };
-        if width == 0 || height == 0 || png_width % width != 0 || png_height % height != 0 {
+        if width == 0
+            || height == 0
+            || !png_width.is_multiple_of(width)
+            || !png_height.is_multiple_of(height)
+        {
             return Err(format!("sprite {name} has invalid frame dimensions").into());
         }
         let columns = png_width / width;
@@ -885,18 +1111,48 @@ impl Sprites {
         // its longer side so UVs (normalized per layer) are unchanged. That square is
         // made only at the layers' size (`lay_out`).
         let side = width.max(height);
-        let mut frames = Vec::new();
-        // The frames keep their own shape: together exactly the decoded image's pixels.
-        for index in 0..count {
-            let x = (index % columns * width) as usize;
-            let y = index / columns * height;
-            let mut frame = Vec::with_capacity(width as usize * height as usize * 4);
-            for row in y..y + height {
-                let start = (row as usize * png_width as usize + x) * 4;
-                frame.extend_from_slice(&pixels[start..start + width as usize * 4]);
+        let mut has_transparent = false;
+        let mut opaque = true;
+        let mut translucent = false;
+        for p in pixels.as_chunks::<4>().0 {
+            let a = p[3];
+            if a == 0 {
+                has_transparent = true;
+                opaque = false;
+            } else if a != 255 {
+                translucent = true;
+                opaque = false;
             }
-            frames.push(frame);
+            if has_transparent && translucent {
+                break;
+            }
         }
+        // The frames keep their own shape: together exactly the decoded image's pixels.
+        let frames = if count == 1 {
+            vec![pixels]
+        } else if columns == 1 {
+            let frame_bytes = width as usize * height as usize * 4;
+            pixels
+                .chunks_exact(frame_bytes)
+                .take(count as usize)
+                .map(<[u8]>::to_vec)
+                .collect()
+        } else {
+            let mut frames = Vec::with_capacity(count as usize);
+            let row_bytes = width as usize * 4;
+            let stride = png_width as usize * 4;
+            for index in 0..count {
+                let x = (index % columns * width) as usize * 4;
+                let y = (index / columns * height) as usize;
+                let mut frame = Vec::with_capacity(width as usize * height as usize * 4);
+                for row in 0..height as usize {
+                    let start = (y + row) * stride + x;
+                    frame.extend_from_slice(&pixels[start..start + row_bytes]);
+                }
+                frames.push(frame);
+            }
+            frames
+        };
         let texture = texture_section(metadata.as_ref());
         Ok(crate::sprite_cache::Decoded {
             side,
@@ -912,13 +1168,9 @@ impl Sprites {
                 .as_ref()
                 .and_then(|t| t["alpha_cutoff_bias"].as_f64())
                 .unwrap_or(0.0) as f32,
-            has_transparent: pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
-            opaque: pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
-            translucent: pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|p| p[3] != 0 && p[3] != 255),
+            has_transparent,
+            opaque,
+            translucent,
         })
     }
     /// Give a decoded texture its layer (or the one an identical still has).
@@ -944,11 +1196,15 @@ impl Sprites {
         let pbr = match name.split_once(':') {
             Some(_) if labpbr_maps() => {
                 let path = crate::atlas_sources::texture_resource(name, "textures");
-                ["_n", "_s"]
-                    .map(|suffix| pbr_map(&self.source, &path, suffix, count, animation.as_ref()))
+                ["_n", "_s"].map(|suffix| {
+                    pbr_map(&self.source, &path, suffix, count, animation.as_ref())
+                        .map(|(side, frames)| (side, Arc::new(frames)))
+                })
             }
-            None if labpbr_maps() && !name.starts_with("fusion/") => ["_n", "_s"]
-                .map(|suffix| pbr_map(&self.source, name, suffix, count, animation.as_ref())),
+            None if labpbr_maps() && !name.starts_with("fusion/") => ["_n", "_s"].map(|suffix| {
+                pbr_map(&self.source, name, suffix, count, animation.as_ref())
+                    .map(|(side, frames)| (side, Arc::new(frames)))
+            }),
             _ => [None, None],
         };
         let settings = crate::mipmap::Settings {
@@ -1006,7 +1262,7 @@ impl Sprites {
             initial = clip.sample(0).frame as usize;
             self.animations.push(SpriteAnimation {
                 layer,
-                frames: frames.clone(),
+                frames: AnimationFrames::Raw(frames.clone()),
                 clip: Arc::new(clip),
                 materials: [None, None],
                 shape: (frame_size != [side, side]).then_some(frame_size),
@@ -1046,20 +1302,45 @@ pub(crate) fn check_frames(side: u32, count: u32) -> std::result::Result<(), Str
 fn read_rgba(source: &ResourceSource, path: &str) -> Result<(u32, u32, Vec<u8>)> {
     decode_rgba(&source.read(path)?)
 }
+fn read_png_dimensions(source: &ResourceSource, path: &str) -> Result<(u32, u32)> {
+    let bytes = source.read(path)?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(&bytes));
+    decoder.ignore_checksums(true);
+    let (width, height) = decoder.read_header_info()?.size();
+    let atlas = u64::from(crate::hud::MAX_ATLAS_SIZE);
+    if u64::from(width) * u64::from(height) > atlas * atlas {
+        return Err(
+            format!("a {width}x{height} PNG is larger than any texture it could fill").into(),
+        );
+    }
+    Ok((width, height))
+}
 pub(crate) fn decode_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let (mut reader, mut bytes) = crate::hud::read_png(bytes)?;
     let info = reader.next_frame(&mut bytes)?;
-    let channels = info.color_type.samples();
+    if info.color_type == png::ColorType::Rgba {
+        bytes.truncate(info.buffer_size());
+        return Ok((info.width, info.height, bytes));
+    }
+    let raw = &bytes[..info.buffer_size()];
     let mut pixels = Vec::with_capacity(info.width as usize * info.height as usize * 4);
-    for pixel in bytes[..info.buffer_size()].chunks_exact(channels) {
-        let rgba = match info.color_type {
-            png::ColorType::Rgba => [pixel[0], pixel[1], pixel[2], pixel[3]],
-            png::ColorType::Rgb => [pixel[0], pixel[1], pixel[2], 255],
-            png::ColorType::Grayscale => [pixel[0], pixel[0], pixel[0], 255],
-            png::ColorType::GrayscaleAlpha => [pixel[0], pixel[0], pixel[0], pixel[1]],
-            _ => return Err("unsupported expanded sprite format".into()),
-        };
-        pixels.extend(rgba);
+    match info.color_type {
+        png::ColorType::Rgb => {
+            for pixel in raw.as_chunks::<3>().0 {
+                pixels.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+        }
+        png::ColorType::Grayscale => {
+            for &g in raw {
+                pixels.extend_from_slice(&[g, g, g, 255]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for pixel in raw.as_chunks::<2>().0 {
+                pixels.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+            }
+        }
+        _ => return Err("unsupported expanded sprite format".into()),
     }
     Ok((info.width, info.height, pixels))
 }
@@ -1075,7 +1356,7 @@ fn pbr_map(
     let stem = path.strip_suffix(".png")?;
     let map = format!("{stem}{suffix}.png");
     let (map_width, map_height, pixels) = read_rgba(source, &map).ok()?;
-    let (width, height, _) = read_rgba(source, path).ok()?;
+    let (width, height) = read_png_dimensions(source, path).ok()?;
     let [frame_width, frame_height] = animation.map_or([width as i32, height as i32], |a| {
         a.frame_size(width as i32, height as i32)
     });
@@ -1098,7 +1379,11 @@ fn pbr_map(
     } else {
         return None;
     };
-    if columns == 0 || rows == 0 || map_width % columns != 0 || map_height % rows != 0 {
+    if columns == 0
+        || rows == 0
+        || !map_width.is_multiple_of(columns)
+        || !map_height.is_multiple_of(rows)
+    {
         return None;
     }
     let (w, h) = (map_width / columns, map_height / rows);
@@ -1107,14 +1392,19 @@ fn pbr_map(
     }
     let side = w.max(h);
     let output_side = side_within(side, LAYERS_AT_LEAST, max_map_bytes()).min(side);
+    let total = columns * rows;
     // Only the frames at `output_side` are made.
-    check_frames(output_side, columns * rows).ok()?;
-    let frames = (0..columns * rows)
-        .map(|index| {
-            let (x, y) = (index % columns * w, index / columns * h);
-            region_layer(&pixels, map_width, [x, y, w, h], output_side)
-        })
-        .collect();
+    check_frames(output_side, total).ok()?;
+    let frames = if total == 1 && w == output_side && h == output_side {
+        vec![pixels]
+    } else {
+        (0..total)
+            .map(|index| {
+                let (x, y) = (index % columns * w, index / columns * h);
+                region_layer(&pixels, map_width, [x, y, w, h], output_side)
+            })
+            .collect()
+    };
     Some((output_side, frames))
 }
 /// SpriteContents: the `.mcmeta` `texture` section (TextureMetadataSection's
@@ -1146,7 +1436,7 @@ pub(crate) fn test_frames(layer: u32, frames: Vec<Vec<u8>>, metadata: &str) -> S
     SpriteAnimation {
         layer,
         clip: Arc::new(metadata.clip(frames.len() as u32).unwrap().unwrap()),
-        frames: Arc::new(frames),
+        frames: AnimationFrames::Raw(Arc::new(frames)),
         materials: [None, None],
         shape: None,
     }
@@ -1329,8 +1619,14 @@ mod tests {
         sprites.finish();
         // Both animations share their layers' decoded frames; a smaller one shows them
         // resampled to the layers' size.
-        assert!(Arc::ptr_eq(&sprites.animations[0].frames, &native));
-        assert!(Arc::ptr_eq(&sprites.animations[1].frames, &smaller));
+        assert!(Arc::ptr_eq(
+            sprites.animations[0].frames.raw_arc().unwrap(),
+            &native
+        ));
+        assert!(Arc::ptr_eq(
+            sprites.animations[1].frames.raw_arc().unwrap(),
+            &smaller
+        ));
         assert_eq!(sprites.animations[0].pixels(1), pixels[1].as_slice());
         let resized = resample(&smaller[0], 8, SPRITE_SIZE);
         assert_eq!(sprites.animations[1].frame_at(0, SPRITE_SIZE), resized);
@@ -1371,7 +1667,10 @@ mod tests {
                 (SPRITE_SIZE, Arc::new(vec![vec![0; 16 * 16 * 4]]), 0),
             ],
             pbr: vec![
-                [Some((16, vec![[9, 8, 7, 6].repeat(16 * 16)])), None],
+                [
+                    Some((16, Arc::new(vec![[9, 8, 7, 6].repeat(16 * 16)]))),
+                    None,
+                ],
                 [None, None],
             ],
             ..Default::default()
@@ -1399,8 +1698,11 @@ mod tests {
                 (128, Arc::new(vec![vec![0; 128 * 128 * 4]]), 0),
             ],
             pbr: vec![
-                [None, Some((16, maps.clone()))],
-                [None, Some((128, vec![[7, 7, 7, 255].repeat(128 * 128)]))],
+                [None, Some((16, Arc::new(maps.clone())))],
+                [
+                    None,
+                    Some((128, Arc::new(vec![[7, 7, 7, 255].repeat(128 * 128)]))),
+                ],
             ],
             animations: vec![test_frames(
                 0,
@@ -1958,7 +2260,7 @@ mod tests {
             layer: 0,
             materials: [None, None],
             shape: None,
-            frames: Arc::new(vec![vec![], vec![], vec![]]),
+            frames: AnimationFrames::Raw(Arc::new(vec![vec![], vec![], vec![]])),
             clip: Arc::new(AnimationMetadata::from_json(r#"{"frames":[{"index":2,"time":8},{"index":1,"time":3},{"index":1,"time":2},0]}"#).unwrap().clip(3).unwrap().unwrap()),
         };
         for (tick, frame) in [
@@ -1998,6 +2300,128 @@ mod tests {
         let stepped = test_clip(16, 0, r#"{"frametime":4}"#);
         assert_eq!(stepped.blend(1), blend(0, 0, 0));
         assert_eq!(stepped.blend(5), blend(1, 1, 0));
+    }
+
+    #[test]
+    fn animation_pack_compresses_frames_and_round_trips_pixels() {
+        let frames: Vec<Vec<u8>> = (0..16u8)
+            .map(|f| {
+                let mut buf = Vec::with_capacity(64 * 64 * 4);
+                for i in 0..64 * 64 {
+                    buf.extend_from_slice(&[(i & 3) as u8, ((i >> 6) & 3) as u8, f, 255]);
+                }
+                buf
+            })
+            .collect();
+        let mut animation = test_frames(3, frames.clone(), r#"{"frametime":1}"#);
+        let raw_bytes = animation.frame_ram_bytes();
+        assert!(!animation.is_packed());
+        assert_eq!(raw_bytes, 16 * 64 * 64 * 4);
+
+        animation.pack();
+        assert!(animation.is_packed());
+        let packed_bytes = animation.frame_ram_bytes();
+        assert!(
+            packed_bytes * 4 < raw_bytes,
+            "expected LZ4 pack to shrink repeated animation frames: packed={packed_bytes} raw={raw_bytes}"
+        );
+        // Packing again is idempotent.
+        animation.pack();
+        assert_eq!(animation.frame_count(), frames.len());
+        for (i, expected) in frames.iter().enumerate() {
+            assert_eq!(animation.pixels(i), expected.as_slice());
+        }
+        assert_eq!(animation.resized_pixels(2, 64, 64), frames[2]);
+        assert_eq!(
+            animation.resized_pixels(2, 32, 32),
+            resample(&frames[2], 64, 32)
+        );
+        assert_eq!(animation.frame_at(2, 32), resample(&frames[2], 64, 32));
+    }
+
+    #[test]
+    fn fast_resample_paths_match_nearest_formula() {
+        let reference = |frame: &[u8], from: u32, to: u32| -> Vec<u8> {
+            let mut out = Vec::with_capacity(to as usize * to as usize * 4);
+            for row in 0..to {
+                let source_row = row * from / to;
+                for column in 0..to {
+                    let offset = ((source_row * from + column * from / to) * 4) as usize;
+                    out.extend_from_slice(&frame[offset..offset + 4]);
+                }
+            }
+            out
+        };
+        for (from, to) in [
+            (8u32, 32u32),
+            (16, 64),
+            (32, 16),
+            (64, 16),
+            (24, 32),
+            (16, 16),
+        ] {
+            let src: Vec<u8> = (0..from * from)
+                .flat_map(|i| [i as u8, (i >> 2) as u8, (i >> 4) as u8, 255])
+                .collect();
+            assert_eq!(
+                resample(&src, from, to),
+                reference(&src, from, to),
+                "{from}->{to}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_finish_keeps_labpbr_maps_indexed_by_layer() {
+        let normal_0 = vec![[10, 20, 30, 255].repeat(16 * 16)];
+        let spec_0 = vec![
+            [1, 2, 3, 255].repeat(16 * 16),
+            [4, 5, 6, 255].repeat(16 * 16),
+        ];
+        let normal_1 = vec![[70, 80, 90, 255].repeat(16 * 16)];
+        let mut sprites = Sprites {
+            native: vec![(16, Arc::new(vec![vec![0; 16 * 16 * 4]; 2]), 1)],
+            pbr: vec![[
+                Some((16, Arc::new(normal_0.clone()))),
+                Some((16, Arc::new(spec_0.clone()))),
+            ]],
+            animations: vec![test_frames(
+                0,
+                vec![vec![0; 16 * 16 * 4]; 2],
+                r#"{"frametime":1}"#,
+            )],
+            ..Default::default()
+        };
+        sprites.finish();
+        assert_eq!(sprites.normals[..4], [10, 20, 30, 255]);
+        assert_eq!(sprites.specular[..4], [4, 5, 6, 255]);
+        assert_eq!(
+            sprites.animations[0].material_frames(1),
+            Some(spec_0.as_slice())
+        );
+        // Adding a second layer after the first layout keeps layer 0's maps and aligns layer 1's.
+        sprites
+            .native
+            .push((16, Arc::new(vec![vec![0; 16 * 16 * 4]]), 0));
+        sprites
+            .pbr
+            .push([Some((16, Arc::new(normal_1.clone()))), None]);
+        sprites.finish();
+        let layer_bytes = 16 * 16 * 4;
+        assert_eq!(sprites.normals.len(), 2 * layer_bytes);
+        assert_eq!(sprites.specular.len(), 2 * layer_bytes);
+        assert_eq!(sprites.normals[..4], [10, 20, 30, 255]);
+        assert_eq!(sprites.normals[layer_bytes..][..4], [70, 80, 90, 255]);
+        assert_eq!(sprites.specular[..4], [4, 5, 6, 255]);
+        assert_eq!(sprites.specular[layer_bytes..][..4], NO_SPECULAR);
+        assert_eq!(
+            sprites.animations[0].material_frames(0),
+            Some(normal_0.as_slice())
+        );
+        assert_eq!(
+            sprites.animations[0].material_frames(1),
+            Some(spec_0.as_slice())
+        );
     }
 }
 
@@ -2235,7 +2659,7 @@ mod png_size_tests {
         sprites.finish();
         assert_eq!(sprites.size, 2048);
         assert!(std::sync::Arc::ptr_eq(
-            &sprites.animations[0].frames,
+            sprites.animations[0].frames.raw_arc().unwrap(),
             &native
         ));
         assert_eq!(sprites.pixels.len(), 2048 * 2048 * 4);
@@ -2345,5 +2769,23 @@ mod png_size_tests {
         assert_eq!(super::check_frames(16, atlas * atlas / 256), Ok(()));
         assert!(super::check_frames(16, atlas * atlas / 256 + 1).is_err());
         assert!(super::check_frames(u32::MAX, u32::MAX).is_err());
+    }
+
+    #[test]
+    fn read_png_dimensions_refuses_huge_claimed_size() {
+        let path = "assets/minecraft/textures/block/huge.png";
+        let source = super::ResourceSource::indexed(
+            [(
+                path.to_owned(),
+                horizon_assets::resource_source::Resource::bytes(claimed_size_png(16_385, 16_384)),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        let error = super::read_png_dimensions(&source, path).unwrap_err();
+        assert!(
+            error.to_string().contains("16385x16384 PNG is larger"),
+            "{error}"
+        );
     }
 }
