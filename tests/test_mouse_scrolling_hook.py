@@ -33,12 +33,14 @@ enum MouseScrollDelta { LineDelta(f32, f32), PixelDelta(Point) }
 struct Settings { discrete_scroll: bool, mouse_wheel_sensitivity: f32 }
 struct Player { flying_speed: f32 }
 struct SpectatorGui { active: bool }
+struct Replay { playing: bool }
+impl Replay { fn playing(&self) -> bool { self.playing } }
 impl SpectatorGui { fn is_menu_active(&self) -> bool { self.active } }
 fn glfw_modifiers(bits: u32) -> u32 { bits }
 struct Game { screen: Screen, overlay: bool, sleeping: Option<()>, player: Option<Player>,
     cancel: bool, mouse: mouse::MouseLook, selected: usize,
     settings: Settings, physical_buttons: HashSet<MouseButton>, cursor: (f32, f32), modifiers: u32,
-    spectator: bool, spectator_gui: SpectatorGui, menu_scrolls: Vec<i32>,
+    spectator: bool, spectator_gui: SpectatorGui, menu_scrolls: Vec<i32>, replay: Replay,
     calls: Vec<([f64; 2], [i32; 2], [bool; 3], [f32; 2], u32)> }
 impl Game {
     fn new() -> Self { Self { screen: Screen::Playing, overlay: false, sleeping: None,
@@ -47,7 +49,7 @@ impl Game {
         settings: Settings { discrete_scroll: false, mouse_wheel_sensitivity: 1.0 },
         physical_buttons: HashSet::from([MouseButton::Left, MouseButton::Right]),
         cursor: (10.0, 20.0), modifiers: 5, spectator: false, spectator_gui: SpectatorGui { active: false },
-        menu_scrolls: vec![], calls: vec![] } }
+        menu_scrolls: vec![], replay: Replay { playing: false }, calls: vec![] } }
     fn screen_over_playing(&self) -> bool { self.overlay }
     fn spectator(&self) -> bool { self.spectator }
     fn spectator_scroll(&mut self, steps: i32) { self.menu_scrolls.push(steps); }
@@ -96,6 +98,13 @@ fn cancellation_consumes_steps_and_preserves_gameplay() {
             else { assert!(game.player.as_ref().unwrap().flying_speed > 0.1); }
         }
     }
+}
+#[test]
+fn a_replay_leaves_the_hotbar_but_mods_still_hear_the_wheel() {
+    let mut game = Game::new(); game.replay.playing = true;
+    game.wheel(MouseScrollDelta::LineDelta(0.0,1.0)).unwrap();
+    assert_eq!(game.calls.len(), 1);
+    assert_eq!(game.selected, 4);
 }
 #[test]
 fn gameplay_gates() {

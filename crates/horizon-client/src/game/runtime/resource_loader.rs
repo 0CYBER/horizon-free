@@ -212,6 +212,11 @@ pub(super) enum PendingWorldEntry {
         cookies: Option<horizon_client::net::Cookies>,
     },
     StudioReplay(std::path::PathBuf),
+    /// A mod's replay, already read (`replay_open`): it is carried, never reopened by name.
+    PreparedReplay {
+        driver: Box<horizon_client::studio::ReplayDriver>,
+        origin: super::native_replay::ReplayOrigin,
+    },
 }
 
 pub(super) struct WorldRestLoader {

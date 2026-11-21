@@ -12,25 +12,53 @@ impl Game<'_> {
     }
 
     pub(super) fn defer_world_entry(&mut self, entry: PendingWorldEntry) -> Result<bool> {
-        self.poll_world_rest()?;
+        Ok(self.try_defer_world_entry(entry)?.is_none())
+    }
+
+    /// As `defer_world_entry`, handing `entry` back when nothing needs waiting for, so an entry
+    /// that carries what it can't rebuild (a replay already read) isn't lost.
+    pub(super) fn try_defer_world_entry(
+        &mut self,
+        entry: PendingWorldEntry,
+    ) -> Result<Option<PendingWorldEntry>> {
+        // An entry dropped by an error still tells a mod waiting on it (`drop_world_entry`).
+        if let Err(error) = self.poll_world_rest() {
+            self.drop_world_entry(entry);
+            return Err(error);
+        }
         if self.rest_loader.is_none() {
-            return Ok(false);
+            return Ok(Some(entry));
         }
         self.perf.world_opening();
         if self.title.is_none() {
+            let saves = match std::env::current_dir() {
+                Ok(dir) => dir.join("saves"),
+                Err(error) => {
+                    self.drop_world_entry(entry);
+                    return Err(error.into());
+                }
+            };
             let title = self
-                .new_title(std::env::current_dir()?.join("saves"))
+                .new_title(saves)
                 .with_user(|| self.options.player_name());
             self.show_title(title);
         }
+        self.displace_pending_replay(mod_api::ReplayError::WorldBusy);
         self.pending_entry = Some(entry);
         log::info!("Horizon: world entry waiting for world resources");
-        Ok(true)
+        Ok(None)
     }
 
     pub(super) fn resume_world_entry(&mut self) -> Result<()> {
-        self.poll_integrated_start()?;
-        self.poll_world_rest()?;
+        // A mod's read replay waiting here is told as failed before the error leaves; other
+        // entries stay as they were.
+        if let Err(error) = self
+            .poll_integrated_start()
+            .and_then(|()| self.poll_world_rest())
+        {
+            self.displace_pending_replay(mod_api::ReplayError::Unavailable);
+            return Err(error);
+        }
         self.poll_world_creation();
         if self.rest_loader.is_some() {
             return Ok(());
@@ -83,6 +111,9 @@ impl Game<'_> {
                 if let Err(e) = self.open_studio_replay(&path_str) {
                     log::warn!("Horizon Studio: could not open {path_str}: {e}");
                 }
+            }
+            Some(PendingWorldEntry::PreparedReplay { driver, origin }) => {
+                self.open_prepared_replay(*driver, origin);
             }
             None => {}
         }

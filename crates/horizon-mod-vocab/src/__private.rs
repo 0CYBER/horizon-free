@@ -198,6 +198,26 @@ pub mod built {
             biome,
         }
     }
+    /// The replay this window plays, constructed by the game and only read by mods.
+    pub fn replay_state(
+        recording: String,
+        standalone: bool,
+        position_ms: u32,
+        duration_ms: u32,
+        speed: f64,
+        paused: bool,
+        ended: bool,
+    ) -> crate::ReplayState {
+        crate::ReplayState {
+            recording,
+            standalone,
+            position_ms,
+            duration_ms,
+            speed,
+            paused,
+            ended,
+        }
+    }
     /// Wrap a slot in the persistent instance group store.
     pub fn instance_group_ref(generation: u64, slot: u32) -> crate::InstanceGroupRef {
         crate::InstanceGroupRef::from_parts(generation, slot).expect("published group generation")

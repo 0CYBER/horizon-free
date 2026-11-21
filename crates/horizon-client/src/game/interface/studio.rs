@@ -422,6 +422,8 @@ impl Game<'_> {
 
     /// Add a bookmark at the replay playhead and save it in the `.mcpr` archive.
     pub(super) fn add_studio_marker(&mut self) {
+        let archive = &mut self.replay.archive;
+        let identity = &mut self.replay.identity;
         let Some(replay) = self
             .replay
             .driver
@@ -430,12 +432,18 @@ impl Game<'_> {
         else {
             return;
         };
+        if let Err(error) = archive_unchanged(*archive, replay) {
+            log::warn!("Studio: could not save replay marker: {error}");
+            return;
+        }
         let label = Text::translate(
             "horizon.studio.timeline.marker",
             &[Text::literal((replay.markers().len() + 1).to_string())],
         )
         .plain();
-        match replay.add_marker(label) {
+        let added = replay.add_marker(label);
+        note_written(archive, identity, replay);
+        match added {
             Ok(_) => self.studio.timeline.markers = replay.markers().to_vec(),
             Err(error) => log::warn!("Studio: could not save replay marker: {error}"),
         }
@@ -466,6 +474,8 @@ impl Game<'_> {
 
     /// Saves the free camera's path into the replay playing, when it changed.
     pub(super) fn save_studio_camera_track(&mut self) -> std::io::Result<()> {
+        let archive = &mut self.replay.archive;
+        let identity = &mut self.replay.identity;
         if self.studio.camera_track_dirty
             && let Some(driver) = self
                 .replay
@@ -479,7 +489,10 @@ impl Game<'_> {
             } else {
                 Some(serde_json::to_vec_pretty(track).map_err(std::io::Error::other)?)
             };
-            driver.save_camera_path(json)?;
+            archive_unchanged(*archive, driver)?;
+            let saved = driver.save_camera_path(json);
+            note_written(archive, identity, driver);
+            saved?;
             self.studio.camera_track_dirty = false;
         }
         Ok(())
@@ -757,5 +770,46 @@ impl Game<'_> {
             }
             _ => {}
         }
+    }
+}
+
+/// A replay a mod opened (`replay_open`) saves into the archive it was opened from only: the file
+/// at its path now must be that same file, not one put in its place since. Other replays (the
+/// replays list, `/studio replay open`) save to their path as before.
+fn archive_unchanged(
+    archive: Option<super::native_replay::FileIdentity>,
+    driver: &ReplayDriver,
+) -> std::io::Result<()> {
+    let Some(archive) = archive else {
+        return Ok(());
+    };
+    let now = std::fs::File::open(driver.path())
+        .and_then(|file| super::native_replay::FileIdentity::of(&file))?;
+    if now != archive {
+        return Err(std::io::Error::other(
+            "the recording was replaced since the replay opened it",
+        ));
+    }
+    Ok(())
+}
+
+/// After an editor save, the archive it wrote (from the handle the writer returns) is the one the
+/// replay reads (`identity`) and a mod's replay saves into next (`archive`).
+fn note_written(
+    archive: &mut Option<super::native_replay::FileIdentity>,
+    identity: &mut Option<super::native_replay::FileIdentity>,
+    driver: &mut ReplayDriver,
+) {
+    let Some(written) = driver.take_written() else {
+        return;
+    };
+    let written = super::native_replay::FileIdentity::of(&written).ok();
+    // Unknown, it matches nothing: a reopen recorded before this save counts as stale.
+    *identity = written;
+    // An identity that can't be read keeps the old one: the next save is refused, not unguarded.
+    if archive.is_some()
+        && let Some(written) = written
+    {
+        *archive = Some(written);
     }
 }

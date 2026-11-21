@@ -304,6 +304,7 @@ impl Game<'_> {
                 };
             });
         self.ui.registries.selector_tokens.clear();
+        self.replay.connections += 1;
         self.remote = Some(Remote {
             selector_metadata_supported: true,
             professions: self.client_professions()?,
@@ -549,6 +550,9 @@ impl Game<'_> {
         let services_keys = Arc::new(std::sync::Mutex::new(ServicesKeys::Ready(Vec::new())));
 
         self.ui.registries.selector_tokens.clear();
+        self.replay.connections += 1;
+        // The session made here is the replay's (an open's, or a seek's rebuild).
+        self.replay.connection = self.replay.connections;
         self.remote = Some(Remote {
             selector_metadata_supported: true,
             professions: self.client_professions()?,
@@ -706,6 +710,28 @@ impl Game<'_> {
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen), whose Back
     /// leads to the title after a single player world.
     pub(super) fn leave_server_body(&mut self, reason: Option<Text>) -> Result<()> {
+        // A replay ends with the session it plays on: one that owns its session, left without
+        // a reason, closes as Escape closes it, which leaves that session; otherwise the replay
+        // ends alone and the leave goes on (a reason to the disconnect screen).
+        self.drop_stale_replay();
+        if self.replay.playing() {
+            let owns = self.replay.standalone
+                || self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|remote| remote.brand == "horizon-studio");
+            if owns && reason.is_none() {
+                self.close_studio_replay();
+                return Ok(());
+            }
+            self.end_studio_replay();
+            if owns {
+                // Left with a reason: the disconnect screen below says it, as without a
+                // replay; the hands and the view the replay set go first.
+                self.reset_studio_hand_state();
+                self.camera_type = horizon_client::camera::CameraType::FirstPerson;
+            }
+        }
         if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
             return self.begin_closing_save(false);
         }

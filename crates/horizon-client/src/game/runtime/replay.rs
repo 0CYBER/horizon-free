@@ -27,6 +27,38 @@ pub(super) struct Replay {
     pub(super) last_tick: Option<std::time::Instant>,
     pub(super) virtual_tick_ms: f32,
     recording_error_reported: bool,
+    /// The playing recording's id: its file name without `.mcpr`.
+    pub(super) recording: String,
+    /// Counts the replays opened, so a mod's close or seek reaches only the replay it was asked
+    /// of.
+    pub(super) generation: u64,
+    /// The position mods were last told of (`replay_advanced`); none until `replay_opened`.
+    pub(super) reported_ms: Option<u32>,
+    /// A mod's close or seek, run at the end of the frame (`native_replay_requests`).
+    pub(super) request: Option<super::native_replay::ReplayRequest>,
+    /// The one thread reading a mod's recording (`replay_open`).
+    pub(super) opening: Option<super::native_replay::ReplayOpening>,
+    /// A mod's accepted open waiting for that thread; a later one takes its place.
+    pub(super) queued: Option<super::native_replay::QueuedOpen>,
+    /// Mods' accepted opens that ended without a replay, told at the frame's end.
+    pub(super) open_failures: Vec<(super::native_replay::ReplayOrigin, mod_api::ReplayError)>,
+    /// The connections this window has made: an open asked for before one was made (and maybe
+    /// left) is no longer for the session it was asked in.
+    pub(super) connections: u64,
+    /// `connections` when the replay playing took up its session: a replay whose session has
+    /// gone since is no longer playing on the one there now.
+    pub(super) connection: u64,
+    /// The archive a mod's replay was opened from (`replay_open`): the editor saves its markers
+    /// and camera path only into that very file, never into one put in its place since.
+    pub(super) archive: Option<super::native_replay::FileIdentity>,
+    /// The archive file the replay playing read (any route), refreshed from the file each
+    /// editor save writes: what a mod's reopen of it is compared with, without opening it.
+    pub(super) identity: Option<super::native_replay::FileIdentity>,
+    /// A seek was applied: the next frame reports its position (`replay_advanced`) and holds the
+    /// clock there, so the frame drawn shows exactly where the seek went.
+    pub(super) seek_report: bool,
+    /// The folder mods open recordings from by id; the game folder's `recordings/` when none.
+    pub(super) recordings_dir: Option<PathBuf>,
 }
 
 impl Replay {
@@ -347,6 +379,7 @@ impl Game<'_> {
                 .seek_and_collect(target_ms)?;
             self.init_remote_for_replay()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+            self.reset_replay_world_extras();
             packets
         } else {
             if target_ms < current_ms {
@@ -363,16 +396,47 @@ impl Game<'_> {
         };
 
         self.dispatch_studio_replay_packets(packets);
+        if !self.replay.playing() {
+            return Ok(());
+        }
         self.reset_studio_playback_ticks();
         self.replay.last_tick = Some(std::time::Instant::now());
+        self.replay.seek_report = true;
         Ok(())
+    }
+
+    /// What the recording's packets set on the game outside the replay's session (which
+    /// `init_remote_for_replay` makes anew), back as a fresh open has it, so the world rebuilt
+    /// from the start shows only what the packets replayed set.
+    fn reset_replay_world_extras(&mut self) {
+        self.border = Default::default();
+        self.tab_list = Default::default();
+        self.score.board = Default::default();
+        self.titles.clear();
+        self.titles.reset_times();
+        self.titles.overlay_time = 0;
+        self.clock.set_rate(20.0);
+        self.clock.set_frozen(false);
+        self.clock.set_frozen_ticks_to_run(0);
+        self.adv = Default::default();
+        self.stats = Default::default();
+        self.post_effects = Vec::new();
+        self.cooldowns = Default::default();
+        self.sleeping = None;
+        self.sleep_timer = 0;
     }
 
     fn dispatch_studio_replay_packets(
         &mut self,
         packets: Vec<horizon_client::studio::mcpr::TimestampedPacket>,
     ) {
+        let generation = self.replay.generation;
         for pkt in packets {
+            // A packet whose handler left the session (a chat it can't place) ended the
+            // replay: the rest of the batch has no session to go to.
+            if !self.replay.playing() || self.replay.generation != generation {
+                break;
+            }
             match horizon_protocol::packets::play::Clientbound::decode(pkt.id, &pkt.payload) {
                 Ok(packet) => {
                     let _ = self.handle_packet(packet);
@@ -395,6 +459,11 @@ impl Game<'_> {
 
     /// Advance active replay playback by elapsed frame time and dispatch ready packets.
     pub(super) fn advance_studio_replay(&mut self) -> Result<()> {
+        self.advance_studio_replay_at(std::time::Instant::now())
+    }
+
+    /// [`Self::advance_studio_replay`] for a frame drawn at `now`.
+    pub(super) fn advance_studio_replay_at(&mut self, now: std::time::Instant) -> Result<()> {
         let status = self
             .remote
             .as_ref()
@@ -408,7 +477,18 @@ impl Game<'_> {
             return Ok(());
         };
 
-        let now = std::time::Instant::now();
+        if std::mem::take(&mut self.replay.seek_report) {
+            // The frame after a seek shows the seek's position and says so; the clock runs on
+            // from the next one.
+            let position = driver.position_ms();
+            self.replay.last_tick = Some(now);
+            self.studio_replay_advanced();
+            if self.replay.reported_ms.is_some() {
+                self.replay.reported_ms = Some(position);
+                self.native_replay_advanced(position);
+            }
+            return Ok(());
+        }
         let delta = match self.replay.last_tick {
             Some(last) => now
                 .saturating_duration_since(last)
@@ -426,6 +506,9 @@ impl Game<'_> {
         };
 
         self.dispatch_studio_replay_packets(ready_packets);
+        if !self.replay.playing() {
+            return Ok(());
+        }
         let paused = self
             .replay
             .driver
@@ -494,6 +577,7 @@ impl Game<'_> {
             m.previous_limb_speed = m.limb_speed;
         }
         self.studio_replay_advanced();
+        self.announce_replay_advance();
         Ok(())
     }
 
@@ -554,18 +638,16 @@ impl Game<'_> {
                 Some("seek") => {
                     let ms_str = words.get(3).ok_or("missing seek timestamp")?;
                     let ms: u32 = ms_str.parse().map_err(|_| "invalid timestamp")?;
-                    let pos = if let Some(r) = self.replay.driver.as_mut() {
-                        r.seek(ms).map_err(|e| format!("{e}"))?;
-                        Some(r.position_ms())
-                    } else {
-                        None
-                    };
-                    if let Some(pos) = pos {
-                        self.reset_studio_playback_ticks();
-                        Ok(Some(json!({ "ok": true, "position_ms": pos })))
-                    } else {
-                        Ok(Some(json!({ "error": "no active replay" })))
+                    if self.replay.driver.is_none() {
+                        return Ok(Some(json!({ "error": "no active replay" })));
                     }
+                    // As chat, Studio and mods seek: the world rebuilt at the position, which the
+                    // next frame reports exactly.
+                    if let Err(error) = self.seek_studio_replay(ms) {
+                        return Ok(Some(json!({ "error": error.to_string() })));
+                    }
+                    let pos = self.replay.driver.as_ref().map(|r| r.position_ms());
+                    Ok(Some(json!({ "ok": true, "position_ms": pos })))
                 }
                 Some("status") => {
                     if let Some(r) = self.replay.driver.as_ref() {
@@ -664,6 +746,7 @@ impl Game<'_> {
     }
 
     pub(super) fn open_studio_replay(&mut self, path: &str) -> Result<Value> {
+        self.drop_stale_replay();
         if let Err(error) = self.save_studio_camera_track() {
             return Ok(json!({ "ok": false, "error": error.to_string() }));
         }
@@ -676,6 +759,7 @@ impl Game<'_> {
                 log::error!("Failed to open studio replay '{path}': {error}");
                 return Ok(json!({ "ok": false, "error": error.to_string() }));
             }
+            self.displace_pending_replay(mod_api::ReplayError::WorldBusy);
             self.pending_entry = Some(PendingWorldEntry::StudioReplay(PathBuf::from(path)));
             if let Err(error) = self.close_world() {
                 self.pending_entry = None;
@@ -696,20 +780,65 @@ impl Game<'_> {
 
         // Validate and index the archive before replacing the title menu or active world. A
         // temp-file, metadata, or protocol error must leave the current screen usable.
-        let driver = match ReplayDriver::open(Path::new(path)) {
-            Ok(driver) => driver,
+        // The archive is read through one handle, which also says which file it is.
+        let opened = std::fs::File::open(path).and_then(|file| {
+            let identity = super::native_replay::FileIdentity::of(&file).ok();
+            Ok((ReplayDriver::from_file(file, Path::new(path))?, identity))
+        });
+        let (driver, identity) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 log::error!("Failed to open studio replay '{path}': {error}");
                 return Ok(json!({ "ok": false, "error": error.to_string() }));
             }
         };
 
+        let origin = super::native_replay::ReplayOrigin {
+            recording: self.recording_id(path),
+            request: 0,
+            archive: None,
+            identity,
+            replacing: None,
+        };
+        self.start_studio_replay(driver, origin, path)
+    }
+
+    /// Plays `driver`, a recording already read, from where the game is (the title, or a replay
+    /// it replaces): its session, the first frame, then `replay_opened`. `origin` says who asked
+    /// for it, `path` only names it in the log.
+    pub(super) fn start_studio_replay(
+        &mut self,
+        driver: ReplayDriver,
+        origin: super::native_replay::ReplayOrigin,
+        path: &str,
+    ) -> Result<Value> {
+        let super::native_replay::ReplayOrigin {
+            recording,
+            request,
+            archive,
+            identity,
+            ..
+        } = origin;
+        let mut driver = driver;
+        // The first frame is set up from the opening snapshot before mods hear `replay_opened`,
+        // whatever time the recording's Login was stamped with.
+        let opening = match driver.take_opening() {
+            Ok(opening) => opening,
+            Err(error) => {
+                log::error!("Failed to read studio replay '{path}': {error}");
+                return Ok(json!({ "ok": false, "error": error.to_string() }));
+            }
+        };
+        self.drop_stale_replay();
         let standalone = self.replay.driver.is_none() && self.remote.is_none();
         if self.remote.is_none()
             && let Err(error) = self.init_remote_for_replay()
         {
             log::error!("Failed to initialize studio replay session: {error}");
             return Ok(json!({ "ok": false, "error": error.to_string() }));
+        }
+        if self.replay.driver.is_none() {
+            self.replay.connection = self.replay.connections;
         }
 
         let duration_ms = driver.duration_ms();
@@ -718,18 +847,46 @@ impl Game<'_> {
         if self.replay.driver.is_none() {
             self.replay.previous_camera_type = Some(self.camera_type);
             self.replay.standalone = standalone;
+        } else {
+            // A replay opened over another: mods hear the old one close before the new one opens.
+            self.replay.driver = None;
+            self.replay.reported_ms = None;
+            // The kept synthetic session isn't made anew, so what the old recording set outside
+            // it goes here.
+            self.ui.chat.clear();
+            self.reset_replay_world_extras();
+            let previous = std::mem::take(&mut self.replay.recording);
+            self.native_replay_closed(&previous);
         }
+        self.replay.recording = recording.clone();
+        self.replay.archive = archive;
+        self.replay.identity = identity;
+        self.replay.generation += 1;
+        self.replay.reported_ms = None;
+        self.replay.seek_report = false;
+        // The wheel's part step belongs to the session the replay leaves.
+        self.mouse.scroll = Default::default();
         self.replay.driver = Some(Box::new(driver));
         self.camera_type = horizon_client::camera::CameraType::FirstPerson;
         self.title = None;
         self.screen = Screen::Playing;
         self.capture(false);
         self.dragging = false;
+        // After the resets: a screen the snapshot opens (a workstation's) stays open.
+        self.dispatch_studio_replay_packets(opening);
         // Apply timestamp-zero login, player pose, and chunk packets before the first rendered
         // frame so playback opens at the recorded player's viewpoint.
         let _ = self.advance_studio_replay();
+        if !self.replay.playing() {
+            // The recording's own packets ended its session (a disconnect) before it was set up.
+            log::error!("Studio replay '{path}' ended while it opened");
+            return Ok(json!({ "ok": false, "error": "the replay ended while it opened" }));
+        }
         self.reset_studio_playback_ticks();
         log::info!("Studio: Opened replay '{path}' ({duration_ms} ms, {packets} packets)");
+        // Mods hear of the clock's moves from here on, starting where this first frame left it.
+        self.replay.reported_ms = self.replay.driver.as_ref().map(|r| r.position_ms());
+        self.native_replay_opened(&recording, duration_ms, self.replay.standalone, request);
         Ok(json!({
             "ok": true,
             "duration_ms": duration_ms,
@@ -737,12 +894,6 @@ impl Game<'_> {
         }))
     }
     pub(super) fn close_studio_replay(&mut self) -> bool {
-        self.studio_replay_closing();
-        let closed = self.replay.driver.take().is_some();
-        if !closed {
-            return false;
-        }
-
         // A standalone replay owns a synthetic Remote connection. Treat that
         // connection as replay state even if the saved origin flag was lost;
         // sending it through leave_server() opens the Multiplayer screen.
@@ -751,13 +902,10 @@ impl Game<'_> {
                 .remote
                 .as_ref()
                 .is_some_and(|remote| remote.brand == "horizon-studio");
-        self.replay.standalone = false;
-        if let Some(camera_type) = self.replay.previous_camera_type.take() {
-            self.camera_type = camera_type;
+        if !self.end_studio_replay() {
+            return false;
         }
-        self.replay.last_tick = None;
-        self.studio_replay_closed();
-        self.replay.virtual_tick_ms = 0.0;
+        let closed = true;
         self.capture(false);
         if standalone {
             if let Some(mut remote) = self.remote.take() {
@@ -783,6 +931,44 @@ impl Game<'_> {
         }
         closed
     }
+    /// The replay itself ends: its edits saved, its driver dropped, mods told `replay_closed`.
+    /// The session it played on is left as it is. False when no replay was installed.
+    pub(super) fn end_studio_replay(&mut self) -> bool {
+        self.studio_replay_closing();
+        if self.replay.driver.take().is_none() {
+            return false;
+        }
+        // Mods heard of it only once `replay_opened` was told (a session the recording's own
+        // packets end while it opens fails the open instead).
+        let heard = self.replay.reported_ms.is_some();
+        self.replay.standalone = false;
+        if let Some(camera_type) = self.replay.previous_camera_type.take() {
+            self.camera_type = camera_type;
+        }
+        self.replay.last_tick = None;
+        self.studio_replay_closed();
+        self.replay.reported_ms = None;
+        self.replay.seek_report = false;
+        // A part step of the wheel in the replay doesn't carry into the next session.
+        self.mouse.scroll = Default::default();
+        self.replay.archive = None;
+        self.replay.identity = None;
+        let recording = std::mem::take(&mut self.replay.recording);
+        if heard {
+            self.native_replay_closed(&recording);
+        }
+        self.replay.virtual_tick_ms = 0.0;
+        true
+    }
+
+    /// A replay installed on a connection that has gone since (a different one is current, or
+    /// none) is ended without touching the session there now.
+    pub(super) fn drop_stale_replay(&mut self) {
+        if self.replay.driver.is_some() && self.replay.connection != self.replay.connections {
+            self.end_studio_replay();
+        }
+    }
+
     /// Dump current player pose, dimension login, center chunk, and resident loaded chunks
     /// into the recording stream at timestamp 0ms so replays accurately reconstruct the world.
     pub(super) fn dump_world_snapshot_to_recorder(

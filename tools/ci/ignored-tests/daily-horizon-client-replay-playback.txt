@@ -1,0 +1,16 @@
+# A client mod driving replay playback needs prepared resources.
+# PACKAGE TEST TARGET daily REASON
+horizon-client game::native_replay_tests::a_client_mod_drives_the_replay_and_hears_its_clock_once_a_move lib daily resources
+horizon-client game::native_replay_tests::a_replay_keeps_gameplay_input_off_and_leaves_mods_the_wheel lib daily resources
+horizon-client game::native_replay_tests::a_client_mod_opens_recordings_by_id_at_the_frames_end lib daily resources
+horizon-client game::native_replay_tests::a_replay_open_never_displaces_a_joining_or_multiplayer_session lib daily resources
+horizon-client game::native_replay_tests::the_editor_saves_a_mods_replay_only_into_the_archive_it_opened lib daily resources
+horizon-client game::native_replay_tests::a_control_socket_seek_to_the_end_rebuilds_the_world_there lib daily resources
+horizon-client game::native_replay_tests::a_replay_with_a_late_login_is_set_up_before_it_is_heard_open lib daily resources
+horizon-client game::native_replay_tests::a_replacement_keeps_the_replay_whose_camera_edits_it_would_lose lib daily resources
+horizon-client game::native_replay_tests::save_and_quit_during_a_read_opens_no_replay lib daily resources
+horizon-client game::native_replay_tests::a_screen_the_opening_snapshot_opens_stays_open lib daily resources
+horizon-client game::native_replay_tests::a_reopen_of_the_playing_archive_after_an_editor_save_is_refused lib daily resources
+horizon-client game::native_replay_tests::a_backward_seek_drops_what_later_packets_set_outside_the_session lib daily resources
+horizon-client game::native_replay_tests::a_replay_ends_with_the_session_it_plays_on lib daily resources
+horizon-client game::native_replay_tests::a_recorded_packet_that_leaves_the_session_ends_the_replay_once lib daily resources

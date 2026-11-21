@@ -6,8 +6,10 @@
 use super::mcpr::{Marker, McprReader, McprWriter, Metadata, TimestampedPacket};
 use crate::packet_source::PacketSource;
 use std::{
+    fs::File,
     io,
     path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
     time::Duration,
 };
 
@@ -16,18 +18,38 @@ pub struct ReplayDriver {
     pub metadata: Metadata,
     reader: McprReader,
     path: PathBuf,
+    /// Where the recording ends: its recorded duration, or its last packet when that is later,
+    /// so no packet is ever past the end. The clock never goes past it.
+    end_ms: u32,
+    /// The Login's time: the recording's opening snapshot is every packet up to it, applied
+    /// whenever the world is built from the start, wherever the clock is.
+    start_ms: u32,
     cursor_ms: f64,
     speed: f64,
     paused: bool,
     looping: bool,
     finished: bool,
     next_packet_cache: Option<TimestampedPacket>,
+    /// The archive the editor's last save wrote, still open (`take_written`).
+    written: Option<File>,
 }
 
 impl ReplayDriver {
     /// Open an `.mcpr` recording archive for replay playback.
     pub fn open(path: &Path) -> io::Result<Self> {
-        let mut reader = McprReader::open(path)?;
+        Self::from_file(std::fs::File::open(path)?, path)
+    }
+
+    /// As [`ReplayDriver::open`], from the archive already open as `file`; `path` is only where
+    /// the editor later saves its markers and camera path.
+    pub fn from_file(file: File, path: &Path) -> io::Result<Self> {
+        Self::from_file_cancellable(file, path, &AtomicBool::new(false))
+    }
+
+    /// As [`ReplayDriver::from_file`], giving up with `Interrupted` soon after `cancel` is set
+    /// ([`McprReader::from_file_cancellable`]).
+    pub fn from_file_cancellable(file: File, path: &Path, cancel: &AtomicBool) -> io::Result<Self> {
+        let mut reader = McprReader::from_file_cancellable(file, cancel)?;
         validate_metadata(&reader.metadata)?;
         let metadata = reader.metadata.clone();
         let next_packet_cache = reader.next_packet()?;
@@ -35,18 +57,50 @@ impl ReplayDriver {
             .as_ref()
             .ok_or_else(|| invalid_replay("recording contains no play-state packets"))?;
         validate_play_stream_start(first)?;
+        let start_ms = first.timestamp_ms;
+        let end_ms = metadata.duration.max(reader.last_timestamp_ms());
 
         Ok(Self {
             metadata,
             reader,
             path: path.to_path_buf(),
+            end_ms,
+            start_ms,
             cursor_ms: 0.0,
             speed: 1.0,
             paused: false,
             looping: false,
             finished: false,
             next_packet_cache,
+            written: None,
         })
+    }
+
+    /// The archive the editor's last save (`add_marker`, `save_camera_path`) wrote, still open,
+    /// once: what is at [`ReplayDriver::path`] now unless something replaced it since.
+    pub fn take_written(&mut self) -> Option<File> {
+        self.written.take()
+    }
+
+    /// The recording's opening snapshot, the Login and every packet with its time, still to be
+    /// handed out: what the replay's first frame is set up from, even when the Login is
+    /// recorded after 0 ms. The clock doesn't move.
+    pub fn take_opening(&mut self) -> io::Result<Vec<TimestampedPacket>> {
+        let mut packets = Vec::new();
+        while self
+            .next_packet_cache
+            .as_ref()
+            .is_some_and(|packet| packet.timestamp_ms <= self.start_ms)
+        {
+            packets.push(self.next_packet_cache.take().expect("checked above"));
+            self.next_packet_cache = self.reader.next_packet()?;
+        }
+        Ok(packets)
+    }
+
+    /// The archive this replay reads, where the editor saves its markers and camera path.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// The editor's camera path saved alongside the packet stream, as the
@@ -69,7 +123,7 @@ impl ReplayDriver {
         let mut markers = self.reader.markers.clone();
         markers.push(marker.clone());
         markers.sort_by_key(|entry| entry.time_ms);
-        McprWriter::replace_markers(&self.path, &markers)?;
+        self.written = Some(McprWriter::replace_markers(&self.path, &markers)?);
         self.reader.markers = markers;
         Ok(marker)
     }
@@ -77,7 +131,10 @@ impl ReplayDriver {
     /// Save the editor's camera path in the recording archive; `None`
     /// removes it.
     pub fn save_camera_path(&mut self, json: Option<Vec<u8>>) -> io::Result<()> {
-        McprWriter::replace_camera_path(&self.path, json.as_deref())?;
+        self.written = Some(McprWriter::replace_camera_path(
+            &self.path,
+            json.as_deref(),
+        )?);
         self.reader.camera_path = json;
         Ok(())
     }
@@ -85,11 +142,11 @@ impl ReplayDriver {
 
 impl PacketSource for ReplayDriver {
     fn position_ms(&self) -> u32 {
-        self.cursor_ms as u32
+        (self.cursor_ms as u32).min(self.end_ms)
     }
 
     fn duration_ms(&self) -> u32 {
-        self.metadata.duration
+        self.end_ms
     }
 
     fn packet_count(&self) -> usize {
@@ -97,10 +154,10 @@ impl PacketSource for ReplayDriver {
     }
 
     fn progress(&self) -> f32 {
-        if self.metadata.duration == 0 {
+        if self.end_ms == 0 {
             0.0
         } else {
-            (self.cursor_ms / self.metadata.duration as f64).clamp(0.0, 1.0) as f32
+            (self.cursor_ms / f64::from(self.end_ms)).clamp(0.0, 1.0) as f32
         }
     }
 
@@ -108,8 +165,11 @@ impl PacketSource for ReplayDriver {
         self.speed
     }
 
+    /// A speed that isn't a number changes nothing: `clamp` would keep a NaN.
     fn set_speed(&mut self, speed: f64) {
-        self.speed = speed.clamp(0.01, 20.0);
+        if !speed.is_nan() {
+            self.speed = speed.clamp(0.01, 20.0);
+        }
     }
 
     fn is_paused(&self) -> bool {
@@ -133,33 +193,32 @@ impl PacketSource for ReplayDriver {
     }
 
     fn advance(&mut self, delta: Duration) -> io::Result<Vec<TimestampedPacket>> {
-        if self.paused || self.finished {
+        // An ended clock still hands out what a seek left pending at the end (a zero-length
+        // recording's snapshot after `restart`).
+        if self.paused || (self.finished && self.next_packet_cache.is_none()) {
             return Ok(Vec::new());
         }
 
         let delta_ms = delta.as_secs_f64() * 1000.0 * self.speed;
-        self.cursor_ms += delta_ms;
+        self.cursor_ms = (self.cursor_ms + delta_ms).min(f64::from(self.end_ms));
 
         let mut ready = Vec::new();
         let target_ms = self.cursor_ms as u32;
-
-        loop {
-            let Some(pkt) = &self.next_packet_cache else {
-                if self.cursor_ms >= self.metadata.duration as f64 {
-                    if self.looping {
-                        self.seek(0)?;
-                    } else {
-                        self.finished = true;
-                    }
-                }
-                break;
-            };
-
-            if pkt.timestamp_ms <= target_ms {
-                ready.push(self.next_packet_cache.take().unwrap());
-                self.next_packet_cache = self.reader.next_packet()?;
+        while self
+            .next_packet_cache
+            .as_ref()
+            .is_some_and(|pkt| pkt.timestamp_ms <= target_ms)
+        {
+            ready.push(self.next_packet_cache.take().expect("checked above"));
+            self.next_packet_cache = self.reader.next_packet()?;
+        }
+        // The end is the clock reaching `end_ms`; every packet is at or before it, so all of
+        // them have been handed out by then.
+        if target_ms >= self.end_ms {
+            if self.looping {
+                self.seek(0)?;
             } else {
-                break;
+                self.finished = true;
             }
         }
 
@@ -167,9 +226,9 @@ impl PacketSource for ReplayDriver {
     }
 
     fn seek(&mut self, target_ms: u32) -> io::Result<()> {
-        let clamped_ms = target_ms.min(self.metadata.duration);
+        let clamped_ms = target_ms.min(self.end_ms);
         self.cursor_ms = clamped_ms as f64;
-        self.finished = false;
+        self.finished = clamped_ms >= self.end_ms;
 
         self.reader.seek_to_timestamp(clamped_ms)?;
         self.next_packet_cache = self.reader.next_packet()?;
@@ -177,27 +236,29 @@ impl PacketSource for ReplayDriver {
     }
 
     fn seek_and_collect(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
-        let target_ms = target_ms.min(self.metadata.duration);
+        let target_ms = target_ms.min(self.end_ms);
         self.reader.seek_to_timestamp(0)?;
         self.next_packet_cache = self.reader.next_packet()?;
 
+        // A world rebuilt from the start always gets the opening snapshot.
+        let through_ms = target_ms.max(self.start_ms);
         let mut packets = Vec::new();
         while self
             .next_packet_cache
             .as_ref()
-            .is_some_and(|packet| packet.timestamp_ms <= target_ms)
+            .is_some_and(|packet| packet.timestamp_ms <= through_ms)
         {
             packets.push(self.next_packet_cache.take().expect("checked above"));
             self.next_packet_cache = self.reader.next_packet()?;
         }
 
         self.cursor_ms = target_ms as f64;
-        self.finished = false;
+        self.finished = target_ms >= self.end_ms;
         Ok(packets)
     }
 
     fn seek_forward(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
-        let target_ms = target_ms.min(self.metadata.duration);
+        let target_ms = target_ms.min(self.end_ms);
         if (target_ms as f64) < self.cursor_ms {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -216,7 +277,7 @@ impl PacketSource for ReplayDriver {
         }
 
         self.cursor_ms = target_ms as f64;
-        self.finished = false;
+        self.finished = target_ms >= self.end_ms;
         Ok(packets)
     }
 

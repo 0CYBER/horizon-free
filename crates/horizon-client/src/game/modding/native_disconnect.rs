@@ -26,9 +26,11 @@ impl Game<'_> {
         Ok(())
     }
 
-    /// What follows the frame's render: the cursor icon, then a mod's `disconnect` (below).
+    /// What follows the frame's render: the cursor icon, a mod's replay open, close or seek
+    /// (`native_replay_requests`), then a mod's `disconnect` (below).
     pub(in crate::game) fn native_frame_end(&mut self) -> Result<()> {
         horizon_client::spans::time("pr_cursor", || self.apply_cursor_icon());
+        self.native_replay_requests();
         self.native_leave_if_asked()
     }
 

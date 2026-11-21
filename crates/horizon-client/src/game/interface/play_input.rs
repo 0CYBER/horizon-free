@@ -330,6 +330,11 @@ impl Game<'_> {
     /// What one whole wheel step does in play (`MouseHandler.onScroll`): a spectator's menu or
     /// flying speed, else the selected hotbar slot.
     pub(super) fn hotbar_wheel_step(&mut self, wheel: i32, vertical_steps: i32) {
+        // A replay's hotbar and spectator menu are the recording's: the wheel and a bumper turn
+        // nothing there, though a mod still heard them (`mouse_scrolling`).
+        if self.replay.playing() {
+            return;
+        }
         if self.spectator() && self.spectator_gui.is_menu_active() {
             self.spectator_scroll(-wheel);
         } else if self.spectator() {
