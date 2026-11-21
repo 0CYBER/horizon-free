@@ -197,7 +197,12 @@ fn note(s: &str) -> Option<AnyElement> {
 
 impl Launcher {
     pub(super) fn glass_settings(&mut self, b: Built, cx: &mut Context<Self>) -> Div {
-        if self.storage_report.is_none() && !self.storage_pending && self.storage_error.is_none() {
+        if crate::glass_storage::count_now(
+            self.storage_report.is_some(),
+            self.storage_pending,
+            self.storage_error.is_some(),
+            self.storage_tried == self.storage_visit,
+        ) {
             self.refresh_storage(None, false);
         }
         let t = self.theme;

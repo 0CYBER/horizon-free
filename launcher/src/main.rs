@@ -314,6 +314,14 @@ struct Launcher {
     disk: Vec<(String, u64)>,
     storage_report: Option<storage::Report>,
     storage_pending: bool,
+    /// The Settings visit (`storage_visit`) the last count or cleanup started in: a count that
+    /// failed is tried again on the next visit, not on every frame of this one.
+    storage_tried: u64,
+    /// The cleanups lowered cache limits asked for and those that ran: one still owed (a count
+    /// was running, the build lock was busy, a newer limit came) runs before the next count.
+    storage_trims: crate::glass_storage::Trims,
+    /// The running storage work is such a cleanup, settling the requests up to this generation.
+    storage_trimming: Option<u64>,
     /// A Clear the player still has to confirm: `Some(None)` is Clear all.
     storage_confirm: Option<Option<storage::Category>>,
     storage_error: Option<String>,

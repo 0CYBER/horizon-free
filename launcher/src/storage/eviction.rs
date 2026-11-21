@@ -82,11 +82,43 @@ pub fn cleanup() -> Result<Report, Error> {
 }
 
 pub fn freed_message(report: &Report) -> Option<String> {
-    let bytes: u64 = report.rows.iter().map(|row| row.freed_bytes).sum();
+    // The report's totals count a unit listed under two rows once; the rows' sum would not.
+    let bytes = report.total_bytes.saturating_sub(report.remaining_bytes);
     (bytes > 0).then(|| {
         crate::i18n::trf(
             "Freed {size} of old caches",
             &[("size", &super::format_bytes(bytes))],
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #19481: a `.trash-*` freed through two rows is announced once.
+    #[test]
+    fn freed_space_counts_a_unit_in_two_rows_once() {
+        let row = |category| Row {
+            category,
+            bytes: 300_000_000,
+            freed_bytes: 300_000_000,
+            remaining_bytes: 0,
+            kept: Vec::new(),
+        };
+        let report = Report {
+            rows: vec![row(Category::PrebuiltGames), row(Category::OtherCaches)],
+            total_bytes: 300_000_000,
+            remaining_bytes: 0,
+        };
+        let message = freed_message(&report).unwrap();
+        assert!(message.contains(&format_bytes(300_000_000)), "{message}");
+        assert!(!message.contains(&format_bytes(600_000_000)), "{message}");
+        let nothing = Report {
+            rows: Vec::new(),
+            total_bytes: 300_000_000,
+            remaining_bytes: 300_000_000,
+        };
+        assert_eq!(freed_message(&nothing), None);
+    }
 }

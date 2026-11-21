@@ -147,6 +147,8 @@ pub(crate) fn locked(file: File, mode: LockMode) -> Result<Locked, Error> {
 }
 
 fn size(path: &Path) -> Result<u64, Error> {
+    #[cfg(test)]
+    SIZED.with(|s| s.borrow_mut().push(path.to_owned()));
     let meta = fs::symlink_metadata(path)?;
     if linked(&meta) {
         return Err(Error::Unsafe(path.to_owned()));
@@ -162,6 +164,16 @@ fn size(path: &Path) -> Result<u64, Error> {
         bytes = bytes.saturating_add(size(&entry?.path())?);
     }
     Ok(bytes)
+}
+
+/// The target's profile folders, and their Cargo locks, held.
+type Profiles = (Vec<Locked>, Vec<PathBuf>);
+
+#[cfg(test)]
+thread_local! {
+    /// The paths `size` measured on this thread, in order.
+    pub(crate) static SIZED: std::cell::RefCell<Vec<PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 impl Cache {
@@ -185,8 +197,16 @@ impl Cache {
         })
     }
 
+    /// What the target's profiles hold; the storage count measures them itself.
+    #[cfg(test)]
     pub(crate) fn bytes(&self) -> Result<u64, Error> {
         self.process(None, false)
+    }
+
+    /// Refuses as `bytes` does (a link in the path, a Cargo holding a target lock) without
+    /// measuring the target folder: the storage count walks it itself (#19481).
+    pub(crate) fn check_target(&self) -> Result<(), Error> {
+        self.locked_profiles().map(drop)
     }
     pub(crate) fn clear(&self) -> Result<u64, Error> {
         crate::cache_cleanup::Access::IncompleteGame.check(crate::cache_cleanup::Proof::Lease)?;
@@ -212,12 +232,13 @@ impl Cache {
         Ok(())
     }
 
-    fn process(&self, limit: Option<u64>, clear: bool) -> Result<u64, Error> {
+    /// The target's profile folders, with each one's Cargo lock held; None without a target.
+    fn locked_profiles(&self) -> Result<Option<Profiles>, Error> {
         checked(&self.root, true)?;
         self.unchanged_path(&self.root)?;
         let target = self.root.join("target");
         if checked(&target, true)?.is_none() {
-            return Ok(0);
+            return Ok(None);
         }
         self.unchanged_path(&target)?;
         let mut locks = Vec::new();
@@ -231,6 +252,13 @@ impl Cache {
                 folders.push(folder);
             }
         }
+        Ok(Some((locks, folders)))
+    }
+
+    fn process(&self, limit: Option<u64>, clear: bool) -> Result<u64, Error> {
+        let Some((locks, folders)) = self.locked_profiles()? else {
+            return Ok(0);
+        };
         // Validate ALL profiles and descendants before deleting ANY output. Never traverse links.
         let mut entries = Vec::new();
         let mut bytes = 0u64;

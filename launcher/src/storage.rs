@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 pub mod eviction;
 mod inventory;
+#[cfg(any(windows, test))]
+mod listing;
 pub mod policy;
 pub use inventory::{Report, Row};
 
@@ -310,11 +312,124 @@ fn walk_into(
     }
     found.push((id, bytes));
     if meta.is_dir() {
-        for entry in fs::read_dir(path)? {
-            walk_into(&entry?.path(), seen, links, found)?;
-        }
+        walk_children(path, seen, links, found)?;
     }
     Ok(())
+}
+
+/// Each child of folder `path` measured on its own, by path.
+fn walk_listed(
+    path: &Path,
+    seen: &mut HashSet<(u64, u64)>,
+    links: Links,
+    found: &mut Allocated,
+) -> Result<(), Error> {
+    for entry in fs::read_dir(path)? {
+        walk_into(&entry?.path(), seen, links, found)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn walk_children(
+    path: &Path,
+    seen: &mut HashSet<(u64, u64)>,
+    links: Links,
+    found: &mut Allocated,
+) -> Result<(), Error> {
+    walk_listed(path, seen, links, found)
+}
+
+/// The children of folder `path` from its listing, one handle per folder (#19481). Opening each
+/// file, as `allocation` does, costs a `CreateFileW` and an antivirus scan per file: minutes on a
+/// Rust toolchain or a Cargo target of tens of thousands of files, while the build lock is held.
+/// The listing carries what `allocation` reads from a handle: the reparse attribute (a link is
+/// never followed), the file ID (with the folder's volume, the identity that counts hard links
+/// once) and the allocation size. NTFS updates a listing's size when a file's last handle closes,
+/// so a file still being written may count its earlier size until then. A filesystem without file
+/// IDs in its listings (ID 0, or the class unsupported) falls back to one handle per file.
+#[cfg(windows)]
+fn walk_children(
+    path: &Path,
+    seen: &mut HashSet<(u64, u64)>,
+    links: Links,
+    found: &mut Allocated,
+) -> Result<(), Error> {
+    use std::os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_NO_MORE_FILES,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+    /// The bytes one listing call may fill.
+    const LISTING: usize = 64 * 1024;
+    let folder = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let handle = folder.as_raw_handle();
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // An OS-owned output buffer; `folder` keeps the handle live.
+    if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // The folder measured by path may have been swapped for a link since.
+    if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+    {
+        return Err(Error::Unsafe(path.to_owned()));
+    }
+    let volume = info.dwVolumeSerialNumber as u64;
+    // 8-byte aligned, as the records are.
+    let mut buffer = vec![0u64; LISTING / 8];
+    let mut class = FileIdBothDirectoryRestartInfo;
+    loop {
+        // The call does not say how much it filled: zeroed, the buffer holds only its records.
+        buffer.fill(0);
+        // The buffer outlives the call, which writes at most LISTING bytes into it.
+        let listed = unsafe {
+            GetFileInformationByHandleEx(handle, class, buffer.as_mut_ptr().cast(), LISTING as u32)
+        };
+        if listed == 0 {
+            let error = std::io::Error::last_os_error();
+            let code = error.raw_os_error();
+            if code == Some(ERROR_NO_MORE_FILES as i32) {
+                return Ok(());
+            }
+            if class == FileIdBothDirectoryRestartInfo
+                && (code == Some(ERROR_INVALID_PARAMETER as i32)
+                    || code == Some(ERROR_NOT_SUPPORTED as i32))
+            {
+                drop(folder);
+                return walk_listed(path, seen, links, found);
+            }
+            return Err(error.into());
+        }
+        class = FileIdBothDirectoryInfo;
+        // LISTING bytes of the buffer's own allocation, initialized.
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), LISTING) };
+        for child in listing::parse(bytes)? {
+            let path = path.join(std::ffi::OsString::from_wide(&child.name));
+            if child.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                if links != Links::GameMade {
+                    return Err(Error::Unsafe(path));
+                }
+            } else if child.id == 0 {
+                walk_into(&path, seen, links, found)?;
+            } else {
+                let id = (volume, child.id);
+                if seen.insert(id) {
+                    found.push((id, child.bytes));
+                    if child.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+                        walk_children(&path, seen, links, found)?;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -358,7 +473,7 @@ fn allocation(path: &Path, _meta: &fs::Metadata) -> Result<((u64, u64), u64), Er
             info.dwVolumeSerialNumber as u64,
             ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
         ),
-        standard.AllocationSize as u64,
+        u64::try_from(standard.AllocationSize).unwrap_or(0),
     ))
 }
 

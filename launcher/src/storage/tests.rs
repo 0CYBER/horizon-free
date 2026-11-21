@@ -103,6 +103,55 @@ fn hard_links_count_once() {
     assert_eq!(allocated_bytes(&home.0.join("rust")).unwrap(), before);
 }
 
+/// #19481: the folder listings find what one handle per file finds: every file and folder once,
+/// a hard link once, and each file's allocation.
+#[cfg(windows)]
+#[test]
+fn listing_walk_matches_one_handle_per_file() {
+    fn by_handle(path: &Path, seen: &mut HashSet<(u64, u64)>, out: &mut Vec<((u64, u64), u64)>) {
+        let meta = fs::symlink_metadata(path).unwrap();
+        let (id, bytes) = allocation(path, &meta).unwrap();
+        if !seen.insert(id) {
+            return;
+        }
+        // A folder's own allocation may read differently by handle than in its parent's listing.
+        out.push((id, if meta.is_dir() { 0 } else { bytes }));
+        if meta.is_dir() {
+            for entry in fs::read_dir(path).unwrap() {
+                by_handle(&entry.unwrap().path(), seen, out);
+            }
+        }
+    }
+    let home = Home::new();
+    for index in 0..40 {
+        home.seed(&format!("rust/deep/{}/file-{index}", index % 4));
+    }
+    fs::write(home.0.join("rust/empty"), []).unwrap();
+    let file = home.seed("rust/a");
+    fs::hard_link(file, home.0.join("rust/deep/b")).unwrap();
+    let root = home.0.join("rust");
+    let mut expected = Vec::new();
+    by_handle(&root, &mut HashSet::new(), &mut expected);
+    let folders: HashSet<_> = expected
+        .iter()
+        .filter(|(_, bytes)| *bytes == 0)
+        .map(|(id, _)| *id)
+        .collect();
+    let mut listed: Vec<_> = survey(&root, Links::Refused)
+        .unwrap()
+        .into_iter()
+        .map(|(id, bytes)| (id, if folders.contains(&id) { 0 } else { bytes }))
+        .collect();
+    listed.sort();
+    expected.sort();
+    assert_eq!(listed, expected);
+    assert_eq!(
+        listed.len(),
+        1 + 5 + 40 + 2,
+        "the root, 5 folders, 42 files"
+    );
+}
+
 #[test]
 fn clears_only_fixed_cache_and_sweeps_detached_tree() {
     let home = Home::new();
