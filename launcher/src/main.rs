@@ -213,6 +213,15 @@ struct Crash {
     copied: bool,
 }
 
+/// What the Prepare error's notice offers to do about it.
+#[derive(Clone, Debug, PartialEq)]
+enum PrepareFix {
+    /// The version was deleted while the window was open: install it again.
+    Reinstall(String),
+    /// The Minecraft folders lack a library of the game: download the version's from Mojang.
+    Mojang(String),
+}
+
 /// The opening: the wordmark holds at least `OPENING_HOLD` (until the release
 /// list is in, at most `OPENING_MAX`), then the launcher appears over `OPENING_REVEAL`.
 const OPENING_HOLD: Duration = horizon_theme::OPENING_HOLD;
@@ -432,6 +441,8 @@ struct Launcher {
     /// so it moves when a line arrives even while `prepare_log` is full and its length stays.
     log_revision: u64,
     prepare_error: Option<String>,
+    /// What `prepare_error`'s notice offers, when something can be done about it.
+    prepare_fix: Option<PrepareFix>,
     client: Option<Running>,
     client_error: Option<String>,
     /// When the running client started, to tell its crash report from older ones.

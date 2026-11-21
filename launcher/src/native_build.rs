@@ -104,9 +104,16 @@ impl Launcher {
                 None => self.native_step = None,
             },
             Next::Prepare => {
-                self.prepare_version(waiting.needs.clone(), backend::MinecraftFrom::Install);
+                let needs = waiting.needs.clone();
+                let started = self.prepare_version(needs.clone(), backend::MinecraftFrom::Install);
                 waiting.started = true;
                 self.wait_for_prepare(waiting);
+                // Refused before a preparation ran (its base was deleted): no preparation will
+                // end to wake the build, so it reads the refusal as a preparation that failed.
+                if !started {
+                    let error = self.prepare_error.clone();
+                    self.native_look_again(Some(&needs), error.as_deref());
+                }
             }
             Next::Wait => self.wait_for_prepare(waiting),
             Next::Stop(error) => {

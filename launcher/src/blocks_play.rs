@@ -104,6 +104,8 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
+                // A version deleted while the window was open leaves none selected: why, here too.
+                .children(self.prepare_notice(cx))
                 .child(middle)
                 .children(memory);
         };
@@ -403,10 +405,12 @@ impl Launcher {
                         .children(java.is_none().then(|| self.home_card(&tag, cx))),
                 )
         };
-        let mut page = div().flex().flex_col().gap(px(28.)).child(banner);
-        if let Some(e) = self.prepare_error.clone() {
-            page = page.child(notice(e, &t));
-        }
+        let mut page = div()
+            .flex()
+            .flex_col()
+            .gap(px(28.))
+            .child(banner)
+            .children(self.prepare_notice(cx));
         // Home's Stable Update failed, its one retry included: its offer is gone until the list
         // is read again, so Home says why.
         let stable_failed = self.install_error.as_ref().filter(|(tag, _)| {
@@ -434,6 +438,52 @@ impl Launcher {
             page = page.child(notice(e, &t));
         }
         page
+    }
+
+    /// The last preparation's error, with what can be done about it: Reinstall a version deleted
+    /// while the window was open, or Download from Mojang when the Minecraft folders lack a
+    /// library of the game. An instance whose pinned version isn't installed (and isn't
+    /// installing) gets the same notice without a press first: it never plays another version.
+    fn prepare_notice(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let t = self.theme;
+        let installing = self.installing.as_ref().map(|(tag, _)| tag.as_str());
+        let pin = self
+            .selected_instance()
+            .and_then(|i| i.missing_pin(&self.installed))
+            .filter(|pin| Some(*pin) != installing);
+        let (error, fix) = crate::launcher_messages::prepare_notice_choice(
+            pin,
+            self.prepare_error.clone(),
+            self.prepare_fix.clone(),
+            |pin| backend::version_gone(&self.version_name(pin)),
+        )?;
+        let busy = self.preparing || installing.is_some();
+        let action = match fix.filter(|_| !busy) {
+            Some(PrepareFix::Reinstall(tag)) => self.release_to_install(&tag).map(|release| {
+                button("prepare-reinstall", "Reinstall", Kind::Secondary, &t).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        this.prepare_error = None;
+                        this.prepare_fix = None;
+                        this.reinstall(&release);
+                        cx.notify();
+                    },
+                ))
+            }),
+            Some(PrepareFix::Mojang(tag)) => Some(
+                button(
+                    "prepare-mojang",
+                    "Download from Mojang",
+                    Kind::Secondary,
+                    &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.prepare_version(tag.clone(), backend::MinecraftFrom::Mojang);
+                    cx.notify();
+                })),
+            ),
+            None => None,
+        };
+        Some(notice(error, &t).children(action.map(|a| a.bg(t.plate))))
     }
 
     /// "Horizon crashed": the report and the logs, and where to report it.

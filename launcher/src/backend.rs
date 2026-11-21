@@ -1062,6 +1062,47 @@ pub fn version_dir(tag: &str) -> PathBuf {
 
 pub(crate) const COMPLETE: &str = ".installed";
 
+/// Whether version `tag` is still installed: its folder holds the mark an install ends with. A
+/// player may delete `versions` (or one version's folder) while the window keeps the list it read.
+pub fn is_installed(tag: &str) -> bool {
+    version_dir(tag).join(COMPLETE).exists()
+}
+
+/// The first of `tags` no longer installed, with the installed versions read again, for a window
+/// whose list is older than the disk ([`is_installed`]).
+pub fn gone(tags: &[&str]) -> Option<(String, Vec<String>)> {
+    gone_from(&versions_dir(), tags)
+}
+
+/// The installed versions read again when `tag` is installed after all: another launcher or the
+/// command line may take a version's mark away for a moment while it replaces it, so Reinstall
+/// looks once more before downloading it.
+pub fn installed_again(tag: &str) -> Option<Vec<String>> {
+    installed_again_in(&versions_dir(), tag)
+}
+
+fn installed_again_in(versions: &Path, tag: &str) -> Option<Vec<String>> {
+    gone_from(versions, &[tag])
+        .is_none()
+        .then(|| installed_in(versions))
+}
+
+fn gone_from(versions: &Path, tags: &[&str]) -> Option<(String, Vec<String>)> {
+    let gone = tags
+        .iter()
+        .find(|tag| !versions.join(tag).join(COMPLETE).exists())?;
+    Some((gone.to_string(), installed_in(versions)))
+}
+
+/// What Prepare and Play say when the version they were asked for is no longer installed: `name`
+/// is the version as the window names it.
+pub fn version_gone(name: &str) -> String {
+    crate::i18n::trf(
+        "{version} is no longer on this computer.",
+        &[("version", name)],
+    )
+}
+
 /// Installed versions, newest tag first.
 pub fn installed() -> Vec<String> {
     installed_in(&versions_dir())
@@ -2362,7 +2403,7 @@ fn assets_folder(
 ) -> PathBuf {
     match resolved {
         Ok(sources::Resolved::Folder(dir)) => dir,
-        Ok(sources::Resolved::NotFound(_)) => {
+        Ok(sources::Resolved::NotFound(..)) => {
             log(format!(
                 "Minecraft {version}'s assets were not found in any launcher folder: the game \
                  will be silent and the title screen plain"
@@ -2373,6 +2414,27 @@ fn assets_folder(
             log(format!("Minecraft {version}'s assets: {e}"));
             chosen.to_path_buf()
         }
+    }
+}
+
+/// Why no Minecraft folder could be prepared from, after the download from Mojang failed with
+/// `download` (a line starting with a bullet). Folders that have the game but lack `incomplete` (a
+/// library's file name) get one short sentence, and the window offers the download again
+/// ([`prepare_offers_mojang`]); otherwise every folder looked in, with what it lacks.
+fn incomplete_or_not_found(
+    version: &str,
+    checked: &[(PathBuf, String)],
+    chosen: &Path,
+    incomplete: Option<String>,
+    download: &str,
+) -> String {
+    match incomplete {
+        Some(file) => {
+            MOJANG_OFFERED.store(true, std::sync::atomic::Ordering::Relaxed);
+            let why = download.trim_start_matches("\n  • ");
+            format!("{} {why}", sources::incomplete(version, &file))
+        }
+        None => sources::not_found(version, checked, chosen) + download,
     }
 }
 
@@ -2421,6 +2483,15 @@ pub fn set_prepare_step(step: PrepareStep) {
     PREPARE_STEP.store(step as usize, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Set when the last [`preparer`] failed because the only Minecraft folders with the game lack a
+/// library and the download from Mojang didn't happen: the window then offers that download.
+static MOJANG_OFFERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the last failed preparation offers Download from Mojang ([`MOJANG_OFFERED`]).
+pub fn prepare_offers_mojang() -> bool {
+    MOJANG_OFFERED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -2433,6 +2504,11 @@ pub fn preparer(
     log: &dyn Fn(String),
 ) -> Result<(Preparer, PathBuf), String> {
     set_prepare_step(PrepareStep::Files);
+    // Deleted while the window was open: never the folder's OS error from the steps below.
+    if !is_installed(tag) {
+        return Err(version_gone(tag));
+    }
+    MOJANG_OFFERED.store(false, std::sync::atomic::Ordering::Relaxed);
     let version = game_version(tag);
     let dir = version_dir(tag);
     let reused = prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
@@ -2457,15 +2533,28 @@ pub fn preparer(
                 .map_err(|e| e.trim_start_matches("\n  • ").to_string())?;
             own
         } else {
-            let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
+            // Reused game files need only the assets: a folder missing libraries still has them.
+            // Otherwise a library this version already imported needn't be in the folder.
+            let imported = prepare::artifacts::Lock::read(&dir).map(|lock| lock.directory);
+            let whole = imported.as_ref().ok().filter(|_| !reused);
+            let resolved = sources::resolve(
+                minecraft,
+                &pins,
+                &known,
+                &linked,
+                whole.map(PathBuf::as_path),
+                &fetch,
+                log,
+            );
             if reused {
                 assets_folder(resolved, &chosen, &version, log)
             } else {
                 match resolved? {
                     sources::Resolved::Folder(dir) => dir,
-                    sources::Resolved::NotFound(checked) => {
-                        let not_found = sources::not_found(&version, &checked, minecraft);
-                        download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                    sources::Resolved::NotFound(checked, incomplete) => {
+                        download_for_owner(&pins, &own, &fetch, log).map_err(|e| {
+                            incomplete_or_not_found(&version, &checked, minecraft, incomplete, &e)
+                        })?;
                         own
                     }
                 }
@@ -5355,7 +5444,7 @@ pub fn {f}("
         let fetch = |_: &str| Ok(manifest.to_vec());
         let lines = std::cell::RefCell::new(Vec::new());
         let log = |line: String| lines.borrow_mut().push(line);
-        let resolved = sources::resolve(&instance, &pins, &[], &linked, &fetch, &log);
+        let resolved = sources::resolve(&instance, &pins, &[], &linked, None, &fetch, &log);
         let folder = assets_folder(resolved, &instance, "26.3", &log);
         assert_eq!(folder, linked);
         assert!(folder.join("assets/indexes/34.json").is_file());
@@ -5363,7 +5452,7 @@ pub fn {f}("
         // Nothing found: the chosen folder, and a line saying what the game will lack.
         let empty = dir.join("empty");
         fs::create_dir_all(&empty).unwrap();
-        let resolved = sources::resolve(&empty, &pins, &[], &linked, &fetch, &log);
+        let resolved = sources::resolve(&empty, &pins, &[], &linked, None, &fetch, &log);
         assert_eq!(assets_folder(resolved, &empty, "26.3", &log), empty);
         assert!(lines.borrow().last().unwrap().contains("will be silent"));
         fs::remove_dir_all(&dir).unwrap();
@@ -8328,6 +8417,88 @@ pub fn {f}("
             envs.get(OsStr::new("PIPEWIRE_PROPS")),
             Some(&Some(OsStr::new("kept")))
         );
+    }
+
+    /// A player deleted a version's folder while the window was open: Prepare and Play refuse
+    /// with one sentence, never the folder's OS error, and the window's list and selection are
+    /// read again from the disk.
+    #[test]
+    fn a_version_deleted_while_the_window_is_open_is_refused_and_the_list_refreshed() {
+        let scratch = tempfile::tempdir().unwrap();
+        let versions = scratch.path().join("versions");
+        for tag in ["scratch-a", "scratch-b"] {
+            fs::create_dir_all(versions.join(tag)).unwrap();
+            fs::write(versions.join(tag).join(COMPLETE), b"").unwrap();
+        }
+        let mut settings = Settings {
+            selected: Some("scratch-a".into()),
+            ..Settings::default()
+        };
+        assert_eq!(gone_from(&versions, &["scratch-a"]), None);
+
+        fs::remove_dir_all(versions.join("scratch-a")).unwrap();
+        let (gone, installed) = gone_from(&versions, &["scratch-a", "scratch-b"]).unwrap();
+        assert_eq!(gone, "scratch-a");
+        assert_eq!(installed, ["scratch-b"]);
+        settings.keep_installed_selection(&installed);
+        assert_eq!(settings.selected.as_deref(), Some("scratch-b"));
+
+        // Back before Reinstall was pressed (another process replacing it): the list again.
+        assert_eq!(installed_again_in(&versions, "scratch-a"), None);
+        fs::create_dir_all(versions.join("scratch-a")).unwrap();
+        fs::write(versions.join("scratch-a").join(COMPLETE), b"").unwrap();
+        let mut again = installed_again_in(&versions, "scratch-a").unwrap();
+        again.sort();
+        assert_eq!(again, ["scratch-a", "scratch-b"]);
+
+        // The whole `versions` folder gone: nothing left to select.
+        fs::remove_dir_all(&versions).unwrap();
+        let (gone, installed) = gone_from(&versions, &["scratch-b"]).unwrap();
+        assert_eq!((gone.as_str(), installed.len()), ("scratch-b", 0));
+
+        // Prepare itself, for a version not on the disk (the command line, or a delete while
+        // the window's check was already past): the sentence, not `canonicalize`'s error.
+        let error = preparer(
+            "deleted-scratch-version",
+            scratch.path(),
+            MinecraftFrom::Install,
+            &|_| {},
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            error,
+            "deleted-scratch-version is no longer on this computer."
+        );
+    }
+
+    /// The only folders with the game lack one of its libraries and the download from Mojang
+    /// failed: one sentence naming the library, and the window offers the download again.
+    #[test]
+    fn incomplete_minecraft_files_name_the_library_and_offer_the_download() {
+        let download = "\n  • Downloading 26.3 from Mojang needs your Microsoft account";
+        let chosen = Path::new("chosen");
+        let checked = vec![(chosen.to_path_buf(), "no Minecraft 26.3 client jar".into())];
+        let error = incomplete_or_not_found(
+            "26.3",
+            &checked,
+            chosen,
+            Some("azure-json-1.4.0.jar".into()),
+            download,
+        );
+        assert_eq!(
+            error,
+            "Your Minecraft 26.3 files are incomplete (azure-json-1.4.0.jar is missing). \
+             Downloading 26.3 from Mojang needs your Microsoft account"
+        );
+        assert!(prepare_offers_mojang());
+        // Nothing found at all: every folder looked in, as before.
+        let error = incomplete_or_not_found("26.3", &checked, chosen, None, download);
+        assert!(
+            error.starts_with("Minecraft 26.3 was not found."),
+            "{error}"
+        );
+        assert!(error.ends_with(download), "{error}");
     }
 }
 

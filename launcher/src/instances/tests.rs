@@ -643,3 +643,34 @@ fn an_instance_without_a_channel_is_nightly_and_an_unknown_one_too() {
     let meta: Meta = serde_json::from_str(r#"{"channel":"beta","group":"g"}"#).unwrap();
     assert_eq!((meta.channel, meta.group.as_deref()), (None, Some("g")));
 }
+
+/// An instance pinned to a version that is gone keeps its pin: Play refuses rather than open its
+/// worlds in the launcher's version. One that follows the launcher, or plays Java, has no pin.
+#[test]
+fn a_pinned_version_that_is_gone_stays_unresolved() {
+    let instance = |version: Option<&str>, java: Option<JavaGame>| Instance {
+        id: "own".into(),
+        name: "Own".into(),
+        kind: Kind::Own,
+        work: PathBuf::new(),
+        home: PathBuf::new(),
+        icon: None,
+        group: None,
+        version: version.map(String::from),
+        channel: Channel::default(),
+        native_profile: crate::native_mods::Profile::Optimized,
+        played: Duration::ZERO,
+        last_played: None,
+        launch: Launch::default(),
+        java,
+    };
+    let installed = ["v-b".to_string()];
+    assert_eq!(
+        instance(Some("v-a"), None).missing_pin(&installed),
+        Some("v-a")
+    );
+    assert_eq!(instance(Some("v-b"), None).missing_pin(&installed), None);
+    assert_eq!(instance(None, None).missing_pin(&installed), None);
+    let java = Some(JavaGame::default());
+    assert_eq!(instance(Some("v-a"), java).missing_pin(&installed), None);
+}

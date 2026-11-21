@@ -86,11 +86,12 @@ fn resolve_with(
         &pins(),
         known,
         linked,
+        Some(&linked.join("imported")),
         &|url| mojang.fetch(url),
         &|_| {},
     )? {
         Resolved::Folder(dir) => Ok(dir),
-        Resolved::NotFound(checked) => Err(not_found("26.3", &checked, chosen)),
+        Resolved::NotFound(checked, _) => Err(not_found("26.3", &checked, chosen)),
     }
 }
 
@@ -455,6 +456,7 @@ fn the_known_folders_are_searched_after_the_chosen_one() {
         &pins(),
         &known,
         &linked,
+        Some(&linked.join("imported")),
         &|url| mojang.fetch(url),
         &|line| logged.borrow_mut().push(line),
     );
@@ -619,4 +621,71 @@ fn each_system_has_its_launcher_folders() {
     );
     assert!(got.contains(&"ATLauncher: C:/Users/r/AppData/Roaming/ATLauncher".into()));
     assert!(got.contains(&"Dawn Client: C:/Users/r/AppData/Roaming/.dawn".into()));
+}
+
+/// An official launcher download that stopped after the client jar (a player's 26.3 lacked
+/// azure-json): the folder isn't chosen while another one has every library, and with none, the
+/// library is named for the Mojang download to stand in.
+#[test]
+fn a_folder_missing_a_library_is_passed_over() {
+    // A made-up version file listing one library, the fixtures' `org/lib/1/lib-1.jar`.
+    let manifest = format!(
+        r#"{{"id": "26.3", "libraries": [{{"name": "org.lib:lib:1",
+        "downloads": {{"artifact": {{"path": "org/lib/1/lib-1.jar", "sha1": "{}", "size": 3}}}}}}]}}"#,
+        sha1_hex(b"lib")
+    );
+    let manifest = manifest.as_bytes();
+    let pins = Pins::read(&serde_json::json!({ "minecraft": {
+        "version": "26.3",
+        "client_sha1": sha1_hex(CLIENT),
+        "manifest_sha1": sha1_hex(manifest),
+    }}))
+    .unwrap();
+    let s = Scratch::new("incomplete");
+    let partial = s.0.join(".minecraft");
+    s.write(".minecraft/versions/26.3/26.3.jar", CLIENT);
+    s.write(".minecraft/versions/26.3/26.3.json", manifest);
+    let whole = s.launcher("minecraft", "", "versions/26.3/26.3.jar");
+    s.write("minecraft/versions/26.3/26.3.json", manifest);
+    let mojang = Mojang::new(b"");
+    let imported = s.0.join("version/.local/minecraft/26.3");
+    let pick = |known: &[(&'static str, PathBuf)], whole: bool| {
+        let linked = s.0.join("linked");
+        resolve(
+            &partial,
+            &pins,
+            known,
+            &linked,
+            whole.then_some(imported.as_path()),
+            &|u| mojang.fetch(u),
+            &|_| {},
+        )
+        .unwrap()
+    };
+
+    let known = [("Horizon's own download", whole.clone())];
+    assert_eq!(pick(&known, true), Resolved::Folder(whole));
+    match pick(&[], true) {
+        Resolved::NotFound(checked, missing) => {
+            assert_eq!(missing.as_deref(), Some("lib-1.jar"));
+            assert_eq!(checked[0].0, partial);
+            assert!(checked[0].1.contains("lib-1.jar is missing"), "{checked:?}");
+            assert_eq!(
+                incomplete("26.3", "lib-1.jar"),
+                "Your Minecraft 26.3 files are incomplete (lib-1.jar is missing)."
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    // Reused game files need only the assets: the folder is still used for them.
+    assert_eq!(pick(&[], false), Resolved::Folder(partial.clone()));
+
+    // A copy the version's import already holds is no reason to pass the folder over, but only
+    // a checksum-valid one: Prepare keeps that copy and prepares offline.
+    let kept = "version/.local/minecraft/26.3/libraries/client/org/lib/1/lib-1.jar";
+    s.write(kept, b"not the library");
+    assert!(matches!(pick(&[], true), Resolved::NotFound(..)));
+    s.write(kept, b"lib");
+    assert_eq!(pick(&[], true), Resolved::Folder(partial.clone()));
+    assert!(mojang.urls.lock().unwrap().is_empty());
 }

@@ -365,24 +365,65 @@ pub type Fetch<'a> = &'a (dyn Fn(&str) -> Result<Vec<u8>, String> + Sync);
 pub enum Resolved {
     /// A folder in the official launcher's layout.
     Folder(PathBuf),
-    /// In none of these folders; each with what it lacks.
-    NotFound(Vec<(PathBuf, String)>),
+    /// In none of these folders; each with what it lacks. Then the file name of a library missing
+    /// from the first folder that had the game but not all its libraries, as an official download
+    /// that stopped halfway leaves it.
+    NotFound(Vec<(PathBuf, String)>, Option<String>),
+}
+
+/// The library missing from `found`, when its version file is the pinned one and lists one its
+/// `libraries` lack and that isn't already imported, checksum-valid, into `imported` (Prepare
+/// keeps such a copy, so the folder still prepares offline). A folder whose version file Horizon
+/// can't read here (another launcher's rewrite, fetched from Mojang later) is kept, as before:
+/// the import names what it lacks.
+fn missing_library(found: &Found, imported: &Path) -> Option<PathBuf> {
+    let manifest = found.manifest.as_ref()?;
+    horizon_platform::prepare::artifacts::missing_library(
+        &found.base.join("libraries"),
+        manifest,
+        Some(imported),
+    )
+}
+
+/// What Home says when the only folders with the game lack one of its libraries (`file`).
+pub fn incomplete(version: &str, file: &str) -> String {
+    crate::i18n::trf(
+        "Your Minecraft {version} files are incomplete ({file} is missing).",
+        &[("version", version), ("file", file)],
+    )
 }
 
 /// A Minecraft folder in the official launcher's layout holding the pinned version: the
 /// chosen folder when it is one, else the files found in the chosen folder, a folder above it
 /// (a launcher's instance folder may be chosen, and the launcher root above a Prism or MultiMC
 /// `instances` folder is looked in too) or any launcher's default folder, linked into `linked`.
+/// With `whole` (the folder the version's import keeps its files in), a folder whose pinned
+/// version file lists a library it lacks, and that import doesn't already hold, is passed over
+/// for the next one, as Prepare prefers a complete folder (#13872): the official launcher's
+/// download that stopped after the jar would otherwise be the one handed to Prepare, which then
+/// fails. None when the game's files are reused and only the assets are needed.
 pub fn resolve(
     chosen: &Path,
     pins: &Pins,
     known: &[(&'static str, PathBuf)],
     linked: &Path,
+    whole: Option<&Path>,
     fetch: Fetch,
     log: &dyn Fn(String),
 ) -> Result<Resolved, String> {
     let mut checked = Vec::new();
     let mut found = None;
+    let mut incomplete = None;
+    let mut look = |dir: &Path| {
+        let found = find(dir, pins)?;
+        let Some(library) = whole.and_then(|imported| missing_library(&found, imported)) else {
+            return Ok(found);
+        };
+        let file = library.file_name().unwrap_or_default().to_string_lossy();
+        let missing = format!("its libraries are incomplete: {file} is missing");
+        incomplete.get_or_insert_with(|| file.into_owned());
+        Err(missing)
+    };
     // The chosen folder, the folders above it (an instance's own folder may be chosen), and,
     // when it is inside a Prism or MultiMC instance tree or a Dawn Client folder, the launcher
     // root that holds their shared `libraries` (#693).
@@ -393,7 +434,7 @@ pub fn resolve(
         }
     }
     for dir in dirs {
-        match find(&dir, pins) {
+        match look(&dir) {
             Ok(f) => {
                 found = Some(("the chosen folder", f));
                 break;
@@ -407,13 +448,13 @@ pub fn resolve(
         if found.is_some() {
             break;
         }
-        match find(dir, pins) {
+        match look(dir) {
             Ok(f) => found = Some((name, f)),
             Err(missing) => checked.push((dir.clone(), format!("{name}: {missing}"))),
         }
     }
     let Some((name, found)) = found else {
-        return Ok(Resolved::NotFound(checked));
+        return Ok(Resolved::NotFound(checked, incomplete));
     };
     log(format!(
         "Using Minecraft {} from {name} ({})",

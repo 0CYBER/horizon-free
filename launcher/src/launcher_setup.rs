@@ -197,6 +197,7 @@ impl Launcher {
             prepare_log: VecDeque::new(),
             log_revision: 0,
             prepare_error: None,
+            prepare_fix: None,
             client: None,
             client_error: None,
             client_started: None,
