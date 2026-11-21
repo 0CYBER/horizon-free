@@ -102,7 +102,25 @@ pub mod exit_code {
     pub const USAGE: i32 = 2;
     /// A panic; a crash report was saved.
     pub const PANIC: i32 = 101;
+    /// A dedicated server's `/restart`: saved and stopped, to be started again by `horizon-server`
+    /// (crates/horizon-server/src/engine.rs holds the same number).
+    pub const RESTART: i32 = 75;
+
+    static RESTART_REQUESTED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// `/restart` stopped a dedicated server: entry.rs exits with `exit_code::RESTART` once it is saved.
+    pub fn restart_requested() -> bool {
+        RESTART_REQUESTED.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn set_restart_requested() {
+        RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
+
+/// Set by `horizon-server` in the game's environment: something outlives the game and starts it again.
+pub const SUPERVISED_ENV: &str = "HORIZON_SUPERVISED";
 
 const EXIT_CODES: &[(i32, &str)] = &[
     (
@@ -120,6 +138,10 @@ const EXIT_CODES: &[(i32, &str)] = &[
     (
         exit_code::PANIC,
         "The game panicked. A crash report was saved.",
+    ),
+    (
+        exit_code::RESTART,
+        "A dedicated server saved and stopped on `/restart`: horizon-server starts it again.",
     ),
 ];
 

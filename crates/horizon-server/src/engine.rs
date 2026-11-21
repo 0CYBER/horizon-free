@@ -17,6 +17,9 @@ use std::{
     time::Duration,
 };
 
+/// Exit code requesting a supervised restart.
+pub const RESTART_EXIT_CODE: i32 = 75;
+
 /// Checks that the game program starts at all: `--help` loads no game files, so it fails only when the
 /// system can't load the program, as on a Linux without the ALSA and udev libraries the full game links
 /// (the server build doesn't). The reason, with what to install.
@@ -230,6 +233,7 @@ fn command(
     let mut command = horizon_server_launch::command_with_transfers(
         program, resources, dir, low_memory, transfers,
     )?;
+    command.env("HORIZON_SUPERVISED", "1");
     // `[engine] parallel_tick`: the game's switch, for a host that cannot set its environment. Off leaves
     // the variable alone, so one the operator set still works.
     if parallel_tick {

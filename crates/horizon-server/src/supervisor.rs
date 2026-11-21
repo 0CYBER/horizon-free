@@ -169,7 +169,7 @@ enum Exit {
     /// Asked to stop, or the game ended by itself without an error (`stop` typed in its console, the EULA
     /// not agreed, the port taken): not restarted.
     Stopped,
-    /// Asked to restart (`horizon-server restart`).
+    /// Asked to restart (`horizon-server restart`, `/restart`).
     Restart,
     Crashed(ExitStatus),
     /// Started on another release, the game wasn't up in time and was stopped.
@@ -865,6 +865,16 @@ fn supervise(
         match child.try_wait() {
             Ok(Some(_)) if not_up => return Exit::NotUp,
             Ok(Some(_)) if restart => return Exit::Restart,
+            // `/restart` in game, on the console or through RCON: the game saved, stopped and says so by its exit
+            // code. A shutdown asked for since wins: it is not started again.
+            Ok(Some(status))
+                if status.code() == Some(engine::RESTART_EXIT_CODE)
+                    && !shared.shutdown.load(Ordering::SeqCst) =>
+            {
+                note(shared, "INFO", "Restarting the server");
+                shared.set_phase(Phase::Restarting);
+                return Exit::Restart;
+            }
             Ok(Some(status)) if stopping.is_some() || status.success() => return Exit::Stopped,
             Ok(Some(status)) => return Exit::Crashed(status),
             Ok(None) => thread::sleep(Duration::from_millis(50)),
@@ -1247,6 +1257,26 @@ mod tests {
         assert!(ended.recv_timeout(Duration::from_millis(300)).is_err());
         stop(&shared);
         assert_eq!(ended.recv_timeout(Duration::from_secs(5)), Ok(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "daily"]
+    fn the_restart_exit_code_starts_the_game_again_and_others_do_not() {
+        let dir = std::env::temp_dir().join(format!("horizon-server-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (_console, console) = mpsc::channel();
+        let run = |script: &str| {
+            let shared = Shared::with_install(&dir, None);
+            let mut child = game(script);
+            (supervise(&shared, &mut child, &console, &mut None), shared)
+        };
+        let (exit, shared) = run(&format!("exit {}", engine::RESTART_EXIT_CODE));
+        assert!(matches!(exit, Exit::Restart));
+        assert_eq!(shared.state.lock().unwrap().phase, Phase::Restarting);
+        assert!(matches!(run("exit 0").0, Exit::Stopped));
+        assert!(matches!(run("exit 1").0, Exit::Crashed(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

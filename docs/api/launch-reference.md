@@ -69,7 +69,8 @@ Prints one JSON object on stdout and exits 0. `horizon` is the build's version; 
     0,
     1,
     2,
-    101
+    101,
+    75
   ],
   "horizon": "<version>",
   "launch_api": "0.1.1",
@@ -141,5 +142,6 @@ Prints one JSON object on stdout and exits 0. `horizon` is the build's version; 
 | 1 | The game stopped on an error. A crash report was saved. |
 | 2 | The command line was refused: an unknown option, a missing or bad value. No crash report. |
 | 101 | The game panicked. A crash report was saved. |
+| 75 | A dedicated server saved and stopped on `/restart`: horizon-server starts it again. |
 
 When a crash report is saved, the last line on stderr is `Horizon: crash report saved to` followed by the report's path.

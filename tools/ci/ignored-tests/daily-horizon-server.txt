@@ -42,6 +42,7 @@ horizon-server supervisor::tests::a_game_that_comes_up_ends_the_update_and_prune
 horizon-server supervisor::tests::a_management_stop_ends_the_supervisor_and_a_stop_in_game_keeps_it lib daily child-process
 horizon-server supervisor::tests::a_queued_restore_is_done_before_the_next_start lib daily child-process
 horizon-server supervisor::tests::a_switch_backs_up_then_rolls_back_world_and_release lib daily child-process
+horizon-server supervisor::tests::the_restart_exit_code_starts_the_game_again_and_others_do_not lib daily child-process
 horizon-server update::tests::an_archive_unpacks_beside_the_others_with_the_game_files_linked lib daily child-process
 horizon-server websocket::tests::control_frames_must_be_whole_and_short lib daily network
 horizon-server websocket::tests::messages_come_whole_and_pings_get_pongs lib daily network

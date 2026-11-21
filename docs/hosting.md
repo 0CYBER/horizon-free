@@ -447,6 +447,14 @@ A running server takes the difficulty, the default game mode, the whitelist, the
 player limit and the backup settings at once; the rest applies at its next start, and `config set` says which. `--json` prints that as `saved`, `applied`
 and `restart`.
 
+**`/restart`** saves and stops the game as `/stop` does, and the server starts it again: from in game, the console,
+RCON and `horizon-server cmd restart`, for owners (the permission `/stop` needs). The command exists only on a
+server `horizon-server` runs, so vanilla's command tree is unchanged elsewhere; a game started by hand answers on its
+console that nothing would start it again, and does nothing. The game program is looked up again at every start, so a
+new engine put in place beforehand (`engine.path`, or the release `current` points at) runs after the restart. Put it
+there with `mv` or `install`, which swap the file: copying over the running program fails or corrupts it.
+Players are disconnected for now; [#16251](https://github.com/horizon-rust/horizon/issues/16251) is about holding them through it.
+
 The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
 minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.
 

@@ -586,10 +586,11 @@ fn apply_vanilla_order(d: &mut Dispatcher) {
 /// (SharedConstants.DEBUG_DEV_COMMANDS), plus Horizon's own commands when
 /// the server turned them on (`set_horizon_commands`).
 pub fn game_dispatcher() -> &'static Dispatcher {
-    game_tree(
+    game_tree_with(
         std::env::var_os("HORIZON_DEV_COMMANDS").is_some(),
         HORIZON_COMMANDS.load(std::sync::atomic::Ordering::Relaxed),
         DEDICATED_COMMANDS.load(std::sync::atomic::Ordering::Relaxed),
+        SUPERVISED_COMMANDS.load(std::sync::atomic::Ordering::Relaxed),
     )
 }
 /// Profiler permission in parser and report-format clientbound trees.
@@ -605,6 +606,18 @@ pub fn session_dispatcher(registry: &RuleRegistry, features: &[String]) -> Dispa
     let dev = std::env::var_os("HORIZON_DEV_COMMANDS").is_some();
     let horizon = HORIZON_COMMANDS.load(std::sync::atomic::Ordering::Relaxed);
     let dedicated = DEDICATED_COMMANDS.load(std::sync::atomic::Ordering::Relaxed);
+    let supervised = SUPERVISED_COMMANDS.load(std::sync::atomic::Ordering::Relaxed);
+    session_tree(registry, features, dev, horizon, dedicated, supervised)
+}
+
+pub(crate) fn session_tree(
+    registry: &RuleRegistry,
+    features: &[String],
+    dev: bool,
+    horizon: bool,
+    dedicated: bool,
+    supervised: bool,
+) -> Dispatcher {
     let mut tree = build_for_features(
         dev,
         dedicated,
@@ -613,6 +626,9 @@ pub fn session_dispatcher(registry: &RuleRegistry, features: &[String]) -> Dispa
     );
     if horizon {
         horizon_commands(&mut tree, 0);
+    }
+    if dedicated && supervised {
+        supervised_commands(&mut tree, 0);
     }
     // Game-session tooling, not part of vanilla's reference/parity dispatcher.
     let profile = tree.literal(0, "modprofile");
@@ -643,23 +659,59 @@ static HORIZON_COMMANDS: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 pub fn set_horizon_commands(on: bool) {
     HORIZON_COMMANDS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
+/// Whether this dedicated server runs under `horizon-server`, which starts the game again after
+/// `/restart`. Off otherwise, so the tree stays vanilla's.
+static SUPERVISED_COMMANDS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// A server run by `horizon-server` turns `/restart` on, for the trees `game_dispatcher` returns
+/// from now on (only a dedicated server's tree has it).
+pub fn set_supervised_commands(on: bool) {
+    SUPERVISED_COMMANDS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+fn tree_slot(dev: bool, horizon: bool, dedicated: bool, supervised: bool) -> usize {
+    usize::from(dev)
+        | usize::from(horizon) << 1
+        | usize::from(dedicated) << 2
+        | usize::from(supervised) << 3
+}
 /// The server.properties key that turns `/pregen` on (Horizon's own; vanilla
 /// ignores keys it doesn't know).
 pub const PREGEN_PROPERTY: &str = "horizon-pregen";
+#[cfg(test)]
 pub(crate) fn game_tree(dev: bool, horizon: bool, dedicated: bool) -> &'static Dispatcher {
-    static TREES: [std::sync::OnceLock<Dispatcher>; 8] = [const { std::sync::OnceLock::new() }; 8];
+    game_tree_with(dev, horizon, dedicated, false)
+}
+pub(crate) fn game_tree_with(
+    dev: bool,
+    horizon: bool,
+    dedicated: bool,
+    supervised: bool,
+) -> &'static Dispatcher {
+    static TREES: [std::sync::OnceLock<Dispatcher>; 16] =
+        [const { std::sync::OnceLock::new() }; 16];
+    let supervised = dedicated && supervised;
     match (dev, horizon, dedicated) {
         (true, false, false) => dispatcher(),
         (false, false, false) => release_dispatcher(),
-        _ => TREES[usize::from(dev) | usize::from(horizon) << 1 | usize::from(dedicated) << 2]
-            .get_or_init(|| {
-                let mut d = build_for(dev, dedicated);
-                if horizon {
-                    horizon_commands(&mut d, 0);
-                }
-                d
-            }),
+        _ => TREES[tree_slot(dev, horizon, dedicated, supervised)].get_or_init(|| {
+            let mut d = build_for(dev, dedicated);
+            if horizon {
+                horizon_commands(&mut d, 0);
+            }
+            if supervised {
+                supervised_commands(&mut d, 0);
+            }
+            d
+        }),
     }
+}
+/// `/restart`: only on a dedicated server `horizon-server` runs. It saves and stops like `/stop`, and the
+/// supervisor starts the game again (docs/hosting.md). The same permission level as `/stop`.
+const OWNERS: u8 = 4;
+fn supervised_commands(d: &mut Dispatcher, root: usize) {
+    let restart = d.literal(root, "restart");
+    d.requires(restart, OWNERS);
+    d.executes(restart, "restart");
 }
 /// Commands vanilla doesn't have, after its own: `/pregen`
 /// (docs/pregeneration.md).

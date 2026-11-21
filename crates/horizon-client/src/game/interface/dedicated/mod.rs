@@ -165,6 +165,23 @@ struct Setup {
     /// `--allowMissingMods`: open a world whose saved mods are missing (`missing_mods`).
     allow_missing_mods: bool,
 }
+/// Whether `horizon-server` runs this game, and so starts it again after a `/restart`.
+pub(super) fn supervised() -> bool {
+    std::env::var_os(super::launch_api::SUPERVISED_ENV).is_some_and(|v| !v.is_empty())
+}
+
+/// `/restart` (Horizon's own, on a server `horizon-server` runs): like `/stop`, then the process exits
+/// with a code that asks the supervisor to start the game again. `stop` is the server loop's flag.
+/// Unsupervised nothing would start the game again, so it says so and stops nothing.
+pub(super) fn request_restart(supervised: bool, stop: &mut bool) -> Text {
+    if !supervised {
+        return Text::translate("horizon.commands.restart.unsupervised", &[]);
+    }
+    super::exit_code::set_restart_requested();
+    *stop = true;
+    Text::translate("horizon.commands.restart.restarting", &[])
+}
+
 static SETUP: OnceLock<Mutex<Option<Setup>>> = OnceLock::new();
 /// usercache.json (Services.nameToIdCache): used by the server thread only.
 static USER_CACHE: Mutex<Option<UserCache>> = Mutex::new(None);
@@ -475,6 +492,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     // A dedicated server's tree: /op, /ban, /whitelist... (single player's
     // server thread is an integrated one and never gets here).
     horizon_client::command::vanilla::set_dedicated_commands(true);
+    horizon_client::command::vanilla::set_supervised_commands(supervised());
     // Horizon's own commands are the owner's choice, off as on vanilla.
     if props
         .raw
@@ -1942,6 +1960,13 @@ impl Game<'_> {
                 self.console_reply(Text::translate("commands.stop.stopping", &[]));
                 state.lists.lock().unwrap().stop = true;
             }
+            // Horizon's own, unlike its tree entry also here without the supervisor, to say why it does nothing.
+            "restart" => {
+                let mut lists = state.lists.lock().unwrap();
+                let reply = request_restart(supervised(), &mut lists.stop);
+                drop(lists);
+                self.console_reply(reply);
+            }
             // Horizon's own, on the console only: a performance report (report.rs).
             "horizon-report" | "horizon-trace" => {
                 let trace = command == "horizon-trace";
@@ -2748,6 +2773,25 @@ mod tests {
         process::{Command, Stdio},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    /// `/restart` without `horizon-server` refuses and stops nothing; with it, it asks the server loop to end.
+    #[test]
+    fn restart_without_a_supervisor_does_nothing_and_says_why() {
+        let mut stop = false;
+        let reply = super::request_restart(false, &mut stop);
+        assert!(!stop);
+        assert!(!super::super::exit_code::restart_requested());
+        assert_eq!(
+            reply.translation_key(),
+            Some("horizon.commands.restart.unsupervised")
+        );
+        let reply = super::request_restart(true, &mut stop);
+        assert!(stop);
+        assert_eq!(
+            reply.translation_key(),
+            Some("horizon.commands.restart.restarting")
+        );
+    }
 
     /// A console line runs in the overworld even after a server tick left the nether in place.
     #[test]

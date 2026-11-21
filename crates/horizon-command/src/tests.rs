@@ -1115,6 +1115,46 @@ fn the_dedicated_commands_complete_from_the_servers_lists() {
     assert!(suggest("ban ").contains(&"@a".to_owned()));
 }
 #[test]
+fn restart_is_only_on_a_supervised_dedicated_server_and_asks_for_stop_permission() {
+    // A vanilla-like server's tree stays vanilla: /restart needs the supervisor.
+    for dev in [false, true] {
+        for horizon in [false, true] {
+            assert!(
+                vanilla::game_tree_with(dev, horizon, true, false)
+                    .find("restart")
+                    .is_none()
+            );
+            // An integrated server never has it, supervised or not.
+            assert!(
+                vanilla::game_tree_with(dev, horizon, false, true)
+                    .find("restart")
+                    .is_none()
+            );
+            let registry = horizon_client_core::gamerules::RuleRegistry::vanilla();
+            let d = vanilla::session_tree(&registry, &[], dev, horizon, true, true);
+            assert!(
+                vanilla::session_tree(&registry, &[], dev, horizon, true, false)
+                    .find("restart")
+                    .is_none()
+            );
+            assert!(
+                vanilla::session_tree(&registry, &[], dev, horizon, false, true)
+                    .find("restart")
+                    .is_none()
+            );
+            let restart = d
+                .find("restart")
+                .expect("supervised dedicated tree has /restart");
+            let stop = d.find("stop").unwrap();
+            assert_eq!(d.nodes[restart].permission, d.nodes[stop].permission);
+            assert_eq!(
+                d.parse("restart", &reg()).executable().unwrap().1,
+                "restart"
+            );
+        }
+    }
+}
+#[test]
 fn only_a_dedicated_server_has_the_dedicated_commands() {
     // Commands.CommandSelection: an integrated server (single player, a LAN
     // world) registers no /op, /ban, /ban-ip, /banlist, /pardon, /pardon-ip,
