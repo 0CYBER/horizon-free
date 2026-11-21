@@ -151,6 +151,8 @@ impl Game<'_> {
                         return true;
                     };
                     match self.open_studio_replay(path) {
+                        // The replay opens once the world is left: nothing to report yet.
+                        Ok(v) if v["pending"].as_bool() == Some(true) => {}
                         Ok(v) if v["ok"].as_bool() == Some(true) => {
                             let duration_s = v["duration_ms"].as_f64().unwrap_or(0.0) / 1000.0;
                             let packets = v["packet_count"].as_u64().unwrap_or(0);
@@ -664,6 +666,22 @@ impl Game<'_> {
     pub(super) fn open_studio_replay(&mut self, path: &str) -> Result<Value> {
         if let Err(error) = self.save_studio_camera_track() {
             return Ok(json!({ "ok": false, "error": error.to_string() }));
+        }
+        // A replay is never watched on top of a live session: the server's time, weather, blocks
+        // and entities would mix with the recording's. Leave the session as Disconnect or Save
+        // and Quit does, then open the replay standalone once the title is back.
+        if self.replay.driver.is_none() && (self.remote.is_some() || self.integrated.is_some()) {
+            // A recording that cannot be opened must leave the live session untouched.
+            if let Err(error) = ReplayDriver::open(Path::new(path)) {
+                log::error!("Failed to open studio replay '{path}': {error}");
+                return Ok(json!({ "ok": false, "error": error.to_string() }));
+            }
+            self.pending_entry = Some(PendingWorldEntry::StudioReplay(PathBuf::from(path)));
+            if let Err(error) = self.close_world() {
+                self.pending_entry = None;
+                return Err(error);
+            }
+            return Ok(json!({ "ok": true, "pending": true }));
         }
         // The recordings browser can be opened while the title screen is
         // available but the slower world tables are still loading. Replay
