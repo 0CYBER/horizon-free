@@ -8,8 +8,13 @@ use crate::{
     entity_obstruction::EntityIdentity,
 };
 use horizon_core::geometry::{
-    Aabb, Axis, ShapeOp, Vec3, VoxelShape, entity_collision_bounds, try_resolve_step_movement,
+    Aabb, Axis, ShapeOp, Vec3, VoxelShape, entity_collision_bounds, try_resolve_step_movement_into,
 };
+use std::cell::RefCell;
+
+thread_local! {
+    static MOVE_SHAPES: RefCell<Vec<VoxelShape>> = const { RefCell::new(Vec::new()) };
+}
 
 /// How far below the feet `Entity.getAvailableSpaceBelow` looks for ground.
 const GROUND_RANGE: f64 = 1.0;
@@ -58,6 +63,9 @@ where
             entity_collision_bounds(request.movement, request.bounds, request.max_step),
         )
         .map_err(CollisionScanError::World)?;
+    if request.movement.length_squared() == 0.0 {
+        return Ok(request.movement);
+    }
     // Vanilla walks the whole box a movement expands to with no candidate
     // counter, so a movement big enough to pass the caller's budget is slow
     // there, never fatal (#6124: a legal movement_speed of 400 crossed more
@@ -71,15 +79,19 @@ where
     let candidate_budget = scan_cells(sweep).map_or(request.candidate_budget, |cells| {
         cells.max(request.candidate_budget)
     });
-    try_resolve_step_movement(
+    let mut shapes = MOVE_SHAPES.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    let result = try_resolve_step_movement_into(
         request.movement,
         request.bounds,
         request.max_step,
         request.on_ground,
-        |bounds| {
-            // A box's blocks are a few dozen shapes at most: one allocation,
-            // not the doubling a push-by-push list makes.
-            let mut shapes = Vec::with_capacity(entities.len() + 16);
+        &mut shapes,
+        |bounds, shapes| {
+            // A box's blocks are a few dozen shapes at most: reuse thread-local storage across ticks.
+            let needed = entities.len() + 16;
+            if shapes.capacity() < needed {
+                shapes.reserve(needed - shapes.len());
+            }
             shapes.extend_from_slice(&entities);
             if let Some(border) = world
                 .movement_border(request.entity, bounds)
@@ -92,9 +104,14 @@ where
             {
                 shapes.push(hit?.shape);
             }
-            Ok(shapes)
+            Ok(())
         },
-    )
+    );
+    shapes.clear();
+    if shapes.capacity() <= 256 {
+        MOVE_SHAPES.with(|cell| *cell.borrow_mut() = shapes);
+    }
+    result
 }
 
 /// Entity-bearing CollisionGetter.noCollision, with block/context selection

@@ -53,11 +53,35 @@ pub fn try_resolve_step_movement<S: std::borrow::Borrow<VoxelShape>, E>(
     on_ground: bool,
     mut collect: impl FnMut(Aabb) -> Result<Vec<S>, E>,
 ) -> Result<Vec3, E> {
+    let mut shapes = Vec::new();
+    try_resolve_step_movement_into(
+        movement,
+        aabb,
+        max_step,
+        on_ground,
+        &mut shapes,
+        |bounds, out| {
+            *out = collect(bounds)?;
+            Ok(())
+        },
+    )
+}
+
+/// Same as [`try_resolve_step_movement`], clearing and reusing `shapes` across queries.
+pub fn try_resolve_step_movement_into<S: std::borrow::Borrow<VoxelShape>, E>(
+    movement: Vec3,
+    aabb: Aabb,
+    max_step: f32,
+    on_ground: bool,
+    shapes: &mut Vec<S>,
+    mut collect: impl FnMut(Aabb, &mut Vec<S>) -> Result<(), E>,
+) -> Result<Vec3, E> {
     let resolved = if movement.length_squared() == 0.0 {
         movement
     } else {
-        let shapes = collect(aabb.expand_towards(movement))?;
-        resolve_borrowed_shape_movement(movement, aabb, &shapes)
+        shapes.clear();
+        collect(aabb.expand_towards(movement), shapes)?;
+        resolve_borrowed_shape_movement(movement, aabb, shapes.as_slice())
     };
     let landed = movement.y != resolved.y && movement.y < 0.0;
     if max_step > 0.0
@@ -73,12 +97,15 @@ pub fn try_resolve_step_movement<S: std::borrow::Borrow<VoxelShape>, E>(
         if !landed {
             query = query.expand_towards(Vec3::new(0.0, -(1.0e-5_f32 as f64), 0.0));
         }
-        let shapes = collect(query)?;
-        for height in borrowed_step_heights(step_box, &shapes, max_step, resolved.y as f32) {
+        shapes.clear();
+        collect(query, shapes)?;
+        for height in
+            borrowed_step_heights(step_box, shapes.as_slice(), max_step, resolved.y as f32)
+        {
             let candidate = resolve_borrowed_shape_movement(
                 Vec3::new(movement.x, height as f64, movement.z),
                 step_box,
-                &shapes,
+                shapes.as_slice(),
             );
             if candidate.horizontal_distance_squared() > resolved.horizontal_distance_squared() {
                 return Ok(candidate.subtract(Vec3::new(

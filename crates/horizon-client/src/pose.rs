@@ -227,18 +227,31 @@ impl MotionWorld<'_, '_, '_> {
     /// LocalPlayer.aiStep computes crouching BEFORE KeyboardInput.tick, using
     /// the old shift input. This is distinct from Entity's current pose.
     pub fn update_local_crouching(&mut self) -> Result<()> {
-        self.player.local_crouching = !self.player.flying
-            && !self.player.swimming
-            && self.can_fit_pose(Pose::Crouching)?
-            && (self.player.shift_key_down || !self.can_fit_pose(Pose::Standing)?);
+        if self.player.flying || self.player.swimming {
+            self.player.local_crouching = false;
+            return Ok(());
+        }
+        if self.player.shift_key_down {
+            self.player.local_crouching = self.can_fit_pose(Pose::Crouching)?;
+            return Ok(());
+        }
+        let stand = self.player.dimensions_for_pose(Pose::Standing)?;
+        let crouch = self.player.dimensions_for_pose(Pose::Crouching)?;
+        self.player.local_crouching =
+            if stand.width >= crouch.width && stand.height >= crouch.height {
+                if self.can_fit_pose(Pose::Standing)? {
+                    false
+                } else {
+                    self.can_fit_pose(Pose::Crouching)?
+                }
+            } else {
+                self.can_fit_pose(Pose::Crouching)? && !self.can_fit_pose(Pose::Standing)?
+            };
         Ok(())
     }
     /// Dry Player.updatePlayerPose after movement: crawl when neither standing
     /// nor crouching fits; leave the current pose if even crawling cannot fit.
     pub fn update_player_pose(&mut self) -> Result<()> {
-        if !self.can_fit_pose(Pose::Swimming)? {
-            return Ok(());
-        }
         // Player.getDesiredPose: sleeping, swimming, gliding, Riptide's spin.
         let desired = if self.player.sleeping {
             Pose::Sleeping
@@ -253,6 +266,19 @@ impl MotionWorld<'_, '_, '_> {
         } else {
             Pose::Standing
         };
+        if !self.player.spectator {
+            let d_dim = self.player.dimensions_for_pose(desired)?;
+            let swim_dim = self.player.dimensions_for_pose(Pose::Swimming)?;
+            if d_dim.width >= swim_dim.width
+                && d_dim.height >= swim_dim.height
+                && self.can_fit_pose(desired)?
+            {
+                return self.player.set_pose(desired);
+            }
+        }
+        if !self.can_fit_pose(Pose::Swimming)? {
+            return Ok(());
+        }
         let pose = if self.player.spectator || self.can_fit_pose(desired)? {
             desired
         } else if self.can_fit_pose(Pose::Crouching)? {
