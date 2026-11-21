@@ -190,6 +190,7 @@ impl Hub {
         if !self.viewed.active() {
             return;
         }
+        self.encoder.set_retain_wire(self.guests.len() > 1);
         self.prepare_terrain_pass();
         let dimension = self.config.dimension.clone();
         let active = self.viewed.active.clone();
@@ -344,6 +345,7 @@ impl Hub {
             let chunks: Vec<_> = taken.iter().map(|&(_, c)| c).collect();
             self.encoder.warm(&chunks);
             let bodies = self.encoder.bodies_with(&chunks, world, &protos);
+            self.encoder.clear_batch_wire();
             batch_runs(level, &taken, &bodies)
         };
         if taken.is_empty() {

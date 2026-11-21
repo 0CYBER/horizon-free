@@ -2872,6 +2872,11 @@ impl Hub {
                 }
             }
         }
+        // In solo singleplayer there is only one receiver, so retaining encoded
+        // wire sections and heightmaps across sends only duplicates chunk RAM.
+        // Update before the empty-batch return so a departing guest releases the
+        // multiplayer cache even if the remaining player stands still.
+        self.encoder.set_retain_wire(self.guests.len() > 1);
         if batches.is_empty() {
             return;
         }
@@ -2944,6 +2949,7 @@ impl Hub {
         let mut encoded = self.encoder.bodies_with(&columns.chunks, world, &|x, z| {
             ctx.streaming.and_then(|s| s.proto_sections(x, z))
         });
+        self.encoder.clear_batch_wire();
         let uses = &mut columns.uses;
         let chunks = &columns.chunks;
         for (i, taken, far, batch) in batches {
@@ -8784,5 +8790,81 @@ mod tests {
         hub.guests.update(0, |g| g.release_tickets());
         hub.guests.update(0, |g| g.watching = false);
         assert_eq!(hub.guests[0].ticket_chunk(), left);
+    }
+
+    #[test]
+    fn departing_guest_releases_multiplayer_wire_cache_when_batches_are_empty() {
+        let (mut hub, _rx1) = hub_with_a_guest();
+        let (tx2, _rx2) = std::sync::mpsc::channel();
+        let mut alice = Guest::new(
+            crate::lan::Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Alice".into(),
+                properties: Vec::new(),
+                info: horizon_protocol::packets::configuration::ClientInformation::new(8),
+                brand: "vanilla".into(),
+                sender: crate::lan::PlayerSender::new(tx2, std::sync::Arc::default()),
+                latency: std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+                expected: false,
+            },
+            2,
+            [0.5, 64.0, 0.5],
+            8,
+        );
+        alice.placed = true;
+        alice.dimension = "minecraft:overworld".into();
+        hub.guests.push(alice);
+        hub.encoder = ChunkEncoder::new(
+            ["minecraft:air", "minecraft:stone"].map(|n| (std::sync::Arc::<str>::from(n), false)),
+            &horizon_protocol::registry::Builtin::default(),
+            &[],
+            &[],
+        );
+        hub.encoder.tables = Some(std::sync::Arc::new(
+            crate::save::SaveTables::for_heightmaps(crate::assets::Properties::for_tests(&[
+                (true, false, false, false),
+                (false, false, true, true),
+            ])),
+        ));
+        let mut world = floor_at(1);
+        let mut next_entity = 100;
+        let border = crate::worldborder::WorldBorder::default();
+        let ctx = TickCtx {
+            sea_level: 63,
+            world: &mut world,
+            entities: &[],
+            next_entity: &mut next_entity,
+            spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
+            difficulty: 2,
+            difficulty_locked: false,
+            clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
+            tick_steps: Default::default(),
+            collision: None,
+            border: &border,
+            streaming: None,
+        };
+        for _ in 0..3 {
+            hub.ticks += 10;
+            for i in 0..hub.guests.len() {
+                hub.guests.update(i, |g| g.unacknowledged = 0);
+            }
+            hub.update_chunks(&ctx);
+        }
+        let [(_, sections_multiplayer), (heights_multiplayer, _)] = hub.encoder.cache_census();
+        assert!(heights_multiplayer > 0);
+        // The second guest leaves while the remaining player has no pending batches.
+        let _ = hub.remove_guest(1, "bye");
+        hub.ticks += 10;
+        hub.guests.update(0, |g| g.unacknowledged = 0);
+        hub.update_chunks(&ctx);
+        let [(_, sections_solo), (heights_solo, _)] = hub.encoder.cache_census();
+        assert_eq!(heights_solo, 0);
+        assert!(sections_solo < sections_multiplayer);
     }
 }

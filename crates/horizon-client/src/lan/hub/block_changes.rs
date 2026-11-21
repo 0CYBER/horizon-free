@@ -144,6 +144,7 @@ impl Hub {
                 .iter()
                 .filter_map(|k| world.chunks.get(k).map(|c| &**c))
                 .collect();
+            self.encoder.set_retain_wire(self.guests.len() > 1);
             self.encoder.warm(&columns);
             for chunk in columns {
                 let key = (chunk.x, chunk.z);
@@ -184,6 +185,7 @@ impl Hub {
                     }
                 }
             }
+            self.encoder.clear_batch_wire();
         }
         let mut refresh: crate::fast_hash::FxHashSet<_> = if has_views {
             bulk.iter()
