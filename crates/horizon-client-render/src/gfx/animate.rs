@@ -74,6 +74,8 @@ pub(crate) struct SpriteAnimator {
     changed: Vec<u32>,
     /// Whether each sprite layer has an animation.
     is_animated: Vec<bool>,
+    /// Whether any animated sprite uses a Polytone mode driven by inputs other than `tick`.
+    has_modes: bool,
     /// What the sprites' Polytone animation `mode`s read.
     modes: AnimationModes,
 }
@@ -239,6 +241,7 @@ impl SpriteAnimator {
         for a in animations {
             is_animated[a.layer as usize] = true;
         }
+        let has_modes = sprites.iter().any(|s| s.animation.mode().is_some());
         let Some((pipeline, layout)) = pipeline else {
             let groups = keys
                 .iter()
@@ -261,6 +264,7 @@ impl SpriteAnimator {
                 size,
                 changed: Vec::new(),
                 is_animated,
+                has_modes,
                 modes: AnimationModes::new(animations),
             };
         };
@@ -342,6 +346,7 @@ impl SpriteAnimator {
             size,
             changed: Vec::new(),
             is_animated,
+            has_modes,
             modes: AnimationModes::new(animations),
         }
     }
@@ -352,6 +357,11 @@ impl SpriteAnimator {
             .get(layer as usize)
             .copied()
             .unwrap_or(false)
+    }
+
+    /// Whether any animated sprite uses a Polytone mode driven by inputs other than `tick`.
+    pub fn has_modes(&self) -> bool {
+        self.has_modes
     }
 
     /// Number of words needed to mark the animated layers visible this frame.
@@ -1125,5 +1135,47 @@ mod tests {
         let count = animator.collect(5, None, None);
         assert_eq!(count, 3);
         assert_eq!(animator.changed, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn newly_visible_sprite_on_same_tick_still_updates() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, _)) = device() else {
+            return;
+        };
+        let size = 16;
+        let clips = [
+            (1, 16, r#"{"frametime":1}"#),
+            (3, 16, r#"{"frametime":1}"#),
+            (5, 16, r#"{"frametime":1}"#),
+        ];
+        let mut mips = vec![Settings::default(); 6];
+        let animations: Vec<_> = clips
+            .iter()
+            .map(|&(layer, native, metadata)| {
+                mips[layer as usize] = settings(native, Strategy::Cutout);
+                let frames = (0..3)
+                    .map(|f| crate::sprites::resample(&frame(native, layer * 7 + f), native, size))
+                    .collect();
+                crate::sprites::test_frames(layer, frames, metadata)
+            })
+            .collect();
+        let mut animator = SpriteAnimator::new(&device, &animations, size, &mips, &[], 2, false);
+        assert!(!animator.has_modes());
+
+        // Tick 1: every sprite has been shown at least once.
+        let all = [(1_u64 << 1) | (1_u64 << 3) | (1_u64 << 5)];
+        assert_eq!(animator.collect(1, None, Some(&all)), 3);
+        assert_eq!(animator.changed, vec![1, 3, 5]);
+
+        // Tick 2, first render: only layer 1 is visible, leaving layers 3 and 5 at tick 1.
+        let only_one = [1_u64 << 1];
+        assert_eq!(animator.collect(2, None, Some(&only_one)), 1);
+        assert_eq!(animator.changed, vec![1]);
+
+        // Tick 2, second render: layer 3 enters view mid-tick and must update immediately.
+        let one_and_three = [(1_u64 << 1) | (1_u64 << 3)];
+        assert_eq!(animator.collect(2, None, Some(&one_and_three)), 1);
+        assert_eq!(animator.changed, vec![3]);
     }
 }
