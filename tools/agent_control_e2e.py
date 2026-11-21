@@ -63,11 +63,12 @@ POSITIONAL = {
     'turn': ['dyaw', 'dpitch'], 'interact': ['x', 'y', 'z', 'face'],
     'wait_for': ['condition', 'value'], 'open': ['world', 'seed', 'mode'], 'select': ['slot'],
     'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
-    'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
+    'xp': ['levels'], 'options': ['page'], 'lan': ['action', 'port'], 'world_backup': ['folder'],
     'world_rename': ['folder', 'name'], 'world_delete': ['folder'], 'mouse': ['button', 'action'],
 }
 # Booleans the game takes as bare words.
-BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby']}
+BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby'],
+        'lan': ['commands', 'force']}
 
 
 class Failed(Exception):
@@ -923,6 +924,30 @@ def suggestions_scenario(d, out):
     return {'completions': len(cases)}
 
 
+def lan_scenario(d, out):
+    d('open', world='Lan', seed=7, mode='creative')
+    d('wait_for', condition='loaded', timeout=400)
+    assert d('lan', action='status')['open'] is False
+    port = None
+    for explicit in (False, True):
+        for commands, force in ((False, False), (True, False), (False, True), (True, True)):
+            port_args = {'port': port} if explicit else {}
+            reply = d('lan', action='open', commands=commands, force=force, **port_args)
+            try:
+                assert reply['ok'] is True and 0 < reply['port'] <= 65535, reply
+                if explicit:
+                    assert reply['port'] == port, reply
+                status = d('lan', action='status')
+                assert status['open'] is True and status['port'] == reply['port'], status
+                assert status['guest_commands'] is commands, status
+                assert status['force_game_mode'] is force, status
+                port = reply['port']
+            finally:
+                d('lan', action='close')
+            assert d('lan', action='status')['open'] is False
+    return {'configurations': 8}
+
+
 def manage_scenario(d, out):
     # The commands that close the audit's gaps: status (F3), entities by right-click, effects and xp,
     # LAN status, options pages by name, then from the title screen the worlds list, Make Backup,
@@ -993,7 +1018,7 @@ def pause_save_scenario(d, out):
 
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
              'consume': consume_scenario, 'copper-chest': copper_chest_scenario, 'use-screen': use_screen_scenario, 'pick': pick_scenario,
-             'suggestions': suggestions_scenario, 'manage': manage_scenario, 'pause-save': pause_save_scenario,
+             'suggestions': suggestions_scenario, 'lan': lan_scenario, 'manage': manage_scenario, 'pause-save': pause_save_scenario,
              'repro': repro_scenario}
 
 

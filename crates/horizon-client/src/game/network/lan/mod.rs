@@ -2,6 +2,7 @@
 //! server threads and the play-state hub, feeds it the world's entities each
 //! tick and turns what the guests do into gameplay. A world that is not open
 //! costs one `Option` check per tick.
+mod control;
 mod event_timings;
 #[cfg(test)]
 mod level_event_targets;
@@ -1135,16 +1136,11 @@ impl Game<'_> {
                 if self.title.is_some() {
                     return Err("open a world first".into());
                 }
-                let port = words.get(2).map_or(Ok(0), |p| p.parse::<u16>())?;
-                self.lan_open(LanSettings {
-                    port: if port == 0 {
-                        lan::available_port()
-                    } else {
-                        port
-                    },
-                    guest_commands: words.contains(&"commands"),
-                    force_game_mode: words.contains(&"force"),
-                })?;
+                let mut settings = control::open_settings(&words[2..])?;
+                if settings.port == 0 {
+                    settings.port = lan::available_port();
+                }
+                self.lan_open(settings)?;
                 Ok(Some(json!({ "ok": true, "port": self.lan_port() })))
             }
             Some("close") => {
@@ -1165,6 +1161,8 @@ impl Game<'_> {
                 // The owner's profile name.
                 "host": self.options.player_name(),
                 "port": h.settings.port,
+                "guest_commands": h.hub.config.guest_commands,
+                "force_game_mode": h.hub.config.force_game_mode,
                 // The server's own world: its finished chunks and how many it
                 // has generated or loaded so far.
                 "world": {

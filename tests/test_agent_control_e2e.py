@@ -61,6 +61,17 @@ class CliArgvTest(unittest.TestCase):
         self.assertEqual(capture_cli('click_slot', slot=200, shift=True),
                          ['click-slot', '200', 'shift'])
 
+    def test_lan_port_and_keywords(self):
+        for commands, force in ((False, False), (True, False), (False, True), (True, True)):
+            keywords = (['commands'] if commands else []) + (['force'] if force else [])
+            for port in (None, 0, 25565):
+                with self.subTest(commands=commands, force=force, port=port):
+                    port_args = {} if port is None else {'port': port}
+                    self.assertEqual(
+                        capture_cli('lan', action='open', commands=commands, force=force, **port_args),
+                        ['lan', 'open'] + ([] if port is None else [str(port)]) + keywords,
+                    )
+
     def test_plain_positional_and_free_text_still_work(self):
         self.assertEqual(capture_cli('goto', x=1, y=64, z=-3), ['goto', '1', '64', '-3'])
         self.assertEqual(capture_cli('type', text='hello everyone', replace=True),
