@@ -489,7 +489,9 @@ impl Game<'_> {
         let at = [p.position.x, p.position.y, p.position.z];
         if self.hook.is_some() {
             let damage = self.retrieve_hook(stack);
-            self.damage_held(damage);
+            // FishingRodItem.hurtAndBreak(..., hand.asEquipmentSlot()): the
+            // rod in the acting hand breaks, not necessarily the main hand.
+            self.damage_held_in_slot(damage, self.acting_hand_slot());
             let pitch = 0.4 / (self.world.random.next_float() * 0.4 + 0.8);
             self.audio.play(
                 "minecraft:entity.fishing_bobber.retrieve",
