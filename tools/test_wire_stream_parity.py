@@ -60,6 +60,8 @@ RESET = [
     'gamerule spawn_mobs false', 'gamerule advance_time false', 'gamerule advance_weather false',
     f'fill -12 {FLOOR + 1} -12 12 {FLOOR + 12} 28 minecraft:air',
     f'fill -12 {FLOOR} -12 12 {FLOOR} 28 minecraft:grass_block',
+    # Under the swim pool, and elytra's pillar above the air fill (a taller fill passes the 32768-block limit).
+    f'fill -3 {FLOOR - 2} 2 3 {FLOOR - 1} 14 minecraft:dirt', f'setblock 0 {FLOOR + 30} 0 minecraft:air',
     'kill @e[type=!minecraft:player]', f'clear {PLAYER}', f'effect clear {PLAYER}', f'gamemode survival {PLAYER}',
     f'effect give {PLAYER} minecraft:saturation 1 20 true', f'effect give {PLAYER} minecraft:instant_health 1 5 true',
     f'tp {PLAYER} 0.5 {FLOOR + 1} 0.5 0 0',
@@ -172,6 +174,55 @@ SCENARIOS = {
         setup=[f'setblock 0 {FLOOR + 1} 2 minecraft:stone'],
         ticks=60, anchor='accept_teleportation',
         steps={0: ['look 0 45'], 3: ['mouse left down'], 15: ['command tp @s ~ ~ ~'], 40: ['mouse left up']}),
+    # Movement: the moves, flags and inputs a client sends where the ground isn't flat and open.
+    # A 20-block fall from a teleport: every falling move, then the landing's on-ground flag. `phase`: the
+    # moves after the teleport compare from the tick each client applied it (wire_stream.compare_phased); a
+    # fixed destination makes that state the same whenever the server answered. `falls`: each client's moves
+    # from its answer on must fall and land, so a teleport answered too late to fall can't pass.
+    'fall': dict(ticks=60, phase='accept_teleportation', falls=True,
+                 steps={0: [f'command tp @s 0.5 {FLOOR + 21} 0.5']}),
+    # Sprinting into a wall (horizontal collision, the sprint it stops), then sliding along it.
+    'wall': dict(
+        setup=[f'fill -3 {FLOOR + 1} 4 3 {FLOOR + 3} 4 minecraft:stone'],
+        ticks=60, steps={0: ['key ctrl down', 'key w down'], 30: ['key a down'], 40: ['key a up'],
+                         45: ['key w up', 'key ctrl up']}),
+    # Stepping up a slab, down from it, then up a full block from the ground (a jump: no step is that high).
+    'step_up': dict(
+        setup=[f'fill -3 {FLOOR + 1} 3 3 {FLOOR + 1} 3 minecraft:stone_slab',
+               f'fill -3 {FLOOR + 1} 7 3 {FLOOR + 1} 7 minecraft:stone'],
+        ticks=60, steps={0: ['key w down'], 28: ['key space down'], 32: ['key space up'], 50: ['key w up']}),
+    # Climbing a ladder, holding on to it sneaking, then letting go.
+    'ladder': dict(
+        setup=[f'fill -1 {FLOOR + 1} 3 1 {FLOOR + 6} 3 minecraft:stone',
+               f'fill 0 {FLOOR + 1} 2 0 {FLOOR + 6} 2 minecraft:ladder[facing=north]'],
+        ticks=70, steps={0: ['key w down'], 30: ['key shift down'], 40: ['key shift up'], 45: ['key w up']}),
+    # Sprint-jumping on packed ice, then sliding to a stop.
+    'ice': dict(
+        setup=[f'fill -3 {FLOOR} -3 3 {FLOOR} 20 minecraft:packed_ice'],
+        ticks=70, steps={0: ['key ctrl down', 'key w down'], 5: ['key space down'],
+                         30: ['key space up', 'key w up', 'key ctrl up']}),
+    # A server teleport while walking: its acceptance, then the moves from the new place with the key still held.
+    # Answered in different ticks, the phase ends at the release (tick 40), which stays on the script's clock
+    # (walk compares a release); answered in the same tick, the release and the stop after it compare too.
+    'teleport_moving': dict(ticks=60, phase='accept_teleportation',
+                            steps={0: ['key w down'], 15: [f'command tp @s 0.5 {FLOOR + 1} 8.5'], 40: ['key w up']}),
+    # An elytra: walking off a pillar 30 blocks up (the setup's teleport puts the player on it and the harness
+    # waits for it, so every input keeps the script's clock), a jump in the air opens it (START_FALL_FLYING), a glide looking down, then a
+    # dive to the ground. It must land before the scenario ends: a player still gliding when the next reset
+    # takes the elytra and teleports it glides a tick more or not, by when the packets land (seen on the
+    # vanilla client both ways), and the next scenario starts from another place.
+    'elytra': dict(
+        setup=[f'item replace entity {PLAYER} armor.chest with minecraft:elytra',
+               f'effect give {PLAYER} minecraft:resistance 60 4 true', f'setblock 0 {FLOOR + 30} 0 minecraft:stone',
+               f'tp {PLAYER} 0.5 {FLOOR + 31} 0.5 0 0'],
+        ticks=90, expect='start_fall_flying', lands=True,
+        steps={0: ['key w down'], 8: ['key w up', 'key space down'], 10: ['key space up'], 12: ['look 0 20'],
+               40: ['look 0 80']}),
+    # Walking into a pool below the ground (the reset refills the dirt under it), swimming up, sprint-swimming.
+    'swim': dict(
+        setup=[f'fill -3 {FLOOR - 2} 2 3 {FLOOR} 14 minecraft:water'],
+        ticks=70, steps={0: ['key w down'], 25: ['key space down'], 40: ['key space up'], 45: ['key ctrl down'],
+                         60: ['key w up', 'key ctrl up']}),
 }
 
 
@@ -430,17 +481,33 @@ def run(args, out):
     return captures
 
 
-def anchored_diffs(v, h, ticks, anchor, problems, names=('vanilla', 'Horizon')):
+def anchored_diffs(v, h, spec, problems, names=('vanilla', 'Horizon')):
     """wire_stream.compare over the scenario's ticks. With an anchor (a frame packet the server's answer brings,
     as AcceptTeleportation), the two ticks that answer arrived in compare with each other
-    (wire_stream.compare_answered). Numbers are vanilla's ticks."""
+    (wire_stream.compare_answered); with a phase, everything after it does (wire_stream.compare_phased), up to
+    the script's next step. Numbers are vanilla's ticks."""
+    ticks = spec['ticks'] + PRELUDE
+    anchor = spec.get('anchor') or spec.get('phase')
     if not anchor:
         return wire_stream.compare(v, h, ticks)
-    av, ah = wire_stream.first_frame(v, anchor), wire_stream.first_frame(h, anchor)
+    av, ah = wire_stream.first_frame(v[:ticks + 1], anchor), wire_stream.first_frame(h[:ticks + 1], anchor)
     if av is None or ah is None:
         problems.append(f'  no {anchor}: {names[0]} at tick {av}, {names[1]} at tick {ah}')
         return wire_stream.compare(v, h, ticks)
-    return wire_stream.compare_answered(v, h, ticks, av, ah)
+    if 'phase' not in spec:
+        return wire_stream.compare_answered(v, h, ticks, av, ah)
+    until = phase_end(spec)
+    if av != ah and max(av, ah) >= until:
+        problems.append(f'  {anchor} after the script\'s next step (tick {until}): {names[0]} at tick {av}, '
+                        f'{names[1]} at tick {ah}')
+        return wire_stream.compare(v, h, min(av, ah) - 1)
+    return wire_stream.compare_phased(v, h, ticks, av, ah, until)
+
+
+def phase_end(spec):
+    """The script's first step after the one that sends the teleport (prelude included), else its end."""
+    sent = min(t for t, lines in spec['steps'].items() if any(line.startswith('command tp') for line in lines))
+    return min((t + PRELUDE for t in spec['steps'] if t > sent), default=spec['ticks'] + PRELUDE + 1)
 
 
 def compare(captures, scenarios):
@@ -458,7 +525,8 @@ def compare(captures, scenarios):
         v, h = runs[ref][name], runs[new][name]
         ticks = SCENARIOS[name]['ticks'] + PRELUDE
         problems = []
-        for i, vt, ht in anchored_diffs(v, h, ticks, SCENARIOS[name].get('anchor'), problems, (ref_name, new_name)):
+        spec = SCENARIOS[name]
+        for i, vt, ht in anchored_diffs(v, h, spec, problems, (ref_name, new_name)):
             problems.append(f'  tick {i}:\n  {ref_name}:\n{wire_stream.describe(vt)}\n  {new_name}:\n'
                             f'{wire_stream.describe(ht)}')
             problems += wire_stream.field_diff(vt, ht, (ref_name, new_name))
@@ -467,6 +535,20 @@ def compare(captures, scenarios):
                              if n not in ('keep_alive', 'chunk_batch_received')]
         if frame(v) != frame(h):
             problems.append(f'  frame packets: {ref_name} {frame(v)}, {new_name} {frame(h)}')
+        # A scenario that never did what it is for passes vacuously: the reference must have done it.
+        if spec.get('expect') and not any(f.get('action') == spec['expect']
+                                          for t in v[:ticks + 1] for _, f in t['packets']):
+            problems.append(f'  {ref_name} never sent {spec["expect"]}')
+        # A fall from the teleport: each client's moves from its own answer on leave the ground and land.
+        for who, run in ((ref_name, v), (new_name, h)) if spec.get('falls') else ():
+            start = wire_stream.first_frame(run[:ticks + 1], spec['phase'])
+            if start is None or not wire_stream.fell_and_landed(run, start, ticks):
+                problems.append(f'  {who} did not fall and land after the teleport (answered at tick {start})')
+        # The last on-ground flag: a player still in the air when the next reset comes ends it differently.
+        for who, run in ((ref_name, v), (new_name, h)) if spec.get('lands') else ():
+            grounds = [f['on_ground'] for t in run[:ticks + 1] for _, f in t['packets'] if 'on_ground' in f]
+            if not grounds or not grounds[-1]:
+                problems.append(f'  {who} has not landed by the scenario\'s last tick')
         misplaced = [(i, t['misplaced']) for i, t in enumerate(h[:ticks + 1]) if t['misplaced']]
         if misplaced:
             problems.append(f'  {new_name} sent the server\'s answers inside a tick: {misplaced}')

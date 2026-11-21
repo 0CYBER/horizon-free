@@ -233,6 +233,41 @@ def compare_answered(vanilla, horizon, ticks, av, ah):
     return sorted(out, key=lambda d: d[0])
 
 
+def compare_phased(vanilla, horizon, ticks, av, ah, until):
+    """compare, for a scenario whose second phase starts when the client has applied the server's answer (a
+    teleport to a fixed place, which also zeroes the player's motion): the ticks before the earlier answer
+    compare on the script's clock; from the answers on, vanilla's tick av + k compares with Horizon's ah + k.
+    A step of the script stays on the script's clock, so when the answers came in different ticks the phase
+    ends before the script's next step (`until`) or after its last tick, on both clients. The ticks one client
+    waited longer for the answer are the server's timing, not compared. Answers in the same tick leave the two
+    clocks together: then every tick compares, to the scenario's end. Numbers are vanilla's; with different
+    answer ticks both must come before `until`."""
+    if av == ah:
+        until = ticks + 1
+    out = compare(vanilla, horizon, min(av, ah) - 1)
+    packets = lambda run, i: run[i]['packets'] if i < len(run) else None  # noqa: E731
+    for k in range(min(until, ticks + 1) - max(av, ah)):
+        v, h = packets(vanilla, av + k), packets(horizon, ah + k)
+        if v != h:
+            out.append((av + k, v, h))
+    return out
+
+
+def fell_and_landed(run, start, end):
+    """Whether the ticks start..end of a run send an on-ground flag false and, after it, one true: a fall and
+    its landing, not only a move in the air or on the ground."""
+    airborne = False
+    for tick in run[start:end + 1]:
+        for _, fields in tick['packets']:
+            if 'on_ground' not in fields:
+                continue
+            if not fields['on_ground']:
+                airborne = True
+            elif airborne:
+                return True
+    return False
+
+
 MOVES = {'move_player_pos', 'move_player_pos_rot', 'move_player_rot', 'move_player_status_only'}
 
 
