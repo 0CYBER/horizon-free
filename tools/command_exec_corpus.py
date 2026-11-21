@@ -3157,6 +3157,7 @@ def social():
         cmd('/help execute'),
         cmd('/help scoreboard players'),
         cmd('/help nonexistent'),
+        cmd('/help give @s minecraft:stone 64'),
         *setup('/scoreboard objectives remove trig', '/scoreboard objectives remove plain'),
     ]
 

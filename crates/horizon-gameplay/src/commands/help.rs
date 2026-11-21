@@ -36,14 +36,12 @@ pub fn help(host: &mut dyn HelpHost, ctx: &Context) -> R<i32> {
             }
             let last = parse.context.nodes.last().map(|n| n.0).unwrap_or(0);
             let usage = d.smart_usage(last, level);
-            let prefix = &command[..parse.context.range.1.min(command.len())];
+            // HelpCommand: the prefix is the whole greedy string, and an
+            // empty usage sends nothing and returns 0.
             for (_, line) in &usage {
-                host.feedback_unbroadcast(Text::literal(format!("/{prefix} {line}")));
+                host.feedback_unbroadcast(Text::literal(format!("/{command} {line}")));
             }
-            if usage.is_empty() {
-                host.feedback_unbroadcast(Text::literal(format!("/{prefix}")));
-            }
-            Ok(usage.len().max(1) as i32)
+            Ok(usage.len() as i32)
         }
         _ => Ok(0),
     }
