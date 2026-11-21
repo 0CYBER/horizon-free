@@ -14,3 +14,4 @@ horizon-prepare artifacts::tests::reuse_skips_a_bad_sibling_and_repairs_bad_curr
 horizon-prepare artifacts::tests::the_error_names_the_folders_looked_in lib daily child-process
 horizon-prepare artifacts::tests::the_prism_version_file_is_found_flat_or_in_its_folder lib daily child-process
 horizon-prepare selects_a_compatible_compiler_and_runtime test:java_selection daily child-process
+horizon-prepare worker::tests::a_jvm_that_stops_early_says_how_in_the_error_and_the_task_log lib daily child-process
