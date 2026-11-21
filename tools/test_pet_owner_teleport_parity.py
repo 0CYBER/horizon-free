@@ -31,7 +31,10 @@ SCRIPT = [
                f'cmd Alice summon minecraft:wolf -3.5 -60 6.5 {{{WOLF},Tags:["free"]}}',
                f'cmd Alice summon minecraft:pig 4.5 -60 6.5 {{UUID:{HOLDER},NoAI:1b,PersistenceRequired:1b}}',
                f'cmd Alice summon minecraft:wolf 2.5 -60 6.5 {{{WOLF},Tags:["leashed"],leash:{{UUID:{HOLDER}}}}}',
-               f'cmd Alice summon minecraft:oak_boat 0.5 -60 10.5 '
+               # The boat stands 21 blocks from the free wolf, past one stroll: a boat takes in a mob that touches
+               # it (AbstractBoat.tick), and a free wolf that strolled into it 6 blocks away stayed behind as a
+               # passenger: 3 of 40 vanilla runs, which `one_player` re-runs; Horizon's run never is (#18133).
+               f'cmd Alice summon minecraft:oak_boat 0.5 -60 -14.5 '
                f'{{Passengers:[{{id:"minecraft:wolf",{WOLF},Tags:["boat"]}}]}}']),
     ('away', ['cmd Alice tp @s 0.5 -60 40.5']),
     *[(f'{pet}-near', [f'cmd Alice data get entity @e[type=minecraft:wolf,tag={pet},limit=1] Pos']) for pet in PETS],
