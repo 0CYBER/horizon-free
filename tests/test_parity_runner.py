@@ -56,6 +56,60 @@ class ParityRunnerTests(unittest.TestCase):
             [["cargo", "build", "--locked", "--profile", "dev", "-p", "foo", "--features", "feat", "--example", "p"]],
         )
 
+    def test_a_harnesses_cargo_test_is_recorded_with_its_selection_and_target_filters(self):
+        commands = [
+            # A test name filter before `--`, the test binary's arguments after it.
+            ["cargo", "test", "--locked", "-p", "horizon-client-lib", "--lib", "mobs::poi::vanilla_bed", "--",
+             "--include-ignored", "--nocapture"],
+            # Output, job and run flags key no unit: the same selection as a plain run.
+            ["cargo", "test", "--profile", "fast", "-p", "horizon-client", "--lib", "--no-run",
+             "--message-format=json", "-j", "2"],
+            ["cargo", "test", "--profile=fast", "--package=horizon-client", "-j2", "--lib", "other_test"],
+            ["/usr/bin/cargo", "test", "-phorizon-client", "--lib", "--no-default-features", "--test", "wire"],
+            ["cargo", "test", "--manifest-path", str(parity.ROOT / "Cargo.toml"), "-p", "horizon-world", "--release",
+             "--lib"],
+            ["cargo", "build", "-p", "horizon-client", "--lib"],  # a build is an artifact, not a test
+            ["cargo", "test", "--lib", "x"],  # no -p: which package depends on the harness's working folder
+            ["cargo", "test", "--manifest-path", "/elsewhere/Cargo.toml", "-p", "probe", "--lib"],
+            ["cargo", "test", "--manifest-path", "Cargo.toml", "-p", "horizon-world", "--lib"],  # relative to which folder?
+            ["cargo", "test", "-p", "horizon-client", "--doc"],  # compiled when run
+            ["cargo", "test", "-p", "horizon-client", "--target-dir", "/t", "--lib"],  # unknown: not repeated
+            # A harness that forbids the network keeps that in its prebuild.
+            ["cargo", "test", "--frozen", "-p", "horizon-world", "--lib"],
+        ]
+        self.assertEqual(parity.cargo_tests(commands), [
+            ["-p", "horizon-client-lib", "--lib"],
+            ["--profile", "fast", "-p", "horizon-client", "--lib"],
+            ["-p", "horizon-client", "--no-default-features", "--lib", "--test", "wire"],
+            ["--release", "-p", "horizon-world", "--lib"],
+            ["--offline", "-p", "horizon-world", "--lib"],
+        ])
+
+    def test_recorded_cargo_tests_are_prebuilt_with_no_run_before_and_apart_from_the_builds(self):
+        artifacts = [["bin", "horizon-client", "dev", ["-p", "horizon-client"], False]]
+        packages = {("bin", "horizon-client"): "horizon-client"}
+        tests = [["-p", "horizon-client", "--lib"], ["-p", "horizon-client", "--no-default-features", "--lib"],
+                 ["--profile", "fast", "-p", "horizon-client", "--lib"], ["-p", "horizon-client", "--lib"]]
+        self.assertEqual(parity.prebuild_commands(artifacts, packages, tests), [
+            ["cargo", "test", "--locked", "--no-run", "--profile", "fast", "-p", "horizon-client", "--lib"],
+            ["cargo", "test", "--locked", "--no-run", "-p", "horizon-client", "--lib"],
+            ["cargo", "test", "--locked", "--no-run", "-p", "horizon-client", "--no-default-features", "--lib"],
+            ["cargo", "build", "--locked", "--profile", "dev", "-p", "horizon-client", "--bin", "horizon-client"],
+        ])
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), parity.prebuild_commands(artifacts, packages, []))
+        self.assertEqual(parity.describe_cargo_build(
+            ["cargo", "test", "--locked", "--no-run", "-p", "horizon-client", "--lib"], [], 0.0, 5.0),
+            "test -p horizon-client --lib: 5s, 0 crates compiled")
+        with tempfile.TemporaryDirectory() as temp:
+            trace = Path(temp) / "trace.json"
+            trace.write_text(json.dumps({"modules": [], "read": [], "commands": [
+                ["cargo", "test", "-p", "horizon-client", "--lib", "x", "--", "--exact"]]}))
+            script = Path(temp) / "test_x_parity.py"
+            script.write_text("")
+            record = parity.outcome("x", script, False, 1.0, trace)
+        self.assertEqual(record["tests"], [["-p", "horizon-client", "--lib"]])
+        self.assertEqual(record["artifacts"], [])
+
     def test_prebuild_follows_a_moved_target_without_losing_features(self):
         selection = ["-p", "horizon-client", "--no-default-features", "--features", "horizon-client/rng-trace"]
         artifacts = [["example", "client_probe", "fast", selection, True],
@@ -484,6 +538,12 @@ class ParityRunnerTests(unittest.TestCase):
         self.assertEqual(printed[3:], ["  compiler cache: not in use, or its counts could not be read"])
         self.assertNotIn(("finish",), events)
         self.assertEqual(sorted(path.name for path in state.iterdir()), ["prebuild-timings-6-1"])
+
+    def test_a_silent_failure_fails_the_prebuild_without_its_switch_too(self):
+        (built, errors), runs, _, _, _ = self.prebuild_with_fake_cargo(["one", "silent"], switch=False)
+        self.assertEqual(runs, [["one"], ["silent"]])
+        self.assertFalse(built, "a Cargo run that exits nonzero fails, whatever it printed")
+        self.assertEqual(errors, "")
 
     def test_the_prebuild_checks_for_a_priority_job_between_its_cargo_runs(self):
         (built, _), _, events, _, _ = self.prebuild_with_fake_cargo(["one", "two", "three"], switch=False)

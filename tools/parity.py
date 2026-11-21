@@ -310,6 +310,74 @@ def artifacts_of(arguments):
     return [[kind, name, profile, selection, examples] for kind, name in found]
 
 
+TEST_TARGETS = {"--lib", "--bins", "--tests", "--examples", "--benches", "--all-targets"}
+TEST_TARGET_FLAGS = {"--bin", "--test", "--example", "--bench"}  # followed by a value
+TEST_UNKEYED = {"--locked", "--no-run", "--no-fail-fast", "-q", "--quiet", "-v", "--verbose"}
+TEST_UNKEYED_FLAGS = {"-j", "--jobs", "--message-format", "--color"}  # followed by a value
+
+
+def test_selection(arguments):
+    """The arguments a `cargo test` command line compiles with: its profile flag as written, its package and feature
+    selection and its target filters, in that order. `cargo test --no-run` with them builds the very units that
+    command builds (--no-run only skips running them), so the harness then finds every one fresh: Cargo keys a unit on
+    its profile, features, target and mode, which these decide, and on the environment, which the prebuild shares with
+    the harnesses (run_environment). What it leaves out keys nothing: --locked, -j, --message-format, test name
+    filters and the test binary's own arguments after `--`. --offline (or --frozen) is kept as --offline: it keys no
+    unit, but a harness that forbids the network must not have its prebuild fetch.
+
+    None when the build can't be repeated exactly: an unknown flag, --doc (compiled when run), no -p or --workspace
+    (the selection would depend on the harness's working folder) or another workspace's --manifest-path."""
+    if len(arguments) < 2 or Path(arguments[0]).name.removesuffix(".exe") != "cargo" or arguments[1] != "test":
+        return None
+    arguments = arguments[2:arguments.index("--")] if "--" in arguments else arguments[2:]
+    profile, selection, targets, offline = [], [], [], []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        flag, sep, value = argument.partition("=") if argument.startswith("--") else (argument, "", "")
+        if not sep and flag[:2] in ("-p", "-F", "-j") and len(flag) > 2:
+            flag, value, sep = flag[:2], flag[2:], "="
+        if not sep and flag in {*SELECTION_FLAGS, *TEST_TARGET_FLAGS, *TEST_UNKEYED_FLAGS, "--profile", "--manifest-path",
+                                "--exclude"}:
+            if index + 1 >= len(arguments):
+                return None
+            value = arguments[index + 1]
+            index += 1
+        if flag in ("--offline", "--frozen"):
+            offline = ["--offline"]
+        elif flag in ("--release", "-r"):
+            profile = ["--release"]
+        elif flag == "--profile":
+            profile = ["--profile", value]
+        elif flag in SELECTION_FLAGS | {"--exclude"}:
+            selection += ["-p" if flag == "--package" else "--features" if flag == "-F" else flag, value]
+        elif flag in SELECTION_SWITCHES:
+            selection.append("--workspace" if flag == "--all" else flag)
+        elif flag in TEST_TARGETS:
+            targets.append(flag)
+        elif flag in TEST_TARGET_FLAGS:
+            targets += [flag, value]
+        elif flag == "--manifest-path":
+            if not Path(value).is_absolute() or Path(value).resolve() != (ROOT / "Cargo.toml").resolve():
+                return None
+        elif flag.startswith("-") and flag not in TEST_UNKEYED | TEST_UNKEYED_FLAGS:
+            return None
+        index += 1  # anything else is a test name filter
+    if "-p" not in selection and "--workspace" not in selection:
+        return None
+    return [*offline, *profile, *selection, *targets]
+
+
+def cargo_tests(commands):
+    """The distinct test_selection of each `cargo test` a traced harness ran, for the prebuild."""
+    found = []
+    for arguments in commands:
+        selection = test_selection(arguments)
+        if selection is not None and selection not in found:
+            found.append(selection)
+    return found
+
+
 RUST_PATH = re.compile(r"(?<![\w:])((?:crate|self|super)(?:::super)*|[a-z_][a-z0-9_]*)::((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)")
 RUST_TYPE = re.compile(r"\b(?:struct|enum|trait|union|type)\s+([A-Za-z_]\w*)")
 RUST_MACRO_USE = re.compile(r"\b([A-Za-z_]\w*)!\s*[(\[{]")
@@ -709,17 +777,23 @@ def target_packages():
             for target in package["targets"] for kind in target["kind"] if kind in ("example", "bin")}
 
 
-def prebuild_commands(artifacts, packages=None):
+def prebuild_commands(artifacts, packages=None, tests=()):
     """The Cargo runs that build the recorded probes exactly as their harnesses do: one per profile, package and
-    feature selection, and whether examples are among the command's targets (see artifacts_of)."""
+    feature selection, and whether examples are among the command's targets (see artifacts_of).
+
+    tests: recorded test_selection lists, each built by one `cargo test --no-run` of its own, before the builds. A test
+    selection of binaries builds them with its dev-dependencies' features and copies them to the profile folder,
+    where the builds after it put the harnesses' own back."""
+    builds = [["cargo", "test", "--locked", "--no-run", *selection] for selection in sorted({*map(tuple, tests)})]
     groups = {}
     for kind, name, profile, selection, examples in selected_builds(artifacts, packages):
         targets = groups.setdefault((profile, tuple(selection), examples), [])
         target = [f"--{kind}", name] if name else [f"--{kind}"]
         if target not in targets:
             targets.append(target)
-    return [["cargo", "build", "--locked", "--profile", profile, *selection, *(part for target in targets for part in target)]
-            for (profile, selection, _), targets in sorted(groups.items())]
+    return builds + [["cargo", "build", "--locked", "--profile", profile, *selection,
+                      *(part for target in targets for part in target)]
+                     for (profile, selection, _), targets in sorted(groups.items())]
 
 
 def executables(artifacts, packages):
@@ -784,8 +858,9 @@ def selected_builds(artifacts, packages=None):
 PREBUILD_LIMIT = {"main": 240 * 60}
 
 
-def prebuild(artifacts, jobs):
-    """Build the recorded probes before the harnesses start, so they don't serialise on Cargo's lock.
+def prebuild(artifacts, jobs, tests=()):
+    """Build the recorded probes and test selections (prebuild_commands) before the harnesses start, so they don't
+    serialise on Cargo's lock or compile within their own time limits.
 
     On the self-hosted Mac the Cargo runs wait for a turn on the machine (tools/compile_lock.py), as the job's
     HORIZON_COMPILE_LOCK_ROLE says: `main` for parity-main, else `pr`. A `pr` job gives the turn back between its runs
@@ -794,7 +869,7 @@ def prebuild(artifacts, jobs):
     environment["CARGO_BUILD_JOBS"] = str(jobs)
     errors = ""
     packages = target_packages()
-    commands = prebuild_commands(artifacts, packages)
+    commands = prebuild_commands(artifacts, packages, tests)
     role = os.environ.get("HORIZON_COMPILE_LOCK_ROLE") or "pr"
     timings = PrebuildTimings(environment) if os.environ.get(PREBUILD_TIMINGS) == "1" else None
     try:
@@ -846,7 +921,7 @@ def prebuild(artifacts, jobs):
 
             if timings:
                 timings.stats = stats
-            failed = False  # with the switch on: a call's last attempt exited nonzero
+            failed = False  # a call's last attempt exited nonzero, with or without output
             for number, command in enumerate(commands, 1):
                 if number > 1:
                     # A pull request's job lets a waiting parity-main or Mac build go first, outside the call's time.
@@ -869,7 +944,7 @@ def prebuild(artifacts, jobs):
                     returncode, output = build(command)
                     lines = lines + output
                 if returncode:
-                    failed = failed or bool(timings)
+                    failed = True
                     errors += "".join(line for _, line in output)
                 summary = report(lambda: f"cargo {number}/{len(commands)}: "
                                          f"{describe_cargo_build(command, lines, started, time.monotonic())}")
@@ -911,7 +986,8 @@ def describe_cargo_build(command, lines, started, ended):
     `Blocking waiting for file lock on <what>` to its next line, or to the end of the run, so it can include silent
     work after the lock was taken."""
     lines = [(at, ANSI_ESCAPE.sub("", line)) for at, line in lines]
-    profile, selection, targets = "dev", [], 0
+    test = command[1:2] == ["test"]  # Cargo's own profile (test) unless one is named
+    profile, selection, targets = None if test else "dev", [], 0
     arguments = iter(command[2:])
     for argument in arguments:
         if argument == "--profile":
@@ -919,8 +995,8 @@ def describe_cargo_build(command, lines, started, ended):
         elif argument in ("--example", "--bin"):
             next(arguments, None)
             targets += 1
-        elif argument != "--locked":  # --bins and --examples stay as written: how many they build isn't known here
-            selection.append(argument)
+        elif argument not in ("--locked", "--no-run"):  # --bins and --examples stay as written: how many they build
+            selection.append(argument)  # isn't known here
     compiled = sum(1 for _, line in lines if line.lstrip().startswith("Compiling "))
     waits, waiting = {}, None
     for at, line in lines:
@@ -932,7 +1008,8 @@ def describe_cargo_build(command, lines, started, ended):
             waiting = (at, lock.group(1))
     if waiting:
         waits[waiting[1]] = waits.get(waiting[1], 0) + ended - waiting[0]
-    built = " ".join([profile, *selection, *([f"{targets} target{'s' * (targets != 1)}"] if targets else [])])
+    built = " ".join([*(["test"] if test else []), *([profile] if profile else []), *selection,
+                      *([f"{targets} target{'s' * (targets != 1)}"] if targets else [])])
     text = f"{built}: {ended - started:.0f}s, {compiled} crate{'s' * (compiled != 1)} compiled"
     for lock, seconds in waits.items():
         text += f", about {seconds:.0f}s waiting for the {lock} lock (to cargo's next line)"
@@ -1253,7 +1330,8 @@ def publish(name, record):
     if record["status"] != "pass" or "key" not in record:
         return
     for path, data in ((SHARED / "passes" / name / f"{record['key']}.json", record),
-                       (SHARED / "dependencies" / f"{name}.json", {k: record[k] for k in ("dependencies", "artifacts")})):
+                       (SHARED / "dependencies" / f"{name}.json",
+                        {k: record[k] for k in ("dependencies", "artifacts", "tests") if k in record})):
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(data))
@@ -1315,6 +1393,7 @@ def outcome(name, script, passed, elapsed, trace_path, hasher=None):
         trace = None  # killed before writing it, or the disk was full: the pass can't be keyed
     if trace:
         record["dependencies"], record["artifacts"] = dependencies(trace, harness_settings(script).get("PARITY_RUST_SCOPE"))
+        record["tests"] = cargo_tests(trace["commands"])
         if "peak_bytes" in trace:
             record["peak_bytes"] = trace["peak_bytes"]
         if passed:
@@ -1323,7 +1402,7 @@ def outcome(name, script, passed, elapsed, trace_path, hasher=None):
             record["hashes"] = {path: hasher(ROOT / path)
                                 for path in {*record["dependencies"], *group_files(record["dependencies"])}}
     else:
-        record["dependencies"], record["artifacts"] = [], []
+        record["dependencies"], record["artifacts"], record["tests"] = [], [], []
     return record
 
 
@@ -1445,7 +1524,7 @@ class RemoteExecutor:
     harness it is sent under the same tracer; results come back with the
     content hash of every dependency, so the pass is keyed on exactly what ran."""
 
-    def __init__(self, name, config, artifacts, local_only, timeout):
+    def __init__(self, name, config, artifacts, local_only, timeout, tests=()):
         import threading
         self.name, self.config, self.local_only, self.timeout = name, config, set(local_only), timeout
         self.jobs, self.memory_budget, self.ready, self.dead = 0, 0, False, False
@@ -1453,12 +1532,12 @@ class RemoteExecutor:
         self.lock = threading.Lock()
         self.process = None
         self.mirror = f"{config['root']}/remote/{HOST}{str(ROOT).replace('/', '-')}"
-        threading.Thread(target=self._connect, args=(artifacts,), daemon=True).start()
+        threading.Thread(target=self._connect, args=(artifacts, tests), daemon=True).start()
 
     def _log(self, text):
         print(f"[{self.name}] {text}", flush=True)
 
-    def _connect(self, artifacts):
+    def _connect(self, artifacts, tests=()):
         import shlex
         ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", self.config["ssh"]]
         started = time.monotonic()
@@ -1497,7 +1576,7 @@ class RemoteExecutor:
             self._log(f"worker failed to start, running everything here: {error}")
             self.dead = True
             return
-        self._send({"prebuild": artifacts, "timeout": self.timeout})
+        self._send({"prebuild": artifacts, "tests": list(tests), "timeout": self.timeout})
         self._log(f"synced in {time.monotonic() - started:.0f}s, building probes...")
         for line in self.process.stdout:
             try:
@@ -1752,7 +1831,9 @@ def worker_main(shared_local):
     state = load_state()
     hasher = Hasher(state["hashes"])
     process_tree.start_build_server()  # before any build here: the probe build's would start it otherwise
-    built, errors = prebuild(first["prebuild"], default_build_jobs()) if first["prebuild"] else (True, "")
+    tests = first.get("tests", [])
+    built, errors = prebuild(first["prebuild"], default_build_jobs(), tests) if first["prebuild"] or tests \
+        else (True, "")
     executor = LocalExecutor(MACHINE_JOBS, int(memory_available() * 0.75), first["timeout"])
     send({"hello": {"jobs": MACHINE_JOBS, "memory": executor.memory_budget, "built": built, "errors": errors[-4000:]}})
     try:
@@ -2358,16 +2439,19 @@ def main():
 
     # The probes the selected harnesses built last time, here or (for those that never ran here) in another
     # worktree. A harness with no record builds its own: building every probe for it would be ~275 binaries.
-    artifacts, built_by = [], {}
+    artifacts, built_by, tests = [], {}, []
     for name in selected:
-        record = records.get(name)
-        if not record or "artifacts" not in record:
+        record = records.get(name) or {}
+        if "artifacts" not in record or "tests" not in record:
+            # A record from before `tests` was recorded takes another worktree's test selections meanwhile.
             template = SHARED / "dependencies" / f"{name}.json"
-            record = json.loads(template.read_text(encoding="utf-8")) if template.exists() else {}
+            shared = json.loads(template.read_text(encoding="utf-8")) if template.exists() else {}
+            record = {**shared, **record} if "artifacts" in record else shared
         built_by[name] = recorded_artifacts(record)
         for artifact in built_by[name]:
             if artifact not in artifacts:
                 artifacts.append(artifact)
+        tests += [selection for selection in record.get("tests", []) if selection not in tests]
     config = host_config()
     hosts = [host for host in (config.get("default", []) if args.hosts is None else args.hosts.split(","))
              if host and host != HOST]
@@ -2380,7 +2464,7 @@ def main():
             any(base_name(name) not in config["hosts"][host].get("exclude", {}) for host in hosts)
     if jobs == 0 and not all(elsewhere(name) for name in selected):
         jobs = 1  # harnesses that can only run here still need a slot
-    remotes = [RemoteExecutor(host, config["hosts"][host], artifacts, config.get("local_only", {}), args.timeout)
+    remotes = [RemoteExecutor(host, config["hosts"][host], artifacts, config.get("local_only", {}), args.timeout, tests)
                for host in hosts]
     local = None
     try:
@@ -2388,7 +2472,7 @@ def main():
             process_tree.start_build_server()  # before any build here: the probe build's would start it otherwise
             print("Building probes...", flush=True)
             started = time.monotonic()
-            built, errors = prebuild(artifacts, default_build_jobs())
+            built, errors = prebuild(artifacts, default_build_jobs(), tests)
             if not built:
                 print(printable(errors[-4000:]))
                 print("Probe build failed; harnesses will report their own build errors.", flush=True)

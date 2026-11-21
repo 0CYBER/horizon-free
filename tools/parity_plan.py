@@ -136,7 +136,8 @@ class IncompleteExport(Exception):
 
 
 def export_dependencies(records, found, directory):
-    """Write NAME.json ({"dependencies", "artifacts"}, as parity.py's shared lists) for each harness passed here.
+    """Write NAME.json ({"dependencies", "artifacts", "tests"}, as parity.py's shared lists) for each harness passed
+    here.
 
     Only meaningful on a runner that started without parity state and ran parity.py once: every record is then that
     run's, traced at this commit. Complete or nothing: it raises IncompleteExport, writing nothing, when a record was
@@ -156,7 +157,8 @@ def export_dependencies(records, found, directory):
     directory.mkdir(parents=True, exist_ok=True)
     try:
         for name in passed:
-            data = {"dependencies": records[name]["dependencies"], "artifacts": records[name]["artifacts"]}
+            data = {"dependencies": records[name]["dependencies"], "artifacts": records[name]["artifacts"],
+                    **({"tests": records[name]["tests"]} if "tests" in records[name] else {})}
             (directory / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
     except OSError as error:
         shutil.rmtree(directory, ignore_errors=True)

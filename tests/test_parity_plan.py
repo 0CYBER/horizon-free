@@ -139,7 +139,8 @@ class ExportTests(unittest.TestCase):
     def test_a_fresh_runs_passes_are_exported(self):
         records = {
             "food": {"status": "pass", "host": "runner", "seconds": 3, "hashes": {"tools/lab.py": "x"},
-                     "dependencies": ["tools/lab.py", "crates/horizon-world/src/food.rs"], "artifacts": [WORLD]},
+                     "dependencies": ["tools/lab.py", "crates/horizon-world/src/food.rs"], "artifacts": [WORLD],
+                     "tests": [["-p", "horizon-world", "--lib"]]},
             "mace": {"status": "fail", "dependencies": ["tools/lab.py"], "artifacts": [GAME]},
             "gone": {"status": "pass", "dependencies": ["tools/lab.py"], "artifacts": []},
         }
@@ -150,7 +151,7 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in directory.iterdir()), ["food.json"])
             self.assertEqual(json.loads((directory / "food.json").read_text(encoding="utf-8")),
                              {"dependencies": ["tools/lab.py", "crates/horizon-world/src/food.rs"],
-                              "artifacts": [WORLD]})
+                              "artifacts": [WORLD], "tests": [["-p", "horizon-world", "--lib"]]})
 
     def test_an_incomplete_export_writes_nothing(self):
         food = {"status": "pass", "dependencies": ["tools/lab.py"], "artifacts": [WORLD]}
