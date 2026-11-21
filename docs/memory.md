@@ -18,7 +18,7 @@ The reply is built in `crates/horizon-client/src/game/memory.rs`. Sizes are MiB 
 | `process.resident_mb` | The resident set: `/proc/self/statm` on Linux, the working set on Windows, `proc_pidinfo` on macOS |
 | `process.allocator_commit_mb`, `allocator_peak_commit_mb` | Bytes mimalloc has committed now and at its peak (`mi_process_info`) |
 | `render_distance` | The window's render distance in chunks |
-| `allocator` | `commit_mb`, `peak_commit_mb`, and where mimalloc's statistics are available `live_heap_mb` (the pages mimalloc has in use, each counted whole) and `overhead_mb` (committed less that) |
+| `allocator` | `commit_mb`, `peak_commit_mb`, and where mimalloc's statistics are available `live_heap_mb` (the pages mimalloc has in use, each counted whole; a huge block, larger than its largest size class, is left out because the statistics say how many huge pages there are but not how big) and `overhead_mb` (committed less that: committed memory no page holds, including any huge block) |
 | `client_columns` | The window's loaded columns (absent on a dedicated server, which has no window and names its columns `columns`): `total_mb`, counts of `columns`, `sections`, `unique_sections` (each shared section once), `uniform_block_sections`, `light_arrays`, and the heap bytes by part (`blocks_mb`, `biomes_mb`, `light_mb`, `heightmaps_mb`, `section_records_mb`, `column_records_mb`) |
 | `columns` | A dedicated server's loaded columns, the same fields as `client_columns` |
 | `server_columns` | The same for the single-player server thread's own levels; `null` when the window has no server thread |
@@ -38,7 +38,7 @@ The reply is built in `crates/horizon-client/src/game/memory.rs`. Sizes are MiB 
 Which number answers which question:
 
 - `process.resident_mb` is what the operating system charges the game. It includes the GPU driver's host-side memory, mapped files and memory mimalloc holds but has not returned.
-- `process.allocator_commit_mb` is the memory mimalloc has committed, touched or not, so it can be higher than the resident set (1869 against 1268 MiB in a fresh single-player world). It is not the live heap; for that use the census.
+- `process.allocator_commit_mb` is the memory mimalloc has committed, touched or not, so it can be higher than the resident set (1869 against 1268 MiB in a fresh single-player world). It is not the live heap: `allocator.live_heap_mb` counts the pages holding allocations, and the census says who holds them.
 - The columns, `server_generation` and `renderer.*` are censuses: each walks its structures and adds up the bytes it finds. What no census reaches shows as the resident set less the parts. A census is a count of what is reachable, so it does not see leaked or forgotten blocks; the heap census does.
 - `renderer.gpu` is video memory, not RAM.
 

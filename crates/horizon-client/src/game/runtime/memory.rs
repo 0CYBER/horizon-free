@@ -227,7 +227,7 @@ struct Allocator {
     live_heap_mb: Option<f64>,
     commit_mb: f64,
     peak_commit_mb: f64,
-    /// Committed minus the pages in use.
+    /// Committed minus the pages in use: committed memory no page holds, and any huge block.
     #[serde(skip_serializing_if = "Option::is_none")]
     overhead_mb: Option<f64>,
 }
