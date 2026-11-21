@@ -47,7 +47,12 @@ of a screen a packet opened). State that came only from the client's own simulat
 moving between its updates, particles) is not promised either way. How the game gets there, and how long it takes,
 is not part of the contract: today a seek forward costs only the packets between the clock and the target, so an
 exporter that pauses and seeks one later position per frame pays for each frame's packets once, while a seek back in a
-standalone replay replays every packet from the start.
+standalone replay replays every packet from the start. A standalone replay also replays from the start when the
+packets in between move the player relative to where it is (a relative teleport), or when reading them fails. When
+a rebuild fails (sought back or after a failed forward read), or a read fails while playing or while a replay that
+doesn't own its session seeks forward, the replay closes (`replay_closed`); a failed seek is never reported by
+`replay_advanced`. A read that fails on the first frame of a mod's open fails that open instead: one
+`replay_open_failed`, and no `replay_opened` or `replay_closed`.
 
 The clock stays within the recording: `position_ms` never passes `duration_ms` (the recorded length, or the last
 packet's time when that is later), and `ended` is true exactly when the clock is at `duration_ms`, whether it played

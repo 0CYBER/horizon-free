@@ -376,9 +376,10 @@ impl Game<'_> {
     /// Bring replay state to a target timestamp. A seek forward plays on: only the packets
     /// between the clock and the target are applied, paused or playing, since every packet up
     /// to the clock already was. A standalone replay seeking back (or forward across a relative
-    /// teleport of the player) resets its synthetic remote and replays from the start; an
-    /// in-world replay can only seek forward because its
-    /// pre-replay world must remain intact.
+    /// teleport of the player, or after a failed forward read) resets its synthetic remote and
+    /// replays from the start; an in-world replay can only seek forward because its
+    /// pre-replay world must remain intact. A failed rebuild, or a failed forward read of an
+    /// in-world replay, ends the replay (`fail_studio_replay`) and its error is returned.
     pub(super) fn seek_studio_replay(&mut self, target_ms: u32) -> std::io::Result<()> {
         let current_ms = self
             .replay
@@ -401,11 +402,18 @@ impl Game<'_> {
             match forward {
                 Some(packets) => packets,
                 None => {
-                    let packets = driver.seek_and_collect(target_ms)?;
-                    self.init_remote_for_replay()
-                        .map_err(|error| std::io::Error::other(error.to_string()))?;
-                    self.reset_replay_world_extras();
-                    packets
+                    let rebuilt = driver.seek_and_collect(target_ms).and_then(|packets| {
+                        self.init_remote_for_replay()
+                            .map(|()| packets)
+                            .map_err(|error| std::io::Error::other(error.to_string()))
+                    });
+                    match rebuilt {
+                        Ok(packets) => {
+                            self.reset_replay_world_extras();
+                            packets
+                        }
+                        Err(error) => return Err(self.fail_studio_replay(error)),
+                    }
                 }
             }
         } else {
@@ -415,11 +423,16 @@ impl Game<'_> {
                     "backward seek requires a standalone replay",
                 ));
             }
-            self.replay
+            let forward = self
+                .replay
                 .driver
                 .as_mut()
                 .expect("replay checked by caller")
-                .seek_forward(target_ms)?
+                .seek_forward(target_ms);
+            match forward {
+                Ok(packets) => packets,
+                Err(error) => return Err(self.fail_studio_replay(error)),
+            }
         };
 
         self.dispatch_studio_replay_packets(packets);
@@ -430,6 +443,15 @@ impl Game<'_> {
         self.replay.last_tick = Some(std::time::Instant::now());
         self.replay.seek_report = true;
         Ok(())
+    }
+
+    /// A read that failed part-way left the reader, the clock and the world out of step, and
+    /// the packets it took are lost: the replay ends as a close ends it. `error` goes back to
+    /// the caller to report.
+    fn fail_studio_replay(&mut self, error: std::io::Error) -> std::io::Error {
+        log::error!("Studio replay read failed, closing the replay: {error}");
+        self.close_studio_replay();
+        error
     }
 
     /// What the recording's packets set on the game outside the replay's session (which
@@ -526,8 +548,8 @@ impl Game<'_> {
 
         let ready_packets = match driver.advance(delta) {
             Ok(pkts) => pkts,
-            Err(e) => {
-                log::warn!("Studio replay advance error: {e}");
+            Err(error) => {
+                self.fail_studio_replay(error);
                 return Ok(());
             }
         };

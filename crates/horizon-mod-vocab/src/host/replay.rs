@@ -74,7 +74,10 @@ pub trait ReplayClientHost {
     /// simulation between packets (an entity moving between its updates, particles) is not
     /// promised either way. How the game gets there, and how long it takes, is not part of this
     /// contract: today a seek forward costs the packets between the clock and the target,
-    /// while a seek back in a standalone replay replays every packet from the start.
+    /// while a seek back in a standalone replay replays every packet from the start, as does a
+    /// seek forward across a relative teleport of the player or one whose read fails. When a
+    /// rebuild fails, or the forward read fails in a replay that doesn't own its session, the
+    /// replay closes (`replay_closed`) and no `replay_advanced` reports the seek.
     /// A standalone replay seeks either way; one that doesn't own its session only forward
     /// (`BackwardSeek`). A later `replay_close` or `replay_seek` in the same frame
     /// replaces this request, and a request for a replay closed or replaced since is

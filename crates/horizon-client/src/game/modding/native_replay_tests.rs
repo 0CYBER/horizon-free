@@ -1782,3 +1782,199 @@ fn a_forward_seek_across_a_relative_teleport_lands_where_a_rebuild_does() {
         assert!(game.close_studio_replay());
     });
 }
+
+/// A recording whose reads all fail from here on, as a damaged archive's would: playing and
+/// every seek that reads fail.
+struct FailingReads(Box<dyn PacketSource>);
+
+impl FailingReads {
+    fn error() -> io::Error {
+        io::Error::other("injected read failure")
+    }
+}
+
+impl PacketSource for FailingReads {
+    fn position_ms(&self) -> u32 {
+        self.0.position_ms()
+    }
+    fn duration_ms(&self) -> u32 {
+        self.0.duration_ms()
+    }
+    fn packet_count(&self) -> usize {
+        self.0.packet_count()
+    }
+    fn progress(&self) -> f32 {
+        self.0.progress()
+    }
+    fn speed(&self) -> f64 {
+        self.0.speed()
+    }
+    fn set_speed(&mut self, speed: f64) {
+        self.0.set_speed(speed);
+    }
+    fn is_paused(&self) -> bool {
+        self.0.is_paused()
+    }
+    fn set_paused(&mut self, paused: bool) {
+        self.0.set_paused(paused);
+    }
+    fn toggle_pause(&mut self) {
+        self.0.toggle_pause();
+    }
+    fn set_looping(&mut self, looping: bool) {
+        self.0.set_looping(looping);
+    }
+    fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+    fn advance(&mut self, _: Duration) -> io::Result<Vec<TimestampedPacket>> {
+        Err(Self::error())
+    }
+    fn seek(&mut self, _: u32) -> io::Result<()> {
+        Err(Self::error())
+    }
+    fn seek_and_collect(&mut self, _: u32) -> io::Result<Vec<TimestampedPacket>> {
+        Err(Self::error())
+    }
+    fn seek_forward(&mut self, _: u32) -> io::Result<Vec<TimestampedPacket>> {
+        Err(Self::error())
+    }
+    fn restart(&mut self) -> io::Result<()> {
+        Err(Self::error())
+    }
+    // The editor's close reaches the real driver (its camera path).
+    fn as_any(&self) -> &dyn Any {
+        self.0.as_any()
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self.0.as_any_mut()
+    }
+}
+
+/// A read that fails while a replay seeks or plays ends it as a close does: mods hear it closed
+/// once, a standalone replay's session goes, and the seek's caller gets the error. A refused
+/// backward seek of an in-world replay ends nothing.
+#[test]
+#[ignore = "daily"]
+fn a_failed_read_ends_the_replay_as_a_close_does() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("worn.mcpr");
+    write_recording(&path, 1_000, &[200, 600]);
+    let open = |game: &mut crate::game::Game<'_>| {
+        let answer = game
+            .open_studio_replay(&path.display().to_string())
+            .unwrap();
+        assert_eq!(answer["ok"], true);
+        let driver = game.replay.driver.take().unwrap();
+        game.replay.driver = Some(Box::new(FailingReads(driver)));
+    };
+    let ended = |game: &mut crate::game::Game<'_>| {
+        assert_eq!(game.replay_state(), None);
+        assert!(game.remote.is_none(), "the replay's session went");
+        frame(game, 16);
+        game.native_replay_requests();
+    };
+    let heard = with_heard(|game| {
+        // A seek back rebuilds; a seek forward whose read fails falls back to a rebuild.
+        for target in [0, 900] {
+            open(game);
+            assert!(game.seek_studio_replay(target).is_err());
+            ended(game);
+        }
+        open(game);
+        game.replay_seek(900).unwrap();
+        game.native_replay_requests();
+        ended(game);
+        open(game);
+        let answer = game
+            .studio_control(&["studio", "replay", "seek", "900"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer["error"], "injected read failure");
+        ended(game);
+        open(game);
+        assert!(game.studio_command("studio replay seek 900"));
+        ended(game);
+        open(game);
+        frame(game, 16);
+        ended(game);
+
+        play(game, 10_000);
+        let mut clock = Clock::new(10_000);
+        clock.seek(500).unwrap();
+        game.replay.driver = Some(Box::new(FailingReads(Box::new(clock))));
+        assert_eq!(
+            game.seek_studio_replay(100).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert!(game.replay_state().is_some(), "refused, not ended");
+        assert!(game.seek_studio_replay(800).is_err());
+        assert_eq!(game.replay_state(), None);
+    });
+    let closed: Vec<_> = heard
+        .iter()
+        .filter(|line| line.starts_with("closed"))
+        .collect();
+    // A replay opened by path has no recording id.
+    assert_eq!(
+        closed,
+        ["closed "; 6]
+            .into_iter()
+            .chain(["closed demo"])
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A close whose save of the edited camera path fails keeps the path in a new draft beside the
+/// recording and says where in chat, whether a failed read or the player closed it; a later
+/// draft never replaces an earlier one.
+#[test]
+#[ignore = "daily"]
+fn a_close_that_cannot_save_the_camera_path_keeps_it_in_a_draft() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("trip.mcpr");
+    write_recording(&path, 1_000, &[200, 600]);
+    let draft = |name: &str| {
+        let json = std::fs::read(root.path().join(name)).unwrap();
+        serde_json::from_slice::<CameraTrack>(&json).unwrap()
+    };
+    with_heard(|game| {
+        game.replay.recordings_dir = Some(root.path().to_path_buf());
+        let edited = |game: &mut crate::game::Game<'_>, at| {
+            game.replay_open("trip").unwrap();
+            finish_opening(game);
+            let keyframe = CameraKeyframe::new(at, [1.0, 2.0, 3.0], 10.0, 5.0, 70.0);
+            game.studio.freecam.track.insert(keyframe.clone());
+            game.studio.camera_track_dirty = true;
+            // Another file put at the recording's path: the save into it is refused.
+            std::fs::remove_file(&path).unwrap();
+            write_recording(&path, 1_000, &[200, 600]);
+            keyframe
+        };
+        let said = |game: &crate::game::Game<'_>, name: &str| {
+            let draft = root.path().join(name).display().to_string();
+            game.ui
+                .chat
+                .recent_lines(10)
+                .iter()
+                .any(|line| line.contains(&draft))
+        };
+
+        let first = edited(game, 250);
+        let driver = game.replay.driver.take().unwrap();
+        game.replay.driver = Some(Box::new(FailingReads(driver)));
+        assert!(game.seek_studio_replay(900).is_err());
+        assert_eq!(game.replay_state(), None);
+        assert_eq!(draft("trip.camera-draft.json").keyframes(), [first]);
+        assert!(said(game, "trip.camera-draft.json"));
+
+        let second = edited(game, 750);
+        assert!(game.close_studio_replay());
+        assert_eq!(draft("trip.camera-draft-2.json").keyframes(), [second]);
+        assert!(said(game, "trip.camera-draft-2.json"));
+        assert!(
+            ReplayDriver::open(&path).unwrap().camera_path().is_none(),
+            "the file put in its place is untouched"
+        );
+    });
+}
