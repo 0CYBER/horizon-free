@@ -519,6 +519,43 @@ pub(crate) fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
         })
 }
 
+/// The folder in the launcher's data that other launchers' files are linked into.
+pub(crate) const LINKED: &str = "linked-minecraft";
+
+/// The links preparing makes in `launcher`'s [`LINKED`] folder: to another launcher's files,
+/// remade by every prepare, so a move of the launcher's data leaves them out. None is followed,
+/// and a real file or folder at one of these paths is not listed (it is the player's to keep).
+pub(crate) fn linked_layout_links(launcher: &Path) -> Vec<PathBuf> {
+    // Each folder on the way must be a folder itself: a linked one is the copy's to refuse.
+    let plain_dir = |dir: &Path| fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir());
+    // Symlinks and junctions only (name-surrogate reparse points on Windows): a cloud
+    // placeholder folder is a reparse point too, and is the player's.
+    let is_link =
+        |path: &Path| fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    let linked = launcher.join(LINKED);
+    if !(plain_dir(launcher) && plain_dir(linked.as_path())) {
+        return Vec::new();
+    }
+    let mut links = vec![linked.join("libraries"), linked.join("assets")];
+    // Only Unix links the client jar; Windows hard-links or copies it.
+    #[cfg(unix)]
+    {
+        let versions = linked.join("versions");
+        if plain_dir(versions.as_path()) {
+            for entry in fs::read_dir(&versions).into_iter().flatten().flatten() {
+                let version = entry.path();
+                if plain_dir(version.as_path()) {
+                    let mut jar = entry.file_name();
+                    jar.push(".jar");
+                    links.push(version.join(jar));
+                }
+            }
+        }
+    }
+    links.retain(|path| is_link(path.as_path()));
+    links
+}
+
 /// Links a launcher's files into the official layout in `linked`: the client jar as
 /// `versions/<v>/<v>.jar`, its `libraries` and `assets`, and the pinned version JSON, the
 /// launcher's own when it keeps it, else Mojang's.

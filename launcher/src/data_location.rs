@@ -412,11 +412,13 @@ fn migrate_locked(
         fs::create_dir_all(&target).map_err(|e| problem(&target, e))?;
         private_dir(&stage)?;
         progress("Copying and verifying launcher data");
+        // Preparing links other launchers' files into the launcher's data and links them again
+        // each time; they are never followed or copied.
         copy_tree(
             &source.launcher,
             &staged.launcher,
             bootstrap,
-            &[],
+            &crate::sources::linked_layout_links(&source.launcher),
             &mut progress,
         )?;
         progress("Copying and verifying game data");

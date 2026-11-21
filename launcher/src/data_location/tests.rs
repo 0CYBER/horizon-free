@@ -348,6 +348,91 @@ fn game_cache_links_are_left_out_of_the_move() {
     );
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn other_launchers_links_are_left_out_of_the_move() {
+    let f = Fixture::new("build");
+    let outside = Temp::new();
+    for dir in ["libraries", "assets"] {
+        fs::create_dir(outside.0.join(dir)).unwrap();
+        fs::write(outside.0.join(dir).join("sentinel"), b"untouched").unwrap();
+    }
+    fs::write(outside.0.join("client.jar"), b"jar").unwrap();
+    struct Link(PathBuf);
+    impl Drop for Link {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+            #[cfg(windows)]
+            let _ = fs::remove_dir(&self.0);
+        }
+    }
+    let linked = f.source.launcher.join("linked-minecraft");
+    let version = linked.join("versions/1.0");
+    fs::create_dir_all(&version).unwrap();
+    fs::write(version.join("1.0.json"), b"{}").unwrap();
+    let mut links = Vec::new();
+    for dir in ["libraries", "assets"] {
+        let link = linked.join(dir);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.0.join(dir), &link).unwrap();
+        #[cfg(windows)]
+        {
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link.to_string_lossy().replace('/', "\\"))
+                .arg(outside.0.join(dir).to_string_lossy().replace('/', "\\"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "junction setup: {output:?}");
+        }
+        links.push(Link(link));
+    }
+    #[cfg(unix)]
+    {
+        let jar = version.join("1.0.jar");
+        std::os::unix::fs::symlink(outside.0.join("client.jar"), &jar).unwrap();
+        links.push(Link(jar));
+    }
+    let roots = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    drop(links);
+    let moved = roots.launcher.join("linked-minecraft");
+    for path in ["libraries", "assets", "versions/1.0/1.0.jar"] {
+        assert!(fs::symlink_metadata(moved.join(path)).is_err(), "{path}");
+    }
+    assert_eq!(
+        fs::read(moved.join("versions/1.0/1.0.json")).unwrap(),
+        b"{}"
+    );
+    assert_eq!(
+        fs::read(roots.launcher.join("accounts.json")).unwrap(),
+        b"{\"accounts\":[]}"
+    );
+    for dir in ["libraries", "assets"] {
+        assert_eq!(
+            fs::read(outside.0.join(dir).join("sentinel")).unwrap(),
+            b"untouched"
+        );
+    }
+    assert_eq!(fs::read(outside.0.join("client.jar")).unwrap(), b"jar");
+}
+
+#[test]
+fn real_files_where_other_launchers_links_go_are_moved() {
+    let f = Fixture::new("build");
+    let linked = f.source.launcher.join("linked-minecraft");
+    for (path, bytes) in [
+        ("assets/indexes/1.json", &b"assets"[..]),
+        ("libraries/a.jar", b"library"),
+        ("versions/1.0/1.0.jar", b"jar"),
+    ] {
+        fs::create_dir_all(linked.join(path).parent().unwrap()).unwrap();
+        fs::write(linked.join(path), bytes).unwrap();
+    }
+    let roots = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    assert_eq!(snapshot(&f.source.launcher), snapshot(&roots.launcher));
+    assert_eq!(snapshot(&linked).len(), 3);
+}
+
 #[cfg(unix)]
 struct PermissionsGuard(PathBuf, fs::Permissions);
 #[cfg(unix)]

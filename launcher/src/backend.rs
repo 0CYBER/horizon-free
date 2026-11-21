@@ -2063,7 +2063,7 @@ fn minecraft_folders() -> Vec<PathBuf> {
     let mut folders: Vec<PathBuf> = Settings::load().minecraft_dir.into_iter().collect();
     folders.extend([
         prepare::artifacts::minecraft_dir(None),
-        data_dir().join("linked-minecraft"),
+        data_dir().join(sources::LINKED),
         data_dir().join("minecraft"),
     ]);
     folders.extend(
@@ -2526,7 +2526,7 @@ pub fn preparer(
                 .unwrap_or_default(),
         );
         let fetch = crate::downloads::install_metadata;
-        let linked = data_dir().join("linked-minecraft");
+        let linked = data_dir().join(sources::LINKED);
         if from == MinecraftFrom::Mojang {
             // Straight from Mojang (what is already there and whole is kept), for an owner only.
             download_for_owner(&pins, &own, &fetch, log)
