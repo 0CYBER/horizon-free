@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <b>Minecraft: Java Edition 26.3, rewritten from scratch in Rust.</b><br>
-  It opens your worlds, generates the same terrain and plays by the same rules, without Java.
+  <b>Minecraft 26.3, rewritten from scratch in Rust.</b><br>
+  Play on existing worlds and servers.
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 </p>
 
 <p align="center">
-  <sub>Against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080. More computers on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
+  <sub>*Against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080. More computers on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
 </p>
 
 <h2 align="center">What you get</h2>
@@ -40,8 +40,7 @@
 - **Multiplayer:** vanilla and Horizon servers, LAN, and invite codes for playing your world with friends. You can [host a server](https://playhorizon.dev/docs/hosting) too.
 - **Mods:** Horizon's own mod system, with mods like zoom and a minimap, and shader packs. Browse the [catalogue](https://playhorizon.dev/mods) or [make a mod](https://playhorizon.dev/docs/make-a-mod).
 - **Beyond vanilla:** terrain up to 1,024 chunks away, HDR, controller support, graphics presets and dynamic lights.
-
-The dedicated server is measured too: in a four-thread server run, Horizon averaged 47.83 ms per tick with 50 bots while vanilla's watchdog stopped its server during warm-up. Horizon used 1.11 GB of RSS at 50 bots, and the full comparison against vanilla, Paper and Fabric + Lithium is in [the server benchmark](docs/performance/server-vs-vanilla.md). Paper is a separately optimized, feature-breaking server and is a reference point rather than a direct vanilla-compatible comparison.
+- **Dedicated server:** Server software for high performance, low memory usage, and near instant startup. See [the server benchmark](docs/performance/server-vs-vanilla.md).
 
 <h2 align="center">What you need</h2>
 
