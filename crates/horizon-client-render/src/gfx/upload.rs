@@ -11,41 +11,211 @@
 //! title artwork loaded, and the world renderer staged it again beside the
 //! block sprites (#15608). Phones share that memory with the game.
 use std::num::NonZeroU64;
+use std::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 /// Large enough for a tick of animated sprites at 16x16 with every mip level.
 const CHUNK: u64 = 1 << 20;
+/// Regular chunks kept warm so steady-state frames never reallocate.
+const MAX_IDLE_REGULAR_CHUNKS: usize = 2;
+/// Finishes an unused oversized staging chunk waits before it is released.
+const IDLE_OVERSIZED_FINISHES: u64 = 120;
+/// Finishes an excess regular staging chunk waits before it is released.
+const IDLE_REGULAR_FINISHES: u64 = 240;
+/// Wall-clock idle time after which stale chunks are also eligible for release
+/// (covers `section_uploads`, whose `finish` only runs when terrain changes).
+const IDLE_WALL_TIME: Duration = Duration::from_secs(5);
+/// Maximum chunks released in one `finish` call so post-burst reclamation stays smooth.
+const MAX_TRIM_PER_FINISH: usize = 2;
+
+struct Chunk {
+    buffer: wgpu::Buffer,
+    offset: u64,
+    last_used_epoch: u64,
+    last_used_at: Instant,
+}
+
+impl Chunk {
+    fn can_allocate(&self, size: u64, alignment: u64) -> bool {
+        let Some(start) = self.offset.checked_next_multiple_of(alignment) else {
+            return false;
+        };
+        start
+            .checked_add(size)
+            .is_some_and(|end| end <= self.buffer.size())
+    }
+
+    fn allocate(&mut self, size: u64, alignment: u64) -> u64 {
+        let start = self.offset.next_multiple_of(alignment);
+        let end = start + size;
+        debug_assert!(end <= self.buffer.size());
+        self.offset = end;
+        start
+    }
+}
 
 pub struct Uploads {
-    belt: wgpu::util::StagingBelt,
+    device: wgpu::Device,
     chunk: u64,
+    active_chunks: Vec<Chunk>,
+    free_chunks: Vec<Chunk>,
+    sender: Mutex<mpsc::Sender<Chunk>>,
+    receiver: Mutex<mpsc::Receiver<Chunk>>,
+    epoch: u64,
+    last_finish_at: Instant,
 }
 
 impl Uploads {
     pub fn new(device: &wgpu::Device) -> Self {
         Self::with_chunk(device, CHUNK)
     }
-    /// A belt whose staging buffers hold `chunk` bytes (a larger write gets
-    /// a buffer of its own, rounded up to a power of two).
+    /// A staging pool whose regular buffers hold `chunk` bytes (a larger write
+    /// gets a buffer rounded up to a power of two, and idle oversized/burst
+    /// buffers are trimmed after they go unused).
     pub fn with_chunk(device: &wgpu::Device, chunk: u64) -> Self {
+        let chunk = chunk
+            .max(wgpu::MAP_ALIGNMENT)
+            .next_multiple_of(wgpu::MAP_ALIGNMENT);
+        let (sender, receiver) = mpsc::channel();
         Self {
-            belt: wgpu::util::StagingBelt::new(device.clone(), chunk),
+            device: device.clone(),
             chunk,
+            active_chunks: Vec::new(),
+            free_chunks: Vec::new(),
+            sender: Mutex::new(sender),
+            receiver: Mutex::new(receiver),
+            epoch: 0,
+            last_finish_at: Instant::now(),
         }
     }
-    /// A mapped staging slice of at least `size` bytes. The belt gives a
-    /// write larger than its chunk a buffer of exactly that size, keeps it for
-    /// good and only reuses it for writes that fit: an upload that grows a
-    /// little every frame (the entity batch while mobs appear) took a new
-    /// buffer each frame until the game ran out of memory (#2826). Rounded up
-    /// to a power of two, the large buffers it keeps are reused, one per
-    /// doubling.
-    fn allocate(&mut self, size: NonZeroU64, alignment: NonZeroU64) -> wgpu::BufferSlice<'_> {
-        let size = if size.get() > self.chunk {
+    /// Power-of-two capacity for an oversized write, or `self.chunk` for regular writes.
+    /// Rounding oversized buffers prevents #2826 (one permanent buffer per frame while a
+    /// large upload grows slightly each frame) while still advancing `offset` only by the
+    /// actual write size so the tail stays usable for later writes in the same frame.
+    fn bucket_size(&self, size: u64) -> u64 {
+        if size > self.chunk {
             size.checked_next_power_of_two().unwrap_or(size)
         } else {
-            size
+            self.chunk
+        }
+    }
+    /// Smallest active chunk that can hold `size` at `alignment`.
+    fn pick_active(&self, size: u64, alignment: u64) -> Option<usize> {
+        self.active_chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.can_allocate(size, alignment))
+            .min_by_key(|(_, c)| c.buffer.size())
+            .map(|(i, _)| i)
+    }
+    /// Smallest free chunk matching `size`'s tier: regular writes never pull an
+    /// oversized burst chunk (keeping it free for large writes and letting it go
+    /// idle for trimming), and oversized writes never keep a much larger burst
+    /// chunk alive indefinitely.
+    fn pick_free(&self, size: u64, alignment: u64) -> Option<usize> {
+        let max_size = if size <= self.chunk {
+            self.chunk
+        } else {
+            self.bucket_size(size).saturating_mul(2)
         };
-        self.belt.allocate(size, alignment)
+        self.free_chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.buffer.size() <= max_size && c.can_allocate(size, alignment))
+            .min_by_key(|(_, c)| c.buffer.size())
+            .map(|(i, _)| i)
+    }
+    /// A mapped staging slice of exactly `size` bytes, aligned to at least
+    /// `alignment` and `MAP_ALIGNMENT`.
+    fn allocate(&mut self, size: NonZeroU64, alignment: NonZeroU64) -> wgpu::BufferSlice<'_> {
+        let size = size.get();
+        assert!(
+            size.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT),
+            "staging allocation size {size} must be a multiple of COPY_BUFFER_ALIGNMENT"
+        );
+        let alignment = alignment.get().max(wgpu::MAP_ALIGNMENT);
+        debug_assert!(alignment.is_power_of_two());
+
+        let index = if let Some(i) = self.pick_active(size, alignment) {
+            i
+        } else {
+            self.receive_chunks();
+            let chunk = if let Some(i) = self.pick_free(size, alignment) {
+                self.free_chunks.swap_remove(i)
+            } else {
+                let capacity = self.bucket_size(size);
+                Chunk {
+                    buffer: self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Horizon staging upload buffer"),
+                        size: capacity,
+                        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE,
+                        mapped_at_creation: true,
+                    }),
+                    offset: 0,
+                    last_used_epoch: self.epoch,
+                    last_used_at: self.last_finish_at,
+                }
+            };
+            self.active_chunks.push(chunk);
+            self.active_chunks.len() - 1
+        };
+
+        let chunk = &mut self.active_chunks[index];
+        let start = chunk.allocate(size, alignment);
+        chunk.buffer.slice(start..start + size)
+    }
+    fn receive_chunks(&mut self) {
+        let receiver = self
+            .receiver
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while let Ok(mut chunk) = receiver.try_recv() {
+            chunk.offset = 0;
+            self.free_chunks.push(chunk);
+        }
+    }
+    /// Releases idle oversized chunks and excess regular burst chunks a couple at
+    /// a time so memory returns after world load, cloud rebuilds, or mob spikes
+    /// without causing frame-time hitches or reallocating in steady state.
+    fn trim_idle(&mut self, now: Instant) {
+        if self.free_chunks.is_empty() {
+            return;
+        }
+        let mut regular_count = self
+            .free_chunks
+            .iter()
+            .filter(|c| c.buffer.size() <= self.chunk)
+            .count();
+        let mut trimmed = Vec::new();
+        let mut i = 0;
+        while i < self.free_chunks.len() && trimmed.len() < MAX_TRIM_PER_FINISH {
+            let chunk = &self.free_chunks[i];
+            let oversized = chunk.buffer.size() > self.chunk;
+            if !oversized && regular_count <= MAX_IDLE_REGULAR_CHUNKS {
+                i += 1;
+                continue;
+            }
+            let idle_finishes = self.epoch.saturating_sub(chunk.last_used_epoch);
+            let finish_limit = if oversized {
+                IDLE_OVERSIZED_FINISHES
+            } else {
+                IDLE_REGULAR_FINISHES
+            };
+            let stale = idle_finishes >= finish_limit
+                || (idle_finishes >= 2
+                    && now.saturating_duration_since(chunk.last_used_at) >= IDLE_WALL_TIME);
+            if stale {
+                if !oversized {
+                    regular_count -= 1;
+                }
+                trimmed.push(self.free_chunks.swap_remove(i).buffer);
+            } else {
+                i += 1;
+            }
+        }
+        if !trimmed.is_empty() && trimmed.iter().any(|b| b.size() >= CHUNK) {
+            super::arena::free_later(trimmed);
+        }
     }
     /// Copy tightly packed RGBA8 `pixels` (`width` by `height`) into one mip
     /// level of one array layer, padding rows to the copy alignment.
@@ -70,9 +240,13 @@ impl Uploads {
             let mut view = slice
                 .get_mapped_range_mut()
                 .expect("staging belt slices are mapped");
-            for (i, src) in pixels.chunks(row).enumerate() {
-                view.slice(i * padded..i * padded + row)
-                    .copy_from_slice(src);
+            if row == padded {
+                view.slice(..).copy_from_slice(pixels);
+            } else {
+                for (i, src) in pixels.chunks(row).enumerate() {
+                    view.slice(i * padded..i * padded + src.len())
+                        .copy_from_slice(src);
+                }
             }
         }
         encoder.copy_buffer_to_texture(
@@ -104,15 +278,13 @@ impl Uploads {
         let Some(size) = NonZeroU64::new(bytes.len() as u64) else {
             return;
         };
-        // The belt's own `write_buffer` checks, kept now that a large write's
-        // slice is rounded up past them.
         assert!(
             offset.is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
                 && size.get().is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT),
             "buffer upload at {offset} of {size} bytes must be 4-byte aligned"
         );
         let alignment = NonZeroU64::new(wgpu::COPY_BUFFER_ALIGNMENT).expect("non-zero alignment");
-        let slice = self.allocate(size, alignment).slice(..size.get());
+        let slice = self.allocate(size, alignment);
         encoder.copy_buffer_to_buffer(slice.buffer(), slice.offset(), target, offset, size.get());
         slice
             .get_mapped_range_mut()
@@ -121,9 +293,30 @@ impl Uploads {
             .copy_from_slice(bytes);
     }
     /// Close this frame's staging buffers: they come back for reuse once the
-    /// encoder's submission finishes on the GPU.
+    /// encoder's submission finishes on the GPU, and stale burst chunks are
+    /// gradually released.
     pub fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
-        self.belt.finish_and_recall_on_submit(encoder);
+        let now = Instant::now();
+        self.last_finish_at = now;
+        let sender = self
+            .sender
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for mut chunk in self.active_chunks.drain(..) {
+            chunk.last_used_epoch = self.epoch;
+            chunk.last_used_at = now;
+            chunk.buffer.unmap();
+            let buffer = chunk.buffer.clone();
+            let sender = sender.clone();
+            encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Write, .., move |result| {
+                if result.is_ok() {
+                    let _ = sender.send(chunk);
+                }
+            });
+        }
+        self.epoch = self.epoch.saturating_add(1);
+        self.receive_chunks();
+        self.trim_idle(now);
     }
 }
 
@@ -345,19 +538,12 @@ mod tests {
         }
     }
 
-    /// Staging buffers the belt holds, once every submitted frame is done
-    /// with them. The belt only reports its buffers through `Debug`.
+    /// Staging buffers the pool holds, once every submitted frame is done with them.
     fn kept_buffers(device: &wgpu::Device, uploads: &mut Uploads) -> usize {
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         // Finishing an empty frame takes back every recalled buffer.
         uploads.finish(&device.create_command_encoder(&Default::default()));
-        let belt = format!("{:?}", uploads.belt);
-        let count = |field: &str| -> usize {
-            let at = belt.find(&format!("{field}: ")).expect(&belt) + field.len() + 2;
-            let digits = belt[at..].split(|c: char| !c.is_ascii_digit()).next();
-            digits.and_then(|d| d.parse().ok()).expect(&belt)
-        };
-        count("active_chunks") + count("closed_chunks") + count("free_chunks")
+        uploads.active_chunks.len() + uploads.free_chunks.len()
     }
 
     /// #2826: a write larger than the chunk that grows a little every frame
@@ -509,5 +695,127 @@ mod tests {
                 "{edge} px, {mips} mips"
             );
         }
+    }
+
+    #[test]
+    fn idle_oversized_and_burst_chunks_are_trimmed() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        const TEST_CHUNK: u64 = 1 << 16;
+        let target = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 4 * TEST_CHUNK,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut uploads = Uploads::with_chunk(&device, TEST_CHUNK);
+        // Burst frame: one oversized write (3.5 chunks -> 4-chunk buffer with 0.5 chunk
+        // tail, too small for a full regular write) plus four full regular chunks.
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let big = vec![0xABu8; 3 * TEST_CHUNK as usize + TEST_CHUNK as usize / 2];
+        let regular = vec![0xCDu8; TEST_CHUNK as usize];
+        uploads.buffer(&mut encoder, &target, 0, &big);
+        for _ in 0..4 {
+            uploads.buffer(&mut encoder, &target, 0, &regular);
+        }
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        assert_eq!(kept_buffers(&device, &mut uploads), 5);
+        // After `IDLE_OVERSIZED_FINISHES` idle finishes, the oversized chunk is released.
+        for _ in 0..IDLE_OVERSIZED_FINISHES {
+            uploads.finish(&device.create_command_encoder(&Default::default()));
+        }
+        assert!(
+            uploads
+                .free_chunks
+                .iter()
+                .all(|c| c.buffer.size() <= TEST_CHUNK),
+            "oversized chunk should be trimmed after idle window"
+        );
+        // After `IDLE_REGULAR_FINISHES` total idle finishes, excess regular chunks trim
+        // back down to the warm reserve (`MAX_IDLE_REGULAR_CHUNKS`).
+        for _ in 0..(IDLE_REGULAR_FINISHES - IDLE_OVERSIZED_FINISHES + 4) {
+            uploads.finish(&device.create_command_encoder(&Default::default()));
+        }
+        assert_eq!(uploads.free_chunks.len(), MAX_IDLE_REGULAR_CHUNKS);
+        // Subsequent uploads still reuse the warm reserve and land accurately.
+        let payload = [0x5Au8; 64];
+        let mut encoder = device.create_command_encoder(&Default::default());
+        uploads.buffer(&mut encoder, &target, 0, &payload);
+        encoder.copy_buffer_to_buffer(&target, 0, &readback, 0, 64);
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(*readback.slice(..).get_mapped_range().unwrap(), payload[..]);
+        readback.unmap();
+    }
+
+    #[test]
+    fn aligned_row_texture_upload_matches_queue_write() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let make = || {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 2,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let (expected, actual) = (make(), make());
+        let pixels: Vec<u8> = (0..64 * 64 * 4).map(|i| (i * 13 + 7) as u8).collect();
+        let at = |texture| wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: 0, y: 0, z: 1 },
+            aspect: wgpu::TextureAspect::All,
+        };
+        queue.write_texture(
+            at(&expected),
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(64 * 4),
+                rows_per_image: Some(64),
+            },
+            wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+        );
+        let mut uploads = Uploads::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        uploads.texture(&mut encoder, at(&actual), 64, 64, &pixels);
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(
+            read_back(&device, &queue, &actual),
+            read_back(&device, &queue, &expected)
+        );
     }
 }
