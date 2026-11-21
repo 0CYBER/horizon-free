@@ -135,8 +135,9 @@ def window_game_scenario(m, client, resources, work):
 
     def start(home, *extra):
         home.mkdir(exist_ok=True)
-        # A first launch shows the accessibility onboarding before the title.
-        (home / 'options.txt').write_text('onboardAccessibility:false\n')
+        # A first launch shows the accessibility onboarding before the title. game_click uses
+        # back-to-game, an English widget id: pin the language.
+        (home / 'options.txt').write_text('onboardAccessibility:false\nlang:en_us\n')
         args = [str(client), '--resources', str(resources), *extra]
         if sys.platform == 'darwin':
             args.append('--offscreen')

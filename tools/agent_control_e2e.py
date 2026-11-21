@@ -1032,8 +1032,10 @@ def scratch(mode, resources):
     (work / '.local/horizon-client').mkdir()
     lab.link_dir(resources, work / '.local/horizon-client' / lab.VERSION)
     # A first launch shows the accessibility onboarding before the title (Gui.addInitialScreens): these
-    # scenarios start at the title, as a player does after it.
-    (work / 'options.txt').write_text('onboardAccessibility:false\n')
+    # scenarios start at the title, as a player does after it. The ui scenario clicks the English ids
+    # docs/agent-control.md shows, and an id is a slug of the drawn (translated) label: pin the
+    # language instead of relying on the default.
+    (work / 'options.txt').write_text('onboardAccessibility:false\nlang:en_us\n')
     # horizon-ctl reads No AI in the game home: this one, not the player's.
     env = game_env(os.environ.get('VSCREEN', 'agent-control'), home=work)
     return work, env

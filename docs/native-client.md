@@ -309,7 +309,9 @@ $C quit                                      # save and exit
 
 `horizon-ctl help` lists the commands by group and `horizon-ctl COMMAND --help`
 explains one with examples; `horizon-ctl help --game` lists what the running
-game accepts, test hooks included.
+game accepts, test hooks included. Widget ids are slugs of the drawn label, in
+the client's language, so the ids above are the English ones: read `ui` first,
+or pin the language ([agent-control.md](agent-control.md#the-widget-tree)).
 
 - **Observe:** `state` (position, rotation, velocity, health, food, saturation,
   XP, effects, game mode, dimension, time, weather, the screen and what the

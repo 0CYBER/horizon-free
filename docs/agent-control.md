@@ -295,10 +295,15 @@ turn the switch off.
    {"id": "done", "kind": "button", "label": "Done", "bounds": [...], "enabled": true}]}
 ```
 
-- **Ids are stable and readable.** An id is the label up to its `:`, as a slug (`FOV: 70` is
-  `fov`, `AI Agent...` is `ai-agent`). A repeated slug gets `-2`, `-3`; unlabelled elements are
-  `<kind>-<n>`. A slider's id doesn't change with its value. Slots are `slot-<ID>` with their
-  stack.
+- **Ids are slugs of the drawn label, so they follow the client's language.** An id is the label
+  up to its `:`, as a slug (`FOV: 70` is `fov`, `AI Agent...` is `ai-agent`), and the label is the
+  translated text the screen drew: the ids in this page and in
+  [native-client.md](native-client.md) are the English ones. On a Russian client the title screen
+  has `одиночная-игра`, not `singleplayer`, and `настройки`, not `options`. A script that clicks a
+  literal id either pins the language first (`options-set lang en_us` on a running game, or
+  `lang:en_us` in the game folder's `options.txt` before launch: `--game-dir`, default the
+  working directory, or `--player-dir` when set) or reads `ui` and uses the ids it returns. A repeated slug gets `-2`, `-3`; unlabelled elements are `<kind>-<n>`. A slider's id
+  doesn't change with its value. Slots are `slot-<ID>` with their stack.
 - **Kinds:** `button`, `slider` (`value` 0..1), `field`, `row` (a world, server, pack or
   language), `tab` (`selected`), `slot`.
 - **Actions:**

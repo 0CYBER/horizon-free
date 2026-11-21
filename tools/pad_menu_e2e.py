@@ -151,8 +151,9 @@ class Game:
         for folder in homes.values():
             folder.mkdir()
         self.game_home = homes['HORIZON_HOME']
-        # A first launch shows the accessibility onboarding before the title.
-        (self.game_home / 'options.txt').write_text('onboardAccessibility:false\n')
+        # A first launch shows the accessibility onboarding before the title. The checks click
+        # widget ids, slugs of the drawn (translated) label: pin English.
+        (self.game_home / 'options.txt').write_text('onboardAccessibility:false\nlang:en_us\n')
         if seed:
             seed(self.game_home)
         self.env = {**lab.game_env(**homes), **(env or {})}
