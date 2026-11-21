@@ -124,6 +124,21 @@ impl<'a> Lookup<'a> {
         Some(self.sprite(*layer))
     }
 
+    /// Each sprite's pixels as the resources loaded them ([`sprite_pixels`]). The store is uncompressed once for
+    /// the whole call, not per sprite.
+    pub fn pixels(&self, sprites: &[SpriteRef]) -> Vec<Option<Vec<u8>>> {
+        if sprites.is_empty() {
+            return Vec::new();
+        }
+        let render = &self.context.render;
+        sprite_pixels(
+            &render.pixels.get(),
+            render.sprite_size,
+            self.split,
+            sprites,
+        )
+    }
+
     /// What block `name` (`minecraft:oak_log[axis=x]`; properties left out take the default) draws on each side;
     /// none for a block the game does not know.
     pub fn block(&self, name: &str) -> Option<BlockSprites> {
@@ -268,9 +283,58 @@ fn affine(ab: &[[f32; 2]; 4], uv: &[[f32; 2]; 4]) -> Option<[f32; 6]> {
     None
 }
 
+/// Each sprite's RGBA8, rows top to bottom, `size` × `size` (every layer of the arrays has the same edge), from
+/// `pixels`: the block sprites' layers as `RenderAssets::pixels` holds them, one after another, `split` layers to an
+/// array (`Renderer::sprite_split`). An animated sprite's is the frame it starts on. None for a sprite past the
+/// layers `pixels` holds, all of them when it holds none (a server loads no pixels).
+pub fn sprite_pixels(
+    pixels: &[u8],
+    size: u32,
+    split: u32,
+    sprites: &[SpriteRef],
+) -> Vec<Option<Vec<u8>>> {
+    let bytes = size as usize * size as usize * 4;
+    sprites
+        .iter()
+        .map(|sprite| {
+            let layer = sprite
+                .array
+                .checked_mul(split.max(1))?
+                .checked_add(sprite.layer)?;
+            let start = (layer as usize).checked_mul(bytes)?;
+            (bytes > 0)
+                .then(|| pixels.get(start..start.checked_add(bytes)?))
+                .flatten()
+                .map(<[u8]>::to_vec)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sprites_pixels_are_its_own_layer_of_its_array() {
+        // Five 2x2 layers, two to an array: each pixel holds its layer's number.
+        let pixels: Vec<u8> = (0..5u8).flat_map(|layer| [layer; 16]).collect();
+        let at = |array, layer| SpriteRef {
+            array,
+            layer,
+            animated: false,
+            cutout: false,
+        };
+        let got = sprite_pixels(&pixels, 2, 2, &[at(0, 1), at(2, 0), at(1, 1), at(2, 1)]);
+        assert_eq!(got[0], Some(vec![1; 16]));
+        assert_eq!(got[1], Some(vec![4; 16]), "array 2 starts at layer 4");
+        assert_eq!(got[2], Some(vec![3; 16]));
+        assert_eq!(got[3], None, "past the last layer");
+        // No renderer: one array holds every layer, and an array past it is none rather than an overflow.
+        let single = sprite_pixels(&pixels, 2, u32::MAX, &[at(0, 3), at(1, 0)]);
+        assert_eq!(single, [Some(vec![3; 16]), None]);
+        // A server's store holds no pixels.
+        assert_eq!(sprite_pixels(&[], 16, 2, &[at(0, 0)]), [None]);
+    }
 
     #[test]
     fn a_faces_texture_runs_across_its_side() {

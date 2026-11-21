@@ -226,3 +226,18 @@ Multiply tinted faces by `block_tint_color(state, face.tint_index, pos)` at thei
 position. Untinted faces return `None`. Water faces use tint index 0 and the world's
 water colour, including resource-pack water colormaps; other water indices return
 `None`. This differs from `fluid_box`, whose colour comes from its fluid stack.
+
+## Texture pixels on the CPU
+
+A mod that colours things by the player's own textures without drawing them on the GPU
+(a map averaging each block's top, a software renderer) reads them with
+`sprite_pixels(&sprites)`. Find the sprites with `block_sprites` or `texture_sprites`;
+each answer is RGBA8, rows top to bottom, a square the arrays' edge on each side, so
+`rgba.len()` is edge × edge × 4. Resource packs are included. An animated sprite gives
+the frame it starts on. A sprite past the arrays' layers gives `None`, and so does every
+sprite on a client that loaded no pixels.
+
+The game keeps the pixels compressed once the GPU has them, and each call uncompresses
+the whole store once: ask for every sprite you need in one call, and again only when
+`block_sprites_version` changes. One call returns at most 256 MiB, the default texture
+budget, and returns `Err` without reading anything past that; ask in parts then.

@@ -5,6 +5,10 @@ use horizon_client::block_sprites::{BlockSprites, Lookup, SpriteRef};
 use horizon_world::registry::BlockStateId;
 use mod_api::{AtlasRegion, Identifier};
 
+/// The most pixel bytes one `sprite_pixels` call returns: the default texture budget
+/// (`sprites::DEFAULT_TEXTURE_BUDGET`), so with it every layer of the arrays fits in one call.
+pub(super) const MAX_SPRITE_PIXEL_BYTES: u64 = 256 << 20;
+
 #[allow(dead_code)]
 impl Game<'_> {
     /// For a client mod: what each block (`minecraft:grass_block`, `oak_log[axis=x]`; properties left out take the
@@ -34,6 +38,23 @@ impl Game<'_> {
             .iter()
             .map(|texture| lookup.texture(texture))
             .collect()
+    }
+    /// For a client mod: each sprite's RGBA8 as the resources loaded it, square at the arrays' edge; none for a
+    /// sprite past the layers or a client that loaded no pixels. `Err`, reading nothing, for more than
+    /// `MAX_SPRITE_PIXEL_BYTES` in one call.
+    pub(super) fn sprite_pixels(
+        &self,
+        sprites: &[SpriteRef],
+    ) -> Result<Vec<Option<Vec<u8>>>, String> {
+        let size = u64::from(self.pack.context.render.sprite_size);
+        let asked = (sprites.len() as u64).saturating_mul(size * size * 4);
+        if asked > MAX_SPRITE_PIXEL_BYTES {
+            return Err(format!(
+                "{} sprites of {size} px are {asked} bytes, more than {MAX_SPRITE_PIXEL_BYTES} a call",
+                sprites.len()
+            ));
+        }
+        Ok(self.native_sprite_lookup().pixels(sprites))
     }
     /// For a client mod drawing a block's faces itself (a copycat drawing its material's, from
     /// `block_sprites`): the 0xRRGGBB colour a face of `state` with tint index `tint_index` is
@@ -342,6 +363,53 @@ mod quad_on_tests {
                 "{uv:?}"
             );
         }
+    }
+}
+
+/// `sprite_pixels`, a texture's pixels as a client mod reads them on the CPU.
+#[cfg(test)]
+mod sprite_pixels_tests {
+    /// A mod reads a texture's pixels through the host: stone's are opaque and not one flat colour, and an oak
+    /// leaf's have holes; a call past the byte cap reads nothing.
+    #[test]
+    #[ignore = "daily"]
+    fn a_client_mod_reads_a_textures_pixels() {
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let sprites: Vec<_> = game
+                .texture_sprites(&["block/stone", "minecraft:block/oak_leaves"])
+                .into_iter()
+                .map(|s| s.expect("a vanilla texture"))
+                .collect();
+            let edge = game.pack.context.render.sprite_size as usize;
+            let got = game.sprite_pixels(&sprites).unwrap();
+            let [Some(stone), Some(leaves)] = &got[..] else {
+                panic!("both textures have pixels: {got:?}");
+            };
+            assert_eq!(stone.len(), edge * edge * 4);
+            assert_eq!(leaves.len(), edge * edge * 4);
+            assert!(
+                stone.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
+                "stone is opaque"
+            );
+            assert!(
+                stone.as_chunks::<4>().0.iter().any(|p| p[..3] != stone[..3]),
+                "stone is not one flat colour"
+            );
+            assert!(
+                leaves.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
+                "leaves have holes"
+            );
+            let past = horizon_client::block_sprites::SpriteRef {
+                array: 7,
+                layer: u32::MAX - 1,
+                animated: false,
+                cutout: false,
+            };
+            assert_eq!(game.sprite_pixels(&[past]).unwrap(), [None]);
+            let per = (edge * edge * 4) as u64;
+            let many = vec![sprites[0]; (super::MAX_SPRITE_PIXEL_BYTES / per + 1) as usize];
+            assert!(game.sprite_pixels(&many).is_err());
+        });
     }
 }
 
