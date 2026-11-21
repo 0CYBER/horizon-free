@@ -701,8 +701,10 @@ pub(crate) fn replaceable(
 }
 
 /// The names a module's own items define, for explicit re-export (an explicit name outranks the
-/// module's glob imports, as the item itself did).
+/// module's glob imports, as the item itself did). Each name comes once per condition: one `use`
+/// of a path imports it in every namespace, so `pub mod render;` and `pub fn render` share it.
 fn defined(items: &[Item]) -> Vec<(syn::Ident, Vec<syn::Attribute>)> {
+    let mut seen = BTreeSet::new();
     let cfg = |attrs: &[syn::Attribute]| {
         attrs
             .iter()
@@ -753,6 +755,7 @@ fn defined(items: &[Item]) -> Vec<(syn::Ident, Vec<syn::Attribute>)> {
                     .iter()
                     .any(|a| a.to_token_stream().to_string().contains("test"))
         })
+        .filter(|(ident, attrs)| seen.insert((ident.to_string(), quote!(#(#attrs)*).to_string())))
         .collect()
 }
 
@@ -2406,6 +2409,45 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("game_helper")
+        );
+    }
+
+    #[test]
+    fn a_module_and_a_function_of_one_name_are_re_exported_once() {
+        // `mobs.rs` has `pub mod render;` and `pub fn render`: one `use` imports both.
+        let mut source = Source {
+            root: PathBuf::new(),
+            loaded: BTreeSet::new(),
+            files: BTreeMap::new(),
+            parsed: BTreeMap::from([(
+                "lower::mobs".to_owned(),
+                Module {
+                    items: syn::parse_file("pub mod render {} pub fn render() {}")
+                        .unwrap()
+                        .items,
+                },
+            )]),
+            local_macros: BTreeSet::new(),
+            libraries: BTreeMap::new(),
+            owners: BTreeMap::new(),
+            cache: Cache::default(),
+            hashes: BTreeMap::new(),
+            stale: None,
+        };
+        let out = mirror(
+            &mut source,
+            "lower::mobs",
+            &Tree::default(),
+            false,
+            None,
+            None,
+        )
+        .unwrap()
+        .to_string();
+        assert_eq!(
+            out.matches("pub use :: lower :: mobs :: render ;").count(),
+            1,
+            "{out}"
         );
     }
 

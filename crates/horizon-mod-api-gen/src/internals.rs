@@ -1161,7 +1161,7 @@ impl Pass {
                     })
                     .ok_or("item not found")?;
                 if whole_module {
-                    self.items(file, &module, &items);
+                    self.whole(file, &module, &items)?;
                 } else {
                     self.item(file, &module, selected, false);
                 }
@@ -1209,7 +1209,7 @@ impl Pass {
                 }
                 if found {
                     if whole_module {
-                        self.items(file, &module, &items);
+                        self.whole(file, &module, &items)?;
                     }
                     for item in &items {
                         if matches!(item, Item::Struct(value) if value.ident == *ident)
@@ -1225,6 +1225,37 @@ impl Pass {
             return Err("item not found".into());
         }
         Err("path names a crate, not an item".into())
+    }
+
+    /// `items`, in `file`, with the fragments they `include!` by a literal path, which rustc
+    /// reads relative to the including file (`villager_brain.rs` with
+    /// `villager_brain/hostile_sensor.rs`): the fragment's items are the module's too.
+    fn whole(&mut self, file: usize, module: &str, items: &[Item]) -> Result<(), String> {
+        self.items(file, module, items);
+        for item in items {
+            let Item::Macro(mac) = item else { continue };
+            if !mac.mac.path.is_ident("include") {
+                continue;
+            }
+            let Ok(at) = syn::parse2::<syn::LitStr>(mac.mac.tokens.clone()) else {
+                continue;
+            };
+            let dir = self.sources[file].path.parent().expect("source parent");
+            let mut path = PathBuf::new();
+            for component in dir.join(at.value()).components() {
+                match component {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        path.pop();
+                    }
+                    component => path.push(component),
+                }
+            }
+            let fragment = self.load(&path)?;
+            let items = self.sources[fragment].parsed.items.clone();
+            self.whole(fragment, module, &items)?;
+        }
+        Ok(())
     }
 
     fn shapes(&mut self, root: &Path) -> Result<(), String> {
@@ -2554,6 +2585,29 @@ const LABEL: &str = "é"; struct AfterUnicode;
             fs::read_to_string(fixture.0.join("crates/lower/src/other.rs"))
                 .unwrap()
                 .contains("pub fn run")
+        );
+    }
+
+    #[test]
+    fn a_marked_function_widens_the_fragments_its_module_includes() {
+        let fixture = Fixture::new("struct Game;\n");
+        fixture.lower();
+        fixture.put(
+            "crates/lower/src/hidden.rs",
+            "#[horizon_mod_api_macros::replaceable] fn sibling() {}\ninclude!(\"hidden/sensor.rs\");\n",
+        );
+        fixture.put("crates/lower/src/hidden/sensor.rs", "fn sense() {}\n");
+        let result = widen_with(&fixture.0, &[]).unwrap();
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|entry| entry.path == "lower::hidden::sense")
+        );
+        assert!(
+            fs::read_to_string(fixture.0.join("crates/lower/src/hidden/sensor.rs"))
+                .unwrap()
+                .contains("pub fn sense")
         );
     }
 
