@@ -137,38 +137,39 @@ fn load(folder: &Path) -> Result<Vec<&'static mod_api::__private::native::Native
 
 /// Start the fixed executable, registering checked native libraries before the engine seal.
 pub fn main() {
-    crate::prepare_main_stack();
-    crate::exit_if_compile_child();
-    let startup = horizon_client::entry::prepare();
-    let result = std::env::current_exe()
-        .map_err(|e| e.to_string())
-        .and_then(|exe| load(exe.parent().expect("executable parent")));
-    let libraries = result.unwrap_or_else(|error| {
-        eprintln!("Horizon: refusing native startup: {error}");
-        std::process::exit(1);
+    horizon_guest_stack::run_main(|| {
+        crate::exit_if_compile_child();
+        let startup = horizon_client::entry::prepare();
+        let result = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| load(exe.parent().expect("executable parent")));
+        let libraries = result.unwrap_or_else(|error| {
+            eprintln!("Horizon: refusing native startup: {error}");
+            std::process::exit(1);
+        });
+        let mut entries = Vec::new();
+        let mut slots = Vec::new();
+        let mut built = Vec::new();
+        let mut installs = Vec::new();
+        // Every patch copy is installed and checked before any mod's hook factory runs, as the
+        // generated `main` did: a factory may call a patched function, and a refused install stops
+        // the start before any mod code beyond the installs has run.
+        for library in &libraries {
+            installs.extend((library.installs)());
+        }
+        horizon_client::entry::installed(&installs);
+        for library in libraries {
+            entries.extend((library.entries)());
+            slots.extend((library.slots)());
+            built.extend_from_slice(library.built);
+        }
+        crate::main_with(
+            entries,
+            &slots,
+            Box::leak(built.into_boxed_slice()),
+            startup,
+        );
     });
-    let mut entries = Vec::new();
-    let mut slots = Vec::new();
-    let mut built = Vec::new();
-    let mut installs = Vec::new();
-    // Every patch copy is installed and checked before any mod's hook factory runs, as the
-    // generated `main` did: a factory may call a patched function, and a refused install stops
-    // the start before any mod code beyond the installs has run.
-    for library in &libraries {
-        installs.extend((library.installs)());
-    }
-    horizon_client::entry::installed(&installs);
-    for library in libraries {
-        entries.extend((library.entries)());
-        slots.extend((library.slots)());
-        built.extend_from_slice(library.built);
-    }
-    crate::main_with(
-        entries,
-        &slots,
-        Box::leak(built.into_boxed_slice()),
-        startup,
-    );
 }
 
 #[cfg(test)]

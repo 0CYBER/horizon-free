@@ -38,6 +38,182 @@ pub fn run_on_guest_stack(test: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// Runs an executable's whole `main` as `body`, after [`prepare_main`]: call it first, around
+/// everything else. Where the main thread's stack is too small and nothing can enlarge it (an
+/// x86_64 game under Rosetta 2 gets the soft limit's 8 MiB whatever `-stack_size` it links, and the
+/// hard limit is below the guest stack), `body` runs on a guest-sized stack the main thread
+/// allocates. It stays on the main thread, where AppKit needs the window and the event loop, and
+/// where a guest's host imports find their caller's state.
+pub fn run_main<R>(body: impl FnOnce() -> R) -> R {
+    #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
+    {
+        // SAFETY: pthread_main_np only reads the calling thread's identity.
+        if inspect_current().is_err() && unsafe { libc::pthread_main_np() } != 0 {
+            let switched = on_new_stack(REQUIRED + HOST_HEADROOM, |_| {
+                // Judged on the new stack: refuses as before if even that is too small.
+                prepare_main();
+                body()
+            });
+            return switched.unwrap_or_else(|error| {
+                eprintln!(
+                    "GuestStackUnavailable: cannot allocate the main thread's stack: {error}"
+                );
+                std::process::exit(1);
+            });
+        }
+    }
+    prepare_main();
+    body()
+}
+
+thread_local! {
+    /// The stack `on_new_stack` switched this thread to, as (start, end), or (0, 0) on its own.
+    /// It scopes `check_current`'s cache and tells `inspect_current` the switched stack's bounds.
+    static ACTIVE_STACK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// `check_current`'s answer, and the stack it was given on.
+    static CHECK: std::cell::Cell<Option<((usize, usize), Result<(), &'static str>)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Runs `body` on this same thread on a new stack of `size` bytes above a guard, then returns its
+/// result here, or resumes its panic here. `body` gets the new stack's usable range.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_vendor = "apple", all(test, target_os = "linux"))
+))]
+fn on_new_stack<R>(
+    size: usize,
+    body: impl FnOnce(std::ops::Range<usize>) -> R,
+) -> std::io::Result<R> {
+    let mapped = MappedStack::new(size)?;
+    Ok(on_stack(&mapped, body))
+}
+
+/// A stack mapping: a guard, the stack, and zeroed room above the stack's top, so a backtrace
+/// taken on it that walks past its first frame by the stack pointer reads zeros, which end the
+/// walk, not unmapped memory. Unmapped when dropped.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_vendor = "apple", all(test, target_os = "linux"))
+))]
+struct MappedStack {
+    base: *mut libc::c_void,
+    length: usize,
+    stack: std::ops::Range<usize>,
+}
+
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_vendor = "apple", all(test, target_os = "linux"))
+))]
+impl MappedStack {
+    fn new(size: usize) -> std::io::Result<Self> {
+        const GUARD: usize = 64 * 1024;
+        const ABOVE: usize = 64 * 1024;
+        let length = GUARD + size + ABOVE;
+        // SAFETY: a new private anonymous mapping that nothing else refers to.
+        let base = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if base == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mapped = Self {
+            base,
+            length,
+            stack: base.addr() + GUARD..base.addr() + GUARD + size,
+        };
+        // SAFETY: the first GUARD bytes of the mapping just made.
+        if unsafe { libc::mprotect(base, GUARD, libc::PROT_NONE) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(mapped)
+    }
+}
+
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_vendor = "apple", all(test, target_os = "linux"))
+))]
+impl Drop for MappedStack {
+    fn drop(&mut self) {
+        // SAFETY: the mapping `new` made; nothing runs on it once `on_stack` has returned.
+        unsafe { libc::munmap(self.base, self.length) };
+    }
+}
+
+/// Runs `body` on `mapped`. A guest-stack check cached for the outer stack is set aside, so the
+/// body checks afresh, and whatever the body cached is dropped on the way out, so a later switch
+/// to a mapping at the same address checks afresh too.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_vendor = "apple", all(test, target_os = "linux"))
+))]
+fn on_stack<R>(mapped: &MappedStack, body: impl FnOnce(std::ops::Range<usize>) -> R) -> R {
+    let stack = mapped.stack.clone();
+    let mut body = Some(body);
+    let mut outcome = None;
+    {
+        let mut once = || {
+            let body = body.take().expect("the new stack runs its body once");
+            let outer = (ACTIVE_STACK.replace((stack.start, stack.end)), CHECK.take());
+            outcome = Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || body(stack.clone()),
+            )));
+            // Also after a panic: the caught one is resumed only on the outer stack.
+            ACTIVE_STACK.set(outer.0);
+            CHECK.set(outer.1);
+        };
+        let mut run: &mut dyn FnMut() = &mut once;
+        // SAFETY: the stack's end is the page-aligned end of the writable part of a mapping that
+        // outlives the call, and `once` never unwinds.
+        unsafe { call_on_stack(stack.end, &mut run) };
+    }
+    match outcome.expect("the new stack ran its body") {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// Calls `run` with the stack pointer at `top`, and restores it after.
+///
+/// # Safety
+/// `top` must be the 16-byte aligned end of writable memory deep enough for `run`, and `run`
+/// must not unwind.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_vendor = "apple", all(test, target_os = "linux"))
+))]
+unsafe fn call_on_stack(top: usize, run: &mut &mut dyn FnMut()) {
+    extern "C" fn enter(run: *mut std::ffi::c_void) {
+        // SAFETY: call_on_stack passes its live `run`.
+        let run = unsafe { &mut *run.cast::<&mut dyn FnMut()>() };
+        run();
+    }
+    // SAFETY: the caller's contract; r12 is callee-saved, so it still holds the old stack pointer
+    // when `enter` returns. A call needs rsp 16-byte aligned, which `top` is.
+    unsafe {
+        std::arch::asm!(
+            "mov r12, rsp",
+            "mov rsp, {top}",
+            "call {enter}",
+            "mov rsp, r12",
+            top = in(reg) top,
+            enter = sym enter,
+            in("rdi") std::ptr::from_mut(run).cast::<std::ffi::c_void>(),
+            out("r12") _,
+            clobber_abi("C"),
+        );
+    }
+}
+
 /// Must run before compiler-child handling or any game initialization.
 pub fn prepare_main() {
     if let Err(error) = prepare() {
@@ -118,12 +294,18 @@ fn prepare() -> std::io::Result<()> {
 }
 
 /// Refuse guest entry when the calling thread's stack reservation is too small.
-/// Cache the platform query once per thread; the hot path reads only thread-local state.
+/// Cache the platform query once per thread and stack (`run_main` may switch the main thread's);
+/// the hot path reads only thread-local state.
 pub fn check_current() -> Result<(), &'static str> {
-    thread_local! {
-        static CHECK: std::cell::OnceCell<Result<(), &'static str>> = const { std::cell::OnceCell::new() };
+    let stack = ACTIVE_STACK.get();
+    match CHECK.get() {
+        Some((checked_on, result)) if checked_on == stack => result,
+        _ => {
+            let result = inspect_current();
+            CHECK.set(Some((stack, result)));
+            result
+        }
     }
-    CHECK.with(|check| *check.get_or_init(inspect_current))
 }
 
 const REQUIRED: usize = GUEST_STACK_BYTES + HOST_HEADROOM;
@@ -153,6 +335,26 @@ fn too_small(size: usize, measured_by: &str) -> Result<(), &'static str> {
 }
 
 fn inspect_current() -> Result<(), &'static str> {
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_vendor = "apple", all(test, target_os = "linux"))
+    ))]
+    {
+        // On a stack on_new_stack allocated, its bounds are known: no platform query describes it.
+        let (start, end) = ACTIVE_STACK.get();
+        let anchor = 0u8;
+        let anchor = std::hint::black_box(&raw const anchor).addr();
+        if (start..end).contains(&anchor) {
+            return if anchor - start >= REQUIRED {
+                Ok(())
+            } else {
+                too_small(
+                    anchor - start,
+                    "the stack run_main allocated, below this frame",
+                )
+            };
+        }
+    }
     #[cfg(target_os = "linux")]
     {
         // SAFETY: gettid only reads this thread's id.
@@ -207,8 +409,39 @@ fn inspect_current() -> Result<(), &'static str> {
     {
         // SAFETY: pthread_self names the live calling thread.
         let size = unsafe { libc::pthread_get_stacksize_np(libc::pthread_self()) };
-        if size < REQUIRED {
+        // SAFETY: pthread_main_np only reads the calling thread's identity.
+        if size < REQUIRED && unsafe { libc::pthread_main_np() } == 0 {
             return too_small(size, "pthread_get_stacksize_np");
+        }
+        if size < REQUIRED {
+            // For the main thread libpthread answers the soft stack limit unless the stack it was
+            // told about has exactly one guard page: an x86_64 game under Rosetta 2 got 8176 KiB
+            // (the default soft limit) though it links a larger `-stack_size`. The mapping decides:
+            // the room below this frame, which is why macOS links more than REQUIRED.
+            let anchor = 0u8;
+            let anchor = std::hint::black_box(&raw const anchor).addr();
+            let pthread = format!(
+                "pthread_get_stacksize_np says {} KiB, the soft stack limit is {}",
+                size / 1024,
+                soft_stack_limit()
+            );
+            match mapped_stack(anchor, REQUIRED, vm_region) {
+                Ok(mapped) if mapped >= REQUIRED => {}
+                Ok(mapped) => {
+                    return refuse(format!(
+                        "the main thread has {} KiB of stack below this frame, needs {} KiB (its \
+                         mapped stack regions; {pthread})",
+                        mapped / 1024,
+                        REQUIRED / 1024
+                    ));
+                }
+                Err(why) => {
+                    return refuse(format!(
+                        "cannot measure the main thread's stack: {why}; needs {} KiB ({pthread})",
+                        REQUIRED / 1024
+                    ));
+                }
+            }
         }
     }
     #[cfg(windows)]
@@ -357,6 +590,125 @@ fn main_stack_room(
         (soft_limit, StackBound::Limit)
     };
     (reach.saturating_sub(top.saturating_sub(used_from)), bound)
+}
+
+/// A region of the address space as `mach_vm_region` answers it.
+#[cfg(any(target_vendor = "apple", test))]
+#[derive(Clone, Copy, Debug)]
+struct Region {
+    start: usize,
+    end: usize,
+    read_write: bool,
+    /// Who made it (<mach/vm_statistics.h>): stacks are `VM_MEMORY_STACK`.
+    user_tag: u32,
+}
+
+#[cfg(any(target_vendor = "apple", test))]
+const VM_MEMORY_STACK: u32 = 30;
+
+/// The room below `anchor` on the stack holding it: through the readable and writable stack region
+/// that holds it and the ones directly below it, to the first gap, guard or region that isn't a
+/// stack's. What lies above `anchor` is in use, so it never counts. Stops early once `enough` is
+/// reached. `region(address)` is the region holding `address`, or the next one above it when none
+/// does.
+#[cfg(any(target_vendor = "apple", test))]
+fn mapped_stack(
+    anchor: usize,
+    enough: usize,
+    mut region: impl FnMut(usize) -> Result<Region, String>,
+) -> Result<usize, String> {
+    let holding = region(anchor)?;
+    if !(holding.start..holding.end).contains(&anchor) || !holding.read_write {
+        return Err(format!(
+            "no readable and writable region holds the stack address {anchor:#x}"
+        ));
+    }
+    if holding.user_tag != VM_MEMORY_STACK {
+        return Err(format!(
+            "the region holding the stack address {anchor:#x} has user tag {}, not a stack's",
+            holding.user_tag
+        ));
+    }
+    let mut bottom = holding.start;
+    // Relies on XNU's guard below a main stack: no other stack's region can abut it.
+    while anchor - bottom < enough && bottom > 0 {
+        let below = region(bottom - 1)?;
+        // A region that doesn't end at `bottom` doesn't hold `bottom - 1`: a gap.
+        if below.end != bottom
+            || below.start >= bottom
+            || !below.read_write
+            || below.user_tag != VM_MEMORY_STACK
+        {
+            break;
+        }
+        bottom = below.start;
+    }
+    Ok(anchor - bottom)
+}
+
+#[cfg(target_vendor = "apple")]
+fn vm_region(address: usize) -> Result<Region, String> {
+    // <mach/vm_region.h>: the flavor, and its info's size in ints (vm_region_extended_info is
+    // packed to 4 bytes: 36 bytes). It starts with the current protection, then the user tag.
+    const VM_REGION_EXTENDED_INFO: libc::c_int = 13;
+    let mut info: [libc::c_int; 9] = [0; 9];
+    let mut count = info.len() as u32;
+    let mut start = address as u64;
+    let mut size: u64 = 0;
+    let mut object_name: u32 = 0;
+    // SAFETY: every out pointer is writable, and count is info's length in ints.
+    let result = unsafe {
+        mach_vm_region(
+            mach_task_self_,
+            &mut start,
+            &mut size,
+            VM_REGION_EXTENDED_INFO,
+            info.as_mut_ptr(),
+            &mut count,
+            &mut object_name,
+        )
+    };
+    if result != 0 {
+        return Err(format!("mach_vm_region failed (kern_return_t {result})"));
+    }
+    let read_write = libc::VM_PROT_READ | libc::VM_PROT_WRITE;
+    Ok(Region {
+        start: start as usize,
+        end: start.saturating_add(size) as usize,
+        read_write: info[0] & read_write == read_write,
+        user_tag: info[1] as u32,
+    })
+}
+
+#[cfg(target_vendor = "apple")]
+fn soft_stack_limit() -> String {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: limit is writable and getrlimit initializes it on success.
+    if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &mut limit) } != 0 {
+        "unknown".to_owned()
+    } else if limit.rlim_cur == libc::RLIM_INFINITY {
+        "unlimited".to_owned()
+    } else {
+        format!("{} KiB", limit.rlim_cur / 1024)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+unsafe extern "C" {
+    // Written again in a forked child, so mutable: read it by value.
+    static mut mach_task_self_: u32;
+    fn mach_vm_region(
+        target_task: u32,
+        address: *mut u64,
+        size: *mut u64,
+        flavor: libc::c_int,
+        info: *mut libc::c_int,
+        count: *mut u32,
+        object_name: *mut u32,
+    ) -> libc::c_int;
 }
 
 #[cfg(windows)]
@@ -508,6 +860,212 @@ mod tests {
         }
         stat.extend_from_slice(b" 3221225472 29\n");
         assert_eq!(super::start_stack(&stat), Some(0xc000_0000));
+    }
+
+    #[test]
+    fn the_mapped_stack_ends_at_a_guard_a_gap_or_another_mapping() {
+        use super::Region;
+        const MIB: usize = 1024 * 1024;
+        let needed = super::GUEST_STACK_BYTES + super::HOST_HEADROOM;
+        let top: usize = 0xc000_0000;
+        // `mach_vm_region`: the region holding the address, or the next one above it.
+        let query = |regions: Vec<Region>| {
+            move |address: usize| {
+                regions
+                    .iter()
+                    .copied()
+                    .find(|region| address < region.end)
+                    .ok_or_else(|| "none above".to_owned())
+            }
+        };
+        // A stack's region; `other` is an anonymous mapping (user tag 0).
+        let region = |start, end, read_write| Region {
+            start,
+            end,
+            read_write,
+            user_tag: super::VM_MEMORY_STACK,
+        };
+        let other = |start, end| Region {
+            start,
+            end,
+            read_write: true,
+            user_tag: 0,
+        };
+        // Startup's frames use the top 64 KiB; only the room below them counts.
+        let used = 64 * 1024;
+        let anchor = top - used;
+        // macOS links the requirement plus the host headroom (packaging/executable_link.rs).
+        let linked = needed + super::HOST_HEADROOM;
+        let stack = |size| {
+            vec![
+                region(top - size - 16 * 1024, top - size, false),
+                region(top - size, top, true),
+            ]
+        };
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(stack(linked))),
+            Ok(linked - used)
+        );
+        // A stack of exactly the requirement has less than that below a frame: refused...
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(stack(needed))),
+            Ok(needed - used)
+        );
+        // ...and one with exactly the requirement below the frame is enough.
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(stack(needed + used))),
+            Ok(needed)
+        );
+        // The same stack in two regions counts whole.
+        let split = vec![
+            region(top - linked - 16 * 1024, top - linked, false),
+            region(top - linked, top - 8 * MIB, true),
+            region(top - 8 * MIB, top, true),
+        ];
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(split)),
+            Ok(linked - used)
+        );
+        // An 8 MiB stack above a guard stops there, whatever lies below the guard.
+        let guarded = vec![
+            region(0x1000, top - 64 * MIB, true),
+            region(top - 64 * MIB, top - 8 * MIB, false),
+            region(top - 8 * MIB, top, true),
+        ];
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(guarded)),
+            Ok(8 * MIB - used)
+        );
+        // A gap below stops it too: the region the query answers lies above the gap.
+        let gap = vec![
+            region(0x1000, top - 9 * MIB, true),
+            region(top - 8 * MIB, top, true),
+        ];
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(gap)),
+            Ok(8 * MIB - used)
+        );
+        // So does a writable mapping right below that isn't a stack's.
+        let abutting = vec![
+            other(0x1000, top - 8 * MIB),
+            region(top - 8 * MIB, top, true),
+        ];
+        assert_eq!(
+            super::mapped_stack(anchor, needed, query(abutting)),
+            Ok(8 * MIB - used)
+        );
+        // An anchor in a region that isn't a stack's is not measured.
+        let untagged = vec![other(top - needed, top)];
+        assert!(super::mapped_stack(anchor, needed, query(untagged)).is_err());
+        // The anchor in no region, or in a guard, is not measured.
+        let below = vec![region(top - 8 * MIB, top, true)];
+        assert!(super::mapped_stack(top - 9 * MIB, needed, query(below)).is_err());
+        let in_guard = vec![region(top - 8 * MIB, top, false)];
+        assert!(super::mapped_stack(anchor, needed, query(in_guard)).is_err());
+        // A failed query below is not measured either.
+        let mut calls = 0;
+        let failing = |address: usize| {
+            calls += 1;
+            if calls == 1 {
+                Ok(region(top - 8 * MIB, top, true))
+            } else {
+                Err(format!("no answer for {address:#x}"))
+            }
+        };
+        assert!(super::mapped_stack(anchor, needed, failing).is_err());
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_vendor = "apple", target_os = "linux")
+    ))]
+    #[test]
+    fn a_body_runs_on_the_new_stack_and_its_panic_comes_back() {
+        const MIB: usize = 1024 * 1024;
+        // Each level keeps a 4 KiB frame alive across the call below it.
+        fn deep(depth: usize) -> usize {
+            let frame = std::hint::black_box([1u8; 4096]);
+            if depth == 0 {
+                return 0;
+            }
+            deep(depth - 1) + usize::from(std::hint::black_box(&frame)[0])
+        }
+        let answer = super::on_new_stack(64 * MIB, |stack| {
+            assert_eq!(stack.len(), 64 * MIB);
+            let local = 0u8;
+            let here = std::hint::black_box(&raw const local).addr();
+            assert!(stack.contains(&here), "{here:#x} is not in {stack:x?}");
+            // At least 16 MiB deep: far past this test thread's own stack.
+            deep(4096)
+        })
+        .unwrap();
+        assert_eq!(answer, 4096);
+        let panicked = std::panic::catch_unwind(|| {
+            super::on_new_stack(MIB, |_| -> u8 { panic!("on the new stack") })
+        })
+        .unwrap_err();
+        assert_eq!(panicked.downcast_ref::<&str>(), Some(&"on the new stack"));
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_vendor = "apple", target_os = "linux")
+    ))]
+    #[test]
+    fn the_check_follows_the_thread_onto_the_new_stack_and_back() {
+        // A thread too small for a guest, as the main thread is under Rosetta 2.
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let guest_sized = super::REQUIRED + super::HOST_HEADROOM;
+                // Refused first, and that cached refusal doesn't stick on the new stack...
+                assert!(super::check_current().is_err());
+                let inside = super::on_new_stack(guest_sized, |_| super::check_current());
+                assert_eq!(inside.unwrap(), Ok(()));
+                // ...nor the approval there once the thread is back on its own.
+                assert!(super::check_current().is_err());
+                // Also when the body panicked after an approved check.
+                let panicked = std::panic::catch_unwind(|| {
+                    super::on_new_stack(guest_sized, |_| -> u8 {
+                        super::check_current().unwrap();
+                        panic!("after an approved check")
+                    })
+                });
+                assert!(panicked.is_err());
+                assert!(super::check_current().is_err());
+                // A new stack smaller than the guest needs is refused.
+                let small =
+                    super::on_new_stack(super::GUEST_STACK_BYTES, |_| super::check_current());
+                assert!(small.unwrap().is_err());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_vendor = "apple", target_os = "linux")
+    ))]
+    #[test]
+    fn a_later_switch_to_the_same_stack_checks_afresh() {
+        // Checks at least 2 MiB below where it starts.
+        fn deep_check(depth: usize) -> Result<(), &'static str> {
+            let frame = std::hint::black_box([1u8; 4096]);
+            if depth == 0 {
+                return super::check_current();
+            }
+            let result = deep_check(depth - 1);
+            std::hint::black_box(&frame);
+            result
+        }
+        // One mapping, so both switches have the same address and size.
+        let mapped = super::MappedStack::new(super::REQUIRED + 1024 * 1024).unwrap();
+        // Near its top there is room enough...
+        assert_eq!(super::on_stack(&mapped, |_| super::check_current()), Ok(()));
+        // ...and with no check on the outer stack in between, the next switch deep below it must
+        // not reuse that approval.
+        assert!(super::on_stack(&mapped, |_| deep_check(512)).is_err());
     }
 
     #[test]

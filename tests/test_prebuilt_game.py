@@ -588,7 +588,7 @@ class ExecutableLinkPolicyTests(unittest.TestCase):
                             *externs, "-o", str(binary)], check=True)
             for target_os, env, expected in [("windows", "msvc", ["/STACK:142606336"]),
                                       ("windows", "gnu", ["-Wl,--stack,142606336"]),
-                                      ("linux", "gnu", []), ("macos", "", ["-Wl,-stack_size,0x8800000"])]:
+                                      ("linux", "gnu", []), ("macos", "", ["-Wl,-stack_size,0x9000000"])]:
                 with self.subTest(os=target_os, env=env):
                     output = root / "output"
                     output.write_text(subprocess.check_output([str(binary)], text=True, env={

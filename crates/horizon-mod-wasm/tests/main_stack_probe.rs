@@ -199,9 +199,11 @@ fn limited(soft: libc::rlim_t, hard: libc::rlim_t) -> Command {
     command
 }
 fn main() {
-    // This is the same function re-exported as horizon_platform::prepare_main_stack,
-    // the first call in horizon-server/src/main.rs. No test worker or hand-off.
-    horizon_guest_stack::prepare_main();
+    // This is the same function re-exported as horizon_platform::run_main, around
+    // horizon-server/src/main.rs. No test worker or hand-off.
+    horizon_guest_stack::run_main(probe);
+}
+fn probe() {
     if std::env::args().any(|arg| arg == "--child") {
         proof();
         return;

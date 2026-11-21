@@ -963,5 +963,6 @@ Releases ship often, so nothing they leave behind may grow without bound.
   `ssh macmini 'cd ~/.actions-runners && for f in runner-gc.sh git-slim.sh; do curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/tools/ci/$f -o $f; done'`.
 
 Guest-stack release note (arismoko/horizon#3232): game and server executables reserve 136 MiB
-for their main stack through MSVC `/STACK` or Apple `-stack_size` linker arguments;
-Linux raises RLIMIT_STACK and re-execs before initialization.
+(144 MiB on macOS) for their main stack through MSVC `/STACK` or Apple `-stack_size` linker arguments;
+Linux raises RLIMIT_STACK and re-execs before initialization. Rosetta 2 ignores `-stack_size`, so an
+Intel macOS program there runs its `main` on a stack its main thread allocates (`run_main`).

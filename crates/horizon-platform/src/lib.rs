@@ -123,3 +123,5 @@ pub mod mod_links {
 
 /// Establish the executable stack policy before starting the game or supervisor.
 pub use horizon_guest_stack::prepare_main as prepare_main_stack;
+/// Run an executable's whole `main` on a main thread stack the guest fits on.
+pub use horizon_guest_stack::run_main;

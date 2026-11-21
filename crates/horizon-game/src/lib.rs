@@ -8,10 +8,11 @@
 //! static GAME_IDENTITY: [u8; horizon_game::GAME_IDENTITY.len()] = horizon_game::GAME_IDENTITY;
 //!
 //! fn main() {
-//!     horizon_game::prepare_main_stack();
-//!     std::hint::black_box(&GAME_IDENTITY);
-//!     my_crate::register();
-//!     horizon_game::main();
+//!     horizon_game::run_main(|| {
+//!         std::hint::black_box(&GAME_IDENTITY);
+//!         my_crate::register();
+//!         horizon_game::main();
+//!     });
 //! }
 //! ```
 //!
@@ -34,3 +35,5 @@ pub fn main() {
 
 /// Establish the executable main thread stack before initialization.
 pub use horizon_guest_stack::prepare_main as prepare_main_stack;
+/// Run an executable's whole `main` on a main thread stack the guest fits on.
+pub use horizon_guest_stack::run_main;
