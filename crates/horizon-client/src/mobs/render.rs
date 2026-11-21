@@ -2177,7 +2177,8 @@ fn render_visible(
             custom_body.is_none()
                 && extra.is_empty()
                 && m.species() != Species::SulfurCube
-                && !translucent_body(m)
+                && (!translucent_body(m)
+                    || (skin.models.tagged && paint.is_none_or(|t| t >> 24 == 0xFF)))
                 && energy_swirl(m, s.age).is_none()
                 && skin.supports(&model)
                 && all_layers.iter().all(|layer| {
@@ -2230,6 +2231,7 @@ fn render_visible(
         });
         if let (Some(tint), Some(uv)) = (paint, uv) {
             let start = out.len();
+            let first_job = skin.as_deref().map(|skin| skin.frame.jobs.len());
             put(
                 skin,
                 &model,
@@ -2259,6 +2261,11 @@ fn render_visible(
             // A body below full alpha (`forceTransparent`'s 654311423) blends too.
             if translucent_body(m) || tint >> 24 != 0xFF {
                 mark_oit(&mut out[start..]);
+                if let (Some(skin), Some(first)) = (skin.as_deref_mut(), first_job) {
+                    for job in &mut skin.frame.jobs[first..] {
+                        job.overlay |= crate::gfx::OIT_ENTITY;
+                    }
+                }
             }
         }
     };

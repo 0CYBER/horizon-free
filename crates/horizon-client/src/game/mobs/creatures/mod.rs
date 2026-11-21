@@ -8033,13 +8033,14 @@ impl Game<'_> {
                 Vec::new()
             };
             let body = out.len();
-            // The GPU path: an ordinary mob, no layers the CPU path changes after drawing them
-            // (a player's, the HDR tiers below, the sulfur cube's shell). A glowing mob's
+            // The GPU path: an ordinary mob (or unarmored player when improved transparency is
+            // off and `SkinModels::tagged` permits `OIT_ENTITY`), no layers the CPU path changes
+            // after drawing them (the HDR tiers below, the sulfur cube's shell). A glowing mob's
             // silhouette is posed too (`SkinFrame::outline_since`), unless it is invisible:
             // then only the outline draws.
             let silhouette_on_gpu = outline.is_none() || !invisible;
             let posable = skinning
-                && !(is_player || modded)
+                && !modded
                 && !layers_only
                 && !seen_invisible
                 && silhouette_on_gpu
