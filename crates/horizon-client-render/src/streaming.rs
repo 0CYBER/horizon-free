@@ -2170,11 +2170,6 @@ impl Streaming {
             retain_decoration_order(&mut self.decoration_order, &ranges, &self.protos);
         }
         if self.decorates && self.decorating < workers * 2 && !self.protos.is_empty() {
-            let wants = |s: &Self, x: i32, z: i32| {
-                !s.decorated.contains(&(x, z))
-                    && !world.chunks.contains_key(&(x, z))
-                    && (s.in_range(x, z, 2) || s.near_finished(x, z, 1))
-            };
             // A wanted chunk holds back higher-ranked ones only if it can be
             // decorated: every neighbour in its 3x3 is either final (when the
             // generator decorates beside final chunks) or generated as a proto.
