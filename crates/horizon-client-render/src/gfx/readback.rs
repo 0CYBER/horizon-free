@@ -17,6 +17,46 @@ pub struct Readback {
     drawn: bool,
 }
 
+/// A swapchain image (or the offscreen target) a frame is drawn for: its size, format and usage.
+#[derive(Clone, Copy)]
+pub struct Image {
+    pub size: wgpu::Extent3d,
+    pub format: wgpu::TextureFormat,
+    pub usage: wgpu::TextureUsages,
+}
+
+impl Image {
+    fn of(texture: &wgpu::Texture) -> Self {
+        Self {
+            size: texture.size(),
+            format: texture.format(),
+            usage: texture.usage(),
+        }
+    }
+}
+
+/// Whether a frame in `format` drawn for `image` needs a texture of its own (`Readback::target`).
+fn needed(image: Image, format: wgpu::TextureFormat, screenshot: bool) -> bool {
+    format != image.format.remove_srgb_suffix()
+        || (screenshot && !image.usage.contains(wgpu::TextureUsages::COPY_SRC))
+}
+
+/// The texture a frame in `format` for `image` is drawn into.
+fn texture(device: &wgpu::Device, image: Image, format: wgpu::TextureFormat) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Horizon screenshot frame"),
+        size: image.size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
 impl Readback {
     /// The texture this frame draws into instead of the swapchain image
     /// `surface`, in the frame's `format`: `None` unless that differs from the
@@ -29,31 +69,47 @@ impl Readback {
         format: wgpu::TextureFormat,
         screenshot: bool,
     ) -> Option<wgpu::Texture> {
-        if format == surface.format().remove_srgb_suffix()
-            && (!screenshot || surface.usage().contains(wgpu::TextureUsages::COPY_SRC))
-        {
+        let image = Image::of(surface);
+        if !needed(image, format, screenshot) {
+            // A frame given up after `target` (#13624) left `drawn` set, and `present` would
+            // draw its stale texture over this one.
+            self.drawn = false;
             return None;
         }
-        if self
-            .texture
-            .as_ref()
-            .is_none_or(|t| t.size() != surface.size() || t.format() != format)
-        {
-            self.texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Horizon screenshot frame"),
-                size: surface.size(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            }));
+        if !self.fits(image, format) {
+            self.texture = Some(texture(device, image, format));
         }
         self.drawn = true;
         self.texture.clone()
+    }
+
+    /// Makes `target`'s texture where a frame for `image` needs one it lacks, the old one let go
+    /// first: `false` where there was no room for it (#13624), and nothing is kept then. Called
+    /// before the swapchain image is taken, so the frame can be skipped and tried again on the
+    /// next without holding one.
+    pub fn ready(
+        &mut self,
+        device: &wgpu::Device,
+        image: Image,
+        format: wgpu::TextureFormat,
+        screenshot: bool,
+    ) -> bool {
+        if !needed(image, format, screenshot) || self.fits(image, format) {
+            return true;
+        }
+        self.texture = None;
+        self.texture =
+            super::frame_targets::made(device, super::frame_targets::Kind::Readback, || {
+                texture(device, image, format)
+            });
+        self.texture.is_some()
+    }
+
+    /// Whether `texture` is there at `image`'s size in `format`.
+    fn fits(&self, image: Image, format: wgpu::TextureFormat) -> bool {
+        self.texture
+            .as_ref()
+            .is_some_and(|t| t.size() == image.size && t.format() == format)
     }
 
     /// The frame `target` gave, finished onto 8 bits of the swapchain image `surface`'s format,

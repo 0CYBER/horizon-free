@@ -2990,6 +2990,11 @@ impl HudRenderer {
             pack_text::PackText::new(device, self.format, &self.atlas_view, shader, self.coverage)
         });
     }
+    /// The pictures are made and uploaded again on the next `prepare`: a frame given up
+    /// (#13624) dropped their uploads.
+    pub fn forget_pictures(&mut self) {
+        self.pictures.clear();
+    }
     /// Stage `patches` into the shared atlas texture.
     pub fn upload_patches(
         &self,

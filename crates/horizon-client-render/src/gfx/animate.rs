@@ -372,6 +372,14 @@ impl SpriteAnimator {
             && limits.max_storage_buffers_per_shader_stage >= 2
     }
 
+    /// Every sprite is rewritten on the next `animate`: a frame given up (#13624) dropped the
+    /// last rewrites.
+    pub fn forget(&mut self) {
+        for sprite in &mut self.sprites {
+            sprite.shown = None;
+        }
+    }
+
     /// The layers the last `animate` rewrote (for the shader pack atlas).
     pub fn changed(&self) -> &[u32] {
         &self.changed

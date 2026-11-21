@@ -47,6 +47,11 @@ impl SortState {
         self.last.is_some()
     }
 
+    /// Sorted again when next drawn: a frame given up (#13624) dropped the last order's upload.
+    pub fn forget(&mut self) {
+        self.last = None;
+    }
+
     /// Large tiles cannot use the section viewpoint shortcut: the camera may
     /// cross a quad's plane while remaining on the same side of the first 16³.
     pub fn update_lod<'a>(

@@ -122,8 +122,17 @@ impl Weather {
             return;
         }
         if vertices.len() > self.capacity {
-            self.capacity = vertices.len().next_power_of_two();
-            self.vertices = Self::buffer(device, self.capacity);
+            let capacity = vertices.len().next_power_of_two();
+            let kind = super::frame_targets::Kind::Buffers;
+            // Without the room (#13624) the frame draws no weather, and the old buffer stays.
+            let Some(buffer) =
+                super::frame_targets::made(device, kind, || Self::buffer(device, capacity))
+            else {
+                self.count = 0;
+                return;
+            };
+            self.capacity = capacity;
+            self.vertices = buffer;
         }
         uploads.buffer(encoder, &self.vertices, 0, bytemuck::cast_slice(vertices));
         uploads.buffer(encoder, &self.uniform, 0, bytemuck::bytes_of(&time));

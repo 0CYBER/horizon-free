@@ -652,6 +652,11 @@ impl Cull {
         pass.draw(0..36, 0..self.test_data.len() as u32);
     }
 
+    /// Lets the depth `bind_depth` bound go, before the window's is made again.
+    pub fn forget_depth(&mut self) {
+        self.depth_group = None;
+    }
+
     /// Before the world pass (`InShader`): the binding of the depth the
     /// world is drawn with this frame.
     pub fn bind_depth(&mut self, device: &wgpu::Device, depth: &wgpu::TextureView) {
@@ -714,13 +719,16 @@ impl Cull {
             return;
         }
         if tests > r.capacity {
-            r.capacity = tests.next_power_of_two();
-            r.buffer = buffer(
-                device,
-                "Section test readback",
-                r.capacity * 4,
-                READBACK_USAGE,
-            );
+            let capacity = tests.next_power_of_two();
+            // Without room (#13624) the old buffer is kept and the frame reads nothing back.
+            let label = "Section test readback";
+            let Some(grown) =
+                super::frame_targets::buffer(device, label, capacity * 4, READBACK_USAGE)
+            else {
+                return;
+            };
+            r.capacity = capacity;
+            r.buffer = grown;
         }
         encoder.copy_buffer_to_buffer(&self.results, 0, &r.buffer, 0, tests * 4);
         r.stamp = self.stamp;

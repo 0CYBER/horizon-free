@@ -60,6 +60,9 @@ pub struct FrameGen {
     /// the new size: the present thread's copy would overrun, a validation error that is
     /// fatal there. Frame generation stays off until the next attempt (`stop_to_configure`).
     pub refused: bool,
+    /// Its frames or targets had no room (#13624): off until the surface is configured again
+    /// (`stop_to_configure`).
+    pub no_room: bool,
     gpu: Option<Gpu>,
     presenter: Option<Presenter>,
     /// When the last real frame was handed over, and the time between real frames.
@@ -119,6 +122,7 @@ impl FrameGen {
             on: false,
             paused: false,
             refused: false,
+            no_room: false,
             gpu: None,
             presenter: None,
             last: None,
@@ -138,7 +142,18 @@ impl FrameGen {
     /// `stop`, before the surface is configured again: what it `refused` no longer counts.
     pub fn stop_to_configure(&mut self) {
         self.refused = false;
+        self.no_room = false;
         self.stop();
+    }
+
+    /// There was no room for its frames or targets: stopped, nothing it made is kept, and it
+    /// is off until the surface is configured again.
+    pub(super) fn out_of_room(&mut self) {
+        self.stop();
+        self.gpu = None;
+        self.offscreen_generated = None;
+        self.motion = None;
+        self.no_room = true;
     }
 
     /// Ends frame generation's frames and present thread: before the surface is

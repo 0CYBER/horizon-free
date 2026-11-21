@@ -35,6 +35,13 @@ impl MaterialAnimations {
 
     /// Emit complete data mip chains only for companions whose selected frame changed.
     /// Single-frame maps remain at their initial upload even while colour interpolates.
+    /// Every material frame is written again on the next `animate` (see `SpriteAnimator::forget`).
+    pub(super) fn forget(&mut self) {
+        for sprite in &mut self.sprites {
+            sprite.shown = [None; 2];
+        }
+    }
+
     pub(super) fn animate(
         &mut self,
         selected: impl IntoIterator<Item = (u32, usize)>,

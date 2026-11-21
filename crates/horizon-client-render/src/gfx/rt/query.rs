@@ -44,17 +44,38 @@ pub(in crate::gfx) fn arena_input(device: &wgpu::Device) -> wgpu::BufferUsages {
 /// and BLAS builds both read.
 pub(in crate::gfx) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
     use wgpu::util::DeviceExt;
-    let indices: Vec<u32> = (0..quads)
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Quad indices"),
+        contents: bytemuck::cast_slice(&quad_index_data(quads)),
+        usage: wgpu::BufferUsages::INDEX | blas_input(device),
+    })
+}
+
+/// `quad_indices` for a frame that grows them (#13624): made unmapped and written through
+/// `queue`, as a buffer mapped at creation that found no room panics instead of reporting it.
+pub(in crate::gfx) fn written_quad_indices(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    quads: u32,
+) -> wgpu::Buffer {
+    let indices = quad_index_data(quads);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Quad indices"),
+        size: std::mem::size_of_val(indices.as_slice()) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST | blas_input(device),
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&indices));
+    buffer
+}
+
+fn quad_index_data(quads: u32) -> Vec<u32> {
+    (0..quads)
         .flat_map(|q| {
             let b = q * 4;
             [b, b + 1, b + 2, b, b + 2, b + 3]
         })
-        .collect();
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Quad indices"),
-        contents: bytemuck::cast_slice(&indices),
-        usage: wgpu::BufferUsages::INDEX | blas_input(device),
-    })
+        .collect()
 }
 
 /// Who turns ray tracing on (`HORIZON_RAY_TRACING`).

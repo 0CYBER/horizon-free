@@ -290,6 +290,18 @@ fn storage(binding: u32, stage: wgpu::ShaderStages, read_only: bool) -> wgpu::Bi
     }
 }
 
+/// `buffer`, for one a frame grows: `None` where there was no room for it (#13624).
+fn grown(
+    device: &wgpu::Device,
+    label: &str,
+    size: u64,
+    usage: wgpu::BufferUsages,
+) -> Option<wgpu::Buffer> {
+    super::frame_targets::made(device, super::frame_targets::Kind::Buffers, || {
+        buffer(device, label, size, usage)
+    })
+}
+
 fn buffer(
     device: &wgpu::Device,
     label: &str,
@@ -723,13 +735,15 @@ impl Flat {
     }
     /// Uploads the frame's camera-relative origins by section id into `self.origins`, growing
     /// the storage buffer if needed and resetting cached page bind groups so `bind_pages` rebinds.
+    /// `false`, with nothing uploaded and the old buffer kept, where there was no room to grow it
+    /// (#13624).
     pub fn write_origins(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         uploads: &mut super::upload::Uploads,
         origins: impl Iterator<Item = (u32, [f32; 4])>,
-    ) {
+    ) -> bool {
         self.origin_data.clear();
         self.origin_data.resize(self.next_id as usize, [0.0; 4]);
         for (id, o) in origins {
@@ -740,13 +754,13 @@ impl Flat {
             self.origin_data[id] = o;
         }
         if self.origin_data.len() as u64 > self.origin_capacity {
-            self.origin_capacity = (self.origin_data.len() as u64).next_power_of_two();
-            self.origins = buffer(
-                device,
-                "Section origins by id",
-                self.origin_capacity * 16,
-                wgpu::BufferUsages::STORAGE,
-            );
+            let capacity = (self.origin_data.len() as u64).next_power_of_two();
+            let usage = wgpu::BufferUsages::STORAGE;
+            let Some(origins) = grown(device, "Section origins by id", capacity * 16, usage) else {
+                return false;
+            };
+            self.origin_capacity = capacity;
+            self.origins = origins;
             for page in self.pages.iter_mut().flatten() {
                 page.group = None;
             }
@@ -759,13 +773,26 @@ impl Flat {
                 bytemuck::cast_slice(&self.origin_data),
             );
         }
+        true
+    }
+    /// Lets go of the frame's flat bindings and calls: it draws section by section.
+    fn unbind(&mut self) {
+        self.phase2_group = None;
+        self.groups.clear();
+        self.calls.clear();
+        self.phase1_calls = 0;
+        self.solid_calls = 0;
+        self.shadow_calls = [0; 2];
+        self.marks = [0; MARKS];
+        self.pass_calls = [0; 3];
     }
     /// Builds the frame's index list from `draws` (`DrawIndexedIndirectArgs`:
     /// index count, instances, first index, base vertex, first instance),
     /// solid ones first, with their (vertex page, sorted index page) and
     /// the origins of the sections they draw by id. Records the copy into
     /// `encoder`; `calls` then lists the frame's draw calls. False when the
-    /// frame cannot be drawn flat (the per-section draws then apply).
+    /// frame cannot be drawn flat (the per-section draws then apply), as where there was no room
+    /// to grow its tables (#13624).
     ///
     /// When culling, the solid draws from `phase1_draws` are phase 2's, which
     /// `phase2` holds as the test leaves them: `flatten_phase2` copies them.
@@ -795,7 +822,10 @@ impl Flat {
             solid_draws
         };
         // Origins by section id.
-        self.write_origins(device, encoder, uploads, origins);
+        if !self.write_origins(device, encoder, uploads, origins) {
+            self.unbind();
+            return false;
+        }
         let Plan {
             phase1_calls,
             solid_calls,
@@ -826,33 +856,60 @@ impl Flat {
         self.pass_calls = pass_calls;
         if total == 0 || total * 4 > device.limits().max_storage_buffer_binding_size {
             // Do not retain bindings for a frame that cannot use flat draws.
-            self.phase2_group = None;
-            self.groups.clear();
-            self.calls.clear();
-            self.phase1_calls = 0;
-            self.solid_calls = 0;
-            self.shadow_calls = [0; 2];
-            self.marks = [0; MARKS];
-            self.pass_calls = [0; 3];
+            self.unbind();
             return false;
         }
-        if self.range_data.len() as u64 > self.range_capacity {
-            self.range_capacity = (self.range_data.len() as u64).next_power_of_two();
-            self.ranges = buffer(
-                device,
+        // Each table that has to grow is made before any is kept: without the room for one
+        // (#13624) the frame draws section by section, and the old ones stay.
+        let ranges = self.range_data.len() as u64;
+        let phase2_calls = (solid_calls - phase1_calls) as u64;
+        let phase2_usage = wgpu::BufferUsages::STORAGE
+            | if self.indirect_execution {
+                wgpu::BufferUsages::INDIRECT
+            } else {
+                wgpu::BufferUsages::empty()
+            };
+        let grow = |needed: u64, capacity: u64, label, stride, usage| {
+            if needed <= capacity {
+                return Some(None);
+            }
+            let capacity = needed.next_power_of_two();
+            grown(device, label, capacity * stride, usage).map(|b| Some((capacity, b)))
+        };
+        let (Some(new_ranges), Some(new_indices), Some(new_calls)) = (
+            grow(
+                ranges,
+                self.range_capacity,
                 "Flat section ranges",
-                self.range_capacity * 16,
+                16,
                 wgpu::BufferUsages::STORAGE,
-            );
-        }
-        if total > self.index_capacity {
-            self.index_capacity = total.next_power_of_two();
-            self.indices = buffer(
-                device,
+            ),
+            grow(
+                total,
+                self.index_capacity,
                 "Flat section indices",
-                self.index_capacity * 4,
+                4,
                 wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
-            );
+            ),
+            grow(
+                phase2_calls,
+                self.phase2_call_capacity,
+                "Flat section draw calls, phase 2",
+                20,
+                phase2_usage,
+            ),
+        ) else {
+            self.unbind();
+            return false;
+        };
+        if let Some((capacity, buffer)) = new_ranges {
+            (self.range_capacity, self.ranges) = (capacity, buffer);
+        }
+        if let Some((capacity, buffer)) = new_indices {
+            (self.index_capacity, self.indices) = (capacity, buffer);
+        }
+        if let Some((capacity, buffer)) = new_calls {
+            (self.phase2_call_capacity, self.phase2_calls) = (capacity, buffer);
         }
         uploads.buffer(
             encoder,
@@ -868,21 +925,7 @@ impl Flat {
                 .iter()
                 .map(|c| [0, 1, c.first, 0, if page_instances { c.page } else { 0 }]),
         );
-        let phase2_calls = self.phase2_call_data.len() as u64;
-        if phase2_calls > self.phase2_call_capacity {
-            self.phase2_call_capacity = phase2_calls.next_power_of_two();
-            self.phase2_calls = buffer(
-                device,
-                "Flat section draw calls, phase 2",
-                self.phase2_call_capacity * 20,
-                wgpu::BufferUsages::STORAGE
-                    | if self.indirect_execution {
-                        wgpu::BufferUsages::INDIRECT
-                    } else {
-                        wgpu::BufferUsages::empty()
-                    },
-            );
-        }
+        debug_assert_eq!(self.phase2_call_data.len() as u64, phase2_calls);
         if phase2_calls > 0 {
             uploads.buffer(
                 encoder,

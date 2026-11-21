@@ -353,6 +353,12 @@ fn emit_flat_cell(vertices: &mut Vec<crate::mesher::Vertex>, x0: f32, z0: f32, u
 impl Mesh {
     /// Returns true only when vertices must be uploaded. Sub-cell motion and
     /// color changes update only the uniform, as in CloudRenderer.prepare.
+    /// Builds the mesh again on the next `prepare`, as for new clouds: its vertices did not
+    /// reach the GPU.
+    pub fn forget(&mut self) {
+        self.key = None;
+    }
+
     pub fn prepare(&mut self, input: &Input<'_>) -> (bool, Uniform) {
         let (key, uniform) = input.state();
         if self.key.as_ref() == Some(&key) {

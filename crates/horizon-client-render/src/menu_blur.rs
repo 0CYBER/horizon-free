@@ -41,6 +41,9 @@ pub struct MenuBlur {
     format: wgpu::TextureFormat,
     /// Blur at half size (`new`'s `software`).
     half: bool,
+    /// The frame size its targets had no room at (#13624): not tried again there until
+    /// `release`.
+    no_room: Option<[u32; 2]>,
 }
 impl MenuBlur {
     /// `format` is the swapchain's; the blur works in its non-sRGB view. `software`:
@@ -140,6 +143,7 @@ impl MenuBlur {
             size: [0, 0],
             format,
             half: software,
+            no_room: None,
         }
     }
     /// The size the blur's rounds run at for a frame of `size`.
@@ -150,10 +154,20 @@ impl MenuBlur {
             size
         }
     }
+    /// Makes the targets for a frame of `size` where they are missing: `false` where there was
+    /// no room for them (#13624), and the menu then draws over the frame unblurred. Nothing that
+    /// failed is kept, the old ones go first, and that size is not tried again until `release`
+    /// (the next screen that blurs). `source` needs it to be `true`.
+    pub fn ready(&mut self, device: &wgpu::Device, size: [u32; 2]) -> bool {
+        self.ensure(device, size);
+        !self.targets.is_empty()
+    }
+    /// `ready` without its answer: the targets stay empty where there was no room.
     fn ensure(&mut self, device: &wgpu::Device, size: [u32; 2]) {
-        if self.size == size && !self.targets.is_empty() {
+        if self.size == size && !self.targets.is_empty() || self.no_room == Some(size) {
             return;
         }
+        self.targets.clear();
         self.size = size;
         let work = self.work_size(size);
         let sizes = if self.half {
@@ -161,7 +175,20 @@ impl MenuBlur {
         } else {
             vec![work, work]
         };
-        self.targets = sizes
+        let made = crate::gfx::frame_targets::made(
+            device,
+            crate::gfx::frame_targets::Kind::MenuBlur,
+            || self.targets_at(device, sizes),
+        );
+        self.no_room = made.is_none().then_some(size);
+        self.targets = made.unwrap_or_default();
+    }
+    fn targets_at(
+        &self,
+        device: &wgpu::Device,
+        sizes: Vec<[u32; 2]>,
+    ) -> Vec<(wgpu::Texture, wgpu::TextureView)> {
+        sizes
             .into_iter()
             .map(|size| {
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -183,12 +210,13 @@ impl MenuBlur {
                 let view = texture.create_view(&Default::default());
                 (texture, view)
             })
-            .collect();
+            .collect()
     }
     /// Give the targets' video memory back: no frame blurs until the next
     /// screen that does, which makes them again.
     pub fn release(&mut self) {
         self.targets.clear();
+        self.no_room = None;
     }
     /// Blur `frame` (the swapchain texture) in place through `target`, its
     /// non-sRGB view, by `radius` pixels (`menuBackgroundBlurriness`).
@@ -205,6 +233,9 @@ impl MenuBlur {
         radius: f32,
         timing: Option<&mut crate::gfx::pack_timing::PassTiming>,
     ) {
+        if !self.ready(device, size) {
+            return;
+        }
         let copy = self.source(device, size).0;
         encoder.copy_texture_to_texture(
             frame.as_image_copy(),
@@ -224,7 +255,7 @@ impl MenuBlur {
         device: &wgpu::Device,
         size: [u32; 2],
     ) -> (wgpu::Texture, wgpu::TextureView) {
-        self.ensure(device, size);
+        self.ready(device, size);
         self.targets[if self.half { 2 } else { 0 }].clone()
     }
     /// Blur what `source` holds into `target`, as `apply` blurs its copy of the frame.
@@ -239,7 +270,9 @@ impl MenuBlur {
         radius: f32,
         mut timing: Option<&mut crate::gfx::pack_timing::PassTiming>,
     ) {
-        self.ensure(device, size);
+        if !self.ready(device, size) {
+            return;
+        }
         let work = self.work_size(size);
         let radius = if self.half { radius / 2.0 } else { radius };
         if self.half {
@@ -423,6 +456,35 @@ mod tests {
         assert!(first.chunks(4).any(|p| p[0] != 0 && p[0] != 255));
         blur.release();
         assert_eq!(blurred(&device, &queue, &mut blur, size), first);
+    }
+
+    /// Without the room for its targets (#13624) the blur leaves the frame as drawn and keeps
+    /// none of them. It doesn't try that size again while the screen stays (`ready`), and the
+    /// next screen that blurs, with room, blurs as ever.
+    #[test]
+    #[ignore = "requires a Vulkan/Metal/DX12 adapter"]
+    fn without_room_the_menu_is_not_blurred_and_the_next_screen_blurs() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let instance = crate::gfx::test_gpu::instance();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut blur = MenuBlur::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, false);
+        let size = [64, 8];
+        crate::gfx::frame_targets::NO_ROOM.set(1);
+        let unblurred = blurred(&device, &queue, &mut blur, size);
+        assert_eq!(crate::gfx::frame_targets::NO_ROOM.get(), 0);
+        // The stripes as drawn, and nothing that failed is kept.
+        assert!(unblurred.chunks(4).all(|p| p[0] == 0 || p[0] == 255));
+        assert!(blur.targets.is_empty());
+        assert!(!blur.ready(&device, size));
+        assert!(blur.targets.is_empty());
+        // The screen closed; the next one blurs.
+        blur.release();
+        let next = blurred(&device, &queue, &mut blur, size);
+        assert!(next.chunks(4).any(|p| p[0] != 0 && p[0] != 255));
     }
 
     /// On a software adapter the blur runs at half size and still blurs the

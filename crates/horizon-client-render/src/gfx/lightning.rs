@@ -184,13 +184,18 @@ impl Renderer {
             return;
         }
         if input.bolts.len() > self.capacity || input.bolts.len() < self.capacity / 4 {
-            self.capacity = input.bolts.len().next_power_of_two();
-            self.instances = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Lightning offsets"),
-                size: (self.capacity * std::mem::size_of::<[f32; 3]>()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
+            let capacity = input.bolts.len().next_power_of_two();
+            let size = (capacity * std::mem::size_of::<[f32; 3]>()) as u64;
+            let usage = wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST;
+            // Without the room (#13624) the frame draws no lightning.
+            let made = super::frame_targets::buffer(device, "Lightning offsets", size, usage);
+            let Some(instances) = made else {
+                self.instances = None;
+                self.capacity = 0;
+                return;
+            };
+            self.capacity = capacity;
+            self.instances = Some(instances);
         }
         let offsets: Vec<_> = input
             .bolts

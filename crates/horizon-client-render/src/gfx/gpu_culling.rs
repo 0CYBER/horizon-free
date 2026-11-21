@@ -1565,6 +1565,11 @@ impl GpuCulling {
     /// The frame's statistics to read back, started by calling it right after
     /// the frame's submission (gfx's after-submit hook, on the submit thread
     /// when the frame goes there), as `cull::Cull::submitted`.
+    /// The whole record table is uploaded again: a frame given up (#13624) dropped the
+    /// changed records' updates.
+    pub fn forget(&mut self) {
+        self.records.all_dirty = true;
+    }
     pub fn submitted(&mut self) -> Option<impl FnOnce() + Send + 'static> {
         let i = self.current.take()?;
         let r = &self.readbacks[i];

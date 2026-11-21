@@ -71,6 +71,7 @@ impl super::Renderer {
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
             && self.executor.is_none()
             && supported(&self.device)
+            && self.oit.as_ref().is_none_or(|oit| !oit.no_room)
     }
 
     /// The last frame drew a translucent block's crack through the transparency path, so it takes
@@ -201,6 +202,9 @@ pub struct Oit {
     cull: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     targets: Option<Targets>,
+    /// Its targets had no room (#13624): it is off (`improved_transparency_runs`) until the
+    /// window's size changes (`Renderer::resize`).
+    pub(super) no_room: bool,
 }
 
 impl Oit {
@@ -559,6 +563,7 @@ impl Oit {
             cull,
             composite,
             targets: None,
+            no_room: false,
         }
     }
 
@@ -577,12 +582,35 @@ impl Oit {
         &self.features
     }
 
-    /// Sizes the targets to the world's and writes this frame's projection.
+    /// Sizes the targets to the world's `size`, before the frame chooses how it draws translucent
+    /// things: `false` where there was no room for them (#13624), and the frame draws them the
+    /// ordinary way. Nothing that failed is kept, the old targets go first, and it stays off
+    /// (`no_room`) until the window's size changes.
+    pub fn fit(&mut self, device: &wgpu::Device, size: [u32; 2]) -> bool {
+        if self.targets.as_ref().is_some_and(|t| t.size == size) {
+            return true;
+        }
+        self.targets = None;
+        self.targets =
+            super::frame_targets::made(device, super::frame_targets::Kind::Transparency, || {
+                self.targets_at(device, size)
+            });
+        self.no_room = self.targets.is_none();
+        !self.no_room
+    }
+
+    /// Lets the targets go while it is off for want of room (`no_room`).
+    pub fn let_go(&mut self) {
+        self.targets = None;
+    }
+
+    /// Writes this frame's projection, and makes the depths the water mask and the clouds
+    /// `wants`. Without the room for one, this frame's `run` leaves that part out and it is off
+    /// from the next frame (`no_room`).
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        size: [u32; 2],
         projection: &Mat4,
         wants: [bool; 2],
     ) {
@@ -592,15 +620,27 @@ impl Oit {
             bytemuck::cast_slice(&[projection_terms(projection), [0.0; 2]].concat()),
         );
         let [mask, clouds] = wants;
-        if let Some(t) = self.targets.as_mut().filter(|t| t.size == size) {
-            if mask && t.terrain_depth.is_none() {
-                t.terrain_depth = Some(Depth::new(device, "OIT terrain depth", size));
-            }
-            if clouds && t.cloud_depth.is_none() {
-                t.cloud_depth = Some(Depth::new(device, "OIT cloud depth", size));
-            }
+        let Some(t) = self.targets.as_mut() else {
             return;
+        };
+        let size = t.size;
+        let depth = |label| {
+            super::frame_targets::made(device, super::frame_targets::Kind::Transparency, || {
+                Depth::new(device, label, size)
+            })
+        };
+        if mask && t.terrain_depth.is_none() {
+            t.terrain_depth = depth("OIT terrain depth");
         }
+        if clouds && t.cloud_depth.is_none() {
+            t.cloud_depth = depth("OIT cloud depth");
+        }
+        if (mask && t.terrain_depth.is_none()) || (clouds && t.cloud_depth.is_none()) {
+            self.no_room = true;
+        }
+    }
+
+    fn targets_at(&self, device: &wgpu::Device, size: [u32; 2]) -> Targets {
         let make = |label, format, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -650,7 +690,7 @@ impl Oit {
             })
         };
         let [c0, c1] = &views.coefficients;
-        self.targets = Some(Targets {
+        Targets {
             size,
             alone: group(&self.layouts[0], &[]),
             sampled: group(&self.layouts[1], &[&views.culled]),
@@ -660,12 +700,12 @@ impl Oit {
                 &self.layouts[3],
                 &[&views.bounds, c0, c1, &views.accumulated],
             ),
-            terrain_depth: mask.then(|| Depth::new(device, "OIT terrain depth", size)),
-            cloud_depth: clouds.then(|| Depth::new(device, "OIT cloud depth", size)),
+            terrain_depth: None,
+            cloud_depth: None,
             bounds,
             culled,
             views,
-        });
+        }
     }
 
     /// `LevelRenderer.executeOit`: `draw` records the terrain's translucent

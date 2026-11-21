@@ -602,6 +602,14 @@
   {
     "package": "horizon-client-render",
     "target": "lib",
+    "test": "gfx::hdr::tests::a_frame_without_room_keeps_no_targets_and_the_next_makes_them",
+    "path": "crates/horizon-client-render/src/gfx/hdr.rs",
+    "reason": "requires a Vulkan/Metal/DX12 adapter",
+    "rationale": "Existing adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
     "test": "gfx::pack_post::indirect_tests::an_unsupported_indirect_device_keeps_the_direct_and_render_passes",
     "path": "crates/horizon-client-render/src/gfx/pack_post/indirect_tests.rs",
     "reason": "requires an explicit capability mask",
@@ -686,6 +694,14 @@
     "path": "crates/horizon-client-render/src/mesher/visibility_tests.rs",
     "reason": "opt-in microbenchmark: cargo test --profile fast ... visibility_benchmark -- --ignored --exact --nocapture",
     "rationale": "Opt-in measurement, not an ordinary daily correctness check: opt-in microbenchmark: cargo test --profile fast ... visibility_benchmark -- --ignored --exact --nocapture. Run by hand on an idle machine with the optimized profile and its explicitly requested inputs; all assertions remain in the test."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
+    "test": "menu_blur::tests::without_room_the_menu_is_not_blurred_and_the_next_screen_blurs",
+    "path": "crates/horizon-client-render/src/menu_blur.rs",
+    "reason": "requires a Vulkan/Metal/DX12 adapter",
+    "rationale": "Existing adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
   },
   {
     "package": "horizon-client-render",

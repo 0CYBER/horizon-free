@@ -557,106 +557,125 @@ impl Hdr {
     /// The frame every pass draws into this frame, sized like the window.
     pub fn frame(&mut self, device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
         if self.targets.as_ref().is_none_or(|t| t.size != size) {
-            let texture = |label, format, usage| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: size[0].max(1),
-                        height: size[1].max(1),
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-            };
-            let frame = texture(
-                "Horizon HDR frame",
-                self.format,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            );
-            let layered = self.layered.is_some();
-            let world = layered.then(|| {
-                texture(
-                    "Horizon HDR world",
-                    self.format,
-                    wgpu::TextureUsages::COPY_DST,
-                )
-            });
-            let coverage = layered.then(|| {
-                texture(
-                    "HUD coverage",
-                    super::hud_coverage::FORMAT,
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                )
-            });
-            // 8-bit, so each HUD draw clips and rounds as on the frame with HDR off.
-            let hud = layered.then(|| {
-                texture(
-                    "HUD",
-                    super::hud_coverage::HUD_FORMAT,
-                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                )
-            });
-            let group = self.group(
-                device,
-                &frame,
-                coverage.as_ref(),
-                hud.as_ref(),
-                &self.params,
-            );
-            let passes = self
-                .layered
-                .as_ref()
-                .zip(world.as_ref())
-                .zip(coverage.as_ref().zip(hud.as_ref()))
-                .map(|((l, world), (coverage, hud))| {
-                    let view = |t: &wgpu::Texture| t.create_view(&Default::default());
-                    let (frame, world, coverage, hud) =
-                        (view(&frame), view(world), view(coverage), view(hud));
-                    let entry = |binding, view| wgpu::BindGroupEntry {
-                        binding,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    };
-                    let params = wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: l.params.as_entire_binding(),
-                    };
-                    let group = |layout, entries: &[wgpu::BindGroupEntry]| {
-                        device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("Horizon HDR layered bindings"),
-                            layout,
-                            entries,
-                        })
-                    };
-                    [
-                        group(&l.tonemap.0, &[entry(1, &world), params.clone()]),
-                        group(&l.keep.0, &[entry(0, &frame)]),
-                        group(
-                            &l.composite.0,
-                            &[
-                                entry(0, &frame),
-                                params,
-                                entry(4, &coverage),
-                                entry(5, &hud),
-                            ],
-                        ),
-                    ]
-                });
-            self.targets = Some(Targets {
-                size,
-                frame,
-                world,
-                coverage,
-                hud,
-                group,
-                passes,
-            });
+            self.targets = Some(self.targets_at(device, size));
         }
         self.targets.as_ref().unwrap().frame.clone()
+    }
+
+    /// Makes the window frame's targets at `size` where they are missing, the old ones let go
+    /// first so a resize never holds both: `false` where there was no room for them (#13624),
+    /// and nothing is kept then. The frame is skipped and this is tried again on the next.
+    pub(super) fn ready(&mut self, device: &wgpu::Device, size: [u32; 2]) -> bool {
+        if self.targets.as_ref().is_some_and(|t| t.size == size) {
+            return true;
+        }
+        self.targets = None;
+        self.targets =
+            super::frame_targets::made(device, super::frame_targets::Kind::HdrFrame, || {
+                self.targets_at(device, size)
+            });
+        self.targets.is_some()
+    }
+
+    fn targets_at(&self, device: &wgpu::Device, size: [u32; 2]) -> Targets {
+        let texture = |label, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: size[0].max(1),
+                    height: size[1].max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let frame = texture(
+            "Horizon HDR frame",
+            self.format,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let layered = self.layered.is_some();
+        let world = layered.then(|| {
+            texture(
+                "Horizon HDR world",
+                self.format,
+                wgpu::TextureUsages::COPY_DST,
+            )
+        });
+        let coverage = layered.then(|| {
+            texture(
+                "HUD coverage",
+                super::hud_coverage::FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            )
+        });
+        // 8-bit, so each HUD draw clips and rounds as on the frame with HDR off.
+        let hud = layered.then(|| {
+            texture(
+                "HUD",
+                super::hud_coverage::HUD_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            )
+        });
+        let group = self.group(
+            device,
+            &frame,
+            coverage.as_ref(),
+            hud.as_ref(),
+            &self.params,
+        );
+        let passes = self
+            .layered
+            .as_ref()
+            .zip(world.as_ref())
+            .zip(coverage.as_ref().zip(hud.as_ref()))
+            .map(|((l, world), (coverage, hud))| {
+                let view = |t: &wgpu::Texture| t.create_view(&Default::default());
+                let (frame, world, coverage, hud) =
+                    (view(&frame), view(world), view(coverage), view(hud));
+                let entry = |binding, view| wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                };
+                let params = wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: l.params.as_entire_binding(),
+                };
+                let group = |layout, entries: &[wgpu::BindGroupEntry]| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Horizon HDR layered bindings"),
+                        layout,
+                        entries,
+                    })
+                };
+                [
+                    group(&l.tonemap.0, &[entry(1, &world), params.clone()]),
+                    group(&l.keep.0, &[entry(0, &frame)]),
+                    group(
+                        &l.composite.0,
+                        &[
+                            entry(0, &frame),
+                            params,
+                            entry(4, &coverage),
+                            entry(5, &hud),
+                        ],
+                    ),
+                ]
+            });
+        Targets {
+            size,
+            frame,
+            world,
+            coverage,
+            hud,
+            group,
+            passes,
+        }
     }
 
     /// Lets the targets go, a scaled screenshot's: the next `frame` makes them again.
@@ -2010,6 +2029,32 @@ var<private> params: ReferenceParams;
         // The window's next frame makes its own again.
         assert_eq!(extent(&hdr.frame(&device, [4, 2])), [4, 2]);
         assert_eq!(extent(hdr.hud().unwrap()), [4, 2]);
+    }
+
+    /// A window frame without the room for its targets (#13624): `ready` says to skip it, the
+    /// old targets are let go and no failed one is kept; the next frame with room makes them.
+    #[test]
+    #[ignore = "requires a Vulkan/Metal/DX12 adapter"]
+    fn a_frame_without_room_keeps_no_targets_and_the_next_makes_them() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let instance = crate::gfx::test_gpu::instance();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+        assert!(hdr.ready(&device, [4, 2]));
+        // The window grew while video memory was full.
+        crate::gfx::frame_targets::NO_ROOM.set(1);
+        assert!(!hdr.ready(&device, [8, 4]));
+        assert!(hdr.targets.is_none() && hdr.hud().is_none() && hdr.coverage_view().is_none());
+        assert!(hdr.ready(&device, [8, 4]));
+        let frame = hdr.targets.as_ref().unwrap().frame.clone();
+        assert_eq!([frame.width(), frame.height()], [8, 4]);
+        // What the frame draws into is the one `ready` made.
+        assert_eq!(hdr.frame(&device, [8, 4]), frame);
+        assert!(hdr.hud().is_some());
     }
 
     #[test]
