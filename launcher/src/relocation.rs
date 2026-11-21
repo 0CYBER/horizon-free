@@ -39,6 +39,10 @@ fn remap(value: &mut Value, source: &Roots, target: &Roots) {
 pub fn prepare_paths(stage: &Roots, source: &Roots, target: &Roots) -> Result<(), String> {
     for name in ["settings.json", "servers.json", "instances.json"] {
         let path = stage.launcher.join(name);
+        // A copied relative link must not be written through to another staged file.
+        if let Ok(meta) = fs::symlink_metadata(&path) {
+            data_location::reject_link(&path, &meta)?;
+        }
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,

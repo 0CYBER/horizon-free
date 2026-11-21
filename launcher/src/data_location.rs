@@ -416,6 +416,7 @@ fn migrate_locked(
         // each time; they are never followed or copied.
         copy_tree(
             &source.launcher,
+            &source.launcher,
             &staged.launcher,
             bootstrap,
             &crate::sources::linked_layout_links(&source.launcher),
@@ -426,6 +427,7 @@ fn migrate_locked(
         // game rebuilds the cache on its next start.
         copy_tree(
             &source.game,
+            &source.game,
             &staged.game,
             bootstrap,
             &crate::instances::game_caches(&source.game),
@@ -433,7 +435,14 @@ fn migrate_locked(
         )?;
         if separate_build || !within(&source.build, &source.launcher) {
             progress("Copying and verifying build data");
-            copy_tree(&source.build, &staged.build, bootstrap, &[], &mut progress)?;
+            copy_tree(
+                &source.build,
+                &source.build,
+                &staged.build,
+                bootstrap,
+                &[],
+                &mut progress,
+            )?;
         } else if !staged.build.exists() {
             fs::create_dir_all(&staged.build).map_err(|e| problem(&staged.build, e))?;
         }
@@ -636,6 +645,36 @@ fn pointer_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// The target of the symlink at `path` when the same link at the destination points into the
+/// copy: relative, only `..` then plain names, and lexically inside `root` from the link's folder.
+/// The link is read, never followed.
+#[cfg(unix)]
+fn contained_link(
+    root: &Path,
+    path: &Path,
+    meta: &fs::Metadata,
+) -> std::io::Result<Option<PathBuf>> {
+    if !meta.file_type().is_symlink() {
+        return Ok(None);
+    }
+    use std::os::unix::ffi::OsStrExt;
+    let target = fs::read_link(path)?;
+    let (mut up, mut down) = (0, 0);
+    // Split by hand: `Path::components` would drop an interior `.` and repeated slashes.
+    for part in target.as_os_str().as_bytes().split(|&byte| byte == b'/') {
+        match part {
+            b".." if down == 0 => up += 1,
+            b"" | b"." | b".." => return Ok(None),
+            _ => down += 1,
+        }
+    }
+    let depth = path
+        .parent()
+        .and_then(|folder| folder.strip_prefix(root).ok())
+        .map(|folder| folder.components().count());
+    Ok((down > 0 && depth.is_some_and(|depth| up <= depth)).then_some(target))
+}
+
 pub(crate) fn reject_link(path: &Path, meta: &fs::Metadata) -> Result<()> {
     #[cfg(windows)]
     let reparse = {
@@ -690,7 +729,10 @@ fn new_file(path: &Path) -> Result<File> {
     options.open(path).map_err(|e| problem(path, e))
 }
 
+/// Copies `source`, inside `root`, to `dest`, leaving out the paths in `skip`.
+#[cfg_attr(not(unix), allow(clippy::only_used_in_recursion))]
 fn copy_tree(
+    root: &Path,
     source: &Path,
     dest: &Path,
     bootstrap: &Path,
@@ -702,6 +744,10 @@ fn copy_tree(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return private_dir(dest),
         Err(e) => return Err(problem(source, e)),
     };
+    #[cfg(unix)]
+    if let Some(target) = contained_link(root, source, &meta).map_err(|e| problem(source, e))? {
+        return std::os::unix::fs::symlink(&target, dest).map_err(|e| problem(dest, e));
+    }
     reject_link(source, &meta)?;
     if meta.is_dir() {
         private_dir(dest)?;
@@ -724,6 +770,7 @@ fn copy_tree(
                 continue;
             }
             copy_tree(
+                root,
                 &path,
                 &dest.join(entry.file_name()),
                 bootstrap,

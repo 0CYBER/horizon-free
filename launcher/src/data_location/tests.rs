@@ -434,6 +434,47 @@ fn real_files_where_other_launchers_links_go_are_moved() {
 }
 
 #[cfg(unix)]
+#[test]
+fn relative_link_inside_the_root_is_made_again() {
+    let f = Fixture::new("build");
+    let runtime = f.source.launcher.join("runtime");
+    fs::create_dir_all(runtime.join("lib")).unwrap();
+    fs::create_dir_all(runtime.join("bin")).unwrap();
+    fs::write(runtime.join("lib/libjvm.so"), b"jvm").unwrap();
+    std::os::unix::fs::symlink("../lib/libjvm.so", runtime.join("bin/libjvm.so")).unwrap();
+    let roots = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    let link = roots.launcher.join("runtime/bin/libjvm.so");
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../lib/libjvm.so"));
+    assert_eq!(fs::read(link).unwrap(), b"jvm");
+}
+
+#[cfg(unix)]
+#[test]
+fn relative_link_leaving_the_root_is_still_refused() {
+    for target in [
+        "../../outside",
+        "lib/../../outside",
+        "./lib",
+        "lib/./a",
+        "lib//a",
+        "lib/",
+        "/etc",
+        "../..",
+    ] {
+        let f = Fixture::new("build");
+        let folder = f.source.launcher.join("runtime");
+        fs::create_dir_all(folder.join("lib")).unwrap();
+        std::os::unix::fs::symlink(target, folder.join("link")).unwrap();
+        let error = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap_err();
+        assert!(
+            error.contains("Symbolic links and reparse points"),
+            "{target}: {error}"
+        );
+        assert_eq!(fs::read(&f.bootstrap).unwrap(), f.pointer);
+    }
+}
+
+#[cfg(unix)]
 struct PermissionsGuard(PathBuf, fs::Permissions);
 #[cfg(unix)]
 impl Drop for PermissionsGuard {
