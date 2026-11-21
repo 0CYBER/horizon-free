@@ -3,10 +3,7 @@
 //! Feeds recorded `.mcpr` packet streams into the client's packet processing
 //! loop at user-controlled playback speeds (slow-motion, 1x, fast-forward, pause).
 
-use super::{
-    mcpr::{Marker, McprReader, McprWriter, Metadata, TimestampedPacket},
-    spline::CameraTrack,
-};
+use super::mcpr::{Marker, McprReader, McprWriter, Metadata, TimestampedPacket};
 use crate::packet_source::PacketSource;
 use std::{
     io,
@@ -52,9 +49,10 @@ impl ReplayDriver {
         })
     }
 
-    /// Camera keyframes saved alongside the packet stream, if present.
-    pub fn camera_track(&self) -> Option<&CameraTrack> {
-        self.reader.camera_track.as_ref()
+    /// The editor's camera path saved alongside the packet stream, as the
+    /// editor wrote it, if present.
+    pub fn camera_path(&self) -> Option<&[u8]> {
+        self.reader.camera_path.as_deref()
     }
 
     /// Markers saved alongside the packet stream, in timeline order.
@@ -76,10 +74,11 @@ impl ReplayDriver {
         Ok(marker)
     }
 
-    /// Save the edited camera path in the recording archive.
-    pub fn save_camera_track(&mut self, track: &CameraTrack) -> io::Result<()> {
-        McprWriter::replace_camera_track(&self.path, track)?;
-        self.reader.camera_track = (!track.is_empty()).then(|| track.clone());
+    /// Save the editor's camera path in the recording archive; `None`
+    /// removes it.
+    pub fn save_camera_path(&mut self, json: Option<Vec<u8>>) -> io::Result<()> {
+        McprWriter::replace_camera_path(&self.path, json.as_deref())?;
+        self.reader.camera_path = json;
         Ok(())
     }
 }

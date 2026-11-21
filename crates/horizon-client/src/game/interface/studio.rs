@@ -473,7 +473,13 @@ impl Game<'_> {
                 .as_mut()
                 .and_then(|driver| driver.as_any_mut().downcast_mut::<ReplayDriver>())
         {
-            driver.save_camera_track(&self.studio.freecam.track)?;
+            let track = &self.studio.freecam.track;
+            let json = if track.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_vec_pretty(track).map_err(std::io::Error::other)?)
+            };
+            driver.save_camera_path(json)?;
             self.studio.camera_track_dirty = false;
         }
         Ok(())
@@ -485,7 +491,14 @@ impl Game<'_> {
         self.studio.timeline.current_time_ms = 0;
         self.studio.timeline.playing = !driver.is_paused();
         self.studio.timeline.markers = driver.markers().to_vec();
-        self.studio.freecam.track = driver.camera_track().cloned().unwrap_or_default();
+        self.studio.freecam.track = match driver.camera_path().map(serde_json::from_slice) {
+            Some(Ok(track)) => track,
+            Some(Err(error)) => {
+                log::warn!("Studio: could not read the replay's camera path: {error}");
+                Default::default()
+            }
+            None => Default::default(),
+        };
         self.studio.camera_track_dirty = false;
     }
 

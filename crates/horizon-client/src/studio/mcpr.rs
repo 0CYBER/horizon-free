@@ -5,8 +5,10 @@
 //! - `recording.tmcpr`: binary stream of chronological timestamped network packets:
 //!   `[timestamp_ms: u32 big-endian][packet_length: u32 big-endian][packet_data: VarInt(packet_id) + payload]`
 //! - Optional `recording.tmcpr.crc32`: CRC32 of the packet stream.
+//! - Optional `markers.json`: the timeline's markers, in ReplayMod's format.
+//! - Optional `camera.json`: the editor's camera path. The archive keeps its
+//!   bytes as the editor wrote them and never reads them.
 
-use super::spline::CameraTrack;
 use horizon_protocol::buf::{Reader, write_varint};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -373,105 +375,20 @@ impl McprWriter {
         }
     }
 
-    /// Atomically replace the optional camera path without touching the packet
-    /// stream, metadata, or other archive entries.
-    pub fn replace_camera_track(path: &Path, track: &CameraTrack) -> io::Result<()> {
-        let part = sibling(path, "camera.part");
-        let result = (|| {
-            let file = File::open(path)?;
-            let mut archive = zip::ZipArchive::new(file)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            let mut output = zip::ZipWriter::new(create_private_file(&part)?);
-            for index in 0..archive.len() {
-                let mut entry = archive.by_index(index).map_err(io::Error::other)?;
-                let name = entry
-                    .name()
-                    .map(|name| name.into_owned())
-                    .map_err(io::Error::other)?;
-                if name == "camera.json" {
-                    continue;
-                }
-                let options = zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Deflated)
-                    .large_file(entry.size() >= u32::MAX as u64);
-                if entry.is_dir() {
-                    output
-                        .add_directory(name, options)
-                        .map_err(io::Error::other)?;
-                } else {
-                    output.start_file(name, options).map_err(io::Error::other)?;
-                    io::copy(&mut entry, &mut output)?;
-                }
-            }
-            if !track.is_empty() {
-                output
-                    .start_file(
-                        "camera.json",
-                        zip::write::SimpleFileOptions::default()
-                            .compression_method(zip::CompressionMethod::Deflated),
-                    )
-                    .map_err(io::Error::other)?;
-                serde_json::to_writer_pretty(&mut output, track).map_err(io::Error::other)?;
-            }
-            let file = output.finish().map_err(io::Error::other)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&part, path)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&part);
-        }
-        result
+    /// Atomically replace the editor's camera path (`camera.json`) without
+    /// touching the packet stream, metadata or other entries. `None` removes it.
+    pub fn replace_camera_path(path: &Path, json: Option<&[u8]>) -> io::Result<()> {
+        replace_entry(path, CAMERA_PATH_ENTRY, "camera.part", json)
     }
 
     /// Atomically replace the optional editor markers without touching packet data.
     pub fn replace_markers(path: &Path, markers: &[Marker]) -> io::Result<()> {
-        let part = sibling(path, "markers.part");
-        let result = (|| {
-            let file = File::open(path)?;
-            let mut archive = zip::ZipArchive::new(file)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            let mut output = zip::ZipWriter::new(create_private_file(&part)?);
-            for index in 0..archive.len() {
-                let mut entry = archive.by_index(index).map_err(io::Error::other)?;
-                let name = entry
-                    .name()
-                    .map(|name| name.into_owned())
-                    .map_err(io::Error::other)?;
-                if name == "markers.json" {
-                    continue;
-                }
-                let options = zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Deflated)
-                    .large_file(entry.size() >= u32::MAX as u64);
-                if entry.is_dir() {
-                    output
-                        .add_directory(name, options)
-                        .map_err(io::Error::other)?;
-                } else {
-                    output.start_file(name, options).map_err(io::Error::other)?;
-                    io::copy(&mut entry, &mut output)?;
-                }
-            }
-            if !markers.is_empty() {
-                output
-                    .start_file(
-                        "markers.json",
-                        zip::write::SimpleFileOptions::default()
-                            .compression_method(zip::CompressionMethod::Deflated),
-                    )
-                    .map_err(io::Error::other)?;
-                serde_json::to_writer_pretty(&mut output, markers).map_err(io::Error::other)?;
-            }
-            let file = output.finish().map_err(io::Error::other)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&part, path)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&part);
-        }
-        result
+        let json = if markers.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_vec_pretty(markers).map_err(io::Error::other)?)
+        };
+        replace_entry(path, "markers.json", "markers.part", json.as_deref())
     }
 
     fn package(&self, part: &Path) -> io::Result<()> {
@@ -673,10 +590,66 @@ pub struct McprReader {
     /// Sparse frame index; timestamps are normalized to never go backwards.
     packet_index: Vec<SparseIndexEntry>,
     total_packets: usize,
-    /// Optional camera keyframes stored by the Studio editor.
-    pub camera_track: Option<CameraTrack>,
+    /// The editor's camera path (`camera.json`), as the editor wrote it.
+    pub camera_path: Option<Vec<u8>>,
     /// User-created editor bookmarks stored in the replay archive.
     pub markers: Vec<Marker>,
+}
+
+/// The archive entry holding the editor's camera path.
+const CAMERA_PATH_ENTRY: &str = "camera.json";
+
+/// Rewrite the archive at `path` with entry `name` replaced by `contents`
+/// (removed when `None`), through a sibling `part` file renamed over it.
+fn replace_entry(path: &Path, name: &str, part: &str, contents: Option<&[u8]>) -> io::Result<()> {
+    let part = sibling(path, part);
+    let result = (|| {
+        let file = File::open(path)?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut output = zip::ZipWriter::new(create_private_file(&part)?);
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).map_err(io::Error::other)?;
+            let entry_name = entry
+                .name()
+                .map(|entry_name| entry_name.into_owned())
+                .map_err(io::Error::other)?;
+            if entry_name == name {
+                continue;
+            }
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .large_file(entry.size() >= u32::MAX as u64);
+            if entry.is_dir() {
+                output
+                    .add_directory(entry_name, options)
+                    .map_err(io::Error::other)?;
+            } else {
+                output
+                    .start_file(entry_name, options)
+                    .map_err(io::Error::other)?;
+                io::copy(&mut entry, &mut output)?;
+            }
+        }
+        if let Some(contents) = contents {
+            output
+                .start_file(
+                    name,
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .map_err(io::Error::other)?;
+            output.write_all(contents)?;
+        }
+        let file = output.finish().map_err(io::Error::other)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&part, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&part);
+    }
+    result
 }
 
 fn read_entry(archive: &mut zip::ZipArchive<File>, name: &str, max: u64) -> io::Result<Vec<u8>> {
@@ -694,11 +667,11 @@ fn read_entry(archive: &mut zip::ZipArchive<File>, name: &str, max: u64) -> io::
     Ok(bytes)
 }
 
-fn read_optional_json<T: for<'de> Deserialize<'de>>(
+fn read_optional_entry(
     archive: &mut zip::ZipArchive<File>,
     name: &str,
     max: u64,
-) -> io::Result<Option<T>> {
+) -> io::Result<Option<Vec<u8>>> {
     match archive.by_name(name) {
         Ok(entry) => {
             let mut bytes = Vec::new();
@@ -709,13 +682,24 @@ fn read_optional_json<T: for<'de> Deserialize<'de>>(
                     format!("{name} is larger than {max} bytes"),
                 ));
             }
-            serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            Ok(Some(bytes))
         }
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
         Err(error) => Err(io::Error::new(io::ErrorKind::InvalidData, error)),
     }
+}
+
+fn read_optional_json<T: for<'de> Deserialize<'de>>(
+    archive: &mut zip::ZipArchive<File>,
+    name: &str,
+    max: u64,
+) -> io::Result<Option<T>> {
+    read_optional_entry(archive, name, max)?
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        })
+        .transpose()
 }
 
 impl McprReader {
@@ -782,8 +766,7 @@ impl McprReader {
                 ));
             }
         }
-        let camera_track =
-            read_optional_json::<CameraTrack>(&mut archive, "camera.json", MAX_METADATA_BYTES)?;
+        let camera_path = read_optional_entry(&mut archive, CAMERA_PATH_ENTRY, MAX_METADATA_BYTES)?;
         let markers =
             read_optional_json::<Vec<Marker>>(&mut archive, "markers.json", MAX_METADATA_BYTES)?
                 .unwrap_or_default();
@@ -818,7 +801,7 @@ impl McprReader {
             end: offset,
             packet_index,
             total_packets,
-            camera_track,
+            camera_path,
             markers,
         })
     }
@@ -1271,25 +1254,18 @@ mod tests {
     }
 
     #[test]
-    fn camera_track_is_saved_without_changing_recorded_packets() {
-        let scratch = Scratch::new("camera_track");
+    fn camera_path_bytes_are_kept_as_written_without_changing_recorded_packets() {
+        let scratch = Scratch::new("camera_path");
         let path = scratch.0.join("camera.mcpr");
         let mut writer = McprWriter::new(path.clone(), Metadata::default()).unwrap();
         writer.write_packet(0, 1, &[10, 20, 30]).unwrap();
         writer.finish(0).unwrap();
 
-        let track = CameraTrack {
-            keyframes: vec![super::super::spline::CameraKeyframe::new(
-                125,
-                [1.0, 64.0, -2.0],
-                45.0,
-                -10.0,
-                70.0,
-            )],
-        };
-        McprWriter::replace_camera_track(&path, &track).unwrap();
+        // Not JSON: the archive stores the editor's bytes without reading them.
+        let saved = b"\x00 editor data {".to_vec();
+        McprWriter::replace_camera_path(&path, Some(&saved)).unwrap();
         let mut reader = McprReader::open(&path).unwrap();
-        assert_eq!(reader.camera_track, Some(track));
+        assert_eq!(reader.camera_path, Some(saved));
 
         let packet = reader.next_packet().unwrap().unwrap();
         assert_eq!(
@@ -1297,8 +1273,8 @@ mod tests {
             (0, 1, vec![10, 20, 30])
         );
 
-        McprWriter::replace_camera_track(&path, &CameraTrack::default()).unwrap();
-        assert!(McprReader::open(&path).unwrap().camera_track.is_none());
+        McprWriter::replace_camera_path(&path, None).unwrap();
+        assert!(McprReader::open(&path).unwrap().camera_path.is_none());
     }
 
     #[test]
