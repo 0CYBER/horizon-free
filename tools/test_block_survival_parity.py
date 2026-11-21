@@ -255,7 +255,7 @@ def main():
     references=[]
     for side,jar in jars.items():
         stage(side,lambda:java(side,side,build))
-        reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
+        reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt',context=5)
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
         print(f'{side}: {matched:,} block-survival output lines match Rust',flush=True)
     base.ensure_sources_unchanged(sources,tested_sources)

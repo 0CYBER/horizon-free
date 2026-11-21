@@ -388,7 +388,7 @@ def main():
             print(f'{name}: completed output checkpointed',flush=True)
     stage('rust',lambda:run([checkpoint['binary'],'state_provider_fixture',build],'rust'));references=[]
     for side,jar in jars.items():
-        stage(side,lambda:java(side,side,build));reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
+        stage(side,lambda:java(side,side,build));reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt',context=5)
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
         print(f'{side}: {matched:,} state-provider output lines match Rust',flush=True)
     base.ensure_sources_unchanged(sources,tested_sources)

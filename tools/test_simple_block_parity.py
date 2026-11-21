@@ -120,7 +120,7 @@ def run(corpus, build_name, source_file, scope):
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary,'simple_block_fixture',build],'rust');references=[]
     for side,jar in jars.items():
-        java(side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt');print(f'{side}: {matched:,} {label} output lines match Rust',flush=True)
+        java(side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt',context=5);print(f'{side}: {matched:,} {label} output lines match Rust',flush=True)
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(build/(side+'.txt'),'sha256'),'matched_output_lines':matched})
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixtures,tested_fixtures)
     report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':fixture_count,'candidate_states':len(facts['states']),'double_plant_blocks':len(placement['double_plants']),'mossy_carpet_blocks':len(placement['mossy_carpets']),'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':scope}
