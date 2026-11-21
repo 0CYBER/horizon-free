@@ -20,7 +20,7 @@ mini's) is kept small by [`tools/ci/git-slim.sh`](../tools/ci/git-slim.sh) befor
 
 Blacksmith's runners (outside GitHub's 20-job pool) took over from GitHub's on 2026-11-17 for jobs that hold no
 secret and neither publish nor release: `checks`' `verify` ([below](#verify-on-blacksmith)), `perf-wasm`,
-`cargo-horizon-mod`'s `plan`, `needs-info`, and the bots whenever `SELF_HOSTED_CI=off` sends them away from ours.
+`cargo-horizon-mod`'s `plan`, `needs-info`, `stale pull requests`, and the bots whenever `SELF_HOSTED_CI=off` sends them away from ours.
 One exception holds secrets there: [hosted parity](#hosted-parity), started by hand, whose fetch step reads the
 maintainers' vanilla data.
 
