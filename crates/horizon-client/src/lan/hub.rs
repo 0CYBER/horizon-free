@@ -444,6 +444,9 @@ pub struct Hub {
     /// Names a server mod shows for players in the Tab list only (`player_set_list_name`),
     /// by UUID, over their nickname.
     pub list_names: std::collections::HashMap<u128, crate::text::Text>,
+    /// Client-only entities a mod put in one viewer's client (`viewer_entity_spawn`), by
+    /// (viewer UUID, entity id).
+    pub viewer_entities: std::collections::HashSet<(u128, u32)>,
     /// The name the server's user cache knew a joining player by, by UUID, looked up before the
     /// cache learns the new one (PlayerList.placeNewPlayer's `oldName`); taken by the join line.
     pub former_names: std::collections::HashMap<u128, String>,
@@ -891,6 +894,7 @@ impl Hub {
             teams: Vec::new(),
             nicknames: std::collections::HashMap::new(),
             list_names: std::collections::HashMap::new(),
+            viewer_entities: std::collections::HashSet::new(),
             former_names: std::collections::HashMap::new(),
             viewed: Default::default(),
         }
@@ -4999,6 +5003,86 @@ impl Hub {
         }));
     }
 
+    /// `viewer_entity_spawn`: an `AddEntity` of `kind` (its registry id, `entity_type`) with entity id
+    /// `id` at `pos`, to `viewer`'s client alone. False when the viewer has no client or `kind` is not
+    /// an entity type. The UUID is the id itself: the entity is not in the level.
+    pub fn spawn_viewer_entity(
+        &mut self,
+        viewer: u128,
+        id: u32,
+        kind: &str,
+        pos: [f64; 3],
+    ) -> bool {
+        let Some(index) = self
+            .guests
+            .iter()
+            .position(|g| g.uuid == viewer && g.participates_online())
+        else {
+            return false;
+        };
+        let (types, sync) = (&mut self.entity_types, &self.sync);
+        let Some(kind_id) = entity_type(types, sync, kind) else {
+            return false;
+        };
+        self.guests[index].send(&C::AddEntity(play::AddEntity {
+            id: id as i32,
+            uuid: u128::from(id),
+            kind: kind_id,
+            position: pos,
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 0,
+            head_yaw: 0,
+            data: 0,
+        }));
+        self.viewer_entities.insert((viewer, id));
+        true
+    }
+
+    /// `viewer_entity_move`: a `TeleportEntity` of the client-only entity `id` to `pos`, to `viewer`'s
+    /// client alone. False when the viewer has no such entity or no client.
+    pub fn move_viewer_entity(&mut self, viewer: u128, id: u32, pos: [f64; 3]) -> bool {
+        if !self.viewer_entities.contains(&(viewer, id)) {
+            return false;
+        }
+        let Some(index) = self
+            .guests
+            .iter()
+            .position(|g| g.uuid == viewer && g.participates_online())
+        else {
+            return false;
+        };
+        self.guests[index].send(&C::TeleportEntity(play::TeleportEntity {
+            id: id as i32,
+            position: pos,
+            delta: [0.0; 3],
+            yaw: 0.0,
+            pitch: 0.0,
+            relatives: 0,
+            on_ground: false,
+        }));
+        true
+    }
+
+    /// `viewer_entity_remove`: a `RemoveEntities` of the client-only entity `id`, to `viewer`'s client
+    /// alone. False when the viewer has no such entity or no client.
+    pub fn remove_viewer_entity(&mut self, viewer: u128, id: u32) -> bool {
+        if !self.viewer_entities.remove(&(viewer, id)) {
+            return false;
+        }
+        let Some(index) = self
+            .guests
+            .iter()
+            .position(|g| g.uuid == viewer && g.participates_online())
+        else {
+            return false;
+        };
+        self.guests[index].send(&C::RemoveEntities(play::RemoveEntities {
+            ids: vec![id as i32],
+        }));
+        true
+    }
+
     /// Paper's `Player.setPlayerListName`: `name` in place of the player's name in the Tab
     /// list (None: the nickname or real name again), sent to everyone at once
     /// (`ClientboundPlayerInfoUpdatePacket` `UPDATE_DISPLAY_NAME`) and kept for a rejoin.
@@ -8790,6 +8874,39 @@ mod tests {
         hub.guests.update(0, |g| g.release_tickets());
         hub.guests.update(0, |g| g.watching = false);
         assert_eq!(hub.guests[0].ticket_chunk(), left);
+    }
+
+    /// A client-only entity reaches only its viewer: spawn, move and remove are one packet each to that
+    /// client, and a move or removal of an id the viewer does not hold is refused. Uuid 1 is Bob,
+    /// uuid 2 is Alice.
+    #[test]
+    fn a_viewer_entity_reaches_that_viewer_only() {
+        let (mut hub, bob) = hub_with_a_guest();
+        hub.entity_types.insert("minecraft:shulker".into(), 1);
+        let alice = add_alice(&mut hub);
+        sent(&alice);
+        sent(&bob);
+        assert!(hub.spawn_viewer_entity(2, 9001, "minecraft:shulker", [1.0, 2.0, 3.0]));
+        let got = sent(&alice);
+        assert!(
+            matches!(&got[0], play::Clientbound::AddEntity(e) if e.id == 9001 && e.position == [1.0, 2.0, 3.0])
+        );
+        assert_eq!(got.len(), 1);
+        assert!(sent(&bob).is_empty(), "the other players are not told");
+        assert!(hub.move_viewer_entity(2, 9001, [4.0, 5.0, 6.0]));
+        assert!(
+            matches!(&sent(&alice)[0], play::Clientbound::TeleportEntity(t) if t.id == 9001 && t.position == [4.0, 5.0, 6.0])
+        );
+        assert!(hub.remove_viewer_entity(2, 9001));
+        assert!(
+            matches!(&sent(&alice)[0], play::Clientbound::RemoveEntities(r) if r.ids == [9001])
+        );
+        // Gone for good: a second removal or move is refused, and nothing is sent.
+        assert!(!hub.remove_viewer_entity(2, 9001));
+        assert!(!hub.move_viewer_entity(2, 9001, [0.0; 3]));
+        // Not for a player who is not on, and not for an unknown kind.
+        assert!(!hub.spawn_viewer_entity(7, 9002, "minecraft:shulker", [0.0; 3]));
+        assert!(!hub.spawn_viewer_entity(2, 9003, "minecraft:no_such_entity", [0.0; 3]));
     }
 
     #[test]

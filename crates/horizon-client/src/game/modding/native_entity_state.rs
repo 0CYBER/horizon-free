@@ -115,6 +115,17 @@ impl Game<'_> {
             Body::Other(_) => None,
         }
     }
+    /// `Entity.isValid`: the entity is in the level and not removed. A stale handle, a mob queued for
+    /// removal and a frame or painting that is gone are not valid.
+    pub(super) fn entity_is_valid(&self, entity: EntityRef) -> bool {
+        match self.native_entity_target(entity) {
+            Some(super::commands::Target::Mob(id)) => self.mobs.iter().any(|m| m.id == id && !m.removed),
+            Some(super::commands::Target::Frame(id)) => self.item_frames.iter().any(|f| f.id == id),
+            Some(super::commands::Target::Painting(id)) => self.paintings.iter().any(|p| p.id == id),
+            Some(_) => true,
+            None => false,
+        }
+    }
     /// Whether the entity is in lava (`Entity.isInLava`): players and mobs.
     pub(super) fn entity_is_in_lava(&self, entity: EntityRef) -> Option<bool> {
         match self.native_entity_body(entity)? {
@@ -475,6 +486,52 @@ impl Game<'_> {
         self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
             m.glowing = glowing;
             m.needs_sync = true;
+            true
+        })
+    }
+    /// Explodes an entity now, as its own explosion would: primed TNT explodes where it
+    /// stands with its power (`PrimedTnt.explode`), and a creeper is lit and explodes at once
+    /// (`Creeper.explodeCreeper`). The entity is gone after its explosion. False for a stale
+    /// handle, a kind that does not explode, or when the explosion itself fails.
+    pub(super) fn entity_detonate(&mut self, entity: EntityRef) -> bool {
+        match self.native_entity_target(entity) {
+            Some(Target::Tnt(id)) => {
+                let Some(i) = self.tnts.iter().position(|t| t.id == id) else {
+                    return false;
+                };
+                self.explode_primed_tnt(i).is_ok()
+            }
+            Some(Target::Mob(id)) => {
+                let mut events = Vec::new();
+                let Some(mob) = self
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == id && m.species() == Species::Creeper)
+                else {
+                    return false;
+                };
+                // Creeper.ignite: the fuse is lit, and the swell is at its end.
+                mob.swell = mob.max_swell;
+                mob.extra.flag = true;
+                horizon_client::mobs::hostile::creeper_tick(mob, &mut events);
+                self.mobs.retain(|m| m.id != id);
+                self.handle_mob_events(events).is_ok()
+            }
+            _ => false,
+        }
+    }
+
+    /// `PrimedTnt.setFuse` (Paper's `TNTPrimed#setFuseTicks`): the ticks left before this primed TNT
+    /// explodes. False for a negative count, a stale handle or an entity that is not primed TNT.
+    pub(super) fn entity_set_fuse(&mut self, entity: EntityRef, ticks: i32) -> bool {
+        if ticks < 0 {
+            return false;
+        }
+        let Some(Target::Tnt(id)) = self.native_entity_target(entity) else {
+            return false;
+        };
+        self.tnts.iter_mut().find(|t| t.id == id).is_some_and(|t| {
+            t.fuse = ticks;
             true
         })
     }
@@ -1388,5 +1445,93 @@ mod tests {
         assert_eq!(max_air(Some(Species::Dolphin)), 4800);
         assert_eq!(max_air(Some(Species::Axolotl)), 6000);
         assert_eq!(max_air(Some(Species::Zombie)), 300);
+    }
+}
+
+#[cfg(test)]
+mod detonate_tests {
+    use super::super::native_entity_refs::tests::with_game;
+    use horizon_core::geometry::Vec3;
+    use horizon_client::mobs::Mob;
+
+    #[test]
+    #[ignore = "daily"]
+    fn entity_detonate_explodes_primed_tnt_and_refuses_a_zombie() {
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.tnts.push(super::super::tnt::PrimedTnt {
+                attachment_lifetime: Default::default(),
+                rotation: [0.0, 0.0],
+                join: Default::default(),
+                id: 0,
+                position: Vec3::ZERO,
+                previous: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                fuse: 80,
+                on_ground: false,
+                in_water: false,
+                stuck: Vec3::ZERO,
+                fall_distance: 0.0,
+                owner: None,
+                guest: None,
+                no_gravity: false,
+                power: 4.0,
+                used_portal: false,
+                block_state: None,
+            });
+            game.native_joins_flush(false, 0);
+            game.native_joins_flush(false, 0);
+            let id = game.tnts.last().unwrap().id;
+            let entity = game.entity(id).unwrap();
+            assert!(game.entity_detonate(entity));
+            assert!(game.tnts.is_empty());
+            let kind = game.res.mob_types().get("minecraft:zombie").unwrap().clone();
+            game.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
+            let zombie = game.entity(42).unwrap();
+            assert!(!game.entity_detonate(zombie));
+            assert_eq!(game.mobs.len(), 1);
+        });
+    }
+}
+
+#[cfg(test)]
+mod fuse_tests {
+    use super::super::native_entity_refs::tests::with_game;
+    use horizon_core::geometry::Vec3;
+
+    #[test]
+    #[ignore = "daily"]
+    fn entity_set_fuse_writes_primed_tnt_and_refuses_a_negative_count() {
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.tnts.push(super::super::tnt::PrimedTnt {
+                attachment_lifetime: Default::default(),
+                rotation: [0.0, 0.0],
+                join: Default::default(),
+                id: 0,
+                position: Vec3::ZERO,
+                previous: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                fuse: 80,
+                on_ground: false,
+                in_water: false,
+                stuck: Vec3::ZERO,
+                fall_distance: 0.0,
+                owner: None,
+                guest: None,
+                no_gravity: false,
+                power: 4.0,
+                used_portal: false,
+                block_state: None,
+            });
+            game.native_joins_flush(false, 0);
+            game.native_joins_flush(false, 0);
+            let id = game.tnts.last().unwrap().id;
+            let entity = game.entity(id).unwrap();
+            assert!(game.entity_set_fuse(entity, 37));
+            assert_eq!(game.tnts.last().unwrap().fuse, 37);
+            assert!(!game.entity_set_fuse(entity, -1));
+            assert_eq!(game.tnts.last().unwrap().fuse, 37);
+        });
     }
 }

@@ -57,3 +57,21 @@ pub(in crate::game) fn entity_type_saves(kind: &str) -> bool {
             | "minecraft:lightning_bolt"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::game::native_entity_refs::tests::with_game;
+
+    /// The registry answers by the id as written: a namespaced id is in it, a bare name and an
+    /// unknown id are not (`EntityType.byString` finds only registered keys).
+    #[test]
+    #[ignore = "daily"]
+    fn a_type_id_is_looked_up_as_written() {
+        with_game(|game| {
+            game.spawners.entity_types = Some(["minecraft:zombie".to_owned()].into_iter().collect());
+            assert!(game.entity_type_exists("minecraft:zombie"));
+            assert!(!game.entity_type_exists("zombie"));
+            assert!(!game.entity_type_exists("minecraft:no_such_mob"));
+        });
+    }
+}

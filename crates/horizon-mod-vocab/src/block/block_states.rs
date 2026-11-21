@@ -140,6 +140,11 @@ impl BlockStates<'_> {
     pub fn has_block_entity(&self, state: BlockState) -> Option<bool> {
         self.backend?.block_state_has_block_entity(state)
     }
+    /// The block entity type id a block of this state carries (`minecraft:chest`). None for an
+    /// unknown state and for a state with no block entity, as for `has_block_entity`.
+    pub fn block_entity_type(&self, state: BlockState) -> Option<String> {
+        self.backend?.block_state_block_entity_type(state)
+    }
     /// `BlockState.getMapColor`: the state's `MapColor.id`, 0 for none (`MapColor.NONE`).
     /// None as for `replaceable`.
     pub fn map_color(&self, state: BlockState) -> Option<u8> {

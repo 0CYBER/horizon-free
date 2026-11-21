@@ -249,6 +249,16 @@ impl Game<'_> {
         self.pack.assets.registry.state(state)?;
         Some(self.res.facts().get(state).block_entity)
     }
+    /// `block_state_block_entity_type`: the factory the game uses to make the block entity of a
+    /// block of this state (`BlockEntity::for_block`, the same call placement makes), named by
+    /// `save::block_entity_id` (a barrel or trapped chest stays its own type). None for an unknown
+    /// state and for a state whose block has no block entity.
+    pub(super) fn block_state_block_entity_type(&self, state: BlockStateId) -> Option<String> {
+        let name = &self.pack.assets.registry.state(state)?.name;
+        let entity = crate::containers::BlockEntity::for_block(name)?;
+        let kind = crate::save::block_entity_id(&entity, name);
+        (!kind.is_empty()).then(|| kind.to_owned())
+    }
     /// `BlockState.getMapColor`: the state's `MapColor.id`, 0 for none. None for an unknown state.
     pub(super) fn block_state_map_color(&self, state: BlockStateId) -> Option<u8> {
         self.pack.assets.registry.state(state)?;
@@ -1001,6 +1011,39 @@ mod tests {
 mod facts_tests {
     use crate::game::api_values::TryIntoApi;
     use mod_api::{BlockStateRecord, HostBlockStates};
+
+    /// `block_entity_type` names the factory of a chest, a barrel (its own type), a trapped chest
+    /// and a sign, and is None for stone (no block entity) and air.
+    #[test]
+    #[ignore = "daily"]
+    fn block_state_block_entity_type_names_the_factory() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let state = |name: &str| {
+                game.pack
+                    .assets
+                    .registry
+                    .default_state(name)
+                    .unwrap()
+                    .try_into_api()
+                    .unwrap()
+            };
+            let facts = game.block_states();
+            assert_eq!(
+                facts.block_entity_type(state("minecraft:chest")),
+                Some("minecraft:chest".to_owned())
+            );
+            assert_eq!(
+                facts.block_entity_type(state("minecraft:barrel")),
+                Some("minecraft:barrel".to_owned())
+            );
+            assert_eq!(
+                facts.block_entity_type(state("minecraft:oak_sign")),
+                Some("minecraft:sign".to_owned())
+            );
+            assert_eq!(facts.block_entity_type(state("minecraft:stone")), None);
+            assert_eq!(facts.block_entity_type(state("minecraft:air")), None);
+        });
+    }
 
     #[test]
     #[ignore = "daily"]

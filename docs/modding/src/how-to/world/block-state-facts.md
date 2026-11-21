@@ -8,6 +8,7 @@ A `BlockState` is an API-owned value pairing a `BlockKey` with a block-local can
 | `destroy_speed(state) -> Option<f32>` | `BlockBehaviour.Properties.destroyTime` (`getDestroySpeed`): stone 1.5, -1 unbreakable |
 | `sound(state) -> Option<BlockSoundType>` | `BlockState.getSoundType()`: volume, pitch and the break, step, place, hit and fall events |
 | `has_block_entity(state) -> Option<bool>` | `BlockState.hasBlockEntity()` |
+| `block_entity_type(state) -> Option<String>` | The block entity type id a placed block of this state gets (`minecraft:chest`, `minecraft:barrel`, `minecraft:sign`), the factory placement uses; None with no block entity |
 | `map_color(state) -> Option<u8>` | `BlockState.getMapColor`: the `MapColor.id` a map item colours a column by, 0 for none |
 | `light_emission(state) -> Option<u8>` | `BlockState.getLightEmission()`: glowstone 15 (a `dynamic_light` block's parts may answer otherwise at a position) |
 | `friction(state) -> Option<f32>` | `Block.getFriction()`: 0.6 for most, ice 0.98 |

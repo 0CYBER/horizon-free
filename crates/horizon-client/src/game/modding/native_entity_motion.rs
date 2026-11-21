@@ -195,6 +195,61 @@ impl Game<'_> {
         with_entity_mut!(self, h, e => e.reset_fall_distance());
         true
     }
+    /// Sets whether a server player or guest is swimming (`Entity.setSwimming`): the flag
+    /// the next water update reads, as `Player` keeps it. False for a mob or another kind,
+    /// and for a stale handle.
+    pub(super) fn entity_set_swimming(&mut self, entity: EntityRef, swimming: bool) -> bool {
+        let Some(target) = self.native_entity_target(entity) else {
+            return false;
+        };
+        let motion = match target {
+            Target::Player => self.player.as_mut(),
+            Target::Guest(conn) => self
+                .lan
+                .as_mut()
+                .and_then(|host| host.hub.guests.motion_mut(conn)),
+            _ => None,
+        };
+        let Some(motion) = motion else {
+            return false;
+        };
+        motion.swimming = swimming;
+        true
+    }
+
+    /// Sets `Entity.fallDistance` of a server player, guest or mob, as Paper's
+    /// `Entity#setFallDistance` does. False for another kind, a client, a stale handle, or a
+    /// value that is not finite.
+    pub(super) fn entity_set_fall_distance(&mut self, entity: EntityRef, distance: f64) -> bool {
+        if !distance.is_finite() {
+            return false;
+        }
+        match self.native_entity_target(entity) {
+            Some(Target::Mob(id)) => self
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id)
+                .is_some_and(|m| {
+                    m.fall_distance = distance;
+                    true
+                }),
+            Some(target @ (Target::Player | Target::Guest(_))) => {
+                let motion = match target {
+                    Target::Player => self.player.as_mut(),
+                    Target::Guest(conn) => self
+                        .lan
+                        .as_mut()
+                        .and_then(|host| host.hub.guests.motion_mut(conn)),
+                    _ => None,
+                };
+                motion.is_some_and(|motion| {
+                    motion.fall_distance = distance;
+                    true
+                })
+            }
+            _ => false,
+        }
+    }
     /// Whether the entity stands on a block (`Entity.onGround`).
     /// Whether the entity stands on a block (`Entity.onGround`). API
     /// 379.
@@ -528,6 +583,80 @@ mod tests {
             // An entity that is gone: nothing.
             game.mobs.clear();
             assert!(!game.entity_reset_fall_distance(zombie));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn entity_set_swimming_writes_a_players_flag_and_refuses_a_mob() {
+        fn fake_swimming<'a>(game: &'a mut super::super::Game<'_>) -> &'a mut bool {
+            let host = game.lan.as_mut().unwrap();
+            let conn = host.hub.guests.iter().find(|g| g.uuid == 2).unwrap().conn;
+            &mut host
+                .hub
+                .guests
+                .motion_mut(conn)
+                .expect("a fake has a motion")
+                .swimming
+        }
+        super::super::native_entity_refs::tests::with_game(|game| {
+            super::super::bossbars::audience_tests::add_real_and_fake(game);
+            game.options.dedicated = Some(Vec::new());
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombie")
+                .unwrap()
+                .clone();
+            use horizon_client::mobs::Mob;
+            game.mobs.push(Mob::new(40, kind, Vec3::ZERO, 0.0));
+            // A mob refuses: its swim is its own AI's.
+            assert!(!game.entity_set_swimming(game.entity(40).unwrap(), true));
+            // A fake guest takes the flag, then gives it up.
+            let level = game.level(game.dim.id()).unwrap();
+            let fake = game.fake_player(level, 2, "fake").unwrap().entity();
+            assert!(game.entity_set_swimming(fake, true));
+            assert!(*fake_swimming(game));
+            assert!(game.entity_set_swimming(fake, false));
+            assert!(!*fake_swimming(game));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn entity_set_fall_distance_writes_a_mob_or_guest_and_refuses_the_rest() {
+        fn fake_fall<'a>(game: &'a mut super::super::Game<'_>) -> &'a mut f64 {
+            let host = game.lan.as_mut().unwrap();
+            let conn = host.hub.guests.iter().find(|g| g.uuid == 2).unwrap().conn;
+            &mut host
+                .hub
+                .guests
+                .motion_mut(conn)
+                .expect("a fake has a motion")
+                .fall_distance
+        }
+        super::super::native_entity_refs::tests::with_game(|game| {
+            super::super::bossbars::audience_tests::add_real_and_fake(game);
+            game.options.dedicated = Some(Vec::new());
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombie")
+                .unwrap()
+                .clone();
+            use horizon_client::mobs::Mob;
+            game.mobs.push(Mob::new(40, kind, Vec3::ZERO, 0.0));
+            let zombie = game.entity(40).unwrap();
+            assert!(game.entity_set_fall_distance(zombie, 3.5));
+            assert_eq!(game.mobs[0].fall_distance, 3.5);
+            // A value that is not finite is refused and changes nothing.
+            assert!(!game.entity_set_fall_distance(zombie, f64::NAN));
+            assert_eq!(game.mobs[0].fall_distance, 3.5);
+            // A fake guest's own motion takes the value.
+            let level = game.level(game.dim.id()).unwrap();
+            let fake = game.fake_player(level, 2, "fake").unwrap().entity();
+            assert!(game.entity_set_fall_distance(fake, 9.0));
+            assert_eq!(*fake_fall(game), 9.0);
         });
     }
 

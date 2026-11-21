@@ -722,6 +722,26 @@ pub trait PlayersBackendMut {
         name: Option<Text>,
     ) -> Result<bool, TextFormError>;
     /// Side: server.
+    /// Spawns a client-only entity of `kind` (a type such as `minecraft:shulker` or
+    /// `minecraft:block_display`) at `pos` for `viewer`'s client alone: an `AddEntity` to that one
+    /// client. The entity is not in the level, no other player sees it, and it is gone when the
+    /// viewer leaves; it has no metadata beyond the type's defaults, and the mod moves and removes it
+    /// with `viewer_entity_move` and `viewer_entity_remove`. Returns its id, which the level never
+    /// gives out to another entity. None when the viewer has no client, `kind` is not an entity
+    /// type, `pos` is not finite, or the entity ids are used up.
+    #[access(WorldOnly)]
+    fn viewer_entity_spawn(&mut self, viewer: PlayerRef, kind: &str, pos: [f64; 3]) -> Option<u32>;
+    /// Side: server.
+    /// Moves a client-only entity made by `viewer_entity_spawn` to `pos`, in `viewer`'s client only
+    /// (`TeleportEntity`). False when the viewer has no such entity or no client, or `pos` is not finite.
+    #[access(WorldOnly)]
+    fn viewer_entity_move(&mut self, viewer: PlayerRef, id: u32, pos: [f64; 3]) -> bool;
+    /// Side: server.
+    /// Removes a client-only entity made by `viewer_entity_spawn` from `viewer`'s client
+    /// (`RemoveEntities`). False when the viewer has no such entity or no client.
+    #[access(WorldOnly)]
+    fn viewer_entity_remove(&mut self, viewer: PlayerRef, id: u32) -> bool;
+    /// Side: server.
     /// Hides that player (a vanish) from the players below permission
     /// `level`, or shows them again (None): from the next tick those players
     /// lose them from the Tab list and the world (their client stops

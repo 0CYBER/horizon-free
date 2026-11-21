@@ -37,6 +37,21 @@ pub trait EntitiesHost {
     /// dimension the server hasn't loaded. API 373.
     #[access(WorldOnly)]
     fn level(&self, dimension: &str) -> Option<LevelRef>;
+    /// Side: server.
+    /// Whether the entity is still in the world and not removed (`Entity.isValid`): a mob queued for
+    /// removal, a frame or painting broken, and a stale handle are not valid. Only the handle's
+    /// entity is asked about; the answer changes nothing.
+    #[access(WorldOnly)]
+    fn entity_is_valid(&self, entity: EntityRef) -> bool;
+    /// Side: both.
+    /// Whether `id` names an entity type in the game's registry (`EntityType.byString` finds it),
+    /// such as `minecraft:zombie` or a mod's type. The check is literal: `id` is compared as
+    /// written, with its namespace (a bare `zombie` is not in the registry). The answer comes
+    /// from the loaded entity-type registry, which loads with the first world, so it is false
+    /// while no world has loaded it. Use it to validate a configured id before a mod acts on it,
+    /// for example whitelist or blacklist entries, which the game drops when unknown.
+    #[access(Metadata)]
+    fn entity_type_exists(&self, id: &str) -> bool;
 }
 /// The server host's methods of the `entities` area, implemented by the game and reached through [`ServerHost`].
 #[horizon_mod_api_macros::host_area]
@@ -533,6 +548,12 @@ pub trait EntitiesBackend {
     /// with no pose stand.
     #[access(WorldOnly)]
     fn entity_pose(&self, entity: EntityRef) -> Option<&'static str>;
+    /// Side: server.
+    /// The way a painting, item frame or glow item frame faces (`HangingEntity.getDirection`),
+    /// the value `entity_set_hanging_direction` sets. A painting answers only a horizontal
+    /// direction, as it keeps one. None for another kind or a stale handle.
+    #[access(WorldOnly)]
+    fn entity_hanging_direction(&self, entity: EntityRef) -> Option<Direction>;
 }
 /// The handles' writes of the `entities` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -621,6 +642,19 @@ pub trait EntitiesBackendMut {
     /// the level in place; true for a kind that keeps no fall distance, which has none to forget.
     #[access(WorldOnly)]
     fn entity_reset_fall_distance(&mut self, entity: EntityRef) -> bool;
+    /// Side: server.
+    /// Sets whether a player is swimming (`Entity.setSwimming`), the flag the next water
+    /// update reads: a swimming player keeps the swimming pose and its swim speed until the
+    /// water says otherwise. Server players and guests; a mob's swim is its own AI's and
+    /// refuses here. False for a mob, another kind or a stale handle.
+    #[access(WorldOnly)]
+    fn entity_set_swimming(&mut self, entity: EntityRef, swimming: bool) -> bool;
+    /// Sets the blocks the entity has fallen (`Entity.fallDistance`), as Paper's
+    /// `Entity#setFallDistance` does: the next landing hurts by what it reads. Server players,
+    /// guests and mobs. False for another kind, a client, a stale handle or a value that is
+    /// not finite. `entity_reset_fall_distance` sets it to zero.
+    #[access(WorldOnly)]
+    fn entity_set_fall_distance(&mut self, entity: EntityRef, distance: f64) -> bool;
     /// Side: server.
     /// The entity's UUID (`Entity.getUUID`), the one it is saved with; an
     /// entity that has none yet gets it now, as a new vanilla entity does.
@@ -949,6 +983,20 @@ pub trait EntitiesBackendMut {
     /// Sets the mob's persistent glowing tag (`Entity.setGlowingTag`). Returns false for players and guests.
     #[access(WorldOnly)]
     fn entity_set_glowing(&mut self, entity: EntityRef, glowing: bool) -> bool;
+    /// Side: server.
+    /// Explodes an entity now, as its own explosion would: a primed TNT explodes where it
+    /// stands, with its power (`PrimedTnt.explode`), and a creeper is lit and explodes at once
+    /// (`Creeper.explodeCreeper`; Paper's `Creeper#explode`). The entity is gone after its
+    /// explosion. False for a stale handle, a kind that does not explode, or when the explosion
+    /// itself fails.
+    #[access(WorldOnly)]
+    fn entity_detonate(&mut self, entity: EntityRef) -> bool;
+    /// Sets the fuse of a primed TNT: the ticks left before it explodes (`PrimedTnt.setFuse`;
+    /// Paper's `TNTPrimed#setFuseTicks`). A fuse at 0 or below explodes it on its next tick,
+    /// as vanilla's does. False for a stale handle, an entity that is not primed TNT, or a
+    /// negative count (this API refuses it and changes nothing).
+    #[access(WorldOnly)]
+    fn entity_set_fuse(&mut self, entity: EntityRef, ticks: i32) -> bool;
     /// Side: server.
     /// Turns a painting, item frame or glow item frame in place to face `direction`
     /// (`HangingEntity.setDirection`, `ItemFrame.setDirection`): its facing, the yaw and pitch

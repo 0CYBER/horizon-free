@@ -1,10 +1,26 @@
 //! Turning hanging entities for mods: a painting's or item frame's facing
-//! (`entity_set_hanging_direction`) and an item frame's item (`entity_set_item_frame_rotation`).
+//! (`entity_set_hanging_direction`, read back by `entity_hanging_direction`) and an item frame's
+//! item (`entity_set_item_frame_rotation`).
 use super::{Game, commands::Target};
 use horizon_core::geometry::Direction;
 use mod_api::EntityRef;
 
 impl Game<'_> {
+    /// `HangingEntity.getDirection`: the facing a frame or painting keeps, read back from its data value.
+    pub(in crate::game) fn entity_hanging_direction(&self, entity: EntityRef) -> Option<Direction> {
+        match self.native_entity_target(entity)? {
+            Target::Frame(id) => {
+                let frame = self.item_frames.iter().find(|f| f.id == id)?;
+                direction_from_3d(frame.facing)
+            }
+            Target::Painting(id) => {
+                let painting = self.paintings.iter().find(|p| p.id == id)?;
+                direction_from_2d(painting.facing)
+            }
+            _ => None,
+        }
+    }
+
     /// `HangingEntity.setDirection`: the facing, from which the yaw, pitch and bounds follow.
     pub(in crate::game) fn entity_set_hanging_direction(
         &mut self,
@@ -76,5 +92,61 @@ fn data_2d(direction: Direction) -> Option<u8> {
         Direction::North => Some(2),
         Direction::East => Some(3),
         Direction::Down | Direction::Up => None,
+    }
+}
+
+/// The inverse of `data_3d`; None for a value past 5, which the game never stores.
+fn direction_from_3d(value: u8) -> Option<Direction> {
+    Some(match value {
+        0 => Direction::Down,
+        1 => Direction::Up,
+        2 => Direction::North,
+        3 => Direction::South,
+        4 => Direction::West,
+        5 => Direction::East,
+        _ => return None,
+    })
+}
+
+/// The inverse of `data_2d`; None for a value past 3.
+fn direction_from_2d(value: u8) -> Option<Direction> {
+    Some(match value {
+        0 => Direction::South,
+        1 => Direction::West,
+        2 => Direction::North,
+        3 => Direction::East,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each facing reads back as the value vanilla stores: `get3DDataValue` and `get2DDataValue`.
+    #[test]
+    fn a_stored_facing_reads_back_as_its_direction() {
+        for (value, direction) in [
+            (0, Direction::Down),
+            (1, Direction::Up),
+            (2, Direction::North),
+            (3, Direction::South),
+            (4, Direction::West),
+            (5, Direction::East),
+        ] {
+            assert_eq!(data_3d(direction), value);
+            assert_eq!(direction_from_3d(value), Some(direction));
+        }
+        assert_eq!(direction_from_3d(6), None);
+        for (value, direction) in [
+            (0, Direction::South),
+            (1, Direction::West),
+            (2, Direction::North),
+            (3, Direction::East),
+        ] {
+            assert_eq!(data_2d(direction), Some(value));
+            assert_eq!(direction_from_2d(value), Some(direction));
+        }
+        assert_eq!(direction_from_2d(4), None);
     }
 }

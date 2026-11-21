@@ -113,6 +113,8 @@ the return value; a collection hook's list is a field (`event.lines`). One event
 sees the changes before it. To exercise dispatch behavior, use the hook's dispatch function
 ([Testing a mod](testing.md)).
 
+To change a hit by a factor rather than an amount, call `event.container.scale_original(factor)`. It multiplies the original and the new damage, leaves the reductions already taken alone, and returns `Err(ScaleRefusal::NotFinite)` or `Err(ScaleRefusal::Negative)` for a factor it refuses, with nothing changed.
+
 The generator validates edited stack-list outputs inside each listener's owning scope. A refused stack
 output retains the immediately preceding accepted value, not the event's initial value. Scalar
 outputs and cancellation still commit; later listeners see the accepted stacks and run independently

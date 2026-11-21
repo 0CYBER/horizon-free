@@ -377,3 +377,10 @@ unknown items and empty tags return `Ok(None)`. Result objects retain their
 
 `KeyConflictContext`, `FireworkShape` and `JarInputsError` are API-owned values.
 `JarInputsError` carries owned diagnostics and the original-jar identity.
+
+## Checking an entity type id
+
+`host.entity_type_exists(id)` answers whether `id` is a registered entity type (`EntityType.byString`), with its
+namespace as written: `minecraft:zombie` is in, `zombie` and an unknown id are not. It reads the entity-type registry
+the world loads, so it answers `false` before a world has loaded it. Use it to check configured ids (for example
+whitelist or blacklist entries, which the game drops when unknown) before a mod acts on them.
