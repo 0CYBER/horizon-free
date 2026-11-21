@@ -186,16 +186,24 @@ impl Input<'_> {
         let cell_x = (x / 12.0).floor() as i64 / SNAP_CELLS * SNAP_CELLS;
         let cell_z = (z / 12.0).floor() as i64 / SNAP_CELLS * SNAP_CELLS;
         let bottom = (CLOUD_HEIGHT - self.camera.y) as f32;
-        // The inward faces of the 3x3 cells around the camera are only seen from inside the
-        // layer; outside it they are back-facing, so the mesh need not follow the camera there.
-        let inside_layer = bottom <= 0.0 && bottom + 4.0 >= 0.0;
-        let (sub_x, sub_z) = if inside_layer {
-            (
-                (x / 12.0).floor() as i32 - cell_x as i32,
-                (z / 12.0).floor() as i32 - cell_z as i32,
-            )
+        // In fast mode every filled cell emits the same flat double-sided quad regardless of
+        // camera height, so vertical movement through the cloud layer needs no mesh rebuild.
+        let (top, bottom_face, sub_x, sub_z) = if self.fast {
+            (false, false, 0, 0)
         } else {
-            (0, 0)
+            let top = bottom <= 0.0;
+            let bottom_face = bottom + 4.0 >= 0.0;
+            // The inward faces of the 3x3 cells around the camera are only seen from inside the
+            // layer; outside it they are back-facing, so the mesh need not follow the camera there.
+            let (sub_x, sub_z) = if top && bottom_face {
+                (
+                    (x / 12.0).floor() as i32 - cell_x as i32,
+                    (z / 12.0).floor() as i32 - cell_z as i32,
+                )
+            } else {
+                (0, 0)
+            };
+            (top, bottom_face, sub_x, sub_z)
         };
         let key = MeshKey {
             cell_x,
@@ -203,8 +211,8 @@ impl Input<'_> {
             // One more ring than the range, for the cells the snapped origin can uncover.
             radius: radius_cells(self.range) + SNAP_CELLS as i32,
             fast: self.fast,
-            top: bottom <= 0.0,
-            bottom: bottom + 4.0 >= 0.0,
+            top,
+            bottom: bottom_face,
             sub_x,
             sub_z,
         };
@@ -228,6 +236,85 @@ impl Input<'_> {
     }
 }
 
+const CELL_FILLED: u8 = 0x80;
+
+/// Precomputed per-texel occupancy and 4-neighbour emptiness bits for the cloud
+/// texture. Replaces 5 wrapped lookups (and 10 `i64::rem_euclid` divisions) per
+/// filled cell with a single byte load from an L2-resident table (64 KiB for
+/// vanilla's 256×256 texture).
+struct CloudMask {
+    w: u32,
+    h: u32,
+    source_ptr: usize,
+    source_len: usize,
+    filled_count: u32,
+    /// `0` for empty cells; `CELL_FILLED` plus bits 2..=5 for empty north/south/west/east
+    /// neighbours (matching `face_mask` direction bits).
+    bits: Box<[u8]>,
+}
+
+impl CloudMask {
+    fn matches(&self, texture: &(u32, u32, Vec<bool>)) -> bool {
+        self.w == texture.0
+            && self.h == texture.1
+            && self.source_ptr == texture.2.as_ptr() as usize
+            && self.source_len == texture.2.len()
+    }
+
+    fn build(texture: &(u32, u32, Vec<bool>)) -> Self {
+        let (w, h, cells) = texture;
+        let (w_usize, h_usize) = (*w as usize, *h as usize);
+        let total = w_usize.saturating_mul(h_usize);
+        if total == 0 || cells.len() < total {
+            return Self {
+                w: *w,
+                h: *h,
+                source_ptr: cells.as_ptr() as usize,
+                source_len: cells.len(),
+                filled_count: 0,
+                bits: Box::new([]),
+            };
+        }
+        let mut bits = vec![0u8; total].into_boxed_slice();
+        let mut filled_count = 0u32;
+        for tz in 0..h_usize {
+            let row = tz * w_usize;
+            let row_n = (if tz == 0 { h_usize - 1 } else { tz - 1 }) * w_usize;
+            let row_s = (if tz + 1 == h_usize { 0 } else { tz + 1 }) * w_usize;
+            for tx in 0..w_usize {
+                if !cells[row + tx] {
+                    continue;
+                }
+                let tx_w = if tx == 0 { w_usize - 1 } else { tx - 1 };
+                let tx_e = if tx + 1 == w_usize { 0 } else { tx + 1 };
+                let mut b = CELL_FILLED;
+                if !cells[row_n + tx] {
+                    b |= 1 << 2;
+                }
+                if !cells[row_s + tx] {
+                    b |= 1 << 3;
+                }
+                if !cells[row + tx_w] {
+                    b |= 1 << 4;
+                }
+                if !cells[row + tx_e] {
+                    b |= 1 << 5;
+                }
+                bits[row + tx] = b;
+                filled_count += 1;
+            }
+        }
+        Self {
+            w: *w,
+            h: *h,
+            source_ptr: cells.as_ptr() as usize,
+            source_len: cells.len(),
+            filled_count,
+            bits,
+        }
+    }
+}
+
 /// The cloud cells around a snapped origin, rebuilt when the key changes: once every
 /// [`SNAP_CELLS`] cells the camera crosses, and every cell while the camera is inside the
 /// layer, where the inward faces follow it. The renderer copies the vertices to the GPU on
@@ -235,8 +322,11 @@ impl Input<'_> {
 #[derive(Default)]
 pub(crate) struct Mesh {
     key: Option<MeshKey>,
-    cells: Vec<(i32, i32)>,
+    cells: Vec<(i16, i16)>,
     cached_radius: Option<i32>,
+    mask: Option<CloudMask>,
+    wrap_x: Vec<usize>,
+    wrap_z: Vec<usize>,
     pub vertices: Vec<crate::mesher::Vertex>,
 }
 
@@ -248,96 +338,140 @@ fn push_quad(
     normal: [i8; 4],
     uv: [f32; 2],
 ) {
-    for pos in p {
-        vertices.push(crate::mesher::Vertex {
-            normal,
-            pos,
-            uv,
-            layer: 4,
-            color: u32::MAX,
-            light: shade,
-            glint_uv: [0.0, 0.0],
-        });
-    }
+    let make = |pos| crate::mesher::Vertex {
+        normal,
+        pos,
+        uv,
+        layer: 4,
+        color: u32::MAX,
+        light: shade,
+        glint_uv: [0.0, 0.0],
+    };
+    vertices.extend_from_slice(&[make(p[0]), make(p[1]), make(p[2]), make(p[3])]);
 }
 
-#[inline(always)]
-fn emit_face(
-    vertices: &mut Vec<crate::mesher::Vertex>,
-    direction: usize,
-    inside: bool,
-    x0: f32,
-    z0: f32,
-    uv: [f32; 2],
-) {
+#[cold]
+fn emit_inward_faces(vertices: &mut Vec<crate::mesher::Vertex>, x0: f32, z0: f32, uv: [f32; 2]) {
     let x1 = x0 + 12.0;
     let z1 = z0 + 12.0;
     const Y0: f32 = 0.0;
     const Y1: f32 = 4.0;
-    let (p, shade, normal) = match direction {
-        0 => (
-            [[x1, Y0, z0], [x1, Y0, z1], [x0, Y0, z1], [x0, Y0, z0]],
+    // Vanilla inward emission order is directions 0..6 with reversed winding and inverted normals.
+    let faces = [
+        (
+            [[x0, Y0, z0], [x0, Y0, z1], [x1, Y0, z1], [x1, Y0, z0]],
             1,
-            [0, -127, 0, 0],
-        ),
-        1 => (
-            [[x0, Y1, z0], [x0, Y1, z1], [x1, Y1, z1], [x1, Y1, z0]],
-            0,
             [0, 127, 0, 0],
         ),
-        2 => (
-            [[x0, Y0, z0], [x0, Y1, z0], [x1, Y1, z0], [x1, Y0, z0]],
-            2,
-            [0, 0, -127, 0],
+        (
+            [[x1, Y1, z0], [x1, Y1, z1], [x0, Y1, z1], [x0, Y1, z0]],
+            0,
+            [0, -127, 0, 0],
         ),
-        3 => (
-            [[x1, Y0, z1], [x1, Y1, z1], [x0, Y1, z1], [x0, Y0, z1]],
+        (
+            [[x1, Y0, z0], [x1, Y1, z0], [x0, Y1, z0], [x0, Y0, z0]],
             2,
             [0, 0, 127, 0],
         ),
-        4 => (
-            [[x0, Y0, z1], [x0, Y1, z1], [x0, Y1, z0], [x0, Y0, z0]],
-            3,
-            [-127, 0, 0, 0],
+        (
+            [[x0, Y0, z1], [x0, Y1, z1], [x1, Y1, z1], [x1, Y0, z1]],
+            2,
+            [0, 0, -127, 0],
         ),
-        _ => (
-            [[x1, Y0, z0], [x1, Y1, z0], [x1, Y1, z1], [x1, Y0, z1]],
+        (
+            [[x0, Y0, z0], [x0, Y1, z0], [x0, Y1, z1], [x0, Y0, z1]],
             3,
             [127, 0, 0, 0],
         ),
-    };
-    if inside {
-        push_quad(
-            vertices,
-            [p[3], p[2], p[1], p[0]],
-            shade,
-            normal.map(|c| -c),
-            uv,
-        );
-    } else {
+        (
+            [[x1, Y0, z1], [x1, Y1, z1], [x1, Y1, z0], [x1, Y0, z0]],
+            3,
+            [-127, 0, 0, 0],
+        ),
+    ];
+    for (p, shade, normal) in faces {
         push_quad(vertices, p, shade, normal, uv);
     }
 }
 
 #[inline(always)]
-fn emit_faces(
+fn emit_fancy_cell(
     vertices: &mut Vec<crate::mesher::Vertex>,
-    mask: u16,
-    x0: f32,
-    z0: f32,
+    vert_mask: u8,
+    side_bits: u8,
+    rel: [i32; 2],
+    pos: [f32; 2],
     uv: [f32; 2],
 ) {
-    for d in [1, 0, 2, 3, 4, 5] {
-        if mask & (1 << d) != 0 {
-            emit_face(vertices, d, false, x0, z0, uv);
+    let [x0, z0] = pos;
+    let x1 = x0 + 12.0;
+    let z1 = z0 + 12.0;
+    const Y0: f32 = 0.0;
+    const Y1: f32 = 4.0;
+    if vert_mask & (1 << 1) != 0 {
+        push_quad(
+            vertices,
+            [[x0, Y1, z0], [x0, Y1, z1], [x1, Y1, z1], [x1, Y1, z0]],
+            0,
+            [0, 127, 0, 0],
+            uv,
+        );
+    }
+    if vert_mask & 1 != 0 {
+        push_quad(
+            vertices,
+            [[x1, Y0, z0], [x1, Y0, z1], [x0, Y0, z1], [x0, Y0, z0]],
+            1,
+            [0, -127, 0, 0],
+            uv,
+        );
+    }
+    let [rel_x, rel_z] = rel;
+    let vis = (u8::from(rel_z > 0) << 2)
+        | (u8::from(rel_z < 0) << 3)
+        | (u8::from(rel_x > 0) << 4)
+        | (u8::from(rel_x < 0) << 5);
+    let sides = side_bits & vis;
+    if sides != 0 {
+        if sides & (1 << 2) != 0 {
+            push_quad(
+                vertices,
+                [[x0, Y0, z0], [x0, Y1, z0], [x1, Y1, z0], [x1, Y0, z0]],
+                2,
+                [0, 0, -127, 0],
+                uv,
+            );
+        }
+        if sides & (1 << 3) != 0 {
+            push_quad(
+                vertices,
+                [[x1, Y0, z1], [x1, Y1, z1], [x0, Y1, z1], [x0, Y0, z1]],
+                2,
+                [0, 0, 127, 0],
+                uv,
+            );
+        }
+        if sides & (1 << 4) != 0 {
+            push_quad(
+                vertices,
+                [[x0, Y0, z1], [x0, Y1, z1], [x0, Y1, z0], [x0, Y0, z0]],
+                3,
+                [-127, 0, 0, 0],
+                uv,
+            );
+        }
+        if sides & (1 << 5) != 0 {
+            push_quad(
+                vertices,
+                [[x1, Y0, z0], [x1, Y1, z0], [x1, Y1, z1], [x1, Y0, z1]],
+                3,
+                [127, 0, 0, 0],
+                uv,
+            );
         }
     }
-    if mask >> 6 != 0 {
-        for d in 0..6 {
-            if mask & (1 << (d + 6)) != 0 {
-                emit_face(vertices, d, true, x0, z0, uv);
-            }
-        }
+    if rel_x.abs() <= 1 && rel_z.abs() <= 1 {
+        emit_inward_faces(vertices, x0, z0, uv);
     }
 }
 
@@ -345,9 +479,20 @@ fn emit_faces(
 fn emit_flat_cell(vertices: &mut Vec<crate::mesher::Vertex>, x0: f32, z0: f32, uv: [f32; 2]) {
     let x1 = x0 + 12.0;
     let z1 = z0 + 12.0;
-    let p = [[x1, 0.0, z0], [x1, 0.0, z1], [x0, 0.0, z1], [x0, 0.0, z0]];
-    push_quad(vertices, p, 0, [0; 4], uv);
-    push_quad(vertices, [p[3], p[2], p[1], p[0]], 0, [0; 4], uv);
+    let make = |pos| crate::mesher::Vertex {
+        normal: [0; 4],
+        pos,
+        uv,
+        layer: 4,
+        color: u32::MAX,
+        light: 0,
+        glint_uv: [0.0, 0.0],
+    };
+    let v0 = make([x1, 0.0, z0]);
+    let v1 = make([x1, 0.0, z1]);
+    let v2 = make([x0, 0.0, z1]);
+    let v3 = make([x0, 0.0, z0]);
+    vertices.extend_from_slice(&[v0, v1, v2, v3, v3, v2, v1, v0]);
 }
 
 impl Mesh {
@@ -364,48 +509,151 @@ impl Mesh {
         if self.key.as_ref() == Some(&key) {
             return (false, uniform);
         }
+        if self.mask.as_ref().is_none_or(|m| !m.matches(input.texture)) {
+            self.mask = Some(CloudMask::build(input.texture));
+        }
+        let mask = self.mask.as_ref().expect("cloud mask built");
+        self.vertices.clear();
+        if mask.filled_count == 0 {
+            self.vertices.shrink_to_fit();
+            self.key = Some(key);
+            return (true, uniform);
+        }
+
         if self.cached_radius != Some(key.radius) {
-            self.cells = self::cells(key.radius).collect();
+            let r = key.radius.max(0);
+            let approx =
+                (std::f64::consts::PI * f64::from(r) * f64::from(r)) as usize + 4 * r as usize + 16;
+            self.cells.clear();
+            self.cells.reserve(approx);
+            self.cells
+                .extend(self::cells(key.radius).map(|(x, z)| (x as i16, z as i16)));
+            if self.cells.capacity() > (self.cells.len() + self.cells.len() / 2).max(1024) {
+                self.cells.shrink_to_fit();
+            }
             self.cached_radius = Some(key.radius);
         }
-        self.vertices.clear();
 
-        let (w, h, tex_cells) = input.texture;
+        // Pre-size on cold builds using the texture's actual cloud fill ratio so
+        // `vertices` avoids repeated doubling reallocations and 2x capacity overshoot.
+        if self.vertices.capacity() == 0 {
+            let total = (mask.w as usize).saturating_mul(mask.h as usize).max(1);
+            let est_filled =
+                (self.cells.len() as u64 * u64::from(mask.filled_count) / total as u64) as usize;
+            let verts_per_cell = if !input.fast && key.top && key.bottom {
+                12
+            } else {
+                8
+            };
+            self.vertices
+                .reserve((est_filled * verts_per_cell + est_filled * 2).max(256));
+        }
+
+        let (w, h) = (mask.w, mask.h);
+        let mask_bits = &mask.bits;
         let (cell_x, cell_z) = (key.cell_x, key.cell_z);
-        let bottom = uniform.offset[1];
         let uv = input.uv;
+        let vert_mask = u8::from(key.bottom) | (u8::from(key.top) << 1);
+        let (sub_x, sub_z) = (key.sub_x, key.sub_z);
 
-        let (w_i64, h_i64) = (i64::from(*w), i64::from(*h));
-        let filled = |cx: i64, cz: i64| {
-            tex_cells[(cz.rem_euclid(h_i64) * w_i64 + cx.rem_euclid(w_i64)) as usize]
-        };
-
-        for &(dx, dz) in &self.cells {
-            let (dx_i64, dz_i64) = (i64::from(dx), i64::from(dz));
-            let (cx, cz) = (cell_x + dx_i64, cell_z + dz_i64);
-            if !filled(cx, cz) {
-                continue;
-            }
-            let x0 = dx as f32 * 12.0;
-            let z0 = dz as f32 * 12.0;
-
+        if w.is_power_of_two() && h.is_power_of_two() {
+            let w_mask = (w - 1) as usize;
+            let h_mask = (h - 1) as usize;
+            let w_shift = w.trailing_zeros();
+            let base_x = cell_x.rem_euclid(i64::from(w)) as usize;
+            let base_z = cell_z.rem_euclid(i64::from(h)) as usize;
             if input.fast {
-                emit_flat_cell(&mut self.vertices, x0, z0, uv);
-                continue;
+                for &(dx, dz) in &self.cells {
+                    let (dx, dz) = (i32::from(dx), i32::from(dz));
+                    let tx = base_x.wrapping_add(dx as isize as usize) & w_mask;
+                    let tz = base_z.wrapping_add(dz as isize as usize) & h_mask;
+                    if mask_bits[(tz << w_shift) | tx] == 0 {
+                        continue;
+                    }
+                    emit_flat_cell(&mut self.vertices, dx as f32 * 12.0, dz as f32 * 12.0, uv);
+                }
+            } else {
+                for &(dx, dz) in &self.cells {
+                    let (dx, dz) = (i32::from(dx), i32::from(dz));
+                    let tx = base_x.wrapping_add(dx as isize as usize) & w_mask;
+                    let tz = base_z.wrapping_add(dz as isize as usize) & h_mask;
+                    let bits = mask_bits[(tz << w_shift) | tx];
+                    if bits == 0 {
+                        continue;
+                    }
+                    emit_fancy_cell(
+                        &mut self.vertices,
+                        vert_mask,
+                        bits,
+                        [dx - sub_x, dz - sub_z],
+                        [dx as f32 * 12.0, dz as f32 * 12.0],
+                        uv,
+                    );
+                }
             }
+        } else {
+            let r = key.radius.max(0);
+            let span = (2 * r + 1) as usize;
+            let (w_usize, h_usize) = (w as usize, h as usize);
+            let mut tx = (cell_x - i64::from(r)).rem_euclid(i64::from(w)) as usize;
+            self.wrap_x.clear();
+            self.wrap_x.reserve(span);
+            for _ in 0..span {
+                self.wrap_x.push(tx);
+                tx += 1;
+                if tx == w_usize {
+                    tx = 0;
+                }
+            }
+            let mut tz = (cell_z - i64::from(r)).rem_euclid(i64::from(h)) as usize;
+            self.wrap_z.clear();
+            self.wrap_z.reserve(span);
+            for _ in 0..span {
+                self.wrap_z.push(tz * w_usize);
+                tz += 1;
+                if tz == h_usize {
+                    tz = 0;
+                }
+            }
+            let (wrap_x, wrap_z) = (&self.wrap_x, &self.wrap_z);
+            if input.fast {
+                for &(dx, dz) in &self.cells {
+                    let (dx, dz) = (i32::from(dx), i32::from(dz));
+                    let idx = wrap_z[(dz + r) as usize] + wrap_x[(dx + r) as usize];
+                    if mask_bits[idx] == 0 {
+                        continue;
+                    }
+                    emit_flat_cell(&mut self.vertices, dx as f32 * 12.0, dz as f32 * 12.0, uv);
+                }
+            } else {
+                for &(dx, dz) in &self.cells {
+                    let (dx, dz) = (i32::from(dx), i32::from(dz));
+                    let idx = wrap_z[(dz + r) as usize] + wrap_x[(dx + r) as usize];
+                    let bits = mask_bits[idx];
+                    if bits == 0 {
+                        continue;
+                    }
+                    emit_fancy_cell(
+                        &mut self.vertices,
+                        vert_mask,
+                        bits,
+                        [dx - sub_x, dz - sub_z],
+                        [dx as f32 * 12.0, dz as f32 * 12.0],
+                        uv,
+                    );
+                }
+            }
+        }
 
-            let mask = face_mask(
-                dx - key.sub_x,
-                dz - key.sub_z,
-                bottom,
-                [
-                    !filled(cx, cz - 1),
-                    !filled(cx, cz + 1),
-                    !filled(cx - 1, cz),
-                    !filled(cx + 1, cz),
-                ],
-            );
-            emit_faces(&mut self.vertices, mask, x0, z0, uv);
+        if self.vertices.is_empty() {
+            self.vertices.shrink_to_fit();
+        } else {
+            let len = self.vertices.len();
+            // Release excess capacity if cloud distance shrank or growth overshot,
+            // leaving 25% headroom so normal snap-to-snap density shifts don't reallocate.
+            if self.vertices.capacity() > (len + len / 2).max(4096) {
+                self.vertices.shrink_to(len + len / 4);
+            }
         }
 
         self.key = Some(key);
@@ -632,5 +880,156 @@ mod tests {
     #[test]
     fn nearby_cells_keep_inward_faces_for_camera_inside_clouds() {
         assert_eq!(face_mask(0, 0, 0.0, [false; 4]), 3 | (63 << 6));
+    }
+
+    #[test]
+    fn optimized_prepare_matches_reference_for_pow2_and_non_pow2_textures() {
+        fn reference_vertices(input: &Input<'_>) -> Vec<crate::mesher::Vertex> {
+            let (key, uniform) = input.state();
+            let (w, h, tex_cells) = input.texture;
+            let (w_i64, h_i64) = (i64::from(*w), i64::from(*h));
+            let filled = |cx: i64, cz: i64| {
+                tex_cells[(cz.rem_euclid(h_i64) * w_i64 + cx.rem_euclid(w_i64)) as usize]
+            };
+            let bottom = uniform.offset[1];
+            let mut out = Vec::new();
+            for (dx, dz) in cells(key.radius) {
+                let (cx, cz) = (key.cell_x + i64::from(dx), key.cell_z + i64::from(dz));
+                if !filled(cx, cz) {
+                    continue;
+                }
+                let (x0, z0) = (dx as f32 * 12.0, dz as f32 * 12.0);
+                if input.fast {
+                    emit_flat_cell(&mut out, x0, z0, input.uv);
+                    continue;
+                }
+                let mask = face_mask(
+                    dx - key.sub_x,
+                    dz - key.sub_z,
+                    bottom,
+                    [
+                        !filled(cx, cz - 1),
+                        !filled(cx, cz + 1),
+                        !filled(cx - 1, cz),
+                        !filled(cx + 1, cz),
+                    ],
+                );
+                for (d, inside) in faces(mask) {
+                    let x1 = x0 + 12.0;
+                    let z1 = z0 + 12.0;
+                    let (p, shade, normal) = match d {
+                        0 => (
+                            [[x1, 0.0, z0], [x1, 0.0, z1], [x0, 0.0, z1], [x0, 0.0, z0]],
+                            1,
+                            [0, -127, 0, 0],
+                        ),
+                        1 => (
+                            [[x0, 4.0, z0], [x0, 4.0, z1], [x1, 4.0, z1], [x1, 4.0, z0]],
+                            0,
+                            [0, 127, 0, 0],
+                        ),
+                        2 => (
+                            [[x0, 0.0, z0], [x0, 4.0, z0], [x1, 4.0, z0], [x1, 0.0, z0]],
+                            2,
+                            [0, 0, -127, 0],
+                        ),
+                        3 => (
+                            [[x1, 0.0, z1], [x1, 4.0, z1], [x0, 4.0, z1], [x0, 0.0, z1]],
+                            2,
+                            [0, 0, 127, 0],
+                        ),
+                        4 => (
+                            [[x0, 0.0, z1], [x0, 4.0, z1], [x0, 4.0, z0], [x0, 0.0, z0]],
+                            3,
+                            [-127, 0, 0, 0],
+                        ),
+                        _ => (
+                            [[x1, 0.0, z0], [x1, 4.0, z0], [x1, 4.0, z1], [x1, 0.0, z1]],
+                            3,
+                            [127, 0, 0, 0],
+                        ),
+                    };
+                    if inside {
+                        push_quad(
+                            &mut out,
+                            [p[3], p[2], p[1], p[0]],
+                            shade,
+                            normal.map(|c| -c),
+                            input.uv,
+                        );
+                    } else {
+                        push_quad(&mut out, p, shade, normal, input.uv);
+                    }
+                }
+            }
+            out
+        }
+
+        let pow2 = (
+            16u32,
+            16u32,
+            (0..256).map(|i| (i * 13 + i / 16 * 7) % 5 < 3).collect(),
+        );
+        let non_pow2 = (
+            7u32,
+            11u32,
+            (0..77).map(|i| (i * 5 + i / 7 * 3) % 4 != 0).collect(),
+        );
+        for texture in [&pow2, &non_pow2] {
+            let mut mesh = Mesh::default();
+            for fast in [false, true] {
+                for y in [100.0, 194.0, 250.0] {
+                    for (x, z) in [(-123.4, 57.8), (245.1, -310.7)] {
+                        let input = Input {
+                            texture,
+                            uv: [0.25, 0.75],
+                            camera: glam::DVec3::new(x, y, z),
+                            time: 1234,
+                            partial_tick: 0.4,
+                            range: 4,
+                            fast,
+                            color: [1.0; 4],
+                        };
+                        mesh.prepare(&input);
+                        let expected = reference_vertices(&input);
+                        assert_eq!(
+                            bytemuck::cast_slice::<_, u8>(&mesh.vertices),
+                            bytemuck::cast_slice::<_, u8>(&expected),
+                            "mismatch for {}x{} fast={fast} pos=({x},{y},{z})",
+                            texture.0,
+                            texture.1
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fast_clouds_skip_vertical_rebuilds_and_shrink_excess_capacity() {
+        let texture = (16, 16, (0..256).map(|i| i % 2 == 0).collect());
+        let mut input = Input {
+            texture: &texture,
+            uv: [0.5; 2],
+            camera: glam::DVec3::new(1.0, 100.0, 1.0),
+            time: 0,
+            partial_tick: 0.0,
+            range: 32,
+            fast: true,
+            color: [1.0; 4],
+        };
+        let mut mesh = Mesh::default();
+        assert!(mesh.prepare(&input).0);
+        let big_cap = mesh.vertices.capacity();
+        assert!(big_cap > 4096);
+        // Crossing into and above the cloud layer in fast mode emits identical quads.
+        for y in [192.33, 194.0, 196.33, 250.0] {
+            input.camera.y = y;
+            assert!(!mesh.prepare(&input).0, "fast clouds rebuilt at y={y}");
+        }
+        // Shrinking cloud range releases excess vertex buffer capacity.
+        input.range = 2;
+        assert!(mesh.prepare(&input).0);
+        assert!(mesh.vertices.capacity() < big_cap / 2);
     }
 }
