@@ -179,9 +179,9 @@ jobs:
     name: build ${{ matrix.name }}
     # Windows ARM64 and musl are new: a failure never holds the other platforms' release (the signing job
     # needs this job, and a failed entry of it would fail it). The release steps leave the missing
-    # optional archives out with a warning. Intel macOS too until its programs pass the guest-stack start
-    # check under Rosetta 2 (#18133); Intel launchers keep their installed build meanwhile.
-    continue-on-error: ${{ matrix.name == 'windows-arm64' || matrix.name == 'linux-musl' || matrix.name == 'macos-x64' }}
+    # optional archives out with a warning. Intel macOS is not one of them: its programs pass the
+    # guest-stack start check under Rosetta 2 since #19008, so a failure there fails the build like arm64's.
+    continue-on-error: ${{ matrix.name == 'windows-arm64' || matrix.name == 'linux-musl' }}
     strategy:
       fail-fast: false
       matrix:

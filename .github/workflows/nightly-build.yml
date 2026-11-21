@@ -255,6 +255,8 @@ jobs:
           else echo "::warning::horizon-windows-arm64.zip is missing: SHA256SUMS goes out without it"; fi
           musl=(); if [[ -f dist/horizon-linux-musl-x86_64.tar.gz ]]; then musl=(dist/horizon-linux-musl-x86_64.tar.gz)
           else echo "::warning::horizon-linux-musl-x86_64.tar.gz is missing: SHA256SUMS goes out without it"; fi
+          # A failed macos-x64 leg no longer gets here (game-build.yml: it fails the build). Kept for an archive
+          # lost after its leg passed, and for the day that leg is made optional again.
           intel=(); if [[ -f dist/horizon-macos-x64.zip ]]; then intel=(dist/horizon-macos-x64.zip)
           else echo "::warning::horizon-macos-x64.zip is missing: SHA256SUMS goes out without it"; fi
           bash tools/ci/sign_release.sh nightly dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
@@ -365,6 +367,7 @@ jobs:
           # Intel macOS only when its build succeeded. Intel launchers have no fallback archive: they find no build of
           # theirs in this Nightly and keep the one they have.
           intel=()
+          # A failed macos-x64 leg no longer reaches the else below (game-build.yml); a lost archive still can.
           if [[ -f dist/horizon-macos-x64.zip ]]; then
             intel=("dist/horizon-macos-x64.zip#Game files the launcher installs (Nightly): macOS on Intel (horizon-macos-x64.zip)")
           else
