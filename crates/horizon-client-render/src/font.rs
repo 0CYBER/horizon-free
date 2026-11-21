@@ -553,8 +553,14 @@ impl TrueType {
         self.font.as_scaled(self.scale).h_advance(id).round() / self.oversample
     }
     /// `loadGlyph` and its bitmap: the grey coverage as `rrrr` texels
-    /// (`text_intensity`), below 0.1 cut (its discard).
-    fn glyph(&self, id: ab_glyph::GlyphId) -> (Glyph, Option<(u32, u32, Vec<u8>)>) {
+    /// (`text_intensity`), below 0.1 cut (its discard). A glyph wider or taller than `max`
+    /// (what the atlas can hold) is refused before its bitmap is allocated: a pack's `size`
+    /// and `oversample` are otherwise unbounded.
+    fn glyph(
+        &self,
+        id: ab_glyph::GlyphId,
+        max: (u32, u32),
+    ) -> Option<(Glyph, Option<(u32, u32, Vec<u8>)>)> {
         let advance = self.advance(id);
         let glyph =
             id.with_scale_and_position(self.scale, ab_glyph::point(self.shift.0, self.shift.1));
@@ -568,14 +574,17 @@ impl TrueType {
             offset: 1.0,
         };
         let Some(outline) = self.font.outline_glyph(glyph) else {
-            return (empty, None);
+            return Some((empty, None));
         };
         let bounds = outline.px_bounds();
         let (w, h) = (bounds.width() as u32, bounds.height() as u32);
         if w == 0 || h == 0 {
-            return (empty, None);
+            return Some((empty, None));
         }
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        if w > max.0 || h > max.1 {
+            return None;
+        }
+        let mut rgba = vec![0u8; w as usize * h as usize * 4];
         outline.draw(|x, y, coverage| {
             let v = if coverage < 0.1 {
                 0
@@ -591,7 +600,7 @@ impl TrueType {
         // GlyphBitmap: bitmap_left / bitmap_top over the oversampling, and
         // top = 7 - bearingTop.
         let (left, top) = (bounds.min.x / os, 7.0 + bounds.min.y / os);
-        (
+        Some((
             Glyph {
                 rect: None,
                 left,
@@ -602,7 +611,7 @@ impl TrueType {
                 offset: 1.0,
             },
             Some((w, h, rgba)),
-        )
+        ))
     }
 }
 fn load_hex(source: &ResourceSource, p: &serde_json::Value) -> HashMap<u32, HexGlyph> {
@@ -825,7 +834,12 @@ impl Font {
                         .as_object()
                         .into_iter()
                         .flatten()
-                        .filter_map(|(k, v)| Some((k.chars().next()?, v.as_f64()? as f32)))
+                        .filter_map(|(k, v)| {
+                            let advance = v.as_f64()? as f32;
+                            // A huge number casts to infinity, which would break every
+                            // line that holds the glyph.
+                            advance.is_finite().then_some((k.chars().next()?, advance))
+                        })
                         .collect(),
                 )),
                 "bitmap" => Some(Provider::Bitmap(
@@ -1018,7 +1032,7 @@ impl Font {
                                 ..self.missing
                             });
                         }
-                        let (glyph, bitmap) = ttf.glyph(*id);
+                        let (glyph, bitmap) = ttf.glyph(*id, (self.atlas.0, self.region.1))?;
                         return match bitmap {
                             Some((w, h, rgba)) => {
                                 let (x, y) = region.place(w, h, rgba, self.atlas, self.region)?;
@@ -1712,6 +1726,40 @@ mod tests {
         assert!(texels.iter().all(|t| t.iter().all(|v| *v == t[0])));
         assert!(texels.iter().all(|t| t[0] == 0 || t[0] >= 25));
         assert!(texels.iter().any(|t| t[0] == 255));
+    }
+
+    /// A pack's `size` and `oversample` are unbounded: a glyph larger than the atlas can hold is
+    /// refused before its bitmap is allocated, and falls to the missing glyph.
+    #[test]
+    fn a_true_type_glyph_too_big_for_the_atlas_is_refused_before_it_is_drawn() {
+        let def = br#"{"providers":[{"type":"ttf","file":"minecraft:mono.ttf","size":100000}]}"#;
+        let root = root(
+            "ttf-huge",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                (
+                    "assets/minecraft/font/mono.ttf",
+                    horizon_theme::fonts::GEIST_MONO,
+                ),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let a = font.glyph('A');
+        assert!(a.rect.is_none());
+        assert_eq!(a.advance, 6.0, "the missing glyph");
+        assert!(font.take_patches().is_empty());
+    }
+
+    /// A `space` advance too big for an `f32` would be infinite: the glyph is left out.
+    #[test]
+    fn a_space_advance_too_big_for_a_float_is_ignored() {
+        let def = br#"{"providers":[{"type":"space","advances":{"a":1e300,"b":3}}]}"#;
+        let root = root("space-huge", &[("assets/minecraft/font/default.json", def)]);
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(font.glyph('a').advance, 6.0, "the missing glyph");
+        assert_eq!(font.glyph('b').advance, 3.0);
     }
 
     /// A bitmap provider's `file` can name any texture. When the atlas has that
