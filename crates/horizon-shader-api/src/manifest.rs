@@ -174,6 +174,12 @@ pub struct RayTracing {
     /// the pack is built as without the key.
     #[serde(default)]
     pub lights: bool,
+    /// `step = true`: the stages whose files name one of its names (`trace_step`, `RayCandidate`,
+    /// the `candidate_` functions, `RAY_PASS`, `RAY_STOP`, `RAY_END`) get `trace_step`, which
+    /// runs one ray query and hands every candidate to the pack's own `ray_step` with the pack's
+    /// own `RayState`, and the names are taken. Off, the pack is built as without the key.
+    #[serde(default)]
+    pub step: bool,
 }
 
 /// `[motion]` (0.2): the pack's post passes get `scene_motion`, `motion_at`, `MotionData` and
@@ -624,7 +630,8 @@ struct RawBudget {
 }
 
 /// Whether `name` is taken from a pack's own WGSL names: by the post prelude's resources or, under
-/// `[ray_tracing]`, by its functions (the light sources' only with `lights = true`), or, under
+/// `[ray_tracing]`, by its functions (the light sources' only with `lights = true`, the step's
+/// only with `step = true`), or, under
 /// `[motion]`, by the motion guide's `scene_motion` and `motion_at`, or as a word WGSL reserves.
 pub(crate) fn taken(name: &str, ray_tracing: Option<&RayTracing>, motion: bool) -> bool {
     // The post prelude's functions `[ray_tracing]` brings.
@@ -658,6 +665,7 @@ pub(crate) fn taken(name: &str, ray_tracing: Option<&RayTracing>, motion: bool) 
     reserved.contains(&name)
         || (ray_tracing.is_some() && traced.contains(&name))
         || (ray_tracing.is_some_and(|r| r.lights) && crate::stages::LIGHT_NAMES.contains(&name))
+        || (ray_tracing.is_some_and(|r| r.step) && crate::stages::STEP_NAMES.contains(&name))
         || (motion && guide.contains(&name))
         || naga::keywords::wgsl::RESERVED.contains(&name)
 }

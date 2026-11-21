@@ -31,10 +31,10 @@ the frame stores gamma (`[frame] blend`, below).
 ## Room to grow
 
 `Frame`, the stage inputs (`SkyInput`, `VertexInput`, `MaterialInput`, `DisplacementInput`, `WeatherInput`,
-`PostInput`, `TonemapInput`, `EntityInput`), `surface_at`'s `SurfaceData` and `trace`'s `RayHit` may gain fields in later
-releases. Read their fields and pass them along, but don't construct them: `horizon-shader check` refuses
-`PostInput(...)` and the like. `Surface` is yours to construct and keeps its one field; later material outputs come as
-helpers.
+`PostInput`, `TonemapInput`, `EntityInput`), `surface_at`'s `SurfaceData`, `trace`'s `RayHit` and `trace_step`'s
+`RayCandidate` may gain fields in later releases. Read their fields and pass them along, but don't construct them:
+`horizon-shader check` refuses `PostInput(...)` and the like. `Surface` is yours to construct and keeps its one field;
+later material outputs come as helpers.
 
 **New names reach a stage only if the pack asked for them.** A later release puts a new name before your files (a
 helper, a struct, a resource, a constant) only under a manifest key the pack sets, or in a stage added later, whose
@@ -365,11 +365,12 @@ pass reads a blank one in place of the target it writes).
 ### Ray tracing
 
 With `[ray_tracing]` in the manifest (it needs a `[[post]]` pass, a `[[before_world]]` pass, a `[material]` or an
-`[entity]` stage; its one key, `lights`, is below), post passes get `RayHit` and the functions and constants
-below. So do the material, entity, compute and `[[before_world]]` stages whose files name one of the four trace
-functions (or, with `lights = true`, a light one). Every stage of the pack has `frame.has_ray_tracing` and
-`frame.ray_distance`. A pack without the key has none of these. A material, entity, compute or `[[before_world]]`
-stage that names no trace function (nor, with `lights = true`, a light one) is built as without it.
+`[entity]` stage; its keys, `lights` and `step`, are below), post passes get `RayHit` and the functions and
+constants below. So do the material, entity, compute and `[[before_world]]` stages whose files name one of the four
+trace functions (or, with `lights = true`, a light one, with `step = true` one of the step's). Every stage of the
+pack has `frame.has_ray_tracing` and `frame.ray_distance`. A pack without the key has none of these. A material,
+entity, compute or `[[before_world]]` stage that names no trace function (nor, with those keys, a light or a step
+name) is built as without it.
 
 The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it
 ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a
@@ -433,6 +434,33 @@ asks for ray queries and keeps the scene with any pack or none; any other value 
   its light gets through. A full glowing cube (glowstone, a sea lantern) is in the scene itself, so a ray aimed
   at its centre is stopped by the source: end the ray where it enters the source's block (as
   `packs/traced_lights` does), or take a hit within the block as the source.
+- The candidate step, only with `step = true` under `[ray_tracing]` (off by default: without it its names are free
+  for the pack's own), and only in a stage whose files name one of them outside a comment: `trace_step`,
+  `RayCandidate`, the six `candidate_` functions, `RAY_PASS`, `RAY_STOP`, `RAY_END`. Such a stage defines its own
+  state type, `struct RayState` (or an `alias`; any type, a spectral pack's array of bands too), and its own step,
+  `fn ray_step(c: RayCandidate, state: ptr<function, RayState>) -> u32`. `fn trace_step(origin: vec3<f32>,
+  direction: vec3<f32>, max_distance: f32, layers: u32, state: ptr<function, RayState>) -> RayHit` makes one ray
+  query over `layers`, as `trace_layers` does, and calls `ray_step` with `state` for every surface the ray crosses,
+  clear texels and all. The step returns what to do with it, bits to OR together: `RAY_PASS` (0) goes on past it,
+  `RAY_STOP` (1) keeps it as the nearest hit so far, which shortens the ray to it, `RAY_END` (2) ends the query now,
+  the hit being the nearest kept by then. The result is that nearest candidate, as `trace_layers` gives a hit;
+  `distance` is negative where a step kept none. `struct RayCandidate`: `distance: f32`, along the ray in blocks, and `layer: u32`, `RAY_SOLID`,
+  `RAY_TRANSLUCENT` or `RAY_ENTITY`; its other fields are Horizon's. Functions read the rest, paid for only where
+  called, each the `RayHit` field of its name as if the candidate were the hit: `fn candidate_albedo(c:
+  RayCandidate) -> vec4<f32>`, `candidate_tint` (a `vec4<f32>`; calling it binds the scene's looks, as reading
+  `RayHit.tint` does), `candidate_material`, `candidate_tags` and `candidate_fluid` (each a `u32`). And `fn
+  candidate_stops(c: RayCandidate) -> bool`: whether the candidate stops a ray of `trace_layers`, by the rule below.
+  So `trace_layers` is `trace_step` with a step that returns `RAY_STOP` where `candidate_stops` is true, and
+  `trace_any_layers` the same with `RAY_STOP | RAY_END`. Candidates come in no set order, not nearest first: one
+  beyond the hit kept in the end may have been stepped before a nearer one was kept, so a step that adds or
+  multiplies keeps none (everything out to `max_distance` counts) or records each contribution's `c.distance` and
+  drops those past the result's `distance`. A stage has one `ray_step` and one `RayState`, shared by every
+  `trace_step` call in it. A surface may reach the step more than once in one query: the graphics APIs allow it unless the
+  scene's geometry forbids it, which Horizon's doesn't yet. A step that only keeps, ends, or takes a minimum or a
+  maximum is unaffected; one that multiplies (light through glass) can count a pane more than once. Without the scene
+  there is no candidate: every ray misses and `state` stays as passed. The check refuses a stage without `RayState` or
+  with another `ray_step`, a `ray_step` that reaches a trace function (`trace_step` too), and a pack that
+  constructs a `RayCandidate`.
 
 A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what
 the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,
@@ -493,7 +521,8 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
 63 the entity layer, for a pack that names it, 80 the light sources, for a pass that
 names them under `lights = true`), and in a post, compute or `[[before_world]]` pass bindings
 12 and 13 the LabPBR maps (the material and entity stages have them there already).
-Binding 81 holds terrain hit looks for a stage that reads `RayHit.tint`, `shade` or `ao` from its entry point.
+Binding 81 holds terrain hit looks for a stage that reads `RayHit.tint`, `shade` or `ao` from its entry point,
+or calls `candidate_tint` from it.
 These bindings are Horizon's, as their `horizon_` names say, and change with the renderer.
 
 ## Kept resources and compute passes

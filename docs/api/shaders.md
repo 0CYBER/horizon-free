@@ -243,6 +243,7 @@ fog = "engine"             # optional: engine (default) or pack, when the pack f
 
 [ray_tracing]              # optional, needs [[post]], [[before_world]], [material] or [entity]: the post stage gets `trace` and `trace_any`, other supported stages get them where they call them
 lights = true              # optional, default false: the light sources (`ray_lights_near`, `ray_light`) in the stages that name them
+step = true                # optional, default false: `trace_step`, a ray query whose per-surface rule is the pack's `ray_step`, in the stages that name it
 [motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
@@ -298,6 +299,12 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-21: API 0.2 (additions, preview; first build: Nightly `TBD`): the candidate step, under `[ray_tracing]`
+  with its second key, `step = true` (off by default). A stage whose files name `trace_step`, `RayCandidate`, a
+  `candidate_` function or a `RAY_PASS`/`RAY_STOP`/`RAY_END` action defines `struct RayState` and `fn ray_step(c:
+  RayCandidate, state: ptr<function, RayState>) -> u32`, and `trace_step` hands it every surface of one ray query, in
+  no set order ([the guide](../shaders.md#candidate-steps)); `trace_light` of #19249 is a step of a few lines. A pack
+  without the key sees the same prelude as before, and its own names stay its own.
 - 2026-11-20: API 0.2 (additions, preview): the light sources, under `[ray_tracing]` with its first key,
   `lights = true` (off by default). A stage whose files name `ray_lights_near`, `ray_light`, `ray_light_at`,
   `ray_light_count` or `RayLight` gets the light-giving blocks around the camera (`RayLight`: `position`, `level`,

@@ -427,6 +427,65 @@ let start = input.position + input.normal * 0.05;
 let shadowed = frame.has_ray_tracing == 1u && trace_any(start, frame.sun_direction, 64.0);
 ```
 
+#### Candidate steps
+
+With `step = true` under `[ray_tracing]`, a stage whose files name `trace_step` or another of its names (outside a
+comment) gets a ray query whose rule is the pack's: `trace_step(origin, direction, max_distance, layers, &state)` makes
+one query, as `trace_layers` does, and calls the pack's `ray_step(c, &state)` for every surface the ray crosses. The
+pack defines the step and its state. Without the key all these names are the pack's own, and a stage that names none of
+them is built as without it; a material, entity, compute or `[[before_world]]` stage that names one is traced, as
+one that names `trace` is. A stage has one `ray_step` and one `RayState`, which every `trace_step` call in it shares.
+Keep them out of a `shared` file that a sky, weather, tonemap or vertex stage also takes: those stages have no
+`RayCandidate`. First build with the key: Nightly `TBD`.
+
+| | |
+| --- | --- |
+| The pack's | `struct RayState { ... }`, any type (an `alias` too; a spectral pack's array of bands), and `fn ray_step(c: RayCandidate, state: ptr<function, RayState>) -> u32` |
+| What `ray_step` returns | `RAY_PASS`: go on past the surface. `RAY_STOP`: keep it as the nearest hit so far, which ends the ray at it. `RAY_END`: end the query now, the hit being the nearest kept by then. `RAY_STOP \| RAY_END`: keep this one, then end |
+| `RayCandidate` | `distance` along the ray, `layer` (`RAY_SOLID`, `RAY_TRANSLUCENT` or `RAY_ENTITY`); its other fields are Horizon's |
+| Read where called | `candidate_stops(c)`, whether `trace_layers` stops there; `candidate_albedo(c)`, `candidate_tint(c)`, `candidate_material(c)`, `candidate_tags(c)`, `candidate_fluid(c)`, each the `RayHit` field of its name at the candidate. A step pays for those it calls |
+| The result | The nearest surface a step kept, as `trace_layers` gives a hit; `distance` negative where it kept none |
+| Order | None: surfaces don't come nearest first, and one beyond the surface kept in the end may have been stepped before it was kept. A step that gathers (multiplies, adds) keeps nothing, so everything out to `max_distance` counts, or records each contribution's `c.distance` in its state and drops those past the result's `distance` |
+| Repeats | A surface may reach the step more than once in one query: the graphics APIs allow it, and Horizon's scene doesn't forbid it yet. A step that only keeps, ends or takes a minimum is unaffected; one that multiplies can count a pane more than once |
+| Without the scene | No surface reaches the step: the result misses and `state` stays as passed |
+| Refused | A `ray_step` that reaches a trace function (`trace_step` too), a stage without `RayState` or with another `ray_step`, a pack that builds a `RayCandidate` |
+
+`trace_layers` is a step of this kind that keeps a surface where `candidate_stops(c)`, and `trace_any_layers` one that
+keeps it and ends. A stage that wants several kinds of step puts a kind in `RayState`, switches on it in its one
+`ray_step`, and [writes the `trace_step` call once](api/shaders-reference-0.2.md#written-ray-calls).
+
+The light that gets through glass, in one query where a `trace_layers` loop makes one a pane: the product of the
+translucent texels on the way, nothing behind solid terrain, water and two `[[materials]]` passing untinted. The step
+keeps no surface, so every pane out to `max_distance` counts, in whatever order they come:
+
+```wgsl
+struct RayState {
+    light: vec3<f32>,
+    skip: vec2<u32>,                                                 // materials that let light through
+}
+fn ray_step(c: RayCandidate, state: ptr<function, RayState>) -> u32 {
+    if !candidate_stops(c) { return RAY_PASS; }                      // a clear texel
+    let material = candidate_material(c);
+    if material == (*state).skip.x || material == (*state).skip.y { return RAY_PASS; }
+    if c.layer == RAY_SOLID {                                        // in shadow: done
+        (*state).light = vec3<f32>(0.0);
+        return RAY_END;
+    }
+    if candidate_fluid(c) == 1u { return RAY_PASS; }                 // water, untinted
+    let albedo = candidate_albedo(c);
+    (*state).light *= mix(vec3<f32>(1.0), albedo.rgb * candidate_tint(c).rgb, albedo.a);
+    return RAY_PASS;
+}
+fn trace_light(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, skip: vec2<u32>) -> vec3<f32> {
+    var state = RayState(vec3<f32>(1.0), skip);
+    _ = trace_step(origin, direction, max_distance, RAY_SOLID | RAY_TRANSLUCENT, &state);
+    return state.light;
+}
+```
+
+`candidate_tint` binds the scene's looks, as `RayHit.tint` does; vanilla's glass and ice are untinted, so a pack that
+needs no tint leaves it out and the store with it.
+
 ## Compute passes and kept resources
 
 Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
