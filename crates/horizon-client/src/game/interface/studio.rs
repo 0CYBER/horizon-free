@@ -647,6 +647,11 @@ impl Game<'_> {
                     return true;
                 }
             }
+            if !self.studio.flying() && !self.studio.rmb_down {
+                // First-person view of the recorded player: the click is ours, but it never
+                // grabs the pointer, so mouse motion cannot turn the recorded view.
+                return true;
+            }
             if pressed {
                 self.studio.topbar.close_dropdown();
                 self.studio.rmb_down = true;

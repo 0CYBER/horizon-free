@@ -499,6 +499,10 @@ impl ApplicationHandler for Game<'_> {
             if self.pad_radial_captures() {
                 return;
             }
+            // A replay's first-person view belongs to the recording, not to the mouse.
+            if self.replay.playing() && !self.studio.flying() {
+                return;
+            }
             if x != 0.0 || y != 0.0 {
                 self.pad_yield_input(event_loop);
             }

@@ -616,10 +616,15 @@ mod input_trace {
 struct Radial(bool);
 impl Radial { fn is_open(&self) -> bool { self.0 } }
 struct Pad { radial: Radial }
+struct Replay { driver: Option<()> }
+impl Replay { fn playing(&self) -> bool { self.driver.is_some() } }
+struct StudioFreecam { active: bool }
+struct Studio { freecam: StudioFreecam }
+impl Studio { fn flying(&self) -> bool { self.freecam.active } }
 struct Game {
     pending_save: Option<()>, captured: bool, focused: bool, keyboard_mouse: bool, split_window: bool,
     options: Options, screen: Screen, mouse: MouseLook, last_input: Instant, pad: Pad, scripted: bool,
-    unclaimed_window: bool,
+    unclaimed_window: bool, replay: Replay, studio: Studio,
 }
 impl Game {
     fn scripted_run(&self) -> bool { self.scripted }
@@ -646,22 +651,26 @@ fn main() {
         (false, false, true, true, true, false, false, true, false, false),
         (false, false, true, true, true, false, false, false, true, false),
     ] {
-        let mut game = Game {
-            pending_save: saving.then_some(()), captured: true, focused: active,
-            keyboard_mouse: owner, split_window: split, options: Options { offscreen },
-            screen: if playing { Screen::Playing } else { Screen::Paused },
-            mouse: MouseLook::default(), last_input: Instant::now(), pad: Pad { radial: Radial(radial) },
-            scripted, unclaimed_window: unclaimed,
-        };
-        game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (0.0, 0.0) });
-        game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (20.0, -10.0) });
-        let look = LookOptions { sensitivity: 0.5, smooth_camera: false, scoping: false, invert_x: false, invert_y: false };
-        let (x, y) = game.mouse.handle_accumulated_movement(1.0, true, true, look).unwrap();
-        let mut rotation = Rotation { x_rot: 0.0, y_rot: 0.0, x_rot_o: 0.0, y_rot_o: 0.0 };
-        rotation.turn(x, y);
-        let want = if turns { (3.0, -1.5) } else { (0.0, 0.0) };
-        assert!((rotation.y_rot - want.0).abs() < 0.00001 && (rotation.x_rot - want.1).abs() < 0.00001,
-            "rotation=({}, {}), offscreen={offscreen}, split={split}, owner={owner}, active={active}, playing={playing}, saving={saving}, radial={radial}, scripted={scripted}, unclaimed={unclaimed}", rotation.y_rot, rotation.x_rot);
+        // Replay suppresses recorded-view motion; freecam still obeys every ownership gate.
+        for (replay, freecam) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut game = Game {
+                pending_save: saving.then_some(()), captured: true, focused: active,
+                keyboard_mouse: owner, split_window: split, options: Options { offscreen },
+                screen: if playing { Screen::Playing } else { Screen::Paused },
+                mouse: MouseLook::default(), last_input: Instant::now(), pad: Pad { radial: Radial(radial) },
+                scripted, unclaimed_window: unclaimed, replay: Replay { driver: replay.then_some(()) },
+                studio: Studio { freecam: StudioFreecam { active: freecam } },
+            };
+            game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (0.0, 0.0) });
+            game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (20.0, -10.0) });
+            let look = LookOptions { sensitivity: 0.5, smooth_camera: false, scoping: false, invert_x: false, invert_y: false };
+            let (x, y) = game.mouse.handle_accumulated_movement(1.0, true, true, look).unwrap();
+            let mut rotation = Rotation { x_rot: 0.0, y_rot: 0.0, x_rot_o: 0.0, y_rot_o: 0.0 };
+            rotation.turn(x, y);
+            let want = if turns && (!replay || freecam) { (3.0, -1.5) } else { (0.0, 0.0) };
+            assert!((rotation.y_rot - want.0).abs() < 0.00001 && (rotation.x_rot - want.1).abs() < 0.00001,
+                "rotation=({}, {}), offscreen={offscreen}, split={split}, owner={owner}, active={active}, playing={playing}, saving={saving}, radial={radial}, scripted={scripted}, unclaimed={unclaimed}, replay={replay}, freecam={freecam}", rotation.y_rot, rotation.x_rot);
+        }
     }
 }
 '''
