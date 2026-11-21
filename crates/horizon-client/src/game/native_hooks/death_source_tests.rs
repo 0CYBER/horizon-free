@@ -12,7 +12,7 @@ use horizon_client::{
 };
 use horizon_core::{geometry::Vec3, nbt::Tag, position::ChunkPos};
 use mod_api::{
-    ArmorHurtEvent, Flow, Hooks, HurtSource, LevelRandomHost, LivingDeathEvent,
+    ArmorHurtEvent, Flow, Hooks, HurtSource, LevelRandomHost, LivingDeathEvent, LivingDropsEvent,
     LivingIncomingDamageEvent, ModEntry, ServerHost,
 };
 use std::sync::{Arc, Mutex};
@@ -50,6 +50,7 @@ impl Hit {
 struct Seen {
     incoming: Vec<Hit>,
     deaths: Vec<Hit>,
+    drops: Vec<Hit>,
     armor: Vec<Hit>,
     kinds: Vec<(String, String)>,
 }
@@ -100,6 +101,15 @@ impl Hooks for Probe {
         } else {
             Flow::Continue
         }
+    }
+    fn living_drops(&self, _: &mut dyn ServerHost, event: &mut LivingDropsEvent<'_>) -> Flow {
+        self.seen.lock().unwrap().drops.push(Hit::new(
+            event.entity,
+            event.kind,
+            event.source,
+            None,
+        ));
+        Flow::Continue
     }
     fn armor_hurt(&self, _: &mut dyn ServerHost, event: &mut ArmorHurtEvent<'_>) -> Flow {
         assert!(!event.entries.is_empty());
@@ -511,6 +521,67 @@ fn guest_player_bow_death_keeps_the_connected_shooter_without_a_local_player() {
                 assert_eq!((hit.causing, hit.direct), (20, arrow as i32));
                 assert_eq!(hit.weapon.as_ref(), Some(&expected));
                 assert!(hit.position.is_some());
+                assert_drops_hear_the_death(&seen);
+            })
+        },
+    );
+}
+
+/// `LivingEntity.die` hands `dropAllDeathLoot` the source the death hook heard:
+/// the drop list hears the same type, attacker, direct entity and position.
+fn assert_drops_hear_the_death(seen: &Seen) {
+    assert_eq!(seen.drops.len(), 1, "one drop list per death");
+    let death = Hit {
+        weapon: None,
+        ..seen.deaths[0].clone()
+    };
+    assert_eq!(seen.drops[0], death);
+}
+
+/// A guest shot dead by a skeleton's arrow: the drop list hears the arrow
+/// `living_death` heard, its direct entity and position included, not a
+/// source rebuilt from the damage type and attacker.
+#[test]
+#[ignore = "daily"]
+fn guest_arrow_death_drops_hear_the_arrow_the_death_heard() {
+    crate::game::in_own_process(
+        "game::native_hooks::death_source_tests::guest_arrow_death_drops_hear_the_arrow_the_death_heard",
+        || {
+            observed(false, false, |game, seen| {
+                game.player = None;
+                crate::game::native_player_death::tests::add_guest(game);
+                game.next_entity = 100;
+                game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                    guest.position = [6.0, 80.0, 4.5];
+                    guest.loaded = true;
+                    guest.load_timeout = 0;
+                    guest.health = 1.0;
+                    guest.inventory[0] = Some(ItemStack::new("minecraft:diamond", 3));
+                });
+                mob(game, 42, "minecraft:skeleton", Vec3::new(2.5, 80.0, 4.5));
+                let mut shot = Projectile::new(
+                    ProjectileKind::Arrow {
+                        base_damage: 2.0,
+                        critical: false,
+                        effect: None,
+                    },
+                    Vec3::new(4.5, 80.5, 4.5),
+                    Some(Who::Mob(42)),
+                );
+                shot.left_owner = true;
+                shot.velocity = Vec3::new(4.0, 0.0, 0.0);
+                game.add_projectile(shot);
+                let arrow = game.creatures.projectiles[0].id;
+                game.tick_projectiles().unwrap();
+                assert!(game.lan.as_ref().unwrap().hub.guests[0].health <= 0.0);
+                game.guest_die(0, 1);
+                let seen = seen.lock().unwrap();
+                assert_eq!(seen.deaths.len(), 1);
+                let hit = &seen.deaths[0];
+                assert_eq!(hit.kind, "minecraft:player");
+                assert_eq!((hit.causing, hit.direct), (42, arrow as i32));
+                assert!(hit.position.is_some());
+                assert_drops_hear_the_death(&seen);
             })
         },
     );

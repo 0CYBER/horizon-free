@@ -34,6 +34,7 @@ mod tests {
         entity: Option<u32>,
         damage_type: Option<String>,
         attacker: Option<u32>,
+        drops_source: Option<String>,
         drops_before: bool,
         experience_before: bool,
     }
@@ -62,6 +63,7 @@ mod tests {
         fn living_drops(&self, _: &mut dyn ServerHost, event: &mut LivingDropsEvent<'_>) -> Flow {
             self.heard.lock().unwrap().push("loot");
             self.drops.store(event.drops.len(), Ordering::SeqCst);
+            self.post.lock().unwrap().drops_source = Some(event.source.damage_type.to_owned());
             Flow::Continue
         }
         fn living_experience_drop(
@@ -217,7 +219,8 @@ mod tests {
     }
 
     /// A server player's death is told at `ServerPlayer.die`'s tail too: after
-    /// its death message, the inventory drops and the experience.
+    /// its death message, the inventory drops and the experience. A death with
+    /// no recorded hit still has a source, so its drop list is heard too.
     #[test]
     #[ignore = "daily"]
     fn living_death_post_hears_a_player_death_after_the_message_and_loot() {
@@ -252,7 +255,7 @@ mod tests {
 
                 assert_eq!(
                     *heard.lock().unwrap(),
-                    ["death", "xp", "post"],
+                    ["death", "loot", "xp", "post"],
                     "the inventory drop, the message and the experience ran before it"
                 );
                 let post = post.lock().unwrap();
@@ -266,6 +269,52 @@ mod tests {
                         .any(|d| &*d.stack.item == "minecraft:stone"),
                     "the inventory was dropped before it"
                 );
+            });
+        });
+    }
+
+    /// `/kill` on a player records no combat hit, yet `dropAllDeathLoot` still
+    /// gets its generic_kill source: with mods loaded the drop list is heard
+    /// with that source, the one `living_death_post` names too.
+    #[test]
+    #[ignore = "daily"]
+    fn living_drops_hears_a_killed_players_drops_with_generic_kill() {
+        use crate::game::native_player_death::tests::add_guest;
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let post = Arc::new(Mutex::new(Post::default()));
+        let mods = vec![ModEntry::new(
+            "deaths",
+            Box::new(Observer {
+                heard: heard.clone(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                drops: Arc::new(AtomicUsize::new(0)),
+                experience: Arc::new(AtomicBool::new(false)),
+                post: post.clone(),
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.load_server_loot();
+                add_guest(game);
+                game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+                    guest.loaded = true;
+                    guest.load_timeout = 0;
+                    guest.inventory[0] =
+                        Some(horizon_client::items::ItemStack::new("minecraft:stone", 1));
+                });
+
+                game.kill_target(crate::game::commands::Target::Guest(1));
+                game.guest_die(0, 1);
+
+                assert_eq!(*heard.lock().unwrap(), ["death", "loot", "xp", "post"]);
+                let post = post.lock().unwrap();
+                assert_eq!(
+                    post.drops_source.as_deref(),
+                    Some("minecraft:generic_kill"),
+                    "the drop list hears /kill's source"
+                );
+                assert_eq!(post.damage_type.as_deref(), Some("minecraft:generic_kill"));
             });
         });
     }

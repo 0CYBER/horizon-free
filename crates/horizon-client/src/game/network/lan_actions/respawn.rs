@@ -318,6 +318,10 @@ impl Game<'_> {
         // The killing blow, for the death hooks.
         let blow = (dying && !mod_api::__private::mods().is_empty())
             .then(|| self.guest_damage_source(conn));
+        // The hit `living_death` hears with it, for the drops too.
+        let hit = blow
+            .as_ref()
+            .and_then(|(damage_type, _)| self.guest_death_hit(gi, damage_type));
         if dying && self.guest_death_canceled(gi, conn) {
             return;
         }
@@ -451,9 +455,24 @@ impl Game<'_> {
                 entity: id as u32,
                 kind: "minecraft:player",
                 player: Some(uuid),
-                source: killing.as_ref().map(|(damage_type, attacker)| {
-                    crate::game::creatures::death_hurt_source(damage_type, attacker.unwrap_or(0))
-                }),
+                // `dropAllDeathLoot(level, source)`: every death has a source, so
+                // with mods loaded the drops hear the blow `living_death` heard,
+                // `/kill`'s generic_kill and an unrecorded death's generic
+                // included. Without mods `blow` is `None` and the combat record's
+                // blow stays, so `drop_death_items` keeps today's draw order.
+                source: blow
+                    .as_ref()
+                    .map(|(damage_type, causing)| {
+                        super::death_state::death_source(hit.as_deref(), damage_type, *causing)
+                    })
+                    .or_else(|| {
+                        killing.as_ref().map(|(damage_type, attacker)| {
+                            crate::game::creatures::death_hurt_source(
+                                damage_type,
+                                attacker.unwrap_or(0),
+                            )
+                        })
+                    }),
                 recently_hit,
             };
             // LivingEntity.die: the death is heard, and a sculk catalyst
