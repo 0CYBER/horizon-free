@@ -42,6 +42,9 @@ fn hold(game: &mut super::Game<'_>, conn: u32, to: [f64; 3], yaw: f32) {
         flags: 1,
         stands: true,
         floating: false,
+        on_ground: true,
+        has_position: true,
+        has_rotation: true,
     };
     let held = PendingMove {
         report,

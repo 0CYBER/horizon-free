@@ -499,6 +499,8 @@ pub fn export_record(
                 since,
                 record: record.clone(),
             });
+            // Queued `player_move_packet` reports must not reach listeners after the snapshot.
+            g.move_packet_queue.clear();
         });
     }
     Ok(record)

@@ -33,6 +33,31 @@ pub enum Hearing {
     Crossing,
 }
 
+/// How many `player_move_packet` events one guest gets told in one hub tick. Vanilla sends one
+/// movement packet per client tick, and a client that was stalled sends a short burst when it
+/// catches up; 8 covers that. A client that sends more (a backlog in its transport, or a flood of
+/// status-only packets) cannot make the listeners run for each of them in one tick: the packets
+/// over the budget wait, in order, for the next ticks. Only the hook is budgeted, the movement
+/// itself is processed as it arrives.
+pub const MOVE_PACKET_BUDGET: usize = 8;
+
+/// How many packets over the budget one guest may have waiting. Past it the oldest are dropped
+/// (a mod then misses them; a client that is that far ahead is not playing normally).
+pub const MOVE_PACKET_QUEUE: usize = 256;
+
+/// What `player_move_packet` is told for one packet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MovePacket {
+    pub to: [f64; 3],
+    pub to_rotation: [f32; 2],
+    pub on_ground: bool,
+    pub has_position: bool,
+    pub has_rotation: bool,
+    /// The guest's `level_entered` when the packet was queued: a packet from before a later level
+    /// change is dropped, not told in the new level.
+    pub entered: u64,
+}
+
 /// A movement report that passed the server's own checks (`handlePlayerPositionChange`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Accepted {
@@ -44,6 +69,13 @@ pub struct Accepted {
     pub stands: bool,
     /// `clientIsFloating`, from this report.
     pub floating: bool,
+    /// The packet's own on-ground flag, as the client sent it: `flags` may have lost the bit to
+    /// the anticheat's ground check, this keeps the claim.
+    pub on_ground: bool,
+    /// The packet carried a position (`MovePlayerPos`, `MovePlayerPosRot`).
+    pub has_position: bool,
+    /// The packet carried a rotation (`MovePlayerRot`, `MovePlayerPosRot`).
+    pub has_rotation: bool,
 }
 
 /// An [`Accepted`] report waiting for the mods, and what it was accepted against.
@@ -83,6 +115,23 @@ impl Hub {
         hearing: Hearing,
         events: &mut Vec<HostEvent>,
     ) {
+        if hearing == Hearing::Heard && self.move_packets_listened && self.move_in_level(i) {
+            let packet = MovePacket {
+                to: m.to,
+                to_rotation: [m.yaw, m.pitch.clamp(-90.0, 90.0)],
+                on_ground: m.on_ground,
+                has_position: m.has_position,
+                has_rotation: m.has_rotation,
+                entered: self.guests[i].level_entered,
+            };
+            self.guests.update(i, |g| {
+                if g.move_packet_queue.len() >= MOVE_PACKET_QUEUE {
+                    g.move_packet_queue.pop_front();
+                }
+                g.move_packet_queue.push_back(packet);
+            });
+            self.tell_move_packets(i, events);
+        }
         if hearing == Hearing::Heard && self.moves_listened && self.move_changes(i, &m) {
             let (since, conn) = (self.ticks, self.guests[i].conn);
             let (teleports, dimension) = {
@@ -119,9 +168,50 @@ impl Hub {
     /// in its level: the tick after it entered (a join, a level change) is not heard, the next is.
     fn move_changes(&self, i: usize, m: &Accepted) -> bool {
         let g = &self.guests[i];
-        self.ticks > g.level_entered + 1
+        self.move_in_level(i)
             && (m.to != g.last_reported.0
                 || [m.yaw, m.pitch.clamp(-90.0, 90.0)] != g.last_reported.1)
+    }
+
+    /// Tells `player_move_packet` the waiting packets of guest `i`, oldest first, up to the
+    /// guest's budget for this tick; the rest wait for the next tick. A packet queued before the
+    /// guest's last level change is dropped. The caller runs this only for an open, unfrozen guest
+    /// in its own level's pass.
+    pub(super) fn tell_move_packets(&mut self, i: usize, events: &mut Vec<HostEvent>) {
+        let ticks = self.ticks;
+        let conn = self.guests[i].conn;
+        let (mut told_at, mut told) = self.guests[i].move_packets_told;
+        if told_at != ticks {
+            (told_at, told) = (ticks, 0);
+        }
+        let mut sent = Vec::new();
+        self.guests.update(i, |g| {
+            while told < MOVE_PACKET_BUDGET {
+                let Some(p) = g.move_packet_queue.pop_front() else {
+                    break;
+                };
+                if p.entered != g.level_entered {
+                    continue;
+                }
+                sent.push(p);
+                told += 1;
+            }
+            g.move_packets_told = (told_at, told);
+        });
+        events.extend(sent.into_iter().map(|p| HostEvent::PlayerMovePacket {
+            conn,
+            to: p.to,
+            to_rotation: p.to_rotation,
+            on_ground: p.on_ground,
+            has_position: p.has_position,
+            has_rotation: p.has_rotation,
+        }));
+    }
+
+    /// The report is not of the player's first tick in its level (the tick after a join or a
+    /// level change); `player_move` and `player_move_packet` both skip that tick.
+    fn move_in_level(&self, i: usize) -> bool {
+        self.ticks > self.guests[i].level_entered + 1
     }
 
     /// `handlePlayerPositionChange`'s commit: the report becomes the player's state.
@@ -133,6 +223,7 @@ impl Hub {
             flags,
             stands,
             floating,
+            ..
         } = m;
         self.guests.update(i, |g| {
             g.client_is_floating = floating;

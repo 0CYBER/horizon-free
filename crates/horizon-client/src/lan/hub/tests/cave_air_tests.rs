@@ -78,6 +78,7 @@ fn a_guest_hovering_in_cave_air_is_kicked_for_flying() {
         [0.5, 64.0, 0.5],
         (0.0, 0.0),
         0,
+        (true, true),
         Hearing::Heard,
         &ctx,
         &mut events,

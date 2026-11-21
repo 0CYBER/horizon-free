@@ -2385,6 +2385,19 @@ impl Game<'_> {
                     }
                 }
                 HostEvent::PlayerMove(conn) => self.lan_player_move(conn),
+                HostEvent::PlayerMovePacket {
+                    conn,
+                    to,
+                    to_rotation,
+                    on_ground,
+                    has_position,
+                    has_rotation,
+                } => self.announce_player_move_packet(
+                    conn,
+                    to,
+                    to_rotation,
+                    (on_ground, has_position, has_rotation),
+                ),
                 HostEvent::Pong { conn, id } => self.announce_player_pong(conn, id),
                 HostEvent::Input { conn, flags } => {
                     if !mod_api::__private::listened(mod_api::HookId::PlayerInput) {

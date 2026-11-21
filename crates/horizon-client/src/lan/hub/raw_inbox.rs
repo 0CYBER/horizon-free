@@ -56,6 +56,7 @@ impl Hub {
             // reaches the next frozen poll. Do not acknowledge or apply later
             // input in this incarnation while waiting for that notification.
             if self.discard_closed_input(i) {
+                self.guests.update(i, |g| g.move_packet_queue.clear());
                 pass.next += 1;
                 pass.started = false;
                 pass.movement_held = false;
@@ -72,6 +73,15 @@ impl Hub {
             let frozen = self.guests[i].handover.is_some() || self.guests[i].held;
             if frozen {
                 self.keep_acknowledgements(i, &mut events);
+            }
+            if !self.guests[i].move_packet_queue.is_empty() {
+                if frozen || !self.move_packets_listened {
+                    self.guests.update(i, |g| g.move_packet_queue.clear());
+                } else if !pass.started {
+                    // The packets over last tick's budget go ahead of this tick's, in the guest's
+                    // own level pass.
+                    self.tell_move_packets(i, &mut events);
+                }
             }
             if self.process_inbox(i, ctx, &mut events, !pass.started, &mut pass.movement_held) {
                 pass.started = true;

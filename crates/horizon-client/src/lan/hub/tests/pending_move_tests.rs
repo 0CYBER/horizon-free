@@ -291,3 +291,157 @@ fn a_vetoed_report_is_counted_before_the_hook_and_adds_no_violation() {
         assert_eq!(g.anticheat.vl(&config, *check, hub.ticks), 0.0, "{check:?}");
     }
 }
+
+/// The `player_move_packet` events of `events`: `(conn, to, to_rotation, flags)`.
+#[allow(clippy::type_complexity)]
+fn packets(events: &[HostEvent]) -> Vec<(u32, [f64; 3], [f32; 2], (bool, bool, bool))> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            HostEvent::PlayerMovePacket {
+                conn,
+                to,
+                to_rotation,
+                on_ground,
+                has_position,
+                has_rotation,
+            } => Some((
+                *conn,
+                *to,
+                *to_rotation,
+                (*on_ground, *has_position, *has_rotation),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_packet_that_changes_nothing_is_heard_as_a_packet_and_not_as_a_move() {
+    let mut hub = standing(false, vec![at(0.0)]);
+    hub.move_packets_listened = true;
+    let conn = hub.guests[0].conn;
+    let events = drain(&mut hub);
+    assert!(moves(&events).is_empty(), "player_move keeps its rule");
+    assert_eq!(
+        packets(&events),
+        [(conn, [0.0, 64.0, 0.0], [0.0, 0.0], (true, true, false))]
+    );
+}
+
+#[test]
+fn a_status_only_packet_is_heard_with_neither_position_nor_rotation() {
+    let status = S::MovePlayerStatus(play::MovePlayerStatus { flags: 0 });
+    let mut hub = standing(false, vec![status]);
+    hub.move_packets_listened = true;
+    let conn = hub.guests[0].conn;
+    assert_eq!(
+        packets(&drain(&mut hub)),
+        [(conn, [0.0, 64.0, 0.0], [0.0, 0.0], (false, false, false))]
+    );
+}
+
+#[test]
+fn a_turn_is_heard_as_a_rotation_without_a_position() {
+    let mut hub = standing(true, vec![turned(30.0)]);
+    hub.move_packets_listened = true;
+    let conn = hub.guests[0].conn;
+    let events = drain(&mut hub);
+    assert_eq!(moves(&events), [conn], "a turn is also a player_move");
+    assert_eq!(
+        packets(&events),
+        [(conn, [0.0, 64.0, 0.0], [30.0, 0.0], (true, false, true))]
+    );
+}
+
+#[test]
+fn a_walking_packet_keeps_the_clients_ground_flag_and_no_listener_hears_nothing() {
+    let mut hub = standing(false, vec![walking(1.0)]);
+    hub.move_packets_listened = true;
+    let events = drain(&mut hub);
+    assert!(matches!(
+        packets(&events).as_slice(),
+        [(_, [x, _, _], _, (false, true, false))] if *x == 1.0
+    ));
+    let mut hub = standing(false, vec![walking(1.0)]);
+    assert!(packets(&drain(&mut hub)).is_empty());
+}
+
+#[test]
+fn the_first_tick_in_a_level_is_not_heard_as_a_packet() {
+    let mut hub = standing(false, vec![at(1.0)]);
+    hub.move_packets_listened = true;
+    hub.guests.update(0, |g| g.level_entered = 9);
+    assert!(packets(&drain(&mut hub)).is_empty());
+}
+
+/// A status-only packet whose ground flag follows `n`: it passes the one-position-a-tick guard
+/// each time, so a client can send any number of them.
+fn status(n: usize) -> S {
+    S::MovePlayerStatus(play::MovePlayerStatus {
+        flags: u8::from(n.is_multiple_of(3)),
+    })
+}
+
+#[test]
+fn more_packets_than_the_budget_are_told_over_the_next_ticks_in_order() {
+    let total = MOVE_PACKET_BUDGET + 3;
+    let mut hub = standing(false, (0..total).map(status).collect());
+    hub.move_packets_listened = true;
+    let first = packets(&drain(&mut hub));
+    assert_eq!(
+        first.len(),
+        MOVE_PACKET_BUDGET,
+        "exactly the budget in one tick"
+    );
+    // The next tick has no new packet: the rest still comes, in order.
+    hub.ticks += 1;
+    let second = packets(&drain(&mut hub));
+    assert_eq!(second.len(), 3);
+    let grounds: Vec<bool> = first.iter().chain(&second).map(|p| p.3.0).collect();
+    let want: Vec<bool> = (0..total).map(|n| n % 3 == 0).collect();
+    assert_eq!(grounds, want);
+    hub.ticks += 1;
+    assert!(packets(&drain(&mut hub)).is_empty());
+}
+
+#[test]
+fn the_queue_of_packets_over_the_budget_is_bounded_and_drops_the_oldest() {
+    let total = MOVE_PACKET_BUDGET + MOVE_PACKET_QUEUE + 5;
+    let mut hub = standing(false, (0..total).map(status).collect());
+    hub.move_packets_listened = true;
+    assert_eq!(packets(&drain(&mut hub)).len(), MOVE_PACKET_BUDGET);
+    assert_eq!(hub.guests[0].move_packet_queue.len(), MOVE_PACKET_QUEUE);
+    // The 5 oldest of those over the budget were dropped: the queue starts at packet 13.
+    let want = (MOVE_PACKET_BUDGET + 5).is_multiple_of(3);
+    assert_eq!(hub.guests[0].move_packet_queue[0].on_ground, want);
+}
+
+#[test]
+fn waiting_packets_are_dropped_when_the_guest_is_frozen_for_a_transfer() {
+    let total = MOVE_PACKET_BUDGET + 3;
+    let mut hub = standing(false, (0..total).map(status).collect());
+    hub.move_packets_listened = true;
+    assert_eq!(packets(&drain(&mut hub)).len(), MOVE_PACKET_BUDGET);
+    assert_eq!(hub.guests[0].move_packet_queue.len(), 3);
+    hub.guests.update(0, |g| g.held = true);
+    hub.ticks += 1;
+    assert!(
+        packets(&drain(&mut hub)).is_empty(),
+        "a frozen guest is not heard"
+    );
+    assert!(hub.guests[0].move_packet_queue.is_empty());
+}
+
+#[test]
+fn waiting_packets_from_before_a_level_change_are_dropped() {
+    let total = MOVE_PACKET_BUDGET + 3;
+    let mut hub = standing(false, (0..total).map(status).collect());
+    hub.move_packets_listened = true;
+    assert_eq!(packets(&drain(&mut hub)).len(), MOVE_PACKET_BUDGET);
+    let entered = hub.ticks;
+    hub.guests.update(0, |g| g.level_entered = entered);
+    hub.ticks += 1;
+    assert!(packets(&drain(&mut hub)).is_empty());
+    assert!(hub.guests[0].move_packet_queue.is_empty());
+}

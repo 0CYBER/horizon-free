@@ -62,7 +62,16 @@ fn a_wind_charged_guest_is_not_sent_back_for_moving_wrongly() {
             g.motion = Some(Box::new(body));
         });
         let mut events = Vec::new();
-        hub.position_change(0, to, (0.0, 0.0), 0, Hearing::Heard, &ctx, &mut events);
+        hub.position_change(
+            0,
+            to,
+            (0.0, 0.0),
+            0,
+            (true, true),
+            Hearing::Heard,
+            &ctx,
+            &mut events,
+        );
         let wrongly = events
             .iter()
             .any(|e| matches!(e, HostEvent::Warn(line) if line.contains("moved wrongly")));
