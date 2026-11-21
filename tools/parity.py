@@ -957,6 +957,10 @@ def prebuild(artifacts, jobs, tests=()):
                     timings.after_call(number, len(commands), summary, keep=not retried)
             report(lambda: describe_machine(os.cpu_count(), load, machine_load()))
             report(lambda: describe_sccache(stats, sccache_stats(environment)))
+        if timings:
+            # Here, not in finally: a cancelled, limit-stopped or raising prebuild doesn't wait on du, and a signal
+            # during du still reaches finish().
+            timings.measure_target()
     finally:
         # After the turn is released (and the limit's error line): only file work on the collection folder.
         if timings:
@@ -1093,6 +1097,37 @@ def remove_collection(path):
 
 
 PREBUILD_TIMINGS_NAMES = re.compile(r"cargo-\d{2,}\.html|prebuild-calls\.txt")
+
+
+TARGET_SIZES_TIMEOUT = 30
+PROFILE_FOLDERS = {"debug", "fast", "release"}
+
+
+def target_sizes(target, timeout=TARGET_SIZES_TIMEOUT):
+    """KiB per top-level folder of the build folder (debug, fast, release, ...), from one `du -sk`, which counts each
+    file once and follows no link. runner-gc.sh's MAX_TARGET_GB is set from these (#19465)."""
+    # cargo-timings holds only these reports (kB): left out, so a folder with no build yet reports nothing.
+    folders = sorted(entry.path for entry in os.scandir(target)
+                     if entry.is_dir(follow_symlinks=False) and entry.name != "cargo-timings")
+    if not folders:
+        return {}
+    done = subprocess.run(["du", "-sk", "--", *folders], capture_output=True, text=True, timeout=timeout, check=True,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    sizes = {}
+    for line in done.stdout.splitlines():
+        kib, _, path = line.partition("	")
+        # Only cargo's profile names go into the public report; any other folder counts as "other".
+        name = Path(path).name if Path(path).name in PROFILE_FOLDERS else "other"
+        sizes[name] = sizes.get(name, 0) + int(kib)
+    return sizes
+
+
+def describe_target_sizes(sizes):
+    if not sizes:
+        raise ValueError("no build folder yet")  # report() leaves the line out
+    gib = lambda kib: f"{kib / (1 << 20):.1f} GB"
+    parts = ", ".join(f"{name} {gib(kib)}" for name, kib in sorted(sizes.items(), key=lambda item: -item[1]))
+    return f"build folder after the prebuild: {gib(sum(sizes.values()))} ({parts})"
 
 
 class PrebuildTimings:
@@ -1239,6 +1274,14 @@ class PrebuildTimings:
             del reports[largest]
             dropped.append(largest.stem.removeprefix("cargo-"))
         (self.folder / "prebuild-calls.txt").write_bytes(text)
+
+    def measure_target(self):
+        """The build folder's size line, after the turn and only when the prebuild ended normally: a cancelled job
+        does not wait on du. A slow or failed du leaves the line out (TARGET_SIZES_TIMEOUT)."""
+        if self.on:
+            sizes = report(lambda: describe_target_sizes(target_sizes(Path(self.environment["CARGO_TARGET_DIR"]))))
+            if sizes:
+                self.calls.append(sizes)
 
     def finish(self):
         """Holds the working folder to PREBUILD_TIMINGS_CAP, checks it holds only regular files of the two kinds,

@@ -817,6 +817,55 @@ class ParityRunnerTests(unittest.TestCase):
         self.assertEqual(sizes, {"cargo-01.html": 40, "cargo-03.html": 20, "prebuild-calls.txt": len(calls)})
         self.assertLessEqual(sum(sizes.values()), 150)
 
+    @unittest.skipUnless(shutil.which("du"), "du is POSIX")
+    def test_the_build_folders_size_is_reported_per_profile_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp, "target")
+            for name, size in (("fast", 300_000), ("debug", 100_000)):
+                (target / name).mkdir(parents=True)
+                (target / name / "unit").write_bytes(b"x" * size)
+            (target / "CACHEDIR.TAG").write_text("tag")  # a file at the top: not a folder of its own
+            if hasattr(os, "symlink"):
+                os.symlink(target / "fast", target / "linked")  # a link is never followed or counted
+            (target / "my-experiment").mkdir()  # not a cargo profile: its name stays out of the public report
+            (target / "my-experiment" / "unit").write_bytes(b"x" * 50_000)
+            sizes = parity.target_sizes(target)
+            self.assertEqual(set(sizes), {"fast", "debug", "other"})
+            self.assertGreaterEqual(sizes["fast"], 290)
+            self.assertGreater(sizes["fast"], sizes["debug"])
+            Path(temp, "empty").mkdir()
+            self.assertEqual(parity.target_sizes(Path(temp, "empty")), {})
+        self.assertEqual(parity.describe_target_sizes({"debug": 1 << 20, "fast": 3 << 20}),
+                         "build folder after the prebuild: 4.0 GB (fast 3.0 GB, debug 1.0 GB)")
+        self.assertIsNone(parity.report(lambda: parity.describe_target_sizes({})), "no folder yet: no line")
+
+    def test_the_build_folder_is_measured_only_after_a_normal_prebuild(self):
+        measured = []
+        patch = mock.patch.object(parity.PrebuildTimings, "measure_target", lambda timings: measured.append(1))
+        (built, _), _, events, state, _ = self.prebuild_with_fake_cargo(["one"], patches=[patch])
+        self.assertTrue(built)
+        self.assertEqual(measured, [1])
+        measured.clear()
+        stopped, _, _, _, _ = self.prebuild_with_fake_cargo(
+            ["sleep", "one"], role="main", patches=[patch, mock.patch.object(parity.compile_lock, "GRACE", 2),
+                                                    mock.patch.object(parity, "PREBUILD_LIMIT", {"main": 1})])
+        self.assertIsInstance(stopped, SystemExit)
+        self.assertEqual(measured, [], "a prebuild stopped at its limit publishes without waiting on du")
+        built_folder = lambda target, state: (target / "fast").mkdir()
+        if shutil.which("du"):
+            (built, _), _, _, state, _ = self.prebuild_with_fake_cargo(["one"], prepare=built_folder)
+            self.assertTrue(built)
+            folder, = state.iterdir()
+            self.assertIn("build folder after the prebuild: 0.0 GB (fast 0.0 GB)",
+                          (folder / "prebuild-calls.txt").read_text(encoding="utf-8"))
+        # A du that times out leaves the line out, and the reports still publish.
+        timeout = mock.patch.object(parity, "target_sizes", side_effect=subprocess.TimeoutExpired("du", 30))
+        (built, _), _, _, state, _ = self.prebuild_with_fake_cargo(["one"], prepare=built_folder, patches=[timeout])
+        self.assertTrue(built)
+        folder, = state.iterdir()
+        self.assertEqual(sorted(path.name for path in folder.iterdir()), ["cargo-01.html", "prebuild-calls.txt"])
+        self.assertNotIn("build folder", (folder / "prebuild-calls.txt").read_text(encoding="utf-8"))
+
     def test_a_collection_that_cannot_be_finished_publishes_nothing(self):
         failures = {"the cap": ({}, mock.patch.object(parity.PrebuildTimings, "size",
                                                       return_value=parity.PREBUILD_TIMINGS_CAP + 1)),
