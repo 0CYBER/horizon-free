@@ -4,9 +4,9 @@
 //!
 //! Only what makes the instance goes in, from a fixed list ([`FILES`], [`FOLDERS`]): never logs,
 //! screenshots, backups, caches, or anything tied to the player's account. A world goes without
-//! its per-player files (`playerdata/`, `stats/`, `advancements/`) and its level.dat without the
-//! player's UUID; options.txt and servers.dat go without the servers the player typed in Direct
-//! Connection.
+//! its per-player files (`players/`, `playerdata/`, `stats/`, `advancements/`) and its level.dat
+//! and level.dat_old without the player's UUID; options.txt and servers.dat go without the
+//! servers the player typed in Direct Connection.
 //!
 //! In a `.mrpack`, a resource pack the browser installed from Modrinth, still the same file, is
 //! listed by its download (`files`, with its SHA-1 and SHA-512) instead of being copied; the
@@ -30,8 +30,15 @@ pub const FILES: [&str; 6] = [
 ];
 /// Its folders of packs, mods and their settings.
 pub const FOLDERS: [&str; 4] = ["resourcepacks", "shaderpacks", "horizon-mods", "config"];
-/// What a world keeps per player: left out.
-const PER_PLAYER: [&str; 4] = ["playerdata", "stats", "advancements", "session.lock"];
+/// What a world keeps per player: left out. 26.3 keeps the per-player files under `players/`
+/// (`data/<uuid>.dat`, `stats/`, `advancements/`); older worlds keep them at the top.
+const PER_PLAYER: [&str; 5] = [
+    "players",
+    "playerdata",
+    "stats",
+    "advancements",
+    "session.lock",
+];
 const INDEX: &str = "modrinth.index.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,7 +150,9 @@ fn write(
     };
     for (rel, file) in files {
         let bytes = match rel.as_str() {
-            rel if rel.ends_with("/level.dat") => shareable_level(file)?,
+            rel if rel.ends_with("/level.dat") || rel.ends_with("/level.dat_old") => {
+                shareable_level(file)?
+            }
             "options.txt" => shareable_options(file)?,
             "servers.dat" => shareable_servers(file)?,
             _ => fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
@@ -249,7 +258,8 @@ fn shareable_servers(file: &Path) -> Result<Vec<u8>, String> {
     crate::server_list::List::load(file.parent().unwrap_or(Path::new(""))).shown_file()
 }
 
-/// A world's level.dat without the player's UUID; unreadable, it goes as it is.
+/// A world's level.dat without the player's UUID (`Data.Player.UUID`, and `Data.singleplayer_uuid`
+/// that 26.3 keeps instead); unreadable, it goes as it is.
 fn shareable_level(file: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut raw = Vec::new();
@@ -264,6 +274,7 @@ fn shareable_level(file: &Path) -> Result<Vec<u8>, String> {
         return Ok(bytes);
     };
     if let Some(Tag::Compound(data)) = root.tag.get_mut("Data") {
+        data.remove(&"singleplayer_uuid".into());
         if let Some(Tag::Compound(player)) = data.get_mut(&"Player".into()) {
             player.remove(&"UUID".into());
         }

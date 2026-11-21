@@ -221,6 +221,67 @@ fn a_zip_has_the_instance_and_the_picked_world_and_nothing_private() {
     fs::remove_dir_all(&home).unwrap();
 }
 
+/// A gzipped 26.3 level.dat: the single player is named by `Data.singleplayer_uuid`.
+fn level_dat_26_3() -> Vec<u8> {
+    let raw = nbt::write_named(
+        &nbt::NamedTag {
+            name: "".into(),
+            tag: Tag::compound([(
+                "Data",
+                Tag::compound([
+                    ("LevelName", Tag::String("Base".into())),
+                    ("singleplayer_uuid", Tag::IntArray(vec![1, 2, 3, 4])),
+                ]),
+            )]),
+        },
+        Limits::default(),
+    )
+    .unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(&raw).unwrap();
+    gz.finish().unwrap()
+}
+
+#[test]
+fn a_26_3_world_goes_without_its_players_folder_and_the_singleplayer_uuid() {
+    let home = scratch("26-3");
+    put(&home.join("saves/New/level.dat"), &level_dat_26_3());
+    put(&home.join("saves/New/level.dat_old"), &level_dat_26_3());
+    put(&home.join("saves/New/region/r.0.0.mca"), b"region");
+    put(&home.join("saves/New/players/data/0001.dat"), b"me");
+    put(&home.join("saves/New/players/stats/0001.json"), b"{}");
+    put(
+        &home.join("saves/New/players/advancements/0001.json"),
+        b"{}",
+    );
+    let out = home.join("out/New.zip");
+    export(&home, "New", Format::Zip, &["New".into()], &[], &out).unwrap();
+    assert_eq!(
+        names(&out),
+        [
+            "saves/New/level.dat",
+            "saves/New/level.dat_old",
+            "saves/New/region/r.0.0.mca",
+        ]
+    );
+    for level in ["saves/New/level.dat", "saves/New/level.dat_old"] {
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(&read(&out, level)[..])
+            .read_to_end(&mut raw)
+            .unwrap();
+        let (root, _) = nbt::read_named(&raw, Limits::default()).unwrap();
+        let Some(Tag::Compound(data)) = root.tag.get("Data") else {
+            panic!("no Data")
+        };
+        assert!(data.get(&"singleplayer_uuid".into()).is_none(), "{level}");
+        assert_eq!(
+            data.get(&"LevelName".into()),
+            Some(&Tag::String("Base".into()))
+        );
+    }
+    fs::remove_dir_all(&home).unwrap();
+}
+
 #[test]
 fn an_mrpack_lists_what_modrinth_serves_and_carries_the_rest() {
     let home = home("mrpack");
