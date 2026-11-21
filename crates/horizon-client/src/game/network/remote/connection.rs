@@ -317,6 +317,7 @@ impl Game<'_> {
             logged_out: false,
             attachments: HashMap::new(),
             far_terrain: None,
+            splash_sound: Default::default(),
             builtin,
             status: lang
                 .get("connect.connecting")
@@ -564,6 +565,7 @@ impl Game<'_> {
             custom_books: false,
             attachments: HashMap::new(),
             far_terrain: None,
+            splash_sound: Default::default(),
             builtin,
             status: "Playing Studio Replay".into(),
             lang,

@@ -403,6 +403,23 @@ impl Game<'_> {
         self.lan.as_ref()?.hub.particle(options, state)
     }
 
+    /// A potion's break on an older release's server, whose splash event carried its sound
+    /// (`adapter::splash_sound`): the sound is played with the splash. False for an event to
+    /// skip, a sound already played that way; true for one to apply.
+    pub(super) fn splash_sound(&mut self, id: i32, pos: [i32; 3]) -> bool {
+        if !self.older_server() {
+            return true;
+        }
+        let Some(remote) = self.remote.as_mut() else {
+            return true;
+        };
+        let answer = remote.splash_sound.event(id, pos);
+        if let Some(sound) = answer.sound {
+            self.level_event_at(sound, pos, 0);
+        }
+        answer.apply
+    }
+
     /// This window plays on an older release's server through the adapter.
     fn older_server(&self) -> bool {
         self.remote.as_ref().is_some_and(|r| {

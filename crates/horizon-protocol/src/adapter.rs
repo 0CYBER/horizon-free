@@ -12,6 +12,7 @@ pub mod layout_26_2;
 mod legacy;
 pub(crate) mod pinned_ids;
 pub mod session;
+pub mod splash_sound;
 mod translate;
 pub(crate) use translate::v1_20_2::read_component as read_legacy_component;
 pub mod v1_20_2;

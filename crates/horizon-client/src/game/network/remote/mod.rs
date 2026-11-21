@@ -489,6 +489,9 @@ pub(super) struct Remote {
     pub attachments: HashMap<Holder, ResidentAttachments>,
     /// The server samples far terrain for us, this far at most (`lod_net`).
     pub far_terrain: Option<horizon_client::lod_net::Offer>,
+    /// Where an older release's server last broke a potion, whose sound this client played
+    /// itself (`splash_sound`).
+    pub(super) splash_sound: horizon_protocol::adapter::splash_sound::SplashSound,
     pub(super) builtin: Arc<Builtin>,
     lang: Arc<Language>,
     pub(in crate::game) registries: Arc<Dynamic>,

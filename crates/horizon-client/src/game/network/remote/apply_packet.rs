@@ -289,7 +289,11 @@ impl Game<'_> {
             // ClientPacketListener.handleLevelEvent: a global one is heard
             // from anywhere (ClientLevel.globalLevelEvent).
             C::LevelEvent(p) if p.global => self.global_level_event_sound(p.kind, p.pos),
-            C::LevelEvent(p) => self.level_event_at(p.kind, p.pos, p.data),
+            C::LevelEvent(p) => {
+                if self.splash_sound(p.kind, p.pos) {
+                    self.level_event_at(p.kind, p.pos, p.data);
+                }
+            }
             C::LevelParticles(p) => self.remote_level_particles(&p),
             C::Explode(p) => self.remote_explode(&p),
             C::Sound(p) => {
