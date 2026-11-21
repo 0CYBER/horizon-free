@@ -770,9 +770,14 @@ pub(super) struct Remote {
     clock_game_time: i64,
     /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
     chunk_center: (i32, i32),
-    /// Received events a frame left for the next one, in order, and when
-    /// the oldest of them first waited (`poll_remote`).
-    backlog: VecDeque<Received>,
+    /// Received events a frame left for the next one, in order, with each
+    /// item's arrival time so `BACKLOG_LIMIT` tracks the front item's age
+    /// instead of staying overdue for an entire continuous chunk stream.
+    backlog: VecDeque<(Received, Instant)>,
+    /// Arrival time of the front item in `backlog`, kept updated for
+    /// mod-API internals compatibility while per-item timestamps drive
+    /// `BACKLOG_LIMIT`.
+    #[allow(dead_code)]
     backlog_since: Option<Instant>,
     /// `ClientboundTransferPacket`'s target: when the connection ends the
     /// game connects here, the stored cookies carried over (`TransferState`).
