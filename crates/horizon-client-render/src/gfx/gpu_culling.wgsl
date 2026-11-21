@@ -2,24 +2,26 @@
 // `cull`: one invocation per section id keeps the sections whose column is
 // within the render distance, that cave culling's graph reaches (occlusion.rs)
 // and whose box is in the frustum, writes each one's origin and the runs of its
-// solid quads that can face the eye, a draw each, and counts them in its page,
-// per block of 64 ids. `scan`: one workgroup per page turns the blocks' counts
-// into where each block's draws start, and the page's count. `scatter`: each
-// block writes its sections' draws there, in id order and each section's in its
-// runs' order, so a page's draws come in the same order every frame (atomics
-// alone would order them as the GPU schedules, and where faces of two sections
-// meet at the same depth the later draw keeps the pixel). Nothing here computes
-// with floats: the origins are the CPU's bits, copied, the frustum test adds
-// integers the CPU computed, and facing compares keys that order as the floats
-// the CPU compares. `cull` leaves sections fading in or out to the CPU
-// (`FADING`).
+// solid quads that can face the eye, a draw each, and counts them per (page,
+// distance band) and block of 64 ids. `scan`: one workgroup per page turns the
+// blocks' counts into where each block's draws start in the page's draw region
+// (front-to-back by distance band, `BANDS`), and the page's count. `scatter`:
+// each block writes its sections' draws there, ordered per page and phase by
+// distance band, section id, and run. Within a band section order stays
+// deterministic rather than depending on GPU scheduling (where faces of two
+// sections meet at the same depth the later draw keeps the pixel), while moving
+// the camera across a band boundary can reorder sections whose bands change.
+// Nothing here computes with floats: the origins are the CPU's bits, copied,
+// the frustum test adds integers the CPU computed, and facing compares keys
+// that order as the floats the CPU compares. `cull` leaves sections fading in
+// or out to the CPU (`FADING`).
 // Frames that occlude (`OCCLUDE`, gpu_occlusion.wgsl) draw in two phases, each
-// in id order: `cull` leaves to phase 2 the sections whose box the last test
-// did not see and lists the boxes to test; after the test, `count2`, `scan2`
-// and `scatter2` write the draws of those it saw into the same regions. Which
-// boxes count as seen untested (`near_or_big`) is float arithmetic of the
-// shader's own: it only sorts sections between the phases, and doubt counts as
-// seen.
+// ordered per page by distance band, section id, and run: `cull` leaves to
+// phase 2 the sections whose box the last test did not see and lists the boxes
+// to test; after the test, `count2`, `scan2` and `scatter2` write the draws of
+// those it saw into the same regions. Which boxes count as seen untested
+// (`near_or_big`) is float arithmetic of the shader's own: it only sorts
+// sections between the phases, and doubt counts as seen.
 
 struct Params {
     // Ids to test, records `apply` writes, the arena pages the counts and
@@ -89,17 +91,18 @@ struct Update {
 @group(0) @binding(2) var<storage, read> tables: array<u32>;
 @group(0) @binding(3) var<storage, read> updates: array<Update>;
 // The statistics (`STATS`), each page's draws in phase 1 and in phase 2, then
-// per block of ids and page its draws in each phase (`cull`, `count2`), turned
-// into where they start (`scan`, `scan2`), then the boxes to test (`cull`).
+// per phase, page, distance band and block of ids its draws (`cull`, `count2`),
+// turned into where they start (`scan`, `scan2`), then the boxes to test
+// (`cull`).
 @group(0) @binding(4) var<storage, read_write> counts: array<atomic<u32>>;
 // DrawIndexedIndirectArgs, five words each.
 @group(0) @binding(5) var<storage, read_write> draws: array<u32>;
 // Per id the instance it is drawn with: origin and UV step, as f32 bits.
 @group(0) @binding(6) var<storage, read_write> origins: array<vec4<u32>>;
-// Per id `RUN_WORDS`: its page << PAGE_SHIFT | TESTED | PHASE2 | its draws when
-// it is drawn this frame, else 0; then each draw's first quad and quads; then
-// the stamps of the frames whose test last saw its box and last tested it,
-// kept from frame to frame.
+// Per id `RUN_WORDS`: its (page << PAGE_SHIFT) | (band << BAND_SHIFT) | TESTED
+// | PHASE2 | its draws when it is drawn this frame, else 0; then each draw's
+// first quad and quads; then the stamps of the frames whose test last saw its
+// box and last tested it, kept from frame to frame.
 @group(0) @binding(7) var<storage, read_write> runs: array<u32>;
 // occlusion.rs `Reach::bits`: whether the search reached each cell of its box,
 // a bit each (32 a word, lowest first).
@@ -133,10 +136,17 @@ const FADING: u32 = 1u;
 // In `params.flags`: solid quads facing away from the eye are left out, its
 // keys in `tables` from `params.eyes`.
 const EYE: u32 = 4u;
-// Words per id in `runs`, and where its page starts in the first, its flags and
-// draws (at most 4: gpu_culling.rs `RUNS`) below.
+// Words per id in `runs`, and where its distance band and page start in the
+// first word, with its flags and draws (at most 4: gpu_culling.rs `RUNS`) below.
 const RUN_WORDS: u32 = 11u;
-const PAGE_SHIFT: u32 = 5u;
+const BANDS: u32 = 4u;
+const BAND_SHIFT: u32 = 5u;
+const BAND_MASK: u32 = 3u;
+const PAGE_SHIFT: u32 = 7u;
+// Pages reduced directly in workgroup shared memory in `cull` and `count2`;
+// worlds with more pages fall back to global atomics for pages >= FAST_PAGES.
+const FAST_PAGES: u32 = 8u;
+const FAST_BUCKETS: u32 = 32u; // FAST_PAGES * BANDS
 // In its first word: its box is tested this frame; it waits for phase 2.
 const TESTED: u32 = 16u;
 const PHASE2: u32 = 8u;
@@ -162,11 +172,28 @@ fn page_count(page: u32, phase: u32) -> u32 {
     return STATS + phase * params.pages + page;
 }
 
-// The count of `block`'s draws in `page` and `phase` (`cull`, `count2`), then
-// where they start (`scan`): phase 1's slots, then phase 2's.
-fn block_count(block: u32, page: u32, phase: u32) -> u32 {
+// The count of `block`'s draws in `(page, band)` and `phase` (`cull`, `count2`),
+// then where they start in `page`'s contiguous draw region (`scan`: band 0
+// first, then band 1 .. BANDS - 1). Laid out with `block` as the innermost index
+// so `scan_page` reads and writes `blocks` contiguously across warp lanes
+// (stride-1 coalesced access per `(page, band)`).
+fn block_base(page: u32, band: u32, phase: u32, blocks: u32) -> u32 {
+    return STATS + 2u * params.pages + ((phase * params.pages + page) * BANDS + band) * blocks;
+}
+
+fn block_count(block: u32, page: u32, band: u32, phase: u32) -> u32 {
     let blocks = (params.ids + BLOCK - 1u) / BLOCK;
-    return STATS + 2u * params.pages + (phase * blocks + block) * params.pages + page;
+    return block_base(page, band, phase, blocks) + block;
+}
+
+// Distance band of section `(sx, sz)` from camera column `(cam_x, cam_z)`:
+// 4 geometric bands covering 0..4, 4..8, 8..16, and >=16 chunks from the camera
+// (64, 128, 256+ blocks), matching early-Z importance with half the scan work.
+fn distance_band(sx: i32, sz: i32) -> u32 {
+    let dx = abs(sx - params.cam_x);
+    let dz = abs(sz - params.cam_z);
+    let d2 = u32(dx * dx + dz * dz);
+    return select(0u, 1u, d2 >= 16u) + select(0u, 1u, d2 >= 64u) + select(0u, 1u, d2 >= 256u);
 }
 
 // The id's first `runs` word, its flags cleared, if it draws in `phase` (in
@@ -346,124 +373,277 @@ fn apply(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// Workgroup-local reductions for `cull` and `count2` (one workgroup owns one
+// `block` exclusively, so its `block_count(block, ...)` slots have no cross-
+// workgroup contention and need at most one atomicStore per non-zero bucket).
+var<workgroup> wg_kept: atomic<u32>;
+var<workgroup> wg_buckets: array<atomic<u32>, 32>;
+
 @compute @workgroup_size(64)
-fn cull(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let id = gid.y * (ROW * BLOCK) + gid.x;
-    if id == 0u && (params.flags & OCCLUDE) != 0u {
-        // The box draw's vertices: the cube's corners (gpu_occlusion.wgsl).
-        atomicStore(&counts[BOX], 36u);
+fn cull(
+    @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32,
+) {
+    let block = group.y * ROW + group.x;
+    let id = block * BLOCK + lane;
+    if lane == 0u {
+        atomicStore(&wg_kept, 0u);
+        if block == 0u && (params.flags & OCCLUDE) != 0u {
+            // The box draw's vertices: the cube's corners (gpu_occlusion.wgsl).
+            atomicStore(&counts[BOX], 36u);
+        }
     }
+    if lane < FAST_BUCKETS {
+        atomicStore(&wg_buckets[lane], 0u);
+    }
+    workgroupBarrier();
+
     // Past the table's end the records are stale: the CPU never writes them free.
-    if id >= params.ids {
-        return;
-    }
-    let at = id * RUN_WORDS;
-    runs[at] = 0u;
-    let s = sections[id];
-    if s.key.w < 0 || s.a.y == 0u || (s.a.w & FADING) != 0u || !near(s.key.x, s.key.z)
-        || !reached(s.key.xyz) {
-        return;
-    }
-    let page = u32(s.key.w);
-    // The tables hold every column within the distance; a key before their
-    // first wraps past their end.
-    let c = vec3<u32>(s.key.xyz - params.first.xyz);
-    if page >= params.pages || any(c >= params.cells.xyz) || !in_frustum(c, s.a.z) {
-        return;
-    }
-    // Kept, whether or not a quad of it can face the eye.
-    atomicAdd(&counts[0], 1u);
-    let nx = params.cells.x;
-    let ny = params.cells.y;
-    let origin = vec4<u32>(tables[c.x], tables[nx + c.y], tables[nx + ny + c.z], STEP_BITS);
-    origins[id] = origin;
-    // gfx.rs `facing_runs`: the runs of its buckets that can face the eye, an
-    // empty bucket breaking none, a draw each; without an eye, its solid quads.
-    var n = 0u;
-    if (params.flags & EYE) == 0u {
-        runs[at + 1u] = 0u;
-        runs[at + 2u] = s.a.y;
-        n = 1u;
-    } else {
-        let e = params.eyes;
-        let eye = vec3<u32>(tables[e + c.x], tables[e + nx + c.y], tables[e + nx + ny + c.z]);
-        var start = 0u;
-        var first = 0u;
-        var open = false;
-        for (var b = 0u; b < 7u; b++) {
-            let end = bucket_end(id, b);
-            if end == start {
-                continue;
+    if id < params.ids {
+        let at = id * RUN_WORDS;
+        runs[at] = 0u;
+        let s = sections[id];
+        if s.key.w >= 0 && s.a.y != 0u && (s.a.w & FADING) == 0u
+            && near(s.key.x, s.key.z) && reached(s.key.xyz)
+        {
+            let page = u32(s.key.w);
+            // The tables hold every column within the distance; a key before their
+            // first wraps past their end.
+            let c = vec3<u32>(s.key.xyz - params.first.xyz);
+            if page < params.pages && all(c < params.cells.xyz) && in_frustum(c, s.a.z) {
+                // Kept, whether or not a quad of it can face the eye.
+                atomicAdd(&wg_kept, 1u);
+                let nx = params.cells.x;
+                let ny = params.cells.y;
+                let origin = vec4<u32>(tables[c.x], tables[nx + c.y], tables[nx + ny + c.z], STEP_BITS);
+                origins[id] = origin;
+                // gfx.rs `facing_runs`: the runs of its buckets that can face the eye, an
+                // empty bucket breaking none, a draw each; without an eye, its solid quads.
+                var n = 0u;
+                if (params.flags & EYE) == 0u {
+                    runs[at + 1u] = 0u;
+                    runs[at + 2u] = s.a.y;
+                    n = 1u;
+                } else {
+                    let e = params.eyes;
+                    let eye = vec3<u32>(tables[e + c.x], tables[e + nx + c.y], tables[e + nx + ny + c.z]);
+                    var start = 0u;
+                    var first = 0u;
+                    var open = false;
+                    for (var b = 0u; b < 7u; b++) {
+                        let end = bucket_end(id, b);
+                        if end == start {
+                            continue;
+                        }
+                        let shown = seen(id, b, eye);
+                        if shown && !open {
+                            open = true;
+                            first = start;
+                        } else if !shown && open {
+                            runs[at + 1u + 2u * n] = first;
+                            runs[at + 2u + 2u * n] = start - first;
+                            n += 1u;
+                            open = false;
+                        }
+                        start = end;
+                    }
+                    if open {
+                        runs[at + 1u + 2u * n] = first;
+                        runs[at + 2u + 2u * n] = start - first;
+                        n += 1u;
+                    }
+                }
+                if n > 0u {
+                    var flags = 0u;
+                    if (params.flags & OCCLUDE) != 0u {
+                        flags = occlusion(id, at, bitcast<vec3<f32>>(origin.xyz), s.a.z);
+                    }
+                    let band = distance_band(s.key.x, s.key.z);
+                    runs[at] = (page << PAGE_SHIFT) | (band << BAND_SHIFT) | flags | n;
+                    if (flags & PHASE2) == 0u {
+                        if page < FAST_PAGES {
+                            atomicAdd(&wg_buckets[page * BANDS + band], n);
+                        } else {
+                            atomicAdd(&counts[block_count(block, page, band, 0u)], n);
+                        }
+                    }
+                }
             }
-            let shown = seen(id, b, eye);
-            if shown && !open {
-                open = true;
-                first = start;
-            } else if !shown && open {
-                runs[at + 1u + 2u * n] = first;
-                runs[at + 2u + 2u * n] = start - first;
-                n += 1u;
-                open = false;
-            }
-            start = end;
-        }
-        if open {
-            runs[at + 1u + 2u * n] = first;
-            runs[at + 2u + 2u * n] = start - first;
-            n += 1u;
         }
     }
-    if n == 0u {
-        return;
+
+    workgroupBarrier();
+    if lane == 0u {
+        let kept = atomicLoad(&wg_kept);
+        if kept > 0u {
+            atomicAdd(&counts[0], kept);
+        }
     }
-    var flags = 0u;
-    if (params.flags & OCCLUDE) != 0u {
-        flags = occlusion(id, at, bitcast<vec3<f32>>(origin.xyz), s.a.z);
-    }
-    runs[at] = (page << PAGE_SHIFT) | flags | n;
-    if (flags & PHASE2) == 0u {
-        atomicAdd(&counts[block_count(id / BLOCK, page, 0u)], n);
+    if lane < FAST_BUCKETS {
+        let count = atomicLoad(&wg_buckets[lane]);
+        if count > 0u {
+            let page = lane / BANDS;
+            let band = lane % BANDS;
+            let blocks = (params.ids + BLOCK - 1u) / BLOCK;
+            atomicStore(&counts[block_base(page, band, 0u, blocks) + block], count);
+        }
     }
 }
 
-var<workgroup> partial: array<u32, 256>;
+var<workgroup> partial: array<vec4<u32>, 256>;
 
-// One workgroup per page: each lane sums a stretch of blocks, the lanes'
-// sums are scanned, and each block's sum becomes where its draws start, in
-// `phase` (`scan`, gpu_occlusion.wgsl `scan2`).
+// One workgroup per page: scans all 4 distance bands together in a single
+// Hillis-Steele workgroup scan with stride-1 coalesced global accesses
+// per band. Band 0's draws land first in the page's contiguous draw region,
+// then band 1's, band 2's, and band 3's; within each band draws stay in
+// deterministic id order.
 fn scan_page(page: u32, lane: u32, phase: u32) {
     let blocks = (params.ids + BLOCK - 1u) / BLOCK;
-    let stretch = (blocks + 255u) / 256u;
-    let first = min(lane * stretch, blocks);
-    let last = min(first + stretch, blocks);
-    var sum = 0u;
-    for (var b = first; b < last; b++) {
-        sum += atomicLoad(&counts[block_count(b, page, phase)]);
+    let base0 = block_base(page, 0u, phase, blocks);
+    let base1 = base0 + blocks;
+    let base2 = base1 + blocks;
+    let base3 = base2 + blocks;
+
+    if blocks <= 256u {
+        // Fast path (up to 16,384 section IDs): 1 coalesced load per lane per band,
+        // 1 vectorized 4-band scan, 1 coalesced store per lane per band.
+        var vals = vec4<u32>(0u);
+        if lane < blocks {
+            vals = vec4<u32>(
+                atomicLoad(&counts[base0 + lane]),
+                atomicLoad(&counts[base1 + lane]),
+                atomicLoad(&counts[base2 + lane]),
+                atomicLoad(&counts[base3 + lane]),
+            );
+        }
+        partial[lane] = vals;
+        workgroupBarrier();
+        for (var step = 1u; step < 256u; step <<= 1u) {
+            var before = vec4<u32>(0u);
+            if lane >= step {
+                before = partial[lane - step];
+            }
+            workgroupBarrier();
+            partial[lane] += before;
+            workgroupBarrier();
+        }
+        let totals = partial[255];
+        let band_bases = vec4<u32>(
+            0u,
+            totals.x,
+            totals.x + totals.y,
+            totals.x + totals.y + totals.z,
+        );
+        if lane < blocks {
+            let excl = partial[lane] - vals;
+            let starts = band_bases + excl;
+            if vals.x > 0u {
+                atomicStore(&counts[base0 + lane], starts.x);
+            }
+            if vals.y > 0u {
+                atomicStore(&counts[base1 + lane], starts.y);
+            }
+            if vals.z > 0u {
+                atomicStore(&counts[base2 + lane], starts.z);
+            }
+            if vals.w > 0u {
+                atomicStore(&counts[base3 + lane], starts.w);
+            }
+        }
+        if lane == 255u {
+            let sum_all = totals.x + totals.y + totals.z + totals.w;
+            // A region has room for every draw of its page's records; were one
+            // short, its draws past it go.
+            let total = min(sum_all, region(page).y);
+            atomicStore(&counts[page_count(page, phase)], total);
+            atomicAdd(&counts[DRAWS], total);
+            if phase == 1u {
+                atomicAdd(&counts[DRAWN2], total);
+            }
+        }
+        return;
     }
-    partial[lane] = sum;
+
+    // Large worlds (> 16,384 section IDs, e.g. RD 32+): tile in chunks of 256
+    // blocks so every global load and store stays 100% stride-1 coalesced across
+    // the 256 lanes, scanning all 4 bands simultaneously in `vec4<u32>`.
+    var totals = vec4<u32>(0u);
+    for (var tile = 0u; tile < blocks; tile += 256u) {
+        let b = tile + lane;
+        if b < blocks {
+            totals += vec4<u32>(
+                atomicLoad(&counts[base0 + b]),
+                atomicLoad(&counts[base1 + b]),
+                atomicLoad(&counts[base2 + b]),
+                atomicLoad(&counts[base3 + b]),
+            );
+        }
+    }
+    // Reduce per-lane partial totals to get total draw count per band across the page.
+    partial[lane] = totals;
     workgroupBarrier();
-    for (var step = 1u; step < 256u; step <<= 1u) {
-        var before = 0u;
-        if lane >= step {
-            before = partial[lane - step];
+    for (var step = 128u; step > 0u; step >>= 1u) {
+        if lane < step {
+            partial[lane] += partial[lane + step];
         }
         workgroupBarrier();
-        partial[lane] += before;
+    }
+    let page_totals = partial[0];
+    var running = vec4<u32>(
+        0u,
+        page_totals.x,
+        page_totals.x + page_totals.y,
+        page_totals.x + page_totals.y + page_totals.z,
+    );
+    workgroupBarrier();
+
+    // Second pass over 256-block tiles: coalesced load, vectorized scan, coalesced store.
+    for (var tile = 0u; tile < blocks; tile += 256u) {
+        let b = tile + lane;
+        var vals = vec4<u32>(0u);
+        if b < blocks {
+            vals = vec4<u32>(
+                atomicLoad(&counts[base0 + b]),
+                atomicLoad(&counts[base1 + b]),
+                atomicLoad(&counts[base2 + b]),
+                atomicLoad(&counts[base3 + b]),
+            );
+        }
+        partial[lane] = vals;
+        workgroupBarrier();
+        for (var step = 1u; step < 256u; step <<= 1u) {
+            var before = vec4<u32>(0u);
+            if lane >= step {
+                before = partial[lane - step];
+            }
+            workgroupBarrier();
+            partial[lane] += before;
+            workgroupBarrier();
+        }
+        if b < blocks {
+            let starts = running + (partial[lane] - vals);
+            if vals.x > 0u {
+                atomicStore(&counts[base0 + b], starts.x);
+            }
+            if vals.y > 0u {
+                atomicStore(&counts[base1 + b], starts.y);
+            }
+            if vals.z > 0u {
+                atomicStore(&counts[base2 + b], starts.z);
+            }
+            if vals.w > 0u {
+                atomicStore(&counts[base3 + b], starts.w);
+            }
+        }
+        running += partial[255];
         workgroupBarrier();
     }
-    var start = 0u;
-    if lane > 0u {
-        start = partial[lane - 1u];
-    }
-    for (var b = first; b < last; b++) {
-        let count = atomicLoad(&counts[block_count(b, page, phase)]);
-        atomicStore(&counts[block_count(b, page, phase)], start);
-        start += count;
-    }
+
     if lane == 255u {
+        let sum_all = page_totals.x + page_totals.y + page_totals.z + page_totals.w;
         // A region has room for every draw of its page's records; were one
         // short, its draws past it go.
-        let total = min(partial[255], region(page).y);
+        let total = min(sum_all, region(page).y);
         atomicStore(&counts[page_count(page, phase)], total);
         atomicAdd(&counts[DRAWS], total);
         if phase == 1u {
@@ -478,26 +658,57 @@ fn scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
 }
 
 var<workgroup> held: array<u32, 64>;
+var<workgroup> scatter_bases: array<u32, 32>;
+var<workgroup> scatter_active: atomic<u32>;
 
 // One workgroup per block of ids: each section's draws go after those of the
-// block's earlier sections in its page, in its runs' order, in `phase`
-// (`scatter`, gpu_occlusion.wgsl `scatter2`).
+// block's earlier sections in the same `(page, band)`, in its runs' order, in
+// `phase` (`scatter`, gpu_occlusion.wgsl `scatter2`).
 fn scatter_block(block: u32, lane: u32, phase: u32) {
     let id = block * BLOCK + lane;
     let mine = drawn_in(id, phase);
     held[lane] = mine;
+    if lane == 0u {
+        atomicStore(&scatter_active, 0u);
+    }
     workgroupBarrier();
-    // Its draws below PAGE_SHIFT, its page above.
     let n = mine & 7u;
+    if n > 0u {
+        let page = mine >> PAGE_SHIFT;
+        if page < FAST_PAGES {
+            let band = (mine >> BAND_SHIFT) & BAND_MASK;
+            atomicOr(&scatter_active, 1u << (page * BANDS + band));
+        }
+    }
+    workgroupBarrier();
+    if lane < FAST_BUCKETS {
+        let mask = atomicLoad(&scatter_active);
+        if ((mask >> lane) & 1u) != 0u {
+            let page = lane / BANDS;
+            let band = lane % BANDS;
+            let blocks = (params.ids + BLOCK - 1u) / BLOCK;
+            scatter_bases[lane] = atomicLoad(&counts[block_base(page, band, phase, blocks) + block]);
+        }
+    }
+    workgroupBarrier();
+    // Its draws below BAND_SHIFT, its band in [BAND_SHIFT..PAGE_SHIFT), its page above.
     if n == 0u {
         return;
     }
+    let page_band = mine >> BAND_SHIFT;
     let page = mine >> PAGE_SHIFT;
-    var slot = atomicLoad(&counts[block_count(block, page, phase)]);
+    let band = page_band & BAND_MASK;
+    var slot: u32;
+    if page < FAST_PAGES {
+        slot = scatter_bases[page * BANDS + band];
+    } else {
+        slot = atomicLoad(&counts[block_count(block, page, band, phase)]);
+    }
     for (var other = 0u; other < lane; other++) {
         // A section not drawn holds 0: no draws.
-        if (held[other] >> PAGE_SHIFT) == page {
-            slot += held[other] & 7u;
+        let h = held[other];
+        if (h >> BAND_SHIFT) == page_band {
+            slot += h & 7u;
         }
     }
     let r = region(page);

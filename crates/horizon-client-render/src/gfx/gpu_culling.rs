@@ -46,14 +46,16 @@
 //! buckets that can face the eye lie in at most `RUNS` runs: a draw each.
 //!
 //! The pass `apply`s the records that changed, then `cull` keeps the sections
-//! in view, writes their runs and counts their draws per page and block of ids,
-//! `scan` turns the counts into where each block's draws start, and `scatter`
-//! writes every block's draws there in id order, each section's in its runs'.
-//! Appended with atomics alone, a page's draws would come in the order the GPU
-//! happens to schedule them, and where faces of two sections meet at exactly
-//! the same depth the later draw keeps the pixel, so such pixels would flicker;
-//! in id order they differ from the CPU's front-to-back order only there, and
-//! stay put.
+//! in view, writes their runs and counts their draws per page, distance band
+//! (`BANDS`) and block of ids, `scan` turns the counts into where each block's
+//! draws start (band 0 through `BANDS - 1` front-to-back within each page), and
+//! `scatter` writes every block's draws there, ordered per page and phase by
+//! distance band, section id, and each section's runs. Appended with atomics
+//! alone, a page's draws would come in the order the GPU happens to schedule
+//! them, and where faces of two sections meet at exactly the same depth the
+//! later draw keeps the pixel, so such pixels would flicker; band-then-id order
+//! stays deterministic for a camera column while giving early-Z coarse
+//! front-to-back order.
 //!
 //! This is not `cull` (occlusion culling, `HORIZON_GPU_CULL`), which tests the
 //! CPU's lists against phase 1's depth: frames drawn from here leave it off.
@@ -315,6 +317,9 @@ const OCCLUDE: u32 = 8;
 const PROBE: u32 = 16;
 /// Ids per block (the shader's `BLOCK`), and the workgroup of the passes over ids.
 const WORKGROUP: u32 = 64;
+/// Front-to-back distance bands per page (the shader's `BANDS`: 0..4, 4..8,
+/// 8..16, and >=16 chunks from the camera).
+const BANDS: u64 = 4;
 /// Workgroups along x when there are more (the shader's `ROW`).
 const ROW: u32 = 65535;
 /// Changed records past which the whole table is written at once: their
@@ -1263,10 +1268,12 @@ impl GpuCulling {
         // A region has room for every draw of every record on its page.
         let total = RUNS * self.records.page_sections.iter().sum::<u32>();
         // The statistics, each page's count in both phases, each block's per
-        // page in both phases, then where the test exists the boxes to test.
+        // (page, distance band) in both phases, then where the test exists the
+        // boxes to test.
         let blocks = u64::from(ids.div_ceil(WORKGROUP));
-        let phase1_end = STATS + u64::from(pass_pages) * (2 + blocks);
-        let tests_at = phase1_end + u64::from(pass_pages) * blocks;
+        let buckets = u64::from(pass_pages) * BANDS;
+        let phase1_end = STATS + u64::from(pass_pages) * 2 + buckets * blocks;
+        let tests_at = phase1_end + buckets * blocks;
         let count_words = match self.test {
             Some(_) => tests_at + u64::from(ids),
             None => phase1_end,
@@ -1470,9 +1477,10 @@ impl GpuCulling {
         }
         pass.set_vertex_buffer(1, self.origins.buffer.slice(..));
         for &(page, first, size) in &self.pages {
-            pass.set_vertex_buffer(0, arena.buffer(page).slice(..));
             if let Some(group) = group(page) {
                 pass.set_bind_group(1, group, &[]);
+            } else {
+                pass.set_vertex_buffer(0, arena.buffer(page).slice(..));
             }
             if let Some(looks) = looks {
                 pass.set_bind_group(super::looks::GROUP, looks.page(page, false), &[]);
@@ -2194,6 +2202,7 @@ mod tests {
             ("STEP_BITS", u64::from(step.to_bits())),
             ("ROW", u64::from(ROW)),
             ("BLOCK", u64::from(WORKGROUP)),
+            ("BANDS", BANDS),
             ("STATS", STATS),
             ("UNBOUNDED", u64::from(UNBOUNDED)),
             ("REACH", u64::from(REACH)),
@@ -2204,8 +2213,12 @@ mod tests {
         ] {
             assert_eq!(constant(name), value, "{name}");
         }
-        // A section's draws fit below its page in its first `runs` word.
-        assert!(u64::from(RUNS) < 1 << constant("PAGE_SHIFT"));
+        // A section's draws and flags fit below its distance band, and its
+        // band fits below its page in its first `runs` word.
+        let band_shift = constant("BAND_SHIFT");
+        let page_shift = constant("PAGE_SHIFT");
+        assert!(u64::from(RUNS) < 1 << band_shift);
+        assert!(BANDS <= 1 << (page_shift - band_shift));
     }
 
     /// The shader's `near` is `in_view_distance`, on every column out to 140
@@ -3125,6 +3138,17 @@ mod tests {
             let draws = read(device, queue, &gpu.draws.buffer, gpu.draws.bytes);
             let origins = read(device, queue, &gpu.origins.buffer, u64::from(gpu.ids) * 16);
             let mut got = Vec::new();
+            let band_of = |key: (i32, i32, i32)| -> u32 {
+                let dx = (key.0 - params.cam_x).abs();
+                let dz = (key.2 - params.cam_z).abs();
+                let d2 = (dx * dx + dz * dz) as u32;
+                match d2 {
+                    0..16 => 0,
+                    16..64 => 1,
+                    64..256 => 2,
+                    _ => 3,
+                }
+            };
             for &(page, first, size) in &gpu.pages {
                 let count = counts[(STATS + u64::from(page)) as usize];
                 assert!(
@@ -3133,13 +3157,15 @@ mod tests {
                 );
                 let mut last = None;
                 for d in draws[first as usize * 5..][..count as usize * 5].chunks(5) {
-                    // In id order and each section's in its runs' order, the
-                    // same every frame.
+                    // Front-to-back by distance band, then id order and each
+                    // section's runs' order.
+                    let key = held[&d[4]].0.0;
+                    let key_order = (band_of(key), d[4], d[3]);
                     assert!(
-                        last < Some((d[4], d[3])),
-                        "case {case}, page {page}: out of order"
+                        last < Some(key_order),
+                        "case {case}, page {page}: out of order ({last:?} vs {key_order:?})"
                     );
-                    last = Some((d[4], d[3]));
+                    last = Some(key_order);
                     assert_eq!([d[1], d[2]], [1, 0], "case {case}: one instance, index 0");
                     let instance = &origins[d[4] as usize * 4..][..4];
                     let instance: [u32; 4] = instance.try_into().unwrap();

@@ -55,12 +55,15 @@ fn fs_box(in: BoxOut) -> @location(0) vec4<f32> {
 var<workgroup> tally: array<atomic<u32>, 3>;
 
 // After the test, one workgroup per block of ids: the quads of the sections
-// with runs, the tested boxes not seen and their quads, and per page each
-// block's draws that phase 2 makes (`drawn_in`'s condition).
+// with runs, the tested boxes not seen and their quads, and per (page, band)
+// each block's draws that phase 2 makes (`drawn_in`'s condition).
 @compute @workgroup_size(64)
 fn count2(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     if lane < 3u {
         atomicStore(&tally[lane], 0u);
+    }
+    if lane < FAST_BUCKETS {
+        atomicStore(&wg_buckets[lane], 0u);
     }
     workgroupBarrier();
     let block = group.y * ROW + group.x;
@@ -81,15 +84,39 @@ fn count2(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_ind
                 atomicAdd(&tally[2], quads);
             }
             if (w & PHASE2) != 0u && saw {
-                atomicAdd(&counts[block_count(block, w >> PAGE_SHIFT, 1u)], n);
+                let page = w >> PAGE_SHIFT;
+                let band = (w >> BAND_SHIFT) & BAND_MASK;
+                if page < FAST_PAGES {
+                    atomicAdd(&wg_buckets[page * BANDS + band], n);
+                } else {
+                    atomicAdd(&counts[block_count(block, page, band, 1u)], n);
+                }
             }
         }
     }
     workgroupBarrier();
     if lane == 0u {
-        atomicAdd(&counts[QUADS], atomicLoad(&tally[0]));
-        atomicAdd(&counts[HIDDEN], atomicLoad(&tally[1]));
-        atomicAdd(&counts[HIDDEN_QUADS], atomicLoad(&tally[2]));
+        let q = atomicLoad(&tally[0]);
+        if q > 0u {
+            atomicAdd(&counts[QUADS], q);
+        }
+        let h = atomicLoad(&tally[1]);
+        if h > 0u {
+            atomicAdd(&counts[HIDDEN], h);
+        }
+        let hq = atomicLoad(&tally[2]);
+        if hq > 0u {
+            atomicAdd(&counts[HIDDEN_QUADS], hq);
+        }
+    }
+    if lane < FAST_BUCKETS {
+        let count = atomicLoad(&wg_buckets[lane]);
+        if count > 0u {
+            let page = lane / BANDS;
+            let band = lane % BANDS;
+            let blocks = (params.ids + BLOCK - 1u) / BLOCK;
+            atomicStore(&counts[block_base(page, band, 1u, blocks) + block], count);
+        }
     }
 }
 
