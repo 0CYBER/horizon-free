@@ -1255,15 +1255,336 @@ impl MotionWorld<'_, '_, '_> {
     /// ServerboundPlayerCommandPacket comes before the tick's move).
     pub fn replayed_tick(&mut self, keys: crate::sprint::Keys, sprinting: bool) -> Result<()> {
         self.player.replaying = true;
-        let result = self.local_tick(keys, |player, _| {
-            if player.sprinting == sprinting {
-                Ok(())
-            } else {
-                player.set_sprinting(sprinting)
-            }
-        });
+        let result = match self.try_fast_stationary_replayed_tick(keys, sprinting) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.local_tick(keys, |player, _| {
+                if player.sprinting == sprinting {
+                    Ok(())
+                } else {
+                    player.set_sprinting(sprinting)
+                }
+            }),
+            Err(err) => Err(err),
+        };
         self.player.replaying = false;
         result
+    }
+    fn stationary_border_and_hooks_clear(&self, width: f32, pos: Vec3) -> bool {
+        if self
+            .player
+            .border
+            .as_ref()
+            .is_some_and(|b| b.distance_to_border(pos.x, pos.z) <= f64::from(width) * 0.5 + 1.0)
+        {
+            return false;
+        }
+        !(self.loop_context.side() == horizon_world::native_load_context::LoopSide::Server
+            && (mod_api::__private::listened(mod_api::HookId::EntityMove)
+                || mod_api::__private::listened(mod_api::HookId::BlockSpeedFactor)
+                || mod_api::__private::listened(mod_api::HookId::Friction)
+                || mod_api::__private::listened(mod_api::HookId::BlockJumpFactor)
+                || mod_api::__private::listened(mod_api::HookId::IsLadder)))
+    }
+    fn stationary_gravity_and_drag(&mut self, max_vy: f64) -> Result<Option<(f64, f32)>> {
+        let vy = self.player.velocity.y;
+        if vy > max_vy {
+            return Ok(None);
+        }
+        let gravity = living_motion::effective_gravity(self)?;
+        if gravity <= 0.0 || gravity.is_nan() || -vy > gravity {
+            return Ok(None);
+        }
+        let drag = living_motion::air_drag(self)?;
+        Ok(Some((gravity, drag)))
+    }
+    fn stationary_floor_and_body_clear(
+        &self,
+        bounds: Aabb,
+        y_floor: i32,
+        require_minecraft_air_body: bool,
+    ) -> Result<bool> {
+        let min_x = (bounds.min_position().x - 1.0e-7).floor() as i32;
+        let max_x = (bounds.max_position().x + 1.0e-7).floor() as i32;
+        let min_z = (bounds.min_position().z - 1.0e-7).floor() as i32;
+        let max_z = (bounds.max_position().z + 1.0e-7).floor() as i32;
+        let max_y = (bounds.max_position().y + 1.0e-7).floor() as i32;
+        let unit_cube = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
+        let cached = self.collision_binding.cached_shapes();
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                let floor_state = self.scene.block(x, y_floor - 1, z);
+                if self.collision_binding.has_context_rule(floor_state) {
+                    return Ok(false);
+                }
+                let Ok(Some(shape)) = cached.cached_shape(floor_state) else {
+                    return Ok(false);
+                };
+                if shape.boxes() != std::slice::from_ref(&unit_cube) {
+                    return Ok(false);
+                }
+                if require_minecraft_air_body {
+                    let Some(floor_def) = self.assets.registry.state(floor_state) else {
+                        return Ok(false);
+                    };
+                    if !floor_def.name.starts_with("minecraft:")
+                        || matches!(
+                            floor_def.name.as_str(),
+                            "minecraft:magma_block"
+                                | "minecraft:slime_block"
+                                | "minecraft:turtle_egg"
+                        )
+                        || self.resources.soul_speed_blocks.contains(&floor_def.name)
+                    {
+                        return Ok(false);
+                    }
+                }
+                let props = self.resources.blocks.get(floor_state)?;
+                if props.coefficients.friction != 0.6
+                    || props.coefficients.speed_factor != 1.0
+                    || props.coefficients.bounce_restitution != 0.0
+                    || crate::block_contact::restitution_listens(floor_state)
+                    || props.fence
+                    || props.wall
+                    || props.coefficients.fence_gate
+                    || props.water
+                    || props.bubble_column
+                {
+                    return Ok(false);
+                }
+                for y in y_floor..=max_y {
+                    let body_state = self.scene.block(x, y, z);
+                    if self.collision_binding.may_collide(body_state)
+                        || self.collision_binding.has_context_rule(body_state)
+                    {
+                        return Ok(false);
+                    }
+                    if require_minecraft_air_body {
+                        let Some(body_def) = self.assets.registry.state(body_state) else {
+                            return Ok(false);
+                        };
+                        if !matches!(
+                            body_def.name.as_str(),
+                            "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                        ) {
+                            return Ok(false);
+                        }
+                    } else {
+                        let props = self.resources.blocks.get(body_state)?;
+                        if props.coefficients.speed_factor != 1.0
+                            || props.water
+                            || props.bubble_column
+                        {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+    fn try_fast_stationary_replayed_tick(
+        &mut self,
+        keys: crate::sprint::Keys,
+        sprinting: bool,
+    ) -> Result<bool> {
+        if keys.forward
+            || keys.backward
+            || keys.left
+            || keys.right
+            || keys.jump
+            || keys.shift
+            || keys.sprint
+            || keys.analog.is_some_and(|v| v != [0.0, 0.0])
+            || sprinting
+            || !self.entities.is_empty()
+        {
+            return Ok(false);
+        }
+        let p = &*self.player;
+        if !p.client_side
+            || !p.collision_exclusions.is_empty()
+            || p.sprinting
+            || p.spectator
+            || p.flying
+            || p.fall_flying
+            || p.swimming
+            || p.is_passenger
+            || p.sleeping
+            || p.auto_jump_time != 0
+            || p.was_jumping
+            || p.jump_trigger_time != 0
+            || p.shift_key_down
+            || p.local_crouching
+            || p.pose != crate::pose::Pose::Standing
+            || p.health.dead_or_dying()
+            || p.nudge != [None; 2]
+            || p.glide_ending
+            || p.fall_fly_ticks != 0
+            || p.fall_distance != 0.0
+            || p.no_jump_delay != 0
+            || p.stuck_multiplier != Vec3::ZERO
+            || p.status.slow_falling
+            || p.status.levitation.is_some()
+            || p.in_powder_snow
+            || p.was_in_powder_snow
+            || p.ticks_frozen != 0
+            || p.auto_spin_attack_ticks != 0
+            || p.air != 300
+            || p.fire_ticks != -20
+            || p.fluids.first_tick
+            || p.fluids.was_touching_water
+            || p.fluids.was_eye_in_water
+            || p.is_in_lava()
+            || !p.fluids.interaction.trackers().is_empty()
+            || p.fluids.boat.is_some()
+            || !p.ground.on_ground
+            || p.ground.on_ground_no_blocks
+            || p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z >= 9.0e-6
+            || p.steps.movement > p.steps.next_step
+            || !p.attributes.updates().is_empty()
+            || !p.history.records().is_empty()
+            || p.location_effects.on_soul_speed_block
+            || !p.position.x.is_finite()
+            || !p.position.y.is_finite()
+            || !p.position.z.is_finite()
+            || p.position.y != p.position.y.floor()
+        {
+            return Ok(false);
+        }
+        let speed_key = p.attributes.key("minecraft:movement_speed");
+        if p.attributes.lookup(speed_key.as_ref()).is_none()
+            || self
+                .player
+                .attributes
+                .has_modifier(speed_key, "minecraft:powder_snow")
+                .map_err(attribute_error)?
+        {
+            return Ok(false);
+        }
+        if let Some(bounce_key) = self.player.attributes.key("minecraft:bounciness")
+            && self
+                .player
+                .attributes
+                .value(Some(bounce_key), ValueKind::Computed)
+                .map_err(attribute_error)?
+                != 0.0
+        {
+            return Ok(false);
+        }
+        let Some((gravity, drag)) = self.stationary_gravity_and_drag(-0.003)? else {
+            return Ok(false);
+        };
+        let p = &*self.player;
+        let position = p.position;
+        let bounds = p.bounds();
+        if !self.stationary_border_and_hooks_clear(p.dimensions.width, position) {
+            return Ok(false);
+        }
+        let Some(supporting) = self.try_flat_unit_cube_support(true, position, bounds) else {
+            return Ok(false);
+        };
+        // Deflate past `cells_without_collision`'s `1e-7` cell expansion so exact
+        // integer feet coordinates (`y = 64.0`) cannot round below `y_floor`.
+        if !self
+            .scene
+            .chunks
+            .contains_key(&(supporting.x >> 4, supporting.z >> 4))
+            || !self
+                .collisions()
+                .cells_without_collision(bounds.deflate(Vec3::new(1.0e-6, 1.0e-6, 1.0e-6)))
+            || !self.stationary_floor_and_body_clear(bounds, position.y.floor() as i32, true)?
+        {
+            return Ok(false);
+        }
+        let speed = self.player.attribute("minecraft:movement_speed")? as f32;
+        self.player.health.advance_clock();
+        self.player
+            .peaceful_regeneration(self.loop_context, self.scene.health_rules)?;
+        let p = &mut *self.player;
+        p.was_auto_jump = false;
+        p.was_in_powder_snow = false;
+        p.in_powder_snow = false;
+        p.was_jumping = false;
+        p.jumping = false;
+        p.old_position = position;
+        p.move_vector = [0.0, 0.0];
+        p.applied_input = [0.0, 0.0];
+        p.ground.on_ground = true;
+        p.ground.horizontal_collision = false;
+        p.ground.on_ground_no_blocks = false;
+        p.ground.supporting_block = Some(supporting);
+        p.collision = horizon_world::entity_move::CollisionFlags {
+            horizontal: false,
+            vertical: true,
+            below: true,
+            minor: false,
+        };
+        p.on_climbable = false;
+        p.fire_ticks = -20;
+        p.head_yaw = p.yaw;
+        p.speed = speed;
+        p.velocity = Vec3::new(0.0, (-gravity) * f64::from(drag), 0.0);
+        Ok(true)
+    }
+    fn try_flat_unit_cube_support(
+        &self,
+        below: bool,
+        position: Vec3,
+        bounds: Aabb,
+    ) -> Option<BlockPos> {
+        if !below
+            || !position.x.is_finite()
+            || !position.y.is_finite()
+            || !position.z.is_finite()
+            || position.y != position.y.floor()
+        {
+            return None;
+        }
+        let y_floor = position.y.floor() as i32;
+        let support_y = y_floor - 1;
+        let min_x = (bounds.min_position().x - 1.0e-7).floor() as i32;
+        let max_x = (bounds.max_position().x + 1.0e-7).floor() as i32;
+        let min_z = (bounds.min_position().z - 1.0e-7).floor() as i32;
+        let max_z = (bounds.max_position().z + 1.0e-7).floor() as i32;
+        let unit_cube = Aabb::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0));
+        let cached = self.collision_binding.cached_shapes();
+        let mut selected = None;
+        let mut closest = f64::MAX;
+        let dy = f64::from(support_y) + 0.5 - position.y;
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                let state = self.scene.block(x, support_y, z);
+                if self.collision_binding.has_context_rule(state) {
+                    return None;
+                }
+                let Ok(Some(shape)) = cached.cached_shape(state) else {
+                    return None;
+                };
+                if shape.boxes() != std::slice::from_ref(&unit_cube) {
+                    return None;
+                }
+                if f64::from(x) < bounds.max_position().x
+                    && f64::from(x + 1) > bounds.min_position().x
+                    && f64::from(z) < bounds.max_position().z
+                    && f64::from(z + 1) > bounds.min_position().z
+                {
+                    let p = BlockPos::new(x, support_y, z);
+                    let dx = f64::from(x) + 0.5 - position.x;
+                    let dz = f64::from(z) + 0.5 - position.z;
+                    let distance = dx * dx + dy * dy + dz * dz;
+                    if distance < closest
+                        || distance == closest
+                            && selected.is_none_or(|old| {
+                                horizon_world::ground_support::compare_positions(old, p) < 0
+                            })
+                    {
+                        selected = Some(p);
+                        closest = distance;
+                    }
+                }
+            }
+        }
+        selected
     }
     /// `LocalPlayer.aiStep` and the travel it ends with; `sprint` is the
     /// sprint phase.
@@ -1423,11 +1744,16 @@ impl MotionWorld<'_, '_, '_> {
     /// what the next knockback starts from; the client's next move places
     /// the player.
     pub fn server_travel(&mut self) -> Result<()> {
+        self.player.drop_tiny_velocity();
+        if let Some((gravity, drag)) = self.can_fast_ground_server_travel()? {
+            self.player.velocity = Vec3::new(0.0, (-gravity) * f64::from(drag), 0.0);
+            return Ok(());
+        }
         let p = &mut *self.player;
         let (position, ground, collision) = (p.position, p.ground, p.collision);
-        let (history, fall_distance, steps) = (p.history.clone(), p.fall_distance, p.steps);
+        let (history, fall_distance, steps) =
+            (std::mem::take(&mut p.history), p.fall_distance, p.steps);
         let events = p.events.len();
-        p.drop_tiny_velocity();
         p.server_copy = true;
         let travelled = self.player_travel(Vec3::ZERO);
         let p = &mut *self.player;
@@ -1443,6 +1769,60 @@ impl MotionWorld<'_, '_, '_> {
         p.events.truncate(events);
         p.events.extend(kept);
         travelled
+    }
+    fn can_fast_ground_server_travel(&mut self) -> Result<Option<(f64, f32)>> {
+        let p = &*self.player;
+        if !self.entities.is_empty()
+            || !p.collision_exclusions.is_empty()
+            || p.spectator
+            || p.flying
+            || p.fall_flying
+            || p.swimming
+            || p.is_passenger
+            || p.sleeping
+            || p.jumping
+            || p.auto_spin_attack_ticks != 0
+            || p.fluids.was_touching_water
+            || p.is_in_lava()
+            || p.in_powder_snow
+            || p.was_in_powder_snow
+            || !p.ground.on_ground
+            || p.ground.on_ground_no_blocks
+            || p.fall_distance != 0.0
+            || p.velocity.x != 0.0
+            || p.velocity.z != 0.0
+            || p.stuck_multiplier != Vec3::ZERO
+            || p.status.slow_falling
+            || p.status.levitation.is_some()
+            || p.position.y != p.position.y.floor()
+            || !p.position.x.is_finite()
+            || !p.position.y.is_finite()
+            || !p.position.z.is_finite()
+        {
+            return Ok(None);
+        }
+        let Some((gravity, drag)) = self.stationary_gravity_and_drag(0.0)? else {
+            return Ok(None);
+        };
+        let p = &*self.player;
+        let bounds = p.bounds();
+        if !self.stationary_border_and_hooks_clear(p.dimensions.width, p.position) {
+            return Ok(None);
+        }
+        let y_floor = p.position.y.floor() as i32;
+        let min_x = (bounds.min_position().x - 1.0e-7).floor() as i32;
+        let max_x = (bounds.max_position().x + 1.0e-7).floor() as i32;
+        let min_z = (bounds.min_position().z - 1.0e-7).floor() as i32;
+        let max_z = (bounds.max_position().z + 1.0e-7).floor() as i32;
+        if p.ground.supporting_block.is_some_and(|sb| {
+            sb.y != y_floor - 1 || sb.x < min_x || sb.x > max_x || sb.z < min_z || sb.z > max_z
+        }) {
+            return Ok(None);
+        }
+        if !self.stationary_floor_and_body_clear(bounds, y_floor, false)? || self.climbable()? {
+            return Ok(None);
+        }
+        Ok(Some((gravity, drag)))
     }
     /// `LivingEntity.checkAutoSpinAttack`: the first living entity in the
     /// box swept this tick takes the hit and ends the spin, bouncing the
@@ -1531,9 +1911,50 @@ impl MotionWorld<'_, '_, '_> {
     }
     fn effects_from_blocks(&mut self, pass: BlockPass) -> Result<()> {
         use horizon_world::entity_move::MovementRecord;
+        thread_local! {
+            static SCRATCH: std::cell::RefCell<(
+                Vec<MovementRecord>,
+                crate::fast_hash::FxHashSet<i64>,
+                mod_api::InsideEffects,
+            )> = std::cell::RefCell::new((
+                Vec::new(),
+                crate::fast_hash::FxHashSet::default(),
+                mod_api::InsideEffects::default(),
+            ));
+        }
         let damage_only = pass != BlockPass::Client;
-        let mut movements: Vec<MovementRecord> =
-            self.player.history.records().iter().copied().collect();
+        let (mut movements, mut visited, mut effects) = SCRATCH.with(|cell| {
+            let mut s = cell.borrow_mut();
+            (
+                std::mem::take(&mut s.0),
+                std::mem::take(&mut s.1),
+                std::mem::take(&mut s.2),
+            )
+        });
+        struct Restore(
+            Vec<MovementRecord>,
+            crate::fast_hash::FxHashSet<i64>,
+            mod_api::InsideEffects,
+        );
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                self.0.clear();
+                self.1.clear();
+                let _ = self.2.take_planned();
+                if self.0.capacity() <= 256 && self.1.capacity() <= 256 {
+                    SCRATCH.with(|cell| {
+                        let mut s = cell.borrow_mut();
+                        *s = (
+                            std::mem::take(&mut self.0),
+                            std::mem::take(&mut self.1),
+                            std::mem::take(&mut self.2),
+                        );
+                    });
+                }
+            }
+        }
+        movements.clear();
+        movements.extend(self.player.history.records().iter().copied());
         if pass != BlockPass::ServerStuck {
             self.player.history.clear();
         }
@@ -1555,6 +1976,7 @@ impl MotionWorld<'_, '_, '_> {
         }
         // isAffectedByBlocks: no physics for spectators.
         if self.player.spectator {
+            drop(Restore(movements, visited, effects));
             return Ok(());
         }
         // Block.stepOn for the block under an entity on the ground:
@@ -1602,18 +2024,28 @@ impl MotionWorld<'_, '_, '_> {
                 }
             }
         }
-        let mut visited = crate::fast_hash::FxHashSet::default();
-        let mut effects = mod_api::InsideEffects::default();
-        let mut inside = PlayerInside {
-            m: self,
-            pass,
-            melt_step: None,
+        visited.clear();
+        let _ = effects.take_planned();
+        let sweep_result = {
+            let mut inside = PlayerInside {
+                m: self,
+                pass,
+                melt_step: None,
+            };
+            crate::block_contact::sweep_movements(
+                &mut inside,
+                &movements,
+                &mut visited,
+                &mut effects,
+            )
         };
-        crate::block_contact::sweep_movements(&mut inside, &movements, &mut visited, &mut effects)?;
+        let planned_list = effects.take_planned();
+        drop(Restore(movements, visited, effects));
+        sweep_result?;
         // `applyAndClear`: the plan applies in order, in this tick, until the
         // player dies. The engine's own effects (the powder snow's freeze and
         // extinguish) and the parts' typed writes flush together.
-        for planned in effects.take_planned() {
+        for planned in planned_list {
             if self.player.health.dead_or_dying() {
                 break;
             }
@@ -2269,6 +2701,13 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     ) -> Result<()> {
         let position = self.player.position;
         let bounds = self.player.bounds();
+        if let Some(supporting) = self.try_flat_unit_cube_support(below, position, bounds) {
+            self.player.ground.on_ground = below;
+            self.player.ground.horizontal_collision = horizontal;
+            self.player.ground.on_ground_no_blocks = false;
+            self.player.ground.supporting_block = Some(supporting);
+            return Ok(());
+        }
         let context = self.context();
         let mut collisions = SceneCollisions {
             world: self.scene,
@@ -6389,5 +6828,269 @@ mod tests {
         assert_eq!(kept(soul_sand, -59.8, false, true), 1.0, "gliding");
         let walking = kept(soul_sand, -60.125, false, false);
         assert!((walking - 0.4).abs() < 1.0e-6, "walking: {walking}");
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn stationary_replayed_tick_fast_path_matches_full_local_tick() {
+        let Some(v) = crate::test_fixtures::vanilla() else {
+            return;
+        };
+        let (assets, render, binding, resources) = (&v.assets, &v.render, &v.collision, &v.motion);
+        let build_scene = || {
+            let mut s = World::test_scene(assets, render, 2).unwrap();
+            let stone = assets.registry.default_state("minecraft:stone").unwrap();
+            for x in 19..=21 {
+                for z in 19..=21 {
+                    s.set(x, 63, z, stone).unwrap();
+                }
+            }
+            s
+        };
+        let mut scene = build_scene();
+        macro_rules! mw {
+            ($player:expr, $scene:expr) => {
+                MotionWorld {
+                    tag_items: None,
+                    block_registries: None,
+                    loop_context: crate::test_resources::server_loop_context(),
+                    damage_hooks: &crate::health::DamageHooks::NONE,
+                    entities: &[],
+                    player: $player,
+                    scene: $scene,
+                    assets,
+                    collision_binding: binding,
+                    resources,
+                    health: &resources.health,
+                }
+            };
+        }
+        let mut seed = PlayerMotion::new(resources, Vec3::new(20.5, 64.0, 20.5)).unwrap();
+        seed.client_side = true;
+        for _ in 0..2 {
+            mw!(&mut seed, &mut scene)
+                .local_tick(crate::sprint::Keys::default(), |p, _| {
+                    p.set_sprinting(false)
+                })
+                .unwrap();
+        }
+
+        let mut fast = seed.clone();
+        let mut full = seed;
+        let mut scene_full = build_scene();
+        for tick in 0..5 {
+            assert!(
+                mw!(&mut fast, &mut scene)
+                    .try_fast_stationary_replayed_tick(crate::sprint::Keys::default(), false)
+                    .unwrap(),
+                "tick {tick} must hit fast path"
+            );
+            full.replaying = true;
+            let full_before_events = full.events.len();
+            mw!(&mut full, &mut scene_full)
+                .local_tick(crate::sprint::Keys::default(), |p, _| {
+                    p.set_sprinting(false)
+                })
+                .unwrap();
+            full.replaying = false;
+
+            assert_eq!(fast.position, full.position, "position tick {tick}");
+            assert_eq!(
+                fast.old_position, full.old_position,
+                "old_position tick {tick}"
+            );
+            assert_eq!(fast.velocity, full.velocity, "velocity tick {tick}");
+            assert_eq!(fast.ground, full.ground, "ground tick {tick}");
+            assert_eq!(
+                (
+                    fast.collision.horizontal,
+                    fast.collision.vertical,
+                    fast.collision.below,
+                    fast.collision.minor,
+                ),
+                (
+                    full.collision.horizontal,
+                    full.collision.vertical,
+                    full.collision.below,
+                    full.collision.minor,
+                ),
+                "collision tick {tick}"
+            );
+            assert_eq!(fast.speed, full.speed, "speed tick {tick}");
+            assert_eq!(fast.head_yaw, full.head_yaw, "head_yaw tick {tick}");
+            assert_eq!(fast.fire_ticks, full.fire_ticks, "fire_ticks tick {tick}");
+            assert_eq!(
+                fast.on_climbable, full.on_climbable,
+                "climbable tick {tick}"
+            );
+            assert_eq!(
+                fast.fall_distance, full.fall_distance,
+                "fall_distance tick {tick}"
+            );
+            assert_eq!(
+                fast.health.tick_count, full.health.tick_count,
+                "health ticks {tick}"
+            );
+            assert_eq!(fast.health.health(), full.health.health(), "health {tick}");
+            // `Replay::play` clears `body.events` after each replayed tick and nothing reads
+            // `MotionEvent::Landing`, so confirm no non-`Landing` events were skipped.
+            assert!(
+                full.events[full_before_events..]
+                    .iter()
+                    .all(|e| matches!(e, MotionEvent::Landing { .. })),
+                "unexpected non-Landing events at tick {tick}: {:?}",
+                &full.events[full_before_events..]
+            );
+        }
+
+        // Bouncy / faster-than-gravity cases must fall back to full path and match.
+        let mut fast_bounce = fast.clone();
+        fast_bounce.velocity.y = -0.3;
+        let key = fast_bounce.attributes.key("minecraft:bounciness").unwrap();
+        let h = fast_bounce
+            .attributes
+            .get_instance(Some(key))
+            .unwrap()
+            .unwrap();
+        fast_bounce
+            .attributes
+            .edit(&h, |a, o| a.set_base_value(0.8, o))
+            .unwrap();
+        let mut full_bounce = fast_bounce.clone();
+        assert!(
+            !mw!(&mut fast_bounce, &mut scene)
+                .try_fast_stationary_replayed_tick(crate::sprint::Keys::default(), false)
+                .unwrap(),
+            "bouncy / -vy > gravity must not enter fast path"
+        );
+        mw!(&mut fast_bounce, &mut scene)
+            .replayed_tick(crate::sprint::Keys::default(), false)
+            .unwrap();
+        full_bounce.replaying = true;
+        mw!(&mut full_bounce, &mut scene_full)
+            .local_tick(crate::sprint::Keys::default(), |p, _| {
+                p.set_sprinting(false)
+            })
+            .unwrap();
+        full_bounce.replaying = false;
+        assert_eq!(fast_bounce.velocity, full_bounce.velocity);
+        assert_eq!(fast_bounce.position, full_bounce.position);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn stationary_server_travel_fast_path_matches_full_and_respects_bounciness() {
+        let Some(v) = crate::test_fixtures::vanilla() else {
+            return;
+        };
+        let (assets, render, binding, resources) = (&v.assets, &v.render, &v.collision, &v.motion);
+        let build_scene = || {
+            let mut s = World::test_scene(assets, render, 2).unwrap();
+            let stone = assets.registry.default_state("minecraft:stone").unwrap();
+            for x in 19..=21 {
+                for z in 19..=21 {
+                    s.set(x, 63, z, stone).unwrap();
+                }
+            }
+            s
+        };
+        let mut scene = build_scene();
+        macro_rules! mw {
+            ($player:expr, $scene:expr) => {
+                MotionWorld {
+                    tag_items: None,
+                    block_registries: None,
+                    loop_context: crate::test_resources::server_loop_context(),
+                    damage_hooks: &crate::health::DamageHooks::NONE,
+                    entities: &[],
+                    player: $player,
+                    scene: $scene,
+                    assets,
+                    collision_binding: binding,
+                    resources,
+                    health: &resources.health,
+                }
+            };
+        }
+        let mut seed = PlayerMotion::new(resources, Vec3::new(20.5, 64.0, 20.5)).unwrap();
+        for _ in 0..2 {
+            mw!(&mut seed, &mut scene)
+                .local_tick(crate::sprint::Keys::default(), |p, _| {
+                    p.set_sprinting(false)
+                })
+                .unwrap();
+        }
+        mw!(&mut seed, &mut scene).server_travel().unwrap();
+
+        let mut fast = seed.clone();
+        let mut full = seed;
+        let mut scene_full = build_scene();
+        for tick in 0..5 {
+            assert!(
+                mw!(&mut fast, &mut scene)
+                    .can_fast_ground_server_travel()
+                    .unwrap()
+                    .is_some(),
+                "tick {tick} must qualify for fast server_travel"
+            );
+            mw!(&mut fast, &mut scene).server_travel().unwrap();
+
+            // Exact baseline fallback path from before this change.
+            full.drop_tiny_velocity();
+            let (position, ground, collision) = (full.position, full.ground, full.collision);
+            let (history, fall_distance, steps) =
+                (full.history.clone(), full.fall_distance, full.steps);
+            let events = full.events.len();
+            full.server_copy = true;
+            mw!(&mut full, &mut scene_full)
+                .player_travel(Vec3::ZERO)
+                .unwrap();
+            full.server_copy = false;
+            (full.position, full.ground, full.collision) = (position, ground, collision);
+            (full.history, full.fall_distance, full.steps) = (history, fall_distance, steps);
+            full.events.truncate(events);
+
+            assert_eq!(
+                fast.velocity, full.velocity,
+                "server_travel velocity tick {tick}"
+            );
+            assert_eq!(
+                fast.position, full.position,
+                "server_travel position tick {tick}"
+            );
+            assert_eq!(fast.ground, full.ground, "server_travel ground tick {tick}");
+        }
+
+        // Blocker #1 regression check: -vy > gravity with bounciness > 0 must fall back and bounce.
+        let mut bounce = fast.clone();
+        bounce.velocity = Vec3::new(0.0, -0.3, 0.0);
+        let key = bounce.attributes.key("minecraft:bounciness").unwrap();
+        let h = bounce.attributes.get_instance(Some(key)).unwrap().unwrap();
+        bounce
+            .attributes
+            .edit(&h, |a, o| a.set_base_value(0.8, o))
+            .unwrap();
+        let mut bounce_full = bounce.clone();
+        assert!(
+            mw!(&mut bounce, &mut scene)
+                .can_fast_ground_server_travel()
+                .unwrap()
+                .is_none(),
+            "-vy > gravity must fall back so entity bounciness runs"
+        );
+        mw!(&mut bounce, &mut scene).server_travel().unwrap();
+
+        bounce_full.drop_tiny_velocity();
+        bounce_full.server_copy = true;
+        mw!(&mut bounce_full, &mut scene_full)
+            .player_travel(Vec3::ZERO)
+            .unwrap();
+        bounce_full.server_copy = false;
+        assert!(
+            bounce.velocity.y > 0.0,
+            "player must bounce vertically: {:?}",
+            bounce.velocity
+        );
+        assert_eq!(bounce.velocity, bounce_full.velocity);
     }
 }

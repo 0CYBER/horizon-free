@@ -1,0 +1,3 @@
+# Equivalence checks for stationary replay and server travel fast paths.
+horizon-client-lib motion::tests::stationary_replayed_tick_fast_path_matches_full_local_tick lib daily resources
+horizon-client-lib motion::tests::stationary_server_travel_fast_path_matches_full_and_respects_bounciness lib daily resources

@@ -8,7 +8,7 @@ use horizon_core::{
     position::BlockPos,
 };
 
-fn compare_positions(left: BlockPos, right: BlockPos) -> i32 {
+pub fn compare_positions(left: BlockPos, right: BlockPos) -> i32 {
     // Vec3i.compareTo uses signed wrapping subtraction in Y/Z/X order.
     if left.y != right.y {
         left.y.wrapping_sub(right.y)
