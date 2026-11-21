@@ -1661,10 +1661,10 @@ impl Game<'_> {
         if self.is_dedicated_server() {
             if self.level.spawn.is_none() {
                 let [x, y, z] = loop {
-                    self.update_world();
                     if let Some(pos) = self.find_world_spawn()? {
                         break pos;
                     }
+                    self.update_world();
                     if Instant::now() > deadline {
                         return Err("the spawn area did not load".into());
                     }
@@ -1681,8 +1681,11 @@ impl Game<'_> {
             return Ok(());
         }
         while self.player.is_none() {
-            self.update_world();
             self.spawn_player()?;
+            if self.player.is_some() {
+                break;
+            }
+            self.update_world();
             if Instant::now() > deadline {
                 return Err("the spawn area did not load".into());
             }

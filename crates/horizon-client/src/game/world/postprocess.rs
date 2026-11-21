@@ -13,7 +13,7 @@ const POSTPROCESS_FLAGS: i32 = 276;
 
 impl Game<'_> {
     pub(super) fn postprocess_chunks(&mut self) -> Result<()> {
-        let ready: Vec<(i32, i32)> = self
+        let mut ready: Vec<(i32, i32)> = self
             .world
             .chunks
             .iter()
@@ -27,6 +27,7 @@ impl Game<'_> {
         if ready.is_empty() {
             return Ok(());
         }
+        ready.sort_unstable();
         // The ticks the marks schedule go to the chunks' containers, which a
         // chunk that arrived since the last tick doesn't have yet
         // (`LevelChunk.registerTickContainerInLevel` comes before
