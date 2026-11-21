@@ -16,8 +16,9 @@ from pathlib import Path
 import subprocess
 
 try:
-    from . import lab, test_rust_parity as base, test_server_knockback_parity as net
+    from . import fast_bins, lab, test_rust_parity as base, test_server_knockback_parity as net
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     import test_server_knockback_parity as net
@@ -66,7 +67,7 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn',
                     '-sourcepath', lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies,
                     '-d', classes, oracle], cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'],
+    subprocess.run(fast_bins.command('horizon-client'),
                    cwd=lab.ROOT, check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],

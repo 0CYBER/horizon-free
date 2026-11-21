@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import uuid
 
+import fast_bins
 import lab
 import test_rust_parity as base
 from integration_env import run_game
@@ -167,7 +168,7 @@ def main():
         if result.returncode:
             raise RuntimeError(f'{name}: {result.returncode}; see {out / (name+".log")}')
     if args.binary is None:
-        run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], 'build', cwd=lab.ROOT)
+        run(fast_bins.command('horizon-client'), 'build', cwd=lab.ROOT)
         binary = lab.cargo_target()/'fast'/('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     else:
         binary = args.binary.resolve(strict=True)

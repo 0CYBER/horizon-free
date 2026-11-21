@@ -28,9 +28,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 try:
-    from . import lab, test_rust_parity as base, test_model_baking_parity as baking
+    from . import fast_bins, lab, test_rust_parity as base, test_model_baking_parity as baking
     from .integration_env import run_game
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     import test_model_baking_parity as baking
@@ -137,7 +138,7 @@ def main():
         'compile-java')
     run(['java', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaBoatAuthorityOracle',
          work / 'inputs.json', work / 'vanilla.json'], 'vanilla')
-    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], 'compile-rust')
+    run(fast_bins.command('horizon-client'), 'compile-rust')
     binary = lab.cargo_target() / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     with (work / 'rust.log').open('w') as log, tempfile.TemporaryDirectory(prefix='boat-authority-') as game_dir:
         run_game([str(binary), '--headless', '--resources', str(args.resources.resolve()), '--game-dir', game_dir], cwd=game_dir,

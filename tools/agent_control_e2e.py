@@ -42,8 +42,9 @@ import time
 from pathlib import Path
 
 try:
-    from . import lab
+    from . import fast_bins, lab
 except ImportError:
+    import fast_bins
     import lab
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1172,7 +1173,7 @@ def main():
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bins'],
+        subprocess.run(fast_bins.command('horizon-client', 'horizon-ctl'),
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)

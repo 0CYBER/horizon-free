@@ -51,10 +51,11 @@ import tempfile
 import time
 
 try:
-    from . import lab, oracle_harness as oh, test_rust_parity as base
+    from . import fast_bins, lab, oracle_harness as oh, test_rust_parity as base
     from .server_bench import DONE, Server
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import fast_bins
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
@@ -543,8 +544,7 @@ def main():
     build = lab.LOCAL / NAME
     shutil.rmtree(build, ignore_errors=True)
     build.mkdir(parents=True)
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client',
-                   '-p', 'horizon-server', '--bin', 'horizon-server'], build, 'compile-rust')
+    oh.run_logged(fast_bins.command('horizon-client', 'horizon-server'), build, 'compile-rust')
     target = lab.cargo_target() / 'fast'
     work = Path(tempfile.mkdtemp(prefix='hz-management-'))
     os.environ['HORIZON_API_DISCOVERY'] = NO_SERVICES

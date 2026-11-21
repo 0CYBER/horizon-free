@@ -25,9 +25,10 @@ import sys
 import tempfile
 
 try:
-    from . import lab, test_model_baking_parity as baking, test_rust_parity as base
+    from . import fast_bins, lab, test_model_baking_parity as baking, test_rust_parity as base
     from .integration_env import run_game
 except ImportError:
+    import fast_bins
     import lab
     import test_model_baking_parity as baking
     import test_rust_parity as base
@@ -131,7 +132,7 @@ def main():
          str(java_root / 'dev/horizonlab/parity/VanillaScreenBuildOracle.java')])
     run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies,
          'dev.horizonlab.parity.VanillaScreenBuildOracle', str(work / 'cases.jsonl'), str(work / 'native.jsonl')])
-    run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    run([*fast_bins.command('horizon-client'), '-q'], cwd=lab.ROOT,
         env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
     executable = lab.cargo_target() / ('fast/horizon-client.exe' if os.name == 'nt' else 'fast/horizon-client')
     with tempfile.TemporaryDirectory(prefix='game-', dir=work) as game_dir:

@@ -20,7 +20,7 @@ TOOL = ROOT / 'tools' / 'test_sculk_parity.py'
 # regression (no jars, no Rust probes), while still exercising the shipped code.
 _STUBS = {
     name: types.ModuleType(name)
-    for name in ('lab', 'oracle_harness', 'test_rust_parity', 'test_model_baking_parity')
+    for name in ('fast_bins', 'lab', 'oracle_harness', 'test_rust_parity', 'test_model_baking_parity')
 }
 _spec = importlib.util.spec_from_file_location('test_sculk_parity_under_test', TOOL)
 sculk = importlib.util.module_from_spec(_spec)

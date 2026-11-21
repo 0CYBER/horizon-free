@@ -28,9 +28,10 @@ import threading
 import time
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port, wait_ticks
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, free_port, wait_ticks
@@ -331,7 +332,7 @@ def sides(name, binary=None):
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
     if binary is None:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
+        subprocess.run(fast_bins.command('horizon-client'), cwd=lab.ROOT,
                        check=True, capture_output=True)
         import json
         metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],

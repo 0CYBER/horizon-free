@@ -384,6 +384,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
+import fast_bins  # noqa: E402
 import lab  # noqa: E402
 from integration_env import game_environment, require_server_reports  # noqa: E402
 
@@ -7484,8 +7485,7 @@ def main():
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib',
-                        '--bin', 'horizon-client', '--bin', 'horizon-ctl'],
+        subprocess.run(fast_bins.command('horizon-client', 'horizon-ctl'),
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)

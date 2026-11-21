@@ -30,11 +30,12 @@ import sys
 import zipfile
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .integration_env import run_game
     from . import command_exec_corpus as corpus_module
     from . import seed_agent
 except ImportError:
+    import fast_bins
     import lab
     import seed_agent
     from integration_env import run_game
@@ -612,7 +613,7 @@ def main():
     if args.binary:
         binary = args.binary.resolve(strict=True)
     else:
-        run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], 'compile-rust', cwd=lab.ROOT)
+        run(fast_bins.command('horizon-client'), 'compile-rust', cwd=lab.ROOT)
         metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
         binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     rust_dir = build / 'rust'

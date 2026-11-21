@@ -8,6 +8,7 @@ clock-recovery parity. Every command record and typed disk snapshot is retained.
 import argparse,hashlib,json,os,shutil,subprocess,sys,datetime
 from pathlib import Path
 import anvil_dump
+import fast_bins
 import test_command_exec_parity as runner
 from container_component_name_corpus import stage_one,stage_two,overlay_restart_programs
 
@@ -107,7 +108,7 @@ def both(args):
     run=(args.work_dir or runner.lab.LOCAL/'container-component-names'/f"{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}-{os.getpid()}").resolve()
     if args.binary:binary=args.binary.resolve(strict=True)
     else:
-        subprocess.run(['cargo','build','--profile','fast','-p','horizon-game','--bin','horizon-client'],cwd=runner.lab.ROOT,check=True)
+        subprocess.run(fast_bins.command('horizon-client'),cwd=runner.lab.ROOT,check=True)
         metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=runner.lab.ROOT,text=True))
         binary=Path(metadata['target_directory'])/'fast'/('horizon-client.exe' if os.name=='nt' else 'horizon-client')
     shared=['--overlay-restart'] if args.overlay_restart else []

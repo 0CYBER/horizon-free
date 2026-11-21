@@ -25,11 +25,12 @@ import sys
 import time
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server, game_time, wait_ticks
     from .test_locator_bar_parity import ClientOutput, generate_world
     from .test_server_knockback_parity import SYNC_TIMEOUT, frozen, left, server_dir
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, game_time, wait_ticks
@@ -383,7 +384,7 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'],
+    subprocess.run(fast_bins.command('horizon-client'),
                    cwd=lab.ROOT, check=True, capture_output=True)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))

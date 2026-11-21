@@ -18,10 +18,11 @@ import subprocess
 import sys
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server
     from .test_locator_bar_parity import Client, generate_world, server_dir
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server
@@ -131,7 +132,7 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    subprocess.run(fast_bins.command('horizon-client'), cwd=lab.ROOT,
                    check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],

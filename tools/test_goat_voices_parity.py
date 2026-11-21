@@ -14,10 +14,11 @@ import subprocess
 import time
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port, game_time
     from .test_server_world_gen_parity import escape
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, free_port, game_time
@@ -166,8 +167,7 @@ def main():
     if args.binary:
         binary = args.binary.resolve(strict=True)
     else:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game',
-                        '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
+        subprocess.run(fast_bins.command('horizon-client'), cwd=lab.ROOT, check=True)
         metadata = json.loads(subprocess.check_output(
             ['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
         binary = Path(metadata['target_directory']) / 'fast' / (

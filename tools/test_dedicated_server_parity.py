@@ -71,11 +71,12 @@ import time
 import zlib
 
 try:
-    from . import lab, oracle_harness as oh, test_rust_parity as base
+    from . import fast_bins, lab, oracle_harness as oh, test_rust_parity as base
     from .integration_env import game_environment, run_game
     from .lab import free_port  # the other server harnesses import it from here
 except ImportError:
     from integration_env import game_environment, run_game
+    import fast_bins
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
@@ -447,7 +448,7 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], build,
+    oh.run_logged(fast_bins.command('horizon-client'), build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))

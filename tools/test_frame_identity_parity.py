@@ -90,8 +90,9 @@ import zlib
 from pathlib import Path
 
 try:
-    from . import lab
+    from . import fast_bins, lab
 except ImportError:
+    import fast_bins
     import lab
 
 ROOT = lab.ROOT
@@ -106,7 +107,7 @@ SEED = '7'
 # horizon-mod-api-gen generates Rust from tools/native-hook-fragments/ (BUILT_FROM_TOOLS).
 NO_BINARY = ('tools/', 'tests/', '.github/')
 BUILT_FROM_TOOLS = ('tools/native-hook-fragments/',)
-BUILD = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bins']
+BUILD = fast_bins.command('horizon-client', 'horizon-ctl')
 # 🤖 Agent: Where the overworld scenes are built, high above seed 7's spawn, so terrain below hardly shows.
 X, Y, Z = 8, 160, 8
 # 🤖 Agent: The entities' corner, out of every other viewpoint's sight.

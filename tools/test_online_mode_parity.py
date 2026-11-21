@@ -48,10 +48,11 @@ import time
 import urllib.parse
 
 try:
-    from . import lab, oracle_harness as oh, test_rust_parity as base
+    from . import fast_bins, lab, oracle_harness as oh, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port
     from .integration_env import run_game
 except ImportError:
+    import fast_bins
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
@@ -355,7 +356,7 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     report = build / 'report.json'
     report.unlink(missing_ok=True)
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], build,
+    oh.run_logged(fast_bins.command('horizon-client'), build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))

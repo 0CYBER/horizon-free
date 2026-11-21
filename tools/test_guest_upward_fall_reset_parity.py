@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import time
 
+import fast_bins
 import lab
 import test_locator_bar_parity as net
 from test_dedicated_server_parity import game_time
@@ -125,7 +126,7 @@ def main():
     if args.binary:
         binary = args.binary.resolve(strict=True)
     else:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'],
+        subprocess.run(fast_bins.command('horizon-client'),
                        cwd=lab.ROOT, check=True)
         metadata = json.loads(subprocess.check_output(
             ['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))

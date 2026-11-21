@@ -18,8 +18,9 @@ import random
 import subprocess
 
 try:
-    from . import lab, oracle_harness, test_rust_parity as base, test_model_baking_parity as baking
+    from . import fast_bins, lab, oracle_harness, test_rust_parity as base, test_model_baking_parity as baking
 except ImportError:
+    import fast_bins
     import lab
     import oracle_harness
     import test_rust_parity as base
@@ -363,7 +364,7 @@ def main():
                                    'dev.horizonlab.parity.VanillaSculkOracle', inputs, build / 'vanilla.txt'],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
-        oracle_harness.run_logged(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'],
+        oracle_harness.run_logged(fast_bins.command('horizon-client'),
                                   build, 'compile-rust')
         oracle_harness.run_logged([lab.cargo_target() / 'fast/horizon-client', '--resources', resources], build, 'horizon',
                                   env=lab.game_env(HORIZON_SCULK_FIXTURE=f'{inputs},{build / "horizon.txt"}'))

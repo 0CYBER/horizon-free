@@ -29,10 +29,11 @@ import time
 from pathlib import Path
 
 try:
-    from . import lab
+    from . import fast_bins, lab
     from .integration_env import run_game
     from .test_dedicated_server_parity import Server, write_server_dir, free_port
 except ImportError:
+    import fast_bins
     import lab
     from integration_env import run_game
     from test_dedicated_server_parity import Server, write_server_dir, free_port
@@ -202,7 +203,7 @@ def signal_saves(build):
 
 
 def main():
-    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bin', 'horizon-client', '--bin', 'horizon-ctl'], cwd=lab.ROOT, check=True)
+    subprocess.run(fast_bins.command('horizon-client', 'horizon-ctl'), cwd=lab.ROOT, check=True)
     build = lab.LOCAL / 'dedicated-crash-save'
     shutil.rmtree(build, ignore_errors=True)
     build.mkdir(parents=True)

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from tools import parity, parity_shard
+from tools import fast_bins, parity, parity_shard
 from tools.parity_shim import UNKEYED as UNKEYED_VARIABLES  # the JVM's and javac's own variables, never keyed
 
 
@@ -100,6 +100,50 @@ class ParityRunnerTests(unittest.TestCase):
             ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
             ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "a", "--example", "b",
              "--example", "old"],
+        ])
+
+    def test_the_harnesses_fast_programs_share_one_prebuild_run(self):
+        # The game alone (most server harnesses), with horizon-ctl (lan_e2e), with the server (management_protocol)
+        # and the official game with the relay (friends_integration).
+        programs = [["horizon-client"], ["horizon-client", "horizon-ctl"], ["horizon-client", "horizon-server"],
+                    ["horizon-official", "horizon-ctl", "horizon-relay"]]
+        artifacts = [artifact for names in programs for artifact in parity.artifacts_of(fast_bins.command(*names))]
+        packages = {("bin", "horizon-client"): "horizon-game", ("bin", "horizon-ctl"): "horizon-client-lib",
+                    ("bin", "horizon-server"): "horizon-server", ("bin", "horizon-official"): "horizon-official",
+                    ("bin", "horizon-relay"): "horizon-relay"}
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), [
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-game", "-p", "horizon-client-lib",
+             "-p", "horizon-server", "-p", "horizon-official", "-p", "horizon-relay", "--bin", "horizon-client",
+             "--bin", "horizon-ctl", "--bin", "horizon-server", "--bin", "horizon-official", "--bin", "horizon-relay"],
+        ])
+
+    def test_records_of_the_old_fast_selections_are_prebuilt_as_the_shared_one(self):
+        # Harness records from before tools/fast_bins.py: calls 12, 13 (as --bins), 14 and 16 of the old prebuild.
+        old = [["bin", "horizon-client", "fast", ["-p", "horizon-game"], False],
+               ["bins", "", "fast", ["-p", "horizon-game", "-p", "horizon-client-lib"], False],
+               ["bin", "horizon-client", "fast", ["-p", "horizon-game", "-p", "horizon-server"], False],
+               ["bin", "horizon-server", "fast", ["-p", "horizon-game", "-p", "horizon-server"], False],
+               *[["bin", name, "fast", ["-p", "horizon-official", "-p", "horizon-client-lib", "-p", "horizon-relay"], False]
+                 for name in ("horizon-official", "horizon-ctl", "horizon-relay")]]
+        untouched = [
+            ["example", "client_probe", "fast", ["-p", "horizon-client-lib"], True],
+            ["bin", "horizon-client", "release", ["-p", "horizon-game"], False],
+            ["bin", "horizon-client", "fast", ["-p", "horizon-game", "--features", "x"], False],
+            ["bin", "horizon-mod-dimension-game", "fast", ["-p", "horizon-game", "-p", "horizon-mod-dimension-game"], False],
+        ]
+        packages = {("bin", "horizon-client"): "horizon-game", ("bin", "horizon-ctl"): "horizon-client-lib",
+                    ("bin", "horizon-server"): "horizon-server", ("bin", "horizon-official"): "horizon-official",
+                    ("bin", "horizon-relay"): "horizon-relay", ("example", "client_probe"): "horizon-client-lib",
+                    ("bin", "horizon-mod-dimension-game"): "horizon-mod-dimension-game"}
+        new = parity.artifacts_of(fast_bins.command("horizon-client"))  # a harness's record made since
+        self.assertEqual(parity.prebuild_commands([*old, *untouched, *new], packages), [
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-client-lib", "--example", "client_probe"],
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-game", "--features", "x",
+             "--bin", "horizon-client"],
+            fast_bins.command("horizon-client", "horizon-ctl", "horizon-server", "horizon-official", "horizon-relay"),
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-game", "-p", "horizon-mod-dimension-game",
+             "--bin", "horizon-mod-dimension-game"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-game", "--bin", "horizon-client"],
         ])
 
     def test_a_prebuild_cargo_run_says_where_its_time_went(self):

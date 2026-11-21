@@ -42,6 +42,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fast_bins  # noqa: E402
 import lab  # noqa: E402
 import test_rust_parity as base  # noqa: E402
 from agent_control_e2e import Failed  # noqa: E402
@@ -512,7 +513,7 @@ def main():
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bins'],
+        subprocess.run(fast_bins.command('horizon-client', 'horizon-ctl'),
                        cwd=ROOT, check=True)
         bins = ROOT / 'target/fast'
     out = Path(args.out)

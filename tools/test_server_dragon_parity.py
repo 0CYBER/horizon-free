@@ -21,10 +21,11 @@ import subprocess
 import sys
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server
     from .test_locator_bar_parity import generate_world, server_dir
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server
@@ -101,7 +102,7 @@ def main():
     # SERVER_DRAGON_SIDES=vanilla (or horizon) runs one side and reads the other's last transcript.
     sides = [s for s in os.environ.get('SERVER_DRAGON_SIDES', 'vanilla,horizon').split(',') if s]
     if 'horizon' in sides:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
+        subprocess.run(fast_bins.command('horizon-client'), cwd=lab.ROOT,
                        check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],

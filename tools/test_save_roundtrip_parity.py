@@ -42,8 +42,9 @@ import anvil_dump  # noqa: E402
 import save_roundtrip_scene as scene  # noqa: E402
 
 try:
-    from . import lab
+    from . import fast_bins, lab
 except ImportError:
+    import fast_bins
     import lab
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -674,7 +675,7 @@ def main():
     else:
         bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else None
         if bin_dir is None:
-            subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bins'], cwd=ROOT, check=True)
+            subprocess.run(fast_bins.command('horizon-client', 'horizon-ctl'), cwd=ROOT, check=True)
             bin_dir = ROOT / os.environ.get('CARGO_TARGET_DIR', 'target') / 'fast'
         h = horizon_resave(v0, RUN / 'h', bin_dir)
     print('comparing', v0, 'with', h)

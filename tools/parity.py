@@ -71,11 +71,13 @@ import time
 try:
     from . import parity_reach
     from . import compile_lock
+    from . import fast_bins
     from . import file_lock
     from . import process_tree
 except ImportError:
     import parity_reach
     import compile_lock
+    import fast_bins
     import file_lock
     import process_tree
 
@@ -758,6 +760,22 @@ def selected_builds(artifacts, packages=None):
         if owner and selected and owner not in selected:
             # A recorded target may have moved packages; retain its feature flags and old selections.
             selection = [*selection, "-p", owner]
+            selected.append(owner)
+        if profile == "fast" and not examples and kind in ("bin", "bins") and selected \
+                and selection == [part for package in selected for part in ("-p", package)] \
+                and set(selected) <= set(fast_bins.PACKAGES):
+            # Records from before tools/fast_bins.py (one selection for every fast program) are built as the harness
+            # builds them now, so their old selection isn't compiled as well. A --bins build is its packages'
+            # programs, named, since the shared selection's --bins would build every package's.
+            # Removable once every runner's harnesses have run since tools/fast_bins.py and recorded the shared
+            # selection (one full parity-main per runner), and no open branch predates it.
+            shared = [part for package in fast_bins.PACKAGES for part in ("-p", package)]
+            names = [name] if name else [target for (other, target), package in (packages or {}).items()
+                                         if other == "bin" and package in selected]
+            if names:
+                for target in names:
+                    yield "bin", target, profile, shared, False
+                continue
         yield kind, name, profile, selection, examples
 
 

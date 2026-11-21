@@ -53,10 +53,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
-    from . import anvil_dump, lab, oracle_harness as oh, parity_shard, test_rust_parity as base
+    from . import anvil_dump, fast_bins, lab, oracle_harness as oh, parity_shard, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port
 except ImportError:
     import anvil_dump
+    import fast_bins
     import lab
     import oracle_harness as oh
     import parity_shard
@@ -164,7 +165,7 @@ def main():
     if args.origins_only:
         sys.exit(1 if origin_diffs else 0)
 
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], build,
+    oh.run_logged(fast_bins.command('horizon-client'), build,
                   'compile-rust', timeout=3600)
     binary = target_dir('fast') / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     # One worker thread: the chunks decorated in a fixed order (see above).

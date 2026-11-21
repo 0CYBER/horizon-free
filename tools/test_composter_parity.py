@@ -24,9 +24,10 @@ import json
 import os
 import random
 try:
-    from . import block_update_harness as h, lab, test_dispenser_parity as d, test_rust_parity as base
+    from . import block_update_harness as h, fast_bins, lab, test_dispenser_parity as d, test_rust_parity as base
 except ImportError:
     import block_update_harness as h
+    import fast_bins
     import lab
     import test_dispenser_parity as d
     import test_rust_parity as base
@@ -122,7 +123,7 @@ def main():
            '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaDispenserOracle.java')])
     d.run(['java', '-Xmx3G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaDispenserOracle',
            str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    d.run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    d.run([*fast_bins.command('horizon-client'), '-q'], cwd=lab.ROOT,
           env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
     d.run([str(lab.cargo_target() / 'fast/horizon-client'), '--resources', str(resources)], cwd=work,
           env=lab.game_env(HORIZON_DISPENSE_FIXTURE=f'{work / "cases.jsonl"},{work / "rust.txt"}'))

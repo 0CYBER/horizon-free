@@ -17,9 +17,10 @@ import uuid
 import zipfile
 
 try:
-    from . import lab, oracle_harness, test_rust_parity as base
+    from . import fast_bins, lab, oracle_harness, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port, game_time
 except ImportError:
+    import fast_bins
     import lab
     import oracle_harness
     import test_rust_parity as base
@@ -172,8 +173,7 @@ def main():
     if args.binary:
         binary = args.binary.resolve(strict=True)
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game',
-                        '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
+        subprocess.run(fast_bins.command('horizon-client'), cwd=lab.ROOT, check=True)
         binary = lab.cargo_target() / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     client_binary = args.client_binary.resolve(strict=True) if args.client_binary else binary
     lock, jars, libraries = base.verify_artifacts()
