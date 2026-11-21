@@ -1,0 +1,1 @@
+horizon-client game::mounts::tests::a_zombie_horse_arms_a_foal_is_chested_and_a_skeleton_horse_is_mounted lib daily resources

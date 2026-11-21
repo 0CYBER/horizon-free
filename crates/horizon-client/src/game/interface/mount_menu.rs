@@ -72,7 +72,7 @@ struct Open {
 }
 
 /// `EntityTypeTags.CAN_WEAR_HORSE_ARMOR`.
-fn can_wear_horse_armor(species: Species) -> bool {
+pub(super) fn can_wear_horse_armor(species: Species) -> bool {
     matches!(species, Species::Horse | Species::ZombieHorse)
 }
 /// Whether `item` fits the body slot of the species (`isEquippableInSlot`).
