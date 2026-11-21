@@ -7,6 +7,15 @@ impl MotionWorld<'_, '_, '_> {
     /// `CollisionGetter.noCollision(player, bounds)`: blocks, less the player's collision exclusions, and
     /// the host's entity boxes.
     pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
+        if self.entities.is_empty()
+            && self.player.collision_exclusions.is_empty()
+            && self.player.border.as_ref().is_none_or(|b| {
+                !b.is_inside_close_to_border(self.player.position.x, self.player.position.z, bounds)
+            })
+            && self.collisions().cells_without_collision(bounds)
+        {
+            return Ok(true);
+        }
         let context = self.context();
         Ok(collision_exclusions::no_world_collision(
             &mut self.movement_collisions(),
@@ -78,5 +87,108 @@ mod tests {
         };
         assert_eq!(land(&mut scene, 21.5), 20.0, "the web outside the box");
         assert_eq!(land(&mut scene, 20.5), 12.0, "the excluded web");
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn no_player_collision_fast_path_matches_full() {
+        let Some(fixture) = crate::test_fixtures::vanilla() else {
+            return;
+        };
+        let (assets, render, binding, resources) = (
+            &fixture.assets,
+            &fixture.render,
+            &fixture.collision,
+            &fixture.motion,
+        );
+        let mut scene = World::test_scene(assets, render, 2).unwrap();
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        scene.set(22, 64, 20, stone).unwrap();
+        let at = Vec3::new(20.5, 64.0, 20.5);
+        let mut player = PlayerMotion::new(resources, at).unwrap();
+        let bounds = player.bounds();
+
+        let full_check = |p: &mut PlayerMotion, s: &mut World, ents: &[Aabb], b: Aabb| -> bool {
+            let w = MotionWorld {
+                tag_items: None,
+                block_registries: None,
+                loop_context: crate::test_resources::server_loop_context(),
+                damage_hooks: &crate::health::DamageHooks::NONE,
+                entities: ents,
+                player: p,
+                scene: s,
+                assets,
+                collision_binding: binding,
+                resources,
+                health: &resources.health,
+            };
+            let ctx = w.context();
+            collision_exclusions::no_world_collision(
+                &mut w.movement_collisions(),
+                &w.player.collision_exclusions,
+                CollisionCheckRequest {
+                    entity: EntityIdentity(0),
+                    context: ctx,
+                    bounds: b,
+                    candidate_budget: 1_000_000,
+                },
+            )
+            .unwrap()
+        };
+        let fast_check = |p: &mut PlayerMotion, s: &mut World, ents: &[Aabb], b: Aabb| -> bool {
+            MotionWorld {
+                tag_items: None,
+                block_registries: None,
+                loop_context: crate::test_resources::server_loop_context(),
+                damage_hooks: &crate::health::DamageHooks::NONE,
+                entities: ents,
+                player: p,
+                scene: s,
+                assets,
+                collision_binding: binding,
+                resources,
+                health: &resources.health,
+            }
+            .no_player_collision(b)
+            .unwrap()
+        };
+
+        // 1. Clear air fast path.
+        assert!(fast_check(&mut player, &mut scene, &[], bounds));
+        assert!(full_check(&mut player, &mut scene, &[], bounds));
+
+        // 2. Entity box forces fallback and reports collision.
+        let blocking_entity = [bounds];
+        assert!(!fast_check(
+            &mut player,
+            &mut scene,
+            &blocking_entity,
+            bounds
+        ));
+        assert!(!full_check(
+            &mut player,
+            &mut scene,
+            &blocking_entity,
+            bounds
+        ));
+
+        // 3. Collision exclusion over stone forces fallback and clears collision.
+        let stone_bounds = Aabb::new(Vec3::new(22.2, 64.0, 20.2), Vec3::new(22.8, 65.8, 20.8));
+        assert!(!fast_check(&mut player, &mut scene, &[], stone_bounds));
+        player
+            .collision_exclusions
+            .set(&[[22.0, 64.0, 20.0, 23.0, 66.0, 21.0]])
+            .unwrap();
+        assert!(fast_check(&mut player, &mut scene, &[], stone_bounds));
+        assert!(full_check(&mut player, &mut scene, &[], stone_bounds));
+        player.collision_exclusions = Default::default();
+
+        // 4. Nearby world border forces fallback and blocks bounds crossing it.
+        player.border = Some(
+            horizon_core::geometry::border::BorderGeometry::new([0.0, 0.0], 40.0, 100).unwrap(),
+        );
+        let border_bounds = Aabb::new(Vec3::new(19.8, 64.0, 20.2), Vec3::new(20.4, 65.8, 20.8));
+        assert!(!fast_check(&mut player, &mut scene, &[], border_bounds));
+        assert!(!full_check(&mut player, &mut scene, &[], border_bounds));
     }
 }
