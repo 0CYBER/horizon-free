@@ -8147,7 +8147,9 @@ pub fn {f}("
             fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
             fs::create_dir_all(app.join("Contents/Resources")).unwrap();
             let bin = app.join("Contents/MacOS/horizon-launcher");
-            fs::copy("/usr/bin/true", &bin).unwrap();
+            // This test binary, not a system one: an ad-hoc re-signed arm64e system binary is killed on
+            // GitHub's macOS 15 runners.
+            fs::copy(std::env::current_exe().unwrap(), &bin).unwrap();
             fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
             fs::write(app.join("Contents/Resources/version"), version).unwrap();
             fs::write(
@@ -8183,7 +8185,13 @@ pub fn {f}("
         assert_eq!(version, "2.0.0");
         let bin = installed.join("Contents/MacOS/horizon-launcher");
         assert!(
-            Command::new(&bin).status().unwrap().success(),
+            // Lists no test and runs none.
+            Command::new(&bin)
+                .args(["--list", "--exact", "no test has this name"])
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
             "still executable"
         );
         let valid = Command::new("codesign")
