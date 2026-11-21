@@ -62,13 +62,17 @@ struct LoadedRule {
     overlay: OverlayJoin,
 }
 
-/// What an overlay rule joins: `connectBlocks` as state ids and `connectTiles` as sprite
-/// layers (sorted), and its tint.
+/// What a rule joins in place of `connect`: an overlay's `connectBlocks` as state ids and
+/// `connectTiles` as sprite layers (sorted), and its tint; or another method's
+/// `horizon.connectBlocks` as state ids.
 #[derive(Default)]
 struct OverlayJoin {
     states: Vec<u32>,
     tiles: Vec<u16>,
     tint: Option<(i32, Option<u32>)>,
+    /// `horizon.connectBlocks` is set: its list replaces `connect` even when none of the
+    /// blocks it names is loaded (then the rule joins nothing).
+    listed: bool,
 }
 
 impl OverlayJoin {
@@ -251,31 +255,50 @@ impl ConnectedTextures {
             ..Self::default()
         };
         let states: Vec<_> = states.collect();
-        // Each block's states, for `connectBlocks` and `tintBlock`.
+        // Each block's states, for `connectBlocks`, `horizon.connectBlocks` and `tintBlock`.
         let mut block_states: HashMap<&str, Vec<u32>> = HashMap::new();
-        if out.rules.iter().any(|r| r.rule.method.is_overlay()) {
+        if out
+            .rules
+            .iter()
+            .any(|r| r.rule.method.is_overlay() || !r.rule.horizon_connect_blocks.is_empty())
+        {
             for (id, state) in states.iter().enumerate() {
                 if let Some((name, _)) = state {
                     block_states.entry(name).or_default().push(id as u32);
                 }
             }
         }
+        // The states `matches` names, sorted.
+        let resolve = |matches: &[horizon_optifine::BlockMatch]| {
+            let mut ids: Vec<u32> = Vec::new();
+            for m in matches {
+                let candidates = block_states
+                    .get(m.id.as_str())
+                    .map_or(&[][..], Vec::as_slice);
+                ids.extend(candidates.iter().filter(|&&id| {
+                    states[id as usize].is_some_and(|(name, props)| {
+                        m.matches(name, |k| props.get(k).map(String::as_str))
+                    })
+                }));
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+        // Another method joins the blocks `horizon.connectBlocks` lists (parsed for those only).
+        for r in out
+            .rules
+            .iter_mut()
+            .filter(|r| !r.rule.horizon_connect_blocks.is_empty())
+        {
+            r.overlay.states = resolve(&r.rule.horizon_connect_blocks);
+            r.overlay.listed = true;
+        }
         for r in out.rules.iter_mut().filter(|r| r.rule.method.is_overlay()) {
             let rule = &r.rule;
             // `connectBlocks` and `connectTiles` are "only for method overlay".
             if rule.method == Method::Overlay {
-                for m in &rule.connect_blocks {
-                    let candidates = block_states
-                        .get(m.id.as_str())
-                        .map_or(&[][..], Vec::as_slice);
-                    r.overlay.states.extend(candidates.iter().filter(|&&id| {
-                        states[id as usize].is_some_and(|(name, props)| {
-                            m.matches(name, |k| props.get(k).map(String::as_str))
-                        })
-                    }));
-                }
-                r.overlay.states.sort_unstable();
-                r.overlay.states.dedup();
+                r.overlay.states = resolve(&rule.connect_blocks);
                 r.overlay.tiles = rule
                     .connect_tiles
                     .iter()
@@ -572,8 +595,9 @@ impl ConnectedTextures {
         let join = &r.overlay;
         let joins = |offset: [i32; 3]| {
             let other = neighbour(offset);
-            if join.any() {
-                // An overlay joins the blocks it is drawn beside.
+            if join.listed || join.any() {
+                // An overlay joins the blocks it is drawn beside; another method the blocks
+                // `horizon.connectBlocks` lists.
                 return join.states.binary_search(&other).is_ok()
                     || self
                         .face_layers
@@ -1165,6 +1189,40 @@ mod tests {
         assert_eq!(layers, [2000]);
         let (layers, _) = overlays_in(&ctm, 1, Face::North, &[([-1, 0, 0], 1)]);
         assert_eq!(layers, [2001]);
+    }
+
+    #[test]
+    fn horizon_connect_blocks_joins_listed_blocks() {
+        let west = |state| [([-1, 0, 0], state)];
+        // Plain ctm joins glass to glass only: stone to the west leaves tile 0.
+        let plain = world(&[("glass.properties", GLASS)]);
+        assert_eq!(pick_in(&plain, 1, 3, Face::North, &west(2)), tile(1000));
+        // horizon.connectBlocks joins the blocks it lists: glass and stone read as one wall.
+        let wall = world(&[(
+            "glass.properties",
+            "matchBlocks=glass\nmethod=ctm\ntiles=0-46\nhorizon.connectBlocks=glass stone",
+        )]);
+        assert_eq!(pick_in(&wall, 1, 3, Face::North, &west(2)), tile(1001));
+        assert_eq!(pick_in(&wall, 1, 3, Face::North, &west(1)), tile(1001));
+        // The list is the whole set: glass not listed doesn't join glass.
+        let only_stone = world(&[(
+            "glass.properties",
+            "matchBlocks=glass\nmethod=ctm\ntiles=0-46\nhorizon.connectBlocks=stone",
+        )]);
+        assert_eq!(
+            pick_in(&only_stone, 1, 3, Face::North, &west(1)),
+            tile(1000)
+        );
+        assert_eq!(
+            pick_in(&only_stone, 1, 3, Face::North, &west(2)),
+            tile(1001)
+        );
+        // A list naming only blocks that aren't loaded joins nothing, not `connect=block`.
+        let absent = world(&[(
+            "glass.properties",
+            "matchBlocks=glass\nmethod=ctm\ntiles=0-46\nhorizon.connectBlocks=nomod:frame",
+        )]);
+        assert_eq!(pick_in(&absent, 1, 3, Face::North, &west(1)), tile(1000));
     }
 
     #[test]

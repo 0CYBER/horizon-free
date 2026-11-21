@@ -176,6 +176,10 @@ pub struct Rule {
     pub connect_tiles: Vec<String>,
     /// ... or these blocks.
     pub connect_blocks: Vec<BlockMatch>,
+    /// Horizon's own `horizon.connectBlocks`: for every method but the overlays, the blocks a face
+    /// joins in place of `connect` (a mod's casing and its valve read as one wall). OptiFine reads
+    /// `connectBlocks` for `overlay` only and ignores this key, so a pack keeps its look there.
+    pub horizon_connect_blocks: Vec<BlockMatch>,
     pub inner_seams: bool,
     /// One per tile (`random`); empty when every tile counts the same.
     pub weights: Vec<u32>,
@@ -354,6 +358,9 @@ impl Rule {
             connect,
             connect_tiles: get("connectTiles").map_or_else(Vec::new, |v| sprite_list(path, v)),
             connect_blocks: get("connectBlocks").map_or_else(Vec::new, BlockMatch::parse_list),
+            horizon_connect_blocks: get("horizon.connectBlocks")
+                .filter(|_| !method.is_overlay())
+                .map_or_else(Vec::new, BlockMatch::parse_list),
             inner_seams: flag("innerSeams") == Some(true),
             weights,
             random_loops: int("randomLoops", 0).clamp(0, 9) as u32,
