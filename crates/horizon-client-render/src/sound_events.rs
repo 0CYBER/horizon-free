@@ -166,6 +166,13 @@ pub fn normalize(id: &str) -> String {
     let (namespace, path) = split(id);
     format!("{namespace}:{path}")
 }
+/// [`normalize`] without allocating when `id` already carries a non-empty namespace.
+pub(crate) fn normalize_cow(id: &str) -> std::borrow::Cow<'_, str> {
+    match id.split_once(':') {
+        Some((namespace, _)) if !namespace.is_empty() => std::borrow::Cow::Borrowed(id),
+        _ => std::borrow::Cow::Owned(normalize(id)),
+    }
+}
 /// `GsonHelper.getAsFloat`: Gson parses the number's text as a float.
 fn json_float(v: &Value, fallback: f32) -> f32 {
     match v {
@@ -249,6 +256,10 @@ impl SoundRegistry {
             };
             registry.add_file(namespace, &text, &exists);
         }
+        for entry in registry.events.values_mut() {
+            entry.sounds.shrink_to_fit();
+        }
+        registry.events.shrink_to_fit();
         registry
     }
     /// No sound event at all: the resources hold no `sounds.json` (sounds not
