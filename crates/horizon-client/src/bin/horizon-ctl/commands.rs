@@ -138,6 +138,11 @@ const STATUS_REPLY: &[Field] = &[
     ),
     f("fps", "number", "frames per second"),
     f("frames", "integer", "frames drawn so far"),
+    f(
+        "not_drawn",
+        "string|null",
+        "why the last frame was not drawn (suspended, acquire_timeout, occluded, outdated, lost, screenshot_only, ...); null when it was",
+    ),
     f("ticks", "integer", "game ticks so far"),
     f("day_time", "integer", "the world's time of day, ticks"),
     f("uptime_seconds", "number", "seconds since the game started"),

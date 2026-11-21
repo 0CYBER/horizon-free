@@ -552,6 +552,8 @@ pub mod pack_uniforms;
 mod pack_weather;
 mod pass_timing_api;
 use pass_timing_api::{after_culling_pass, pixel_count, world_pass_after_culling};
+mod not_drawn;
+pub use not_drawn::NotDrawn;
 mod page_runs;
 pub mod panorama;
 mod readback;
@@ -1873,6 +1875,10 @@ pub struct Renderer {
     readback: readback::Readback,
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
+    /// Why the last window frame was not drawn; `None` once one is (`not_drawn`).
+    not_drawn: Option<NotDrawn>,
+    /// The reason the frame being drawn names at its way out, for `render` to settle.
+    refusal: Option<NotDrawn>,
     /// Consecutive frames whose surface acquisition failed validation. The
     /// first gets the swapchain a fresh configuration; later ones reattach
     /// the window, as a lost surface does.
@@ -4721,6 +4727,8 @@ impl Renderer {
             readback: readback::Readback::default(),
             info,
             suspended: !drawable_size(size.width, size.height, max_side),
+            not_drawn: None,
+            refusal: None,
             acquire_validation_failures: 0,
             surface_unconfigured: false,
             drawn_sections: 0,
@@ -7358,10 +7366,14 @@ impl Renderer {
             self.capture_result = Some(result.map_err(|e| e.to_string()));
         }
         let scaled = self.screenshot_size();
+        self.refusal = None;
         let rendered = match scaled {
             Some(size) => self.draw_scaled_frame(frame, size),
             None => self.draw_frame(frame, None, self.output),
         };
+        // As `render` answers the game below: a scaled screenshot's frame never reached the window.
+        let refusal = self.refusal.take();
+        self.not_drawn = NotDrawn::settle(self.not_drawn, refusal, &rendered, scaled.is_some());
         self.finish_prepared_frame();
         // A frame that was not drawn still submits the section copies and
         // atlas patches (glyphs, skins, maps), which the caller already took.
@@ -7390,6 +7402,15 @@ impl Renderer {
         }
         // A scaled screenshot's frame never reached the window.
         rendered.map(|drawn| drawn && scaled.is_none())
+    }
+    /// Why the last frame was not drawn; `None` when it was (#19436).
+    pub fn not_drawn(&self) -> Option<NotDrawn> {
+        self.not_drawn
+    }
+    /// A frame's way out before it was drawn, named.
+    fn refuse(&mut self, why: NotDrawn) -> Result<bool> {
+        self.refusal = Some(why);
+        Ok(false)
     }
     /// Whether the device's loss callback has fired. A surface reconfigure
     /// alone cannot restore resources belonging to a lost device.
@@ -7450,7 +7471,7 @@ impl Renderer {
                 size[1]
             );
             self.screenshot_halvings += 1;
-            return Ok(false);
+            return self.refuse(NotDrawn::ScreenshotNoMemory);
         }
         let scale = self.world_post.scale;
         self.world_post.scale = scale / scale.max(1.0);
@@ -7547,7 +7568,7 @@ impl Renderer {
             mesh_terrain.store.trim(|page| self.arena.has_page(page));
         }
         if self.suspended {
-            return Ok(false);
+            return self.refuse(NotDrawn::Suspended);
         }
         // A window frame without the room for a target it draws into is skipped before it takes
         // a swapchain image, and tried again on the next (#13624). A scaled screenshot's frame
@@ -7556,14 +7577,14 @@ impl Renderer {
             frame_targets::begin_frame();
             if self.depth.is_none() && !self.remake_depth() {
                 self.frame_given_up();
-                return Ok(false);
+                return self.refuse(NotDrawn::NoRoom);
             }
             let size = [self.config.width, self.config.height];
             if let Some(hdr) = &mut self.hdr
                 && !hdr.ready(&self.device, size)
             {
                 self.frame_given_up();
-                return Ok(false);
+                return self.refuse(NotDrawn::NoRoom);
             }
             // Without HDR, the texture a float frame or a screenshot of a swapchain that can't
             // be copied from is drawn into, for the image the swapchain was configured to give.
@@ -7590,7 +7611,7 @@ impl Renderer {
                 && !self.readback.ready(&self.device, image, format, screenshot)
             {
                 self.frame_given_up();
-                return Ok(false);
+                return self.refuse(NotDrawn::NoRoom);
             }
         }
         let started = Instant::now();
@@ -7617,7 +7638,7 @@ impl Renderer {
             )
             .is_err()
             {
-                return Ok(false);
+                return self.refuse(NotDrawn::Unconfigured);
             }
             self.surface_unconfigured = false;
         }
@@ -7686,16 +7707,19 @@ impl Renderer {
             None => (None, false),
             Some(wgpu::CurrentSurfaceTexture::Success(f)) => (Some(f), false),
             Some(wgpu::CurrentSurfaceTexture::Suboptimal(f)) => (Some(f), true),
-            Some(wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded) => {
-                return Ok(false);
+            Some(wgpu::CurrentSurfaceTexture::Timeout) => {
+                return self.refuse(NotDrawn::AcquireTimeout);
+            }
+            Some(wgpu::CurrentSurfaceTexture::Occluded) => {
+                return self.refuse(NotDrawn::Occluded);
             }
             Some(wgpu::CurrentSurfaceTexture::Outdated) => {
                 self.configure_surface();
-                return Ok(false);
+                return self.refuse(NotDrawn::Outdated);
             }
             Some(wgpu::CurrentSurfaceTexture::Lost) => {
                 self.recreate_surface()?;
-                return Ok(false);
+                return self.refuse(NotDrawn::Lost);
             }
             Some(wgpu::CurrentSurfaceTexture::Validation) => {
                 // Acquire caught a validation error: the swapchain cannot be
@@ -7711,7 +7735,7 @@ impl Renderer {
                 }
                 self.acquire_validation_failures =
                     self.acquire_validation_failures.saturating_add(1);
-                return Ok(false);
+                return self.refuse(NotDrawn::Validation);
             }
         };
         if surface_frame.is_some() {

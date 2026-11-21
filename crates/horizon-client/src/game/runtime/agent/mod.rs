@@ -1978,9 +1978,11 @@ impl Game<'_> {
             return;
         }
         if now >= g.deadline {
+            let why = (self.renderer.as_ref().and_then(|r| r.not_drawn()))
+                .map_or("unknown", |n| n.as_str());
+            let error = format!("no frame was drawn to turn the view ({why})");
             let _ = g.reply.send(
-                json!({ "error": "no frame was drawn to turn the view", "yaw": self.yaw, "pitch": self.pitch })
-                    .to_string(),
+                json!({ "error": error, "yaw": self.yaw, "pitch": self.pitch }).to_string(),
             );
             return;
         }

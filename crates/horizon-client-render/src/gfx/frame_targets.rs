@@ -251,6 +251,6 @@ impl super::Renderer {
             self.screenshot = Some(request);
         }
         self.frame_given_up();
-        Ok(false)
+        self.refuse(super::NotDrawn::GivenUp)
     }
 }

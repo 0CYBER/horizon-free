@@ -179,6 +179,7 @@ The reply fields of the commands described so far (more follow, a group at a tim
 | `keys` | array | the keys the game holds down, each a string |
 | `fps` | number | frames per second |
 | `frames` | integer | frames drawn so far |
+| `not_drawn` | string, null | why the last frame was not drawn (suspended, acquire_timeout, occluded, outdated, lost, screenshot_only, ...); null when it was |
 | `ticks` | integer | game ticks so far |
 | `day_time` | integer | the world's time of day, ticks |
 | `uptime_seconds` | number | seconds since the game started |

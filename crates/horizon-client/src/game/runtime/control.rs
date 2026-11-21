@@ -211,6 +211,19 @@ impl Game<'_> {
                 self.pending_bench = Some((deadline, reply, raw));
             }
         }
+        // Without frames too: a screenshot no frame takes fails rather than waiting for good.
+        // A result still to be answered (a rebuilt renderer carries it over) is left to the
+        // next frame, which answers it whether or not it is drawn.
+        let renderer = self.renderer.as_mut();
+        if renderer.as_ref().is_none_or(|r| r.screenshot_result.is_none()) {
+            let not_drawn = renderer.as_ref().and_then(|r| r.not_drawn());
+            super::pending_screenshot::expire(
+                &mut self.pending_screenshot,
+                renderer.map(|r| &mut r.screenshot),
+                not_drawn,
+                Instant::now(),
+            );
+        }
         horizon_client::widgets::end_frame(self.frames);
         self.narrate_screen();
         self.poll_repro(event_loop);
@@ -1107,19 +1120,16 @@ impl Game<'_> {
             }
             "screenshot" => {
                 let renderer = self.renderer.as_mut().ok_or("no renderer yet")?;
-                if self.pending_screenshot.is_some() {
-                    return Err("a screenshot is already pending".into());
-                }
                 arg(1)?;
                 // The rest of the line: a path may hold spaces.
                 let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
-                renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
-                    path: path.trim().into(),
-                    size: None,
-                    scaled: false,
-                    background: false,
-                });
-                self.pending_screenshot = Some(reply.clone());
+                super::pending_screenshot::begin(
+                    &mut self.pending_screenshot,
+                    &mut renderer.screenshot,
+                    path.trim().into(),
+                    reply,
+                    Instant::now(),
+                )?;
                 Ok(None)
             }
             "chat" => {
@@ -1669,6 +1679,9 @@ impl Game<'_> {
                 .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
         status["lod"] = lod;
+        // Why `frames` stands still, if it does (#19436).
+        let not_drawn = self.renderer.as_ref().and_then(|r| r.not_drawn());
+        status["not_drawn"] = not_drawn.map(|n| n.as_str()).into();
         // Parallel Tick: the setting, whether the next tick shares its work, and Auto's state.
         let (setting, on, auto) = horizon_client::parallel::status();
         status["parallel_tick"] = json!({ "setting": setting, "on": on, "auto": auto });

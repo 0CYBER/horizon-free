@@ -1690,7 +1690,7 @@ struct Game<'a> {
     /// This play session's frame and tick times, for opt-in performance statistics.
     perf: horizon_client::telemetry::Session,
     /// Control replies waiting for a rendered frame or a benchmark deadline.
-    pending_screenshot: Option<std::sync::mpsc::Sender<String>>,
+    pending_screenshot: Option<pending_screenshot::Pending>,
     /// `screenshot-sequence` while it runs.
     screenshot_sequence: Option<screenshot_sequence::Sequence>,
     /// `render-capture DIR`: replied once the renderer wrote the scene.
@@ -10281,9 +10281,9 @@ impl Game<'_> {
                             }
                         });
                     if let Some(result) = &finished
-                        && let Some(reply) = self.pending_screenshot.take()
+                        && let Some(pending) = self.pending_screenshot.take()
                     {
-                        let _ = reply.send(
+                        let _ = pending.reply.send(
                             match result {
                                 Ok([w, h]) => {
                                     serde_json::json!({ "ok": true, "width": w, "height": h })
