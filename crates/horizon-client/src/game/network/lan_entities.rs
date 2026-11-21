@@ -546,6 +546,24 @@ impl Game<'_> {
                     .as_mut()
                     .and_then(|host| host.hub.stack(&Some(item)));
             }
+            // Interaction.DATA_WIDTH (8), DATA_HEIGHT (9) and DATA_RESPONSE
+            // (10): sent only when they differ from the defaults a client
+            // starts with, which are the values it returns to.
+            if let Some(i) = o.interaction {
+                if i.width != 1.0 {
+                    e.meta.push((8, serializer::FLOAT, Value::Float(i.width)));
+                }
+                if i.height != 1.0 {
+                    e.meta.push((9, serializer::FLOAT, Value::Float(i.height)));
+                }
+                if i.response {
+                    e.meta.push((10, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                e.defaults.push((8, serializer::FLOAT, Value::Float(1.0)));
+                e.defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
+                e.defaults
+                    .push((10, serializer::BOOLEAN, Value::Bool(false)));
+            }
         }
         // Only this level's displays: the others are kept for their own level's pass.
         KEPT_DISPLAYS.with(|kept| {
@@ -1490,5 +1508,99 @@ mod vehicle_meta_tests {
         );
         vehicle_meta(&mut e, 4, -1, 3.0);
         assert_eq!(e.meta.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod interaction_meta_tests {
+    //! A server `minecraft:interaction`'s box and response reach a guest as
+    //! `Interaction`'s synched data, sent only when they differ from the
+    //! defaults a client starts with (`Interaction.defineSynchedData`).
+    use super::*;
+
+    /// The values a client starts with, which the tracker sends whenever a
+    /// value it saw is left out again.
+    fn defaults() -> Vec<(u8, i32, Value)> {
+        vec![
+            (8, serializer::FLOAT, Value::Float(1.0)),
+            (9, serializer::FLOAT, Value::Float(1.0)),
+            (10, serializer::BOOLEAN, Value::Bool(false)),
+        ]
+    }
+
+    fn interaction(
+        id: u32,
+        width: f32,
+        height: f32,
+        response: bool,
+    ) -> crate::game::commands::OtherEntity {
+        crate::game::commands::OtherEntity {
+            attachment_lifetime: Default::default(),
+            join: Default::default(),
+            id,
+            kind: "minecraft:interaction".into(),
+            position: horizon_core::geometry::Vec3::new(4.5, 70.0, 4.5),
+            yaw: 0.0,
+            pitch: 0.0,
+            item_transformation: None,
+            interaction: Some(crate::game::interactions::InteractionState {
+                width,
+                height,
+                response,
+                attack: None,
+                interaction: None,
+            }),
+            knot_check: None,
+            eye: None,
+        }
+    }
+
+    /// What the tracker holds for `id`: the synched values it sends and the
+    /// defaults it falls back to (`ServerEntity.getNonDefaultValues`).
+    fn tracked(game: &mut Game<'_>, id: u32) -> (Vec<(u8, i32, Value)>, Vec<(u8, i32, Value)>) {
+        fn data(list: &[(u8, i32, Value)]) -> Vec<(u8, i32, Value)> {
+            // `Interaction`'s DATA_WIDTH (8), DATA_HEIGHT (9), DATA_RESPONSE (10).
+            list.iter()
+                .filter(|(index, _, _)| (8..=10).contains(index))
+                .cloned()
+                .collect()
+        }
+        let mut states = States::default();
+        game.lan_object_states(&mut states, false, 0);
+        let e = states
+            .as_slice()
+            .iter()
+            .find(|e| e.id == id as i32)
+            .expect("the interaction is tracked");
+        (data(&e.meta), data(&e.defaults))
+    }
+
+    #[test]
+    fn an_interactions_box_and_response_reach_guests_with_their_defaults() {
+        if std::env::var_os("HORIZON_TEST_RESOURCES").is_none() {
+            return;
+        }
+        // A LAN host: `lan_object_states` tracks nothing without one.
+        crate::game::native_guest_turn_tests::with_guests(|game| {
+            game.others.push(interaction(900, 2.5, 1.5, true));
+            game.others.push(interaction(901, 1.0, 1.0, false));
+            assert_eq!(
+                tracked(game, 900),
+                (
+                    vec![
+                        (8, serializer::FLOAT, Value::Float(2.5)),
+                        (9, serializer::FLOAT, Value::Float(1.5)),
+                        (10, serializer::BOOLEAN, Value::Bool(true)),
+                    ],
+                    defaults(),
+                ),
+                "a box and a response a client cannot guess, over the defaults they return to"
+            );
+            assert_eq!(
+                tracked(game, 901),
+                (Vec::new(), defaults()),
+                "an interaction at its defaults sends none of them"
+            );
+        });
     }
 }
