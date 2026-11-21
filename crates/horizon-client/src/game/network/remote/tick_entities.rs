@@ -292,8 +292,10 @@ impl Game<'_> {
             Vec::new()
         };
         // ExperienceOrb.followNearbyPlayer: the players an orb may go for,
-        // their feet and the point `eyeHeight / 2` above them.
-        let followed: Vec<([f64; 3], [f64; 3])> = {
+        // their feet and the point `eyeHeight / 2` above them. Skip building when no orbs exist.
+        let followed: Vec<([f64; 3], [f64; 3])> = if self.orbs.is_empty() {
+            Vec::new()
+        } else {
             let own = self
                 .player
                 .as_ref()
@@ -328,36 +330,43 @@ impl Game<'_> {
         let driven = self.driven_mount().map(|m| m.id);
         // Cat.handleLieDown: the sleeping players (another's, drawn lying in
         // a bed, and this client's own) a lying cat can lie on top of.
-        let sleepers: Vec<horizon_core::geometry::Aabb> = self
-            .remote
-            .as_ref()
-            .map(|r| {
-                self.mobs
-                    .iter()
-                    .filter(|m| {
-                        r.level_players.contains_key(&(m.id as i32)) && m.extra.ints[1] != 0
-                    })
-                    .map(|m| {
-                        let p = m.position;
-                        horizon_core::geometry::Aabb::new(
-                            horizon_core::geometry::Vec3::new(p.x - 0.1, p.y, p.z - 0.1),
-                            horizon_core::geometry::Vec3::new(p.x + 0.1, p.y + 0.2, p.z + 0.1),
-                        )
-                    })
-                    .chain(self.sleeping.map(|bed| {
-                        let p = horizon_core::geometry::Vec3::new(
-                            f64::from(bed[0]) + 0.5,
-                            f64::from(bed[1]) + 0.6875,
-                            f64::from(bed[2]) + 0.5,
-                        );
-                        horizon_core::geometry::Aabb::new(
-                            horizon_core::geometry::Vec3::new(p.x - 0.1, p.y, p.z - 0.1),
-                            horizon_core::geometry::Vec3::new(p.x + 0.1, p.y + 0.2, p.z + 0.1),
-                        )
-                    }))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let sleepers: Vec<horizon_core::geometry::Aabb> = if self
+            .mobs
+            .iter()
+            .any(|m| m.species() == horizon_client::mobs::Species::Cat)
+        {
+            self.remote
+                .as_ref()
+                .map(|r| {
+                    self.mobs
+                        .iter()
+                        .filter(|m| {
+                            r.level_players.contains_key(&(m.id as i32)) && m.extra.ints[1] != 0
+                        })
+                        .map(|m| {
+                            let p = m.position;
+                            horizon_core::geometry::Aabb::new(
+                                horizon_core::geometry::Vec3::new(p.x - 0.1, p.y, p.z - 0.1),
+                                horizon_core::geometry::Vec3::new(p.x + 0.1, p.y + 0.2, p.z + 0.1),
+                            )
+                        })
+                        .chain(self.sleeping.map(|bed| {
+                            let p = horizon_core::geometry::Vec3::new(
+                                f64::from(bed[0]) + 0.5,
+                                f64::from(bed[1]) + 0.6875,
+                                f64::from(bed[2]) + 0.5,
+                            );
+                            horizon_core::geometry::Aabb::new(
+                                horizon_core::geometry::Vec3::new(p.x - 0.1, p.y, p.z - 0.1),
+                                horizon_core::geometry::Vec3::new(p.x + 0.1, p.y + 0.2, p.z + 0.1),
+                            )
+                        }))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let Some(r) = self.remote.as_mut() else {
             return;
         };
