@@ -1,6 +1,6 @@
 //! The Mods page: its tabs are the kinds (mods, modpacks, resource packs, shader packs, data
-//! packs). Search Horizon's own registry for what was made for Horizon, or Modrinth (CurseForge:
-//! coming soon) for Java mods, modpacks, resource packs and data packs (a Java instance's files
+//! packs). Search Horizon's own registry for what was made for Horizon, or Modrinth for Java
+//! mods, modpacks, resource packs and data packs (a Java instance's files
 //! always come from Modrinth, for its version), see where each comes
 //! from and how well it runs (a Java mod's jar is checked first; a Horizon mod says whether it is
 //! signed and what it may do), install it with its checksum checked, turn Horizon mods on and
@@ -29,12 +29,6 @@ const KINDS: [(PackKind, &str, &str); 5] = [
 ];
 /// Java mods checked at once.
 const CHECKING: usize = 2;
-/// The sources to pick from on the tabs that have both ([`switches`]); CurseForge is shown
-/// beside them as coming soon.
-pub(super) const SOURCES: [(SourceId, &str); 2] = [
-    (SourceId::Horizon, "Horizon"),
-    (SourceId::Modrinth, "Modrinth"),
-];
 const PAGE: usize = 20;
 
 #[path = "glass_mods.rs"]
@@ -1246,12 +1240,8 @@ impl Launcher {
                 this.mods_search(0);
                 cx.notify();
             }));
-        // The kinds both sources serve pick theirs: CurseForge is coming soon there, shown,
-        // inert, never searched (like the Microsoft account's "Coming soon").
         // A Java instance's files come from Modrinth, for its version.
         let java = self.mods.java_for(self.mods.kind).is_some();
-        let source_note = (switches(self.mods.kind) && !java)
-            .then(|| div().flex().child(self.mods_source_switch(cx)));
         // The registry lists only what was made for Horizon: no "everything", and of the filters
         // only its categories.
         let registry = self.mods.source == SourceId::Horizon && !java;
@@ -1271,7 +1261,6 @@ impl Launcher {
                     .child(self.mods_field(cx))
                     .when(!registry && !java, |d| d.child(toggle)),
             )
-            .children(source_note)
             .child(filters)
             .children(self.mods_target_line(cx));
         // The kinds are inventory tabs on the panel that holds the open one.
@@ -1932,58 +1921,10 @@ pub(super) fn auto_update(
     lines
 }
 
-/// Where a kind's tab searches first: Horizon's registry for mods and shader packs, Modrinth for
-/// the rest.
-fn source_for(kind: PackKind) -> SourceId {
-    match kind {
-        PackKind::Mod | PackKind::Shader => SourceId::Horizon,
-        PackKind::ResourcePack | PackKind::Modpack | PackKind::DataPack => SourceId::Modrinth,
-    }
-}
-
-/// Whether a kind's tab picks its source: mods, modpacks, resource packs and data packs are on
-/// both Horizon's registry and Modrinth; Horizon's shader packs are on its registry only.
-pub(super) fn switches(kind: PackKind) -> bool {
-    kind != PackKind::Shader
-}
-
-impl Launcher {
-    /// The source switch: Modrinth or Horizon's registry, CurseForge shown as coming soon and not
-    /// clickable, like the Microsoft account's "Coming soon".
-    fn mods_source_switch(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let this = cx.entity().downgrade();
-        source_switch(&self.theme, self.mods.source, move |source, _, cx| {
-            let _ = this.update(cx, |this, cx| {
-                if this.mods.source != source {
-                    this.mods.source = source;
-                    this.mods.browse.filters = Default::default();
-                    this.mods.browse.open = None;
-                    this.mods_search(0);
-                }
-                cx.notify();
-            });
-        })
-    }
-}
-
-fn source_switch(
-    t: &Theme,
-    current: SourceId,
-    on_pick: impl Fn(SourceId, &mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
-    let soon = div()
-        .flex()
-        .items_center()
-        .h(px(theme::SEGMENT))
-        .px(px(14.))
-        .pb(px(2.))
-        .opacity(theme::DISABLED)
-        .child(
-            blocks::pixel(14., FontWeight::MEDIUM)
-                .text_color(t.muted)
-                .child(tr("CurseForge (coming soon)")),
-        );
-    segments("mods-source", &SOURCES, current, t, on_pick).child(soon)
+/// Where a kind's tab searches: Horizon's registry, for every kind. (A Java instance's files
+/// are still Modrinth's, for its version: `Mods::java_for`.)
+fn source_for(_kind: PackKind) -> SourceId {
+    SourceId::Horizon
 }
 
 #[cfg(test)]
