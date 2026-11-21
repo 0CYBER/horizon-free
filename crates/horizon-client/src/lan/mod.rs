@@ -601,7 +601,7 @@ impl Shared {
             }
         }
         if self.is_online(uuid) {
-            let _ = self.events.send(NetEvent::Duplicate(uuid));
+            let _ = self.events.send_over_budget(NetEvent::Duplicate(uuid));
             let deadline = std::time::Instant::now() + Duration::from_secs(30);
             while self.is_online(uuid) {
                 if std::time::Instant::now() > deadline {

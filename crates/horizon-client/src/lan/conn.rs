@@ -584,13 +584,17 @@ impl PlayerSender {
     }
     /// Hand the held packets to the network thread.
     pub fn flush(&self) {
-        let held = std::mem::take(&mut *self.held());
-        if !held.is_empty() {
-            match &self.to {
-                To::Disabled => {}
-                To::Channel(tx) => drop(tx.send(unshared(held))),
-                To::Pool(outbox, _) => outbox.send(held, None),
-            }
+        let mut held = self.held();
+        if held.is_empty() {
+            return;
+        }
+        match &self.to {
+            To::Disabled => held.clear(),
+            To::Channel(tx) => drop(tx.send(unshared(std::mem::take(&mut *held)))),
+            To::Pool(outbox, _) => outbox.send_from(&mut held, None),
+        }
+        if held.capacity() > 512 {
+            held.shrink_to(64);
         }
     }
     /// Send a play disconnect with this reason after what was sent before,
@@ -656,20 +660,23 @@ impl Drop for PreparedPayload {
 pub fn flush_all<'a>(senders: impl IntoIterator<Item = &'a PlayerSender>) {
     let mut wake: Vec<&Arc<io_pool::Worker>> = Vec::new();
     for s in senders {
-        let held = std::mem::take(&mut *s.held());
+        let mut held = s.held();
         if held.is_empty() {
             continue;
         }
         match &s.to {
-            To::Disabled => {}
-            To::Channel(tx) => drop(tx.send(unshared(held))),
+            To::Disabled => held.clear(),
+            To::Channel(tx) => drop(tx.send(unshared(std::mem::take(&mut *held)))),
             To::Pool(outbox, _) => {
-                if let Some(worker) = outbox.push(held, None)
+                if let Some(worker) = outbox.push_from(&mut held, None)
                     && !wake.iter().any(|w| Arc::ptr_eq(w, worker))
                 {
                     wake.push(worker);
                 }
             }
+        }
+        if held.capacity() > 512 {
+            held.shrink_to(64);
         }
     }
     wake.into_iter().for_each(|w| w.wake());
@@ -2273,6 +2280,7 @@ fn play(
         counted,
         undrained,
         packet_counts,
+        deferred: None,
     };
     // The ServerPlayer is made with the configuration's client information (updateOptions).
     shared.set_listed(parts.uuid, parts.info.allows_listing);
@@ -2324,6 +2332,8 @@ struct PlayConn {
     undrained: Arc<Undrained>,
     /// Shared with the player's [`PlayerSender`]: the packets counted while a mod asks.
     packet_counts: Arc<super::packet_counts::PacketCounts>,
+    /// Already-decoded play event awaiting ingress budget after `Refusal::Pressure`.
+    deferred: Option<NetEvent>,
 }
 /// The id an inbound play packet is counted under: its own when the protocol has it, else -1.
 fn counted_id(id: i32) -> i32 {
@@ -2478,11 +2488,29 @@ impl io_pool::Session for PlayConn {
                 let event = NetEvent::Packet(self.conn, Box::new(p), payload.len());
                 match self.shared.events.send(event) {
                     Ok(()) => Verdict::Go,
+                    Err(err) if err.reason == crate::net::ingress::Refusal::Pressure => {
+                        self.deferred = Some(err.value);
+                        Verdict::Defer
+                    }
                     Err(_) => Verdict::Close("server closed".to_owned()),
                 }
             }
             // A malformed packet disconnects like vanilla's decoder exception.
             Err(e) => Verdict::Close(format!("Invalid packet {id}: {e}")),
+        }
+    }
+    fn flush_deferred(&mut self) -> io_pool::Verdict {
+        use io_pool::Verdict;
+        let Some(event) = self.deferred.take() else {
+            return Verdict::Go;
+        };
+        match self.shared.events.send(event) {
+            Ok(()) => Verdict::Go,
+            Err(err) if err.reason == crate::net::ingress::Refusal::Pressure => {
+                self.deferred = Some(err.value);
+                Verdict::Defer
+            }
+            Err(_) => Verdict::Close("server closed".to_owned()),
         }
     }
     /// ServerCommonPacketListenerImpl.keepConnectionAlive: a keep-alive 15 s
@@ -2495,7 +2523,13 @@ impl io_pool::Session for PlayConn {
         Some(body)
     }
     fn left(&mut self, reason: String) {
-        let _ = self.shared.events.send(NetEvent::Left(self.conn, reason));
+        if let Some(NetEvent::Packet(_, _, bytes)) = self.deferred.take() {
+            self.undrained.taken(bytes);
+        }
+        let _ = self
+            .shared
+            .events
+            .send_over_budget(NetEvent::Left(self.conn, reason));
         self.shared.closing.fetch_add(1, Ordering::AcqRel);
     }
     fn closed(&mut self) {
@@ -3985,6 +4019,7 @@ mod tests {
             counted: None,
             undrained: Arc::default(),
             packet_counts: Arc::default(),
+            deferred: None,
         };
         // The bodies after the packets' one-byte VarInt ids.
         let packets = |sequence: i32| {
@@ -4124,6 +4159,7 @@ mod tests {
             counted: None,
             undrained: Arc::default(),
             packet_counts: Arc::default(),
+            deferred: None,
         };
         let answer = |c: &mut PlayConn, id: i64| c.packet(KEEP_ALIVE, id.to_be_bytes().to_vec());
         // The pending one: accepted.
@@ -4178,6 +4214,7 @@ mod tests {
             counted: None,
             undrained: Arc::default(),
             packet_counts: Arc::default(),
+            deferred: None,
         };
         // The body after the packet's one-byte VarInt id.
         let response = play::Serverbound::CookieResponse(cfg::CookieResponse {
@@ -4479,6 +4516,118 @@ mod handshake_hook_tests {
             status::Clientbound::StatusResponse(_)
         ));
         assert!(lan.shared.handshake.take().is_empty());
+    }
+    #[test]
+    fn play_conn_defers_packet_on_ingress_pressure_and_flushes_when_drained() {
+        use io_pool::{Session, Verdict};
+        let lan = lan();
+        // Saturate the 96 MiB ingress budget so the next packet hits `Refusal::Pressure`.
+        let filler = NetEvent::Left(99, String::with_capacity((96 << 20) - 4096));
+        lan.shared.events.send(filler).unwrap();
+
+        let undrained = Arc::new(Undrained::default());
+        let mut c = PlayConn {
+            payload_sender: PlayerSender::disabled(),
+            payload_transport: Transport::empty(),
+            conn: 7,
+            shared: lan.shared.clone(),
+            uuid: 7,
+            name: "p".to_owned(),
+            required_pack: false,
+            rate: None,
+            watch: Arc::new(KeepAliveWatch {
+                start: Instant::now(),
+                alive: Arc::new(AtomicI64::new(-1)),
+            }),
+            latency: Arc::new(AtomicI32::new(0)),
+            sent_at: None,
+            next_keep_alive: Instant::now(),
+            counted: None,
+            undrained: undrained.clone(),
+            packet_counts: Arc::default(),
+            deferred: None,
+        };
+        let encoded = play::Serverbound::AcceptTeleportation(play::AcceptTeleportation {
+            id: 42,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+        })
+        .encode();
+        let (id, payload) = (i32::from(encoded[0]), encoded[1..].to_vec());
+
+        assert!(matches!(c.packet(id, payload), Verdict::Defer));
+        assert!(c.deferred.is_some());
+        assert!(matches!(c.flush_deferred(), Verdict::Defer));
+
+        // Drain the ingress channel so budget is available again.
+        let _ = lan.poll();
+        assert!(matches!(c.flush_deferred(), Verdict::Go));
+        assert!(c.deferred.is_none());
+        let events = lan.poll();
+        assert!(events.into_iter().any(|r| matches!(
+            r.into_parts().0,
+            NetEvent::Packet(7, p, _) if matches!(
+                p.as_ref(),
+                play::Serverbound::AcceptTeleportation(play::AcceptTeleportation { id: 42, .. })
+            )
+        )));
+    }
+
+    #[test]
+    fn play_conn_left_sends_over_budget_and_releases_deferred_undrained_bytes() {
+        use io_pool::{Session, Verdict};
+        let lan = lan();
+        let filler = NetEvent::Left(99, String::with_capacity((96 << 20) - 4096));
+        lan.shared.events.send(filler).unwrap();
+
+        let undrained = Arc::new(Undrained::default());
+        let mut c = PlayConn {
+            payload_sender: PlayerSender::disabled(),
+            payload_transport: Transport::empty(),
+            conn: 8,
+            shared: lan.shared.clone(),
+            uuid: 8,
+            name: "p".to_owned(),
+            required_pack: false,
+            rate: None,
+            watch: Arc::new(KeepAliveWatch {
+                start: Instant::now(),
+                alive: Arc::new(AtomicI64::new(-1)),
+            }),
+            latency: Arc::new(AtomicI32::new(0)),
+            sent_at: None,
+            next_keep_alive: Instant::now(),
+            counted: None,
+            undrained: undrained.clone(),
+            packet_counts: Arc::default(),
+            deferred: None,
+        };
+        let encoded = play::Serverbound::AcceptTeleportation(play::AcceptTeleportation {
+            id: 1,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+        })
+        .encode();
+        let (id, payload) = (i32::from(encoded[0]), encoded[1..].to_vec());
+        let payload_len = payload.len();
+
+        assert!(matches!(c.packet(id, payload), Verdict::Defer));
+        assert!(undrained.bytes.load(Ordering::Relaxed) >= payload_len);
+
+        // Even while the channel is at budget, `left` must release undrained bytes and deliver `NetEvent::Left`.
+        c.left("Disconnected".to_owned());
+        assert_eq!(undrained.bytes.load(Ordering::Relaxed), 0);
+        let events = lan.poll();
+        assert!(events.into_iter().any(|r| matches!(
+            r.into_parts().0,
+            NetEvent::Left(8, reason) if reason == "Disconnected"
+        )));
     }
 }
 
