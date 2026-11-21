@@ -5,30 +5,47 @@
 #[cfg(test)]
 use super::Frustum;
 use super::{Cull, SectionKey};
-use crate::{
-    fast_hash::{FxHashMap, FxHashSet},
-    streaming::in_view_distance,
-};
+use crate::fast_hash::{FxHashMap, FxHashSet};
+#[cfg(test)]
+use crate::streaming::in_view_distance;
 use glam::{DVec3, Vec3};
 
-/// One chunk column's resident sections.
-struct Column {
+/// Hot column culling metadata, packed 4 per 64-byte cache line so `walk` rejects
+/// out-of-range and out-of-frustum columns without touching per-column section lists.
+#[derive(Clone, Copy)]
+struct ColumnHeader {
     x: i32,
     z: i32,
-    /// Section y (from the world's bottom) and slot, in no particular order.
-    sections: Vec<(i32, u32)>,
-    /// Those of `sections` that are marked (`Resident::insert_marked`), in no
-    /// particular order.
-    marked: Vec<(i32, u32)>,
-    /// The lowest and highest section y of `sections`.
+    /// The lowest and highest section y of the column's resident sections.
     low: i32,
     high: i32,
 }
 
+/// One chunk column's resident section lists and pre-resolved tight bounds.
+struct Column {
+    /// Section y (from the world's bottom) and slot, in no particular order.
+    sections: Vec<(i32, u32)>,
+    /// Resolved local bounds parallel to `sections` (`None` stored as `[0, 16]`).
+    section_bounds: Vec<[Vec3; 2]>,
+    /// Those of `sections` that are marked (`Resident::insert_marked`), in no
+    /// particular order.
+    marked: Vec<(i32, u32)>,
+    /// Resolved local bounds parallel to `marked`.
+    marked_bounds: Vec<[Vec3; 2]>,
+}
+
+#[inline(always)]
+fn resolve_bounds(bounds: Option<[Vec3; 2]>) -> [Vec3; 2] {
+    bounds.unwrap_or([Vec3::ZERO, Vec3::splat(16.0)])
+}
+
 impl Column {
-    fn bounds(&mut self) {
-        self.low = self.sections.iter().map(|s| s.0).min().unwrap_or(0);
-        self.high = self.sections.iter().map(|s| s.0).max().unwrap_or(0);
+    fn bounds(&self) -> (i32, i32) {
+        let mut iter = self.sections.iter().map(|s| s.0);
+        let Some(first) = iter.next() else {
+            return (0, 0);
+        };
+        iter.fold((first, first), |(lo, hi), y| (lo.min(y), hi.max(y)))
     }
 }
 
@@ -43,6 +60,10 @@ pub struct Resident<T> {
     /// `walk` lists only those when `marked_only_near`.
     marked: Vec<bool>,
     slots: FxHashMap<SectionKey, u32>,
+    column_headers: Vec<ColumnHeader>,
+    /// One bit per column: whether `columns[ci].marked` is non-empty, checked
+    /// in L1 before touching `columns` or testing the frustum on GPU-culled frames.
+    column_marked_bits: Vec<u64>,
     columns: Vec<Column>,
     column_index: FxHashMap<(i32, i32), u32>,
     /// Calls that removed sections so far: a user that keeps its own per-section state
@@ -58,6 +79,8 @@ impl<T> Default for Resident<T> {
             bounds: Vec::new(),
             marked: Vec::new(),
             slots: FxHashMap::default(),
+            column_headers: Vec::new(),
+            column_marked_bits: Vec::new(),
             columns: Vec::new(),
             column_index: FxHashMap::default(),
             removals: 0,
@@ -78,11 +101,17 @@ impl<T> Resident<T> {
             + self.bounds.capacity() * size_of::<Option<[Vec3; 2]>>()
             + self.marked.capacity() * size_of::<bool>()
             + self.slots.capacity() * (size_of::<(SectionKey, u32)>() + 1)
+            + self.column_headers.capacity() * size_of::<ColumnHeader>()
+            + self.column_marked_bits.capacity() * size_of::<u64>()
             + self.columns.capacity() * size_of::<Column>()
             + self
                 .columns
                 .iter()
-                .map(|c| (c.sections.capacity() + c.marked.capacity()) * size_of::<(i32, u32)>())
+                .map(|c| {
+                    (c.sections.capacity() + c.marked.capacity()) * size_of::<(i32, u32)>()
+                        + (c.section_bounds.capacity() + c.marked_bounds.capacity())
+                            * size_of::<[Vec3; 2]>()
+                })
                 .sum::<usize>()
             + self.column_index.capacity() * (size_of::<((i32, i32), u32)>() + 1)
     }
@@ -149,8 +178,24 @@ impl<T> Resident<T> {
         self.bounds.clear();
         self.marked.clear();
         self.slots.clear();
+        self.column_headers.clear();
+        self.column_marked_bits.clear();
         self.columns.clear();
         self.column_index.clear();
+    }
+    #[inline(always)]
+    fn column_has_marked(&self, ci: usize) -> bool {
+        (self.column_marked_bits[ci >> 6] >> (ci & 63)) & 1 != 0
+    }
+    #[inline(always)]
+    fn set_column_marked_bit(&mut self, ci: usize, has: bool) {
+        let word = ci >> 6;
+        let bit = 1u64 << (ci & 63);
+        if has {
+            self.column_marked_bits[word] |= bit;
+        } else {
+            self.column_marked_bits[word] &= !bit;
+        }
     }
     /// Adds or replaces `key`'s value with default 16x16x16 bounds.
     #[cfg(test)]
@@ -172,10 +217,30 @@ impl<T> Resident<T> {
         bounds: Option<[Vec3; 2]>,
         marked: bool,
     ) {
+        let resolved = resolve_bounds(bounds);
         if let Some(&slot) = self.slots.get(&key) {
             self.items[slot as usize].1 = value;
             self.bounds[slot as usize] = bounds;
-            self.mark_slot(slot, marked);
+            let c = self.column_index[&(key.0, key.2)] as usize;
+            let col = &mut self.columns[c];
+            let at = col
+                .sections
+                .iter()
+                .position(|s| s.1 == slot)
+                .expect("section in its column");
+            col.section_bounds[at] = resolved;
+            if self.marked[slot as usize] == marked {
+                if marked {
+                    let mat = col
+                        .marked
+                        .iter()
+                        .position(|s| s.1 == slot)
+                        .expect("marked section in its column's list");
+                    col.marked_bounds[mat] = resolved;
+                }
+            } else {
+                self.mark_slot(slot, marked);
+            }
             return;
         }
         let slot = self.items.len() as u32;
@@ -183,28 +248,41 @@ impl<T> Resident<T> {
         self.bounds.push(bounds);
         self.marked.push(marked);
         self.slots.insert(key, slot);
-        let column = match self.column_index.get(&(key.0, key.2)) {
-            Some(&c) => &mut self.columns[c as usize],
+        let c = match self.column_index.get(&(key.0, key.2)) {
+            Some(&c) => c as usize,
             None => {
-                self.column_index
-                    .insert((key.0, key.2), self.columns.len() as u32);
-                self.columns.push(Column {
+                let c = self.columns.len();
+                self.column_index.insert((key.0, key.2), c as u32);
+                self.column_headers.push(ColumnHeader {
                     x: key.0,
                     z: key.2,
-                    sections: Vec::new(),
-                    marked: Vec::new(),
                     low: key.1,
                     high: key.1,
                 });
-                self.columns.last_mut().expect("just pushed")
+                if c >> 6 >= self.column_marked_bits.len() {
+                    self.column_marked_bits.push(0);
+                }
+                self.set_column_marked_bit(c, false);
+                self.columns.push(Column {
+                    sections: Vec::new(),
+                    section_bounds: Vec::new(),
+                    marked: Vec::new(),
+                    marked_bounds: Vec::new(),
+                });
+                c
             }
         };
+        let column = &mut self.columns[c];
         column.sections.push((key.1, slot));
+        column.section_bounds.push(resolved);
         if marked {
             column.marked.push((key.1, slot));
+            column.marked_bounds.push(resolved);
+            self.set_column_marked_bit(c, true);
         }
-        column.low = column.low.min(key.1);
-        column.high = column.high.max(key.1);
+        let header = &mut self.column_headers[c];
+        header.low = header.low.min(key.1);
+        header.high = header.high.max(key.1);
     }
     /// Marks or unmarks the section at `key`, if it is resident.
     pub fn set_marked(&mut self, key: SectionKey, marked: bool) {
@@ -219,9 +297,13 @@ impl<T> Resident<T> {
             return;
         }
         let (x, y, z) = self.items[slot as usize].0;
-        let column = &mut self.columns[self.column_index[&(x, z)] as usize];
+        let c = self.column_index[&(x, z)] as usize;
+        let resolved = resolve_bounds(self.bounds[slot as usize]);
+        let column = &mut self.columns[c];
         if marked {
             column.marked.push((y, slot));
+            column.marked_bounds.push(resolved);
+            self.set_column_marked_bit(c, true);
         } else {
             let at = column
                 .marked
@@ -229,6 +311,10 @@ impl<T> Resident<T> {
                 .position(|s| s.1 == slot)
                 .expect("marked section in its column's list");
             column.marked.swap_remove(at);
+            column.marked_bounds.swap_remove(at);
+            if column.marked.is_empty() {
+                self.set_column_marked_bit(c, false);
+            }
         }
     }
     /// Removes every section of the `gone` columns, the others keeping their order and
@@ -237,10 +323,16 @@ impl<T> Resident<T> {
     pub fn remove_columns(&mut self, gone: &FxHashSet<(i32, i32)>) -> Vec<T> {
         self.removals += 1;
         // Every column (a far teleport): emptied, without a lookup per section.
-        if self.columns.iter().all(|c| gone.contains(&(c.x, c.z))) {
+        if self
+            .column_headers
+            .iter()
+            .all(|h| gone.contains(&(h.x, h.z)))
+        {
             self.bounds.clear();
             self.marked.clear();
             self.slots.clear();
+            self.column_headers.clear();
+            self.column_marked_bits.clear();
             self.columns.clear();
             self.column_index.clear();
             return std::mem::take(&mut self.items)
@@ -252,6 +344,8 @@ impl<T> Resident<T> {
         let bounds = std::mem::take(&mut self.bounds);
         let marked = std::mem::take(&mut self.marked);
         self.slots.clear();
+        self.column_headers.clear();
+        self.column_marked_bits.clear();
         self.columns.clear();
         self.column_index.clear();
         let mut removed = Vec::new();
@@ -276,14 +370,25 @@ impl<T> Resident<T> {
             .position(|s| s.1 == slot)
             .expect("section in its column");
         column.sections.swap_remove(at);
+        column.section_bounds.swap_remove(at);
         if column.sections.is_empty() {
             self.column_index.remove(&(key.0, key.2));
+            let last_c = self.columns.len() - 1;
             self.columns.swap_remove(c);
-            if let Some(moved) = self.columns.get(c) {
+            self.column_headers.swap_remove(c);
+            let last_marked = self.column_has_marked(last_c);
+            self.set_column_marked_bit(c, last_marked);
+            self.set_column_marked_bit(last_c, false);
+            if let Some(moved) = self.column_headers.get(c) {
                 self.column_index.insert((moved.x, moved.z), c as u32);
             }
         } else {
-            column.bounds();
+            let header = &mut self.column_headers[c];
+            if key.1 == header.low || key.1 == header.high {
+                let (lo, hi) = column.bounds();
+                header.low = lo;
+                header.high = hi;
+            }
         }
         let _ = self.bounds.swap_remove(slot as usize);
         let _ = self.marked.swap_remove(slot as usize);
@@ -343,11 +448,104 @@ pub(super) fn camera_column(camera: DVec3) -> (i32, i32) {
 }
 
 /// The world AABB (min, max) of a section from its origin and optional tight bounds.
+#[cfg(test)]
 #[inline]
 fn section_box(min: Vec3, bounds: Option<[Vec3; 2]>) -> (Vec3, Vec3) {
     match bounds {
         Some([bmin, bmax]) => (min + bmin, min + bmax),
         None => (min, min + Vec3::splat(16.0)),
+    }
+}
+
+/// Number of precomputed section-Y offsets kept on the stack per `walk`.
+/// Covers all standard Overworld/Nether/End section indices (`0..24`).
+const Y_TABLE_LEN: usize = 32;
+
+#[inline(always)]
+fn column_oy_f32(y: i32, min_y: i32, cam_y: f64, table: &[f32; Y_TABLE_LEN]) -> f32 {
+    if (0..Y_TABLE_LEN as i32).contains(&y) {
+        table[y as usize]
+    } else {
+        (f64::from(min_y + y * 16) - cam_y) as f32
+    }
+}
+
+#[inline(always)]
+fn section_oy(
+    y: i32,
+    min_y: i32,
+    cam_y: f64,
+    y_oy_f32: &[f32; Y_TABLE_LEN],
+    y_dy8_sq: &[f64; Y_TABLE_LEN],
+) -> (f32, f64) {
+    if (0..Y_TABLE_LEN as i32).contains(&y) {
+        let i = y as usize;
+        (y_oy_f32[i], y_dy8_sq[i])
+    } else {
+        let oy = f64::from(min_y + y * 16) - cam_y;
+        let dy8 = oy + 8.0;
+        (oy as f32, dy8 * dy8)
+    }
+}
+
+/// In-place 512-bucket American Flag Sort on `Visible::distance` followed by
+/// L1-resident comparison sorts per bucket, preserving exact `(distance, key)` order.
+///
+/// `256.0_f64.to_bits() >> 47 == 32_992` (16 blocks = 1 chunk); 512 bins span
+/// 16 powers of two in squared distance (`[16, 4096]` blocks = RD 1..256), with
+/// 64 bins across the outer half of any render distance.
+const SORT_BUCKETS: usize = 512;
+const BUCKET_BASE: u64 = 32_992;
+
+#[inline(always)]
+fn distance_bucket(bits: u64) -> usize {
+    (bits >> 47)
+        .saturating_sub(BUCKET_BASE)
+        .min((SORT_BUCKETS - 1) as u64) as usize
+}
+
+#[inline]
+fn sort_visible(out: &mut [Visible]) {
+    if out.len() <= 1 {
+        return;
+    }
+    if out.len() < 256 {
+        out.sort_unstable_by(|a, b| a.distance.cmp(&b.distance).then_with(|| a.key.cmp(&b.key)));
+        return;
+    }
+    let mut ends = [0usize; SORT_BUCKETS];
+    for v in &*out {
+        ends[distance_bucket(v.distance)] += 1;
+    }
+    let mut offsets = [0usize; SORT_BUCKETS];
+    let mut sum = 0usize;
+    for (offset, end) in offsets.iter_mut().zip(&mut ends) {
+        let c = *end;
+        *offset = sum;
+        sum += c;
+        *end = sum;
+    }
+    for b in 0..SORT_BUCKETS {
+        while offsets[b] < ends[b] {
+            let cur = offsets[b];
+            let target = distance_bucket(out[cur].distance);
+            if target == b {
+                offsets[b] = cur + 1;
+            } else {
+                let dst = offsets[target];
+                offsets[target] = dst + 1;
+                out.swap(cur, dst);
+            }
+        }
+    }
+    let mut start = 0usize;
+    for &end in &ends {
+        if end - start > 1 {
+            out[start..end].sort_unstable_by(|a, b| {
+                a.distance.cmp(&b.distance).then_with(|| a.key.cmp(&b.key))
+            });
+        }
+        start = end;
     }
 }
 
@@ -436,77 +634,168 @@ impl<T> Resident<T> {
         out: &mut Vec<Visible>,
     ) {
         let from = camera_column(camera);
-        for column in &self.columns {
-            let near = in_view_distance(from, radius, column.x, column.z);
-            if !near && !beyond(column.x, column.z) {
+        let radius_sq = i64::from(radius) * i64::from(radius);
+        let tight = frustum.tight();
+        let min_y = self.min_y;
+        let cam_x = camera.x;
+        let cam_y = camera.y;
+        let cam_z = camera.z;
+
+        // Precompute camera-relative Y offsets and (oy + 8)^2 once for y in 0..32.
+        let mut y_oy_f32 = [0.0f32; Y_TABLE_LEN];
+        let mut y_dy8_sq = [0.0f64; Y_TABLE_LEN];
+        let min_y_i64 = i64::from(min_y);
+        for (i, (oy_slot, dy8_slot)) in y_oy_f32.iter_mut().zip(&mut y_dy8_sq).enumerate() {
+            let oy = (min_y_i64 + i as i64 * 16) as f64 - cam_y;
+            *oy_slot = oy as f32;
+            let dy8 = oy + 8.0;
+            *dy8_slot = dy8 * dy8;
+        }
+
+        for (ci, h) in self.column_headers.iter().enumerate() {
+            let dx = i64::from(((h.x - from.0).abs() - 1).max(0));
+            let dz = i64::from(((h.z - from.1).abs() - 1).max(0));
+            let near = dx * dx + dz * dz < radius_sq;
+            if near {
+                if marked_only_near && !self.column_has_marked(ci) {
+                    continue;
+                }
+            } else if !beyond(h.x, h.z) {
                 continue;
             }
-            let list = if marked_only_near && near {
-                &column.marked
-            } else {
-                &column.sections
-            };
-            if list.is_empty() {
-                continue;
-            }
-            let ox = f64::from(column.x * 16) - camera.x;
-            let oz = f64::from(column.z * 16) - camera.z;
+            let ox = f64::from(h.x * 16) - cam_x;
+            let oz = f64::from(h.z * 16) - cam_z;
             let min_x = ox as f32;
             let min_z = oz as f32;
-            let low_oy = (f64::from(self.min_y + column.low * 16) - camera.y) as f32;
-            let high_oy = (f64::from(self.min_y + column.high * 16) - camera.y) as f32;
-            let min = Vec3::new(min_x, low_oy, min_z);
-            let max = Vec3::new(min_x + 16.0, high_oy + 16.0, min_z + 16.0);
-            let inside = frustum.contains(min, max);
-            if !inside && !frustum.intersects(min, max) {
+            let low_oy = column_oy_f32(h.low, min_y, cam_y, &y_oy_f32);
+            let high_oy = if h.high == h.low {
+                low_oy
+            } else {
+                column_oy_f32(h.high, min_y, cam_y, &y_oy_f32)
+            };
+            let col_min = Vec3::new(min_x, low_oy, min_z);
+            let col_max = Vec3::new(min_x + 16.0, high_oy + 16.0, min_z + 16.0);
+            // Reject out-of-frustum columns (~75-80%) before testing `contains`
+            // or touching per-column section lists.
+            if !frustum.intersects(col_min, col_max) {
                 continue;
             }
+            let inside = frustum.contains(col_min, col_max);
             let dx8 = ox + 8.0;
             let dz8 = oz + 8.0;
             let xz_sq = dx8 * dx8 + dz8 * dz8;
 
+            let column = &self.columns[ci];
+            let (list, bounds_list) = if marked_only_near && near {
+                (&column.marked, &column.marked_bounds)
+            } else {
+                (&column.sections, &column.section_bounds)
+            };
+
             if inside {
-                for &(y, slot) in list {
-                    let key = (column.x, y, column.z);
-                    if near && !reachable(key) {
-                        continue;
+                if near {
+                    for &(y, slot) in list {
+                        let key = (h.x, y, h.z);
+                        if !reachable(key) {
+                            continue;
+                        }
+                        let (oy_f32, dy8_sq) = section_oy(y, min_y, cam_y, &y_oy_f32, &y_dy8_sq);
+                        let distance = xz_sq + dy8_sq;
+                        out.push(Visible {
+                            distance: distance.to_bits(),
+                            key,
+                            slot,
+                            origin: [min_x, oy_f32, min_z],
+                        });
                     }
-                    let oy = f64::from(self.min_y + y * 16) - camera.y;
-                    let min = Vec3::new(min_x, oy as f32, min_z);
-                    let dy8 = oy + 8.0;
-                    let distance = xz_sq + dy8 * dy8;
-                    out.push(Visible {
-                        distance: distance.to_bits(),
-                        key,
-                        slot,
-                        origin: min.to_array(),
-                    });
+                } else {
+                    for &(y, slot) in list {
+                        let (oy_f32, dy8_sq) = section_oy(y, min_y, cam_y, &y_oy_f32, &y_dy8_sq);
+                        let distance = xz_sq + dy8_sq;
+                        out.push(Visible {
+                            distance: distance.to_bits(),
+                            key: (h.x, y, h.z),
+                            slot,
+                            origin: [min_x, oy_f32, min_z],
+                        });
+                    }
+                }
+            } else if tight {
+                if near {
+                    for (&(y, slot), &[bmin_off, bmax_off]) in list.iter().zip(bounds_list) {
+                        let key = (h.x, y, h.z);
+                        if !reachable(key) {
+                            continue;
+                        }
+                        let (oy_f32, dy8_sq) = section_oy(y, min_y, cam_y, &y_oy_f32, &y_dy8_sq);
+                        let min = Vec3::new(min_x, oy_f32, min_z);
+                        if !frustum.intersects(min + bmin_off, min + bmax_off) {
+                            continue;
+                        }
+                        let distance = xz_sq + dy8_sq;
+                        out.push(Visible {
+                            distance: distance.to_bits(),
+                            key,
+                            slot,
+                            origin: [min_x, oy_f32, min_z],
+                        });
+                    }
+                } else {
+                    for (&(y, slot), &[bmin_off, bmax_off]) in list.iter().zip(bounds_list) {
+                        let (oy_f32, dy8_sq) = section_oy(y, min_y, cam_y, &y_oy_f32, &y_dy8_sq);
+                        let min = Vec3::new(min_x, oy_f32, min_z);
+                        if !frustum.intersects(min + bmin_off, min + bmax_off) {
+                            continue;
+                        }
+                        let distance = xz_sq + dy8_sq;
+                        out.push(Visible {
+                            distance: distance.to_bits(),
+                            key: (h.x, y, h.z),
+                            slot,
+                            origin: [min_x, oy_f32, min_z],
+                        });
+                    }
                 }
             } else {
-                for &(y, slot) in list {
-                    let key = (column.x, y, column.z);
-                    if near && !reachable(key) {
-                        continue;
+                let sixteen = Vec3::splat(16.0);
+                if near {
+                    for &(y, slot) in list {
+                        let key = (h.x, y, h.z);
+                        if !reachable(key) {
+                            continue;
+                        }
+                        let (oy_f32, dy8_sq) = section_oy(y, min_y, cam_y, &y_oy_f32, &y_dy8_sq);
+                        let min = Vec3::new(min_x, oy_f32, min_z);
+                        if !frustum.intersects(min, min + sixteen) {
+                            continue;
+                        }
+                        let distance = xz_sq + dy8_sq;
+                        out.push(Visible {
+                            distance: distance.to_bits(),
+                            key,
+                            slot,
+                            origin: [min_x, oy_f32, min_z],
+                        });
                     }
-                    let oy = f64::from(self.min_y + y * 16) - camera.y;
-                    let min = Vec3::new(min_x, oy as f32, min_z);
-                    let bounds = self.bounds[slot as usize].filter(|_| frustum.tight());
-                    let (bmin, bmax) = section_box(min, bounds);
-                    if !frustum.intersects(bmin, bmax) {
-                        continue;
+                } else {
+                    for &(y, slot) in list {
+                        let (oy_f32, dy8_sq) = section_oy(y, min_y, cam_y, &y_oy_f32, &y_dy8_sq);
+                        let min = Vec3::new(min_x, oy_f32, min_z);
+                        if !frustum.intersects(min, min + sixteen) {
+                            continue;
+                        }
+                        let distance = xz_sq + dy8_sq;
+                        out.push(Visible {
+                            distance: distance.to_bits(),
+                            key: (h.x, y, h.z),
+                            slot,
+                            origin: [min_x, oy_f32, min_z],
+                        });
                     }
-                    let dy8 = oy + 8.0;
-                    let distance = xz_sq + dy8 * dy8;
-                    out.push(Visible {
-                        distance: distance.to_bits(),
-                        key,
-                        slot,
-                        origin: min.to_array(),
-                    });
                 }
             }
         }
-        out.sort_unstable_by_key(|v| (v.distance, v.key));
+        sort_visible(out);
     }
 }
 
@@ -611,7 +900,7 @@ mod tests {
             planes: super::super::frustum(projection * crate::camera::view_matrix(0.0, 5.0)),
         };
         let inside = r
-            .columns
+            .column_headers
             .iter()
             .filter(|c| {
                 let min = origin((c.x, c.low, c.z), crate::chunk::MIN_Y, camera).as_vec3();
@@ -640,17 +929,25 @@ mod tests {
     /// its marked sections.
     fn check(r: &Resident<u32>, model: &HashMap<SectionKey, (u32, bool)>) {
         assert_eq!(r.len(), model.len());
+        assert_eq!(r.columns.len(), r.column_headers.len());
         let mut seen = 0;
-        for column in &r.columns {
+        for (ci, (header, column)) in r.column_headers.iter().zip(&r.columns).enumerate() {
             assert!(!column.sections.is_empty());
+            assert_eq!(column.sections.len(), column.section_bounds.len());
+            assert_eq!(column.marked.len(), column.marked_bounds.len());
+            assert_eq!(r.column_has_marked(ci), !column.marked.is_empty());
             let ys: Vec<i32> = column.sections.iter().map(|s| s.0).collect();
-            assert_eq!(column.low, *ys.iter().min().unwrap());
-            assert_eq!(column.high, *ys.iter().max().unwrap());
-            for &(y, slot) in &column.sections {
+            assert_eq!(header.low, *ys.iter().min().unwrap());
+            assert_eq!(header.high, *ys.iter().max().unwrap());
+            for (&(y, slot), &resolved) in column.sections.iter().zip(&column.section_bounds) {
                 let (key, value) = &r.items[slot as usize];
-                assert_eq!(*key, (column.x, y, column.z));
+                assert_eq!(*key, (header.x, y, header.z));
                 assert_eq!(model[key], (*value, r.marked[slot as usize]));
+                assert_eq!(resolved, resolve_bounds(r.bounds[slot as usize]));
                 seen += 1;
+            }
+            for (&(_, slot), &resolved) in column.marked.iter().zip(&column.marked_bounds) {
+                assert_eq!(resolved, resolve_bounds(r.bounds[slot as usize]));
             }
             let mut marked: Vec<(i32, u32)> = column
                 .sections
@@ -661,7 +958,7 @@ mod tests {
             let mut listed = column.marked.clone();
             marked.sort_unstable();
             listed.sort_unstable();
-            assert_eq!(listed, marked, "column ({}, {})", column.x, column.z);
+            assert_eq!(listed, marked, "column ({}, {})", header.x, header.z);
         }
         assert_eq!(seen, model.len());
         for (key, &(_, marked)) in model {
@@ -823,7 +1120,7 @@ mod tests {
                 planes: super::super::frustum(projection * crate::camera::view_matrix(yaw, pitch)),
             };
             inside += r
-                .columns
+                .column_headers
                 .iter()
                 .filter(|c| {
                     let min = origin((c.x, c.low, c.z), r.min_y, camera).as_vec3();

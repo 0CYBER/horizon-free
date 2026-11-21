@@ -17,13 +17,14 @@
 //! the graph (`Reach`): the cells it reached, kept as bits too, sent again
 //! whenever the generation moves, which it does whenever an answer may change.
 use super::SectionKey;
-use crate::fast_hash::FxHashSet;
+use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::mesher::ALL_VISIBLE;
 use glam::DVec3;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 /// Vanilla's `Direction` order: down, up, north, south, west, east.
+#[cfg(test)]
 const STEPS: [(i32, i32, i32); 6] = [
     (0, -1, 0),
     (0, 1, 0),
@@ -51,7 +52,7 @@ struct Columns {
     /// The lowest block y of section 0 (`Level.getMinY`).
     min_y: i32,
     sections: i32,
-    map: HashMap<(i32, i32), Box<[u64]>>,
+    map: FxHashMap<(i32, i32), Box<[u64]>>,
 }
 
 impl Columns {
@@ -59,7 +60,7 @@ impl Columns {
         Self {
             min_y,
             sections,
-            map: HashMap::new(),
+            map: FxHashMap::default(),
         }
     }
     /// `SectionPos.of`: the section holding `pos`.
@@ -116,12 +117,27 @@ enum Edit {
     Clear,
 }
 
+#[derive(Clone, Copy)]
+struct QueueNode {
+    index: u32,
+    ux: u16,
+    uy: u16,
+    uz: u16,
+}
+
 /// One search's result over the box around the camera: vanilla's
 /// `GraphStorage.sectionToNodeMap`, as dense arrays.
 #[derive(Default)]
 struct Graph {
     from: SectionKey,
     radius: i32,
+    /// Precomputed `from.0 - radius` and `from.2 - radius` for branch-minimal indexing.
+    origin_x: i32,
+    origin_z: i32,
+    /// Precomputed `2 * radius + 1` (0 until searched).
+    side: u32,
+    /// Precomputed `height as u32` (0 until searched).
+    height_u: u32,
     /// The world: lowest block y and height in sections.
     min_y: i32,
     sections: i32,
@@ -151,48 +167,75 @@ struct Graph {
 }
 
 impl Graph {
-    fn index(&self, key: SectionKey) -> Option<usize> {
-        let (dx, dz, dy) = (key.0 - self.from.0, key.2 - self.from.2, key.1 - self.y0);
-        let side = 2 * self.radius + 1;
-        if dx.abs() > self.radius || dz.abs() > self.radius || !(0..self.height).contains(&dy) {
+    #[inline]
+    fn node(&self, key: SectionKey) -> Option<QueueNode> {
+        let ux = key.0.wrapping_sub(self.origin_x) as u32;
+        let uz = key.2.wrapping_sub(self.origin_z) as u32;
+        let uy = key.1.wrapping_sub(self.y0) as u32;
+        if ux >= self.side || uz >= self.side || uy >= self.height_u {
             return None;
         }
-        Some((((dz + self.radius) * side + dx + self.radius) * self.height + dy) as usize)
+        let index = (uz * self.side + ux) * self.height_u + uy;
+        Some(QueueNode {
+            index,
+            ux: ux as u16,
+            uy: uy as u16,
+            uz: uz as u16,
+        })
     }
-    fn key(&self, index: usize) -> SectionKey {
-        let side = 2 * self.radius + 1;
-        let i = index as i32;
-        let column = i / self.height;
-        (
-            self.from.0 + column % side - self.radius,
-            self.y0 + i % self.height,
-            self.from.2 + column / side - self.radius,
-        )
+    #[cfg(test)]
+    #[inline]
+    fn index(&self, key: SectionKey) -> Option<usize> {
+        self.node(key).map(|n| n.index as usize)
     }
+    #[inline]
     fn contains(&self, key: SectionKey) -> bool {
-        if let Some(i) = self.index(key) {
+        let ux = key.0.wrapping_sub(self.origin_x) as u32;
+        let uz = key.2.wrapping_sub(self.origin_z) as u32;
+        if ux >= self.side || uz >= self.side {
+            return false;
+        }
+        let uy = key.1.wrapping_sub(self.y0) as u32;
+        if uy < self.height_u {
+            let i = ((uz * self.side + ux) * self.height_u + uy) as usize;
             self.directions[i] & REACHED != 0
-        } else if (0..=self.sections).contains(&key.1)
-            && key.1 >= self.y0 + self.height
-            && (key.0 - self.from.0).abs() <= self.radius
-            && (key.2 - self.from.2).abs() <= self.radius
-        {
+        } else {
             // Everything above the highest non-air section is open sky. A
             // full search can reach that layer from a neighbouring column,
             // so checking only this column's top cell can hide an upper
             // section that is visible through the open layer. Once any top
             // cell is reached, conservatively keep the whole sky band visible.
             self.sky_reached
+                && key.1 >= self.y0 + self.height
+                && (0..=self.sections).contains(&key.1)
+        }
+    }
+    /// Same answer as `contains`, reading the 8x denser L1-resident `bits`
+    /// array kept in lockstep with `directions` by `set_reached`.
+    #[inline]
+    fn contains_bit(&self, key: SectionKey) -> bool {
+        let ux = key.0.wrapping_sub(self.origin_x) as u32;
+        let uz = key.2.wrapping_sub(self.origin_z) as u32;
+        if ux >= self.side || uz >= self.side {
+            return false;
+        }
+        let uy = key.1.wrapping_sub(self.y0) as u32;
+        if uy < self.height_u {
+            let i = ((uz * self.side + ux) * self.height_u + uy) as usize;
+            (self.bits[i >> 5] >> (i & 31)) & 1 != 0
         } else {
-            false
+            self.sky_reached
+                && key.1 >= self.y0 + self.height
+                && (0..=self.sections).contains(&key.1)
         }
     }
     /// Cell `i` is reached, having travelled `directions` (`REACHED` among
     /// them): the one writer of `REACHED`, so `bits` say what `directions` do.
+    #[inline(always)]
     fn set_reached(&mut self, i: usize, directions: u8) {
         debug_assert!(directions & REACHED != 0);
         self.directions[i] = directions;
-        self.bits[i / 32] |= 1 << (i % 32);
+        self.bits[i >> 5] |= 1 << (i & 31);
     }
     /// The full search from the camera (vanilla's `scheduleFullUpdate`).
     fn search(
@@ -201,23 +244,35 @@ impl Graph {
         camera: DVec3,
         radius: i32,
         vis: &mut Vec<u64>,
-        queue: &mut VecDeque<u32>,
+        queue: &mut VecDeque<QueueNode>,
     ) {
         let from = columns.section_of(camera);
+        let origin_x = from.0 - radius;
+        let origin_z = from.2 - radius;
+        let side = (2 * radius + 1) as usize;
         self.from = from;
         self.radius = radius;
+        self.origin_x = origin_x;
+        self.origin_z = origin_z;
+        self.side = side as u32;
         self.min_y = columns.min_y;
         self.sections = columns.sections;
         self.y0 = -1;
+
+        let mut present: Vec<(usize, &[u64])> = Vec::new();
         if from.1 >= columns.sections {
             self.height = columns.sections + 2;
         } else {
             let mut max_non_air_y = 0;
-            for dz in -radius..=radius {
-                for dx in -radius..=radius {
-                    let Some(column) = columns.map.get(&(from.0 + dx, from.2 + dz)) else {
+            for dz in 0..side {
+                let wz = origin_z + dz as i32;
+                let row = dz * side;
+                for dx in 0..side {
+                    let wx = origin_x + dx as i32;
+                    let Some(column) = columns.map.get(&(wx, wz)) else {
                         continue;
                     };
+                    present.push((row + dx, column));
                     for (y, &v) in column.iter().enumerate().rev() {
                         let y = y as i32;
                         if y <= max_non_air_y {
@@ -233,8 +288,9 @@ impl Graph {
             let top_y = max_non_air_y.max(from.1);
             self.height = (top_y + 3).max(3).min(columns.sections + 2);
         }
-        let side = (2 * radius + 1) as usize;
-        let size = side * side * self.height as usize;
+        self.height_u = self.height as u32;
+        let h = self.height as usize;
+        let size = side * side * h;
         self.directions.clear();
         self.directions.resize(size, 0);
         self.bits.clear();
@@ -247,23 +303,32 @@ impl Graph {
             .resize((side + 1) * (side + 1) * (self.height + 1) as usize, 0);
         vis.clear();
         vis.resize(size, ALL_VISIBLE);
-        for dz in -radius..=radius {
-            for dx in -radius..=radius {
-                let Some(column) = columns.map.get(&(from.0 + dx, from.2 + dz)) else {
-                    continue;
-                };
-                let base = self
-                    .index((from.0 + dx, 0, from.2 + dz))
-                    .expect("column inside the searched box");
+        if from.1 >= columns.sections {
+            for dz in 0..side {
+                let wz = origin_z + dz as i32;
+                let row = dz * side;
+                for dx in 0..side {
+                    let wx = origin_x + dx as i32;
+                    let Some(column) = columns.map.get(&(wx, wz)) else {
+                        continue;
+                    };
+                    let base = (row + dx) * h + 1;
+                    let len = (column.len() as i32).min(self.height - 1) as usize;
+                    vis[base..base + len].copy_from_slice(&column[..len]);
+                }
+            }
+        } else {
+            for (col_idx, column) in present {
+                let base = col_idx * h + 1;
                 let len = (column.len() as i32).min(self.height - 1) as usize;
                 vis[base..base + len].copy_from_slice(&column[..len]);
             }
         }
         queue.clear();
         if (0..columns.sections).contains(&from.1) {
-            let start = self.index(from).expect("camera inside the searched box");
-            self.set_reached(start, REACHED);
-            queue.push_back(start as u32);
+            let start = self.node(from).expect("camera inside the searched box");
+            self.set_reached(start.index as usize, REACHED);
+            queue.push_back(start);
         } else {
             self.seed_outside(camera, queue);
         }
@@ -277,8 +342,8 @@ impl Graph {
     /// centre (a stable sort over vanilla's x-then-z loop). Vanilla seeds only
     /// columns in view distance; this search covers its whole box, as it does
     /// from inside the world.
-    fn seed_outside(&mut self, camera: DVec3, queue: &mut VecDeque<u32>) {
-        // STEPS indexes: down, up, north, south, west, east.
+    fn seed_outside(&mut self, camera: DVec3, queue: &mut VecDeque<QueueNode>) {
+        // Direction order: down, up, north, south, west, east.
         let (y, travel) = if self.from.1 < 0 {
             (0, 1)
         } else {
@@ -310,13 +375,14 @@ impl Graph {
         }
         seeds.sort_by_key(|seed| seed.0);
         for (_, dx, dz, directions) in seeds {
-            let i = self
-                .index((self.from.0 + dx, y, self.from.2 + dz))
+            let node = self
+                .node((self.from.0 + dx, y, self.from.2 + dz))
                 .expect("seed inside the searched box");
+            let i = node.index as usize;
             self.set_reached(i, directions);
             // Entered through the face opposite the travel (`sourceDirection`).
             self.entered[i] = 1 << (travel ^ 1);
-            queue.push_back(i as u32);
+            queue.push_back(node);
         }
     }
     /// Vanilla's `runUpdates`: take nodes from the queue and step through
@@ -326,7 +392,7 @@ impl Graph {
     /// partial update. Whether it reached a cell it had not.
     fn propagate(
         &mut self,
-        queue: &mut VecDeque<u32>,
+        queue: &mut VecDeque<QueueNode>,
         camera: DVec3,
         full: bool,
         vis: impl Fn(usize, SectionKey) -> u64,
@@ -339,22 +405,50 @@ impl Graph {
         );
         // `SectionPos.center` of the camera's section.
         let centre = [eye.0 * 16 + 8, eye.1 * 16 + self.min_y + 8, eye.2 * 16 + 8];
-        while let Some(index) = queue.pop_front() {
-            let i = index as usize;
-            let key = self.key(i);
-            if key.1 == self.y0 + self.height - 1 {
+        let stride_x = self.height_u as usize;
+        let stride_z = (self.side * self.height_u) as usize;
+        let max_u = self.side.saturating_sub(1) as u16;
+        let top_uy = self.height_u.saturating_sub(1) as u16;
+        let reuse = eye == self.from;
+
+        while let Some(node) = queue.pop_front() {
+            let i = node.index as usize;
+            let (ux, uy, uz) = (node.ux, node.uy, node.uz);
+            if uy == top_uy {
                 self.sky_reached = true;
             }
+            let key = (
+                self.origin_x + i32::from(ux),
+                self.y0 + i32::from(uy),
+                self.origin_z + i32::from(uz),
+            );
             let directions = self.directions[i];
             let entered = self.entered[i];
             let exits = if entered == 0 {
                 0x3f
             } else {
-                let vis = vis(i, key);
-                (0..6)
-                    .filter(|face| entered & (1 << face) != 0)
-                    .fold(0, |exits, face| exits | (vis >> (face * 6)) as u8 & 0x3f)
+                let v = vis(i, key);
+                if v == ALL_VISIBLE {
+                    0x3f
+                } else if v == 0 {
+                    continue;
+                } else {
+                    let mut m = entered;
+                    let mut out = 0u8;
+                    while m != 0 {
+                        let face = m.trailing_zeros();
+                        out |= (v >> (face * 6)) as u8;
+                        m &= m - 1;
+                    }
+                    out & 0x3f
+                }
             };
+            // Block steps opposite any already-travelled direction (`d ^ 1`).
+            let blocked = ((directions & 0x15) << 1) | ((directions & 0x2a) >> 1);
+            let mut mask = exits & !blocked;
+            if mask == 0 {
+                continue;
+            }
             let distant = (key.0 - eye.0).abs() > DISTANT_SECTIONS
                 || (key.1 - eye.1).abs() > DISTANT_SECTIONS
                 || (key.2 - eye.2).abs() > DISTANT_SECTIONS;
@@ -363,17 +457,48 @@ impl Graph {
             // graph was searched from, every step leads away from it or
             // sideways, so no point of the line falls in a neighbour this loop
             // adds. A partial update after the camera moved tests every step.
-            let reuse = eye == self.from;
             let mut seen = [None; 3];
-            for (d, step) in STEPS.iter().enumerate() {
-                if exits & (1 << d) == 0 || directions & (1 << (d ^ 1)) != 0 {
-                    continue;
-                }
-                let next = (key.0 + step.0, key.1 + step.1, key.2 + step.2);
-                if next.1 < -1 || next.1 > self.sections {
-                    continue;
-                }
-                let Some(n) = self.index(next) else { continue };
+            while mask != 0 {
+                let d = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                let (n, nux, nuy, nuz) = match d {
+                    0 => {
+                        if uy == 0 {
+                            continue;
+                        }
+                        (i - 1, ux, uy - 1, uz)
+                    }
+                    1 => {
+                        if uy == top_uy {
+                            continue;
+                        }
+                        (i + 1, ux, uy + 1, uz)
+                    }
+                    2 => {
+                        if uz == 0 {
+                            continue;
+                        }
+                        (i - stride_z, ux, uy, uz - 1)
+                    }
+                    3 => {
+                        if uz == max_u {
+                            continue;
+                        }
+                        (i + stride_z, ux, uy, uz + 1)
+                    }
+                    4 => {
+                        if ux == 0 {
+                            continue;
+                        }
+                        (i - stride_x, ux - 1, uy, uz)
+                    }
+                    _ => {
+                        if ux == max_u {
+                            continue;
+                        }
+                        (i + stride_x, ux + 1, uy, uz)
+                    }
+                };
                 if distant {
                     let sees = match seen[d / 2] {
                         Some(sees) if reuse => sees,
@@ -387,7 +512,12 @@ impl Graph {
                 if self.directions[n] & REACHED == 0 {
                     self.set_reached(n, directions | 1 << d);
                     self.entered[n] = 1 << (d ^ 1);
-                    queue.push_back(n as u32);
+                    queue.push_back(QueueNode {
+                        index: n as u32,
+                        ux: nux,
+                        uy: nuy,
+                        uz: nuz,
+                    });
                     grew = true;
                 } else {
                     self.entered[n] |= 1 << (d ^ 1);
@@ -516,22 +646,34 @@ pub struct Reach<'a> {
 impl Reach<'_> {
     /// gpu_culling.wgsl's `reached`, statement for statement: what
     /// `Graph::contains` answers.
+    #[inline]
     pub fn contains(&self, key: SectionKey) -> bool {
         let r = self.radius;
-        let (dx, dz, dy) = (key.0 - self.from_x, key.2 - self.from_z, key.1 - self.y0);
-        if dx < -r || dx > r || dz < -r || dz > r || dy < 0 {
+        if r < 0 {
             return false;
         }
-        if dy >= self.height {
-            return self.sky_reached && (0..=self.sections).contains(&key.1);
+        let side = (2 * r + 1) as u32;
+        let ux = key.0.wrapping_sub(self.from_x - r) as u32;
+        let uz = key.2.wrapping_sub(self.from_z - r) as u32;
+        if ux >= side || uz >= side {
+            return false;
         }
-        let i = (((dz + r) * (2 * r + 1) + dx + r) * self.height + dy) as usize;
-        (self.bits[i / 32] >> (i % 32)) & 1 != 0
+        let uy = key.1.wrapping_sub(self.y0) as u32;
+        let h = self.height.max(0) as u32;
+        if uy < h {
+            let i = ((uz * side + ux) * h + uy) as usize;
+            (self.bits[i >> 5] >> (i & 31)) & 1 != 0
+        } else {
+            self.sky_reached
+                && key.1 >= self.y0 + self.height
+                && (0..=self.sections).contains(&key.1)
+        }
     }
 }
 
 /// `Mth.floor` for coordinates inside the world, without a libm call (the
 /// x86-64 baseline has no rounding instruction).
+#[inline(always)]
 fn floor(x: f64) -> i32 {
     let i = x as i32;
     i - i32::from(f64::from(i) > x)
@@ -610,7 +752,7 @@ pub struct Occlusion {
     /// its graph when it lands.
     changed_late: Vec<SectionKey>,
     vis: Vec<u64>,
-    queue: VecDeque<u32>,
+    queue: VecDeque<QueueNode>,
     /// Changes whenever `contains` may answer differently (`generation`).
     generation: u64,
     /// Set when edits were dropped; the next search resends every column.
@@ -717,8 +859,9 @@ impl Occlusion {
     /// Whether `key` is visible from the camera. Without a usable graph
     /// (before the first search lands, or with the camera somewhere the graph
     /// never reached) every section is.
+    #[inline]
     pub fn contains(&self, key: SectionKey) -> bool {
-        self.graph.as_ref().is_none_or(|g| g.contains(key))
+        self.graph.as_ref().is_none_or(|g| g.contains_bit(key))
     }
     /// Whether the current graph knows that `key` is visible from
     /// `camera_section`. Unknown is returned when the graph is absent, was
@@ -737,7 +880,7 @@ impl Occlusion {
         {
             return None;
         }
-        Some(graph.contains(key))
+        Some(graph.contains_bit(key))
     }
     /// Changes whenever `contains` may answer differently: a search landed, a
     /// partial update reached more sections, or the graph went.
@@ -786,7 +929,7 @@ impl Occlusion {
         if self
             .graph
             .as_ref()
-            .is_some_and(|g| g.from != from && !g.contains(from))
+            .is_some_and(|g| g.from != from && !g.contains_bit(from))
             && let Some(graph) = self.graph.take()
         {
             self.spare = graph;
@@ -875,10 +1018,10 @@ impl Occlusion {
         };
         self.queue.clear();
         for key in self.changed.drain(..) {
-            if let Some(i) = graph.index(key)
-                && graph.directions[i] & REACHED != 0
+            if let Some(node) = graph.node(key)
+                && graph.directions[node.index as usize] & REACHED != 0
             {
-                self.queue.push_back(i as u32);
+                self.queue.push_back(node);
             }
         }
         let columns = &self.columns;
@@ -899,6 +1042,7 @@ impl Occlusion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     /// The centre of a section, in a world whose section 0 starts at y 0.
     fn at(key: SectionKey) -> DVec3 {

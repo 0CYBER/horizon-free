@@ -16,8 +16,14 @@
 
 /// The width of a band, in blocks.
 const BAND: f64 = 64.0;
+/// Exact reciprocal of `BAND` (power of two).
+const INV_BAND: f64 = 1.0 / BAND;
 /// Where a run's group sits in its sort key, above band and page.
 const GROUP_SHIFT: u32 = 62;
+/// Largest band index whose squared-distance bounds stay exact integers in `f64`.
+const MAX_CACHED_BAND: u64 = 1 << 20;
+/// Maximum `(group, band, page)` bucket count handled by O(N) counting sort.
+const MAX_COUNTING_BUCKETS: usize = 4096;
 
 /// One section's draws: `start..start + len` of the list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,22 +38,62 @@ pub(super) struct Run {
 #[derive(Default)]
 pub(super) struct PageRuns {
     runs: Vec<Run>,
-    scratch: Vec<([u32; 5], (u32, Option<u32>))>,
+    sorted_runs: Vec<Run>,
+    counts: Vec<u32>,
+    scratch_draws: Vec<[u32; 5]>,
+    scratch_pages: Vec<(u32, Option<u32>)>,
+    total_draws: usize,
+    first_gp: u64,
+    mixed_gp: bool,
+    max_group: u8,
+    max_band: u32,
+    max_page: u32,
+    cached_band: u64,
+    band_lo_bits: u64,
+    band_hi_bits: u64,
 }
 
 impl PageRuns {
     pub fn clear(&mut self) {
         self.runs.clear();
+        self.total_draws = 0;
+        self.first_gp = 0;
+        self.mixed_gp = false;
+        self.max_group = 0;
+        self.max_band = 0;
+        self.max_page = 0;
+    }
+
+    #[inline(always)]
+    fn band_of(&mut self, distance: u64) -> u64 {
+        if distance >= self.band_lo_bits && distance < self.band_hi_bits {
+            return self.cached_band;
+        }
+        let band = (f64::from_bits(distance).sqrt() * INV_BAND) as u64;
+        if band < MAX_CACHED_BAND {
+            let lo = band as f64 * BAND;
+            let hi = (band + 1) as f64 * BAND;
+            self.cached_band = band;
+            self.band_lo_bits = if band == 0 {
+                0
+            } else {
+                (lo * lo).to_bits().saturating_add(2)
+            };
+            self.band_hi_bits = (hi * hi).to_bits().saturating_sub(2);
+        }
+        band
     }
 
     /// The draws `start..start + len` of a section `distance` from the
     /// camera (squared, as bits) in arena `page`; runs come nearest first.
+    #[inline]
     pub fn push(&mut self, distance: u64, page: u32, start: usize, len: usize, tag: [u32; 3]) {
         self.push_in(0, distance, page, start, len, tag);
     }
 
     /// As `push`, in `group` (0 to 3): regrouping puts each group's runs
     /// before the next group's, then bands and pages within it.
+    #[inline]
     pub fn push_in(
         &mut self,
         group: u8,
@@ -58,9 +104,19 @@ impl PageRuns {
         tag: [u32; 3],
     ) {
         if len > 0 {
-            let band = (f64::from_bits(distance).sqrt() / BAND) as u64;
+            let band = self.band_of(distance);
+            let gp = u64::from(group) << GROUP_SHIFT | u64::from(page);
+            if self.runs.is_empty() {
+                self.first_gp = gp;
+            } else if gp != self.first_gp {
+                self.mixed_gp = true;
+            }
+            self.max_group = self.max_group.max(group & 3);
+            self.max_band = self.max_band.max(band.min(u64::from(u32::MAX)) as u32);
+            self.max_page = self.max_page.max(page);
+            self.total_draws += len;
             self.runs.push(Run {
-                key: u64::from(group) << GROUP_SHIFT | band << 32 | u64::from(page),
+                key: gp | band << 32,
                 start: start as u32,
                 len: len as u32,
                 tag,
@@ -78,23 +134,79 @@ impl PageRuns {
         base: usize,
     ) -> &[Run] {
         // Group and page: one of each needs no reordering.
-        let page = |r: &Run| r.key & (3 << GROUP_SHIFT | u64::from(u32::MAX));
-        if self.runs.windows(2).all(|w| page(&w[0]) == page(&w[1])) {
+        if !self.mixed_gp {
             return &self.runs;
         }
-        // Stable: within a band and page the runs stay nearest first.
-        self.runs.sort_by_key(|r| r.key);
-        self.scratch.clear();
+        // Stable O(N) counting sort over (group, band, page) when the bucket
+        // space is compact (every real frame), keeping runs nearest first
+        // within each bucket without per-frame heap allocation.
+        let groups = usize::from(self.max_group) + 1;
+        let bands = self.max_band as usize + 1;
+        let pages_count = self.max_page as usize + 1;
+        let num_buckets = if self.max_band < 1024 && self.max_page < 1024 {
+            groups
+                .checked_mul(bands)
+                .and_then(|v| v.checked_mul(pages_count))
+        } else {
+            None
+        };
+        if let Some(num_buckets) = num_buckets
+            && num_buckets <= MAX_COUNTING_BUCKETS
+        {
+            self.counts.clear();
+            self.counts.resize(num_buckets, 0);
+            for r in &self.runs {
+                let g = (r.key >> GROUP_SHIFT) as usize;
+                let b = ((r.key >> 32) & 0x3fff_ffff) as usize;
+                let p = r.key as u32 as usize;
+                self.counts[(g * bands + b) * pages_count + p] += 1;
+            }
+            let mut sum = 0u32;
+            for count in &mut self.counts {
+                let c = *count;
+                *count = sum;
+                sum += c;
+            }
+            let n_runs = self.runs.len();
+            if self.sorted_runs.len() < n_runs {
+                self.sorted_runs.resize(n_runs, self.runs[0]);
+            } else {
+                self.sorted_runs.truncate(n_runs);
+            }
+            for &r in &self.runs {
+                let g = (r.key >> GROUP_SHIFT) as usize;
+                let b = ((r.key >> 32) & 0x3fff_ffff) as usize;
+                let p = r.key as u32 as usize;
+                let bucket = (g * bands + b) * pages_count + p;
+                let dst = self.counts[bucket] as usize;
+                self.counts[bucket] = (dst + 1) as u32;
+                self.sorted_runs[dst] = r;
+            }
+            std::mem::swap(&mut self.runs, &mut self.sorted_runs);
+        } else {
+            // Stable fallback for synthetic inputs with sparse bands or pages.
+            self.runs.sort_by_key(|r| r.key);
+        }
+        self.scratch_draws.clear();
+        self.scratch_pages.clear();
+        self.scratch_draws.reserve(self.total_draws);
+        self.scratch_pages.reserve(self.total_draws);
         for r in &mut self.runs {
-            let (s, e) = (r.start as usize, (r.start + r.len) as usize);
-            r.start = (base + self.scratch.len()) as u32;
-            self.scratch
-                .extend(draws[s..e].iter().copied().zip(pages[s..e].iter().copied()));
+            let s = r.start as usize;
+            let len = r.len as usize;
+            r.start = (base + self.scratch_draws.len()) as u32;
+            if len == 1 {
+                self.scratch_draws.push(draws[s]);
+                self.scratch_pages.push(pages[s]);
+            } else {
+                let e = s + len;
+                self.scratch_draws.extend_from_slice(&draws[s..e]);
+                self.scratch_pages.extend_from_slice(&pages[s..e]);
+            }
         }
-        for (i, &(draw, p)) in self.scratch.iter().enumerate() {
-            draws[base + i] = draw;
-            pages[base + i] = p;
-        }
+        let n = self.scratch_draws.len();
+        draws[base..base + n].copy_from_slice(&self.scratch_draws);
+        pages[base..base + n].copy_from_slice(&self.scratch_pages);
         &self.runs
     }
 }
@@ -212,5 +324,51 @@ mod tests {
         grouped.clear();
         grouped.push(bits(1.0), 0, 0, 0, [0; 3]);
         assert!(grouped.regroup(&mut [], &mut [], 0).is_empty());
+    }
+
+    #[test]
+    fn counting_sort_and_fallback_match_stable_key_order() {
+        for max_page in [8u32, 2048u32] {
+            let mut grouped = PageRuns::default();
+            let (mut draws, mut pages) = (Vec::new(), Vec::new());
+            let mut expected = Vec::new();
+            let mut seed = 0x1234_5678u32;
+            let mut next = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed
+            };
+            for i in 0..400u32 {
+                let group = (next() % 3) as u8;
+                let dist = f64::from((i / 2) * 3) + (next() % 100) as f64 * 0.01;
+                let page = if max_page > 1024 && i % 17 == 0 {
+                    max_page
+                } else {
+                    next() % 6
+                };
+                let count = 1 + (next() % 3);
+                let start = draws.len();
+                for k in 0..count {
+                    draws.push([i, k, 0, 0, 0]);
+                    pages.push((page, None));
+                }
+                let dist_bits = bits(dist);
+                let band = (f64::from_bits(dist_bits).sqrt() / BAND) as u64;
+                let key = u64::from(group) << GROUP_SHIFT | band << 32 | u64::from(page);
+                expected.push((key, i, count));
+                grouped.push_in(group, dist_bits, page, start, count as usize, [i, 0, 0]);
+            }
+            expected.sort_by_key(|e| e.0);
+            let runs = grouped.regroup(&mut draws, &mut pages, 0);
+            assert_eq!(runs.len(), expected.len());
+            for (r, &(_, id, count)) in runs.iter().zip(&expected) {
+                assert_eq!((r.tag[0], r.len), (id, count));
+                for k in 0..count {
+                    assert_eq!(draws[(r.start + k) as usize][0], id);
+                    assert_eq!(draws[(r.start + k) as usize][1], k);
+                }
+            }
+        }
     }
 }
