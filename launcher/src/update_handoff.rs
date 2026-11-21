@@ -694,6 +694,9 @@ mod tests {
         let held = backend::lock_update(&lock).unwrap();
         assert!(!backend::remove_replaced_once(&dir, name, 1, &lock));
         assert!(aside.iter().all(|file| dir.join(file).exists()));
+        // Unlocked, not only closed: a process another test is starting right now can still hold
+        // a copy of the descriptor until its exec, and on Unix that copy keeps the lock.
+        held.unlock().unwrap();
         drop(held);
         assert!(backend::remove_replaced_once(&dir, name, 1, &lock));
         assert!(aside.iter().all(|file| !dir.join(file).exists()));
