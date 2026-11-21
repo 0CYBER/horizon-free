@@ -705,3 +705,28 @@ fn a_piston_dropping_its_signal_in_the_block_entity_pass_asks_for_event_one() {
         "a block entity ticks below handlingTick, so its neighbour change asks for event 1"
     );
 }
+
+/// `PistonStructureResolver.resolve()` pops a `POPPED` block even at the
+/// build limit, where `isPushable` fails on the Y bound. A piston at Y=318
+/// facing up must break a torch at Y=319 and extend.
+#[test]
+fn a_piston_pops_a_fragile_block_at_the_build_limit() {
+    let mut w = world!();
+    let piston = w.id("piston", &[("facing", "up")]);
+    let torch = w.id("torch", &[]);
+    let block = w.id("redstone_block", &[]);
+    w.set(BlockPos::new(0, 318, 0), piston);
+    w.set(BlockPos::new(0, 319, 0), torch);
+    w.set(BlockPos::new(-1, 318, 0), block);
+    for _ in 0..4 {
+        w.full_tick();
+    }
+    // The extended piston head now occupies the popped block's cell.
+    assert_eq!(w.prop(BlockPos::new(0, 318, 0), "extended"), "true");
+    assert!(
+        w.level
+            .events
+            .iter()
+            .any(|e| matches!(e, LevelEvent::DropResources { state, .. } if *state == torch))
+    );
+}

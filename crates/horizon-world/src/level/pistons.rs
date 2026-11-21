@@ -470,10 +470,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         };
         let next = self.state(r.start);
         if !self.is_pushable(next, r.start, r.push_direction, false, r.piston_direction) {
-            if r.extending
-                && self.b.piston_reaction(next) == PushReaction::Popped
-                && self.is_pushable(next, r.start, r.push_direction, true, r.piston_direction)
-            {
+            // PistonStructureResolver.resolve(): a POPPED block is destroyed
+            // even at the build limit, where isPushable fails on the Y bound.
+            if r.extending && self.b.piston_reaction(next) == PushReaction::Popped {
                 r.to_destroy.push(r.start);
                 return Ok(r);
             }
