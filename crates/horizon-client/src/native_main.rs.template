@@ -9,5 +9,9 @@ static GAME_IDENTITY: [u8; horizon_mod_package::game_identity::MARK.len()] =
 fn main() {
     std::hint::black_box(&HOLDER_CAPABILITY);
     std::hint::black_box(&GAME_IDENTITY);
+    // A client SDK's executable is the official game (docs/layers.md, "What players get"); the
+    // SDK build sets the cfg (tools/prebuilt_game.py `api_route`).
+    #[cfg(horizon_official)]
+    horizon_official::register();
     horizon_mod_host::main();
 }

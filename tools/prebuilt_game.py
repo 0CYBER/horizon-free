@@ -41,6 +41,15 @@ SUFFIXES = (".rmeta", ".so", ".dll", ".dll.a", ".dylib")
 IDENTITY = "horizon-prebuilt.json"
 # The crate the game's library is built from; its build resolves what mods compile against.
 GAME = "horizon-mod-host"
+# Horizon's official parts (docs/layers.md, "What players get"): a client's executable registers them, built with
+# the game's library but linked into the executable only.
+OFFICIAL = "horizon-official"
+# Crates the parts and the game's library must share, never compile twice: the hooks' registries, the facade the
+# parts reach them through, and the two crates both the game and a part use (Play with Friends, telemetry).
+SHARED_ONCE = ("horizon_hooks", "horizon_platform", "horizon_friends", "horizon_telemetry")
+# What a start without prepared files prints only when the official parts registered with the game's hooks:
+# horizon-official-servers' `get_the_game` (loading_screen.rs `missing_resources`).
+OFFICIAL_PARTS = "Horizon is started from its launcher"
 LOCK = "Cargo.lock"
 # Where `smoke` installs the executable it builds, as the launcher does, for `start`: beside OUT, never inside it,
 # since the archive is OUT alone.
@@ -345,18 +354,25 @@ def slices(metadata: dict, copied: dict[str, list[str]], api_route: list[str]) -
     return {"runtime": sorted(set(runtime)), "api": sorted(set(api))}
 
 
-def api_route(out: Path, link_args: list[str]) -> list[str]:
-    """Build the fixed executable shared by both native routes, once for this SDK."""
+def api_route(out: Path, link_args: list[str], official: Path | None = None) -> list[str]:
+    """Build the fixed executable shared by both native routes, once for this SDK. Given `official` (the client's
+    [`official_link`] folder), it registers Horizon's official parts, as the release's executable does."""
     deps = out / "deps"
     folder = out / RUNTIME
     folder.mkdir()
     common = ["--edition", "2024", "-C", "prefer-dynamic", "-C", "opt-level=3", "-L", f"dependency={deps}",
               "-L", f"dependency={out / 'host'}", "-L", f"native={out / NATIVE}"]
     origin = {"linux": ["-Wl,-rpath,$ORIGIN"], "darwin": ["-Wl,-rpath,@executable_path"]}.get(sys.platform, [])
+    parts = []
+    if official is not None:
+        rlibs = list(official.glob("libhorizon_official-*.rlib"))
+        if len(rlibs) != 1:
+            sys.exit(f"expected exactly one horizon-official rlib in {official}: {rlibs}")
+        parts = ["--cfg", "horizon_official", "-L", f"dependency={official}", "--extern", f"horizon_official={rlibs[0]}"]
     run(["rustc", *common, "--crate-type", "bin", "--crate-name", "horizon_native_game",
          *(flag for arg in origin + link_args for flag in ("-C", f"link-arg={arg}")),
          *extern_args(deps, "horizon_client"), *extern_args(deps, "mod_api"), *extern_args(deps, "horizon_mod_package"),
-         "--extern", f"{GAME_LIBRARIES[0]}={dylib(deps, GAME_LIBRARIES[0])}",
+         "--extern", f"{GAME_LIBRARIES[0]}={dylib(deps, GAME_LIBRARIES[0])}", *parts,
  "-o", str(folder / EXECUTABLE), str(API_MAIN)])
     built = sorted(path.relative_to(out).as_posix() for path in folder.iterdir())
     if not {path.name for path in folder.iterdir()} <= api_route_files():
@@ -453,23 +469,61 @@ def assert_externs(out: Path, eligible: list[str]) -> None:
 
 
 def dylib_crate_types(staged: Path) -> None:
-    """Every API crate (and the wasm runtime) of the staged copy also builds as a dylib."""
+    """Every API crate (and the wasm runtime) of the staged copy also builds as a dylib, and the game's library
+    ([`GAME`]) as a dylib only: the client's `cargo build` of it beside [`OFFICIAL`] has no `--crate-type`, so it
+    builds what `cargo rustc --crate-type dylib` builds for the server."""
     metadata = json.loads(run(["cargo", "metadata", "--format-version", "1"], cwd=staged))
     closure = api_closure(metadata)
     for package in metadata["packages"]:
-        if package["id"] not in closure and package["name"] != "horizon-mod-wasm":
+        if package["id"] not in closure and package["name"] not in ("horizon-mod-wasm", GAME):
             continue
         if not any(target["kind"] == ["lib"] for target in package["targets"]):
             continue
         manifest = Path(package["manifest_path"])
         if not manifest.is_relative_to(staged):
             continue  # Registry dependencies are owned by Cargo, not rewritten.
+        kinds = '["dylib"]' if package["name"] == GAME else '["rlib", "dylib"]'
         text = manifest.read_text()
         if "[lib]" in text:
-            text = text.replace("[lib]", '[lib]\ncrate-type = ["rlib", "dylib"]', 1)
+            text = text.replace("[lib]", f'[lib]\ncrate-type = {kinds}', 1)
         else:
-            text += '\n[lib]\ncrate-type = ["rlib", "dylib"]\n'
+            text += f'\n[lib]\ncrate-type = {kinds}\n'
         manifest.write_text(text)
+
+
+def compiled_once(artifacts: list[dict], target: Path) -> None:
+    """Refuses a build that compiled a crate the official parts share with the game's library more than once: the
+    parts would register with a copy of the hooks the game never reads, the build would pass, and Play with Friends
+    would stay off in every modded game (#19384)."""
+    for crate in SHARED_ONCE:
+        units = [message["package_id"] for message in artifacts
+                 if message["reason"] == "compiler-artifact" and message["target"]["name"] == crate
+                 and any(Path(name).is_relative_to(target) for name in message["filenames"])]
+        if len(units) > 1:
+            sys.exit(f"the SDK build compiled {crate} {len(units)} times ({units}): the official parts must share the "
+                     "game library's copy")
+
+
+def official_link(artifacts: list[dict], target: Path, folder: Path) -> Path:
+    """The folder the client's executable links the official parts from: every rlib this build compiled, linked or
+    copied there, never shipped. rustc takes each crate the game's library holds from that library, so only the
+    parts' own crates end up in the executable. Cargo names a library's `.rmeta` only (the build's `--emit=metadata`
+    is in RUSTFLAGS, which Cargo's output listing reads), so the rlib is the file beside it."""
+    if folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True)
+    for message in artifacts:
+        if message["reason"] != "compiler-artifact":
+            continue
+        for name in message["filenames"]:
+            file = Path(name).with_suffix(".rlib")
+            if name.endswith((".rlib", ".rmeta")) and file.is_relative_to(target) and file.is_file() \
+                    and not (folder / file.name).exists():
+                try:
+                    os.link(file, folder / file.name)
+                except OSError:
+                    shutil.copy2(file, folder / file.name)
+    return folder
 
 
 def build(out: Path, server: bool) -> None:
@@ -487,19 +541,45 @@ def build(out: Path, server: bool) -> None:
     features = cargo_features(server, sys.platform)
     # Linux's executable RUNPATH doesn't cover transitive dependencies: the game itself must find
     # the wasm runtime beside it. macOS's @rpath install names use the executable's rpath.
-    link = ["--", "-C", "link-arg=-Wl,-rpath,$ORIGIN"] if sys.platform == "linux" else []
+    rpath = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"] if sys.platform == "linux" else []
     # Encoded flags take precedence over RUSTFLAGS in Cargo.
     environment = {key: value for key, value in os.environ.items() if key != "CARGO_ENCODED_RUSTFLAGS"}
+    # --timings writes target/prebuilt/cargo-timings/, outside the package; the workflow uploads it on its own.
+    common = [*(["--timings"] if os.environ.get(TIMINGS) else []), "--target", host, "--profile", PROFILE,
+              "--message-format", "json-render-diagnostics"]
+    if server:
+        # The dedicated server's game is horizon-client's, with no Horizon part (docs/layers.md, "What players get").
+        command = ["cargo", "rustc", "--locked", "-p", GAME, "--lib", "--crate-type", "dylib", *common, *features,
+                   *(["--", *rpath] if rpath else [])]
+        flags = rustflags
+    else:
+        # The client's executable registers Horizon's official parts, as the release's does. They build in the game
+        # library's own build, so features resolve once and every crate they share with it compiles once.
+        # `cargo build` passes no flags to one crate: on Linux every library of the build gets the rpath.
+        command = ["cargo", "build", "--locked", "-p", GAME, "-p", OFFICIAL, "--lib", *common,
+                   *(f"{GAME}/{flag}" if previous == "--features" else flag
+                     for previous, flag in zip([None, *features], features))]
+        flags = " ".join([rustflags, *rpath])
+        # The release profile's thin LTO never reaches the dylib build: a dylib root builds every crate as plain
+        # objects. horizon-official, an rlib root, would make the crates only it uses bitcode only, which rustc
+        # refuses with prefer-dynamic on Windows and the executable's plain link can't use anywhere.
+        environment["CARGO_PROFILE_RELEASE_LTO"] = "false"
     messages = run(
-        # --timings writes target/prebuilt/cargo-timings/, outside the package; the workflow uploads it on its own.
-        ["cargo", "rustc", "--locked", "-p", GAME, "--lib", "--crate-type", "dylib",
-         *(["--timings"] if os.environ.get(TIMINGS) else []), "--target", host, "--profile", PROFILE, "--message-format", "json-render-diagnostics", *features, *link],
+        command,
         cwd=staged,
-        env={**environment, "HORIZON_GAME_BUILD_ID": head(), "RUSTFLAGS": rustflags + " -D warnings", "CARGO_TARGET_DIR": str(target_dir)},
+        env={**environment, "HORIZON_GAME_BUILD_ID": head(), "RUSTFLAGS": flags + " -D warnings", "CARGO_TARGET_DIR": str(target_dir)},
     )
     artifacts = list(map(json.loads, messages.splitlines()))
+    compiled_once(artifacts, target_dir / host)
+    metadata = json.loads(run([
+        "cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", host,
+        *features,
+    ], cwd=staged))
+    # The official parts' own crates link into the executable only: the SDK ships the game's.
+    official = set() if server else api_closure(metadata, (OFFICIAL,)) - api_closure(metadata, (GAME,))
+    shipped = [message for message in artifacts if message.get("package_id") not in official]
     scripts = [
-        message for message in artifacts
+        message for message in shipped
         if message["reason"] == "build-script-executed"
     ]
     if out.exists():
@@ -508,11 +588,7 @@ def build(out: Path, server: bool) -> None:
     deps.mkdir(parents=True)
     macros = out / "host"
     macros.mkdir()
-    copied = copy_artifacts(artifacts, deps, macros, target_dir / host)
-    metadata = json.loads(run([
-        "cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", host,
-        *features,
-    ], cwd=staged))
+    copied = copy_artifacts(shipped, deps, macros, target_dir / host)
     eligible = facade_crates(deps, runtime_crates(metadata, GAME))
     assert_externs(out, eligible)
     native = out / NATIVE
@@ -542,7 +618,8 @@ def build(out: Path, server: bool) -> None:
         shutil.copy2(staged / manifest, out / manifest)
     output = Path(game["out_dir"]).parent / "output"
     link_args = executable_link_args(output)
-    sliced = slices(metadata, copied, api_route(out, link_args))
+    parts = None if server else official_link(artifacts, target_dir / host, target_dir / "official-link")
+    sliced = slices(metadata, copied, api_route(out, link_args, parts))
     files = {str(path.relative_to(out).as_posix()): sha256(path) for path in sorted(out.rglob("*")) if path.is_file()}
     identity = {
         "package_format": layout,
@@ -795,10 +872,13 @@ def start(out: Path) -> None:
     each as a dedicated server with no game data: it loads the game's libraries
     and sets up the mods' runtime, then stops at the missing prepared files. Fails on a crash, a hang or any other
     stop, so an archive whose libraries disagree (two allocators, arismoko/horizon#3877) cannot ship. On Windows it runs without
-    MinGW on PATH, as on a player's computer, so a runtime DLL the launcher would not install fails here (arismoko/horizon#3521)."""
+    MinGW on PATH, as on a player's computer, so a runtime DLL the launcher would not install fails here (arismoko/horizon#3521).
+    A client's error must point to the launcher, which only the official parts' hooks do ([`OFFICIAL_PARTS`]), and a
+    server's must not."""
     # Run as a script, so lab sits on the path beside it; tests import this module without running `start`.
     import lab
 
+    side = json.loads((out / IDENTITY).read_text())["side"]
     for installed in (out.parent / SMOKE, out.parent / SMOKE_API):
         with tempfile.TemporaryDirectory(dir=out.parent) as scratch:
             scratch = Path(scratch)
@@ -851,6 +931,11 @@ def start(out: Path) -> None:
         # The prepared-files check exits with status 1; any other status is a different stop.
         if result.returncode != 1 or NO_RESOURCES not in result.stdout or "panicked" in result.stdout:
             sys.exit(f"start: {installed.name} stopped before the prepared-files check (exit {result.returncode})")
+        # A client's executable is the official game, a server's never has a Horizon part (docs/layers.md).
+        if (OFFICIAL_PARTS in result.stdout) != (side == "client"):
+            sys.exit(f"start: the {side} executable in {installed.name} "
+                     + ("registered no official parts: Play with Friends, the heartbeat and the official server are "
+                        "missing (#19384)" if side == "client" else "registered Horizon's official parts"))
         print(f"start: {installed.name} loaded the game's libraries and the mods' runtime and stopped at: "
               f"{NO_RESOURCES}")
 
