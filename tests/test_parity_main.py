@@ -341,6 +341,38 @@ class ParityMainTests(unittest.TestCase):
             self.assertEqual(parity_main.run_harnesses(["not_a_harness_yet"], 60), [])
             run.assert_not_called()
 
+    def test_only_parity_mains_harness_step_keeps_the_prebuild_timings(self):
+        root = Path(__file__).resolve().parents[1]
+        with mock.patch("sys.path", [str(root / "tools/ci/vendor/pyyaml-6.0.3.zip"), *sys.path]):
+            import yaml
+        switch = "HORIZON_PARITY_PREBUILD_TIMINGS"
+        setting = [path.name for path in (root / ".github").rglob("*") if path.is_file()
+                   and switch in path.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual(setting, ["parity-main.yml"], "PR parity, nightly and parity-hosted upload nothing")
+        job = yaml.safe_load((root / ".github/workflows/parity-main.yml").read_text(encoding="utf-8"))["jobs"]["parity-main"]
+        names = [step.get("name") for step in job["steps"]]
+        harnesses = names.index("The harnesses the merges since then can affect")
+        self.assertEqual([index for index, step in enumerate(job["steps"]) if switch in step.get("env", {})],
+                         [harnesses], "the verdict's reruns build without it")
+        self.assertNotIn(switch, job["env"])
+        self.assertEqual(job["steps"][harnesses]["env"][switch], "1")
+        index = names.index("Upload the prebuild's timing reports")
+        upload = job["steps"][index]
+        # Right after the harnesses: the verdict steps that follow run only on a failure.
+        self.assertEqual(index, harnesses + 1)
+        self.assertLess(index, min(i for i, name in enumerate(names) if name and "verdict" in name))
+        # Only when the harness step's tools/parity.py says it published, and then this attempt's folder (which
+        # tools/parity.py names after PARITY_RUN_ID), never a path from the output, which cargo and the harnesses
+        # can write too; in it only the two kinds of file it holds.
+        self.assertEqual(job["steps"][harnesses]["id"], "harnesses")
+        folder = f".local/parity-runner/prebuild-timings-{job['env']['PARITY_RUN_ID']}"
+        self.assertEqual(upload["if"], "${{ !cancelled() && steps.harnesses.outputs.prebuild_timings == 'ready' }}")
+        self.assertNotIn("outputs", upload["with"]["path"])
+        self.assertTrue(upload["continue-on-error"], "the artifact service never decides the run")
+        self.assertEqual((upload["with"]["retention-days"], upload["with"]["if-no-files-found"]), (7, "ignore"))
+        self.assertEqual(upload["with"]["path"].splitlines(), [f"{folder}/cargo-*.html", f"{folder}/prebuild-calls.txt"])
+        self.assertEqual(upload["uses"], job["steps"][names.index("Upload the verdict")]["uses"])
+
 
 if __name__ == "__main__":
     unittest.main()

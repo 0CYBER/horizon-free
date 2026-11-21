@@ -193,6 +193,11 @@ which runs them on main a batch of merges at a time, on the Mac mini's runner:
   that passed only when run again in 3 or more of the last 10 runs (kept in
   `.local/parity-runner/verdict-history.json` on the runner). The run's summary names each; they don't fail it: put
   one on `known_flaky` with its issue, or fix it. Neither the report nor the history can change the verdict.
+- The `parity-main-prebuild-timings` artifact (7 days, best effort) tells which crates take the probe prebuild's
+  minutes: Cargo's `--timings` report of each prebuild run (`cargo-NN.html`, the largest left out above 20 MB in
+  all) and `prebuild-calls.txt`, each run's `cargo N/M` line with the change in the machine's sccache hits and
+  misses since the reading before it. Only parity-main
+  collects them (`HORIZON_PARITY_PREBUILD_TIMINGS=1` on its harness step).
 - Nightlies build only on a commit both `checks` and `parity-main` passed on (`tools/release_train.py`,
   `tools/ci/nightly.py`, see below), so a broken merge holds them instead of reaching players. They take the
   newest such commit even when a later batch failed: that failure is in merges the green commit doesn't contain, so
