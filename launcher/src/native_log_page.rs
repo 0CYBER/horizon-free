@@ -131,7 +131,7 @@ impl Launcher {
     /// file is emptied, or the reason it could not be is shown in its place. An open panel
     /// reads again rather than keep showing the last attempt as the latest.
     pub(super) fn native_log_reset(&mut self) {
-        // A build or cleanup already running keeps its log; this attempt is refused as busy.
+        // A build or cleanup already running keeps its log; this attempt waits for it.
         let begun = native_mods::begin_log();
         self.native_log.held = begun == Ok(false);
         self.native_log.reset = begun.err();

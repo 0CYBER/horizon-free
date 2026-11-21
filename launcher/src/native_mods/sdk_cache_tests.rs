@@ -445,6 +445,140 @@ fn the_api_route_fetches_its_two_slices_only_and_reuses_them_on_their_stamps() {
     }
 }
 
+/// #19294: a build's Stop ends its wait for another fetch unpacking the same folder, and the
+/// folder is left to that fetch.
+#[test]
+fn stop_ends_a_wait_for_another_fetch_of_the_same_folder() {
+    let fixture = Fixture::new();
+    let sdk = fixture.sdk(&[]).unwrap();
+    let package = Package::at(
+        &fixture
+            .scratch
+            .path()
+            .join("prebuilt")
+            .join(format!("{COMMIT}-{TRIPLE}")),
+    );
+    fs::create_dir_all(package.runtime.parent().unwrap()).unwrap();
+    let mut lock = package.runtime.as_os_str().to_owned();
+    lock.push(".fetch.lock");
+    let other = crate::native_cache::waited(&PathBuf::from(lock), &|| false)
+        .unwrap()
+        .unwrap();
+    let (sent, got) = std::sync::mpsc::channel();
+    let (base, into) = (fixture.base(), package.runtime.clone());
+    std::thread::spawn(move || {
+        let mut fetched = Fetched::default();
+        // Stop comes only once the fetch waits for the lock: the folder base needs no download,
+        // so the fetch asks twice before (on starting, before unpacking), then while it waits.
+        let asked = std::cell::Cell::new(0);
+        let stop = || {
+            asked.set(asked.get() + 1);
+            match asked.get() > 2 {
+                true => Err(super::super::CANCELLED.to_owned()),
+                false => Ok(()),
+            }
+        };
+        let stopped = fetch_into(
+            &sdk,
+            &base,
+            &runtime(),
+            &into,
+            false,
+            &mut fetched,
+            &|_| {},
+            &stop,
+        );
+        let _ = sent.send((stopped, asked.get()));
+    });
+    // Bounded: a wait Stop can't end must fail this test, not hang it.
+    let result = got.recv_timeout(std::time::Duration::from_secs(10));
+    drop(other);
+    let (result, asked) = result.expect("Stop ended the wait");
+    assert!(asked > 2, "stopped before the wait, after {asked} asks");
+    assert!(!package.runtime.exists());
+    // The build ends with exactly the words the window shows as a cancel, not as a failure.
+    assert_eq!(
+        super::super::refused(result.unwrap_err()),
+        super::super::CANCELLED
+    );
+}
+
+#[cfg(unix)]
+fn link_dir(from: &Path, to: &Path) {
+    std::os::unix::fs::symlink(from, to).unwrap();
+}
+#[cfg(windows)]
+fn link_dir(from: &Path, to: &Path) {
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(to.to_string_lossy().replace('/', "\\"))
+        .arg(from.to_string_lossy().replace('/', "\\"))
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+}
+
+/// #19294: a link (a junction on Windows) anywhere between the native root and the folder a
+/// fetch works in is refused before anything is read or written through it.
+#[test]
+fn a_fetch_refuses_a_link_above_its_folder() {
+    let _guard = super::super::tests::scratch_state();
+    let fixture = Fixture::new();
+    let sdk = fixture.sdk(&[]).unwrap();
+    let prebuilt = super::super::root().join("prebuilt");
+    let _ = fs::remove_dir_all(&prebuilt);
+    fs::create_dir_all(prebuilt.parent().unwrap()).unwrap();
+    let elsewhere = fixture.scratch.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    link_dir(&elsewhere, &prebuilt);
+    let package = Package::at(&prebuilt.join(format!("{COMMIT}-{TRIPLE}")));
+    let mut fetched = Fetched::default();
+    let result = fetch_into(
+        &sdk,
+        &fixture.base(),
+        &runtime(),
+        &package.runtime,
+        false,
+        &mut fetched,
+        &|_| {},
+        &|| Ok(()),
+    );
+    let reached: Vec<_> = fs::read_dir(&elsewhere).unwrap().collect();
+    #[cfg(windows)]
+    fs::remove_dir(&prebuilt).unwrap();
+    #[cfg(unix)]
+    fs::remove_file(&prebuilt).unwrap();
+    assert!(reached.is_empty(), "{reached:?}");
+    assert!(matches!(&result, Err(Refusal::Cache(_))), "{result:?}");
+}
+
+/// #19294: a fetch hears only the Stop its caller passes, never a build's elsewhere in the
+/// process: a check, or a test beside a stopped one, still fetches.
+#[test]
+fn a_fetch_hears_only_its_callers_stop() {
+    let _guard = super::super::tests::scratch_state();
+    let fixture = Fixture::new();
+    let sdk = fixture.sdk(&[]).unwrap();
+    let prebuilt = fixture.scratch.path().join("prebuilt");
+    super::super::cancel();
+    let package = slices_in(
+        &prebuilt,
+        &sdk,
+        &fixture.base(),
+        Route::Api,
+        TRIPLE,
+        Side::Client,
+        &|_| {},
+        &|| Ok(()),
+    );
+    super::super::arm_cancel();
+    assert!(package.is_ok(), "{package:?}");
+}
+
 #[test]
 fn a_stamp_from_another_index_is_not_trusted() {
     let fixture = Fixture::new();

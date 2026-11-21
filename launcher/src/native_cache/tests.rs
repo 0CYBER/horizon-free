@@ -175,6 +175,34 @@ fn an_active_release_build_prevents_any_deletion_in_the_fast_profile_too() {
     assert!(cargo_lock.exists());
 }
 
+/// #19294: Stop that comes while a wait sleeps, just before the holder lets go, still ends the
+/// wait: the lock is not handed on.
+#[test]
+fn stop_as_a_waited_lock_is_let_go_still_ends_the_wait() {
+    let dir = Temp::new();
+    let path = dir.0.join("fetch.lock");
+    let held = waited(&path, &|| false).unwrap().unwrap();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let (tried, tries) = std::sync::mpsc::channel::<()>();
+    let stop = &stop;
+    let got = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            if tries.recv_timeout(Duration::from_secs(30)).is_ok() {
+                // Inside the wait's 50 ms pause between tries: Stop, then the holder lets go.
+                std::thread::sleep(Duration::from_millis(20));
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            drop(held);
+        });
+        waited(&path, &|| {
+            let _ = tried.send(());
+            stop.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .unwrap()
+    });
+    assert!(got.is_none());
+}
+
 #[cfg(unix)]
 fn link_dir(from: &Path, to: &Path) {
     std::os::unix::fs::symlink(from, to).unwrap();

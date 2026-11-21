@@ -339,7 +339,7 @@ pub fn clear_log() -> Result<(), String> {
 
 /// Starts a build attempt's log from the window: [`clear_log`] under the build lease, so a
 /// build or cleanup already holding it keeps its log, result included (#18469). `Ok(false)`
-/// when one does: the attempt will be refused as busy and leaves the log alone.
+/// when one does: the attempt waits for it and starts its log once it has the lease.
 pub fn begin_log() -> Result<bool, String> {
     match crate::native_cache::Cache::acquire(&backend::build_dir()) {
         Err(crate::native_cache::Error::Busy) => Ok(false),
@@ -360,12 +360,40 @@ pub fn append_log(message: &str) -> Result<(), String> {
     writeln!(log, "{message}").map_err(|e| e.to_string())
 }
 
-/// Records the whole attempt, including selection or export after compilation.
+/// Records the whole attempt, including selection or export after compilation, once it has the
+/// build lease ([`lease`]).
 fn logged<T, E: From<String>>(
     said: impl Fn(&E) -> String,
+    progress: &dyn Fn(Step),
     build: impl FnOnce(Result<&crate::native_cache::Cache, &str>) -> Result<T, E>,
 ) -> Result<T, E> {
-    logged_then(said, build, |result| result, clean_up)
+    match lease(progress) {
+        Ok(cache) => logged_then(said, cache, build, |result| result, clean_up),
+        Err(cancelled) => Err(cancelled.into()),
+    }
+}
+
+/// The build lease, waited for while another build, a cache cleanup or Settings → Storage holds
+/// it: the build says what it waits for, and Stop ends the wait with [`CANCELLED`] (#19294). Any
+/// other failure only stops cleanup for explicit builds, and is theirs to tell: automatic
+/// selection requires a held cache for its catalog and can refuse instead of accessing an
+/// unsafe tree.
+fn lease(progress: &dyn Fn(Step)) -> Result<Result<crate::native_cache::Cache, String>, String> {
+    let mut waiting = false;
+    loop {
+        match crate::native_cache::Cache::acquire(&backend::build_dir()) {
+            // Stop pressed as the holder let go still ends the build here, before anything.
+            Ok(cache) => return check_cancelled().map(|()| Ok(cache)),
+            Err(crate::native_cache::Error::Busy) => {}
+            Err(error) => return Ok(Err(cache_error(error))),
+        }
+        if !waiting {
+            waiting = true;
+            progress(Step::Busy);
+        }
+        check_cancelled()?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// The old-build cleanup after an attempt, inside its lease; what it freed and kept is logged.
@@ -373,25 +401,16 @@ fn clean_up(cache: &crate::native_cache::Cache) {
     crate::storage::eviction::after_build_logged(cache, append_log, log_warning)
 }
 
-/// [`logged`], handing the result to `deliver` as soon as it is logged, before `cleanup` runs
-/// under the same build lease: the window shows it without waiting for the cleanup (#18669).
-/// Returns what `deliver` returned, once the cleanup has ended.
+/// [`logged`] with the `cache` [`lease`] gave, handing the result to `deliver` as soon as it is
+/// logged, before `cleanup` runs under the same build lease: the window shows it without waiting
+/// for the cleanup (#18669). Returns what `deliver` returned, once the cleanup has ended.
 fn logged_then<T, E: From<String>, R>(
     said: impl Fn(&E) -> String,
+    cache: Result<crate::native_cache::Cache, String>,
     build: impl FnOnce(Result<&crate::native_cache::Cache, &str>) -> Result<T, E>,
     deliver: impl FnOnce(Result<T, E>) -> R,
     cleanup: impl FnOnce(&crate::native_cache::Cache),
 ) -> R {
-    // Another build or a cleanup holds the lease on the same target/: refuse. Any other
-    // failure only stops cleanup for explicit builds. Automatic selection requires a held
-    // cache for its catalog and can refuse instead of accessing an unsafe tree.
-    let cache = match crate::native_cache::Cache::acquire(&backend::build_dir()) {
-        Ok(cache) => Ok(cache),
-        Err(crate::native_cache::Error::Busy) => {
-            return deliver(Err(cache_error(crate::native_cache::Error::Busy).into()));
-        }
-        Err(error) => Err(cache_error(error)),
-    };
     if let Err(error) = clear_log() {
         return deliver(Err(error.into()));
     }
@@ -1066,6 +1085,9 @@ pub enum Step {
     Install,
     /// This launcher's last build still cleans up its old files: this one waits for it.
     Waiting,
+    /// Another build, a cache cleanup or Settings → Storage holds the build cache: this build
+    /// waits for it (#19294).
+    Busy,
     /// This mod was left out of the build.
     LeftOut(LeftOut),
     /// The build ended: seconds it took.
@@ -1120,7 +1142,8 @@ impl Step {
             | Self::LeftOut(_)
             | Self::Checking(_)
             | Self::BackedUp(_)
-            | Self::Waiting => (Stage::Prepare, None),
+            | Self::Waiting
+            | Self::Busy => (Stage::Prepare, None),
             Self::ToolsKept { .. } => (Stage::Prepare, Some(1.)),
             Self::Tools { done, total, .. } => (
                 Stage::Prepare,
@@ -1211,6 +1234,7 @@ impl Step {
             },
             Self::Install => tr("Installing the build").into(),
             Self::Waiting => tr("Cleaning up the last build…").into(),
+            Self::Busy => tr("Waiting for another build or a cache cleanup to finish…").into(),
             Self::LeftOut(left) => left.label(),
             Self::Done { secs, .. } => trf(
                 "Your mods are built (took {secs} s).",
@@ -2588,15 +2612,48 @@ pub fn build(
     )
 }
 
+/// [`build`] of the native mods turned on in `instance`, staged once the build has its turn and
+/// lease ([`build_then`]): a build queued behind another never replaces the shared staging folder
+/// that one builds from (#19294).
+pub fn build_installed(
+    base: &str,
+    instance: &Instance,
+    profile: Option<Profile>,
+    asked: Asked,
+    progress: impl Fn(Step),
+    registry_consent: impl Fn(&RegistryInventory) -> bool,
+) -> Result<String, Failed> {
+    arm_cancel();
+    build_then(
+        base,
+        || installed_mods(&instance.home),
+        true,
+        instance,
+        profile,
+        asked,
+        progress,
+        registry_consent,
+        |result| result,
+    )
+}
+
 /// Held by a build from start to the end of its cleanup, within this launcher (#18669).
 static BUILD_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// What [`build_turn`] hands a build: its turn in this launcher, and the build lease (or why
+/// there is none).
+type Turn = (
+    std::sync::MutexGuard<'static, ()>,
+    Result<crate::native_cache::Cache, String>,
+);
+
 /// Waits for this launcher's last build to end its cleanup: it hands its result on before the
 /// cleanup ends, so a build started meanwhile (Try again, or backing up worlds) waits instead
-/// of being refused as busy. Stop ends the wait. Native mods turned off meanwhile are checked
-/// again once the turn is taken, before any build step. Every wait a window build needs
-/// before it starts belongs here.
-fn build_turn(progress: &impl Fn(Step)) -> Result<std::sync::MutexGuard<'static, ()>, Failed> {
+/// of being refused as busy. Then waits for the build lease ([`lease`]) another launcher's
+/// build, a cache cleanup or Settings → Storage may hold (#19294). Stop ends either wait.
+/// Native mods turned off meanwhile are checked again once both are taken, before any build
+/// step. Every wait a window build needs before it starts belongs here.
+fn build_turn(progress: &impl Fn(Step)) -> Result<Turn, Failed> {
     let mut waiting = false;
     let turn = loop {
         match BUILD_TURN.try_lock() {
@@ -2613,8 +2670,9 @@ fn build_turn(progress: &impl Fn(Step)) -> Result<std::sync::MutexGuard<'static,
     };
     // A Stop pressed before this build's worker ran ends it here, not at its first command.
     check_cancelled()?;
+    let cache = lease(progress)?;
     require_consent()?;
-    Ok(turn)
+    Ok((turn, cache))
 }
 
 /// [`build`], handing its result to `deliver` before the old-build cleanup runs (under the same
@@ -2639,7 +2697,7 @@ pub fn build_then<R>(
     if let Err(error) = require_consent() {
         return deliver(Err(error));
     }
-    let _turn = match build_turn(&progress) {
+    let (_turn, cache) = match build_turn(&progress) {
         Ok(turn) => turn,
         Err(error) => return deliver(Err(error)),
     };
@@ -2656,7 +2714,7 @@ pub fn build_then<R>(
         let folder = stage()?;
         let folder = folder.as_path();
         let profile = select_build_profile(instance.native_profile, profile, || {
-            planning::classify_until(folder, Some(base), lease, &check_cancelled)
+            planning::classify_until(folder, Some(base), &check_cancelled)
                 .map_err(|error| Failed::Other(error.said(caller)))
         })?;
         let built = isolated(
@@ -2708,7 +2766,7 @@ pub fn build_then<R>(
         }
         Ok(built.version)
     };
-    logged_then(said, attempt, deliver, clean_up)
+    logged_then(said, cache, attempt, deliver, clean_up)
 }
 
 /// The release or Nightly `instance` plays now (the one a native build of it started from).
@@ -2741,7 +2799,9 @@ pub fn build_server(
     require_consent()?;
     CANCEL.store(false, Ordering::Relaxed);
     // Only the command line exports a server: its errors are already the command line's words.
-    logged(String::clone, |cache| {
+    logged(String::clone, &progress, |cache| {
+        // Native mods turned off while this waited for the lease end it before anything.
+        require_consent().map_err(String::from)?;
         if output.symlink_metadata().is_ok() {
             return Err(trf(
                 "{path} already exists. Move it away, or build into another folder.",
@@ -2768,7 +2828,7 @@ pub fn build_server(
         }
         let lease = cache.map_err(str::to_owned)?;
         let profile = select_build_profile(Profile::default(), profile, || {
-            planning::classify_until(folder, Some(base), lease, &check_cancelled)
+            planning::classify_until(folder, Some(base), &check_cancelled)
         })?;
         let built = pipeline(
             lease,
@@ -4485,12 +4545,11 @@ mod tests {
             "[package]\nname='snapshot'\nversion='0.1.0'\n[dependencies]\nhorizon-client='0.1'\n",
         )
         .unwrap();
-        let preview = root().join("installed.routes");
+        let preview = root().join(planning::CHECKED);
         fs::create_dir_all(&preview).unwrap();
         let sentinel = preview.join("snapshot-sentinel");
         fs::write(&sentinel, b"retained").unwrap();
-        let lease = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
-        let plan = planning::classify(&folder, None, &lease).unwrap();
+        let plan = planning::classify(&folder, None).unwrap();
         assert_eq!(plan.mods.len(), 1);
         assert_eq!(plan.mods[0].0, "snapshot");
         assert!(
@@ -4548,7 +4607,7 @@ mod tests {
             pinned_catalog_with_modules(&folder).err().unwrap(),
             expected
         );
-        let preview = root().join("installed.routes");
+        let preview = root().join(planning::CHECKED);
         fs::create_dir_all(&preview).unwrap();
         let marker = preview.join("permission-sentinel");
         fs::write(&marker, b"unchanged").unwrap();
@@ -4612,7 +4671,7 @@ mod tests {
         assert!(!log.contains("Build again"), "{log}");
         assert!(!log.contains("the last build's output"), "{log}");
         // A failure after compiler output keeps those diagnostics and the final reason.
-        let failure: Result<(), String> = logged(String::clone, |_| {
+        let failure: Result<(), String> = logged(String::clone, &|_| {}, |_| {
             append_log("error[E0425]: cannot find value `missing` in this scope")?;
             Err("Could not export the engine".into())
         });
@@ -4621,7 +4680,7 @@ mod tests {
         assert!(log.starts_with("error[E0425]"), "{log}");
         assert_result_then_cleanup(&log, "The build failed: Could not export the engine");
         assert!(!log.contains("Build completed."), "{log}");
-        let success: Result<(), String> = logged(String::clone, |_| Ok(()));
+        let success: Result<(), String> = logged(String::clone, &|_| {}, |_| Ok(()));
         success.unwrap();
         let log = fs::read_to_string(log_path()).unwrap();
         assert_result_then_cleanup(&log, "Build completed.");
@@ -4656,6 +4715,7 @@ mod tests {
             let order = std::cell::RefCell::new(Vec::new());
             let returned = logged_then(
                 String::clone,
+                crate::native_cache::Cache::acquire(&backend::build_dir()).map_err(cache_error),
                 |_| outcome.clone(),
                 |result| {
                     order.borrow_mut().push("result");
@@ -4894,6 +4954,254 @@ mod tests {
         // It went on to build the captured base, which isn't installed here: the build names it.
         let error = String::from(result.unwrap_err());
         assert!(error.contains(base), "{error}");
+    }
+
+    /// #19294: the Mods tab's route check needs no build lease, so one running beside a build
+    /// can't make that build wait or fail.
+    #[test]
+    fn a_route_check_runs_beside_a_build_without_its_lease() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let home = dir("routes-beside-build");
+        let build = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+        let checked = routes(&home, None).map_err(String::from);
+        drop(build);
+        original.save().unwrap();
+        let _ = fs::remove_dir_all(home);
+        // It read the instance's mods, which a check refused for the build's lease never does.
+        let error = checked.unwrap_err();
+        assert_ne!(error, cache_error(crate::native_cache::Error::Busy));
+        assert!(error.contains("No native mod is turned on"), "{error}");
+    }
+
+    /// #19294: a build started while a cache cleanup, Settings → Storage or another launcher's
+    /// build holds the build lease says it waits, and builds once the lease is let go.
+    #[test]
+    fn a_build_waits_for_a_held_lease_then_builds() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (held, holding) = std::sync::mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            let _lease = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+            held.send(()).unwrap();
+            // Bounded: a build that never waits must fail this test, not hang it.
+            let _ = released.recv_timeout(std::time::Duration::from_secs(30));
+        });
+        holding.recv().unwrap();
+        let steps = std::cell::RefCell::new(Vec::new());
+        let result = build_then(
+            "v0.0.0-not-installed",
+            // Runs only once the build has the lease.
+            || -> Result<PathBuf, String> {
+                steps.borrow_mut().push("staged".to_string());
+                Err("staged".into())
+            },
+            false,
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: false,
+            },
+            |step| {
+                if matches!(step, Step::Busy) {
+                    release.send(()).unwrap();
+                }
+                steps.borrow_mut().push(step.label());
+            },
+            |_| false,
+            |result| result,
+        );
+        cleanup.join().unwrap();
+        original.save().unwrap();
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if error == "staged"),
+            "{:?}",
+            result.map_err(String::from)
+        );
+        assert_eq!(*steps.borrow(), [Step::Busy.label(), "staged".to_string()]);
+    }
+
+    /// #19294: Stop ends a build's wait for a held build lease, and nothing of the build runs.
+    #[test]
+    fn stop_ends_a_builds_wait_for_a_held_lease() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let held = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+        let steps = std::cell::RefCell::new(Vec::new());
+        let result = build_then(
+            "v0.0.0-not-installed",
+            || -> Result<PathBuf, String> { panic!("staged while the lease was held") },
+            false,
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: false,
+            },
+            |step| {
+                if matches!(step, Step::Busy) {
+                    cancel();
+                }
+                steps.borrow_mut().push(step.label());
+            },
+            |_| false,
+            |result| result,
+        );
+        drop(held);
+        CANCEL.store(false, Ordering::Relaxed);
+        original.save().unwrap();
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if error == CANCELLED),
+            "{:?}",
+            result.map_err(String::from)
+        );
+        assert_eq!(*steps.borrow(), [Step::Busy.label()]);
+    }
+
+    /// #19294: the command line's build of an instance's installed mods, queued behind a held
+    /// lease, stages them only once it has the lease: the shared staging folder the holder builds
+    /// from stays as it is while this one waits.
+    #[test]
+    fn a_queued_build_of_the_installed_mods_stages_them_only_once_it_has_the_lease() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let incoming = installed_incoming();
+        fs::create_dir_all(&incoming).unwrap();
+        let sentinel = incoming.join("the-running-build-reads-this");
+        fs::write(&sentinel, b"kept").unwrap();
+        let held = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+        let kept_while_waiting = std::cell::Cell::new(false);
+        let result = build_installed(
+            "v0.0.0-not-installed",
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::CommandLine,
+                back_up: false,
+            },
+            |step| {
+                if matches!(step, Step::Busy) {
+                    kept_while_waiting.set(sentinel.is_file());
+                    cancel();
+                }
+            },
+            |_| false,
+        );
+        drop(held);
+        CANCEL.store(false, Ordering::Relaxed);
+        original.save().unwrap();
+        let kept = fs::read(&sentinel);
+        let _ = fs::remove_dir_all(&incoming);
+        assert!(kept_while_waiting.get());
+        assert_eq!(kept.unwrap(), b"kept");
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if error == CANCELLED),
+            "{:?}",
+            result.map_err(String::from)
+        );
+    }
+
+    /// #19294: native mods turned off while a server export waits for a held lease end the
+    /// export once it has the lease, before anything is exported.
+    #[test]
+    fn a_server_export_checks_consent_again_once_it_has_the_lease() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (held, holding) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _lease = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+            held.send(()).unwrap();
+            let _ = released.recv_timeout(std::time::Duration::from_secs(30));
+        });
+        holding.recv().unwrap();
+        let scratch = dir("server-consent");
+        let output = scratch.join("server");
+        let result = build_server(
+            "v0.0.0-not-installed",
+            &scratch,
+            &output,
+            None,
+            false,
+            |step| {
+                if matches!(step, Step::Busy) {
+                    let mut settings = backend::Settings::load();
+                    settings.native_mods_allowed_at = None;
+                    settings.save().unwrap();
+                    release.send(()).unwrap();
+                }
+            },
+            |_| false,
+        );
+        holder.join().unwrap();
+        original.save().unwrap();
+        let exported = output.exists();
+        let _ = fs::remove_dir_all(scratch);
+        assert!(!exported);
+        let expected = String::from(Failed::NoConsent);
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if *error == expected),
+            "{:?}",
+            result.map_err(String::from)
+        );
+    }
+
+    /// #19294: Stop pressed while a build waits, just before the holder lets the lease go, still
+    /// ends the build before it stages anything.
+    #[test]
+    fn stop_as_the_lease_is_let_go_still_ends_the_build() {
+        let _guard = scratch_state();
+        let original = backend::Settings::load();
+        backend::Settings::load().allow_native_mods().unwrap();
+        let (waiting, waits) = std::sync::mpsc::channel::<()>();
+        let (held, holding) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let lease = crate::native_cache::Cache::acquire(&backend::build_dir()).unwrap();
+            held.send(()).unwrap();
+            if waits
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .is_ok()
+            {
+                // Inside the build's 100 ms pause between tries: Stop, then the lease goes.
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                cancel();
+                drop(lease);
+            }
+        });
+        holding.recv().unwrap();
+        let result = build_then(
+            "v0.0.0-not-installed",
+            || -> Result<PathBuf, String> { panic!("staged after Stop") },
+            false,
+            &instances::selected(),
+            None,
+            Asked {
+                caller: Caller::Window,
+                back_up: false,
+            },
+            |step| {
+                if matches!(step, Step::Busy) {
+                    waiting.send(()).unwrap();
+                }
+            },
+            |_| false,
+            |result| result,
+        );
+        holder.join().unwrap();
+        CANCEL.store(false, Ordering::Relaxed);
+        original.save().unwrap();
+        assert!(
+            matches!(&result, Err(Failed::Other(error)) if error == CANCELLED),
+            "{:?}",
+            result.map_err(String::from)
+        );
     }
 
     /// #18669: the command line's build of the installed mods whose lease can't be taken (not

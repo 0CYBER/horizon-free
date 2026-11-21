@@ -315,6 +315,14 @@ fn root() -> PathBuf {
     super::root().join("sdk")
 }
 
+/// A name part no other writer uses: this launcher's route checks run beside its build, which
+/// may fetch the same SDK files at once, without the build lease (#19294).
+fn unique() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{next}", std::process::id())
+}
+
 /// Write `bytes` to `path` whole or not at all: beside it first, then renamed into place.
 fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
     let cache = |error: std::io::Error| Refusal::Cache(format!("{}: {error}", path.display()));
@@ -322,7 +330,7 @@ fn write_whole(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
         fs::create_dir_all(parent).map_err(cache)?;
     }
     let mut temporary = path.as_os_str().to_owned();
-    temporary.push(format!(".{}.new", std::process::id()));
+    temporary.push(format!(".{}.new", unique()));
     let temporary = PathBuf::from(temporary);
     let written = fs::write(&temporary, bytes).and_then(|()| fs::rename(&temporary, path));
     if written.is_err() {
@@ -371,6 +379,8 @@ fn index_in(root: &Path, base: &Base, commit: &str, keys: &[PublicKey]) -> Resul
         });
     }
     let dir = root.join(commit);
+    crate::native_cache::checked_tree(&crate::backend::build_dir(), &dir)
+        .map_err(|error| Refusal::Cache(super::cache_error(error)))?;
     let kept = dir.join(INDEX);
     if let Ok(bytes) = fs::read(&kept) {
         // Written only once verified: read as the same checks would, without the signature.
@@ -520,7 +530,8 @@ pub(super) fn build_data(
     const NAME: &str = "build-data.tar.xz";
     let into = sdk.dir.join("build-data");
     let mut fetched = Fetched::default();
-    fetch_into(sdk, base, NAME, &into, &mut fetched, &|_| {}, stop)?;
+    // Route checks fetch it without the build lease, maybe beside a build: their own download.
+    fetch_into(sdk, base, NAME, &into, true, &mut fetched, &|_| {}, stop)?;
     Ok(into)
 }
 
@@ -629,7 +640,7 @@ fn slices_in(
     }
     progress(fetched);
     for (name, into) in &wanted {
-        fetch_into(sdk, base, name, into, &mut fetched, progress, stop)?;
+        fetch_into(sdk, base, name, into, false, &mut fetched, progress, stop)?;
     }
     Ok(package)
 }
@@ -691,18 +702,27 @@ fn stamp_holds(sdk: &Sdk, name: &str, into: &Path) -> bool {
     stamp.index == sdk.sha256 && stamp.asset == name && listing(into) == Some(stamp.files)
 }
 
-/// `name` unpacked at `into`: kept when its stamp holds; otherwise what is there is removed,
-/// the archive read from `base` (downloaded beside `into` first when the base is not a folder),
-/// unpacked, and stamped.
+/// `name` unpacked at `into`: kept when its stamp holds; otherwise the archive is read from
+/// `base` (downloaded beside `into` first when the base is not a folder), and, under
+/// `<into>.fetch.lock`, what is there is removed, the archive unpacked and stamped. A route check
+/// and a build may fetch the same folder at once (#19294): with `own_download` each downloads its
+/// own copy; only one at a time changes the folder, and one stamped meanwhile is kept. `stop`
+/// ends the wait for that turn (a build's Stop) with [`super::CANCELLED`].
+#[allow(clippy::too_many_arguments)]
 fn fetch_into(
     sdk: &Sdk,
     base: &Base,
     name: &str,
     into: &Path,
+    own_download: bool,
     fetched: &mut Fetched,
     progress: &dyn Fn(Fetched),
     stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<(), Refusal> {
+    // No link or junction between the native root and the folder, before any I/O in it.
+    let parent = into.parent().expect("a slice folder has a parent");
+    crate::native_cache::checked_tree(&crate::backend::build_dir(), parent)
+        .map_err(|error| Refusal::Cache(super::cache_error(error)))?;
     if stamp_holds(sdk, name, into) {
         return Ok(());
     }
@@ -715,26 +735,12 @@ fn fetch_into(
         build: build.clone(),
         why,
     };
-    let cache = |error: std::io::Error| Refusal::Cache(format!("{}: {error}", into.display()));
     let size = sdk
         .index
         .asset(name)
         .map_err(|r| refused(r.to_string()))?
         .size;
     let stamp = stamp_path(into);
-    match fs::remove_file(&stamp) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(cache(error)),
-    }
-    match fs::symlink_metadata(into) {
-        Ok(meta) if meta.is_dir() => fs::remove_dir_all(into).map_err(cache)?,
-        Ok(_) => fs::remove_file(into).map_err(cache)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(cache(error)),
-    }
-    let parent = into.parent().expect("a slice folder has a parent");
-    fs::create_dir_all(parent).map_err(cache)?;
     let tag = tag(sdk.commit());
     let start = fetched.done;
     let (archive, downloaded) = match base.local(&tag, name) {
@@ -754,7 +760,10 @@ fn fetch_into(
                     Unread::Failed(why) => refused(why),
                 })?
                 .ok_or_else(|| refused(sdk::Refusal::Missing(vec![name.into()]).to_string()))?;
-            let file = parent.join(format!("{name}.download"));
+            let file = match own_download {
+                true => parent.join(format!("{name}.{}.download", unique())),
+                false => parent.join(format!("{name}.download")),
+            };
             let listed = sdk.index.asset(name).map_err(|r| refused(r.to_string()))?;
             let total = fetched.total;
             crate::backend::save_checked_until(
@@ -787,24 +796,72 @@ fn fetch_into(
         }
         return Err(Refusal::Cancelled);
     }
-    let unpacked = sdk::unpack(&sdk.index, name, &archive, into, UNPACKED_LIMIT);
+    let made = in_place(sdk, name, &archive, into, &stamp, &stopped);
     if let Some(file) = downloaded {
         let _ = fs::remove_file(file);
     }
-    unpacked.map_err(|refusal| match refusal {
-        sdk::Refusal::Missing(_) | sdk::Refusal::Io(_) if !archive.is_file() => {
+    made.map_err(|refusal| match refusal {
+        Made::Cache(error) => Refusal::Cache(format!("{}: {error}", into.display())),
+        Made::Unpack(sdk::Refusal::Missing(_) | sdk::Refusal::Io(_)) if !archive.is_file() => {
             refused(sdk::Refusal::Missing(vec![name.into()]).to_string())
         }
-        sdk::Refusal::Busy(_) | sdk::Refusal::NoLocks(_) | sdk::Refusal::Rename { .. } => {
-            Refusal::Cache(refusal.to_string())
-        }
-        other => refused(other.to_string()),
+        Made::Unpack(
+            refusal @ (sdk::Refusal::Busy(_)
+            | sdk::Refusal::NoLocks(_)
+            | sdk::Refusal::Rename { .. }),
+        ) => Refusal::Cache(refusal.to_string()),
+        Made::Unpack(other) => refused(other.to_string()),
+        Made::Refused(refusal) => refusal,
     })?;
+    fetched.done = start + size;
+    progress(*fetched);
+    Ok(())
+}
+
+/// Why [`in_place`] did not make its folder.
+enum Made {
+    Cache(std::io::Error),
+    Unpack(sdk::Refusal),
+    Refused(Refusal),
+}
+
+/// The local half of [`fetch_into`], under `<into>.fetch.lock`: `archive` unpacked at `into` and
+/// stamped, unless another fetch stamped it while this one downloaded.
+fn in_place(
+    sdk: &Sdk,
+    name: &str,
+    archive: &Path,
+    into: &Path,
+    stamp: &Path,
+    stop: &dyn Fn() -> bool,
+) -> Result<(), Made> {
+    let mut path = into.as_os_str().to_owned();
+    path.push(".fetch.lock");
+    let cache = |error| Made::Refused(Refusal::Cache(super::cache_error(error)));
+    let Some(_lock) = crate::native_cache::waited(&PathBuf::from(path), stop).map_err(cache)?
+    else {
+        return Err(Made::Refused(Refusal::Cancelled));
+    };
+    if stamp_holds(sdk, name, into) {
+        return Ok(());
+    }
+    match fs::remove_file(stamp) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(Made::Cache(error)),
+    }
+    match fs::symlink_metadata(into) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(into).map_err(Made::Cache)?,
+        Ok(_) => fs::remove_file(into).map_err(Made::Cache)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(Made::Cache(error)),
+    }
+    sdk::unpack(&sdk.index, name, archive, into, UNPACKED_LIMIT).map_err(Made::Unpack)?;
     let files = listing(into).ok_or_else(|| {
-        Refusal::Cache(trf(
+        Made::Refused(Refusal::Cache(trf(
             "{folder} holds something other than files and folders",
             &[("folder", &into.display().to_string())],
-        ))
+        )))
     })?;
     let stamp_text = serde_json::to_vec(&Stamp {
         index: sdk.sha256.clone(),
@@ -812,10 +869,7 @@ fn fetch_into(
         files,
     })
     .expect("a stamp serializes");
-    write_whole(&stamp, &stamp_text)?;
-    fetched.done = start + size;
-    progress(*fetched);
-    Ok(())
+    write_whole(stamp, &stamp_text).map_err(Made::Refused)
 }
 
 /// The build id the game release `version` was made from, as its copy of its SDK's index names

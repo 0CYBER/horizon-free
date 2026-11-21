@@ -4,29 +4,39 @@ use super::*;
 /// Plan enabled native mods for an instance. Worker-only filesystem and release reads.
 pub fn routes(home: &Path, base: Option<&str>) -> Result<Routes, Failed> {
     require_consent()?;
-    let lease = crate::native_cache::Cache::acquire(&backend::build_dir()).map_err(cache_error)?;
-    let Some(folder) = stage_installed(home, root().join("installed.routes"))? else {
+    let _turn = check_turn()?;
+    let Some(folder) = stage_installed(home, root().join(CHECKED))? else {
         return Ok(Routes::default());
     };
-    classify(&folder, base, &lease)
+    classify(&folder, base)
 }
 
-/// Share classification with an actual build under its existing cache lease.
-pub(super) fn classify(
-    folder: &Path,
-    base: Option<&str>,
-    // Held while the SDK's index, surface and build data are read and kept.
-    lease: &crate::native_cache::Cache,
-) -> Result<Routes, Failed> {
-    classify_until(folder, base, lease, &|| Ok(()))
+/// Where the checks stage the installed mods. Not `installed.routes`, which an older launcher
+/// stages into under the build lease and would delete beside a check of this one.
+pub(super) const CHECKED: &str = "installed.checked";
+
+/// The route and update checks' own lock: they stage the installed mods into one folder, one
+/// check at a time. They never take the build lease, so a check fetching the SDK's files can't
+/// make a Build the player starts meanwhile wait or fail (#19294); the SDK's files are kept so
+/// that a check and a build can fetch them at once.
+fn check_turn() -> Result<crate::native_cache::Locked, Failed> {
+    crate::native_cache::side_lock(&backend::build_dir(), "installed.checked.lock")
+        .map_err(|error| cache_error(error).into())
+}
+
+/// Classification for the checks, which never stop. A build classifies with
+/// [`classify_until`], under its lease; the SDK's index, surface and build data it reads and
+/// keeps need no build lease.
+pub(super) fn classify(folder: &Path, base: Option<&str>) -> Result<Routes, Failed> {
+    classify_until(folder, base, &|| Ok(()))
 }
 
 /// [`classify`] for a build: `stop` (its [`check_cancelled`]) is asked while the build data
-/// downloads, and a stop ends the classification as [`CANCELLED`] rather than as a mod's route.
+/// downloads and while it waits for another fetch unpacking it, and a stop ends the
+/// classification as [`CANCELLED`] rather than as a mod's route.
 pub(super) fn classify_until(
     folder: &Path,
     base: Option<&str>,
-    _lease: &crate::native_cache::Cache,
     stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<Routes, Failed> {
     let found = scan_bundles(folder)?;
@@ -143,8 +153,8 @@ pub struct UpdateCheck {
 /// or Nightly `to`. Worker-only: it reads releases.
 pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
     require_consent()?;
-    let _lease = crate::native_cache::Cache::acquire(&backend::build_dir()).map_err(cache_error)?;
-    let found = match stage_installed(home, root().join("installed.routes"))? {
+    let _turn = check_turn()?;
+    let found = match stage_installed(home, root().join(CHECKED))? {
         Some(folder) => scan_bundles(&folder)?,
         None => Vec::new(),
     };
