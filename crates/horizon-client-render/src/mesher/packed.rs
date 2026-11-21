@@ -52,38 +52,71 @@ const ROUND: [[u32; 2]; 4] = [[0, 0], [1, 0], [1, 1], [0, 1]];
 /// `quad`'s record, if one gives back its four vertices exactly. `tint`: what the mesher
 /// multiplied its grey levels by (`UNKNOWN_TINT` when it does not say).
 pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
-    // Corners on the block grid of the section.
+    let layer = quad[0].layer;
+    if quad[1].layer != layer || quad[2].layer != layer || quad[3].layer != layer {
+        return None;
+    }
+    // Corners on the block grid of the section (rejects -0.0 and non-integers without libm).
     let mut p = [[0u32; 3]; 4];
     for (to, v) in p.iter_mut().zip(quad) {
         for (c, &x) in to.iter_mut().zip(&v.pos) {
-            if !(0.0..=16.0).contains(&x) || x.fract() != 0.0 {
+            if !(0.0..=16.0).contains(&x) {
                 return None;
             }
-            *c = x as u32;
+            let n = x as u32;
+            if x.to_bits() != (n as f32).to_bits() {
+                return None;
+            }
+            *c = n;
         }
     }
-    let axis = (0..3).find(|&a| p.iter().all(|c| c[a] == p[0][a]))?;
-    let (u, w) = ((axis + 1) % 3, (axis + 2) % 3);
-    let lo = [u, w].map(|k| p.iter().map(|c| c[k]).min().unwrap_or(0));
-    if lo.iter().any(|&l| l > 15) {
+    let axis = if p[1][0] == p[0][0] && p[2][0] == p[0][0] && p[3][0] == p[0][0] {
+        0
+    } else if p[1][1] == p[0][1] && p[2][1] == p[0][1] && p[3][1] == p[0][1] {
+        1
+    } else if p[1][2] == p[0][2] && p[2][2] == p[0][2] && p[3][2] == p[0][2] {
+        2
+    } else {
+        return None;
+    };
+    let (u, w) = match axis {
+        0 => (1, 2),
+        1 => (2, 0),
+        _ => (0, 1),
+    };
+    let lo_u = p[0][u].min(p[1][u]).min(p[2][u]).min(p[3][u]);
+    let lo_w = p[0][w].min(p[1][w]).min(p[2][w]).min(p[3][w]);
+    if lo_u > 15 || lo_w > 15 {
         return None;
     }
     let mut steps = [0u32; 4];
     for (step, c) in steps.iter_mut().zip(&p) {
-        let d = [c[u] - lo[0], c[w] - lo[1]];
-        *step = ROUND.iter().position(|r| *r == d)? as u32;
+        let du = c[u] - lo_u;
+        let dw = c[w] - lo_w;
+        if (du | dw) > 1 {
+            return None;
+        }
+        *step = (dw << 1) | (du ^ dw);
     }
-    let (start, dir) = (0..8u32).map(|n| (n & 3, n >> 2)).find(|&(start, dir)| {
-        (0..4u32).all(|i| {
-            let step = if dir == 1 { 4 - i } else { i };
-            steps[i as usize] == (start + step) & 3
-        })
-    })?;
+    let start = steps[0];
+    let dir = if steps[1] == ((start + 1) & 3)
+        && steps[2] == ((start + 2) & 3)
+        && steps[3] == ((start + 3) & 3)
+    {
+        0u32
+    } else if steps[1] == ((start + 3) & 3)
+        && steps[2] == ((start + 2) & 3)
+        && steps[3] == ((start + 1) & 3)
+    {
+        1u32
+    } else {
+        return None;
+    };
     let plane = p[0][axis];
     let mut block = [0u32; 3];
     block[axis] = plane.min(15);
-    block[u] = lo[0];
-    block[w] = lo[1];
+    block[u] = lo_u;
+    block[w] = lo_w;
     let side = plane - block[axis];
     let orient = block[0]
         | block[1] << 4
@@ -93,37 +126,48 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
         | start << 15
         | dir << 17;
     // UVs in 1/32 of the sprite, at most two values each way.
-    let mut ranges = [[u32::MAX, 0u32]; 2];
+    let mut u_min = u32::MAX;
+    let mut u_max = 0u32;
+    let mut v_min = u32::MAX;
+    let mut v_max = 0u32;
     let mut uvs = [[0u32; 2]; 4];
     for (uv, v) in uvs.iter_mut().zip(quad) {
-        for k in 0..2 {
-            let raw = u32::from(v.uv[k]);
-            if raw & 1023 != 0 {
-                return None;
-            }
-            uv[k] = raw >> 10;
-            ranges[k] = [ranges[k][0].min(uv[k]), ranges[k][1].max(uv[k])];
+        let ru = u32::from(v.uv[0]);
+        let rv = u32::from(v.uv[1]);
+        if (ru | rv) & 1023 != 0 {
+            return None;
         }
+        let u0 = ru >> 10;
+        let v0 = rv >> 10;
+        uv[0] = u0;
+        uv[1] = v0;
+        u_min = u_min.min(u0);
+        u_max = u_max.max(u0);
+        v_min = v_min.min(v0);
+        v_max = v_max.max(v0);
     }
     let mut select = 0u32;
-    for (i, uv) in uvs.iter().enumerate() {
-        for k in 0..2 {
-            if uv[k] == ranges[k][1] && uv[k] != ranges[k][0] {
-                select |= 1 << (2 * i + k);
-            } else if uv[k] != ranges[k][0] {
-                return None;
-            }
+    for (i, &[u0, v0]) in uvs.iter().enumerate() {
+        if u0 == u_max && u0 != u_min {
+            select |= 1 << (2 * i);
+        } else if u0 != u_min {
+            return None;
+        }
+        if v0 == v_max && v0 != v_min {
+            select |= 1 << (2 * i + 1);
+        } else if v0 != v_min {
+            return None;
         }
     }
-    let rect = ranges[0][0] | ranges[0][1] << 6 | ranges[1][0] << 12 | ranges[1][1] << 18;
+    let rect = u_min | u_max << 6 | v_min << 12 | v_max << 18;
     // Light in steps of 4 (smooth light averages four levels of 16).
     let mut light = [0u32; 4];
     for (l, v) in light.iter_mut().zip(quad) {
-        let (sky, block) = (u32::from(v.light & 0xFF), u32::from(v.light >> 8));
-        if sky & 3 != 0 || block & 3 != 0 {
+        let raw = u32::from(v.light);
+        if raw & 0x0303 != 0 {
             return None;
         }
-        *l = sky >> 2 | (block >> 2) << 6;
+        *l = ((raw & 0xFF) >> 2) | ((raw >> 10) << 6);
     }
     // The colour: each channel the grey level times the tint's, over 255.
     let tint = if tint == UNKNOWN_TINT {
@@ -133,8 +177,39 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
     };
     let alpha = quad[0].color & 0xFF00_0000;
     let mut grays = 0u32;
-    for (i, v) in quad.iter().enumerate() {
-        grays |= gray_of(v.color, tint)? << (8 * i);
+    if tint == WHITE {
+        for (i, v) in quad.iter().enumerate() {
+            let r = v.color & 255;
+            let g = (v.color >> 8) & 255;
+            let b = (v.color >> 16) & 255;
+            if r != g || g != b {
+                return None;
+            }
+            grays |= r << (8 * i);
+        }
+    } else {
+        let t = channels(tint);
+        let k = if t[1] > t[0] {
+            if t[2] > t[1] { 2 } else { 1 }
+        } else if t[2] > t[0] {
+            2
+        } else {
+            0
+        };
+        let mut prev_rgb = u32::MAX;
+        let mut prev_gray = 0u32;
+        for (i, v) in quad.iter().enumerate() {
+            let rgb = v.color & 0x00FF_FFFF;
+            let g = if rgb == prev_rgb {
+                prev_gray
+            } else {
+                let g = gray_of_precomputed(rgb, t, k)?;
+                prev_rgb = rgb;
+                prev_gray = g;
+                g
+            };
+            grays |= g << (8 * i);
+        }
     }
     // Corners 1 to 3's alpha (a shader pack's `separateAo`: each corner's ambient occlusion,
     // multiples of 51 on a whole face): `ALPHA_STEP` times the code, 0 for corner 0's.
@@ -152,34 +227,40 @@ pub fn pack_quad(quad: &[TerrainVertex; 4], tint: u32) -> Option<[u32; 6]> {
         tint | alpha,
         grays,
         rect | select << 24,
-        u32::from(quad[0].layer) | light[0] << 16 | codes[0] << 28,
+        u32::from(layer) | light[0] << 16 | codes[0] << 28,
         light[1] | light[2] << 12 | codes[1] << 24 | codes[2] << 27,
         light[3] | orient << 12,
     ];
-    let exact = (0..4).all(|c| {
+    debug_assert!((0..4).all(|c| {
         let (a, b) = (packed_vertex(&words, c), quad[c]);
         bytemuck::bytes_of(&a) == bytemuck::bytes_of(&b)
-    });
-    exact.then_some(words)
+    }));
+    Some(words)
 }
 
 /// The tint's channels, as the mesher takes them for red, green and blue.
+#[inline]
 fn channels(tint: u32) -> [u32; 3] {
     [tint >> 16 & 255, tint >> 8 & 255, tint & 255]
 }
 
-/// A grey level that `tint` turns into `color`'s red, green and blue.
-fn gray_of(color: u32, tint: u32) -> Option<u32> {
-    let want = [color & 255, color >> 8 & 255, color >> 16 & 255];
-    let t = channels(tint);
-    let gives = |g: u32| (0..3).all(|k| g * t[k] / 255 == want[k]);
-    let k = (0..3).max_by_key(|&k| t[k]).unwrap_or(0);
-    if t[k] == 0 {
-        return gives(0).then_some(0);
+/// A grey level that `t` (precomputed `channels(tint)`, dominant channel `k`) turns into `rgb`.
+#[inline]
+fn gray_of_precomputed(rgb: u32, t: [u32; 3], k: usize) -> Option<u32> {
+    let want = [rgb & 255, (rgb >> 8) & 255, (rgb >> 16) & 255];
+    let tk = t[k];
+    if tk == 0 {
+        return (rgb == 0).then_some(0);
     }
-    let lo = (want[k] * 255).div_ceil(t[k]);
-    let hi = ((want[k] * 255 + 254) / t[k]).min(255);
-    (lo..=hi).find(|&g| gives(g))
+    let (k1, k2) = match k {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let prod = want[k] * 255;
+    let lo = prod.div_ceil(tk);
+    let hi = ((prod + 254) / tk).min(255);
+    (lo..=hi).find(|&g| g * t[k1] / 255 == want[k1] && g * t[k2] / 255 == want[k2])
 }
 
 /// Corner `corner` of the quad `words` holds, as terrain.wgsl's `packed_corner` expands it.
@@ -220,11 +301,6 @@ pub fn packed_vertex(words: &[u32; 6], corner: usize) -> TerrainVertex {
     }
 }
 
-thread_local! {
-    static RECORDS_SCRATCH: std::cell::RefCell<Vec<Option<[u32; 6]>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
 /// The compact layout of sorted solid quads with their tints (`SectionMesh::packed`), or
 /// nothing when it would be no smaller than their vertices.
 pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
@@ -233,16 +309,53 @@ pub fn layout(solid: &[TerrainVertex], tints: &[u32]) -> Vec<[u32; 6]> {
     out
 }
 
-/// Writes the compact layout of sorted solid quads with their tints into `out`,
-/// reusing `out`'s allocation and a thread-local record scratch buffer.
+/// Writes the compact layout of sorted solid quads with their tints directly into `out`,
+/// reusing `out`'s allocation with no intermediate scratch buffer and aborting early once
+/// too many quads spill to beat the uncompressed vertex layout.
 pub fn layout_into(solid: &[TerrainVertex], tints: &[u32], out: &mut Vec<[u32; 6]>) {
+    out.clear();
     let quads = solid.as_chunks::<4>().0;
-    RECORDS_SCRATCH.with(|cell| {
-        let mut records = cell.borrow_mut();
-        records.clear();
-        records.extend(quads.iter().zip(tints).map(|(q, &t)| pack_quad(q, t)));
-        place_into(&records, quads, out);
-    });
+    let n = quads.len().min(tints.len());
+    let pad = n.next_multiple_of(4) - n;
+    if n + pad >= 4 * n {
+        return;
+    }
+    let max_full = (3 * n - pad - 1) / 4;
+    let had_cap = out.capacity() > 0;
+    out.reserve(n + pad);
+    let mut full = 0usize;
+    for (q, &t) in quads[..n].iter().zip(&tints[..n]) {
+        match pack_quad(q, t) {
+            Some(words) => out.push(words),
+            None => {
+                full += 1;
+                if full > max_full {
+                    if had_cap {
+                        out.clear();
+                    } else {
+                        *out = Vec::new();
+                    }
+                    return;
+                }
+                out.push([0, 0, 0, 0, 0, FULL]);
+            }
+        }
+    }
+    out.resize(n + pad, [0; 6]);
+    if full == 0 {
+        return;
+    }
+    out.reserve_exact(4 * full);
+    let mut next = n + pad;
+    for (i, q) in quads[..n].iter().enumerate() {
+        if out[i][5] == FULL {
+            out[i][0] = (next - i) as u32;
+            next += 4;
+            for v in q {
+                out.push(bytemuck::cast::<TerrainVertex, [u32; 6]>(*v));
+            }
+        }
+    }
 }
 
 /// A mesh's solid range from a record per quad, `None` where no record fits:
@@ -285,6 +398,9 @@ pub fn place_into(
         }));
     }
     out.resize(n + pad, [0; 6]);
+    if full == 0 {
+        return;
+    }
     for (q, record) in quads.iter().zip(records) {
         if record.is_none() {
             out.extend(
@@ -419,5 +535,44 @@ mod tests {
         let out = layout(&solid, &[TINT; 5]);
         assert_eq!(packed_quads(&out, 5), 5);
         assert_eq!(out.len(), 8);
+    }
+
+    #[test]
+    fn rejected_layout_drops_fresh_capacity_but_keeps_reused_buffer() {
+        let mut odd = top([0, 1, 2, 3]);
+        for v in &mut odd {
+            v.pos[1] = 8.5;
+        }
+        let solid: Vec<TerrainVertex> = (0..16).flat_map(|_| odd).collect();
+        let tints = [TINT; 16];
+        let mut fresh = Vec::new();
+        layout_into(&solid, &tints, &mut fresh);
+        assert!(fresh.is_empty());
+        assert_eq!(fresh.capacity(), 0);
+        let mut reused = Vec::with_capacity(64);
+        layout_into(&solid, &tints, &mut reused);
+        assert!(reused.is_empty());
+        assert!(reused.capacity() >= 64);
+    }
+
+    #[test]
+    fn spilled_quads_reserve_exact_slots() {
+        let quad = top([0, 1, 2, 3]);
+        let mut odd = quad;
+        for v in &mut odd {
+            v.pos[1] = 8.5;
+        }
+        let mut solid: Vec<TerrainVertex> = Vec::with_capacity(4096 * 4);
+        for _ in 0..4095 {
+            solid.extend_from_slice(&quad);
+        }
+        solid.extend_from_slice(&odd);
+        let tints = vec![TINT; 4096];
+        let mut out = Vec::new();
+        layout_into(&solid, &tints, &mut out);
+        assert_eq!(out.len(), 4100);
+        assert_eq!(out.capacity(), 4100);
+        assert_eq!(packed_quads(&out, 4096), 4095);
+        assert_eq!(out[4095][5], FULL);
     }
 }

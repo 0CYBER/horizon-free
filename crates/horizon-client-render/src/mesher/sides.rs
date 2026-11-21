@@ -226,28 +226,39 @@ pub enum Part {
 
 /// The bucket of a quad: the axis plane it lies in and the side its
 /// triangles (corners 0, 1, 2 and 0, 2, 3, as the renderer draws them) face.
+#[inline]
 fn bucket(quad: &[TerrainVertex; 4]) -> usize {
-    let p = quad.map(|v| v.pos);
+    const SIDE_BUCKET: [[usize; 2]; 3] = [[5, 0], [6, 3], [4, 1]];
+    let p0 = quad[0].pos;
+    let p1 = quad[1].pos;
+    let p2 = quad[2].pos;
+    let p3 = quad[3].pos;
     for axis in 0..3 {
-        if p.iter().any(|v| v[axis] != p[0][axis]) {
+        let c = p0[axis];
+        if p1[axis] != c || p2[axis] != c || p3[axis] != c {
             continue;
         }
         // The normal's component along `axis`, twice each triangle's area.
-        let (u, w) = ((axis + 1) % 3, (axis + 2) % 3);
-        let area = |a: usize, b: usize, c: usize| {
-            (p[b][u] - p[a][u]) * (p[c][w] - p[a][w]) - (p[b][w] - p[a][w]) * (p[c][u] - p[a][u])
+        let (u, w) = match axis {
+            0 => (1, 2),
+            1 => (2, 0),
+            _ => (0, 1),
         };
-        let (first, second) = (area(0, 1, 2), area(0, 2, 3));
+        let du1 = p1[u] - p0[u];
+        let dw1 = p1[w] - p0[w];
+        let du2 = p2[u] - p0[u];
+        let dw2 = p2[w] - p0[w];
+        let du3 = p3[u] - p0[u];
+        let dw3 = p3[w] - p0[w];
+        let first = du1 * dw2 - dw1 * du2;
+        let second = du2 * dw3 - dw2 * du3;
         let positive = first >= 0.0 && second >= 0.0;
         let negative = first <= 0.0 && second <= 0.0;
         if positive == negative {
             // Opposite windings, or no area at all.
             return OTHER;
         }
-        return BUCKETS
-            .iter()
-            .position(|b| matches!(*b, Bucket::Side(a, s) if a == axis && s == positive))
-            .expect("every side has a bucket");
+        return SIDE_BUCKET[axis][usize::from(positive)];
     }
     OTHER
 }
@@ -306,6 +317,7 @@ fn sort_parts(solid: &mut Vec<TerrainVertex>, grouped: bool) -> Sides {
 #[derive(Default)]
 struct SortScratch {
     slots: Vec<u8>,
+    order: Vec<u32>,
     keys: Vec<u64>,
     sorted: Vec<[TerrainVertex; 4]>,
     tints: Vec<u32>,
@@ -341,14 +353,18 @@ fn sort_with(
     };
     let slots = &mut scratch.slots;
     slots.clear();
-    slots.extend(quads.iter().map(|q| position(bucket(q), cutout(q)) as u8));
-    let has_cutout = quads.iter().any(cutout);
+    slots.reserve(quads_len);
+    let mut has_cutout = false;
     let mut counts = [0u32; 7];
     let mut slot_counts = [0u32; 14];
     let mut planes = [0f32; 7];
-    for (quad, &part) in quads.iter().zip(slots.iter()) {
-        slot_counts[usize::from(part)] += 1;
-        let b = slot(grouped, usize::from(part)).0;
+    for quad in quads {
+        let b = bucket(quad);
+        let is_cutout = cutout(quad);
+        has_cutout |= is_cutout;
+        let part = position(b, is_cutout);
+        slots.push(part as u8);
+        slot_counts[part] += 1;
         if let Bucket::Side(axis, positive) = BUCKETS[b] {
             let p = quad[0].pos[axis];
             planes[b] = match (counts[b], positive) {
@@ -359,36 +375,42 @@ fn sort_with(
         }
         counts[b] += 1;
     }
+    let mut slot_starts = [0u32; 14];
     let mut slot_ends = [0u32; 14];
-    let mut total = 0;
-    for (end, count) in slot_ends.iter_mut().zip(slot_counts) {
+    let mut total = 0u32;
+    for ((start, end), count) in slot_starts.iter_mut().zip(&mut slot_ends).zip(slot_counts) {
+        *start = total;
         total += count;
         *end = total;
     }
-    if has_cutout || counts.iter().filter(|&&c| c > 0).count() > 1 {
-        // One integer key per quad: its part, then (cutout meshes, side
-        // buckets) its plane from the outside in, then its index, which keeps
-        // the order of equal quads as a stable sort does.
+    if has_cutout {
+        // Pre-partition into each part's slice and sort only the axis-facing parts
+        // by plane from the outside in, using the original index to break ties.
+        debug_assert!(quads_len < 1 << 24);
         let keys = &mut scratch.keys;
-        keys.clear();
-        keys.extend(
-            quads
-                .iter()
-                .zip(slots.iter())
-                .enumerate()
-                .map(|(i, (quad, &part))| {
-                    let plane = match BUCKETS[slot(grouped, usize::from(part)).0] {
-                        Bucket::Side(axis, positive) if has_cutout => {
-                            let key = total_order_key(quad[0].pos[axis]);
-                            if positive { !key } else { key }
-                        }
-                        _ => 0,
-                    };
-                    u64::from(part) << 56 | u64::from(plane) << 24 | i as u64
-                }),
-        );
-        debug_assert!(quads.len() < 1 << 24);
-        keys.sort_unstable();
+        keys.resize(quads_len, 0);
+        let mut write = slot_starts;
+        for (i, (quad, &part)) in quads.iter().zip(slots.iter()).enumerate() {
+            let p = usize::from(part);
+            let plane = match BUCKETS[slot(grouped, p).0] {
+                Bucket::Side(axis, positive) => {
+                    let key = total_order_key(quad[0].pos[axis]);
+                    if positive { !key } else { key }
+                }
+                Bucket::Other => 0,
+            };
+            keys[write[p] as usize] = u64::from(plane) << 24 | i as u64;
+            write[p] += 1;
+        }
+        for (p, (&start, &end)) in slot_starts.iter().zip(&slot_ends).enumerate() {
+            if slot(grouped, p).0 == OTHER {
+                continue;
+            }
+            let (start, end) = (start as usize, end as usize);
+            if end - start > 1 {
+                keys[start..end].sort_unstable();
+            }
+        }
         let sorted = &mut scratch.sorted;
         sorted.clear();
         sorted.extend(keys.iter().map(|&k| quads[(k & 0xFF_FFFF) as usize]));
@@ -398,19 +420,58 @@ fn sort_with(
             let sorted_tints = &mut scratch.tints;
             sorted_tints.clear();
             sorted_tints.extend(keys.iter().map(|&k| tints[(k & 0xFF_FFFF) as usize]));
-            std::mem::swap(tints, sorted_tints);
+            tints.clear();
+            tints.extend_from_slice(sorted_tints);
         }
         if sources.len() == quads_len {
-            scratch.sources.clear();
-            scratch
-                .sources
-                .extend(keys.iter().map(|&k| sources[(k & 0xFF_FFFF) as usize]));
-            std::mem::swap(sources, &mut scratch.sources);
+            let sorted_sources = &mut scratch.sources;
+            sorted_sources.clear();
+            sorted_sources.extend(keys.iter().map(|&k| sources[(k & 0xFF_FFFF) as usize]));
+            sources.clear();
+            sources.extend_from_slice(sorted_sources);
         }
         if looks.len() == quads_len {
-            scratch.looks.clear();
-            (scratch.looks).extend(keys.iter().map(|&k| looks[(k & 0xFF_FFFF) as usize]));
-            std::mem::swap(looks, &mut scratch.looks);
+            let sorted_looks = &mut scratch.looks;
+            sorted_looks.clear();
+            sorted_looks.extend(keys.iter().map(|&k| looks[(k & 0xFF_FFFF) as usize]));
+            looks.clear();
+            looks.extend_from_slice(sorted_looks);
+        }
+    } else if counts.iter().filter(|&&c| c > 0).count() > 1 {
+        // Pure opaque mesh: O(N) counting scatter preserves original order within each part.
+        let order = &mut scratch.order;
+        order.resize(quads_len, 0);
+        let mut write = slot_starts;
+        for (i, &part) in slots.iter().enumerate() {
+            let p = usize::from(part);
+            order[write[p] as usize] = i as u32;
+            write[p] += 1;
+        }
+        let sorted = &mut scratch.sorted;
+        sorted.clear();
+        sorted.extend(order.iter().map(|&i| quads[i as usize]));
+        solid.clear();
+        solid.extend_from_slice(sorted.as_flattened());
+        if tints.len() == quads_len {
+            let sorted_tints = &mut scratch.tints;
+            sorted_tints.clear();
+            sorted_tints.extend(order.iter().map(|&i| tints[i as usize]));
+            tints.clear();
+            tints.extend_from_slice(sorted_tints);
+        }
+        if sources.len() == quads_len {
+            let sorted_sources = &mut scratch.sources;
+            sorted_sources.clear();
+            sorted_sources.extend(order.iter().map(|&i| sources[i as usize]));
+            sources.clear();
+            sources.extend_from_slice(sorted_sources);
+        }
+        if looks.len() == quads_len {
+            let sorted_looks = &mut scratch.looks;
+            sorted_looks.clear();
+            sorted_looks.extend(order.iter().map(|&i| looks[i as usize]));
+            looks.clear();
+            looks.extend_from_slice(sorted_looks);
         }
     }
     Sides {
