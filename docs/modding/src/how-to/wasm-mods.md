@@ -77,6 +77,27 @@ cargo install --locked --git https://github.com/horizon-rust/horizon --rev <sdk 
 
 A mod carries native code or wasm code, not both. A wasm mod has no `[native]` table.
 
+The game checks a `mod.wasm` when it loads it; the build promises no range of games. It refuses
+the mod when:
+
+- its core transport layout differs from the game's ("built for another version of the mod API's
+  transport");
+- a call it imports is missing from the game, or has another signature or layout there;
+- a hook it answers (an export row in its call table) is missing from the game or changed. A hook
+  the game added after the mod's build is fine: the mod just doesn't answer it;
+- its mod points layout, when it carries one, differs from the game's.
+
+A newer SDK can bring calls an older game lacks, so build for the oldest Nightly you support and
+test the build on each Nightly you support. As reported for the November 2026 Nightlies, the
+transport changed between the 2026-11-18 Nightly (`dd67b76`) and the 2026-11-19 Nightly
+(`5ef7734`): a mod built for `dd67b76` was refused on later games, one built for `5ef7734` loaded
+on the 2026-11-20 game, and players of the 18 November Nightly needed a build of their own.
+
+`mod.wasm` is a build output and stays out of Git, so in the
+[horizon-mods](https://github.com/horizon-rust/horizon-mods) registry a wasm mod's source sits under
+`native/` beside the native mods. Its `horizon-mod.toml` has a `[wasm]` table and no `[native]` one,
+and its registry entry's kind is `mod`, not `native-mod`.
+
 A mod with `[[inject]]` listeners builds against the game's staged point catalog. Pass
 `--catalog path/to/points.json`, or set `HORIZON_WASM_STD` to the toolchain's std member
 with `points.json` beside it. Mods without listeners need no catalog. When packaging the
