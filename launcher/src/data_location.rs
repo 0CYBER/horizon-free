@@ -358,6 +358,8 @@ fn migrate_locked(
     prepare: impl FnOnce(&Roots, &Roots) -> Result<()>,
     _lease: &MigrationLease,
 ) -> Result<Roots> {
+    // How the launcher spelled its folder, which the links it made may name.
+    let written = source.launcher.clone();
     let source = validate_roots(source)?;
     if let Some(current) = resolve_at(bootstrap)? {
         if current != source {
@@ -413,13 +415,17 @@ fn migrate_locked(
         private_dir(&stage)?;
         progress("Copying and verifying launcher data");
         // Preparing links other launchers' files into the launcher's data and links them again
-        // each time; they are never followed or copied.
+        // each time; they are never followed or copied. The server runtime's links are made
+        // again below, to the same release.
+        let runtime = crate::servers::RuntimeLinks::find(&source.launcher, &written)?;
+        let mut skip = runtime.paths(&source.launcher);
+        skip.extend(crate::sources::linked_layout_links(&source.launcher));
         copy_tree(
             &source.launcher,
             &source.launcher,
             &staged.launcher,
             bootstrap,
-            &crate::sources::linked_layout_links(&source.launcher),
+            &skip,
             &mut progress,
         )?;
         progress("Copying and verifying game data");
@@ -454,6 +460,7 @@ fn migrate_locked(
             }
         }
         fs::remove_dir(&stage).map_err(|e| problem(&stage, e))?;
+        runtime.make(&destination.launcher)?;
         sync_dir(&target)?;
         progress("Committing data location");
         commit(bootstrap, &destination)?;
@@ -850,7 +857,7 @@ fn commit(bootstrap: &Path, roots: &Roots) -> Result<()> {
     Ok(())
 }
 
-fn sync_dir(path: &Path) -> Result<()> {
+pub(crate) fn sync_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         File::open(path)

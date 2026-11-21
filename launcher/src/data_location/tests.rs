@@ -416,6 +416,152 @@ fn other_launchers_links_are_left_out_of_the_move() {
     assert_eq!(fs::read(outside.0.join("client.jar")).unwrap(), b"jar");
 }
 
+/// Links the folder `link` to `target`: a symlink on Unix, a junction on Windows.
+#[cfg(any(unix, windows))]
+fn dir_link(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(link.to_string_lossy().replace('/', "\\"))
+            .arg(target.to_string_lossy().replace('/', "\\"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "junction setup: {output:?}");
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn server_runtime_moves_with_its_release() {
+    let f = Fixture::new("build");
+    let root = f.source.launcher.join("server-runtime");
+    let files = root.join("game-files/horizon-client");
+    fs::create_dir_all(files.join("1.0")).unwrap();
+    fs::write(files.join("1.0/data"), b"files").unwrap();
+    // Two releases with their links; `current` picks the first, which is not the newest.
+    for tag in ["v1", "v2"] {
+        let release = root.join("releases").join(tag);
+        fs::create_dir_all(release.join(".local")).unwrap();
+        fs::write(release.join("horizon-server"), tag).unwrap();
+        dir_link(&files, &release.join(".local/horizon-client"));
+    }
+    fs::create_dir_all(root.join("releases/v3/.local")).unwrap();
+    fs::write(root.join("current.switching"), b"mine").unwrap();
+    dir_link(&root.join("releases/v1"), &root.join("current"));
+    let roots = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    let moved = roots.launcher.join("server-runtime");
+    let canonical = |path: PathBuf| fs::canonicalize(path).unwrap();
+    assert_eq!(
+        canonical(moved.join("current")),
+        canonical(moved.join("releases/v1"))
+    );
+    assert_eq!(
+        fs::read(moved.join("current/horizon-server")).unwrap(),
+        b"v1"
+    );
+    for tag in ["v1", "v2"] {
+        let local = moved
+            .join("releases")
+            .join(tag)
+            .join(".local/horizon-client");
+        assert_eq!(fs::read(local.join("1.0/data")).unwrap(), b"files");
+        assert_eq!(
+            canonical(local),
+            canonical(moved.join("game-files/horizon-client"))
+        );
+    }
+    assert_eq!(
+        canonical(root.join("current")),
+        canonical(root.join("releases/v1"))
+    );
+    // A release with a plain `.local` gets no link, and a player's own `.switching` file moves.
+    assert!(fs::read_dir(moved.join("releases/v3/.local"))
+        .unwrap()
+        .next()
+        .is_none());
+    assert_eq!(fs::read(moved.join("current.switching")).unwrap(), b"mine");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn server_runtime_current_elsewhere_is_refused() {
+    let f = Fixture::new("build");
+    let outside = Temp::new();
+    fs::write(outside.0.join("sentinel"), b"untouched").unwrap();
+    // No `releases` folder: `current` is still checked on its own.
+    let root = f.source.launcher.join("server-runtime");
+    fs::create_dir_all(&root).unwrap();
+    dir_link(&outside.0, &root.join("current"));
+    let error = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap_err();
+    assert!(error.contains("a link Horizon did not make"), "{error}");
+    assert_eq!(fs::read(&f.bootstrap).unwrap(), f.pointer);
+    assert_eq!(fs::read(outside.0.join("sentinel")).unwrap(), b"untouched");
+    #[cfg(unix)]
+    fs::remove_file(root.join("current")).unwrap();
+    #[cfg(windows)]
+    fs::remove_dir(root.join("current")).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn a_linked_server_runtime_is_refused() {
+    let f = Fixture::new("build");
+    let elsewhere = f.source.launcher.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    dir_link(&elsewhere, &f.source.launcher.join("server-runtime"));
+    let error = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap_err();
+    assert!(error.contains("a link Horizon did not make"), "{error}");
+    assert_eq!(fs::read(&f.bootstrap).unwrap(), f.pointer);
+}
+
+#[cfg(unix)]
+#[test]
+fn server_game_files_through_a_linked_folder_are_refused() {
+    let f = Fixture::new("build");
+    let root = f.source.launcher.join("server-runtime");
+    fs::create_dir_all(root.join("releases/v1/.local")).unwrap();
+    fs::create_dir_all(f.source.launcher.join("elsewhere/horizon-client")).unwrap();
+    // A relative link the copy would keep, so the game files would end outside the runtime.
+    std::os::unix::fs::symlink("../elsewhere", root.join("game-files")).unwrap();
+    dir_link(
+        &root.join("game-files/horizon-client"),
+        &root.join("releases/v1/.local/horizon-client"),
+    );
+    let error = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap_err();
+    assert!(error.contains("a link Horizon did not make"), "{error}");
+    assert_eq!(fs::read(&f.bootstrap).unwrap(), f.pointer);
+}
+
+#[cfg(unix)]
+#[test]
+fn server_links_spelled_through_a_linked_parent_move() {
+    let f = Fixture::new("build");
+    // The launcher spelled its folder through a link above it, as `~/.local/share` can be.
+    let alias = f.temp.0.join("alias");
+    std::os::unix::fs::symlink(f.temp.0.join("source"), &alias).unwrap();
+    let spelled = Roots {
+        launcher: alias.join("launcher"),
+        ..f.source.clone()
+    };
+    let root = spelled.launcher.join("server-runtime");
+    fs::create_dir_all(root.join("releases/v1/.local")).unwrap();
+    fs::create_dir_all(root.join("game-files/horizon-client")).unwrap();
+    dir_link(
+        &root.join("game-files/horizon-client"),
+        &root.join("releases/v1/.local/horizon-client"),
+    );
+    dir_link(&root.join("releases/v1"), &root.join("current"));
+    let roots = migrate(&spelled, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    let moved = roots.launcher.join("server-runtime");
+    assert_eq!(
+        fs::read_link(moved.join("current")).unwrap(),
+        moved.join("releases/v1")
+    );
+}
+
 #[test]
 fn real_files_where_other_launchers_links_go_are_moved() {
     let f = Fixture::new("build");

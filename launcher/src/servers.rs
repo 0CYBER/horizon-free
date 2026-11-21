@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -199,7 +199,310 @@ pub fn new_folder(name: &str) -> PathBuf {
 // ----- The programs: an installed Horizon version, laid out as install.sh does ---------------------
 
 pub fn runtime_root() -> PathBuf {
-    backend::data_dir().join("server-runtime")
+    backend::data_dir().join(RUNTIME)
+}
+
+/// The servers' programs in the launcher's data.
+const RUNTIME: &str = "server-runtime";
+
+/// The names horizon-server gives its background services: `name` and `launchd_label` in
+/// crates/horizon-server/src/service.rs, which the launcher doesn't depend on.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+const SERVICE_PREFIX: &str = "horizon-server-";
+#[cfg(target_os = "macos")]
+const LAUNCHD_PREFIX: &str = "dev.horizon.server.";
+
+/// Horizon server services registered on this computer, for any server and in any scope, read
+/// from the system's own registrations (no server program is run). An unreadable one is an error.
+pub(crate) fn registered_services() -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        scheduled_tasks().map(horizon_tasks)
+    }
+    #[cfg(not(windows))]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        #[cfg(target_os = "macos")]
+        let folders = [(
+            home.ok_or("HOME is not set")?.join("Library/LaunchAgents"),
+            LAUNCHD_PREFIX,
+            ".plist",
+        )];
+        #[cfg(not(target_os = "macos"))]
+        let folders = {
+            let config = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .or_else(|| home.map(|home| home.join(".config")))
+                .ok_or("HOME is not set")?;
+            [
+                (config.join("systemd/user"), SERVICE_PREFIX, ".service"),
+                (
+                    PathBuf::from("/etc/systemd/system"),
+                    SERVICE_PREFIX,
+                    ".service",
+                ),
+            ]
+        };
+        let mut found = Vec::new();
+        for (folder, prefix, suffix) in folders {
+            let entries = match fs::read_dir(&folder) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("{}: {e}", folder.display())),
+            };
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("{}: {e}", folder.display()))?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with(prefix) && name.ends_with(suffix) {
+                    found.push(name);
+                }
+            }
+        }
+        Ok(found)
+    }
+}
+
+/// The names among `tasks` that horizon-server registered.
+#[cfg(any(windows, test))]
+fn horizon_tasks(tasks: Vec<String>) -> Vec<String> {
+    tasks
+        .into_iter()
+        .filter(|name| name.starts_with(SERVICE_PREFIX))
+        .collect()
+}
+
+/// The tasks in Task Scheduler's root folder, where horizon-server registers its own, hidden ones
+/// too, read through the scheduler's own interface.
+#[cfg(windows)]
+fn scheduled_tasks() -> Result<Vec<String>, String> {
+    use std::mem::ManuallyDrop;
+    use windows::core::BSTR;
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_MULTITHREADED,
+    };
+    use windows::Win32::System::TaskScheduler::{ITaskService, TaskScheduler, TASK_ENUM_HIDDEN};
+    use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4};
+    // SAFETY: plain COM calls on this thread; COM is released only if this call started it, and
+    // a thread already in the other apartment mode can still use it.
+    let started = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if started.is_err() && started != RPC_E_CHANGED_MODE {
+        return Err(windows::core::Error::from(started).to_string());
+    }
+    // Errors become text, and every interface is released, before COM is.
+    let names = unsafe {
+        (|| {
+            let service: ITaskService =
+                CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
+            let local = VARIANT::default();
+            service.Connect(&local, &local, &local, &local)?;
+            let tasks = service
+                .GetFolder(&BSTR::from("\\"))?
+                .GetTasks(TASK_ENUM_HIDDEN.0)?;
+            let mut names = Vec::new();
+            // The collection counts from 1.
+            for index in 1..=tasks.Count()? {
+                let index = VARIANT {
+                    Anonymous: VARIANT_0 {
+                        Anonymous: ManuallyDrop::new(VARIANT_0_0 {
+                            vt: VT_I4,
+                            Anonymous: VARIANT_0_0_0 { lVal: index },
+                            ..Default::default()
+                        }),
+                    },
+                };
+                names.push(tasks.get_Item(&index)?.Name()?.to_string());
+            }
+            Ok::<_, windows::core::Error>(names)
+        })()
+        .map_err(|e| e.to_string())
+    };
+    if started.is_ok() {
+        unsafe { CoUninitialize() };
+    }
+    names
+}
+
+/// The server runtime's links in the launcher's data, which a move leaves out and makes again
+/// in the new folder: `current` to the release it selects, and each release's
+/// `.local/horizon-client` to the servers' game files. Found without following any link.
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeLinks {
+    release: Option<std::ffi::OsString>,
+    game_files: Vec<std::ffi::OsString>,
+}
+
+impl RuntimeLinks {
+    /// The links in the runtime of the launcher's data at `launcher` (its checked, canonical
+    /// path; `written` is how the launcher spelled it when it made the links, perhaps through a
+    /// linked parent folder). A `current` or game-files link that points anywhere else is
+    /// refused, as any link a move can't make again.
+    pub(crate) fn find(launcher: &Path, written: &Path) -> Result<Self, String> {
+        let root = launcher.join(RUNTIME);
+        // Whether link text names `inside` the runtime, under either spelling of the folder.
+        let ours = |text: &Path, inside: &Path| {
+            [launcher, written]
+                .into_iter()
+                .any(|spelling| same_target(text, &spelling.join(RUNTIME).join(inside)))
+        };
+        let releases = root.join("releases");
+        let mut links = Self::default();
+        let refused = |link: &Path| {
+            format!(
+                "{} is a link Horizon did not make; remove it, or set the servers up again, before moving data",
+                link.display()
+            )
+        };
+        // A linked data folder is the copy's to refuse; a linked runtime is refused here.
+        if is_link(&root) {
+            return Err(refused(&root));
+        }
+        if !(plain_dir(launcher) && plain_dir(&root)) {
+            return Ok(links);
+        }
+        let current = root.join("current");
+        if is_link(&current) {
+            // Read once; its whole text must name `releases/<tag>` before any folder is looked at.
+            let text = fs::read_link(&current).map_err(|_| refused(&current))?;
+            let tag = match text.components().next_back() {
+                Some(Component::Normal(tag)) => tag.to_owned(),
+                _ => return Err(refused(&current)),
+            };
+            // Alone it must still be one plain name: a verbatim path can end in one that a join
+            // would read as rooted.
+            let mut parts = Path::new(&tag).components();
+            let single = matches!(
+                (parts.next(), parts.next()),
+                (Some(Component::Normal(name)), None) if name == tag.as_os_str()
+            );
+            if !single || tag.to_string_lossy().contains(['/', '\\']) {
+                return Err(refused(&current));
+            }
+            if !(ours(&text, &Path::new("releases").join(&tag))
+                && plain_dir(&releases)
+                && plain_dir(&releases.join(&tag)))
+            {
+                return Err(refused(&current));
+            }
+            links.release = Some(tag);
+        }
+        if !plain_dir(&releases) {
+            return Ok(links);
+        }
+        for entry in fs::read_dir(&releases).map_err(|e| format!("{}: {e}", releases.display()))? {
+            let entry = entry.map_err(|e| format!("{}: {e}", releases.display()))?;
+            let local = entry.path().join(".local");
+            let link = local.join("horizon-client");
+            if !plain_dir(&entry.path()) || !plain_dir(&local) || !is_link(&link) {
+                continue;
+            }
+            let text = fs::read_link(&link).map_err(|_| refused(&link))?;
+            if !(ours(&text, Path::new("game-files/horizon-client"))
+                && plain_dir(&root.join("game-files"))
+                && plain_dir(&root.join("game-files/horizon-client")))
+            {
+                return Err(refused(&link));
+            }
+            links.game_files.push(entry.file_name());
+        }
+        Ok(links)
+    }
+
+    /// The links' paths under `launcher`, for the copy to leave out.
+    pub(crate) fn paths(&self, launcher: &Path) -> Vec<PathBuf> {
+        let root = launcher.join(RUNTIME);
+        let local = |tag: &std::ffi::OsString| {
+            root.join("releases")
+                .join(tag)
+                .join(".local/horizon-client")
+        };
+        let current = self.release.as_ref().map(|_| root.join("current"));
+        self.game_files.iter().map(local).chain(current).collect()
+    }
+
+    /// Makes the links again in the runtime of the moved data at `launcher`, at their vacant
+    /// names, and checks them before the move is committed.
+    pub(crate) fn make(&self, launcher: &Path) -> Result<(), String> {
+        let root = launcher.join(RUNTIME);
+        let files = root.join("game-files/horizon-client");
+        let mut made = Vec::new();
+        for tag in &self.game_files {
+            made.push((
+                root.join("releases")
+                    .join(tag)
+                    .join(".local/horizon-client"),
+                files.clone(),
+            ));
+        }
+        if let Some(tag) = &self.release {
+            made.push((root.join("current"), root.join("releases").join(tag)));
+        }
+        for (link, target) in &made {
+            dir_link(target, link)
+                .map_err(|e| format!("{} → {}: {e}", link.display(), target.display()))?;
+            let folder = link.parent().unwrap_or(&root);
+            crate::data_location::sync_dir(folder)?;
+            // The target and its parent are folders themselves, so the link ends in the runtime.
+            let parent = target.parent().unwrap_or(&root);
+            if !(is_link(link) && links_to(link, target) && plain_dir(parent) && plain_dir(target))
+            {
+                return Err(format!("{} was not made again", link.display()));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `path` is a folder itself, not a link to one.
+fn plain_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|meta| meta.is_dir() && crate::data_location::reject_link(path, &meta).is_ok())
+}
+
+/// Whether `path` is a symlink or junction, without following it.
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|meta| crate::data_location::reject_link(path, &meta).is_err())
+}
+
+/// Whether the link at `link` is written as pointing at `target` (read, never followed).
+fn links_to(link: &Path, target: &Path) -> bool {
+    fs::read_link(link).is_ok_and(|text| same_target(&text, target))
+}
+
+/// Whether link text `written` names `target`.
+fn same_target(written: &Path, target: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        // A junction reads back with a verbatim prefix (`\\?\C:\`, `\\?\UNC\`). Nothing else is
+        // normalised (no case folding; a name that isn't Unicode never matches): the launcher
+        // wrote these links, so another spelling is not one of them.
+        let plain = |path: &Path| -> Option<PathBuf> {
+            let text = path.to_str()?;
+            Some(match text.strip_prefix(r"\\?\UNC\") {
+                Some(share) => PathBuf::from(format!(r"\\{share}")),
+                None => PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(text)),
+            })
+        };
+        plain(written).is_some_and(|written| Some(written) == plain(target))
+    }
+    #[cfg(not(windows))]
+    {
+        written == target
+    }
+}
+
+/// Makes `link`, which must not exist, point at the folder `target`.
+fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        crate::sources::junction(target, link)
+    }
 }
 
 /// `horizon-server` of the release in use, once one is set up.

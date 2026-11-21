@@ -440,3 +440,17 @@ fn the_game_mode_comes_from_server_toml() {
     assert_eq!(game_mode(&dir), None);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn only_horizon_server_tasks_are_background_servers() {
+    let tasks = [
+        "horizon-server-survival",
+        "OneDrive Update",
+        "horizon-serverless",
+        "Horizon-Server-x",
+    ];
+    assert_eq!(
+        horizon_tasks(tasks.map(String::from).to_vec()),
+        ["horizon-server-survival"]
+    );
+}
