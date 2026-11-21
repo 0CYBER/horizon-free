@@ -279,6 +279,75 @@ fn source_entry_link_is_rejected_without_touching_its_target() {
     assert_eq!(fs::read(outside.0.join("sentinel")).unwrap(), b"untouched");
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn game_cache_links_are_left_out_of_the_move() {
+    let f = Fixture::new("build");
+    let assets = f.source.launcher.join("versions/x/assets");
+    fs::create_dir_all(&assets).unwrap();
+    fs::write(assets.join("sentinel"), b"untouched").unwrap();
+    struct Link(PathBuf);
+    impl Drop for Link {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            let _ = fs::remove_file(&self.0);
+            #[cfg(windows)]
+            let _ = fs::remove_dir(&self.0);
+        }
+    }
+    let mut links = Vec::new();
+    for instance in [
+        f.source.game.clone(),
+        f.source.game.join("instances/a"),
+        f.source.game.join("ports/p/home"),
+    ] {
+        let stamp = instance.join(".horizon-cache/mod-content/0123456789abcdef");
+        fs::create_dir_all(&stamp).unwrap();
+        fs::write(stamp.join("STAMP"), b"stamp").unwrap();
+        let link = stamp.join("assets");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&assets, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link.to_string_lossy().replace('/', "\\"))
+                .arg(assets.to_string_lossy().replace('/', "\\"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "junction setup: {output:?}");
+        }
+        links.push(Link(link));
+    }
+    fs::write(f.source.game.join("instances/a/options.txt"), b"options").unwrap();
+    // A world may carry the cache's name; only the game's own caches are left out.
+    let world = f.source.game.join("saves/.horizon-cache");
+    fs::create_dir_all(&world).unwrap();
+    fs::write(world.join("level.dat"), b"world").unwrap();
+    let roots = migrate(&f.source, &f.target(), &f.bootstrap, |_| {}).unwrap();
+    drop(links);
+    assert!(!roots.game.join(".horizon-cache").exists());
+    assert!(!roots.game.join("instances/a/.horizon-cache").exists());
+    assert!(!roots.game.join("ports/p/home/.horizon-cache").exists());
+    assert_eq!(
+        fs::read(roots.game.join("saves/.horizon-cache/level.dat")).unwrap(),
+        b"world"
+    );
+    assert_eq!(
+        fs::read(roots.game.join("instances/a/options.txt")).unwrap(),
+        b"options"
+    );
+    assert_eq!(
+        fs::read(roots.game.join("saves/dummy/level.dat")).unwrap(),
+        b"\0\xff\x80world\0"
+    );
+    assert_eq!(fs::read(assets.join("sentinel")).unwrap(), b"untouched");
+    assert_eq!(
+        fs::read(roots.launcher.join("versions/x/assets/sentinel")).unwrap(),
+        b"untouched"
+    );
+}
+
 #[cfg(unix)]
 struct PermissionsGuard(PathBuf, fs::Permissions);
 #[cfg(unix)]

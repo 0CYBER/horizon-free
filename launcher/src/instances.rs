@@ -512,6 +512,35 @@ pub fn select(query: &str) -> Result<Instance, String> {
     Ok(instance)
 }
 
+/// The game's cache folder in each instance; the game rebuilds it on start.
+const GAME_CACHE: &str = ".horizon-cache";
+
+/// Where the game makes its cache under `game_home`: directly in each instance's home, never
+/// deeper, since a world may carry the same name. Every instance, port and pack folder counts,
+/// whether or not its record reads. Links are never followed: the copy refuses them afterwards.
+pub(crate) fn game_caches(game_home: &Path) -> Vec<PathBuf> {
+    let plain_dir = |dir: &Path| {
+        fs::symlink_metadata(dir).is_ok_and(|meta| {
+            meta.is_dir() && crate::data_location::reject_link(dir, &meta).is_ok()
+        })
+    };
+    let children = |dir: PathBuf| {
+        (plain_dir(game_home) && plain_dir(&dir))
+            .then(|| fs::read_dir(dir).ok())
+            .flatten()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+    };
+    std::iter::once(game_home.to_path_buf())
+        .chain(children(game_home.join(OWN)))
+        .chain(children(game_home.join("ports")).map(|w| modpacks::profile_home(&w)))
+        .chain(children(game_home.join("horizon-packs")).map(|w| registry_pack::home(&w)))
+        .map(|home| home.join(GAME_CACHE))
+        .collect()
+}
+
 /// What a copy of a game folder leaves out: other instances and packs, logs and crash reports,
 /// caches, data collection's state, and sign-in sessions (a session never leaves its folder).
 const NOT_COPIED: &[&str] = &[
@@ -522,7 +551,7 @@ const NOT_COPIED: &[&str] = &[
     "crash-reports",
     "sessions",
     "mod-browser",
-    ".horizon-cache",
+    GAME_CACHE,
     // Far terrain's copies of what servers sent, rebuilt as the instance plays.
     "server-terrain",
 ];
