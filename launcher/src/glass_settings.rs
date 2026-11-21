@@ -800,10 +800,11 @@ impl Launcher {
     /// About's version line, with a button that copies it (for a bug report).
     fn version_row(&self, t: &Theme) -> Div {
         let nightly = tr("Nightly").to_string();
+        let launcher = backend::launcher_version_label();
         let line = trf(
             "Launcher {launcher}, game {game}",
             &[
-                ("launcher", env!("CARGO_PKG_VERSION")),
+                ("launcher", &launcher),
                 (
                     "game",
                     self.settings.selected.as_deref().unwrap_or(&nightly),

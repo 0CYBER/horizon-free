@@ -44,6 +44,17 @@ const fn version_or(injected: Option<&'static str>) -> &'static str {
     }
 }
 
+/// Horizon-free: the Horizon launcher release this fork is built from (`launcher/upstream.txt`),
+/// shown beside [`VERSION`] in the window and in the release's title, which names it after all.
+/// Never a tag, a `--version` or a comparison: `0.2.35 (Horizon 0.2.98)` is not a version, and
+/// [`already_in_place`] would read a launcher carrying it as older than every 0.2 release.
+pub const UPSTREAM_VERSION: &str = include_str!("../upstream.txt");
+
+/// What the window shows where a bare version goes: `0.2.35 (Horizon 0.2.98)`.
+pub fn launcher_version_label() -> String {
+    format!("{} (Horizon {})", VERSION, UPSTREAM_VERSION.trim())
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Release {
     pub tag: String,
@@ -6648,6 +6659,21 @@ pub fn {f}("
             parse_version_output(&format!("horizon-launcher {VERSION}\n")),
             Some(VERSION)
         );
+    }
+
+    /// The window names the Horizon launcher the fork is built from beside its own version, and
+    /// neither the label nor `launcher/upstream.txt` (which the release workflow reads) may look
+    /// like a version: the tag, `--version` and every comparison take [`VERSION`] alone.
+    #[test]
+    fn the_version_shown_names_the_horizon_launcher_it_is_built_from() {
+        let upstream = UPSTREAM_VERSION.trim();
+        assert_eq!(
+            launcher_version_label(),
+            format!("{VERSION} (Horizon {upstream})")
+        );
+        let parts: Vec<&str> = upstream.split('.').collect();
+        assert_eq!(parts.len(), 3, "{upstream}");
+        assert!(parts.iter().all(|p| p.parse::<u64>().is_ok()), "{upstream}");
     }
 
     /// The fork and Horizon publish `launcher@X.Y.Z` releases under the same numbering: a

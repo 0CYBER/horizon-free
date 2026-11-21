@@ -832,19 +832,28 @@ impl Launcher {
                 cx.notify();
             })),
         );
-        // The launcher's version under it: "Launcher 0.2.0" open, the number alone while narrow.
+        // The launcher's version under it: "Launcher 0.2.35 (Horizon 0.2.98)" open. Narrow, the
+        // rail is 80px and that line does not fit, so the two numbers stack instead: the fork's
+        // version over the Horizon launcher it is built from. The whole label is the tooltip.
+        let label = backend::launcher_version_label();
         let version: SharedString = if open {
-            trf("Launcher {version}", &[("version", backend::VERSION)]).into()
+            trf("Launcher {version}", &[("version", &label)]).into()
         } else {
             backend::VERSION.into()
         };
+        let horizon: SharedString = trf(
+            "Horizon {version}",
+            &[("version", backend::UPSTREAM_VERSION.trim())],
+        )
+        .into();
         foot = foot.child(rule()).child(
             div()
                 .flex()
+                .flex_col()
+                .justify_center()
                 .items_center()
-                .h(px(20.))
+                .h(px(if open { 20. } else { 27. }))
                 .px(px(if open { 12. } else { 0. }))
-                .when(!open, |d| d.justify_center())
                 .child(
                     ui::text(11.5, FontWeight::NORMAL, ink::DIM)
                         .id("launcher-version")
@@ -852,17 +861,22 @@ impl Launcher {
                         .truncate()
                         .child(version)
                         .when(!open, |d| {
-                            d.tooltip(ui::tip(trf(
-                                "Launcher {version}",
-                                &[("version", backend::VERSION)],
-                            )))
+                            d.tooltip(ui::tip(trf("Launcher {version}", &[("version", &label)])))
                         })
                         // Horizon-free: seven clicks reveal the developer options (`dev_options`).
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.version_clicked();
                             cx.notify();
                         })),
-                ),
+                )
+                .when(!open, |d| {
+                    d.child(
+                        ui::text(9., FontWeight::NORMAL, ink::DIM)
+                            .whitespace_nowrap()
+                            .truncate()
+                            .child(horizon),
+                    )
+                }),
         );
 
         let width = RAIL + (RAIL_OPEN - RAIL) * p;

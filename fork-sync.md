@@ -16,7 +16,9 @@ again.
    re-serialise a file (that reorders keys and adds noise), only append the fork's keys at the end
    as upstream does for its own, and keep every value upstream changed.
 5. Bump `launcher/Cargo.toml` (`version = "0.2.X"`) and the `horizon-launcher` entry in
-   `launcher/Cargo.lock`. The workflow tags `launcher@X.Y.Z` from that version.
+   `launcher/Cargo.lock`. The workflow tags `launcher@X.Y.Z` from that version. Bump
+   `launcher/upstream.txt` to the newest upstream `launcher@X.Y.Z` too: it is the Horizon
+   launcher this build is based on, shown after the fork's own version.
 6. Delete every upstream workflow and restore the fork's:
    ```sh
    git rm -q .github/workflows/*.yml
@@ -86,6 +88,14 @@ again.
 - No Microsoft plates: `frame.rs` top-bar sign-in, `glass_account.rs` Microsoft card,
   `blocks_settings.rs` `account_rows` and prepare sign-in.
 - `Horizon-Free` link in the glass sidebar, above the Discord button (`frame.rs`).
+
+- The version players see names the Horizon launcher the fork is built from: `launcher/upstream.txt`
+  is compiled in (`backend::UPSTREAM_VERSION`, `launcher_version_label()`) and read by `launcher.yml`, so the
+  window's version line and the release's title say `0.2.35 (Horizon 0.2.98)`. Bump the file with
+  every sync. It stays out of the tag, `--version`, `own_tag()` and every comparison:
+  `0.2.35 (Horizon 0.2.98)` is not a version, `release_order` reads it as before-0.2, and
+  `already_in_place` would then take a launcher carrying it as older than every 0.2 release and
+  replace it (an update offered forever, and a staged older release could go back in).
 
 - The README warning block.
 - `backend::PARTNER_BANNERS = false`: the partner/sponsor plate (Sculk's sidebar card and Servers

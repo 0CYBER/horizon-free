@@ -379,7 +379,10 @@ impl Launcher {
                 .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .child(trf("Launcher {version}", &[("version", backend::VERSION)])),
+                .child(trf(
+                    "Launcher {version}",
+                    &[("version", backend::launcher_version_label().as_str())],
+                )),
         );
         // Custom title bars carry the mark and name already.
         let brand = (!titlebar::draws_brand(window)).then(|| {
