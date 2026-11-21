@@ -8,6 +8,7 @@ impl Game<'_> {
     /// listener and the billboards facing the camera follow it; the player, where they aim, the
     /// first-person hand and which chunks load stay the player's. Values that aren't finite keep
     /// vanilla's. Not called on the title screen's panorama. API 402.
+    /// `camera_roll`, asked right after, rolls it.
     pub(in crate::game) fn native_camera_pose(
         &self,
         partial: f32,

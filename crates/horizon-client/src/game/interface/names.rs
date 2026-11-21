@@ -726,6 +726,16 @@ impl Game<'_> {
         let forward = glam::DVec3::from_array(view_vector(view_yaw, view_pitch));
         let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
+        // A mod's roll (`native_camera_roll`) turns the camera's right and up about its forward,
+        // as `Camera.setRotation`'s roll turns `Camera.rotation()`.
+        let (right, up) = if self.posed_roll == 0.0 {
+            (right, up)
+        } else {
+            // In f32, as the view's `view_roll` and the billboards' `rolled_camera` turn.
+            let (sin, cos) = self.posed_roll.to_radians().sin_cos();
+            let (sin, cos) = (f64::from(sin), f64::from(cos));
+            (right * cos - up * sin, right * sin + up * cos)
+        };
         let away = forward.as_vec3() * 0.002;
         let mut batch = HudBatch::new(
             [1, 1],

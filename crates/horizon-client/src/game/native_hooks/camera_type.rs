@@ -112,6 +112,9 @@ mod camera_type_tests {
             assert_eq!(host.camera_type(), CameraType::ThirdPersonBack);
             event.yaw += 15.0;
         }
+        fn camera_roll(&self, _: &dyn ClientHost, event: &mut mod_api::CameraRollEvent) {
+            event.roll = 22.5;
+        }
         fn camera_type_cycle(&self, _: &mut dyn ClientHost, _: &mut CameraTypeCycleEvent<'_>) {
             self.0
                 .cycles
@@ -146,6 +149,8 @@ mod camera_type_tests {
                 assert!((posed.0.z + 4.0).abs() < 1e-6, "refresh unchanged position");
                 assert_eq!(posed.1, 15.0, "preserve the explicit yaw override");
                 assert_eq!(posed.2, vanilla.2);
+                // The camera type the pose asked for leaves the roll as the mod set it.
+                assert_eq!(game.native_camera_roll_now(1.0), 22.5);
             });
         });
         assert_eq!(calls.poses.load(Ordering::Relaxed), 1);

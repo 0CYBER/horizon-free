@@ -94,10 +94,26 @@ impl Game<'_> {
     }
 
     /// What a sequence's frames must share: the world, the camera, the settings, the pack and
-    /// the window's size.
+    /// the window's size. Before the first frame the roll is the last drawn frame's. For a frame
+    /// about to be drawn (`sequence_frame_asks`: whether mods are asked for its roll, else
+    /// level) it is that frame's, kept for it in `sequence_frame_roll`, and asked after the pose:
+    /// a mod hears `camera_pose` before `camera_roll`, as on every frame.
     fn sequence_scene(&mut self) -> Result<String> {
+        let frame = self.sequence_frame_asks.take();
         let view = self.camera_view(1.0).ok_or("no camera")?;
         let (position, yaw, pitch) = self.native_camera_pose_now(1.0, view);
+        let roll = match frame {
+            None => self.posed_roll,
+            Some(asks) => {
+                let roll = if asks {
+                    self.native_camera_roll_now(self.clock.camera_fraction() as f32)
+                } else {
+                    0.0
+                };
+                self.sequence_frame_roll = Some(roll);
+                roll
+            }
+        };
         let renderer = self.renderer.as_ref().ok_or("no renderer")?;
         Ok(format!(
             "{:?}",
@@ -108,7 +124,8 @@ impl Game<'_> {
                 (
                     position.to_array().map(f64::to_bits),
                     yaw.to_bits(),
-                    pitch.to_bits()
+                    pitch.to_bits(),
+                    roll.to_bits()
                 ),
                 format!("{:?}", self.camera_type),
                 format!("{:?}", self.settings),
@@ -215,9 +232,16 @@ impl Game<'_> {
             sequence.scene.clone(),
         );
         let refusal = self.sequence_refusal();
-        match (refusal, self.sequence_scene()) {
+        // Read once: the check and the frame both use this roll.
+        self.sequence_frame_asks =
+            Some(refusal.is_none() && !self.shows_panorama() && !self.studio.flying());
+        let now = self.sequence_scene();
+        // A mod's replacement of `sequence_scene` doesn't take it.
+        self.sequence_frame_asks = None;
+        match (refusal, now) {
             (None, Ok(now)) if now == scene => {}
             (refusal, _) => {
+                self.sequence_frame_roll = None;
                 let reason = refusal.unwrap_or(
                     "the camera, world, settings, shader pack or window size changed while it ran",
                 );
@@ -235,6 +259,7 @@ impl Game<'_> {
             renderer.screenshot_result = None;
         }
         let drawn = self.render_frame();
+        self.sequence_frame_roll = None;
         let renderer = self.renderer.as_mut().ok_or("no renderer")?;
         // Still queued when the frame wasn't drawn, or when the PNG is to be taken
         // again smaller (out of memory): not this sequence's frame.

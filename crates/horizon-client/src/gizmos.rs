@@ -89,6 +89,18 @@ impl Gizmos {
             });
         }
     }
+    /// The on-top lines turned by `turn` about `camera`: `turn` takes a camera-relative point
+    /// to where it is drawn (the debug crosshair rolled with a mod's camera roll, whose pass
+    /// draws without the frame's pose).
+    pub fn turn_on_top(&mut self, camera: [f64; 3], turn: glam::DMat4) {
+        let turned = |p: [f64; 3]| {
+            let rel = glam::DVec3::from_array(p) - glam::DVec3::from_array(camera);
+            (turn.transform_point3(rel) + glam::DVec3::from_array(camera)).to_array()
+        };
+        for line in &mut self.on_top {
+            (line.start, line.end) = (turned(line.start), turned(line.end));
+        }
+    }
     /// `Gizmos.line`.
     pub fn line(&mut self, start: [f64; 3], end: [f64; 3], color: u32, width: f32) {
         self.lines.push(Line {
@@ -515,6 +527,30 @@ mod tests {
                 (z, 0xFF7F_7FFF, 2.0),
             ]
         );
+    }
+
+    /// A rolled camera turns the crosshair with the world: drawn through the unrolled view,
+    /// at +90 the green +Y axis points to the screen's left, as the world's up does.
+    #[test]
+    fn a_rolled_crosshair_turns_with_the_world() {
+        let camera = [0.5, 64.0, 0.5];
+        let view = crate::camera::view_matrix(0.0, 0.0);
+        let roll = crate::camera::view_roll(90.0);
+        let mut g = Gizmos::default();
+        g.debug_crosshair(camera, 0.0, 0.0, 2.0);
+        g.turn_on_top(camera, (view.inverse() * roll * view).as_dmat4());
+        let green = g.on_top[4];
+        assert_eq!(green.color, 0xFF00_FF00);
+        let rel =
+            |p: [f64; 3]| (glam::DVec3::from_array(p) - glam::DVec3::from_array(camera)).as_vec3();
+        let (start, end) = (
+            view.transform_point3(rel(green.start)),
+            view.transform_point3(rel(green.end)),
+        );
+        let axis = end - start;
+        assert!(axis.x < 0.0 && axis.y.abs() < 1e-4 * axis.x.abs(), "{axis}");
+        // Its centre, straight ahead, stays where it was.
+        assert!(rel(green.start).distance(glam::Vec3::Z) < 1e-6, "{start}");
     }
 
     #[test]

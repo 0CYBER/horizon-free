@@ -1034,6 +1034,7 @@ one of these moments has to move that logic into a client native mod.
 | `block_screen_effect_draw.rs` | `block_screen_effect_draw` |
 | `calculate_player_turn.rs` | `calculate_player_turn` |
 | `camera_pose.rs` | `camera_pose` |
+| `camera_roll.rs` | `camera_roll` |
 | `camera_type.rs` | `camera_type_cycle` |
 | `chat_suggestion_applied.rs` | `chat_suggestion_applied` |
 | `client_chat.rs` | `client_chat` |

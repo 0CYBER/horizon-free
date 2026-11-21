@@ -34,6 +34,7 @@ impl Game<'_> {
             camera.position,
             camera.yaw,
             camera.pitch,
+            self.posed_roll,
             at,
         )
     }

@@ -484,15 +484,16 @@ pub fn view_matrix(yaw: f32, pitch: f32) -> glam::Mat4 {
 }
 
 /// `GameRenderer.projectPointToScreen`: world point `at` seen from a camera at `position` facing
-/// `yaw`/`pitch` through column-major `projection` (the frame's reversed-Z perspective), as
-/// normalised device x and y (-1 to 1 across the screen) and depth z. The view is the camera's
-/// rotation only, without bob or spin, as vanilla's. None for a point at or behind the camera and
+/// `yaw`/`pitch`, rolled `roll` degrees (`view_roll`), through column-major `projection` (the
+/// frame's reversed-Z perspective), as normalised device x and y (-1 to 1 across the screen) and
+/// depth z. The view is the camera's rotation only, without bob or spin, as vanilla's. None for a point at or behind the camera and
 /// for a non-finite `at`, where vanilla returns a mirrored or NaN point.
 pub fn project_point(
     projection: &[f32; 16],
     position: [f64; 3],
     yaw: f32,
     pitch: f32,
+    roll: f32,
     at: [f64; 3],
 ) -> Option<[f32; 3]> {
     if !at.iter().all(|v| v.is_finite()) {
@@ -504,8 +505,12 @@ pub fn project_point(
         (at[1] - position[1]) as f32,
         (at[2] - position[2]) as f32,
     );
-    let clip =
-        glam::Mat4::from_cols_array(projection) * view_matrix(yaw, pitch) * offset.extend(1.0);
+    let view = if roll == 0.0 {
+        view_matrix(yaw, pitch)
+    } else {
+        view_roll(roll) * view_matrix(yaw, pitch)
+    };
+    let clip = glam::Mat4::from_cols_array(projection) * view * offset.extend(1.0);
     if clip.w.is_nan() || clip.w <= 0.0 {
         return None;
     }
@@ -521,6 +526,17 @@ pub fn view_matrix_rolled(yaw: f32, pitch: f32, roll: f32) -> glam::Mat4 {
         -roll * DEG_TO_RAD,
     );
     glam::Mat4::from_quat(glam::Quat::from_xyzw(-q.x, -q.y, -q.z, q.w))
+}
+
+/// The roll `view_matrix_rolled` adds, as a turn in front of the unrolled view:
+/// `view_roll(roll) * view_matrix(yaw, pitch)` is `view_matrix_rolled(yaw, pitch, roll)`, so it
+/// can sit in a frame's pose (beside the bob and the nausea spin) and reach everything that
+/// reads that pose. Identity at 0.
+pub fn view_roll(roll: f32) -> glam::Mat4 {
+    if roll == 0.0 {
+        return glam::Mat4::IDENTITY;
+    }
+    glam::Mat4::from_rotation_z(roll * DEG_TO_RAD)
 }
 /// `AbstractClientPlayer.getFieldOfViewModifier(firstPerson, effectScale)`.
 pub fn field_of_view_modifier(p: &FovPlayer, first_person: bool, effect_scale: f32) -> f32 {
@@ -1063,12 +1079,46 @@ pub fn spinning_effect_matrix(intensity: f32, angle_degrees: f32) -> glam::Mat4 
 
 #[cfg(test)]
 mod tests {
+    /// A roll in front of the view is `view_matrix_rolled`'s (NeoForge's `Camera.setRotation`
+    /// roll), and at 0 leaves the view as it was.
+    #[test]
+    fn a_view_roll_in_front_of_the_view_is_the_rolled_view() {
+        assert_eq!(super::view_roll(0.0), glam::Mat4::IDENTITY);
+        assert_eq!(
+            super::view_roll(0.0) * super::view_matrix(37.0, -21.0),
+            super::view_matrix(37.0, -21.0)
+        );
+        for (yaw, pitch, roll) in [
+            (0.0, 0.0, 90.0),
+            (37.0, -21.0, 22.5),
+            (-137.25, 61.5, -45.0),
+            (359.9, -90.0, 180.0),
+        ] {
+            let posed = super::view_roll(roll) * super::view_matrix(yaw, pitch);
+            let rolled = super::view_matrix_rolled(yaw, pitch, roll);
+            assert!(
+                (posed.to_cols_array().iter())
+                    .zip(rolled.to_cols_array())
+                    .all(|(a, b)| (a - b).abs() < 1e-5),
+                "yaw {yaw} pitch {pitch} roll {roll}: {posed} vs {rolled}"
+            );
+        }
+        // 90 puts the world's up at the screen's left, on the projected screen too.
+        let up = super::view_roll(90.0) * super::view_matrix(0.0, 0.0) * glam::Vec4::Y;
+        assert!(up.x < -0.99 && up.y.abs() < 1e-6, "{up}");
+        let projection =
+            glam::Mat4::perspective_rh(70f32.to_radians(), 16.0 / 9.0, 512.0, 0.05).to_cols_array();
+        let above = super::project_point(&projection, [0.0; 3], 0.0, 0.0, 90.0, [0.0, 1.0, 10.0]);
+        let [x, y, _] = above.unwrap();
+        assert!(x < -0.05 && y.abs() < 1e-5, "{above:?}");
+    }
+
     /// A synthetic camera at (0, 64, 0) facing south (yaw 0, +Z), 70° FOV, 16:9, near 0.05, far
     /// 512, reversed Z as the game builds it.
     fn project(at: [f64; 3]) -> Option<[f32; 3]> {
         let projection =
             glam::Mat4::perspective_rh(70f32.to_radians(), 16.0 / 9.0, 512.0, 0.05).to_cols_array();
-        super::project_point(&projection, [0.0, 64.0, 0.0], 0.0, 0.0, at)
+        super::project_point(&projection, [0.0, 64.0, 0.0], 0.0, 0.0, 0.0, at)
     }
 
     #[test]
