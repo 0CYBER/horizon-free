@@ -22,6 +22,8 @@ horizon-engine-slots = { path = "../horizon-engine-slots" }
 horizon-hooks = { path = "../horizon-hooks" }
 horizon-mod-runtime = { path = "../horizon-mod-runtime" }
 mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab" }
+# Whether a held lock file is still the one at its name (dev and inode, or volume and index).
+same-file = "1"
 horizon-assets = { path = "../horizon-assets" }
 horizon-client-core = { path = "../horizon-client-core" }
 horizon-client-input = { path = "../horizon-client-input" }

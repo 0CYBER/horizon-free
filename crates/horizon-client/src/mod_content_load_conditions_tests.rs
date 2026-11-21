@@ -100,6 +100,36 @@ fn registered_conditions_select_content_root_tags_and_structure_modifiers() {
 }
 
 #[test]
+fn code_only_mods_with_registered_conditions_reuse_their_root() {
+    let scratch = tempfile::tempdir().unwrap();
+    let base = scratch.path().join("base");
+    fs::create_dir_all(base.join("assets")).unwrap();
+    fs::write(base.join("horizon-resources.json"), b"{}").unwrap();
+    let inventory =
+        horizon_mod_package::enabled::EnabledMods::new([("codeonly".into(), mod_api::Side::Both)]);
+    let roots: Vec<PathBuf> = (0..2)
+        .map(|_| {
+            let conditions = LoadConditions::new(["codeonly"]).with_lookup(
+                BTreeMap::from([("codeonly".into(), "codeonly".into())]),
+                |_, _| Some(Ok(true)),
+            );
+            assert!(conditions.has_registered());
+            super::super::resource_root_with_conditions(
+                &base,
+                Path::new(""),
+                &[],
+                &scratch.path().join("cache"),
+                &inventory,
+                &conditions,
+            )
+            .unwrap()
+        })
+        .collect();
+    assert_ne!(roots[0], base);
+    assert_eq!(roots[0], roots[1]);
+}
+
+#[test]
 fn conditional_base_tag_does_not_gate_later_accepted_layers() {
     let base = r#"{"neoforge:conditions":[{"type":"neoforge:mod_loaded","modid":"code_only"}],"values":["minecraft:stone"]}"#;
     let more = [J::Str("minecraft:dirt".into())];

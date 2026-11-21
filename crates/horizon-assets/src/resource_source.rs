@@ -55,8 +55,13 @@ fn copy_resource_bytes(
     out.write_all(bytes)
 }
 
+/// Whatever a source must keep alive for as long as any reader holds it (a lock).
+/// Shared, so a subdirectory of a guarded folder keeps the same guard.
+type Guard = Option<Arc<dyn std::any::Any + Send + Sync>>;
+
 enum Storage {
-    Directory(PathBuf),
+    /// A folder, and what its owner keeps alive while it is read.
+    Directory(PathBuf, Guard),
     #[cfg(not(target_arch = "wasm32"))]
     Archive(Zip),
     Prefix {
@@ -114,7 +119,7 @@ impl Hash for ResourceSource {
 impl std::fmt::Debug for ResourceSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = match self.0.as_ref() {
-            Storage::Directory(_) => "Directory",
+            Storage::Directory(..) => "Directory",
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(_) => "Archive",
             Storage::Prefix { .. } => "Prefix",
@@ -287,7 +292,7 @@ impl ResourceSource {
         if !stays_inside(top) {
             return Vec::new();
         }
-        if let Storage::Directory(root) = self.0.as_ref() {
+        if let Storage::Directory(root, _) = self.0.as_ref() {
             let mut names: Vec<_> = fs::read_dir(root.join(top))
                 .into_iter()
                 .flatten()
@@ -341,7 +346,11 @@ impl ResourceSource {
         }
     }
     pub fn directory(root: PathBuf) -> Self {
-        Self(Arc::new(Storage::Directory(root)))
+        Self(Arc::new(Storage::Directory(root, None)))
+    }
+    /// A folder that keeps `guard` until its last reader is dropped.
+    pub fn directory_holding(root: PathBuf, guard: Box<dyn std::any::Any + Send + Sync>) -> Self {
+        Self(Arc::new(Storage::Directory(root, Some(Arc::from(guard)))))
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn archive(path: &Path) -> io::Result<Self> {
@@ -358,8 +367,11 @@ impl ResourceSource {
         if directory.is_empty() {
             return Ok(self.clone());
         }
-        if let Storage::Directory(root) = self.0.as_ref() {
-            return Ok(Self::directory(root.join(directory)));
+        if let Storage::Directory(root, guard) = self.0.as_ref() {
+            return Ok(Self(Arc::new(Storage::Directory(
+                root.join(directory),
+                guard.clone(),
+            ))));
         }
         if !stays_inside(directory) {
             return Err(io::Error::new(
@@ -380,7 +392,7 @@ impl ResourceSource {
             ));
         }
         match self.0.as_ref() {
-            Storage::Directory(root) => horizon_core::prepared_files::read(&root.join(name)),
+            Storage::Directory(root, _) => horizon_core::prepared_files::read(&root.join(name)),
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(archive) => archive.read(name),
             Storage::Prefix { source, prefix } => source.read(&format!("{prefix}{name}")),
@@ -397,7 +409,7 @@ impl ResourceSource {
             return None;
         }
         match self.0.as_ref() {
-            Storage::Directory(root) => root.join(name).is_file().then(|| root.clone()),
+            Storage::Directory(root, _) => root.join(name).is_file().then(|| root.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             Storage::Archive(_) => None,
             Storage::Prefix { source, prefix } => source.folder_of(&format!("{prefix}{name}")),
@@ -434,7 +446,7 @@ impl ResourceSource {
                 ResourceStorage::File { source, name } => source.copy_to(name, out, budget),
                 ResourceStorage::Bytes(bytes) => copy_resource_bytes(bytes, out, budget),
             },
-            Storage::Directory(root) => copy_resource_bytes(
+            Storage::Directory(root, _) => copy_resource_bytes(
                 &horizon_core::prepared_files::read(&root.join(name))?,
                 out,
                 budget,
@@ -454,7 +466,7 @@ impl ResourceSource {
             ));
         }
         match self.0.as_ref() {
-            Storage::Directory(root) => {
+            Storage::Directory(root, _) => {
                 horizon_core::prepared_files::read_head(&root.join(name), max)
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -478,7 +490,7 @@ impl ResourceSource {
             return false;
         }
         match self.0.as_ref() {
-            Storage::Directory(root) => {
+            Storage::Directory(root, _) => {
                 let path = root.join(name);
                 if horizon_core::prepared_files::find(&path).is_some() {
                     horizon_core::prepared_files::read_head(&path, 0).is_ok()
@@ -502,7 +514,7 @@ impl ResourceSource {
             ));
         }
         let bytes = match self.0.as_ref() {
-            Storage::Directory(root) => {
+            Storage::Directory(root, _) => {
                 horizon_core::prepared_files::read_head(&root.join(name), max.saturating_add(1))?
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -540,7 +552,7 @@ impl ResourceSource {
             return Vec::new();
         }
         match self.0.as_ref() {
-            Storage::Directory(root) => {
+            Storage::Directory(root, _) => {
                 let mut out = Vec::new();
                 let directory = if prefix.ends_with('/') || prefix.is_empty() {
                     prefix
@@ -580,7 +592,7 @@ impl ResourceSource {
             return Vec::new();
         }
         match self.0.as_ref() {
-            Storage::Directory(root) => {
+            Storage::Directory(root, _) => {
                 let Ok(entries) = fs::read_dir(root.join(top)) else {
                     return Vec::new();
                 };
@@ -617,7 +629,7 @@ impl ResourceSource {
     /// local to one operation: a later reload observes folder edits even when
     /// a source is shared, while archive identities follow their open readers.
     pub fn fingerprint_under(&self, top: &str, kinds: &[&str]) -> Option<u64> {
-        if let Storage::Directory(root) = self.0.as_ref()
+        if let Storage::Directory(root, _) = self.0.as_ref()
             && !root.join(top).is_dir()
         {
             return None;
@@ -632,7 +644,7 @@ impl ResourceSource {
     }
     fn file_fingerprint(&self, name: &str, archives: &mut HashMap<usize, u64>) -> Option<u64> {
         match self.0.as_ref() {
-            Storage::Directory(root) => {
+            Storage::Directory(root, _) => {
                 metadata_fingerprint(&fs::metadata(root.join(name)).ok()?).ok()
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -737,6 +749,18 @@ mod tests {
         assert!(first.same_generation(&first.clone()));
         let reload = ResourceSource::directory(PathBuf::from("same-prepared-root"));
         assert!(!first.same_generation(&reload));
+    }
+
+    #[test]
+    fn a_subdirectory_keeps_its_parents_guard() {
+        let guard = Arc::new(());
+        let alive = Arc::downgrade(&guard);
+        let parent = ResourceSource::directory_holding(PathBuf::from("root"), Box::new(guard));
+        let child = parent.subdirectory("assets").unwrap();
+        drop(parent);
+        assert!(alive.upgrade().is_some());
+        drop(child);
+        assert!(alive.upgrade().is_none());
     }
 
     #[cfg(unix)]

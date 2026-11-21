@@ -1983,6 +1983,7 @@ dependencies = [
  "pollster",
  "rayon",
  "rustix 1.1.5",
+ "same-file",
  "serde",
  "serde_json",
  "sha1",

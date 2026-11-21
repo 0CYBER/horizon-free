@@ -558,7 +558,8 @@ pub fn resource_root_with_conditions(
         return Ok(base.to_owned());
     }
     let mut stamp = stamp(base, jar_store, mods, inventory)?;
-    if conditions.has_registered() {
+    // Code-only roots never read the conditions, so they keep one root per stamp.
+    if has_content && conditions.has_registered() {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         stamp.hash(&mut hash);
@@ -575,6 +576,8 @@ pub fn resource_root_with_conditions(
     let out = roots.join(&stamp[..ROOT_NAME]);
     // Pin before examining the root. If a prune already admitted the old generation, this
     // waits for it to move that generation aside before looking for its stamp.
+    // The lock file goes beside the root, so the folder must exist before the hold.
+    fs::create_dir_all(&roots)?;
     let _preparing = retain_root(&out);
     if fs::read(out.join(STAMP)).is_ok_and(|s| s == stamp.as_bytes())
         && fs::read(out.join(horizon_mod_package::enabled::MARKER)).is_ok_and(|bytes| {
@@ -607,8 +610,13 @@ pub fn resource_root_with_conditions(
     }
     fs::write(out.join(STAMP), stamp)?;
     // Old roots go on a thread of their own: removing one linked file by file takes seconds, and
-    // the start would wait for each.
+    // the start would wait for each. Tests prune inline: a detached prune holds lock files open
+    // while a test removes its cache, which Windows refuses.
     let current = out.clone();
+    if cfg!(test) {
+        prune_roots(&roots, &current, KEEP_ROOTS);
+        return Ok(out);
+    }
     let spawned = std::thread::Builder::new()
         .name("mod-content-prune".into())
         .spawn(move || prune_roots(&roots, &current, KEEP_ROOTS));

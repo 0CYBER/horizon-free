@@ -2888,7 +2888,7 @@ fn link_file(
 mod root_lifetime;
 use root_lifetime::prune_roots;
 
-pub use root_lifetime::retain_root;
+pub use root_lifetime::{RootHold, retain_root};
 mod load_conditions;
 use load_conditions::{TagLayers, TagMerge, merge_tag, tag_list};
 pub use load_conditions::{build_with_conditions, resource_root_with_conditions};
@@ -3209,10 +3209,10 @@ pub fn resolved_resources(
     }
     let mut assets_base = base_source.clone();
     if prepared != base {
+        // Held before the first read: a prune in another game can't retire it meanwhile.
+        let generated_source = root_lifetime::retained_source(&prepared);
         let generated: Vec<String> =
             serde_json::from_slice(&fs::read(prepared.join(GENERATED_FILES))?)?;
-        let generated_source = ResourceSource::directory(prepared.clone());
-        root_lifetime::retain_source(&prepared, &generated_source);
         let mut generated_assets = BTreeMap::new();
         for name in generated {
             if !horizon_assets::resource_source::stays_inside(&name) {
