@@ -105,6 +105,22 @@ impl SeenGrid {
         let c = self.cell_of[i as usize];
         lo.0 <= c.0 && c.0 <= hi.0 && lo.1 <= c.1 && c.1 <= hi.1
     }
+    /// Whether any entry passing `hit` sits in columns overlapping `area` (zero allocations).
+    pub fn any_in(&self, area: Aabb, entries: usize, mut hit: impl FnMut(u32) -> bool) -> bool {
+        let Some((lo, hi)) = self.admission(area) else {
+            return (0..entries as u32).any(hit);
+        };
+        for x in lo.0..=hi.0 {
+            for z in lo.1..=hi.1 {
+                if let Some(list) = self.cells.get(&(x, z))
+                    && list.iter().copied().any(&mut hit)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
     /// The indices, ascending, of every entry whose box can meet `area`
     /// (a superset: callers still test it). False when the area spans more
     /// columns than the grid has entries (at least 64), or is not finite:

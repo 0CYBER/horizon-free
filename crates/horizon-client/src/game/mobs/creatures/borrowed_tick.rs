@@ -232,6 +232,73 @@ impl Game<'_> {
                         continue;
                     }
                     let (bx, bz) = (m.position.x.floor() as i32, m.position.z.floor() as i32);
+                    if !resuming
+                        && !retried
+                        && m.species() == horizon_client::mobs::Species::Mannequin
+                        && m.extra.static_env_stamp
+                            == Some((
+                                base.world.revision,
+                                [
+                                    m.position.x.to_bits(),
+                                    m.position.y.to_bits(),
+                                    m.position.z.to_bits(),
+                                ],
+                                [m.width().to_bits(), m.height().to_bits()],
+                            ))
+                        && !mod_api::__private::listened(mod_api::HookId::LivingChangeTarget)
+                    {
+                        if !base.world.loaded(bx, bz) || !ticking(bx, bz) {
+                            keep[slot] = true;
+                            cursor += 1;
+                            continue;
+                        }
+                        if round.canceled(m.id) {
+                            m.despawn = mod_api::Despawn::default();
+                            cursor += 1;
+                            continue;
+                        }
+                        let bounds = m.bounds();
+                        let reach = (16.0 * f64::from(m.model_scale().max(1.0))).powi(2);
+                        let near_player = |pos: Vec3| {
+                            let dx = pos.x - m.position.x;
+                            let dy = pos.y - m.position.y;
+                            let dz = pos.z - m.position.z;
+                            dx * dx + dy * dy + dz * dz < reach
+                        };
+                        let player_near = nearest
+                            .nearest(m.position.x, m.position.y, m.position.z)
+                            .is_some_and(|p| near_player(p.position))
+                            || base.player.as_ref().is_some_and(|p| {
+                                p.alive && !p.spectator && near_player(p.position)
+                            });
+                        let clear_of_mobs = !pushes.has_for(m.id)
+                            && !grid.any_in(bounds, snapshot.len(), |idx| {
+                                let o = &snapshot[idx as usize];
+                                o.id != m.id && o.alive && o.pushable && o.bounds.intersects(bounds)
+                            });
+                        if !player_near
+                            && clear_of_mobs
+                            && m.is_static_mannequin()
+                            && m.position.y >= f64::from(base.world.bottom_y() - 64)
+                        {
+                            m.despawn = mod_api::Despawn::default();
+                            super::super::inventory_tick::equipment_inventory_tick(
+                                &self.world,
+                                self.res.facts(),
+                                level_id,
+                                &mut m.extra.equipment,
+                            );
+                            if horizon_client::mobs::ai::tick_static_mannequin(
+                                m,
+                                base.world.revision,
+                                base.world.bottom_y(),
+                            ) {
+                                ticked.insert(m.id);
+                                cursor += 1;
+                                continue;
+                            }
+                        }
+                    }
                     let seen_guest = if resuming {
                         resume_guest
                     } else if guests.is_empty() {
