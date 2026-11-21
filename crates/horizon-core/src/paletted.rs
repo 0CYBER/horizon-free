@@ -305,6 +305,20 @@ impl PalettedContainer {
     /// `get` of the entries `start..start + out.len()`, the palette matched once.
     #[inline]
     pub fn get_run(&self, start: usize, out: &mut [u32]) {
+        match &self.palette {
+            Palette::Single(value) => {
+                out.fill(*value);
+                return;
+            }
+            Palette::List(list) if self.bits == 4 && out.len() == 16 && (start & 15) == 0 => {
+                let word = self.words[start >> 4];
+                for (k, cell) in out.iter_mut().enumerate() {
+                    *cell = list[((word >> (k * 4)) & 15) as usize];
+                }
+                return;
+            }
+            _ => {}
+        }
         if out.len() == 2 && !matches!(self.palette, Palette::Single(_)) {
             let bits = usize::from(self.bits);
             let per = 64 / bits;
@@ -492,6 +506,13 @@ impl PalettedContainer {
         assert_eq!(out.len(), self.strategy.entries());
         match &self.palette {
             Palette::Single(value) => out.fill(*value),
+            Palette::List(list) if self.bits == 4 => {
+                for (row, &word) in out.as_chunks_mut::<16>().0.iter_mut().zip(&self.words) {
+                    for (x, cell) in row.iter_mut().enumerate() {
+                        *cell = list[((word >> (x * 4)) & 15) as usize];
+                    }
+                }
+            }
             Palette::List(list) => {
                 let bits = usize::from(self.bits);
                 let per = 64 / bits;
@@ -911,6 +932,66 @@ mod tests {
                     run,
                     values[start..start + len],
                     "{distinct} values, {start}+{len}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn four_bit_fast_paths_match_get() {
+        let mut state = 0x517C_C1B7_2722_0A95;
+        // Both minimal (2 values) and full (16 values) 4-bit palettes, plus 5-bit and single.
+        for (distinct, expected_bits) in [(1usize, 0u8), (2, 4), (16, 4), (20, 5)] {
+            let values: Vec<u32> = (0..4096)
+                .map(|i| {
+                    let slot = if i < distinct {
+                        i
+                    } else {
+                        (rng(&mut state) as usize) % distinct
+                    };
+                    100 + slot as u32 * 7
+                })
+                .collect();
+            let container = PalettedContainer::from_values(BLOCKS, &values);
+            assert_eq!(
+                container.bits(),
+                expected_bits,
+                "{distinct} distinct values"
+            );
+
+            let mut unpacked = vec![u32::MAX; 4096];
+            container.unpack(&mut unpacked);
+            assert_eq!(unpacked, values, "unpack ({distinct} values)");
+
+            // Every 16-aligned 16-entry row hits the 4-bit `get_run` fast path.
+            for row in 0..256 {
+                let start = row * 16;
+                let mut buf = [u32::MAX; 16];
+                container.get_run(start, &mut buf);
+                assert_eq!(
+                    buf,
+                    values[start..start + 16],
+                    "aligned 16-run at {start} ({distinct} values)"
+                );
+            }
+
+            // Unaligned 16-entry runs and non-16 lengths at aligned starts stay exact.
+            for (start, len) in [
+                (1, 16),
+                (15, 16),
+                (17, 16),
+                (4079, 16),
+                (0, 0),
+                (0, 1),
+                (0, 15),
+                (16, 17),
+                (32, 32),
+            ] {
+                let mut buf = vec![u32::MAX; len];
+                container.get_run(start, &mut buf);
+                assert_eq!(
+                    buf,
+                    values[start..start + len],
+                    "run {start}+{len} ({distinct} values)"
                 );
             }
         }
