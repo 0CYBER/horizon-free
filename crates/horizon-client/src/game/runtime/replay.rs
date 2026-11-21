@@ -15,6 +15,18 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+/// A recorded `PlayerPosition` that moves the local player relative to where it is (a rotation
+/// or velocity relative to it moves nothing).
+fn moves_player_relatively(packet: &horizon_client::studio::mcpr::TimestampedPacket) -> bool {
+    use horizon_protocol::packets::play::{self, relative};
+    packet.id == horizon_protocol::ids::play::clientbound::PLAYER_POSITION
+        && matches!(
+            play::Clientbound::decode(packet.id, &packet.payload),
+            Ok(play::Clientbound::PlayerPosition(p))
+                if p.relatives & (relative::X | relative::Y | relative::Z) != 0
+        )
+}
+
 /// The packet replay a `Game` plays, if any, and its playback clock.
 #[derive(Default)]
 pub(super) struct Replay {
@@ -361,9 +373,12 @@ impl Game<'_> {
         }
     }
 
-    /// Reconstruct replay state at a target timestamp. Standalone replays can
-    /// safely reset their synthetic remote; an in-world replay can only seek
-    /// forward because its pre-replay world must remain intact.
+    /// Bring replay state to a target timestamp. A seek forward plays on: only the packets
+    /// between the clock and the target are applied, paused or playing, since every packet up
+    /// to the clock already was. A standalone replay seeking back (or forward across a relative
+    /// teleport of the player) resets its synthetic remote and replays from the start; an
+    /// in-world replay can only seek forward because its
+    /// pre-replay world must remain intact.
     pub(super) fn seek_studio_replay(&mut self, target_ms: u32) -> std::io::Result<()> {
         let current_ms = self
             .replay
@@ -371,16 +386,28 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |driver| driver.position_ms());
         let packets = if self.replay.standalone {
-            let packets = self
+            let driver = self
                 .replay
                 .driver
                 .as_mut()
-                .expect("replay checked by caller")
-                .seek_and_collect(target_ms)?;
-            self.init_remote_for_replay()
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-            self.reset_replay_world_extras();
-            packets
+                .expect("replay checked by caller");
+            // A failed forward read may have dropped packets it had taken, and a relative
+            // teleport would land on the player's simulated position: rebuilt instead, from the
+            // start, whatever the forward read took.
+            let forward = (target_ms >= current_ms)
+                .then(|| driver.seek_forward(target_ms).ok())
+                .flatten()
+                .filter(|packets| !packets.iter().any(moves_player_relatively));
+            match forward {
+                Some(packets) => packets,
+                None => {
+                    let packets = driver.seek_and_collect(target_ms)?;
+                    self.init_remote_for_replay()
+                        .map_err(|error| std::io::Error::other(error.to_string()))?;
+                    self.reset_replay_world_extras();
+                    packets
+                }
+            }
         } else {
             if target_ms < current_ms {
                 return Err(std::io::Error::new(
@@ -641,7 +668,7 @@ impl Game<'_> {
                     if self.replay.driver.is_none() {
                         return Ok(Some(json!({ "error": "no active replay" })));
                     }
-                    // As chat, Studio and mods seek: the world rebuilt at the position, which the
+                    // As chat, Studio and mods seek: the world brought to the position, which the
                     // next frame reports exactly.
                     if let Err(error) = self.seek_studio_replay(ms) {
                         return Ok(Some(json!({ "error": error.to_string() })));

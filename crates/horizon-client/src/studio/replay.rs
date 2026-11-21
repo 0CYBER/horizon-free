@@ -30,6 +30,13 @@ pub struct ReplayDriver {
     looping: bool,
     finished: bool,
     next_packet_cache: Option<TimestampedPacket>,
+    /// A packet read failed since the stream was last read from a seek: the packets taken with
+    /// it may be lost, so the stream no longer reads on from the clock (`seek_forward`
+    /// refuses) until a seek reads it again.
+    broken: bool,
+    /// The next packet read fails, as a failing archive's would.
+    #[cfg(test)]
+    fail_next_read: bool,
     /// The archive the editor's last save wrote, still open (`take_written`).
     written: Option<File>,
 }
@@ -72,6 +79,9 @@ impl ReplayDriver {
             looping: false,
             finished: false,
             next_packet_cache,
+            broken: false,
+            #[cfg(test)]
+            fail_next_read: false,
             written: None,
         })
     }
@@ -80,6 +90,25 @@ impl ReplayDriver {
     /// once: what is at [`ReplayDriver::path`] now unless something replaced it since.
     pub fn take_written(&mut self) -> Option<File> {
         self.written.take()
+    }
+
+    /// The next packet into the cache; a failure marks the stream broken.
+    fn read_next(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_read) {
+            self.broken = true;
+            return Err(io::Error::other("injected read failure"));
+        }
+        match self.reader.next_packet() {
+            Ok(packet) => {
+                self.next_packet_cache = packet;
+                Ok(())
+            }
+            Err(error) => {
+                self.broken = true;
+                Err(error)
+            }
+        }
     }
 
     /// The recording's opening snapshot, the Login and every packet with its time, still to be
@@ -93,7 +122,7 @@ impl ReplayDriver {
             .is_some_and(|packet| packet.timestamp_ms <= self.start_ms)
         {
             packets.push(self.next_packet_cache.take().expect("checked above"));
-            self.next_packet_cache = self.reader.next_packet()?;
+            self.read_next()?;
         }
         Ok(packets)
     }
@@ -210,7 +239,7 @@ impl PacketSource for ReplayDriver {
             .is_some_and(|pkt| pkt.timestamp_ms <= target_ms)
         {
             ready.push(self.next_packet_cache.take().expect("checked above"));
-            self.next_packet_cache = self.reader.next_packet()?;
+            self.read_next()?;
         }
         // The end is the clock reaching `end_ms`; every packet is at or before it, so all of
         // them have been handed out by then.
@@ -231,14 +260,15 @@ impl PacketSource for ReplayDriver {
         self.finished = clamped_ms >= self.end_ms;
 
         self.reader.seek_to_timestamp(clamped_ms)?;
-        self.next_packet_cache = self.reader.next_packet()?;
+        self.read_next()?;
+        self.broken = false;
         Ok(())
     }
 
     fn seek_and_collect(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
         let target_ms = target_ms.min(self.end_ms);
         self.reader.seek_to_timestamp(0)?;
-        self.next_packet_cache = self.reader.next_packet()?;
+        self.read_next()?;
 
         // A world rebuilt from the start always gets the opening snapshot.
         let through_ms = target_ms.max(self.start_ms);
@@ -249,20 +279,28 @@ impl PacketSource for ReplayDriver {
             .is_some_and(|packet| packet.timestamp_ms <= through_ms)
         {
             packets.push(self.next_packet_cache.take().expect("checked above"));
-            self.next_packet_cache = self.reader.next_packet()?;
+            self.read_next()?;
         }
 
         self.cursor_ms = target_ms as f64;
         self.finished = target_ms >= self.end_ms;
+        self.broken = false;
         Ok(packets)
     }
 
     fn seek_forward(&mut self, target_ms: u32) -> io::Result<Vec<TimestampedPacket>> {
         let target_ms = target_ms.min(self.end_ms);
-        if (target_ms as f64) < self.cursor_ms {
+        // Against the whole millisecond, not the fractional cursor: every packet up to it has
+        // been handed out, so a seek to the position shown is forward too.
+        if target_ms < self.position_ms() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "cannot seek backwards without rebuilding replay state",
+            ));
+        }
+        if self.broken {
+            return Err(io::Error::other(
+                "a packet read failed: the replay has to be rebuilt to seek",
             ));
         }
 
@@ -273,7 +311,7 @@ impl PacketSource for ReplayDriver {
             .is_some_and(|packet| packet.timestamp_ms <= target_ms)
         {
             packets.push(self.next_packet_cache.take().expect("checked above"));
-            self.next_packet_cache = self.reader.next_packet()?;
+            self.read_next()?;
         }
 
         self.cursor_ms = target_ms as f64;
@@ -519,6 +557,79 @@ mod tests {
             [4]
         );
         assert_eq!(driver.position_ms(), 500);
+
+        // A clock between two whole milliseconds: a seek to the one shown is forward, and
+        // hands out nothing again.
+        driver.set_speed(0.5);
+        assert!(
+            driver
+                .advance(Duration::from_millis(33))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(driver.position_ms(), 516);
+        assert!(driver.seek_forward(516).unwrap().is_empty());
+        assert_eq!(driver.position_ms(), 516);
+        assert_eq!(
+            driver.seek_forward(515).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let _ = fs::remove_file(mcpr_path);
+        let _ = fs::remove_dir(temp_dir);
+    }
+
+    /// A packet read that fails while playing loses the packets taken with it: a later forward
+    /// seek refuses (the caller rebuilds) rather than skip them, until a seek reads the stream
+    /// again.
+    #[test]
+    fn a_failed_read_makes_forward_seeks_refuse_until_the_stream_is_read_again() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("replay_driver_broken_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let mcpr_path = temp_dir.join("broken_test.mcpr");
+        let meta = Metadata {
+            duration: 1000,
+            ..Default::default()
+        };
+        let mut writer = McprWriter::new(mcpr_path.clone(), meta).unwrap();
+        let (login_id, login_payload) = play_login_packet();
+        writer.write_packet(0, login_id, &login_payload).unwrap();
+        for (timestamp, id) in [(200, 2), (300, 3), (500, 4)] {
+            writer.write_packet(timestamp, id, &[id as u8]).unwrap();
+        }
+        writer.finish(1000).unwrap();
+
+        let mut driver = ReplayDriver::open(&mcpr_path).unwrap();
+        assert_eq!(driver.advance(Duration::from_millis(100)).unwrap().len(), 1);
+        // Reading on after the packet at 200 fails: it is taken, and lost with the batch.
+        driver.fail_next_read = true;
+        assert!(driver.advance(Duration::from_millis(150)).is_err());
+        assert!(driver.seek_forward(400).is_err(), "refused, not skipped");
+        assert!(driver.seek_forward(600).is_err());
+
+        let rebuilt = driver.seek_and_collect(400).unwrap();
+        assert_eq!(
+            rebuilt.iter().map(|packet| packet.id).collect::<Vec<_>>(),
+            [login_id, 2, 3]
+        );
+        let forward = driver.seek_forward(600).unwrap();
+        assert_eq!(
+            forward.iter().map(|packet| packet.id).collect::<Vec<_>>(),
+            [4]
+        );
+
+        // A failed forward seek breaks it too; a plain seek reads it again.
+        driver.seek(0).unwrap();
+        driver.fail_next_read = true;
+        assert!(driver.seek_forward(250).is_err());
+        assert!(driver.seek_forward(900).is_err());
+        driver.seek(0).unwrap();
+        assert_eq!(
+            driver.seek_forward(250).unwrap().len(),
+            2,
+            "the Login and the packet at 200"
+        );
 
         let _ = fs::remove_file(mcpr_path);
         let _ = fs::remove_dir(temp_dir);

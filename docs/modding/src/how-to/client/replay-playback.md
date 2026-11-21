@@ -45,8 +45,9 @@ the game cannot decode or apply is skipped), and the next `replay_advanced` repo
 session; what the game keeps outside that session may carry over (today the difficulty shown, and the backing state
 of a screen a packet opened). State that came only from the client's own simulation between packets (an entity
 moving between its updates, particles) is not promised either way. How the game gets there, and how long it takes,
-is not part of the contract: today a seek can take time in proportion to the position, so an exporter should let
-the replay advance where it can rather than seek every frame.
+is not part of the contract: today a seek forward costs only the packets between the clock and the target, so an
+exporter that pauses and seeks one later position per frame pays for each frame's packets once, while a seek back in a
+standalone replay replays every packet from the start.
 
 The clock stays within the recording: `position_ms` never passes `duration_ms` (the recorded length, or the last
 packet's time when that is later), and `ended` is true exactly when the clock is at `duration_ms`, whether it played
