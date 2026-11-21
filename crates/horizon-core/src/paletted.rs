@@ -8,7 +8,12 @@
 //! in index order, and the value that did not fit is added last. Palettes
 //! never shrink while resident; `pack` writes the canonical saved form.
 
+use crate::nbt::Tag;
 use crate::storage::{locate, mask};
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -243,12 +248,70 @@ pub struct Packed {
     pub data: Option<Vec<u64>>,
 }
 
+/// Per-save-folder byte budget for cached canonical section palettes held by
+/// resident [`PalettedContainer`]s.
+#[derive(Debug)]
+pub struct SavedPaletteBudget {
+    limit: usize,
+    used: AtomicUsize,
+}
+
+impl SavedPaletteBudget {
+    pub fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: AtomicUsize::new(0),
+        }
+    }
+
+    /// Bytes currently reserved by live cached section palettes.
+    pub fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    /// Maximum bytes this budget admits.
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    fn reserve(&self, charge: usize) -> bool {
+        let mut used = self.used.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = used.checked_add(charge).filter(|&next| next <= self.limit) else {
+                return false;
+            };
+            match self
+                .used
+                .compare_exchange_weak(used, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return true,
+                Err(actual) => used = actual,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SavedNbt {
+    budget: Arc<SavedPaletteBudget>,
+    charge: usize,
+    ids: Box<[u32]>,
+    words: Box<[i64]>,
+}
+
+impl Drop for SavedNbt {
+    fn drop(&mut self) {
+        self.budget.used.fetch_sub(self.charge, Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PalettedContainer {
     strategy: Strategy,
     bits: u8,
     palette: Palette,
     words: Vec<u64>,
+    saved_nbt: OnceLock<Arc<SavedNbt>>,
 }
 impl PalettedContainer {
     /// `new PalettedContainer(initialValue, strategy)`.
@@ -258,6 +321,7 @@ impl PalettedContainer {
             bits: 0,
             palette: Palette::Single(value),
             words: Vec::new(),
+            saved_nbt: OnceLock::new(),
         }
     }
     pub fn strategy(&self) -> Strategy {
@@ -412,6 +476,9 @@ impl PalettedContainer {
     }
     /// `getAndSet`: stores `value` and returns the previous one.
     pub fn set(&mut self, i: usize, value: u32) -> u32 {
+        if self.saved_nbt.get().is_some() && self.get(i) != value {
+            self.saved_nbt.take();
+        }
         let id = self.id_for(value);
         match &self.palette {
             Palette::Single(old) => *old,
@@ -603,6 +670,7 @@ impl PalettedContainer {
                 bits,
                 words: pack_words(bits, ids.len(), ids.iter().copied()),
                 palette: Palette::List(palette),
+                saved_nbt: OnceLock::new(),
             },
             Config::Global => {
                 let bits = strategy.global_bits;
@@ -611,6 +679,7 @@ impl PalettedContainer {
                     bits,
                     words: pack_words(bits, ids.len(), ids.iter().map(|&id| palette[id as usize])),
                     palette: Palette::Global,
+                    saved_nbt: OnceLock::new(),
                 }
             }
         }
@@ -649,6 +718,7 @@ impl PalettedContainer {
                     bits,
                     palette: Palette::List(palette),
                     words,
+                    saved_nbt: OnceLock::new(),
                 };
                 container.check_indices()?;
                 Ok(container)
@@ -658,6 +728,7 @@ impl PalettedContainer {
                 bits: storage_bits,
                 palette: Palette::Global,
                 words,
+                saved_nbt: OnceLock::new(),
             }),
         }
     }
@@ -754,6 +825,64 @@ impl PalettedContainer {
             data,
         }
     }
+
+    fn pack_nbt_fields(
+        palette: &[u32],
+        data: Option<Vec<i64>>,
+        name: impl FnMut(u32) -> Tag,
+    ) -> Tag {
+        let mut fields = vec![(
+            "palette",
+            Tag::List(palette.iter().copied().map(name).collect()),
+        )];
+        if let Some(words) = data {
+            fields.push(("data", Tag::LongArray(words)));
+        }
+        Tag::compound(fields)
+    }
+
+    /// Canonical `palette` and `data` NBT compound for a saved section.
+    ///
+    /// When `budget` is `Some`, a non-uniform container caches its canonical
+    /// palette ids and packed `data` words lazily on the first save within the
+    /// budget's byte cap. Repeated saves of an unchanged container (or clones
+    /// sharing the entry) reuse those words and re-resolve `name` against the
+    /// caller's current registry. Mutating a cell via [`Self::set`] drops the
+    /// entry and releases its budget reservation when the last owner drops.
+    pub fn pack_nbt(
+        &self,
+        budget: Option<&Arc<SavedPaletteBudget>>,
+        name: impl FnMut(u32) -> Tag,
+    ) -> Tag {
+        if let Some(saved) = self.saved_nbt.get()
+            && budget.is_some_and(|budget| Arc::ptr_eq(budget, &saved.budget))
+        {
+            return Self::pack_nbt_fields(&saved.ids, Some(saved.words.to_vec()), name);
+        }
+        let Packed { palette, data, .. } = self.pack();
+        let data = data.map(|words| {
+            words
+                .into_iter()
+                .map(|word| word as i64)
+                .collect::<Vec<_>>()
+        });
+        if let (Some(budget), Some(words), None) = (budget, data.as_deref(), self.saved_nbt.get()) {
+            let charge = std::mem::size_of::<SavedNbt>()
+                + 2 * std::mem::size_of::<usize>()
+                + std::mem::size_of_val(palette.as_slice())
+                + std::mem::size_of_val(words);
+            if budget.reserve(charge) {
+                let _ = self.saved_nbt.set(Arc::new(SavedNbt {
+                    budget: Arc::clone(budget),
+                    charge,
+                    ids: palette.as_slice().into(),
+                    words: words.into(),
+                }));
+            }
+        }
+        Self::pack_nbt_fields(&palette, data, name)
+    }
+
     /// `PalettedContainer.unpack`: a container from the saved form.
     pub fn from_packed(
         strategy: Strategy,
@@ -789,6 +918,7 @@ impl PalettedContainer {
                 bits,
                 words: data.to_vec(),
                 palette: Palette::List(palette),
+                saved_nbt: OnceLock::new(),
             };
             container.check_indices()?;
             return Ok(container);
@@ -856,13 +986,15 @@ impl PalettedContainer {
         }
         (0..entries).any(|i| matching[self.raw(i)])
     }
-    /// Heap bytes held by the palette and the storage.
+    /// Heap bytes held by the palette, the storage, and any cached canonical
+    /// saved palette.
     pub fn heap_bytes(&self) -> usize {
         self.words.capacity() * 8
             + match &self.palette {
                 Palette::List(list) => list.capacity() * 4,
                 _ => 0,
             }
+            + self.saved_nbt.get().map_or(0, |saved| saved.charge)
     }
 }
 impl PartialEq for PalettedContainer {
@@ -890,6 +1022,125 @@ impl PartialEq for PalettedContainer {
 mod tests {
     use super::*;
     const BLOCKS: Strategy = Strategy::blocks(16);
+
+    #[test]
+    fn pack_nbt_caches_lazily_and_follows_unchanged_clones() {
+        let mut palette = PalettedContainer::new(BLOCKS, 0);
+        palette.set(1, 1);
+        let budget = Arc::new(SavedPaletteBudget::new(1 << 20));
+        let name = |id| Tag::Int(id as i32);
+
+        // Lazy: nothing cached until the first save.
+        assert_eq!(budget.used(), 0);
+        assert!(palette.saved_nbt.get().is_none());
+        let base_heap = palette.heap_bytes();
+
+        let first = palette.pack_nbt(Some(&budget), name);
+        let cached_charge = budget.used();
+        assert!(cached_charge > 0);
+        assert_eq!(palette.heap_bytes(), base_heap + cached_charge);
+        let old = Arc::downgrade(palette.saved_nbt.get().unwrap());
+
+        // An unchanged clone shares the entry without charging the budget again.
+        let unchanged = palette.clone();
+        assert_eq!(unchanged.pack_nbt(Some(&budget), name), first);
+        assert!(old.ptr_eq(&Arc::downgrade(unchanged.saved_nbt.get().unwrap())));
+        assert_eq!(budget.used(), cached_charge);
+
+        // A no-op write keeps the cache; a real mutation invalidates it.
+        palette.set(1, 1);
+        assert!(palette.saved_nbt.get().is_some());
+        palette.set(1, 2);
+        assert!(palette.saved_nbt.get().is_none());
+        assert_eq!(palette.heap_bytes(), base_heap);
+
+        let changed = palette.pack_nbt(Some(&budget), name);
+        assert_ne!(first, changed);
+        assert_eq!(changed, palette.pack_nbt(None, name));
+        // Both old (held by `unchanged`) and new entries are charged until `unchanged` drops.
+        assert!(budget.used() > cached_charge);
+        drop(unchanged);
+        assert!(old.upgrade().is_none());
+        let after_drop_unchanged = budget.used();
+        assert!(after_drop_unchanged > 0);
+
+        // Cache hit re-resolves registry names at save time.
+        assert_eq!(
+            palette.pack_nbt(Some(&budget), |id| Tag::Long(i64::from(id) + 100)),
+            palette.pack_nbt(None, |id| Tag::Long(i64::from(id) + 100))
+        );
+
+        drop(palette);
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn pack_nbt_uniform_and_collapsed_sections_bypass_cache() {
+        let budget = Arc::new(SavedPaletteBudget::new(1 << 20));
+        let name = |id| Tag::Int(id as i32);
+
+        let single = PalettedContainer::new(BLOCKS, 5);
+        let mut collapsed = PalettedContainer::new(BLOCKS, 5);
+        collapsed.set(100, 9);
+        collapsed.set(100, 5);
+        let global = global_uniform(3000);
+
+        for container in [&single, &collapsed, &global] {
+            assert_eq!(
+                container.pack_nbt(Some(&budget), name),
+                container.pack_nbt(None, name)
+            );
+            assert!(container.saved_nbt.get().is_none());
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn pack_nbt_budget_cap_and_retry_after_drop() {
+        let name = |id| Tag::Int(id as i32);
+        let mut words = vec![0; storage_len(4, BLOCKS.entries())];
+        words[0] = 0x10;
+        let load = || PalettedContainer::from_packed(BLOCKS, vec![3, 4], Some(&words)).unwrap();
+        let first = load();
+        let second = load();
+        let budget = Arc::new(SavedPaletteBudget::new(3000));
+        assert_eq!(budget.used(), 0);
+        assert!(first.saved_nbt.get().is_none());
+
+        let expected = first.pack_nbt(Some(&budget), name);
+        assert!(first.saved_nbt.get().is_some());
+        assert!(budget.used() <= budget.limit());
+
+        // Over cap: packs identically without admitting into the cache.
+        assert_eq!(second.pack_nbt(Some(&budget), name), expected);
+        assert!(second.saved_nbt.get().is_none());
+
+        // Dropping the first owner frees its budget so the second can be admitted.
+        drop(first);
+        assert_eq!(budget.used(), 0);
+        assert_eq!(second.pack_nbt(Some(&budget), name), expected);
+        assert!(second.saved_nbt.get().is_some());
+        drop(second);
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn pack_nbt_matches_pack_across_cases_and_isolates_budgets() {
+        let budget_a = Arc::new(SavedPaletteBudget::new(1 << 20));
+        let budget_b = Arc::new(SavedPaletteBudget::new(1 << 20));
+        let name = |id| Tag::Int(id as i32);
+        for (label, container) in pack_cases() {
+            let uncached = container.pack_nbt(None, name);
+            let first_a = container.pack_nbt(Some(&budget_a), name);
+            let hit_a = container.pack_nbt(Some(&budget_a), name);
+            let other_b = container.pack_nbt(Some(&budget_b), name);
+            assert_eq!(first_a, uncached, "{label}: first cached save");
+            assert_eq!(hit_a, uncached, "{label}: repeated cached save");
+            assert_eq!(other_b, uncached, "{label}: isolated budget save");
+            assert_eq!(budget_b.used(), 0, "{label}: second budget unaffected");
+        }
+        assert_eq!(budget_a.used(), 0);
+    }
     const BIOMES: Strategy = Strategy::biomes(7);
 
     #[test]
@@ -1205,6 +1456,7 @@ mod tests {
                 bits,
                 palette: Palette::List((0..len as u32).collect()),
                 words: words.to_vec(),
+                saved_nbt: OnceLock::new(),
             };
             match (container.check_indices(), scan(strategy, bits, len, words)) {
                 (Ok(()), Ok(())) => {}
@@ -1318,6 +1570,7 @@ mod tests {
                     bits,
                     palette: Palette::List(palette),
                     words: data.to_vec(),
+                    saved_nbt: OnceLock::new(),
                 },
                 _ => PalettedContainer::build(strategy, palette, &ids),
             })
@@ -1625,6 +1878,7 @@ mod tests {
             bits,
             palette: Palette::Global,
             words: vec![pattern; BLOCKS.entries().div_ceil(per)],
+            saved_nbt: OnceLock::new(),
         }
     }
     /// Sections saved from a column: one value (a single palette, and a list

@@ -189,6 +189,7 @@ fn an_exhausted_biome_table_refuses_every_save_before_touching_the_world() {
         biomes: biomes.clone(),
         tables: None,
         shape: save.shape,
+        section_palettes: None,
     });
     let record = Record::Chunk(Arc::new(Chunk::empty(1, 0)), encoding, None);
     match &compress_records(&[((1, 0), &record)], 0)[0] {

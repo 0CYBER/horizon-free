@@ -19,6 +19,7 @@ impl SaveDir {
             biomes: biomes.clone(),
             tables: self.tables.get().cloned(),
             shape: self.shape,
+            section_palettes: Some(Arc::clone(&self.section_palettes)),
         }))
     }
 }

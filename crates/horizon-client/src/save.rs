@@ -22,6 +22,7 @@ mod block_entity_order;
 mod far_regions;
 pub mod level_mods;
 mod respawn;
+mod section_nbt;
 mod writes;
 use writes::{Outstanding, Writer};
 
@@ -34,7 +35,7 @@ use crate::{
     streaming::ChunkGenerator,
 };
 use horizon_core::{
-    paletted::PalettedContainer,
+    paletted::{PalettedContainer, SavedPaletteBudget},
     position::{BlockPos, ChunkPos},
     ticks::{SavedTick, TickPriority, TickTypeId},
 };
@@ -1190,8 +1191,9 @@ fn encode_saved(
     tables: Option<&SaveTables>,
     shape: LevelShape,
     blending: Option<&BlendingData>,
+    palette_cache: Option<&Arc<SavedPaletteBudget>>,
 ) -> NamedTag {
-    let mut root = encode_with(chunk, registry, biomes, tables, shape);
+    let mut root = encode_with_palette_cache(chunk, registry, biomes, tables, shape, palette_cache);
     if let Some(data) = blending {
         put_calculated_blending(&mut root, data);
     }
@@ -1231,9 +1233,19 @@ pub fn encode_with(
     tables: Option<&SaveTables>,
     shape: LevelShape,
 ) -> NamedTag {
+    encode_with_palette_cache(chunk, registry, biomes, tables, shape, None)
+}
+
+fn encode_with_palette_cache(
+    chunk: &Chunk,
+    registry: &BlockRegistry,
+    biomes: &Biomes,
+    tables: Option<&SaveTables>,
+    shape: LevelShape,
+    palette_cache: Option<&Arc<SavedPaletteBudget>>,
+) -> NamedTag {
     let sky_light = shape.sky_light;
     let mut sections = Vec::new();
-    let air = tables.map_or(0, |t| t.air);
     // Sky layers below the highest section with light other than 15 are
     // written (even all-zero ones): vanilla derives missing layers from the
     // layer above them.
@@ -1246,60 +1258,12 @@ pub fn encode_with(
         if !shape.has_section(y) {
             continue;
         }
-        // PalettedContainer.pack: distinct states in index order, indices at
-        // the saved width.
-        let packed = section.blocks.pack();
-        let mut states = vec![(
-            "palette",
-            Tag::List(
-                packed
-                    .palette
-                    .iter()
-                    .map(|&id| {
-                        let state = registry.state(BlockStateId(id));
-                        match state {
-                            // BlockState.CODEC: the block name for default states.
-                            Some(s)
-                                if tables.is_some_and(|t| {
-                                    t.default_state.get(id as usize) == Some(&true)
-                                }) =>
-                            {
-                                string(&s.name)
-                            }
-                            Some(s) => s.to_nbt(),
-                            None => string("minecraft:air"),
-                        }
-                    })
-                    .collect(),
-            ),
-        )];
-        if let Some(data) = &packed.data {
-            states.push((
-                "data",
-                Tag::LongArray(data.iter().map(|&w| w as i64).collect()),
-            ));
-        }
-        let biome_packed = section.biomes.pack();
-        let mut biome_tag = vec![(
-            "palette",
-            Tag::List(
-                biome_packed
-                    .palette
-                    .iter()
-                    .map(|&b| string(&biomes.saved_name(b as u16)))
-                    .collect(),
-            ),
-        )];
-        if let Some(data) = &biome_packed.data {
-            biome_tag.push((
-                "data",
-                Tag::LongArray(data.iter().map(|&w| w as i64).collect()),
-            ));
-        }
+        let (block_states, biomes_tag) =
+            section_nbt::palettes(section, registry, biomes, tables, palette_cache);
         let mut entries = vec![
             ("Y", Tag::Byte(y as i8)),
-            ("block_states", Tag::compound(states)),
-            ("biomes", Tag::compound(biome_tag)),
+            ("block_states", block_states),
+            ("biomes", biomes_tag),
         ];
         if chunk.lit {
             let block_lit = section.light.any(15);
@@ -1310,7 +1274,6 @@ pub fn encode_with(
                 entries.push(("SkyLight", Tag::ByteArray(nibbles(&section.light, true))));
             }
         }
-        let _ = air;
         sections.push(Tag::compound(entries));
     }
     let extras = chunk.saved.as_deref();
@@ -2111,6 +2074,7 @@ struct Encoding {
     biomes: Arc<Biomes>,
     tables: Option<Arc<SaveTables>>,
     shape: LevelShape,
+    section_palettes: Option<Arc<SavedPaletteBudget>>,
 }
 impl Record {
     fn tag(&self) -> Option<Arc<NamedTag>> {
@@ -2123,6 +2087,7 @@ impl Record {
                 e.tables.as_deref(),
                 e.shape,
                 blending.as_deref(),
+                e.section_palettes.as_ref(),
             ))),
             Record::Proto(p, e) => Some(Arc::new(encode_proto(
                 p,
@@ -2316,6 +2281,8 @@ pub struct SaveDir {
     /// The Overworld's old-world blending cache, read when a save is requested
     /// (installed where `SavedOldWorld` is made for this same folder).
     blending_lookup: OnceLock<BlendingLookup>,
+    /// Lazy canonical section palette cache budget for repeated chunk saves.
+    section_palettes: Arc<SavedPaletteBudget>,
 }
 fn intern_saved_fluids(root: &NamedTag) {
     if let Some(Tag::List(entities)) = root.tag.get("block_entities") {
@@ -2469,6 +2436,7 @@ impl SaveDir {
             lod_decoded: Default::default(),
             datafix_context: OnceLock::new(),
             blending_lookup: OnceLock::new(),
+            section_palettes: section_nbt::new_budget(),
         }
     }
     /// Mark this as a server-owned world save, not a remote cache.
@@ -2844,6 +2812,7 @@ impl SaveDir {
             biomes: biomes.clone(),
             tables: self.tables.get().cloned(),
             shape: self.shape,
+            section_palettes: None,
         });
         let records = protos
             .into_iter()
@@ -2888,6 +2857,7 @@ impl SaveDir {
                         tables,
                         self.shape,
                         blending.as_deref(),
+                        Some(&self.section_palettes),
                     )),
                 )
             })
@@ -10568,6 +10538,7 @@ mod calculated_blending_save_tests {
             biomes: biomes.clone(),
             tables: save.tables.get().cloned(),
             shape: save.shape,
+            section_palettes: None,
         });
         // As `save_later` makes it: the snapshot taken at the request.
         let record = Record::Chunk(
