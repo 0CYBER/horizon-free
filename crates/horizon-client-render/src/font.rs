@@ -466,7 +466,9 @@ fn load_bitmap(
                 top,
                 right: cell_w as f32 * scale,
                 bottom: top + cell_h as f32 * scale,
-                advance: (0.5 + used as f32 * scale).floor() + 1.0,
+                // `(int) (0.5 + width * scale)`: truncated toward zero, so a negative
+                // `height` gives a cell an advance one more than flooring would.
+                advance: (0.5 + used as f32 * scale).trunc() + 1.0,
                 offset: 1.0,
             };
             if metrics_only {
@@ -1948,6 +1950,25 @@ mod tests {
             6.0,
             "excluded from what obfuscated text draws"
         );
+    }
+
+    /// Server packs pair a cell with its copy at a negative `height` so the two advance a fixed
+    /// amount whatever the cell's width: `(w + 1) + ((int) (0.5 - w) + 1)` is 3 in vanilla.
+    #[test]
+    fn a_negative_height_cell_advances_as_vanilla_truncates() {
+        let sheet = png(8, 8, |x, _| x < 4);
+        let def = br#"{"providers":[{"type":"bitmap","file":"minecraft:font/cell.png","height":8,"ascent":7,"chars":["a"]},{"type":"bitmap","file":"minecraft:font/cell.png","height":-8,"ascent":-32768,"chars":["b"]}]}"#;
+        let root = root(
+            "negative-height",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                ("assets/minecraft/textures/font/cell.png", &sheet),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(font.glyph('a').advance, 5.0);
+        assert_eq!(font.glyph('b').advance, -2.0);
     }
 
     /// A font whose first provider is `first` (its sheet `sheet`), then a

@@ -19,6 +19,7 @@ mod audio_attributes_fixture;
 /// Sound-engine fakes the audio probes share.
 mod audio_common;
 mod auto_jump_probe;
+mod bitmap_advance_fixture;
 mod block_entity_anim_fixture;
 mod block_entity_render_fixture;
 mod block_entity_tickers_fixture;
@@ -137,6 +138,7 @@ probes! {
     arrow_probe,
     audio_attributes_fixture,
     auto_jump_probe,
+    bitmap_advance_fixture,
     block_entity_anim_fixture,
     block_entity_render_fixture,
     block_entity_tickers_fixture,
