@@ -67,6 +67,9 @@ pub fn sound_source(event: &str) -> usize {
         index("music")
     } else if e.starts_with("weather.") || e.starts_with("entity.lightning_bolt") {
         index("weather")
+    } else if e.starts_with("block.note_block.") {
+        // NoteBlock.triggerEvent plays every instrument on RECORDS.
+        index("record")
     } else if e.starts_with("block.") {
         index("block")
     } else if e.starts_with("ambient.") {
@@ -973,6 +976,9 @@ mod tests {
     fn hostile_families_keep_their_sound_category() {
         for (event, source) in [
             ("entity.zombie.hurt", 5),
+            ("block.note_block.harp", 2),
+            ("block.note_block.imitate.creeper", 2),
+            ("block.note_block.trumpet_exposed", 2),
             ("entity.cow.hurt", 6),
             ("block.stone.break", 4),
             ("entity.player.hurt", 7),
