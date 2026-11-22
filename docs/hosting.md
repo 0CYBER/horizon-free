@@ -453,7 +453,7 @@ server `horizon-server` runs, so vanilla's command tree is unchanged elsewhere; 
 console that nothing would start it again, and does nothing. The game program is looked up again at every start, so a
 new engine put in place beforehand (`engine.path`, or the release `current` points at) runs after the restart. Put it
 there with `mv` or `install`, which swap the file: copying over the running program fails or corrupts it.
-Players are disconnected for now; [#16251](https://github.com/horizon-rust/horizon/issues/16251) is about holding them through it.
+With `[proxy]` on (below), the players stay connected through it.
 
 ### Behind the server's own proxy: `[proxy]`
 
@@ -467,6 +467,30 @@ itself, with `online_mode` as set (the account check and the encryption), then l
 and passes the packets along as they are. The game sees the player's real UUID, name, skin and address, and its own
 whitelist, bans and player limit apply as always. The server list is the game's own, or says "restarting" while the
 game is down. It is read when `horizon-server` starts, not when the game does.
+
+    [proxy]
+    enabled = true
+    hold_seconds = 60       # how long a held player waits for the game, 1 to 3600
+
+**What players see during a restart.** Whatever stops the game for a restart (`/restart`, `horizon-server restart`,
+the API, the panel, an update, a backup restore) or ends it (a crash), the proxy sends each player a request to
+set the world up again, and the player's game shows its loading screen. The player stays on the same connection:
+no disconnect, no login, no auto-reconnect. The proxy keeps them alive while the game is down. When the game is
+back, the proxy logs into it again as the same player, passes its configuration (registries, tags, packs) to the
+client and replays what the client said at its first login (its settings, brand, plugin channels and chat
+session); then play goes on from the game's own join, so the player is placed where the saved player data says,
+with their inventory. A player who connects while the game is down is logged in the same way and waits in the
+loading screen. The server list says "restarting" meanwhile.
+
+If the game is not back after `hold_seconds`, the held players are disconnected with a message that says so. A
+stop for good (`horizon-server stop`, Ctrl-C, the service stopping) is not held: players get the game's own
+"server closed", and a `stop` typed in game disconnects them with "the server was stopped" once the game has ended.
+A player who is in the middle of joining when the game stops is held in the configuration they were in: the
+game's registries reach them a second time, which is not tried against every client version.
+
+The proxy relays a stopping game's own kick as a hold. To keep a plugin or a restart script from being mistaken
+for a kick, only the reason `multiplayer.disconnect.server_shutdown` is held; bans, kicks and timeouts reach the
+player as they are.
 
 It is not a general proxy: one game, the one this server runs, and no routing (for several servers, see
 [#7484](https://github.com/horizon-rust/horizon/issues/7484)). Clients of an older release (`accept_older_clients`)

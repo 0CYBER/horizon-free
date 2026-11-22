@@ -419,10 +419,10 @@ impl Shared {
         })
     }
 
-    /// Tells `[proxy]` whether a game that answers is running.
-    pub fn proxy_game_up(&self, up: bool) {
+    /// What `[proxy]` is told as the game starts, stops and ends (proxy/mod.rs); nothing when it is off.
+    pub fn proxy(&self, tell: impl FnOnce(&crate::proxy::Proxy)) {
         if let Some(proxy) = self.proxy.lock().unwrap().as_ref() {
-            proxy.set_game_up(up);
+            tell(proxy);
         }
     }
 

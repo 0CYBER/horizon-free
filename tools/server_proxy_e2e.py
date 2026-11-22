@@ -15,6 +15,12 @@ Steps, each checked:
 3. It chats a command (`/give`, after the console ops it) and the game runs it for the player: the inventory.
 4. The game saved the player under the UUID of the name: the proxy forwarded who the client is.
 5. A client that connects to the game's own port directly is refused (forwarding is required).
+6. The engine binary is swapped (a new file renamed over the old path, as docs/hosting.md says) and `/restart`
+   runs on the console. The game process is a new one running the new file; the client never sees a disconnect: it
+   is told to set the world up again, is kept alive, and is back in play on the same TCP connection (the same
+   socket, the same local port) with its items and its position.
+7. A game that never comes back (the engine swapped for a program that fails) ends with the translated
+   disconnect after `[proxy] hold_seconds`, not with a dropped connection.
 
 Everything runs in a fresh temporary folder with fresh HORIZON_HOME and XDG folders and no audio. Logs go to
 --out. Build first:
@@ -261,6 +267,73 @@ def scenario_join(bins, folder, port, game_port):
     return player
 
 
+def children(pid):
+    out = subprocess.run(['pgrep', '-P', str(pid)], capture_output=True, text=True)
+    return [int(p) for p in out.stdout.split()]
+
+
+def swap(engine, source):
+    """Puts `source`'s file at `engine` the way an installer does: a new file renamed over the old one."""
+    new = engine.with_name(engine.name + '.new')
+    shutil.copy2(source, new)
+    os.replace(new, engine)
+
+
+def entity(bins, folder, path):
+    out = cli(bins, folder, 'cmd', 'data', 'get', 'entity', NAME, path)
+    if out.returncode == 0:
+        prefix = f"{NAME} has the following entity data: "
+        return next((line[len(prefix):] for line in out.stdout.splitlines() if line.startswith(prefix)), None)
+
+
+def scenario_restart(bins, folder, server, port, engine, player):
+    items, position = entity(bins, folder, 'Inventory'), entity(bins, folder, 'Pos')
+    diamonds = 'Inventory[{id:"minecraft:diamond"}].count'
+    check(entity(bins, folder, diamonds) == '7', f'{NAME} holds seven diamonds before the restart')
+    check(items is not None and position is not None, f'{NAME}\'s inventory and position were read')
+    old_game = children(server.process.pid)
+    old_inode = os.stat(engine).st_ino
+    local, sock = player.local, player.sock
+    packet_boundary = len(player.packets)
+    swap(engine, bins / f'horizon-client{EXE}')
+    check(os.stat(engine).st_ino != old_inode, 'the engine binary was swapped (a new file at the same path)')
+    out = cli(bins, folder, 'cmd', 'restart')
+    check(out.returncode == 0, f'/restart runs on the console ({out.stdout!r} {out.stderr!r})')
+    wait_for(lambda: bool(children(server.process.pid)) and children(server.process.pid) != old_game,
+             'a new game process after the restart', 300)
+    check(not player.closed.is_set() and player.reason is None,
+          f'{NAME} was not disconnected while the game restarted ({player.reason})')
+    # Out of play for the loading screen, then back in it: the game's Login packet again.
+    wait_for(lambda: ('play', PLAY_LOGIN) in player.packets[packet_boundary:] and player.in_play.is_set(),
+             f'{NAME} to be back in play', 300)
+    check(player.sock is sock and player.local == local and not player.closed.is_set(),
+          f'{NAME} is back on the same TCP connection ({local})')
+    for state, packet_id in player.packets:
+        if (state, packet_id) in (('play', PLAY_DISCONNECT), ('config', CFG_DISCONNECT), ('login', 0)):
+            raise Failed(f'{NAME} was sent a disconnect ({state} packet {packet_id})')
+    check(('play', PLAY_START_CONFIG) in player.packets[packet_boundary:],
+          f'{NAME} was told to set the world up again')
+    new_inode = os.stat(f'/proc/{children(server.process.pid)[0]}/exe').st_ino if os.path.exists('/proc') else None
+    check(new_inode in (None, os.stat(engine).st_ino), 'the new game process runs the swapped engine file')
+    check(entity(bins, folder, 'Inventory') == items, f'{NAME}\'s inventory is as it was')
+    check(entity(bins, folder, 'Pos') == position, f'{NAME} is where they were')
+    player.command('give @s minecraft:diamond 1')
+    wait_for(lambda: entity(bins, folder, diamonds) == '8', f'{NAME}\'s command to run in the new game')
+    check(True, f'{NAME} plays on after the restart')
+
+
+def scenario_never_back(bins, folder, server, engine, player):
+    stub = engine.with_name('failing-engine')
+    stub.write_text('#!/bin/sh\nexit 1\n')
+    stub.chmod(0o755)
+    swap(engine, stub)
+    cli(bins, folder, 'cmd', 'restart')
+    wait_for(player.closed.is_set, f'{NAME} to be disconnected when the game does not come back', 120)
+    kind, payload = player.reason if isinstance(player.reason, tuple) else (None, b'')
+    check(kind in ('config disconnect', 'play disconnect') and b'restart_timed_out' in payload,
+          f'the held player got the translated disconnect, not a dropped connection ({player.reason})')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--bin-dir', default=str(lab.ROOT / 'target/fast'))
@@ -274,6 +347,10 @@ def main():
     folder = work / 'server'
     folder.mkdir()
     port, game_port = lab.free_port(), lab.free_port()
+    # The game runs from a copy, so that the run can swap it under the supervisor.
+    engine = work / 'engine' / f'horizon-client{EXE}'
+    engine.parent.mkdir()
+    shutil.copy2(bins / f'horizon-client{EXE}', engine)
     (folder / 'eula.txt').write_text('eula=true\n')
     (folder / 'server.toml').write_text(f'''[server]
 port = {port}
@@ -289,9 +366,9 @@ generate-structures = false
 spawn-protection = 0
 
 [engine]
-path = {json.dumps(str(bins / f'horizon-client{EXE}'))}
+path = {json.dumps(str(engine))}
 resources = {json.dumps(str(lab.RESOURCES.resolve()))}
-restart_on_crash = false
+restart_on_crash = true
 
 [backups]
 every = "0"
@@ -302,12 +379,15 @@ bind = ""
 [proxy]
 enabled = true
 game_port = {game_port}
+hold_seconds = 20
 ''')
     server = Server([bins / f'horizon-server{EXE}', '--dir', folder, 'run'], folder, out / 'server.log')
     player = None
     try:
         server.wait_for(DONE, 300)
         player = scenario_join(bins, folder, port, game_port)
+        scenario_restart(bins, folder, server, port, engine, player)
+        scenario_never_back(bins, folder, server, engine, player)
         cli(bins, folder, 'stop')
         server.process.wait(timeout=120)
     except (Failed, RuntimeError, OSError, subprocess.TimeoutExpired) as e:
@@ -317,8 +397,9 @@ game_port = {game_port}
             player.close()
         server.stop()
         shutil.rmtree(work, ignore_errors=True)
-    print('server_proxy_e2e: a player joined through the proxy, chatted a command the game ran for them, and '
-          'the game knew them by their real UUID')
+    print('server_proxy_e2e: a player joined through the proxy and chatted a command the game ran for them; the '
+          'engine was swapped and /restart ran with the player on the same TCP connection, back in play with their '
+          'items and position; a game that never came back ended with the translated disconnect')
 
 
 if __name__ == '__main__':

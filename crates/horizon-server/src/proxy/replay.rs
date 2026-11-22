@@ -71,8 +71,6 @@ impl Replay {
         }
     }
 
-    // Used by the hold through a restart (the next change of #16251); tested here.
-    #[allow(dead_code)]
     /// The configuration packets (bodies) that tell a game what the client told the last one.
     pub fn config_packets(&self) -> Vec<Vec<u8>> {
         use ids::configuration::serverbound as cfg;
@@ -93,7 +91,6 @@ impl Replay {
         out
     }
 
-    #[allow(dead_code)]
     /// The play packets (bodies) for a game that has just sent its Login: the chat session.
     pub fn play_packets(&self) -> Vec<Vec<u8>> {
         self.chat_session
@@ -112,7 +109,6 @@ fn split_channels(data: &[u8]) -> impl Iterator<Item = String> + '_ {
         .map(|c| String::from_utf8_lossy(c).into_owned())
 }
 
-#[allow(dead_code)]
 fn payload(channel: &str, data: &[u8]) -> Vec<u8> {
     let mut w = Writer::new();
     w.string(channel);

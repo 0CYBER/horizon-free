@@ -239,12 +239,24 @@ pub struct Config {
 /// `[proxy]`: the supervisor listens on `server.port` and signs players in itself (proxy/mod.rs), and the
 /// game listens on 127.0.0.1 behind it, with Velocity forwarding. Off by default. Read when horizon-server
 /// starts: turning it on or off needs a restart of horizon-server, not only of the game.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Proxy {
     pub enabled: bool,
     /// The port the game listens on, on 127.0.0.1; 0 takes a free one at every start of horizon-server.
     pub game_port: u16,
+    /// How long a player is held through a restart before it is sent away if the game isn't back.
+    pub hold_seconds: u32,
+}
+
+impl Default for Proxy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            game_port: 0,
+            hold_seconds: 60,
+        }
+    }
 }
 
 impl Proxy {
@@ -780,6 +792,9 @@ impl Config {
         self.chat_filter.check()?;
         self.prune_chunks.check()?;
         self.entities.check()?;
+        if !(1..=3600).contains(&self.proxy.hold_seconds) {
+            return Err("proxy.hold_seconds must be from 1 to 3600".into());
+        }
         if self.proxy.enabled && self.proxy.game_port == self.server.port {
             return Err("proxy.game_port is server.port: the game listens behind the proxy, on its own port".into());
         }
