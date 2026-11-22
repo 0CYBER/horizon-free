@@ -104,10 +104,15 @@ impl Game<'_> {
                 host.waypoints.remove(&level);
             }
         }
-        for (conn, packet) in out {
+        // Each receiver's packets are together: the guest is found once and its connection
+        // locked once for the run, the packets in the order they were made.
+        let mut rest = &out[..];
+        while let Some(&(conn, _)) = rest.first() {
+            let run = rest.iter().take_while(|(c, _)| *c == conn).count();
             if let Some(g) = host.hub.guest(conn) {
-                packet.deliver(g);
+                g.send_waypoints(&rest[..run]);
             }
+            rest = &rest[run..];
         }
     }
 }

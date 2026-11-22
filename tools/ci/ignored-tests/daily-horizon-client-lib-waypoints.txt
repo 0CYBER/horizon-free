@@ -1,2 +1,4 @@
 # PACKAGE TEST TARGET daily REASON; exact logical libtest identities.
+horizon-client-lib lan::waypoints::tests::crowd_cost lib daily slow
 horizon-client-lib lan::waypoints::tests::flat_pair_floor lib daily slow
+horizon-client-lib lan::waypoints::tests::moves_by_receiver_match_the_loop_when_most_players_stand_still lib daily slow
