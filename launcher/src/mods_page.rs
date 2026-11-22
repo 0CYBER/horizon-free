@@ -429,8 +429,11 @@ impl Mods {
     /// Flips Show everything. Its checks go too: `everything` picks which file a check reads.
     pub(super) fn toggle_everything(&mut self) {
         self.everything = !self.everything;
-        if !self.everything && self.kind == PackKind::ResourcePack {
-            self.browse.filters.categories.retain(|tag| tag != "modded");
+        if !self.everything {
+            self.browse.filters.game_version = None;
+            if self.kind == PackKind::ResourcePack {
+                self.browse.filters.categories.retain(|tag| tag != "modded");
+            }
         }
         self.checks.clear();
     }
@@ -2547,6 +2550,34 @@ mod tests {
 
             assert!(mods.browse.show_filters);
             assert_eq!(mods.browse.filters.picked(), 0);
+        });
+    }
+
+    #[gpui::test]
+    fn turning_off_show_everything_removes_filters_that_become_unavailable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut mods = Mods::new(cx);
+            for kind in [PackKind::ResourcePack, PackKind::DataPack] {
+                mods.kind = kind;
+                mods.everything = true;
+                let filters = &mut mods.browse.filters;
+                filters.game_version = Some("1.21.1".into());
+                filters.categories = vec!["decoration".into()];
+                if kind == PackKind::ResourcePack {
+                    filters.categories.push("modded".into());
+                }
+
+                mods.toggle_everything();
+
+                assert!(!mods.everything);
+                let filters = &mods.browse.filters;
+                assert_eq!(filters.game_version, None);
+                assert!(!filters.other_version());
+                assert_eq!(filters.categories, ["decoration"]);
+                assert_eq!(filters.picked(), 1);
+            }
         });
     }
 

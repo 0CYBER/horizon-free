@@ -99,6 +99,15 @@ impl Filters {
             + usize::from(self.environment.is_some())
     }
 
+    /// Clears the choices shown as chips, keeping the sort and instance constraint.
+    pub fn clear_picked(&mut self) {
+        *self = Self {
+            sort: self.sort,
+            works_on: self.works_on,
+            ..Self::default()
+        };
+    }
+
     /// The sort a search uses.
     pub fn sort(&self, text: &str) -> Sort {
         self.sort.unwrap_or(if text.is_empty() {
@@ -482,6 +491,31 @@ mod tests {
         assert_eq!(category_label("gui"), "GUI");
         assert_eq!(category_label("16x"), "16x");
         assert_eq!(category_label(""), "");
+    }
+
+    #[test]
+    fn clearing_picked_filters_keeps_sort_and_instance_constraint() {
+        let mut filters = Filters {
+            categories: vec!["decoration".into()],
+            tags: vec!["pvp".into()],
+            loader: Some("fabric".into()),
+            game_version: Some("1.21.1".into()),
+            environment: Some(Environment::Client),
+            sort: Some(Sort::Updated),
+            works_on: true,
+        };
+
+        filters.clear_picked();
+
+        assert_eq!(
+            filters,
+            Filters {
+                sort: Some(Sort::Updated),
+                works_on: true,
+                ..Filters::default()
+            }
+        );
+        assert_eq!(filters.picked(), 0);
     }
 
     #[test]

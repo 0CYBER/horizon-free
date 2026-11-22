@@ -168,6 +168,52 @@ pub(super) enum Loaded {
 /// Images fetched at once.
 const IMAGE_WORKERS: usize = 4;
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct FilterSections {
+    loader: bool,
+    game_version: bool,
+    environment: bool,
+    tags: bool,
+    group_categories: bool,
+    hide_modded: bool,
+}
+
+impl FilterSections {
+    fn for_browse(source: SourceId, kind: PackKind, java: bool, everything: bool) -> Self {
+        match (source, kind) {
+            (SourceId::Horizon, _) => Self {
+                tags: true,
+                ..Self::default()
+            },
+            (_, _) if java => Self {
+                environment: kind == PackKind::Mod,
+                group_categories: kind == PackKind::ResourcePack,
+                ..Self::default()
+            },
+            (SourceId::Modrinth, PackKind::ResourcePack) => Self {
+                game_version: everything,
+                group_categories: true,
+                hide_modded: !everything,
+                ..Self::default()
+            },
+            (SourceId::Modrinth, PackKind::Shader) => Self {
+                group_categories: true,
+                ..Self::default()
+            },
+            (SourceId::Modrinth, PackKind::DataPack) => Self {
+                game_version: everything,
+                ..Self::default()
+            },
+            _ => Self {
+                loader: true,
+                game_version: true,
+                environment: true,
+                ..Self::default()
+            },
+        }
+    }
+}
+
 impl Launcher {
     pub(super) fn mods_loaded(&mut self, loaded: Loaded) {
         let b = &mut self.mods.browse;
@@ -554,11 +600,13 @@ impl Launcher {
             return (active > 0).then(|| self.mods_picked_filters(f, cx));
         }
         let f = f.clone();
-        let source = self.mods.source();
-        let registry = source == SourceId::Horizon;
-        let resource = source == SourceId::Modrinth && self.mods.kind == PackKind::ResourcePack;
-        let shader = source == SourceId::Modrinth && self.mods.kind == PackKind::Shader;
-        let hide_modded = resource && !self.mods.everything && self.mods.java.is_none();
+        let kind = self.mods.kind;
+        let sections = FilterSections::for_browse(
+            self.mods.source(),
+            kind,
+            self.mods.java_for(kind).is_some(),
+            self.mods.everything,
+        );
         let Some(tags) = self.mods_tags().cloned() else {
             return Some(caps(tr("Loading filters")).text_color(t.muted));
         };
@@ -623,7 +671,7 @@ impl Launcher {
                 ),
             );
         }
-        let grouped = resource || shader;
+        let grouped = sections.group_categories;
         let mut category_rows = Vec::new();
         for group in tags
             .categories
@@ -633,13 +681,13 @@ impl Launcher {
                 "features" if grouped => tr("Features"),
                 "resolutions" if grouped => tr("Resolutions"),
                 "performance impact" if grouped => tr("Performance"),
-                "categories" if shader => tr("Style"),
+                "categories" if grouped && kind == PackKind::Shader => tr("Style"),
                 _ => tr("Categories"),
             };
             let mut categories = div().flex().flex_wrap().gap(px(4.));
             for c in group
                 .iter()
-                .filter(|c| !(hide_modded && c.name == "modded"))
+                .filter(|c| !(sections.hide_modded && c.name == "modded"))
             {
                 let on = f.categories.contains(&c.name);
                 let value = c.name.clone();
@@ -689,21 +737,19 @@ impl Launcher {
         }
         let clear = button("mods-clear", "Clear filters", Kind::Ghost, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
-                this.mods_filter(|f| *f = Filters::default());
+                this.mods_filter(Filters::clear_picked);
                 cx.notify();
             },
         ));
-        let mut bar = div().flex().flex_col().gap(px(12.));
-        if !registry {
-            bar = bar
-                .children((!resource && !tags.loaders.is_empty()).then_some(loaders))
-                .children((!shader).then_some(versions))
-                .children((!grouped).then_some(environment));
-        }
-        bar = bar.children(category_rows);
-        if registry && !tags.tags.is_empty() {
-            bar = bar.child(tag_row);
-        }
+        let mut bar = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .children((sections.loader && !tags.loaders.is_empty()).then_some(loaders))
+            .children(sections.game_version.then_some(versions))
+            .children(sections.environment.then_some(environment))
+            .children(category_rows)
+            .children((sections.tags && !tags.tags.is_empty()).then_some(tag_row));
         if active > 0 {
             bar = bar.child(div().flex().child(clear));
         }
@@ -773,13 +819,7 @@ impl Launcher {
         row.child(
             button("mods-picked-clear", "Clear filters", Kind::Ghost, &t).on_click(cx.listener(
                 |this, _: &ClickEvent, _, cx| {
-                    // The sort has its own control: only what filters goes.
-                    this.mods_filter(|f| {
-                        *f = Filters {
-                            sort: f.sort,
-                            ..Filters::default()
-                        }
-                    });
+                    this.mods_filter(Filters::clear_picked);
                     cx.notify();
                 },
             )),
@@ -1228,6 +1268,60 @@ impl Opened {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_sections_match_each_browse_context() {
+        let registry = FilterSections {
+            tags: true,
+            ..FilterSections::default()
+        };
+        let external = FilterSections {
+            loader: true,
+            game_version: true,
+            environment: true,
+            ..FilterSections::default()
+        };
+        for everything in [false, true] {
+            let grouped = FilterSections {
+                group_categories: true,
+                ..FilterSections::default()
+            };
+            let resource_packs = FilterSections {
+                game_version: everything,
+                hide_modded: !everything,
+                ..grouped
+            };
+            let data_packs = FilterSections {
+                game_version: everything,
+                ..FilterSections::default()
+            };
+            let java_mods = FilterSections {
+                environment: true,
+                ..FilterSections::default()
+            };
+            for (kind, modrinth, java_instance) in [
+                (PackKind::Mod, &external, &java_mods),
+                (PackKind::Modpack, &external, &FilterSections::default()),
+                (PackKind::ResourcePack, &resource_packs, &grouped),
+                (PackKind::Shader, &grouped, &FilterSections::default()),
+                (PackKind::DataPack, &data_packs, &FilterSections::default()),
+            ] {
+                for (source, horizon, java_instance) in [
+                    (SourceId::Horizon, &registry, &registry),
+                    (SourceId::Modrinth, modrinth, java_instance),
+                    (SourceId::CurseForge, &external, java_instance),
+                ] {
+                    for (java, expected) in [(false, horizon), (true, java_instance)] {
+                        assert_eq!(
+                            &FilterSections::for_browse(source, kind, java, everything),
+                            expected,
+                            "{source:?} {kind:?}, Java={java}, Show everything={everything}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn reopening_the_same_project_rejects_the_old_versions_response() {
