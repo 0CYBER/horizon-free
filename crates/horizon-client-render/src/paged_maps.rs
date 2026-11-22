@@ -79,6 +79,27 @@ fn build_one<'a>(
     if pool.is_empty() || pool.len() >= 1 << 24 {
         return None;
     }
+    // Equal pages (a block's map reused by its variants, flat filler) share one pool page.
+    let mut seen = std::collections::HashMap::new();
+    let mut kept = Vec::with_capacity(pool.len());
+    let mut deduped: Vec<Vec<u8>> = Vec::new();
+    for page in pool.iter_mut() {
+        let hash = page_hash(page);
+        let found = seen
+            .get(&hash)
+            .copied()
+            .filter(|&k: &u32| deduped[k as usize] == *page);
+        kept.push(found.unwrap_or_else(|| {
+            let k = deduped.len() as u32;
+            seen.insert(hash, k);
+            deduped.push(std::mem::take(page));
+            k
+        }));
+    }
+    for entry in table.iter_mut().filter(|entry| **entry != 0) {
+        *entry = kept[*entry as usize - 1] + 1;
+    }
+    let pool = deduped;
     let entries = HEADER + pages_x * pages_y;
     // The narrowest map width (whole pages) that keeps it within the GPU's side.
     let (side, rows, map_height) = [1024, 2048, 4096, 8192, 16384]
@@ -118,6 +139,13 @@ fn build_one<'a>(
         width: side,
         height: map_height,
         pixels,
+    })
+}
+
+/// FNV-1a over a page's bytes: the key that finds its equal candidates.
+fn page_hash(page: &[u8]) -> u64 {
+    page.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
 }
 
@@ -222,6 +250,38 @@ mod tests {
             maps: [None, None],
         }];
         assert_eq!(build((1024, 1024), &sprites, 16384), [None, None]);
+    }
+
+    #[test]
+    fn equal_map_pages_share_one_pool_page() {
+        // 70 sprites with the same 16x16 map, one atlas page each: the equal pages share one
+        // pool page, a row of pages short of the 70 separate ones, and each still reads back.
+        let size = (1024, 70 * 16);
+        let map: Vec<u8> = (0..16 * 16)
+            .flat_map(|i: u32| [i as u8, i as u8 | 8, 5, 255])
+            .collect();
+        let sprite = |y| SpriteMaps {
+            rect: [0, y, 16, 16],
+            maps: [Some(map.clone()), None],
+        };
+        let mut sprites: Vec<SpriteMaps> = (0..70).map(|i| sprite(i * 16)).collect();
+        let [equal, _] = build(size, &sprites, 16384);
+        let equal = equal.unwrap();
+        // A table row (16), then one row of pages; 70 separate pages would take two (48).
+        assert_eq!(equal.height, 32);
+        for y in [0, 34 * 16, 69 * 16] {
+            assert_eq!(read(&equal, size, (3, y + 7)), [115, 123, 5, 255]);
+        }
+        // A different map in the middle keeps its own page.
+        sprites[35] = SpriteMaps {
+            rect: [0, 35 * 16, 16, 16],
+            maps: [Some(vec![255; 16 * 16 * 4]), None],
+        };
+        let [mixed, _] = build(size, &sprites, 16384);
+        let mixed = mixed.unwrap();
+        assert_eq!(read(&mixed, size, (3, 7)), [115, 123, 5, 255]);
+        assert_eq!(read(&mixed, size, (3, 35 * 16 + 7)), [255; 4]);
+        assert_eq!(read(&mixed, size, (3, 69 * 16 + 7)), [115, 123, 5, 255]);
     }
 
     #[test]
