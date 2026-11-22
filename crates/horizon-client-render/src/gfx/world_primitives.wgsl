@@ -54,21 +54,43 @@ struct LineOut {
 @vertex fn vs_line(@builtin(vertex_index) vertex: u32,
     @location(0) start: vec3<f32>, @location(1) end: vec3<f32>,
     @location(2) argb: vec4<f32>, @location(3) width: f32) -> LineOut {
-    let position = select(start, end, vertex >= 2u);
-    let view_shrink = 1.0 - 1.0 / 256.0;
-    let line_start = globals.view_proj * vec4(position * view_shrink, 1.0);
-    let line_end = globals.view_proj * vec4((position + (end - start)) * view_shrink, 1.0);
-    let ndc1 = line_start.xyz / line_start.w;
-    let ndc2 = line_end.xyz / line_end.w;
-    let screen = globals.viewport.xy;
-    let direction = normalize((ndc2.xy - ndc1.xy) * screen);
-    var offset = vec2(-direction.y, direction.x) * width / screen;
-    if offset.x < 0.0 { offset = -offset; }
-    if vertex % 2u != 0u { offset = -offset; }
     var out: LineOut;
-    out.clip = vec4((ndc1 + vec3(offset, 0.0)) * line_start.w, line_start.w);
     // ARGB in a little-endian u32 reads as B, G, R, A.
     out.color = argb.zyxw;
+
+    let view_shrink = 1.0 - 1.0 / 256.0;
+    let p0 = globals.view_proj * vec4(start * view_shrink, 1.0);
+    let p1 = globals.view_proj * vec4(end * view_shrink, 1.0);
+
+    // An end behind the camera has no screen position: cut the line where it reaches the
+    // near plane (in clip space, so the cut is exact), and drop it when both ends are behind.
+    let near = 0.01;
+    if p0.w < near && p1.w < near {
+        out.clip = vec4(0.0, 0.0, -2.0, 1.0);
+        return out;
+    }
+    var c0 = p0;
+    var c1 = p1;
+    if c0.w < near {
+        c0 = mix(c0, c1, (near - c0.w) / (c1.w - c0.w));
+    } else if c1.w < near {
+        c1 = mix(c1, c0, (near - c1.w) / (c0.w - c1.w));
+    }
+
+    let ndc0 = c0.xyz / c0.w;
+    let ndc1 = c1.xyz / c1.w;
+    let screen = globals.viewport.xy;
+    let delta = (ndc1.xy - ndc0.xy) * screen;
+    let len = length(delta);
+    let direction = select(vec2(1.0, 0.0), delta / len, len > 0.001);
+    let offset = vec2(-direction.y, direction.x) * width / screen;
+
+    // Vertices 0 and 1 sit at the start, 2 and 3 at the end; odd ones on the far side.
+    let at_end = vertex >= 2u;
+    let base = select(ndc0, ndc1, at_end);
+    let w = select(c0.w, c1.w, at_end);
+    let side = select(-1.0, 1.0, vertex % 2u != 0u);
+    out.clip = vec4((base + vec3(side * offset, 0.0)) * w, w);
     return out;
 }
 

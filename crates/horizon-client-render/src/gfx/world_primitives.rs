@@ -796,6 +796,18 @@ mod tests {
         let lines_through = [
             line(view_proj, [half, full], 56.0, 10.0, MAGENTA_ARGB),
             line(view_proj, [half, full], 24.0, 10.0, MAGENTA_ARGB),
+            // Starts 10 blocks ahead at pixel (48, 48) and ends in the camera's plane: on screen it
+            // runs from there down and left, off the bottom edge near column 36.
+            [
+                3.5,
+                -3.5,
+                -10.0,
+                -3.5,
+                -3.5,
+                0.0,
+                f32::from_bits(MAGENTA_ARGB),
+                4.0,
+            ],
         ];
         let batch = Batch {
             quads: &quads,
@@ -938,6 +950,12 @@ mod tests {
             "a through-wall line covers a through-wall quad",
         );
         // The line is its width (4 pixels) thick, not more.
-        assert_eq!(at(48, 52), black);
+        assert_eq!(at(56, 52), black);
+        assert_eq!(at(56, 54), [255, 0, 255, 255], "and as thick as that");
+        // A line with an end in the camera's plane is cut at the near plane: it still runs from
+        // its visible end to the screen's edge.
+        assert_eq!(at(36, 60), [255, 0, 255, 255]);
+        assert_eq!(at(44, 60), black);
+        assert_eq!(at(60, 46), black);
     }
 }
