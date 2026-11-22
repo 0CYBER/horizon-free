@@ -1,0 +1,3 @@
+# Boss-bar skip tests boot Game with prepared resources; the dragon-fight override runs in its own process.
+horizon-client game::bossbars::audience_tests::non_end_dimension_with_dragon_fight_does_not_skip_boss_bars lib daily child-process
+horizon-client game::bossbars::audience_tests::removing_all_boss_bars_prunes_sent_entries_and_reenables_skip lib daily resources
