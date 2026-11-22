@@ -1491,8 +1491,16 @@ impl Game<'_> {
         let fire = (self.dimension_type().has_ender_dragon_fight)
             .then(|| self.pack.assets.registry.default_state("minecraft:fire"))
             .flatten();
+        let ticking = self.entity_ticking_area();
         for i in 0..self.crystals.len() {
+            // The spin and bob are the client's `time`: `ClientLevel.tickEntities`
+            // ticks every crystal in a chunk it has loaded.
             self.crystals[i].time += 1;
+            // ServerLevel.tick: the server ticks one only in an entity-ticking chunk.
+            let at = self.crystals[i].position;
+            if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                continue;
+            }
             self.crystal_block_effects(i);
             let p = self.crystals[i].position;
             let b = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
