@@ -962,25 +962,151 @@ mod tests {
             })
             .collect()
     }
-    /// The fields the code fills in (`%s`, `%d`, `%1$s`, `%.2f`, `%%`), sorted. A
-    /// percent sign that starts none of them ("100% is") is plain text.
-    fn placeholders(text: &str) -> Vec<String> {
-        let mut found = Vec::new();
-        let mut rest = text;
-        while let Some(at) = rest.find('%') {
-            rest = &rest[at + 1..];
-            let spec = rest
-                .find(|c: char| !(c.is_ascii_digit() || c == '$' || c == '.'))
-                .unwrap_or(rest.len());
-            let after = rest[spec..].chars().next();
-            if after.is_some_and(|c| matches!(c, 's' | 'd' | 'f' | '%')) {
-                let end = spec + 1;
-                found.push(format!("%{}", &rest[..end]));
-                rest = &rest[end..];
+    /// How the game reads `text` as a template, walked by the formatter's own parser
+    /// (`crate::text::walk_template`): the argument indices it fills in, once per use and
+    /// sorted, and its literal text; `None` where it shows the template as written whatever the
+    /// arguments (`%d`, `%q`, a `%` at the end, `%0$s`). `tools/lang_coverage.py` mirrors it.
+    fn template(text: &str) -> Option<(Vec<usize>, String)> {
+        use crate::text::{TemplatePiece, TemplateWalk, walk_template};
+        use std::ops::ControlFlow;
+        let mut fields = Vec::new();
+        let mut literal = String::new();
+        let walk = walk_template(text, |piece| match piece {
+            // `%0$s`: no call has an argument at usize::MAX.
+            TemplatePiece::Argument(usize::MAX) => ControlFlow::Break(()),
+            TemplatePiece::Argument(index) => {
+                fields.push(index);
+                ControlFlow::Continue(())
+            }
+            TemplatePiece::Literal(text) => {
+                literal.push_str(text);
+                ControlFlow::Continue(())
+            }
+        });
+        if walk != TemplateWalk::Done {
+            return None;
+        }
+        fields.sort_unstable();
+        Some((fields, literal))
+    }
+    /// The keys whose English text the game cannot format: read as plain text, never formatted.
+    /// The list may only shrink: `a_listed_unformattable_key_still_cannot_be_formatted` pins it.
+    fn unformattable() -> HashMap<String, String> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/lang_unformattable.json"
+        );
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+    /// Unicode's bidirectional embedding, override and isolate controls.
+    fn is_bidi_control(c: char) -> bool {
+        matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    }
+
+    /// What is wrong with one translated `value` of `key`, if anything: the game cannot format
+    /// it (it would show the template as written, `%s` and all), it fills in other arguments
+    /// than English, it drops the percent sign English writes as `%%`, or it carries a control
+    /// character. A line break is always allowed, a tab and a bidi control only where English
+    /// has one.
+    fn entry_problem(
+        key: &str,
+        value: &str,
+        english: &str,
+        plain: &HashMap<String, String>,
+    ) -> Option<&'static str> {
+        let (read, wanted) = (template(value), template(english));
+        if plain.contains_key(key) {
+            if read.map(|t| t.0).unwrap_or_default() != wanted.map(|t| t.0).unwrap_or_default() {
+                return Some("is read as plain text and must fill in no argument");
+            }
+        } else {
+            let Some((fields, literal)) = read else {
+                return Some("is a template the game cannot format");
+            };
+            if wanted.as_ref().map(|t| &t.0) != Some(&fields) {
+                return Some("changes the placeholders of the English text");
+            }
+            if english.contains("%%") && !literal.contains('%') {
+                return Some("drops the percent sign the English text shows");
             }
         }
-        found.sort();
-        found
+        let stray = value.chars().any(|c| match c {
+            '\n' => false,
+            '\t' => !english.contains('\t'),
+            c if is_bidi_control(c) => !english.contains(c),
+            c => c.is_control(),
+        });
+        stray.then_some("carries a control character its English text lacks")
+    }
+
+    #[test]
+    fn a_translation_the_game_cannot_format_or_with_a_control_character_is_refused() {
+        let plain = HashMap::from([("plain".to_owned(), String::new())]);
+        let problem = |value: &str, english: &str| entry_problem("k", value, english, &plain);
+        assert_eq!(problem("%2$s, %1$s", "%s and %s"), None);
+        assert_eq!(problem("50% off %s, %%", "%s"), None);
+        assert_eq!(problem("50 % de %s", "50%% off %s"), None);
+        assert_eq!(problem("line\nnext", "line"), None);
+        assert_eq!(problem("a\u{2067}b\u{2069}", "\u{2067}x\u{2069}"), None);
+        for (value, english) in [
+            ("%s %q", "%s %s"),
+            ("%s in %", "%s in"),
+            ("%d", "%s"),
+            ("%s", "%s and %s"),
+            ("%s %s", "%s"),
+            ("%1$s %1$s", "%s %s"),
+            // Past any argument count a probe would supply, and an index no call has.
+            ("Durability %33$s", "Durability"),
+            ("%0$s", "%0$s"),
+            // Text that looks like a filled-in argument is still text.
+            ("\u{e000}0\u{e001}", "%s"),
+            ("50 off %s", "50%% off %s"),
+        ] {
+            assert!(
+                problem(value, english).is_some(),
+                "{value:?} for {english:?}"
+            );
+        }
+        for value in [
+            "a\u{1b}[0m",
+            "a\tb",
+            "a\u{7f}",
+            "a\u{85}",
+            "a\u{202e}b",
+            "a\u{2066}b",
+        ] {
+            assert!(problem(value, "a b").is_some(), "{value:?}");
+        }
+        // A key read as plain text is held to filling in nothing.
+        assert_eq!(
+            entry_problem("plain", "En %", "Durability in %", &plain),
+            None
+        );
+        assert!(entry_problem("plain", "En %s", "Durability in %", &plain).is_some());
+        assert!(entry_problem("plain", "En %33$s", "Durability in %", &plain).is_some());
+    }
+
+    #[test]
+    fn a_listed_unformattable_key_still_cannot_be_formatted() {
+        let en: HashMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
+        )
+        .unwrap();
+        let listed = unformattable();
+        // Growing the list takes changing this test (and tests/test_lang_coverage.py's twin).
+        let mut keys: Vec<&str> = listed.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["horizon.pvp.hud_armour_percent"]);
+        for key in listed.keys() {
+            let english = en
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} is not in en_us.json"));
+            assert_eq!(
+                template(english),
+                None,
+                "{key} formats now: take it off tools/lang_unformattable.json"
+            );
+        }
     }
 
     #[test]
@@ -1005,11 +1131,13 @@ mod tests {
         }
     }
 
-    /// The checks every lang folder passes: flat maps, no repeated key, no key en_us lacks, the
-    /// same placeholders as English, no empty text. Its en_us and how many files it has.
+    /// The checks every lang folder passes: flat maps, no repeated key, no key en_us lacks, text
+    /// the game can format with the same arguments as English, no control character English
+    /// lacks, no empty text. Its en_us and how many files it has.
     fn check_lang_dir(dir: &std::path::Path, bundled: bool) -> (HashMap<String, String>, usize) {
         let en_body = std::fs::read_to_string(dir.join("en_us.json")).unwrap();
         let en: HashMap<String, String> = serde_json::from_str(&en_body).unwrap();
+        let plain = unformattable();
         let mut seen = 0;
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
             let name = entry.file_name().into_string().unwrap();
@@ -1037,12 +1165,9 @@ mod tests {
                 let english = en
                     .get(key)
                     .unwrap_or_else(|| panic!("{code}: {key} is not in en_us.json"));
-                // A translation keeps the fields the code fills in.
-                assert_eq!(
-                    placeholders(value),
-                    placeholders(english),
-                    "{code}: {key} changes the placeholders of the English text"
-                );
+                if let Some(problem) = entry_problem(key, value, english, &plain) {
+                    panic!("{code}: {key} {problem}: {value:?}");
+                }
                 assert!(!value.trim().is_empty(), "{code}: {key} is empty");
             }
         }

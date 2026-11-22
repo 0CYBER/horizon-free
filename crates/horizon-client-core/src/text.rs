@@ -4,6 +4,7 @@
 use crate::lang;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 
 /// ChatFormatting colours by legacy code index 0..=15.
 pub const COLORS: [(char, &str, u32); 16] = [
@@ -1221,16 +1222,45 @@ pub fn format_translation(template: &str, args: &[Text]) -> Text {
     let text = format_translation_origin(template, args, Origin::Local);
     Text::from_spans(text.rendered.spans)
 }
-pub(crate) fn format_translation_origin(template: &str, args: &[Text], origin: Origin) -> Text {
-    let mut out = Text::default();
-    let mut bytes = 0usize;
-    let mut literal = String::new();
+
+/// One part of a translation template as [`format_translation`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TemplatePiece<'a> {
+    /// Text shown as it is (the first of a `%%`, or a `%` that starts no conversion, included).
+    Literal(&'a str),
+    /// A field filled with the argument at this index (`%0$s` asks for `usize::MAX`, which no
+    /// call has).
+    Argument(usize),
+}
+
+/// How [`walk_template`] ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TemplateWalk {
+    /// Every piece was visited.
+    Done,
+    /// The visitor stopped the walk.
+    Stopped,
+    /// The template is one [`format_translation`] shows as written whatever its arguments: a
+    /// conversion other than `%s` or `%%` (`%d`, `%q`), a `%` at the end, `%1$` or `%1$%`.
+    Malformed,
+}
+
+/// TranslatableContents.decomposeTemplate as a walk: hands each piece of `template` to `visit`
+/// in order, as it reaches it, and stops where `visit` breaks or the template turns out
+/// malformed. [`format_translation`] renders with it; the lang checks read templates with it.
+pub(crate) fn walk_template<'a>(
+    template: &'a str,
+    mut visit: impl FnMut(TemplatePiece<'a>) -> ControlFlow<()>,
+) -> TemplateWalk {
+    // Every byte the grammar looks at is ASCII, so byte offsets are char boundaries, and a
+    // non-ASCII character after `%` is "not a conversion" as it is char by char.
+    let bytes = template.as_bytes();
     let mut next = 0usize;
-    let chars: Vec<char> = template.chars().collect();
+    // Where the literal text not yet handed to `visit` starts.
+    let mut start = 0;
     let mut i = 0;
-    while i < chars.len() {
-        if chars[i] != '%' {
-            literal.push(chars[i]);
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
             i += 1;
             continue;
         }
@@ -1238,31 +1268,27 @@ pub(crate) fn format_translation_origin(template: &str, args: &[Text], origin: O
         let mut j = i + 1;
         let mut number = None;
         let digits_start = j;
-        while j < chars.len() && chars[j].is_ascii_digit() {
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
             j += 1;
         }
-        if j > digits_start && j < chars.len() && chars[j] == '$' {
-            number = chars[digits_start..j]
-                .iter()
-                .collect::<String>()
-                .parse::<usize>()
-                .ok();
+        if j > digits_start && j < bytes.len() && bytes[j] == b'$' {
+            number = template[digits_start..j].parse::<usize>().ok();
             j += 1;
         } else {
             j = digits_start;
         }
-        let conversion = chars.get(j).copied();
-        match conversion {
-            Some('%') if number.is_none() => {
-                literal.push('%');
+        match bytes.get(j).copied() {
+            // `%%`: the text so far and one percent sign; the second is skipped.
+            Some(b'%') if number.is_none() => {
+                if visit(TemplatePiece::Literal(&template[start..=i])).is_break() {
+                    return TemplateWalk::Stopped;
+                }
+                start = j + 1;
                 i = j + 1;
             }
-            // Not a format specifier at all: the percent sign is literal.
-            Some(c) if !c.is_ascii_alphabetic() && c != '%' => {
-                literal.push('%');
-                i += 1;
-            }
-            Some('s') => {
+            // Not a format specifier at all: the percent sign stays in the literal text.
+            Some(c) if !c.is_ascii_alphabetic() && c != b'%' => i += 1,
+            Some(b's') => {
                 let index = match number {
                     Some(n) => n.wrapping_sub(1),
                     None => {
@@ -1270,50 +1296,72 @@ pub(crate) fn format_translation_origin(template: &str, args: &[Text], origin: O
                         next - 1
                     }
                 };
-                let Some(arg) = args.get(index) else {
-                    return Text::from_spans(vec![Span {
-                        text: template.into(),
-                        style: Style::default(),
-                        origin,
-                    }]);
-                };
-                bytes = bytes
-                    .saturating_add(literal.len())
-                    .saturating_add(arg.rendered.spans.iter().map(|s| s.text.len()).sum());
-                if out
-                    .rendered
-                    .spans
-                    .len()
-                    .saturating_add(arg.rendered.spans.len())
-                    >= MAX_TRANSLATION_SPANS
-                    || bytes > MAX_TRANSLATION_BYTES
-                {
-                    return Text::from_spans(vec![Span {
-                        text: template.into(),
-                        style: Style::default(),
-                        origin,
-                    }]);
+                if start < i && visit(TemplatePiece::Literal(&template[start..i])).is_break() {
+                    return TemplateWalk::Stopped;
                 }
-                if !literal.is_empty() {
-                    out.rendered.spans.push(Span {
-                        origin,
-                        text: std::mem::take(&mut literal),
-                        style: Style::default(),
-                    });
+                if visit(TemplatePiece::Argument(index)).is_break() {
+                    return TemplateWalk::Stopped;
                 }
-                out.rendered
-                    .spans
-                    .extend(arg.rendered.spans.iter().cloned());
+                start = j + 1;
                 i = j + 1;
             }
-            _ => {
-                return Text::from_spans(vec![Span {
-                    text: template.into(),
-                    style: Style::default(),
-                    origin,
-                }]);
-            }
+            _ => return TemplateWalk::Malformed,
         }
+    }
+    if start < bytes.len() && visit(TemplatePiece::Literal(&template[start..])).is_break() {
+        return TemplateWalk::Stopped;
+    }
+    TemplateWalk::Done
+}
+
+pub(crate) fn format_translation_origin(template: &str, args: &[Text], origin: Origin) -> Text {
+    let mut out = Text::default();
+    let mut bytes = 0usize;
+    let mut literal = String::new();
+    // Stops at the first argument the call lacks or the first that passes a limit, as the
+    // template is read; the walk itself stops at the first malformed specifier.
+    let walk = walk_template(template, |piece| {
+        let index = match piece {
+            TemplatePiece::Literal(text) => {
+                literal.push_str(text);
+                return ControlFlow::Continue(());
+            }
+            TemplatePiece::Argument(index) => index,
+        };
+        let Some(arg) = args.get(index) else {
+            return ControlFlow::Break(());
+        };
+        bytes = bytes
+            .saturating_add(literal.len())
+            .saturating_add(arg.rendered.spans.iter().map(|s| s.text.len()).sum());
+        if out
+            .rendered
+            .spans
+            .len()
+            .saturating_add(arg.rendered.spans.len())
+            >= MAX_TRANSLATION_SPANS
+            || bytes > MAX_TRANSLATION_BYTES
+        {
+            return ControlFlow::Break(());
+        }
+        if !literal.is_empty() {
+            out.rendered.spans.push(Span {
+                origin,
+                text: std::mem::take(&mut literal),
+                style: Style::default(),
+            });
+        }
+        out.rendered
+            .spans
+            .extend(arg.rendered.spans.iter().cloned());
+        ControlFlow::Continue(())
+    });
+    if walk != TemplateWalk::Done {
+        return Text::from_spans(vec![Span {
+            text: template.into(),
+            style: Style::default(),
+            origin,
+        }]);
     }
     if !literal.is_empty() {
         out.rendered.spans.push(Span {
@@ -1867,6 +1915,64 @@ mod tests {
         assert_eq!(format_translation("end %", &a).plain(), "end %");
         let t = format_translation("%s was slain by %s", &a);
         assert_eq!(t.rendered.spans.last().unwrap().style.color, Some(RED));
+    }
+    /// The cases `tools/lang_coverage.py` mirrors this formatter on, so the lang checks there
+    /// cannot drift from the game.
+    #[test]
+    fn formats_the_shared_template_cases() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/translation_templates.json"
+        );
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let template = case["template"].as_str().unwrap();
+            let args: Vec<Text> = case["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arg| Text::literal(arg.as_str().unwrap()))
+                .collect();
+            assert_eq!(
+                format_translation(template, &args).plain(),
+                case["out"].as_str().unwrap(),
+                "{template:?}"
+            );
+            let mut indices = Vec::new();
+            let walk = walk_template(template, |piece| {
+                if let TemplatePiece::Argument(index) = piece {
+                    indices.push(index);
+                }
+                ControlFlow::Continue(())
+            });
+            let fields = (walk == TemplateWalk::Done).then_some(indices);
+            let want: Option<Vec<usize>> = serde_json::from_value(case["fields"].clone()).unwrap();
+            assert_eq!(fields, want, "{template:?}");
+        }
+    }
+    /// The walk hands over each piece as it reaches it and stops where its visitor does, so a
+    /// long template the formatter refuses at its first argument costs one piece, not all of
+    /// them (a server's `fallback` template is any text it likes).
+    #[test]
+    fn the_template_walk_stops_where_its_visitor_does() {
+        let template = "x%s".repeat(20_000);
+        let mut visits = 0;
+        let walk = walk_template(&template, |piece| {
+            visits += 1;
+            match piece {
+                TemplatePiece::Argument(_) => ControlFlow::Break(()),
+                TemplatePiece::Literal(_) => ControlFlow::Continue(()),
+            }
+        });
+        assert_eq!((walk, visits), (TemplateWalk::Stopped, 2));
+        let mut visits = 0;
+        let walk = walk_template("a%%b%s%q%s", |_| {
+            visits += 1;
+            ControlFlow::Continue(())
+        });
+        assert_eq!((walk, visits), (TemplateWalk::Malformed, 3));
+        assert_eq!(format_translation(&template, &[]).plain(), template);
     }
     #[test]
     fn legacy_codes_and_inheritance() {

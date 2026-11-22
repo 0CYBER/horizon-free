@@ -1,0 +1,3 @@
+{
+  "horizon.pvp.hud_armour_percent": "the English text ends in a bare %, which the formatter refuses; the game reads it with lang::get_or and never formats it"
+}

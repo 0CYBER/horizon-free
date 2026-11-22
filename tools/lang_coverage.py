@@ -43,6 +43,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,20 +63,124 @@ def shown(path: Path) -> str:
         return str(path)
 
 
-def placeholders(text: str) -> list[str]:
-    """The fields the code fills in, sorted, as `lang.rs` counts them: `%s`, `%d`, `%f`,
-    `%1$s`, `%.2f`, `%%`. A percent sign that starts none of them ("100% is") is plain text."""
-    found: list[str] = []
-    rest = text
-    while (at := rest.find("%")) != -1:
-        rest = rest[at + 1:]
-        spec = next((i for i, c in enumerate(rest) if c not in "0123456789$."), len(rest))
-        after = rest[spec:spec + 1]
-        if after in ("s", "d", "f", "%"):
-            end = spec + 1
-            found.append("%" + rest[:end])
-            rest = rest[end:]
-    return sorted(found)
+USIZE_MAX = 2**64 - 1
+
+
+def usize(digits: str) -> int | None:
+    """Rust's `digits.parse::<usize>().ok()`, without building an int from thousands of digits."""
+    significant = digits.lstrip("0") or "0"
+    if len(significant) > len(str(USIZE_MAX)):
+        return None
+    value = int(significant)
+    return value if value <= USIZE_MAX else None
+
+
+def translation_pieces(template: str) -> list[str | int] | None:
+    """The game's `translation_pieces` (`crates/horizon-client-core/src/text.rs`), the parser its
+    formatter runs: literal text (a str, `%%` already a percent sign) and the argument index each
+    field takes (an int; `%0$s` asks for USIZE_MAX), in order. `%s` takes the next argument, `%n$s`
+    the n-th; a percent sign that starts no conversion ("100% sure", "%.2f") is text. None where the
+    game shows the template as written whatever its arguments: another letter such as `%d` or `%q`,
+    a `%` at the end, `%1$` or `%1$%`. `tests/fixtures/translation_templates.json` pins this
+    against the game's own test."""
+    pieces: list[str | int] = []
+    literal: list[str] = []
+    following = 0
+    i = 0
+    while i < len(template):
+        if template[i] != "%":
+            literal.append(template[i])
+            i += 1
+            continue
+        j = digits = i + 1
+        while j < len(template) and template[j] in "0123456789":
+            j += 1
+        number = None
+        if j > digits and j < len(template) and template[j] == "$":
+            number = usize(template[digits:j])
+            j += 1
+        else:
+            j = digits
+        conversion = template[j] if j < len(template) else None
+        if conversion == "%" and number is None:
+            literal.append("%")
+            i = j + 1
+        elif conversion is not None and conversion != "%" and not (
+                conversion.isascii() and conversion.isalpha()):
+            literal.append("%")
+            i += 1
+        elif conversion == "s":
+            if number is None:
+                index = following
+                following += 1
+            else:
+                index = (number - 1) % (USIZE_MAX + 1)  # Rust's `wrapping_sub(1)`
+            if literal:
+                pieces.append("".join(literal))
+                literal = []
+            pieces.append(index)
+            i = j + 1
+        else:
+            return None
+    if literal:
+        pieces.append("".join(literal))
+    return pieces
+
+
+def format_translation(template: str, args: list[str]) -> str:
+    """The game's `format_translation` on plain text: the template as written when its parser
+    refuses it or it asks for an argument the call lacks."""
+    pieces = translation_pieces(template)
+    if pieces is None or any(isinstance(piece, int) and piece >= len(args) for piece in pieces):
+        return template
+    return "".join(args[piece] if isinstance(piece, int) else piece for piece in pieces)
+
+
+def template(text: str) -> tuple[list[int], str] | None:
+    """How the game reads `text` as a template: the argument indices it fills in, once per use and
+    sorted, and its literal text; None where it shows the template as written whatever the
+    arguments (`%0$s` included: no call has an argument at USIZE_MAX). `lang.rs`'s bundled-file
+    test computes the same from the game's parser."""
+    pieces = translation_pieces(text)
+    if pieces is None or USIZE_MAX in pieces:
+        return None
+    return (sorted(piece for piece in pieces if isinstance(piece, int)),
+            "".join(piece for piece in pieces if isinstance(piece, str)))
+
+
+UNFORMATTABLE_FILE = ROOT / "tools/lang_unformattable.json"
+
+
+def unformattable(body: str | None = None) -> set[str]:
+    """The keys whose English text the game cannot format: they are read as plain text, never
+    formatted, so their translations only have to fill in no argument. The list may only shrink:
+    `tests/test_lang_coverage.py` and `lang.rs` pin its keys, and `lang.rs` fails on a listed key
+    whose English formats."""
+    return set(json.loads(UNFORMATTABLE_FILE.read_text(encoding="utf-8") if body is None else body))
+
+
+def formats_like(key: str, english: str, text: str, plain: set[str] | None = None) -> bool:
+    """A translation the game can format, filling in the same arguments as the English text, and
+    still showing a percent sign where English writes one as `%%`."""
+    want, got = template(english), template(text)
+    if key in (unformattable() if plain is None else plain):
+        return (want or ([], ""))[0] == (got or ([], ""))[0]
+    if got is None or want is None or got[0] != want[0]:
+        return False
+    return "%%" not in english or "%" in got[1]
+
+
+# Unicode's bidirectional embedding, override and isolate controls: one a translation adds can
+# turn the rest of a line around.
+BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def stray_controls(english: str, text: str) -> list[str]:
+    """The control characters (C0, DEL, C1) and bidi controls `text` must not carry: a line break
+    is always allowed, a tab and a bidi control only where its English text has one, any other
+    control character never. `lang.rs`'s bundled-file test applies the same rule."""
+    return sorted({c for c in text if c != "\n" and (
+        c not in english if c == "\t" or c in BIDI_CONTROLS else unicodedata.category(c) == "Cc")})
 
 
 HOLE = re.compile(r"\{([A-Za-z0-9_]+)\}")
@@ -174,9 +279,9 @@ def game_rows(directory: Path, codes: set[str],
         missing = sorted(set(english) - set(entries))
         extra = sorted(set(entries) - set(english))
         changed = []
+        plain = unformattable()
         for key in sorted(set(entries) & set(english)):
-            want, got = placeholders(english[key]), placeholders(entries[key])
-            if want != got:
+            if not formats_like(key, english[key], entries[key], plain):
                 changed.append({"key": key, "english": english[key], "value": entries[key]})
         same = [] if lang.code == "en_us" else sorted(
             key for key in set(entries) & set(english) if entries[key] == english[key])
@@ -277,7 +382,8 @@ def print_game_keys(rows: list[dict]) -> None:
         print_groups(row, [("missing", "missing"), ("extra", "not in the reference"),
                            ("empty", "empty"), ("same", "identical to English")])
         for bad in row["placeholders"]:
-            print(f"\n{row['code']}: {bad['key']} changes the placeholders of the English text")
+            print(f"\n{row['code']}: {bad['key']} changes the placeholders of the English text, "
+                  "or the game cannot format it")
             print(f"  english: {bad['english']}")
             print(f"  {row['code']}: {bad['value']}")
 

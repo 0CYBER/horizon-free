@@ -16,9 +16,12 @@ docs/translations.md states, and it is why an edit a translator makes without a 
 mark off again by itself.
 
 Crowdin checks neither the key set nor the placeholders against the English text, so both are done
-here: a translation whose `%s`/`%1$s` fields differ is dropped and reported, and so is one that is
-the English sentence itself (Crowdin fills an untranslated string with its source unless the export
-skips it). Either way the language keeps the text it had.
+here: a translation the game cannot format, or whose `%s`/`%1$s` fields differ, is dropped and
+reported, and so is one with a control character (`lang_coverage.stray_controls`), and one that is
+the English sentence itself (Crowdin fills an untranslated string with its source unless the export skips it).
+Either way the language keeps the text it had. An export that is not a flat map of key to text, is
+larger than MAX_EXPORT_BYTES or holds a string longer than MAX_TEXT_CHARS fails the run, naming the
+language, before anything is written.
 
 `--stage` is the other direction, once: it copies the lang files into the staging folder under the
 names Crowdin's export uses, so the first `upload translations` seeds the project with the strings the
@@ -192,9 +195,102 @@ def render(entries: dict[str, str], newline: str) -> str:
     return "{" + newline + body.replace("\n", newline) + newline + "}" + newline
 
 
-def placeholders_kept(english: str, text: str) -> bool:
-    """A translation keeps every field the code fills in (`%s`, `%1$s`) and adds none."""
-    return lang_coverage.placeholders(english) == lang_coverage.placeholders(text)
+# The largest export file and the longest string the import takes. Today's largest lang file is
+# about 145 KB and its longest string 369 characters; anything near these bounds is a broken or
+# hostile export, not a translation, and the run fails before it writes anything.
+MAX_EXPORT_BYTES = 4 * 1024 * 1024
+MAX_TEXT_CHARS = 4096
+
+
+class ExportError(Exception):
+    """An export the import cannot trust: the run stops with exit code 1, writing nothing."""
+
+    def __init__(self, code: str, path: Path, problem: str):
+        super().__init__(f"{code} ({path.parent.name}/{path.name}): {problem}")
+
+
+class InventoryError(ExportError):
+    """An export folder whose files do not name one known language each."""
+
+    def __init__(self, problem: str):
+        Exception.__init__(self, problem)
+
+
+def unique_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """A JSON object whose keys do not repeat: of two equal keys, which text wins is a guess."""
+    entries = dict(pairs)
+    if len(entries) != len(pairs):
+        raise ValueError("a key repeats")
+    return entries
+
+
+def read_export(code: str, path: Path, wanted: set[str]) -> dict[str, str]:
+    """One exported language, kept to the keys in `wanted` (the English file's), or ExportError:
+    larger than MAX_EXPORT_BYTES (it reads no more than that), not a flat map of key to text, a key
+    that repeats, a string too long or holding a lone surrogate. Its layout is Crowdin's to choose;
+    an empty file or `[]` is a language with nothing exported."""
+    try:
+        with path.open("rb") as file:
+            data = file.read(MAX_EXPORT_BYTES + 1)
+        if len(data) > MAX_EXPORT_BYTES:
+            raise ExportError(code, path, f"more than the {MAX_EXPORT_BYTES} bytes an export may have")
+        body = data.decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ExportError(code, path, f"cannot read: {error}") from None
+    del data
+    if not body.strip():
+        return {}
+    try:
+        entries = json.loads(body, object_pairs_hook=unique_keys)
+    except ValueError as error:  # JSONDecodeError is one
+        raise ExportError(code, path, f"not JSON: {error}") from None
+    except RecursionError:
+        raise ExportError(code, path, "not JSON: nested too deep") from None
+    if entries == []:
+        return {}  # Crowdin writes an empty object as `[]`, as PHP does
+    if not isinstance(entries, dict) or not all(
+            isinstance(name, str) and isinstance(text, str) for name, text in entries.items()):
+        raise ExportError(code, path, "not a flat map of key to text")
+    for name, text in entries.items():
+        if len(text) > MAX_TEXT_CHARS:
+            raise ExportError(code, path, f"{name} is {len(text)} characters, more than the "
+                                          f"{MAX_TEXT_CHARS} a string may have")
+        try:
+            (name + text).encode("utf-8")
+        except UnicodeEncodeError:
+            raise ExportError(code, path, f"{name!r} holds a lone surrogate (\\ud800)") from None
+    return {name: text for name, text in entries.items() if name in wanted}
+
+
+def inventory(folder: Path, table: dict[str, str]) -> dict[str, Path]:
+    """The export files in `folder` by the game's code, or InventoryError when a file names no
+    language the table knows or two files name the same one."""
+    found: dict[str, Path] = {}
+    unmapped, twice = [], []
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        code = language(path.stem, table)
+        if code is None:
+            unmapped.append(f"{folder.name}/{path.name}")
+        elif code in found:
+            twice.append(f"{found[code].name} and {path.name} are both {code}")
+        else:
+            found[code] = path
+    problems = []
+    if unmapped:
+        problems.append(f"not a Crowdin language this table knows: {', '.join(unmapped)} — add it "
+                        "to LOCALES in tools/crowdin_import.py and run again")
+    if twice:
+        problems.append(f"{folder.name}: {'; '.join(twice)}")
+    if problems:
+        raise InventoryError("\n".join(problems))
+    return found
+
+
+def acceptable(name: str, english: str, text: str, plain: set[str]) -> bool:
+    """A translation the game can format with the English text's arguments, and without a control
+    character it must not carry (`lang_coverage.formats_like`, `stray_controls`)."""
+    return (lang_coverage.formats_like(name, english, text, plain)
+            and not lang_coverage.stray_controls(english, text))
 
 
 def merge(existing: dict[str, str], incoming: dict[str, str],
@@ -246,17 +342,19 @@ def write_record(path: Path, entries: dict[str, str], order: list[str]) -> None:
         path.unlink()
 
 
-def sync_language(code: str, exported: Path, approved: Path, lang: Path, review: Path,
-                  english: dict[str, str], write: bool) -> dict:
-    """One language: its exported text into `lang/<code>.json`, its proofread keys into the record."""
+def sync_language(code: str, exported: dict[str, str], proofread: dict[str, str] | None,
+                  lang: Path, review: Path, english: dict[str, str], write: bool) -> dict:
+    """One language: its exported text into `lang/<code>.json`, its proofread keys into the record.
+    `proofread` is None when Crowdin exported no approved file for it."""
     target = lang / f"{code}.json"
     existing = lang_coverage.LangFile(target).entries
     incoming: dict[str, str] = {}
     dropped: list[str] = []
-    for name, text in lang_coverage.LangFile(exported).entries.items():
+    plain = lang_coverage.unformattable()
+    for name, text in exported.items():
         if not text.strip() or name not in english:
             continue  # a blank value is a gap, and a key English lost is not this file's to write
-        if not placeholders_kept(english[name], text):
+        if not acceptable(name, english[name], text, plain):
             dropped.append(name)
         elif text == english[name] and existing.get(name) != text:
             # Crowdin fills an untranslated string with its English source unless the export skips
@@ -269,8 +367,7 @@ def sync_language(code: str, exported: Path, approved: Path, lang: Path, review:
     merged, added, changed = merge(existing, incoming, list(english))
 
     checked: list[str] = []
-    if approved.exists():
-        proofread = lang_coverage.LangFile(approved).entries
+    if proofread is not None:
         checked = [name for name in merged if proofread.get(name) == merged[name]]
 
     record = review / f"{code}.json"
@@ -300,21 +397,22 @@ def sync_language(code: str, exported: Path, approved: Path, lang: Path, review:
 
 
 def sync(translations: Path, approved: Path, lang: Path = LANG, review: Path = REVIEW,
-         write: bool = True) -> tuple[list[dict], list[str]]:
-    """Every exported language under `translations`, and the filenames the table does not name."""
+         write: bool = True) -> list[dict]:
+    """Every exported language under `translations`. Both folders' files are mapped, and every
+    export read and checked, before the first language is written: a broken one stops the run with
+    the repository as it was (ExportError)."""
     table = index()
     english_file = lang_coverage.LangFile(lang / "en_us.json")
     if english_file.problem:
         raise SystemExit(f"{lang / 'en_us.json'}: {english_file.problem}")
-    rows, unmapped = [], []
-    for exported in sorted(translations.glob("*.json")):
-        code = language(exported.stem, table)
-        if code is None:
-            unmapped.append(exported.stem)
-            continue
-        rows.append(sync_language(code, exported, approved / exported.name, lang, review,
-                                  english_file.entries, write))
-    return rows, unmapped
+    english = english_file.entries
+    exported, proofread = inventory(translations, table), inventory(approved, table)
+    # Every file in both folders, a proofread one without a translations file included.
+    wanted = set(english)
+    exports = {code: read_export(code, path, wanted) for code, path in sorted(exported.items())}
+    checked = {code: read_export(code, path, wanted) for code, path in sorted(proofread.items())}
+    return [sync_language(code, entries, checked.get(code), lang, review, english, write)
+            for code, entries in exports.items()]
 
 
 def stage(lang: Path, folder: Path, write: bool = True) -> tuple[list[dict], list[str]]:
@@ -397,8 +495,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{arguments.translations} does not exist: nothing to import", file=sys.stderr)
         return 1
 
-    rows, unmapped = sync(arguments.translations, arguments.approved, arguments.lang,
-                          arguments.review, write=not arguments.dry_run)
+    try:
+        rows = sync(arguments.translations, arguments.approved, arguments.lang, arguments.review,
+                    write=not arguments.dry_run)
+    except ExportError as error:
+        print(f"{error}; nothing was written", file=sys.stderr)
+        return 1
     if not rows:
         print(f"{arguments.translations}: no exported language the table names", file=sys.stderr)
         return 1
@@ -413,12 +515,9 @@ def main(argv: list[str] | None = None) -> int:
     for row in rows:
         if row["dropped"]:
             print(f"\n{row['code']}: {len(row['dropped'])} translations change the placeholders of "
-                  f"the English text and were not written: {', '.join(row['dropped'][:5])}",
+                  f"the English text, cannot be formatted, add a control character or are the "
+                  f"English text, and were not written: {', '.join(row['dropped'][:5])}",
                   file=sys.stderr)
-    if unmapped:
-        print(f"\nnot a Crowdin language this table knows: {', '.join(unmapped)} — add it to "
-              f"LOCALES in tools/crowdin_import.py and run again", file=sys.stderr)
-        return 1
     return 0
 
 

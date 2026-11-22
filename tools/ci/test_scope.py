@@ -55,8 +55,12 @@ READERS = {
     "horizon-client": HORIZON_CLIENT,
     # Shares horizon-client's sources, so its unit tests run the same reads.
     "horizon-client-lib": HORIZON_CLIENT,
-    # lang.rs embeds the bundled language files.
-    "horizon-client-core": ["crates/horizon-client/assets/horizon/lang"],
+    # lang.rs embeds the bundled language files; its tests read the unformattable keys, and text.rs's the
+    # template cases tools/lang_coverage.py shares.
+    "horizon-client-core": [
+        "crates/horizon-client/assets/horizon/lang", "tests/fixtures/translation_templates.json",
+        "tools/lang_unformattable.json",
+    ],
     # The world's shaders include the HDR look from its pack, and the look pack's tests load the pack.
     "horizon-client-render": [
         "crates/horizon-client/assets/horizon/lang", "crates/horizon-client/assets/horizon/textures/gui",
