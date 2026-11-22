@@ -92,8 +92,13 @@ impl LevelAccess for RainView<'_> {
 }
 
 impl Game<'_> {
-    /// `Level.getSkyDarken`: the same dimension, time and weather calculation used by gameplay.
-    pub(super) fn sky_darken_in(&self, world: &World, dimension: Dim) -> i32 {
+    /// The attribute stack a level reads (`Level.environmentAttributes`): its environment, its
+    /// rain and thunder levels and its day clock's time.
+    fn level_environment_in(
+        &self,
+        world: &World,
+        dimension: Dim,
+    ) -> (&horizon_client::environment::Environment, (f32, f32), i64) {
         // A client of a server has the environment its server's type made for a mod's level.
         let environment = match self
             .remote
@@ -111,13 +116,50 @@ impl Game<'_> {
                 Dim::End => self.res.end_environment(),
             },
         };
-        let (rain, thunder) = weather_for_level(
+        let weather = weather_for_level(
             world.shape,
             dimension == Dim::End,
             self.world.weather.levels(1.0),
         );
         let day_time = self.command_clock_time(&self.level_clock_name(dimension));
+        (environment, weather, day_time)
+    }
+
+    /// `Level.getSkyDarken`: the same dimension, time and weather calculation used by gameplay.
+    pub(super) fn sky_darken_in(&self, world: &World, dimension: Dim) -> i32 {
+        let (environment, (rain, thunder), day_time) = self.level_environment_in(world, dimension);
         horizon_client::environment::sky_darken(environment, day_time, rain, thunder)
+    }
+
+    /// `level.environmentAttributes().getValue(attribute, pos)` of a server level, active or
+    /// parked, for a float attribute: the level's stack with the one biome at `pos` (no
+    /// interpolator). None on a client, for a stale level, an unknown id or another type.
+    pub(super) fn level_environment_float(
+        &self,
+        level: LevelRef,
+        attribute: &str,
+        pos: [f64; 3],
+    ) -> Option<f32> {
+        if !self.is_logical_server() {
+            return None;
+        }
+        let world = self.native_level_read_world(level)?;
+        let (environment, weather, _) =
+            self.level_environment_in(world, Dim::from_id(level.dimension_id()));
+        // `Mth.floor` of each coordinate, as the biome layer reads the position.
+        let block = pos.map(|v| v.floor() as i32);
+        let biomes = world_biomes!(self);
+        let map = |zoomed: bool| {
+            let info = biomes.get(self.native_biome_index(level, block, zoomed)?);
+            Some(environment.biome(&info.name).unwrap_or(&info.attributes))
+        };
+        let id = attribute.strip_prefix("minecraft:").unwrap_or(attribute);
+        // Each timeline reads the clock it names, 0 for one the world has not met.
+        let clock = |name: &str| self.command_clock_time(name);
+        match environment.value_at(id, &clock, weather, map(false), map(true))? {
+            horizon_world::environment_attributes::Value::Float(value) => Some(value),
+            _ => None,
+        }
     }
 
     /// `Level.getSkyDarken` for an active or parked level, without switching dimensions.

@@ -214,21 +214,37 @@ impl Game<'_> {
     /// `LevelReader.getBiome`: the noise cell selected by this level's BiomeManager zoom.
     /// Unlike a generating server query, an absent selected column returns None.
     fn native_read_biome(&self, level: LevelRef, pos: [i32; 3]) -> Option<String> {
+        let biome = self.native_biome_index(level, pos, true)?;
+        Some(world_biomes!(self).get(biome).name.clone())
+    }
+
+    /// The biome at `pos` in the world's biome table: `zoomed`, `LevelReader.getBiome` through
+    /// the level's biome zoom; otherwise the noise biome of the block's quart
+    /// (`BiomeManager.getNoiseBiomeAtPosition`). None for a stale level or an unloaded column.
+    pub(super) fn native_biome_index(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+        zoomed: bool,
+    ) -> Option<u16> {
         let world = self.native_level_read_world(level)?;
-        let streaming = if level.dimension() == self.native_level_key() {
-            &self.streaming
+        let [qx, qy, qz] = if zoomed {
+            let streaming = if level.dimension() == self.native_level_key() {
+                &self.streaming
+            } else {
+                self.levels.parked_streaming_of(level.dimension_id())?
+            };
+            streaming.biome_zoom.quart_at_block(block_pos(pos))
         } else {
-            self.levels.parked_streaming_of(level.dimension_id())?
+            pos.map(|v| v >> 2)
         };
-        let [qx, qy, qz] = streaming.biome_zoom.quart_at_block(block_pos(pos));
         let chunk = world.chunks.get(&(qx >> 2, qz >> 2))?;
         // ChunkAccess clamps to the dimension's height, not our padded storage.
         // Clamp before conversion to preserve signed block-coordinate extremes.
         let min_qy = world.shape.min_y >> 2;
         let max_qy = (world.shape.max_y() - 1) >> 2;
         let y = qy.clamp(min_qy, max_qy) << 2;
-        let biome = chunk.biome(qx << 2, y, qz << 2);
-        Some(world_biomes!(self).get(biome).name.clone())
+        Some(chunk.biome(qx << 2, y, qz << 2))
     }
 
     /// The authoritative server's `LevelReader.getBiome`, including parked levels.
@@ -2950,6 +2966,78 @@ mod environment_read_tests {
 
     #[test]
     #[ignore = "daily"]
+    fn environment_floats_read_time_weather_and_the_biome_at_a_position() {
+        use crate::game::execution_role::ExecutionRole;
+        use horizon_protocol::connection::Pipe;
+
+        with_game(|game| {
+            let overworld = game.level("minecraft:overworld").unwrap();
+            paint_biome(game, "minecraft:plains");
+            game.world.weather.rain_level = (0.0, 0.0);
+            game.world.weather.thunder_level = (0.0, 0.0);
+            let sun = |game: &crate::game::Game<'_>| {
+                overworld.environment_float(
+                    game,
+                    "minecraft:visual/sky_light_factor",
+                    [8.5, 64.0, 8.5],
+                )
+            };
+            // data/minecraft/timeline/day.json: 1.0 from 730 to 11270, 0.24 from 13140 to 22860.
+            game.world.day_time = 6000;
+            assert_eq!(sun(game), Some(1.0));
+            assert_eq!(
+                overworld.environment_float(game, "visual/sky_light_factor", [8.5, 64.0, 8.5]),
+                Some(1.0),
+                "the namespace may be left out"
+            );
+            game.world.day_time = 18000;
+            assert_eq!(sun(game), Some(0.24));
+            game.world.day_time = 6000;
+            game.world.weather.rain_level = (1.0, 1.0);
+            let rainy = sun(game).unwrap();
+            assert!(rainy < 1.0, "rain dims the sky: {rainy}");
+            game.world.weather.rain_level = (0.0, 0.0);
+            // The biome layer: pale_garden.json sets audio/music_volume to 0.
+            let music = |game: &crate::game::Game<'_>| {
+                overworld.environment_float(game, "audio/music_volume", [8.5, 64.0, 8.5])
+            };
+            assert_eq!(music(game), Some(1.0));
+            paint_biome(game, "minecraft:pale_garden");
+            assert_eq!(music(game), Some(0.0));
+            assert_eq!(
+                overworld.environment_float(game, "visual/sky_color", [8.5, 64.0, 8.5]),
+                None,
+                "not a float"
+            );
+            assert_eq!(
+                overworld.environment_float(game, "visual/nothing", [0.0; 3]),
+                None
+            );
+            let stale = LevelRef::new(
+                WorldEpoch::new(overworld.epoch().get() + 1),
+                overworld.dimension(),
+            );
+            assert_eq!(
+                stale.environment_float(game, "visual/sky_light_factor", [0.0; 3]),
+                None
+            );
+
+            game.options.execution_role = ExecutionRole::Client;
+            game.options.dedicated = None;
+            let (client, _server) = Pipe::pair();
+            game.connect_local(client, "EnvironmentReadTest").unwrap();
+            game.remote.as_mut().unwrap().logged_in = true;
+            let level = game.level("minecraft:overworld").unwrap();
+            assert_eq!(
+                level.environment_float(game, "visual/sky_light_factor", [8.5, 64.0, 8.5]),
+                None,
+                "server only"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn sky_and_logical_height_read_the_named_dimension_and_client_state() {
         use crate::game::execution_role::ExecutionRole;
         use horizon_client::chunk::LevelShape;
@@ -3278,7 +3366,10 @@ mod environment_read_tests {
             let in_piece = start.pieces[0].bounding_box().min;
             let in_box = start.bounding_box.min;
             assert!(
-                !start.pieces.iter().any(|p| p.bounding_box().is_inside(in_box)),
+                !start
+                    .pieces
+                    .iter()
+                    .any(|p| p.bounding_box().is_inside(in_box)),
                 "the box's corner is outside every piece"
             );
             let refer = |game: &mut crate::game::Game<'_>, pos: [i32; 3]| {

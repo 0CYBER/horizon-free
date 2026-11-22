@@ -93,6 +93,22 @@ pub trait LevelsBackend {
     /// None for a stale or unavailable level. Does not load chunks.
     #[access(WorldOnly)]
     fn level_get_sky_darken(&self, level: LevelRef) -> Option<i32>;
+    /// Side: server.
+    /// `level.environmentAttributes().getValue(attribute, pos)` for a float environment
+    /// attribute (`visual/sky_light_factor`, `gameplay/sky_light_level`; the `minecraft:`
+    /// namespace may be left out): the level's stack of dimension type, timelines on its clock
+    /// and weather, with the one biome at `pos` and no spatial interpolation (the noise biome,
+    /// or the block's biome for an attribute with full-resolution biomes). Reads an active or
+    /// parked server level and loads nothing; a biome layer of an unloaded column is skipped.
+    /// None on a client, for a stale or unavailable level, an unknown attribute and one that
+    /// isn't a float.
+    #[access(WorldOnly)]
+    fn level_environment_float(
+        &self,
+        level: LevelRef,
+        attribute: &str,
+        pos: [f64; 3],
+    ) -> Option<f32>;
     /// Side: both.
     /// `BlockGetter.getBlockFloorHeight` with the normal collision shapes and an empty
     /// entity context. The result is relative to the block: negative infinity means no floor.
