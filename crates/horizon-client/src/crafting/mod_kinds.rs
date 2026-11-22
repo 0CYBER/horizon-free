@@ -293,8 +293,27 @@ impl Recipes {
     }
 }
 
+/// The requested names that are recipe serializers of another type, each with the type it
+/// reads as (`minecraft:crafting_shaped` is a `minecraft:crafting` recipe): a sync selects by
+/// type, so such a name selects nothing.
+pub fn serializers_asked_as_types(requested: &[String]) -> Vec<(&str, String)> {
+    requested
+        .iter()
+        .filter_map(|name| match recipe_type("sync", name) {
+            Ok(Reading::Type(kind)) if kind != *name => Some((name.as_str(), kind)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Recipe types selected for sync; registered crafting serializers share crafting.
 pub fn sync_recipe_types(requested: &[String]) -> Vec<String> {
+    for (serializer, kind) in serializers_asked_as_types(requested) {
+        log::warn!(
+            "datapack_sync asked for {serializer}, a recipe serializer: recipe types select \
+             recipes, so it selects none; ask for {kind}"
+        );
+    }
     let mut types = requested.to_vec();
     if !mod_api::__private::parts_installation::crafting_recipe_kinds().is_empty() {
         types.push("minecraft:crafting".into());
