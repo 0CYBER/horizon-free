@@ -3280,3 +3280,53 @@ fn departing_guest_releases_multiplayer_wire_cache_when_batches_are_empty() {
     assert_eq!(heights_solo, 0);
     assert!(sections_solo < sections_multiplayer);
 }
+
+/// `ServerGamePacketListenerImpl.handleMovePlayer` while a teleport awaits its accept
+/// (`updateAwaitingTeleport`): the move's position is ignored but its turn is not,
+/// `absSnapRotationTo(Mth.wrapDegrees(yRot), Mth.wrapDegrees(xRot))` (`Entity` clamps the pitch
+/// to 90 degrees). Expected values worked out from `Mth.wrapDegrees`, not from the code.
+#[test]
+fn a_moves_turn_still_counts_while_a_teleport_awaits() {
+    let (mut hub, _rx) = hub_with_a_guest();
+    hub.guests.update(0, |g| g.load_timeout = 0);
+    let mut world = floor_at(0);
+    hub.teleport(0, Some([5.0, 70.0, 5.0]));
+    assert!(hub.guests[0].awaiting_teleport.is_some());
+    let at = hub.guests[0].position;
+    let turned = |hub: &Hub| (hub.guests[0].yaw, hub.guests[0].pitch);
+    let turn = |yaw, pitch| {
+        S::MovePlayerRot(play::MovePlayerRot {
+            yaw,
+            pitch,
+            flags: 0,
+        })
+    };
+    // 450 degrees is 90; a pitch past the top clamps to 90.
+    tick_packet(&mut hub, &mut world, turn(450.0, 100.0));
+    assert_eq!(turned(&hub), (90.0, 90.0));
+    // -270 wraps to 90 as well, and -540 to -180; the pitch keeps what it is in range.
+    tick_packet(&mut hub, &mut world, turn(-540.0, -30.0));
+    assert_eq!(turned(&hub), (-180.0, -30.0));
+    // A move with a position turns the player too and still does not move them.
+    hub.guests.update(0, |g| g.position_this_tick = false);
+    tick_packet(
+        &mut hub,
+        &mut world,
+        S::MovePlayerPosRot(play::MovePlayerPosRot {
+            x: 50.0,
+            y: 70.0,
+            z: 50.0,
+            yaw: 10.0,
+            pitch: 20.0,
+            flags: 0,
+        }),
+    );
+    assert_eq!(turned(&hub), (10.0, 20.0));
+    assert_eq!(hub.guests[0].position, at);
+    // A move without a turn keeps the one they have, and the teleport is still awaited.
+    hub.guests.update(0, |g| g.position_this_tick = false);
+    tick_guest_move(&mut hub, &mut world, [50.0, 70.0, 50.0], 0);
+    assert_eq!(turned(&hub), (10.0, 20.0));
+    assert!(hub.guests[0].awaiting_teleport.is_some());
+    assert!(hub.guests[0].left_reason.is_empty());
+}

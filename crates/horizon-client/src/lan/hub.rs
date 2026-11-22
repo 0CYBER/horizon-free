@@ -4707,11 +4707,24 @@ impl Hub {
             if self.ticks - g.teleport_tick > 20 {
                 self.resend_teleport(i, Some(at));
             }
-            return;
+            return self.snap_rotation(i, rot);
         }
         let to = pos.unwrap_or(g.position);
         let rot = rot.unwrap_or((g.yaw, g.pitch));
         self.position_change(i, to, rot, flags, shape, Hearing::Heard, ctx, events);
+    }
+
+    /// `handleMovePlayer` while a teleport awaits its accept (`updateAwaitingTeleport`): the move's
+    /// position is ignored, its turn is not: `absSnapRotationTo(Mth.wrapDegrees(yRot),
+    /// Mth.wrapDegrees(xRot))`, which clamps the pitch to 90 degrees either way. A move without a
+    /// turn carries the player's own, so it changes nothing.
+    fn snap_rotation(&mut self, i: usize, rot: Option<(f32, f32)>) {
+        if let Some((yaw, pitch)) = rot {
+            self.guests.update(i, |g| {
+                g.yaw = wrap_degrees(yaw);
+                g.pitch = wrap_degrees(pitch).clamp(-90.0, 90.0);
+            });
+        }
     }
 
     /// ServerGamePacketListenerImpl.handlePlayerPositionChange.

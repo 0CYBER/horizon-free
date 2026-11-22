@@ -156,12 +156,14 @@ fn a_veto_of_the_first_of_two_reports_in_one_tick_corrects_and_the_second_is_not
     hub.resolve_move(conn, false);
     assert_eq!(look(&hub), [0.0, 0.0], "the vetoed report is not applied");
     assert!(hub.guests[0].awaiting_teleport.is_some());
-    // The second waited behind it, and meets the unconfirmed correction: only the server's own
-    // handling of a report that arrives then, no hearing.
+    // The second waited behind it, and meets the unconfirmed correction: no hearing. Vanilla's
+    // `handleMovePlayer` still snaps the turn while `updateAwaitingTeleport` holds
+    // (`absSnapRotationTo`), so the look follows the second report and the position stays.
     assert!(moves(&drain(&mut hub)).is_empty());
     assert!(hub.guests[0].pending_move.is_none());
     assert!(hub.guests[0].inbox.is_empty());
-    assert_eq!(look(&hub), [0.0, 0.0]);
+    assert!(hub.guests[0].awaiting_teleport.is_some());
+    assert_eq!(look(&hub), [20.0, 0.0]);
 }
 
 #[test]
