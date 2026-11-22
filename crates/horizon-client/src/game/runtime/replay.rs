@@ -1199,10 +1199,62 @@ impl Game<'_> {
     }
 }
 
+/// Default registries for a standalone studio replay, populated from resource clocks
+/// so `SetTime` packets find the dimension's clock and set `world.day_time`.
+pub(super) fn replay_dynamic_registries(
+    clocks: &[String],
+    builtin: &horizon_protocol::registry::Builtin,
+) -> horizon_protocol::registry::Dynamic {
+    let mut dynamic = horizon_protocol::registry::Dynamic::default();
+    let clock_names: Vec<String> = if !clocks.is_empty() {
+        clocks.to_vec()
+    } else if let Some(builtin_clocks) = builtin.get("minecraft:world_clock") {
+        builtin_clocks.names.clone()
+    } else {
+        vec!["minecraft:overworld".into()]
+    };
+    dynamic.registries.insert(
+        "minecraft:world_clock".into(),
+        clock_names.into_iter().map(|n| (n, None)).collect(),
+    );
+    dynamic
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use horizon_client::net::RecorderStatus;
+
+    /// Vanilla's `world_clock` registry has `minecraft:overworld` and `minecraft:the_end`; a
+    /// recorded `SetTime` names a clock by its id there, and `Remote::resolve_clocks` finds the
+    /// dimension's clock by name.
+    #[test]
+    fn a_replay_without_registry_data_still_names_the_world_clocks() {
+        let builtin = horizon_protocol::registry::Builtin::default();
+        let none = replay_dynamic_registries(&[], &builtin);
+        assert_eq!(
+            none.id("minecraft:world_clock", "minecraft:overworld"),
+            Some(0)
+        );
+        let listed = [
+            "minecraft:overworld".to_owned(),
+            "minecraft:the_end".to_owned(),
+        ];
+        let dynamic = replay_dynamic_registries(&listed, &builtin);
+        assert_eq!(
+            dynamic.id("minecraft:world_clock", "minecraft:overworld"),
+            Some(0)
+        );
+        assert_eq!(
+            dynamic.id("minecraft:world_clock", "minecraft:the_end"),
+            Some(1)
+        );
+        assert_eq!(
+            dynamic.name("minecraft:world_clock", 1),
+            Some("minecraft:the_end")
+        );
+        assert_eq!(dynamic.name("minecraft:world_clock", 2), None);
+    }
 
     #[test]
     fn recording_failure_is_notified_once_and_rearms_for_a_new_session() {

@@ -568,10 +568,14 @@ impl Game<'_> {
             attachments: HashMap::new(),
             far_terrain: None,
             splash_sound: Default::default(),
-            builtin,
+            builtin: builtin.clone(),
             status: "Playing Studio Replay".into(),
             lang,
-            registries: Arc::new(Dynamic::default()),
+            // A recording holds no configuration phase: the clocks `SetTime` names resolve here.
+            registries: Arc::new(super::super::replay::replay_dynamic_registries(
+                &self.ui.registries.clocks,
+                &builtin,
+            )),
             tags: None,
             enchantments: None,
             joined: false,

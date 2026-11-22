@@ -3601,6 +3601,78 @@ fn a_reconfiguring_client_plays_menu_music_and_never_indexes_past_the_biomes() {
     assert!(music.is_some_and(|m| m != Music::menu()));
 }
 
+/// #16040: a standalone replay has no configuration phase, so its registries come from the
+/// local resources. Once the recording's Login enters the dimension the Overworld's clock is
+/// resolved, and a recorded `SetTime` sets the time of day.
+#[test]
+#[ignore = "daily"]
+fn a_standalone_replay_resolves_the_recorded_world_clock() {
+    use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
+    use horizon_protocol::packets::play::{self, Clientbound as C};
+    let root = std::path::PathBuf::from(
+        std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
+    );
+    let settings = Settings::default();
+    let loaded = load_resources(
+        horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+        Vec::new(),
+        None,
+        &root,
+        &settings,
+        std::time::Instant::now(),
+        false,
+        crate::game::execution_role::ExecutionRole::Client,
+        &Progress::new(),
+        &mut |_, _| unreachable!(),
+    )
+    .unwrap();
+    let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+    options.resources = root.clone();
+    let mut game = Game::new(
+        &loaded.resources,
+        loaded.pack,
+        loaded.gui.unwrap(),
+        options,
+        settings,
+        Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+            root.clone(),
+        )),
+        None,
+    )
+    .unwrap();
+    game.init_remote_for_replay().unwrap();
+    let spawn = play::SpawnInfo {
+        dimension_type: 0,
+        dimension: "minecraft:overworld".into(),
+        seed: 1,
+        game_type: 0,
+        previous_game_type: None,
+        debug: false,
+        flat: false,
+        last_death: None,
+        portal_cooldown: 0,
+        sea_level: 63,
+    };
+    game.enter_remote_dimension(&spawn, false, horizon_client::level_loading::Reason::Other);
+    let overworld = game.remote.as_ref().unwrap().default_clock;
+    assert!(
+        overworld.is_some(),
+        "the Overworld's default clock resolves"
+    );
+    // The afternoon of the issue's recording: day time 9155.
+    game.handle_packet(C::SetTime(play::SetTime {
+        game_time: 9155,
+        clocks: vec![play::ClockState {
+            clock: overworld.unwrap(),
+            total_ticks: 9155,
+            partial_tick: 0.0,
+            rate: 1.0,
+        }],
+    }))
+    .unwrap();
+    assert_eq!(game.world.day_time, 9155);
+}
+
 /// The server's on-fire flag keeps the predicted countdown (which
 /// `fluid_base_tick` runs down) from ending the fire; a clear flag leaves
 /// the window's own contact fire alone.
