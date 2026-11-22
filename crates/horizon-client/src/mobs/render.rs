@@ -563,8 +563,9 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
     }
 }
 /// Extra render layers drawn over the body with the same pose. `age` is the
-/// render state's `ageInTicks` (`Mob.age` plus the partial tick).
-pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
+/// render state's `ageInTicks` (`Mob.age` plus the partial tick); `worn` the
+/// game's [`WornArmor`] for the mob ([`humanoid_armor`]).
+pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
     if avatar(m) {
@@ -946,77 +947,48 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
         }
         _ => {}
     }
-    humanoid_armor(m, &mut v);
+    humanoid_armor(m, worn, &mut v);
     v
 }
-/// `HumanoidArmorLayer.renderArmorPiece`: a baby wears the `humanoid_baby`
-/// layer type for every slot (leggings included), an adult the leggings layer
-/// for its legs and the `humanoid` one otherwise.
-fn humanoid_layer_folder(baby: bool, layer: &str) -> &'static str {
-    if baby {
-        "humanoid_baby"
-    } else if layer == "leggings" {
-        "humanoid_leggings"
-    } else {
-        "humanoid"
-    }
-}
+/// A mob's worn armour, resolved by the game from each stack's `equippable`
+/// asset and the equipment table: per slot (`equipment::ARMOR`'s order: head,
+/// chest, legs, feet) the asset's layers in vanilla's layer type for that mob,
+/// each (texture, the colour it has when undyed) — the table's own lists, lent
+/// for the frame. A stack without an asset wears no layer at all.
+pub type WornArmor<'a> = [Option<&'a [(String, Option<u32>)]>; 4];
 /// `HumanoidArmorLayer`: the armour models of the mob's main model with the
-/// equipment textures (leather tinted, with its overlay).
-fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
+/// equipment layers `worn` resolved (`EquipmentLayerRenderer.renderLayers`):
+/// a dyeable layer takes the stack's dye colour, the colour it has when undyed
+/// otherwise, and a layer keeps its place in the asset's own order (leather's
+/// overlay is its second layer).
+fn humanoid_armor(m: &Mob, worn: &WornArmor, v: &mut Vec<Layer>) {
     // A player's or mannequin's armour is drawn by the game's armour layers.
     if super::equine::is_equine(m.species()) || avatar(m) {
         return;
     }
-    let e = &m.extra;
-    use horizon_items::equipment::{ARMOR, CHEST, FEET, HEAD, LEGS};
-    if ARMOR.iter().all(|&slot| e.slot_stack(slot).is_none()) {
+    if worn.iter().all(Option::is_none) {
         return;
     }
     let (model, _) = body(m);
     let Some(base) = model.strip_suffix("#main") else {
         return;
     };
-    let slots = [
-        (HEAD, "helmet"),
-        (CHEST, "chestplate"),
-        (LEGS, "leggings"),
-        (FEET, "boots"),
-    ];
-    for (slot, layer) in slots {
-        let stack = e.slot_stack(slot);
-        let Some(name) = stack.and_then(|s| s.item.strip_prefix("minecraft:")) else {
+    let slots = ["helmet", "chestplate", "leggings", "boots"];
+    for (i, (slot, layer)) in horizon_items::equipment::ARMOR
+        .into_iter()
+        .zip(slots)
+        .enumerate()
+    {
+        let Some(layers) = worn[i] else {
             continue;
         };
-        let Some(material) = name.strip_suffix(layer).and_then(|n| n.strip_suffix('_')) else {
-            continue;
-        };
-        let asset = match material {
-            "golden" => "gold",
-            "turtle" => "turtle_scute",
-            other => other,
-        };
-        let folder = humanoid_layer_folder(m.is_baby(), layer);
+        let stack = m.extra.slot_stack(slot);
         let model = interned(format_args!("{base}#{layer}"));
-        // EquipmentLayerRenderer.getColorForLayer: the leather layer takes
-        // the stack's dye colour, the colour it has when undyed otherwise.
-        let tint = if asset == "leather" {
-            armor_tint(Some(0xA06540), stack)
-        } else {
-            0xFFFF_FFFF
-        };
-        v.push(Layer {
-            model: model.clone(),
-            texture: interned(format_args!("entity/equipment/{folder}/{asset}")),
-            color: tint,
-            full_bright: false,
-            scroll: 0.0,
-        });
-        if asset == "leather" {
+        for (texture, undyed) in layers {
             v.push(Layer {
-                model,
-                texture: interned(format_args!("entity/equipment/{folder}/leather_overlay")),
-                color: 0xFFFF_FFFF,
+                model: model.clone(),
+                texture: interned(format_args!("{texture}")),
+                color: armor_tint(*undyed, stack),
                 full_bright: false,
                 scroll: 0.0,
             });
@@ -1457,11 +1429,22 @@ pub fn render(
     data: &MobData,
     out: &mut Vec<Vertex>,
 ) {
-    render_with(m, alpha, camera, atlas, light, data, &[], out);
+    render_with(
+        m,
+        alpha,
+        camera,
+        atlas,
+        light,
+        data,
+        &Default::default(),
+        &[],
+        out,
+    );
 }
 /// `render` plus extra layers posed like the body (`HumanoidArmorLayer`:
 /// the armour model's parts copy the body's): (model, texture rect, colour,
 /// overlay: 0 or `ARMOR_GLINT`, as `EquipmentLayerRenderer` never tints them).
+/// `worn` is the mob's [`WornArmor`].
 #[allow(clippy::too_many_arguments)]
 pub fn render_with(
     m: &Mob,
@@ -1470,6 +1453,7 @@ pub fn render_with(
     atlas: Atlas,
     light: u32,
     data: &MobData,
+    worn: &WornArmor,
     extra: &[(&Part, [f32; 4], u32, u32, bool)],
     out: &mut Vec<Vertex>,
 ) {
@@ -1480,6 +1464,7 @@ pub fn render_with(
         atlas,
         light,
         data,
+        worn,
         extra,
         Default::default(),
         None,
@@ -1499,6 +1484,7 @@ pub fn render_with_hidden(
     atlas: Atlas,
     light: u32,
     data: &MobData,
+    worn: &WornArmor,
     extra: &[(&Part, [f32; 4], u32, u32, bool)],
     hidden: mod_api::HiddenParts,
     mut parts: Option<&mut Option<mod_api::PosedParts>>,
@@ -1522,6 +1508,7 @@ pub fn render_with_hidden(
                     atlas,
                     light,
                     data,
+                    worn,
                     extra,
                     paint,
                     hidden,
@@ -1540,6 +1527,7 @@ pub fn render_with_hidden(
         atlas,
         light,
         data,
+        worn,
         extra,
         paint,
         hidden,
@@ -1559,6 +1547,7 @@ pub fn render_skinned(
     atlas: Atlas,
     light: u32,
     data: &MobData,
+    worn: &WornArmor,
     hidden: mod_api::HiddenParts,
     parts: Option<&mut Option<mod_api::PosedParts>>,
     out: &mut Vec<Vertex>,
@@ -1572,6 +1561,7 @@ pub fn render_skinned(
             atlas,
             light,
             data,
+            worn,
             &[],
             hidden,
             parts,
@@ -1586,6 +1576,7 @@ pub fn render_skinned(
         atlas,
         light,
         data,
+        worn,
         &[],
         Some(body_color(m, alpha)),
         hidden,
@@ -1846,6 +1837,7 @@ pub fn render_layers(
     atlas: Atlas,
     light: u32,
     data: &MobData,
+    worn: &WornArmor,
     extra: &[(&Part, [f32; 4], u32, u32, bool)],
     parts: Option<&mut Option<mod_api::PosedParts>>,
     out: &mut Vec<Vertex>,
@@ -1858,6 +1850,7 @@ pub fn render_layers(
         atlas,
         light,
         data,
+        worn,
         extra,
         None,
         Default::default(),
@@ -1875,6 +1868,7 @@ pub fn render_posed(
     atlas: Atlas,
     light: u32,
     data: &MobData,
+    worn: &WornArmor,
     out: &mut Vec<Vertex>,
 ) {
     let base = base_transform_at(m, alpha, origin);
@@ -1885,6 +1879,7 @@ pub fn render_posed(
         atlas,
         light,
         data,
+        worn,
         &[],
         Some(body_color(m, alpha)),
         Default::default(),
@@ -1907,7 +1902,7 @@ fn cem_key(model_key: &str) -> &str {
 /// the atlas lacks it, and only the layer a `.jem` was made for takes it, `paints_with_jem`),
 /// and the warden's glowing layers (whether they glow this frame or not). Random textures
 /// choose a variant for each.
-pub fn drawn_textures(m: &Mob, data: &MobData) -> Vec<String> {
+pub fn drawn_textures(m: &Mob, data: &MobData, worn: &WornArmor) -> Vec<String> {
     fn push(names: &mut Vec<String>, custom: Option<&super::cem::CemLayer>, vanilla: String) {
         if let Some(texture) = custom.and_then(|c| c.texture_for(&vanilla)) {
             names.push(texture.to_owned());
@@ -1922,7 +1917,7 @@ pub fn drawn_textures(m: &Mob, data: &MobData) -> Vec<String> {
     let cem_key = cem_key(&model_key);
     let mut names = Vec::new();
     push(&mut names, cem.layer(cem_key), texture.into_owned());
-    let mut all_layers = layers(m, m.age as f32);
+    let mut all_layers = layers(m, m.age as f32, worn);
     if m.species() == Species::Warden {
         for (model, texture, _) in super::warden::emissive_layers(m, 0.0) {
             all_layers.push(Layer {
@@ -2071,6 +2066,7 @@ fn render_visible(
     atlas: Atlas,
     light: u32,
     data: &MobData,
+    worn: &WornArmor,
     extra: &[(&Part, [f32; 4], u32, u32, bool)],
     // `submit`'s `tintedColor` to draw the body in, or `None` for its layers only.
     paint: Option<u32>,
@@ -2152,7 +2148,7 @@ fn render_visible(
     if let Some(animation) = body_animation {
         animation.run(m, &s, &mut poses);
     }
-    let mut all_layers = layers(m, s.age);
+    let mut all_layers = layers(m, s.age, worn);
     // WardenRenderer: the translucent emissive layers fade with the animations.
     if m.species() == Species::Warden {
         for (model, texture, a) in super::warden::emissive_layers(m, alpha) {
@@ -2878,53 +2874,6 @@ mod tests {
         );
     }
 
-    /// A baby zombie's armour reads the `humanoid_baby` textures for every
-    /// slot, not the adult `humanoid`/`humanoid_leggings` ones (#7302).
-    #[test]
-    fn a_baby_zombies_armour_uses_the_humanoid_baby_textures() {
-        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
-        kind.species = Species::Zombie;
-        let model = kind.model.clone();
-        kind.layers.insert("zombie_baby#main".into(), model);
-        let mut mob = Mob::new(
-            1,
-            std::sync::Arc::new(kind),
-            horizon_core::geometry::Vec3::ZERO,
-            0.0,
-        );
-        mob.extra.age = -24000;
-        use horizon_items::equipment::{FEET, HEAD, LEGS};
-        let armour = |name: &str| Some(horizon_client::items::ItemStack::new(name, 1));
-        mob.extra
-            .equipment
-            .set(HEAD, armour("minecraft:iron_helmet"));
-        mob.extra
-            .equipment
-            .set(LEGS, armour("minecraft:iron_leggings"));
-        mob.extra
-            .equipment
-            .set(FEET, armour("minecraft:leather_boots"));
-        let mut layers = Vec::new();
-        humanoid_armor(&mob, &mut layers);
-        let textures: Vec<&str> = layers.iter().map(|l| &*l.texture).collect();
-        assert_eq!(
-            textures,
-            [
-                "entity/equipment/humanoid_baby/iron",
-                "entity/equipment/humanoid_baby/iron",
-                "entity/equipment/humanoid_baby/leather",
-                "entity/equipment/humanoid_baby/leather_overlay",
-            ]
-        );
-        mob.extra.age = 0;
-        let mut adult = Vec::new();
-        humanoid_armor(&mob, &mut adult);
-        assert_eq!(
-            &*adult[1].texture,
-            "entity/equipment/humanoid_leggings/iron"
-        );
-    }
-
     /// A zombie whose model is a humanoid built here (head with its hat, body, arms, legs: one
     /// face each), and empty mob data: what the posed-parts tests draw, without `.local`.
     fn humanoid_zombie() -> (Mob, MobData) {
@@ -2994,6 +2943,7 @@ mod tests {
                 &atlas,
                 0xf0f0,
                 &data,
+                &Default::default(),
                 extra,
                 hidden,
                 Some(&mut parts),
@@ -3260,7 +3210,7 @@ mod tests {
                         (m.extra.variant, m.extra.villager_level) = (t as u8, 5);
                         m.extra.profession =
                             super::super::villager::ProfessionState::from_index(p as u8);
-                        let layers = layers(&m, m.age as f32);
+                        let layers = layers(&m, m.age as f32, &Default::default());
                         let group = if baby { "/baby/" } else { "/type/" };
                         assert!(
                             layers.iter().any(|l| l.texture.contains(group)),
@@ -3325,6 +3275,7 @@ mod tests {
                         &atlas,
                         0xf0f0,
                         &data,
+                        &Default::default(),
                         &mut vertices,
                     );
                 } else {
@@ -3586,6 +3537,7 @@ mod tests {
                 &atlas,
                 0xf0f0,
                 &data,
+                &Default::default(),
                 &[(part, [0.5, 0.5, 0.75, 0.75], 0xFFFF_FFFF, overlay, false)],
                 &mut vertices,
             );
@@ -3642,7 +3594,9 @@ mod tests {
     }
 
     fn sheep_layer(m: &Mob, model: &str, age: f32) -> Option<Layer> {
-        layers(m, age).into_iter().find(|l| l.model == model)
+        layers(m, age, &Default::default())
+            .into_iter()
+            .find(|l| l.model == model)
     }
 
     /// SheepRenderer.extractRenderState's `jeb_` magic name: the wool layer
@@ -3764,7 +3718,7 @@ mod scroll_tests {
         };
         // The sheep's wool layers, model, texture and colour, in submission order.
         let wool = |m: &Mob| -> Vec<(String, String, u32)> {
-            layers(m, 0.0)
+            layers(m, 0.0, &Default::default())
                 .into_iter()
                 .filter(|l| l.model.contains("#wool"))
                 .map(|l| (l.model.into_owned(), l.texture.into_owned(), l.color))
@@ -3892,7 +3846,17 @@ mod scroll_tests {
         let frame = |out: &mut Vec<Vertex>| {
             out.clear();
             for m in &mobs {
-                render_with(m, 0.5, camera, &atlas, 0xf0f0, &data, &[], out);
+                render_with(
+                    m,
+                    0.5,
+                    camera,
+                    &atlas,
+                    0xf0f0,
+                    &data,
+                    &Default::default(),
+                    &[],
+                    out,
+                );
             }
         };
         frame(&mut out);
@@ -4069,7 +4033,17 @@ mod emissive_tests {
         let m = silverfish();
         let draw = |data: &MobData| {
             let mut out = Vec::new();
-            render_with(&m, 0.0, glam::DVec3::ZERO, &atlas, lit, data, &[], &mut out);
+            render_with(
+                &m,
+                0.0,
+                glam::DVec3::ZERO,
+                &atlas,
+                lit,
+                data,
+                &Default::default(),
+                &[],
+                &mut out,
+            );
             out
         };
         // No `_e` file: one quad, as vanilla.
@@ -4103,7 +4077,17 @@ mod emissive_tests {
             let mut m = silverfish();
             m.age = age;
             let mut out = Vec::new();
-            render_with(&m, 0.0, glam::DVec3::ZERO, &atlas, 0, &data, &[], &mut out);
+            render_with(
+                &m,
+                0.0,
+                glam::DVec3::ZERO,
+                &atlas,
+                0,
+                &data,
+                &Default::default(),
+                &[],
+                &mut out,
+            );
             out.iter().map(|v| v.uv).collect::<Vec<_>>()
         };
         // Entity 1's phase is 0x9E3779B1 % 150 = 61: of every 150 ticks, it blinks for the
@@ -4157,7 +4141,17 @@ mod emissive_tests {
     /// Draws `m` and returns each vertex's (uv, light).
     fn drawn(m: &Mob, data: &MobData, atlas: Atlas) -> Vec<([f32; 2], u32)> {
         let mut out = Vec::new();
-        render_with(m, 0.0, glam::DVec3::ZERO, atlas, 7, data, &[], &mut out);
+        render_with(
+            m,
+            0.0,
+            glam::DVec3::ZERO,
+            atlas,
+            7,
+            data,
+            &Default::default(),
+            &[],
+            &mut out,
+        );
         out.iter().map(|v| (v.uv, v.light)).collect()
     }
 
@@ -4232,7 +4226,14 @@ mod emissive_tests {
             let mut m = silverfish();
             {
                 let textures = data.random_textures.read().unwrap();
-                crate::mobs::random_textures::choose(&mut m, &textures, &data, Some(seen()), 0);
+                crate::mobs::random_textures::choose(
+                    &mut m,
+                    &textures,
+                    &data,
+                    &Default::default(),
+                    Some(seen()),
+                    0,
+                );
             }
             let v = drawn(&m, &data, &atlas);
             assert!(inside(&v[..4], 0.5), "the variant");
@@ -4263,6 +4264,7 @@ mod emissive_tests {
             &atlas,
             7,
             &data,
+            &Default::default(),
             &extra,
             &mut out,
         );
@@ -4337,7 +4339,17 @@ mod random_texture_tests {
 
     fn uvs(m: &Mob, data: &MobData, atlas: Atlas) -> Vec<[f32; 2]> {
         let mut out = Vec::new();
-        render_with(m, 0.0, glam::DVec3::ZERO, atlas, 0, data, &[], &mut out);
+        render_with(
+            m,
+            0.0,
+            glam::DVec3::ZERO,
+            atlas,
+            0,
+            data,
+            &Default::default(),
+            &[],
+            &mut out,
+        );
         out.iter().map(|v| v.uv).collect()
     }
 
@@ -4355,7 +4367,14 @@ mod random_texture_tests {
                 day_time: 0,
                 weather: horizon_optifine::random::Weather::Clear,
             };
-            crate::mobs::random_textures::choose(&mut m, &textures, &data, Some(seen), 0);
+            crate::mobs::random_textures::choose(
+                &mut m,
+                &textures,
+                &data,
+                &Default::default(),
+                Some(seen),
+                0,
+            );
         }
         let both = |name: &str| match name {
             "entity/silverfish" => Some([0.0, 0.0, 0.5, 0.5]),

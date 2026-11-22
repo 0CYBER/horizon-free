@@ -3,6 +3,7 @@
 //! checks (`horizon_client::mobs::random_textures`).
 
 use super::Game;
+use crate::game::armor_stands::worn_equipment_layers;
 use horizon_client::mobs::random_textures::{Seen, choose, seed};
 use horizon_core::geometry::Vec3;
 use horizon_optifine::random::Weather;
@@ -27,7 +28,9 @@ impl Game<'_> {
             let m = &self.mobs[i];
             let seed = seed(m, self.persist.uuids.get(&id).copied());
             let seen = (!m.random_textures.has_seen()).then(|| self.seen_at(m.position));
-            choose(&mut self.mobs[i], &textures, res.mob_data(), seen, seed);
+            // The tables on their own: `choose` takes the mob mutably after.
+            let worn = worn_equipment_layers(m, self.res.items(), &self.armor_stand_assets);
+            choose(&mut self.mobs[i], &textures, res.mob_data(), &worn, seen, seed);
         }
     }
 

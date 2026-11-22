@@ -263,6 +263,7 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         // A screen's entity: custom entity model animations see is_in_gui = 1.
+        let worn = self.mob_armor_layers(mob);
         horizon_client::mobs::cem_anim::in_gui(|| {
             if modded {
                 return;
@@ -274,6 +275,7 @@ impl Game<'_> {
                 &lookup,
                 FULL_BRIGHT,
                 self.res.mob_data(),
+                &worn,
                 &[],
                 Default::default(),
                 added.is_some().then_some(&mut parts),

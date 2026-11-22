@@ -838,6 +838,7 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 self.res.mob_data(),
+                &Default::default(),
                 &self.player_armor_layers(),
                 hidden,
                 (listened || layers.is_some()).then_some(&mut parts),
@@ -851,6 +852,7 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 self.res.mob_data(),
+                &Default::default(),
                 &self.player_armor_layers(),
                 (listened || layers.is_some()).then_some(&mut parts),
                 out,
@@ -974,11 +976,28 @@ impl Game<'_> {
             let light = 240 | 240 << 8;
             if body {
                 horizon_client::mobs::render::render_with(
-                    &m, 1.0, camera, &lookup, light, data, &armour, &mut verts,
+                    &m,
+                    1.0,
+                    camera,
+                    &lookup,
+                    light,
+                    data,
+                    &Default::default(),
+                    &armour,
+                    &mut verts,
                 );
             } else {
                 horizon_client::mobs::render::render_layers(
-                    &m, 1.0, camera, &lookup, light, data, &armour, None, &mut verts,
+                    &m,
+                    1.0,
+                    camera,
+                    &lookup,
+                    light,
+                    data,
+                    &Default::default(),
+                    &armour,
+                    None,
+                    &mut verts,
                 );
             }
         });
@@ -2017,11 +2036,28 @@ mod preview_tests {
             let at = glam::DVec3::ZERO;
             if body {
                 horizon_client::mobs::render::render_with(
-                    &m, 1.0, at, &atlas, 0xF0F0, &data, &armour, &mut out,
+                    &m,
+                    1.0,
+                    at,
+                    &atlas,
+                    0xF0F0,
+                    &data,
+                    &Default::default(),
+                    &armour,
+                    &mut out,
                 );
             } else {
                 horizon_client::mobs::render::render_layers(
-                    &m, 1.0, at, &atlas, 0xF0F0, &data, &armour, None, &mut out,
+                    &m,
+                    1.0,
+                    at,
+                    &atlas,
+                    0xF0F0,
+                    &data,
+                    &Default::default(),
+                    &armour,
+                    None,
+                    &mut out,
                 );
             }
             out
@@ -2045,6 +2081,7 @@ mod preview_tests {
                 &atlas,
                 0xF0F0,
                 &data,
+                &Default::default(),
                 armour,
                 None,
                 out,

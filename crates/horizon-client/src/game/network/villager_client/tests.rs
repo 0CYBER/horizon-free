@@ -78,7 +78,7 @@ fn roundtrip(kind: &str, custom: bool, texture: &str) {
         }
     );
     assert!(
-        render::layers(&client, 0.0)
+        render::layers(&client, 0.0, &Default::default())
             .iter()
             .any(|layer| layer.texture == texture)
     );
@@ -266,7 +266,7 @@ fn villager_client_packet_slots_and_unresolved_identity() {
             );
             render::villager_client::install(&client_table, &Default::default());
             assert_eq!(
-                render::layers(&client, 0.0)
+                render::layers(&client, 0.0, &Default::default())
                     .iter()
                     .any(|layer| layer.texture.contains("/profession/")),
                 layer

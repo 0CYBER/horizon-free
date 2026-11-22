@@ -12,6 +12,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
             &atlas,
             0xf0f0,
             &data,
+            &Default::default(),
             &[],
             Default::default(),
             keep.then_some(&mut parts),
@@ -63,6 +64,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
         &atlas,
         0xf0f0,
         &data,
+        &Default::default(),
         Default::default(),
         Some(&mut skinned),
         &mut Vec::new(),
@@ -77,6 +79,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
         &atlas,
         0xf0f0,
         &data,
+        &Default::default(),
         &[],
         Some(&mut layered),
         &mut Vec::new(),
@@ -120,6 +123,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
             &atlas,
             0xf0f0,
             &data,
+            &Default::default(),
             &[],
             hidden,
             None,
@@ -148,6 +152,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
             &atlas,
             0xf0f0,
             &data,
+            &Default::default(),
             hidden,
             None,
             &mut Vec::new(),
@@ -210,6 +215,7 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
                 &atlas,
                 0xf0f0,
                 &data,
+                &Default::default(),
                 extra,
                 Some(body_color(&villager, 0.5)),
                 hidden,
@@ -252,7 +258,11 @@ fn posed_parts_are_the_poses_the_draw_made_and_change_nothing() {
     let table = super::super::villager::ResolvedProfessions::vanilla();
     super::villager_client::install(&table, &Default::default());
     layered.extra.profession = super::super::villager::ProfessionState::Vanilla(5);
-    assert_eq!(layers(&layered, 0.0).len(), 3, "type, profession and level");
+    assert_eq!(
+        layers(&layered, 0.0, &Default::default()).len(),
+        3,
+        "type, profession and level"
+    );
     let mut nose = mod_api::HiddenParts::default();
     nose.hide_named("nose").unwrap();
     assert_eq!(

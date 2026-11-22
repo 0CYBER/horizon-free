@@ -428,6 +428,7 @@ mod precheck_envelope_tests {
                         &|_| Some([0.0, 0.0, 1.0, 1.0]),
                         0xF0F0,
                         &data,
+                        &Default::default(),
                         &[],
                         &mut vertices,
                     );
