@@ -7106,7 +7106,16 @@ impl Game<'_> {
                         // emptied into a water bucket in its place.
                         if species == Species::Axolotl && &*item == "minecraft:tropical_fish_bucket"
                         {
-                            give = Some("minecraft:water_bucket");
+                            // ItemUtils.createFilledResult: in creative the
+                            // result is only given when none is already held.
+                            let has_bucket = self
+                                .inventory
+                                .iter()
+                                .flatten()
+                                .any(|s| &*s.item == "minecraft:water_bucket");
+                            if !self.creative || !has_bucket {
+                                give = Some("minecraft:water_bucket");
+                            }
                         }
                         // Animal.setInLove: entity event 18 (a baby that
                         // only grew is not in love).
