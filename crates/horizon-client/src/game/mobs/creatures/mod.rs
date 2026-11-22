@@ -4434,6 +4434,8 @@ impl Game<'_> {
         let mut impacts: Vec<Impact> = Vec::new();
         let mut vehicle_winds = self.vehicle_winds();
         let targets = self.projectile_targets();
+        // A stand without gravity has `noPhysics`: hurting projectiles skip it.
+        let free_stands = self.armor_stands.iter().any(|a| a.no_gravity);
         let breezes: Vec<u32> = self
             .mobs
             .iter()
@@ -4547,6 +4549,22 @@ impl Game<'_> {
                             };
                             targets.extend_from_slice(&winds);
                             horizon_client::arrows::tick(p, &scene, &targets)
+                        }
+                        (false, with_guests, no_winds) if free_stands => {
+                            let mut targets = if with_guests {
+                                pw_guests.targets.to_vec()
+                            } else {
+                                pw.targets.to_vec()
+                            };
+                            if !no_winds {
+                                targets.extend_from_slice(&winds);
+                            }
+                            self.drop_no_physics_stands(&p.kind, &mut targets);
+                            p.tick(&ProjWorld {
+                                w: if with_guests { pw_guests.w } else { pw.w },
+                                targets: &targets,
+                                border,
+                            })
                         }
                         (false, false, true) => p.tick(&pw),
                         (false, true, true) => p.tick(&pw_guests),
@@ -5325,6 +5343,14 @@ impl Game<'_> {
         {
             return Ok(());
         }
+        // An armor stand or an item frame (`projectile_targets.rs`).
+        if let Hit::Entity {
+            who: Who::Mob(id), ..
+        } = hit
+            && (self.projectile_hits_stand(p, id) || self.arrow_hits_frame(p, id))
+        {
+            return Ok(());
+        }
         if matches!(
             p.kind,
             ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge
@@ -5404,24 +5430,6 @@ impl Game<'_> {
             ) {
                 return Ok(());
             }
-        }
-        if p.arrow.is_some()
-            && let Hit::Entity {
-                who: Who::Mob(id), ..
-            } = hit
-            && self.item_frames.iter().any(|f| f.id == id)
-        {
-            // AbstractArrow.onHitEntity on an item frame: spent when the
-            // frame took the hit, turned back when a fixed one refused it.
-            let by_player = p.owner == Some(Who::Player);
-            let hurt = self.projectile_hurts_frame(id, by_player, by_player && self.creative);
-            let outcome = if hurt {
-                EntityHit::Hurt
-            } else {
-                EntityHit::Refused
-            };
-            self.finish_arrow_hit(p.clone(), outcome);
-            return Ok(());
         }
         if p.arrow.is_some()
             && let Hit::Entity {

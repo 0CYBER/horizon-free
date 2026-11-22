@@ -387,6 +387,7 @@ impl Game<'_> {
         if again.owner != Some(Who::Player) || super::lan_pvp::meets_players(&again.kind) {
             targets.extend(self.lan_projectile_targets());
         }
+        self.drop_no_physics_stands(&again.kind, &mut targets);
         let border = Some(self.border.bounds());
         let (mut keep, mut hit) = {
             let w = self.mob_world_base(&[]);

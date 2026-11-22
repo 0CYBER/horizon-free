@@ -457,6 +457,7 @@ impl Game<'_> {
         if mob_shot || pvp {
             targets.extend(self.lan_projectile_targets());
         }
+        self.drop_no_physics_stands(&p.kind, &mut targets);
         let rain = self.arrow_rain();
         let scene = self.arrow_scene(&rain);
         let (keep, _) = if p.arrow.is_some() {

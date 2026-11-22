@@ -648,12 +648,19 @@ impl Game<'_> {
                         }
                     }
                 }
-                // Boats, minecarts and primed TNT are pickable too (`isPickable`).
+                // Boats, minecarts, primed TNT and armor stands that are not
+                // markers are pickable too (`isPickable`).
                 if !t.dealt_damage {
                     for (who, b) in self
                         .vehicle_targets()
                         .into_iter()
                         .chain(self.tnts.iter().map(|t| (Who::Mob(t.id), t.bounds())))
+                        .chain(
+                            self.armor_stands
+                                .iter()
+                                .filter(|a| !a.marker)
+                                .map(|a| (Who::Mob(a.id), a.bounds())),
+                        )
                     {
                         if let Who::Mob(id) = who
                             && let Some(d) = segment_box(t.position, t.velocity, b.inflate(grow))
@@ -828,6 +835,10 @@ impl Game<'_> {
                                 let hit = CartHit::attributed(Some(by));
                                 self.hurt_cart(i, damage, creative, false, hit);
                             }
+                        } else if self.armor_stands.iter().any(|a| a.id == id) {
+                            // ArmorStand.hurtServer: `trident` always kills a stand.
+                            let by = t.guest.map_or(Target::Player, Target::Guest);
+                            self.command_damage_stand(id, "minecraft:trident", Some(by));
                         } else {
                             // ItemFrame.hurtServer: the item comes out, or the frame breaks.
                             self.projectile_hurts_frame(id, true, creative);
