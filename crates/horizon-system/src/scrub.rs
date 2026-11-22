@@ -160,6 +160,22 @@ fn ipv4_at(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
     if !starts_token(bytes, i) {
         return None;
     }
+    let mut end = dotted_quad(bytes, i)?;
+    // A port goes with it.
+    if bytes.get(end) == Some(&b':') {
+        let digits = bytes[end + 1..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        if (1..=5).contains(&digits) {
+            end += 1 + digits;
+        }
+    }
+    ends_token(bytes, end).then_some((end - i, IP))
+}
+
+/// Where four dotted decimal parts (each 0 to 255) starting at `i` end, if they do.
+fn dotted_quad(bytes: &[u8], i: usize) -> Option<usize> {
     let mut end = i;
     for part in 0..4 {
         if part > 0 {
@@ -188,21 +204,15 @@ fn ipv4_at(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
     if bytes.get(end) == Some(&b'.') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit) {
         return None;
     }
-    // A port goes with it.
-    if bytes.get(end) == Some(&b':') {
-        let digits = bytes[end + 1..]
-            .iter()
-            .take_while(|b| b.is_ascii_digit())
-            .count();
-        if (1..=5).contains(&digits) {
-            end += 1 + digits;
-        }
-    }
-    ends_token(bytes, end).then_some((end - i, IP))
+    Some(end)
 }
 
-/// Eight hex groups with colons, or fewer around a `::` (at least three groups, so a Rust path
-/// such as `a::b` is left alone).
+/// Eight hex groups with colons, or fewer around a `::` (at least two, as in `fd00::1`), the last
+/// 32 bits possibly written as an IPv4 address (`::ffff:192.168.1.10`), which goes with it, and
+/// a trailing `::` too (`2a01:4f8:c0c:1::`). A digit in it is what leaves a Rust path such as
+/// `a::b` alone; with only two groups and every colon in a `::` pair, as a path has them, the
+/// digit has to be in the last group, so `f32::add` stays too. A bare `::1` (loopback) says
+/// nothing about the player.
 fn ipv6_at(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
     if !starts_token(bytes, i) {
         return None;
@@ -212,13 +222,46 @@ fn ipv6_at(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
         .take_while(|b| b.is_ascii_hexdigit() || **b == b':')
         .count();
     let token = std::str::from_utf8(&bytes[i..i + len]).ok()?;
-    let token = token.trim_end_matches(':');
-    let groups: Vec<&str> = token.split(':').collect();
-    let filled = groups.iter().filter(|g| !g.is_empty()).count();
+    // One colon after it ends the sentence (`2001:db8::1: refused`); a `::` is the address's.
+    let trimmed = token.trim_end_matches(':');
+    let mut token = if token.len() - trimmed.len() >= 2 {
+        &token[..trimmed.len() + 2]
+    } else {
+        trimmed
+    };
+    let mut end = i + token.len();
+    // An IPv4 address in the last two groups' place: the hex part is what comes before it.
+    let mut quad = false;
+    if bytes.get(end) == Some(&b'.')
+        && let Some(colon) = token.rfind(':')
+        && let Some(quad_end) = dotted_quad(bytes, i + colon + 1)
+    {
+        token = &token[..=colon];
+        end = quad_end;
+        quad = true;
+    }
+    let hex = if quad {
+        &token[..token.len() - 1]
+    } else {
+        token
+    };
+    let groups: Vec<&str> = hex.split(':').collect();
+    let filled = groups.iter().filter(|g| !g.is_empty()).count() + if quad { 2 } else { 0 };
+    let digit = |g: &&str| g.bytes().any(|b| b.is_ascii_digit());
+    // Every colon in a `::`, as in a code path (`a::b`): only a digit tells an address apart. A single colon
+    // never stands in a path, so an address of letters only (`fdab:cdef::abcd`) is hidden too.
+    let pathish = !token.replace("::", "").contains(':');
+    let path_like = !quad && filled == 2 && pathish;
     let ok = groups.iter().all(|g| g.len() <= 4)
-        && (filled == 8 || (token.contains("::") && filled >= 3))
-        && groups.iter().any(|g| g.bytes().any(|b| b.is_ascii_digit()));
-    (ok && ends_token(bytes, i + token.len())).then_some((token.len(), IP))
+        && (filled == 8 || (token.contains("::") && filled >= 2))
+        && (quad || !pathish || groups.iter().any(digit))
+        && (!path_like
+            || groups
+                .iter()
+                .rev()
+                .find(|g| !g.is_empty())
+                .is_some_and(digit));
+    (ok && ends_token(bytes, end)).then_some((end - i, IP))
 }
 
 /// `0f8c…-…` (8-4-4-4-12) or the same 32 hex digits without dashes, as accounts are named.
@@ -351,6 +394,23 @@ mod tests {
         assert_eq!(s.scrub("joined 192.168.1.20:25565 ok"), "joined <ip> ok");
         assert_eq!(s.scrub("from 10.0.0.1."), "from <ip>.");
         assert_eq!(s.scrub("[2a01:e0a:1f2::5]"), "[<ip>]");
+        assert_eq!(
+            s.scrub("joined [fd00::1]:25565 ok"),
+            "joined [<ip>]:25565 ok"
+        );
+        assert_eq!(s.scrub("via fe80::1%eth0"), "via <ip>%eth0");
+        assert_eq!(
+            s.scrub("from ::ffff:192.168.1.10 and fd00::192.168.1.10."),
+            "from <ip> and <ip>."
+        );
+        assert_eq!(
+            s.scrub("net 2a01:4f8:c0c:1::/64 and fd00:1::, 2001:db8::1: refused"),
+            "net <ip>/64 and <ip>, <ip>: refused"
+        );
+        assert_eq!(
+            s.scrub("letters only: fdab:cdef::abcd, dead:beef:cafe:face:dead:beef:cafe:face"),
+            "letters only: <ip>, <ip>"
+        );
         assert_eq!(s.scrub("mail ana.b+mc@example.org now"), "mail <email> now");
         assert_eq!(
             s.scrub(
@@ -366,6 +426,7 @@ mod tests {
         for text in [
             "std::panicking::begin_panic (src/game.rs:12:5)",
             "a::b::c",
+            "f32::abs, f64::add(x), u8::MAX, d3d12::Device::new",
             "driver 31.0.15.3623, Windows 10.0.19045.1",
             "wgpu 30.0.1",
             "commit 9fceb02d0ae598e95dc970b74767f19372d61af8",
