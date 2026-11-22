@@ -295,7 +295,34 @@ fn channels(color: i32) -> [f32; 4] {
     [byte(16), byte(8), byte(0), byte(24)]
 }
 
+/// The attributes clients are not sent (the ones registered without `syncable()`).
+const NOT_SYNCED: [&str; 18] = [
+    "gameplay/can_start_raid",
+    "gameplay/bed_rule",
+    "gameplay/straw_bed_rule",
+    "gameplay/respawn_anchor_works",
+    "gameplay/nether_portal_spawns_piglin",
+    "gameplay/increased_fire_burnout",
+    "gameplay/eyeblossom_open",
+    "gameplay/turtle_egg_hatch_chance",
+    "gameplay/snow_golem_melts",
+    "gameplay/surface_slime_spawn_chance",
+    "gameplay/cat_waking_up_gift_chance",
+    "gameplay/bees_stay_in_hive",
+    "gameplay/monsters_burn",
+    "gameplay/can_pillager_patrol_spawn",
+    "gameplay/natural_mob_spawns",
+    "gameplay/creature_world_gen_spawn_probability",
+    "gameplay/villager_activity",
+    "gameplay/baby_villager_activity",
+];
+
 impl Attribute {
+    /// `EnvironmentAttribute.isSyncable`: whether clients are sent it
+    /// (`EnvironmentAttributeMap.NETWORK_CODEC`).
+    pub fn synced(&self) -> bool {
+        !NOT_SYNCED.contains(&self.id)
+    }
     /// `EnvironmentAttribute.defaultValue`; `None` for the types not ported yet.
     pub fn default_value(&self) -> Option<Value> {
         Some(match self.default {

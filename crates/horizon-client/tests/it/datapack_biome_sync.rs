@@ -49,7 +49,12 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let root = std::env::temp_dir().join(format!("horizon-sync-biomes-{}", std::process::id()));
     let _scratch = Scratch(root.clone());
     let base = write_base(&root);
-    let pack: Value = serde_json::from_str(r##"{"effects":{"grass_color":"#123456"}}"##).unwrap();
+    let pack: Value = serde_json::from_str(
+        r##"{"effects":{"grass_color":"#123456"},"temperature":0.5,
+            "attributes":{"minecraft:visual/sky_color":"#78a7ff","minecraft:gameplay/monsters_burn":false},
+            "carvers":"minecraft:cave","features":[[],["minecraft:ore_dirt"]]}"##,
+    )
+    .unwrap();
     let world = base.with_packs([("minecraft:tundra_x", &pack)]);
     let defaults = horizon_world::item_defaults::read(&root).unwrap();
     let sync = SyncData::load_with(
@@ -80,6 +85,14 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let biomes = sent.iter().find(|r| r.registry == BIOME_REGISTRY).unwrap();
     assert!(biomes.entries[0].data.is_none(), "a known one is not sent");
     assert!(biomes.entries[2].data.is_some(), "the pack's biome is sent");
+    // As `Biome.NETWORK_CODEC` writes it: its climate, effects and the attributes
+    // clients get, without what only the server reads.
+    let data = biomes.entries[2].data.as_ref().unwrap();
+    assert!(data.get("temperature").is_some() && data.get("effects").is_some());
+    assert!(data.get("features").is_none() && data.get("carvers").is_none());
+    let attributes = data.get("attributes").unwrap();
+    assert!(attributes.get("minecraft:visual/sky_color").is_some());
+    assert!(attributes.get("minecraft:gameplay/monsters_burn").is_none());
 
     // The client builds its table from what arrived: the server's id for
     // the name, and the pack's colour.

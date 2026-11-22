@@ -280,6 +280,39 @@ fn file_order<T>(entries: &mut [((String, String), T, bool)]) {
     entries.sort_by_cached_key(|((ns, path), ..)| (format!("{path}.json"), ns.clone()));
 }
 
+/// A biome file as clients are sent it (`Biome.NETWORK_CODEC`): its climate,
+/// the attributes clients get (`EnvironmentAttributeMap.NETWORK_CODEC`) and
+/// its effects. Its features, carvers and the attributes of gameplay stay on
+/// the server.
+fn network_biome(biome: &Value) -> Value {
+    let mut sent = serde_json::Map::new();
+    let climate = [
+        "has_precipitation",
+        "temperature",
+        "temperature_modifier",
+        "downfall",
+    ];
+    for key in climate.into_iter().chain(["effects"]) {
+        if let Some(value) = biome.get(key) {
+            sent.insert(key.into(), value.clone());
+        }
+    }
+    let attributes: serde_json::Map<String, Value> = biome
+        .get("attributes")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| {
+            horizon_world::environment_attributes::attribute(id).is_some_and(|a| a.synced())
+        })
+        .map(|(id, entry)| (id.clone(), entry.clone()))
+        .collect();
+    if !attributes.is_empty() {
+        sent.insert("attributes".into(), Value::Object(attributes));
+    }
+    Value::Object(sent)
+}
+
 /// A JSON value as the NBT that vanilla's NbtOps would produce from the codec
 /// (integers are ints, other numbers doubles, booleans bytes).
 pub fn json_to_nbt(v: &Value) -> Tag {
@@ -586,10 +619,14 @@ impl SyncData {
                     entries.push(((ns.to_owned(), p.to_owned()), json, packed));
                 }
             }
+            let biomes = *key == BIOME_REGISTRY;
             let mut entries = damage_entries.unwrap_or_else(|| {
                 entries
                     .into_iter()
-                    .map(|(key, value, packed)| (key, json_to_nbt(&value), packed))
+                    .map(|(key, value, packed)| {
+                        let value = if biomes { network_biome(&value) } else { value };
+                        (key, json_to_nbt(&value), packed)
+                    })
                     .collect()
             });
             file_order(&mut entries);
