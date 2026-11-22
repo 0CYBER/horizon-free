@@ -397,6 +397,39 @@ fn check_identity(dir: &Path, revision: &str, host: &str, target: Target) -> Res
     }
 }
 
+/// The SDK libraries a native build links, by library name, found in `deps`. `mod_points` is
+/// empty since the injection points were removed (#19576): it is resolved only when one of the
+/// mods being built names it, so an SDK that no longer ships it still builds every other mod.
+pub(super) fn sdk_libraries(
+    deps: &Path,
+    projects: &[api::Project<'_>],
+) -> Result<std::collections::HashMap<&'static str, PathBuf>, String> {
+    let named = |library: &str| {
+        projects.iter().any(|project| {
+            project
+                .api_dependencies()
+                .iter()
+                .any(|(_, used)| *used == library)
+        })
+    };
+    sdk_libraries_named(deps, named)
+}
+
+fn sdk_libraries_named(
+    deps: &Path,
+    named: impl Fn(&str) -> bool,
+) -> Result<std::collections::HashMap<&'static str, PathBuf>, String> {
+    let mut libraries = std::collections::HashMap::new();
+    for (package, name) in api::PACKAGES {
+        if package == api::INTERNALS_PACKAGE || (package == api::POINTS_PACKAGE && !named(name)) {
+            continue;
+        }
+        libraries.insert(name, library(deps, name)?);
+    }
+    libraries.insert("mod_vocab", library(deps, "mod_vocab")?);
+    Ok(libraries)
+}
+
 /// The library file a crate named `krate` left in `deps`: its metadata, or its own dylib.
 pub(super) fn library(deps: &Path, krate: &str) -> Result<PathBuf, String> {
     // A cached target can still contain metadata from an earlier static build. Prefer the dylib:
@@ -439,7 +472,6 @@ pub(super) fn wrapper_externs(deps: &Path) -> Result<BTreeMap<String, PathBuf>, 
         "horizon_client",
         "mod_api",
         "mod_vocab",
-        "mod_points",
         "horizon_mod_package",
     ] {
         externs.insert(name.to_owned(), library(deps, name)?);
@@ -716,15 +748,9 @@ pub(super) fn compile(
     crate::storage::mark_used(out).map_err(super::cache_error)?;
     let deps = game.join("deps");
     let sdk = identity(game)?;
-    let mut libraries = std::collections::HashMap::new();
-    for (package, name) in api::PACKAGES {
-        if package != api::INTERNALS_PACKAGE {
-            libraries.insert(name, library(&deps, name)?);
-        }
-    }
+    let libraries = sdk_libraries(&deps, projects)?;
     let game_library = library(&deps, "horizon_client")?;
     let mut facades = std::collections::HashMap::new();
-    libraries.insert("mod_vocab", library(&deps, "mod_vocab")?);
     let mut rlibs: std::collections::HashMap<&str, PathBuf> = std::collections::HashMap::new();
     let mut crate_names: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
     for (n, &index) in resolution.order.iter().enumerate() {
@@ -937,7 +963,9 @@ pub(super) fn compile_mod<'a>(
     cmd.args(["--crate-type", "dylib", "--crate-name", &krate])
         .arg("-C")
         .arg(format!("metadata={id}"));
-    for name in ["mod_api", "mod_vocab", "mod_points"] {
+    // `mod_points` is an extern only for a mod that names it (`api_dependencies`): it is empty
+    // since the injection points were removed (#19576), and a later SDK may not ship it.
+    for name in ["mod_api", "mod_vocab"] {
         refuse_closure_rlib(id, name, library(name))?;
         cmd.arg("--extern")
             .arg(format!("{name}={}", library(name).display()));
@@ -1244,6 +1272,21 @@ mod tests {
         let dylib = dir.path().join(super::dylib_name("mod_api"));
         std::fs::write(&dylib, b"dylib").unwrap();
         assert_eq!(super::library(dir.path(), "mod_api").unwrap(), dylib);
+    }
+
+    #[test]
+    fn sdk_without_mod_points_builds_mods_that_do_not_name_it() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["mod_api", "mod_vocab"] {
+            std::fs::write(dir.path().join(super::dylib_name(name)), b"dylib").unwrap();
+        }
+        let libraries = super::sdk_libraries_named(dir.path(), |_| false).unwrap();
+        let mut names: Vec<_> = libraries.keys().copied().collect();
+        names.sort();
+        assert_eq!(names, ["mod_api", "mod_vocab"]);
+        let message =
+            super::sdk_libraries_named(dir.path(), |name| name == "mod_points").unwrap_err();
+        assert!(message.contains("mod_points"), "{message}");
     }
 
     #[test]

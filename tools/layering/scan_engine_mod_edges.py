@@ -52,7 +52,7 @@ RULES = [
     ("loading", r"^mod_api::(ModEntry|Mods|ModFields|__private::(install|mods|set_mod_enabled|ModPhase|PhaseOwner"
                 r"|current_phase|LoadAccess|check_access|with_test_packages|loaded_mods|LoadedMods"
                 r"|installed_code_ids|mod_index\w*|mark_game_thread|command_argument_types))\b"),
-    ("slots", r"^(mod_points|horizon_mod_api_macros|horizon_mod_api_gen|point_shape|horizon_mod_point_emit)\b"),
+    ("slots", r"^(mod_points|horizon_mod_api_macros|horizon_mod_api_gen)\b"),
     ("attachments", r"^horizon_mod_runtime::(attachments|impl_attachment_lifetime)\b"),
     ("attachments", r"^mod_api::(Attachment\w*|attachment_queries|__private::attach\w*)\b"),
     ("host", r"^mod_api::(\w*Host|HostSide|Backend\w*|__private::(backend\w*|game))\b"),

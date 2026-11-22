@@ -91,6 +91,5 @@ proves every commit before it. A red is attributed by reading the error, with a 
 need a local build.
 
 To run it yourself, on Linux or Windows, follow the steps of `.github/workflows/wasm-mods.yml` from the repository
-root; the tool installs its pinned toolchain through rustup. One wasm compile of `horizon-mod-points` takes about
-10 GiB of memory, so set `CARGO_BUILD_JOBS=1` on a 16 GiB machine. To check one change, build only the member that
-uses the point and run its test. The build rewrites files in the fixture folders; don't commit them.
+root; the tool installs its pinned toolchain through rustup. To check one change, build only the member that uses
+it and run its test. The build rewrites files in the fixture folders; don't commit them.

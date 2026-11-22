@@ -1,12 +1,7 @@
 //! Compiled independently twice; never linked into the probe executable.
 #[unsafe(no_mangle)]
-pub fn probe_identity() -> [usize; 2] {
-    let shared = probe_shared::identity();
-    assert_eq!(
-        shared[1],
-        &mod_points::__private::POINTS as *const _ as usize
-    );
-    shared
+pub fn probe_identity() -> usize {
+    probe_shared::identity()
 }
 #[unsafe(no_mangle)]
 pub fn probe_bump() -> usize {
@@ -29,8 +24,4 @@ pub fn probe_enter() -> mod_api::content::crash::ModGuard {
 #[unsafe(no_mangle)]
 pub fn probe_tls(expected: Option<&str>) {
     assert_eq!(mod_api::content::crash::current_native_mod(), expected);
-    assert_eq!(
-        mod_points::__private::POINTS[0].load(std::sync::atomic::Ordering::SeqCst),
-        expected.is_some()
-    );
 }

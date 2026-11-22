@@ -17,7 +17,7 @@ There is no type information, so:
 - uses through another name for the game (a closure parameter in `self.as_guest(conn, |game| ...)`, a `let g = self`)
   are not attributed unless you pass --alias game. A bare `self` handed on (`helper(self)`, `&mut *self`) is listed
   under "whole self": its uses are those of the callee;
-- "mod point candidate" mimics point_shape::eligible (crates/horizon-mod-point-shape/src/lib.rs) from the signature
+- "mod point candidate" mimics the rule the removed injection points admitted a function by (#19576) from the signature
   and attributes: a `&self` or `&mut self` receiver, no `native_*` name, no const, async, unsafe or extern, no
   `cfg`, `cfg_attr`, `test` or `inline(always)` attribute (also on the impl or an enclosing inline module, or a
   gated `mod x;`), no `-> !` or `-> impl`, no `impl` parameter type, no parameter named `cancel` or `result`.
@@ -321,7 +321,8 @@ class Fn:
         return m.group(0).split() if m else []
 
     def eligible(self):
-        """(bool, reason): whether point_shape::eligible, read from the text, admits it as a `Game` method."""
+        """(bool, reason): whether the removed injection points' rule (#19576), read from the text, admits it as a
+        `Game` method."""
         why = []
         if self.owner != "Game" or self.trait:
             return False, "not an inherent `impl Game` method"

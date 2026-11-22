@@ -4,12 +4,9 @@ pub static STATE: AtomicUsize = AtomicUsize::new(0);
 pub fn bump() -> usize {
     STATE.fetch_add(1, Ordering::SeqCst)
 }
-pub fn identity() -> [usize; 2] {
+pub fn identity() -> usize {
     std::hint::black_box(horizon_mod_host::main_with as *const ());
-    [
-        &STATE as *const _ as usize,
-        &mod_points::__private::POINTS as *const _ as usize,
-    ]
+    &STATE as *const _ as usize
 }
 pub fn exchange(value: Vec<u8>) -> Vec<u8> {
     assert_eq!(value, [1, 2, 3]);

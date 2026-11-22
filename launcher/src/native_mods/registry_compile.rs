@@ -710,7 +710,6 @@ mod tests {
         for name in [
             "mod_api",
             "mod_vocab",
-            "mod_points",
             "horizon_mod_package",
             "horizon_mod_host",
         ] {

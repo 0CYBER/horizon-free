@@ -192,9 +192,9 @@ A feature often splits along this rule: the part others build on is platform, an
 is Horizon (PvP & HUD and replays, [above](#controllers-splitscreen-replays-and-ui-pages)).
 
 The mod interface follows that split too: `horizon-mod-vocab` is an engine crate, while
-`horizon-mod-api` preserves the mod-facing paths through re-exports. The build-time generator,
-procedural macros and point-shape parser are engine dependencies of that interface. Horizon's launcher
-reaches the generator and point-shape parser through `horizon-platform`'s optional `mod-build` feature.
+`horizon-mod-api` preserves the mod-facing paths through re-exports. The build-time generator and
+procedural macros are engine dependencies of that interface. Horizon's launcher reaches the generator
+through `horizon-platform`'s optional `mod-build` feature.
 The launcher and registry also reach the engine's shared mod package formats through
 `horizon_platform::mod_package`. The optional `mod-index`, `mod-prebuilt` and `mod-runtime-process`
 features enable registry validation, SDK archives and native process leases respectively; native
@@ -742,14 +742,11 @@ The mod API is part of the platform. The API owns its types,
 `horizon-mod-runtime` gets no game dependency, and its CI property check stays as a stricter check inside the
 platform.
 
-The portable engine crate `horizon-engine-slots` owns the final registration seal socket
-and the generated point records, their copy-in constructors, typed dispatchers and activity table.
-The host installs its seal provider before engine startup and registers native API listeners
-after dependency ordering and installation. At sealing, `horizon-mod-points` installs the
-set-once dispatch provider before publishing activity flags. Ordering, owner guards,
-replacement authority and listener dispatch remain in the platform registry. Staged point
-sites name only engine-owned paths; staging does not inject point dependencies into engine manifests.
-The seal refuses repeat or re-entrant sealing and late provider installation.
+The portable engine crate `horizon-engine-slots` owns the final registration seal socket and the
+platform socket the host installs before engine startup. The seal refuses repeat or re-entrant
+sealing. Its generated point records and dispatchers went with the injection points (#19576):
+`horizon-mod-points` is an empty crate the SDK keeps shipping because launchers released before
+then link it into every native mod, and staging still writes an empty `points.json` for them.
 
 Engine crates import `horizon-mod-vocab` as `mod_api`. Their test-only
 `mod_platform` dependency reaches `horizon-mod-api`; dev-dependencies are exempt

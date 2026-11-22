@@ -622,8 +622,8 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// Initializes programmatically loaded mods with the final inventory, then installs
-    /// their point listeners. Call once, before sealing the point registry.
+    /// Initializes programmatically loaded mods with the final inventory. Call once, at
+    /// startup.
     pub fn initialize(
         &self,
         inventory: &[mod_api::PackageInfo],

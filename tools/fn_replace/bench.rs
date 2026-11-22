@@ -1,14 +1,11 @@
-//! fn-replace bench: one game point, `horizon_client::game::autosave_interval(rate: f32) -> i64`,
+//! fn-replace bench: one game function, `horizon_client::game::autosave_interval(rate: f32) -> i64`,
 //! called from outside the prebuilt game, built with rustc against the SDK folder alone.
 //!
 //! usage: bench <mode> [millions of calls]
 //!   plain    the same body in this crate, never inlined: no replacement check
 //!   idle     the game's function with nothing installed
 //!   patched  the patched copy installed through the typed installer
-//!   listened an API listener at the function's return, through its injection point
-//!   both     the patched copy, with the API listener around it
 extern crate horizon_mod_host;
-extern crate mod_points;
 use horizon_client::game as g;
 use std::hint::black_box;
 use std::time::Instant;
@@ -34,20 +31,9 @@ fn main() {
     let mode = args.next().expect("mode");
     let calls: u64 = args.next().map_or(100, |n| n.parse().unwrap()) * 1_000_000;
     match mode.as_str() {
-        "patched" | "both" => assert!(g::__fnr_autosave_interval(copy)),
-        "plain" | "idle" | "listened" => {}
-        _ => panic!("expected plain, idle, patched, listened or both"),
-    }
-    if matches!(mode.as_str(), "listened" | "both") {
-        let double = mod_points::listeners::game_autosave_interval_return(
-            "bench",
-            0,
-            "double",
-            |args| *args.result.as_mut().unwrap() = listener(args.result.unwrap()),
-        );
-        mod_points::register(&double).unwrap();
-        mod_points::__private::seal();
-        horizon_client::__fnr_arm();
+        "patched" => assert!(g::__fnr_autosave_interval(copy)),
+        "plain" | "idle" => {}
+        _ => panic!("expected plain, idle or patched"),
     }
     let f: fn(f32) -> i64 = if mode == "plain" {
         plain

@@ -72,7 +72,8 @@ API_MAIN = ROOT / "crates/horizon-client/src/native_main.rs.template"
 RUNTIME = "bin"
 # The required inputs (`horizon_mod_package::sdk::Inputs`): `members` lists what each slice must hold.
 INPUTS = ROOT / "crates/horizon-mod-package/src/sdk/inputs.json"
-# The crates an API-only mod may name; their closure is the `api` archive.
+# The crates an API-only mod may name; their closure is the `api` archive. `horizon-mod-points` is empty since the
+# injection points were removed (#19576); it stays while launchers released before then link it into every native mod.
 API_ROOTS = ("horizon-mod-api", "horizon-mod-points")
 # The game libraries outside the API closure, in the runtime archive.
 GAME_LIBRARIES = ("horizon_mod_host", "horizon_mod_wasm")
