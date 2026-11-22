@@ -141,6 +141,9 @@ pub(super) struct Level {
     chunk_marks: HashMap<(i32, i32), horizon_client::world::ChunkMark>,
     /// What the root commit does, in order.
     after: Vec<After>,
+    /// What a shared (`&self`) host staged here: it joins `after` when this transaction
+    /// commits and is dropped when it aborts (`Level::settle_staged`).
+    staged: std::cell::RefCell<Vec<After>>,
     /// Internal decide/fire/apply state. No menu route uses this yet.
     actions: decision::Journal,
     action: Option<decision::ActiveAction>,
@@ -328,6 +331,13 @@ fn frame_token() -> u64 {
 }
 
 impl Level {
+    /// Merges what shared hosts staged into `after` on a commit; an abort drops it with the rest.
+    fn settle_staged(&mut self, commit: bool) {
+        let staged = std::mem::take(self.staged.get_mut());
+        if commit {
+            self.after.extend(staged);
+        }
+    }
     /// Keeps chested mob `id`'s item list's length, `len`, before `entity_slots` grows it, if
     /// this transaction hasn't yet.
     pub(super) fn keep_mob_length(&mut self, id: u32, len: usize) {
@@ -455,6 +465,7 @@ impl Game<'_> {
     /// What closing `level` does, with the closing phase already set.
     fn close_level(&mut self, mut level: Level, commit: bool) {
         let departed = std::mem::take(&mut level.departed);
+        level.settle_staged(commit);
         if let Some(scope) = &mut self.block_entity_tick_items {
             scope.close_transaction(commit);
         }
@@ -921,6 +932,18 @@ impl Game<'_> {
     pub(super) fn defer_effect(&mut self, effect: DeferredEffect) {
         self.after_commit(After::Effect(effect));
     }
+    /// `after_commit` for a caller holding only `&self`: inside a transaction it is staged
+    /// with the innermost one, so an abort drops it; with none open it comes back for the
+    /// caller to queue.
+    pub(in crate::game) fn stage_after_commit(&self, after: After) -> Option<After> {
+        match self.transactions.last() {
+            Some(level) => {
+                level.staged.borrow_mut().push(after);
+                None
+            }
+            None => Some(after),
+        }
+    }
     /// Runs `after` at once, or at the root commit inside a transaction.
     pub(super) fn after_commit(&mut self, after: After) {
         match self.transactions.last_mut() {
@@ -1296,6 +1319,47 @@ include!("transactions/item_entity.rs");
 #[cfg(test)]
 #[path = "transactions/player_tests.rs"]
 mod player_tests;
+
+#[cfg(test)]
+mod staged_tests {
+    use super::{After, Level};
+
+    fn changed(level: &Level) -> Vec<(i32, i32, i32)> {
+        level
+            .after
+            .iter()
+            .map(|after| match after {
+                After::Changed(pos) => *pos,
+                _ => unreachable!("only `Changed` is staged here"),
+            })
+            .collect()
+    }
+
+    fn with_staged() -> Level {
+        let mut level = Level::default();
+        level.after.push(After::Changed((0, 0, 0)));
+        level.staged.borrow_mut().push(After::Changed((1, 0, 0)));
+        level.staged.borrow_mut().push(After::Changed((2, 0, 0)));
+        level
+    }
+
+    #[test]
+    fn what_a_shared_host_staged_follows_the_commit_in_order() {
+        let mut level = with_staged();
+        level.settle_staged(true);
+        assert_eq!(changed(&level), [(0, 0, 0), (1, 0, 0), (2, 0, 0)]);
+    }
+
+    #[test]
+    fn what_a_shared_host_staged_is_dropped_by_an_abort() {
+        let mut level = with_staged();
+        level.settle_staged(false);
+        assert_eq!(changed(&level), [(0, 0, 0)]);
+        // Nothing is left to run at a later close either.
+        level.settle_staged(true);
+        assert_eq!(changed(&level), [(0, 0, 0)]);
+    }
+}
 
 #[cfg(test)]
 mod tests {

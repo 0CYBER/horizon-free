@@ -4370,6 +4370,8 @@ impl Game<'_> {
         self.update_interaction_ranges();
         // A logical server has no window to lead and never follows another server.
         if !self.is_logical_server() {
+            // Screen and other shared-host hooks can only stage payloads; publish them now.
+            self.flush_shared_payloads();
             self.tick_client_lead()?;
             if self.remote.is_some() {
                 return self.with_residency_tick(Self::tick_remote);

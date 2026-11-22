@@ -18,10 +18,35 @@ pub(super) struct Deferred {
 }
 const _: () = assert!(std::mem::size_of::<Deferred>() <= 256);
 impl Deferred {
+    fn new(_side: Side, _id: &PayloadId, epoch: Arc<Epoch>, prepared: Prepared) -> Self {
+        Self {
+            epoch,
+            prepared,
+            #[cfg(test)]
+            probe_server_reply: _side == Side::Server && _id.0 == "raw_probe:receipt",
+        }
+    }
     pub(super) fn publish(self) {
         #[cfg(test)]
         wasm_tests::publication(self.probe_server_reply);
         let _ = self.epoch.with_active(|| self.prepared.publish());
+    }
+}
+
+/// Interior-mutable staging for calls that only hold `&self` outside a transaction, drained by the game.
+/// `Default` and the `push`/`take` pair are the whole contract, so it can be tested alone.
+pub(super) struct SharedQueue<T>(std::cell::RefCell<Vec<T>>);
+impl<T> Default for SharedQueue<T> {
+    fn default() -> Self {
+        Self(std::cell::RefCell::new(Vec::new()))
+    }
+}
+impl<T> SharedQueue<T> {
+    pub(super) fn push(&self, value: T) {
+        self.0.borrow_mut().push(value);
+    }
+    pub(super) fn take(&self) -> Vec<T> {
+        std::mem::take(&mut *self.0.borrow_mut())
     }
 }
 impl Game<'_> {
@@ -51,6 +76,42 @@ impl Game<'_> {
             .payload_endpoint();
         self.queue_current_payload(endpoint, id, bytes)
     }
+    /// The shared-host half: validates and stages now, publishes on a later client
+    /// tick from a `&mut` host. Screen hooks receive `&dyn ClientHost` and cannot call
+    /// `send_payload_to_server`; this keeps their signatures unchanged.
+    pub(super) fn queue_payload_to_server(
+        &self,
+        id: &PayloadId,
+        bytes: PayloadBytes,
+    ) -> Result<PayloadAccepted, PayloadSendError> {
+        let endpoint = self
+            .remote
+            .as_ref()
+            .ok_or(PayloadSendError::Disconnected)?
+            .session
+            .payload_endpoint();
+        let epoch = endpoint
+            .transport()
+            .epoch()
+            .ok_or(PayloadSendError::NotNegotiated)?;
+        let prepared = endpoint.prepare(&epoch, id, bytes)?;
+        let deferred = Deferred::new(endpoint.side(), id, epoch, prepared);
+        // Inside a transaction the send goes with it: a handler that fails and rolls back
+        // sends nothing. With none open it waits for the next tick's flush.
+        if let Some(super::transactions::After::Payload(deferred)) = self
+            .stage_after_commit(super::transactions::After::Payload(deferred))
+        {
+            self.native_net.shared_payloads.push(deferred);
+        }
+        Ok(PayloadAccepted::Queued)
+    }
+    /// Move everything staged by `queue_payload_to_server` into the ordinary
+    /// root-commit queue, in submission order. Called once per client tick.
+    pub(super) fn flush_shared_payloads(&mut self) {
+        for deferred in self.native_net.shared_payloads.take() {
+            self.after_commit(super::transactions::After::Payload(deferred));
+        }
+    }
     pub(super) fn queue_current_payload(
         &mut self,
         endpoint: Endpoint,
@@ -71,12 +132,12 @@ impl Game<'_> {
         bytes: PayloadBytes,
     ) -> Result<PayloadAccepted, PayloadSendError> {
         let prepared = endpoint.prepare(&epoch, id, bytes)?;
-        self.after_commit(super::transactions::After::Payload(Deferred {
+        self.after_commit(super::transactions::After::Payload(Deferred::new(
+            endpoint.side(),
+            id,
             epoch,
             prepared,
-            #[cfg(test)]
-            probe_server_reply: endpoint.side() == Side::Server && id.0 == "raw_probe:receipt",
-        }));
+        )));
         #[cfg(test)]
         wasm_tests::staged_reply(endpoint.side() == Side::Server && id.0 == "raw_probe:receipt");
         Ok(PayloadAccepted::Queued)
@@ -313,3 +374,21 @@ mod wasm_config_tests;
 #[cfg(test)]
 #[path = "payload_transport/wasm_tests.rs"]
 mod wasm_tests;
+
+#[cfg(test)]
+mod shared_queue_tests {
+    use super::SharedQueue;
+
+    #[test]
+    fn staged_sends_drain_once_in_submission_order() {
+        let queue = SharedQueue::<u8>::default();
+        queue.push(1);
+        queue.push(2);
+        queue.push(3);
+        assert_eq!(queue.take(), vec![1, 2, 3]);
+        assert!(queue.take().is_empty());
+        // A send staged after a drain waits for the next one, not lost.
+        queue.push(4);
+        assert_eq!(queue.take(), vec![4]);
+    }
+}

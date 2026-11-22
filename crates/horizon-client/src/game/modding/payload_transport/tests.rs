@@ -28,6 +28,16 @@ fn drive_until(deadline: Instant, mut poll: impl FnMut() -> bool) -> bool {
 }
 
 #[test]
+fn a_shared_client_host_can_stage_a_payload() {
+    // A screen hook holds `&dyn ClientHost`. Type-check that the additive helper is
+    // reachable from a shared reference, without needing `&mut`.
+    fn stage(host: &dyn mod_api::ClientHost) {
+        let _ = host.queue_payload_to_server(&PayloadId(CHANNEL.into()), PayloadBytes(vec![]));
+    }
+    let _: fn(&dyn mod_api::ClientHost) = stage;
+}
+
+#[test]
 fn completion_observed_on_last_poll_wins_over_deadline() {
     let expired = Instant::now();
     let mut polls = 0;

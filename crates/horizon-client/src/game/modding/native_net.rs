@@ -13,6 +13,10 @@ pub(super) struct NativeNet {
     pub(super) book_retry_at: Option<std::time::Instant>,
     /// A mod's `disconnect` (its reason, if any), carried out at the end of the frame.
     pub(super) leave: Option<super::native_disconnect::LeaveRequest>,
+    /// Payloads staged from a shared (`&dyn ClientHost`) hook, drained each client tick
+    /// by `Game::flush_shared_payloads`.
+    pub(super) shared_payloads:
+        super::payload_transport::SharedQueue<super::payload_transport::Deferred>,
 }
 
 impl Game<'_> {
