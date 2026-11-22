@@ -4859,6 +4859,7 @@ pub(crate) mod tests {
     }
 
     mod crafted_stat_tests;
+    mod hook_result_tests;
     mod mod_grid_tests;
 
     /// Extra sources (`native_recipe_sources`) count as more inventory: the

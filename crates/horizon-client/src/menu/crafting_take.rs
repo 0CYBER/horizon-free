@@ -199,7 +199,14 @@ impl Menu {
                 .iter()
                 .map(|cell| cell.as_ref().and_then(|s| env.remainder(s)))
                 .collect(),
-            None => return,
+            // No recipe matches: the result is a mod's (`prepare_item_craft`,
+            // or a patched `recompute`). Its take still uses one of each
+            // occupied slot, with each item's own remainder, as Paper's
+            // `PrepareItemCraftEvent` keeps vanilla's take.
+            None => grid
+                .iter()
+                .map(|cell| cell.as_ref().and_then(|s| env.remainder(s)))
+                .collect(),
         };
         for cell in 0..n * n {
             let mut here = self.state.containers[GRID][cell].take();
