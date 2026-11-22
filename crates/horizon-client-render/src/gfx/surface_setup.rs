@@ -123,6 +123,15 @@ pub(super) struct DeviceNeeds {
     pub(super) layers: u32,
     pub(super) rays: bool,
 }
+impl DeviceNeeds {
+    /// Whether the device will be asked for a Shader Model 6.5 feature: ray queries
+    /// (`HORIZON_RAY_TRACING` and the picked pack, as `rt::query::features` decides) or mesh
+    /// shaders (`HORIZON_MESH_SHADER`). On DirectX 12, FXC can't compile those; DXC can.
+    pub(super) fn shader_model_6_5(self) -> bool {
+        super::rt::query::wanted(super::rt::query::switch(), self.rays)
+            || mesh_shader::switch() == mesh_shader::Switch::On
+    }
+}
 impl super::output::FrameRequest {
     /// What a device opened for this request and `layers` sprite layers needs.
     pub(super) fn needs(self, layers: u32) -> DeviceNeeds {

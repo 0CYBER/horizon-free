@@ -574,11 +574,13 @@ async fn open_backend(
             adapter.get_info().name
         )));
     }
-    // An integrated GPU on DirectX 12 compiles with DXC: the same request
-    // again, on an instance that loads the DLL beside the game. Anything that
-    // goes wrong keeps the FXC instance.
+    // An integrated GPU on DirectX 12 compiles with DXC, and so does a discrete
+    // one asked for ray queries or mesh shaders, which FXC can't compile: the
+    // same request again, on an instance that loads the DLL beside the game.
+    // Anything that goes wrong keeps the FXC instance.
     let forced = dx12_compiler::forced();
-    let dxc = if dx12_compiler::wants_dxc(&adapter.get_info(), forced) {
+    let sm_6_5 = needs.shader_model_6_5();
+    let dxc = if dx12_compiler::wants_dxc(&adapter.get_info(), forced, sm_6_5) {
         open_dxc(&adapter.get_info(), window, offscreen, open).await
     } else {
         None
@@ -718,8 +720,9 @@ async fn open_dxc(
     let why = match surface_and_adapter(&instance, window, offscreen).await {
         Ok((surface, adapter)) if dx12_compiler::same_adapter(fxc, &adapter.get_info()) => {
             log::info!(
-                "Horizon renderer: DirectX 12 compiles shaders with DXC ({}) on this integrated GPU",
-                dll.display()
+                "Horizon renderer: DirectX 12 compiles shaders with DXC ({}) on this {:?}",
+                dll.display(),
+                fxc.device_type
             );
             return Some((instance, surface, adapter));
         }
