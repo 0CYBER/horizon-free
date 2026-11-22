@@ -207,14 +207,26 @@ fn close(at: [f64; 3], slack: f64, p: [f64; 3]) -> bool {
 
 /// Whether an entity in `entities` other than the guest's own (`own`) is close to `at`. The
 /// distance test runs first: most entities are far, and the kind is a string compare. Items and
-/// experience orbs neither push nor hold anyone up; the list holds the player itself.
+/// experience orbs neither push nor hold anyone up, and neither do the entities that keep `Entity`'s
+/// `isPushable` and `canBeCollidedWith` (both false) and move no one on the client: paintings, item
+/// frames, markers, displays, interactions and leash knots. The list holds the player itself.
 fn entity_near(entities: &[EntityState], own: i32, at: [f64; 3], slack: f64) -> bool {
     entities.iter().any(|e| {
         close(at, slack, e.position)
             && e.id != own
             && !matches!(
                 e.kind.as_str(),
-                "minecraft:item" | "minecraft:experience_orb"
+                "minecraft:item"
+                    | "minecraft:experience_orb"
+                    | "minecraft:painting"
+                    | "minecraft:item_frame"
+                    | "minecraft:glow_item_frame"
+                    | "minecraft:marker"
+                    | "minecraft:block_display"
+                    | "minecraft:item_display"
+                    | "minecraft:text_display"
+                    | "minecraft:interaction"
+                    | "minecraft:leash_knot"
             )
     })
 }
@@ -380,5 +392,49 @@ mod tests {
             ..zombie(2, [0.0, 0.0, 0.0])
         };
         assert!(!entity_near(&[item], 0, at, s));
+    }
+
+    /// An entity a vanilla client can neither be pushed by (`isPushable`) nor stand on
+    /// (`canBeCollidedWith`) can't move the player: beside one, the moves count. One that can, and a
+    /// firework (it boosts its glider on the client), still excuses them.
+    #[test]
+    fn only_entities_that_can_move_a_player_excuse_its_moves() {
+        let at = [0.0, 64.0, 0.0];
+        let near = |kind: &str| {
+            let e = EntityState {
+                id: 1,
+                kind: kind.to_string(),
+                position: [1.0, 64.0, 0.5],
+                ..Default::default()
+            };
+            entity_near(&[e], 0, at, 0.0)
+        };
+        for inert in [
+            "minecraft:painting",
+            "minecraft:item_frame",
+            "minecraft:glow_item_frame",
+            "minecraft:marker",
+            "minecraft:block_display",
+            "minecraft:item_display",
+            "minecraft:text_display",
+            "minecraft:interaction",
+            "minecraft:leash_knot",
+        ] {
+            assert!(!near(inert), "{inert} excused the moves beside it");
+        }
+        for moving in [
+            "minecraft:cow",
+            "minecraft:armor_stand",
+            "minecraft:oak_boat",
+            "minecraft:minecart",
+            "minecraft:shulker",
+            "minecraft:firework_rocket",
+            "minecraft:arrow",
+        ] {
+            assert!(
+                near(moving),
+                "{moving} no longer excuses the moves beside it"
+            );
+        }
     }
 }
