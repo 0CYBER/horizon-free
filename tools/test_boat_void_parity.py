@@ -34,6 +34,17 @@ def program():
         cmd('/forceload add 0 0')
         cmd('/forceload add -78 -56')
         ops.append(dict(op='settle', required_chunks=[[0, 0], [-5, -4]]))
+        # Generated terrain can shed unrelated items while these chunks load.
+        # Observe every item type around the boat, below the dimension's floor,
+        # rather than making this fixture depend on all of the world's drops.
+        items = f'@e[type=item,x=-2,y={line - 2},z=-2,dx=5,dy=4,dz=5]'
+        outside = str(uuid.UUID(int=(802 << 96) | 1))
+        inside = str(uuid.UUID(int=(802 << 96) | 2))
+        cmd('/summon item 0.5 200 0.5 {UUID:[I;802,0,0,1],NoGravity:1b,Item:{id:"minecraft:stick",count:1}}')
+        cmd(f'/execute unless entity {items}')
+        cmd(f'/summon item 0.5 {line - 0.5} 0.5 {{UUID:[I;802,0,0,2],NoGravity:1b,Item:{{id:"minecraft:stick",count:1}}}}')
+        cmd(f'/execute if entity {items}')
+        cmd(f'/kill {inside}')
         boat = str(uuid.UUID(int=(801 << 96) | 1))
         cmd(f'/summon oak_boat 0.5 {line} 0.5 {{UUID:[I;801,0,0,1],Motion:[0d,-0.5d,0d]}}')
         cmd(f'/execute if entity {boat}')
@@ -41,7 +52,7 @@ def program():
         cmd(f'/execute if entity {boat}')
         tick(1)
         cmd(f'/execute unless entity {boat}')
-        cmd('/execute unless entity @e[type=item]')
+        cmd(f'/execute unless entity {items}')
         # Load the incident's exact position and motion while frozen. Clamping
         # must happen at load, and removal on the very next server tick.
         cmd(f'/summon oak_boat 0.5 200 0.5 {{UUID:[I;801,0,0,1]}}')
@@ -53,12 +64,18 @@ def program():
         cmd(f'/data get entity {boat} Motion')
         tick(1)
         cmd(f'/execute unless entity {boat}')
+        # Entity.load clamps the incident's Y to -20,000,000. Keep its
+        # no-drop check as well as the ordinary void-boundary case above.
+        loaded_items = '@e[type=item,x=-80,y=-20000002,z=-58,dx=5,dy=4,dz=5]'
+        cmd(f'/execute unless entity {loaded_items}')
         # Boundary equality survives indefinitely without gravity.
         cmd(f'/summon oak_boat 0.5 {line} 0.5 {{UUID:[I;801,0,0,1],NoGravity:1b}}')
         tick(3)
         cmd(f'/execute if entity {boat}')
         cmd(f'/kill {boat}')
-        cmd('/kill @e[type=item]')
+        cmd(f'/kill {items}')
+        cmd(f'/execute if entity {outside}')
+        cmd(f'/kill {outside}')
     return ops
 
 
