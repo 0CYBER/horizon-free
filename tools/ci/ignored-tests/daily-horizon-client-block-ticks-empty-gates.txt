@@ -1,0 +1,2 @@
+# block_ticks empty gates test boots Game with prepared resources.
+horizon-client game::block_ticks::tests::random_tick_speed_zero_and_empty_block_events_skip_without_breaking_active_ticks lib daily resources
