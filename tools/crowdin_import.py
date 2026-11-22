@@ -287,10 +287,11 @@ def inventory(folder: Path, table: dict[str, str]) -> dict[str, Path]:
 
 
 def acceptable(name: str, english: str, text: str, plain: set[str]) -> bool:
-    """A translation the game can format with the English text's arguments, and without a control
-    character it must not carry (`lang_coverage.formats_like`, `stray_controls`)."""
+    """A translation the game can format with the English text's arguments, that keeps the
+    formatting codes, line breaks, length and characters the English text allows
+    (`lang_coverage.formats_like`, `text_problem`)."""
     return (lang_coverage.formats_like(name, english, text, plain)
-            and not lang_coverage.stray_controls(english, text))
+            and lang_coverage.text_problem(english, text) is None)
 
 
 def merge(existing: dict[str, str], incoming: dict[str, str],
@@ -393,14 +394,32 @@ def sync_language(code: str, exported: dict[str, str], proofread: dict[str, str]
         "checked": len(checked),
         "kept": sum(1 for name in before if name not in ours),
         "dropped": dropped,
+        "recorded": len(ours),
+        "withdrawn": sorted(ours - set(checked)),
     }
 
 
+# The most review marks one run may take back in a language, of those the sync recorded: this many,
+# or this share of them, whichever is more. A partial approved export would otherwise withdraw marks
+# in bulk; more than this needs `--allow-withdrawals`, which only a run by hand can pass.
+MIN_WITHDRAWALS = 3
+WITHDRAWAL_SHARE = 0.10
+
+
+def withdrawal_cap(recorded: int) -> int:
+    return max(MIN_WITHDRAWALS, int(recorded * WITHDRAWAL_SHARE))
+
+
+class WithdrawalError(InventoryError):
+    """A run that would take back more review marks than `withdrawal_cap` allows."""
+
+
 def sync(translations: Path, approved: Path, lang: Path = LANG, review: Path = REVIEW,
-         write: bool = True) -> list[dict]:
-    """Every exported language under `translations`. Both folders' files are mapped, and every
-    export read and checked, before the first language is written: a broken one stops the run with
-    the repository as it was (ExportError)."""
+         write: bool = True, allow_withdrawals: bool = False) -> list[dict]:
+    """Every exported language under `translations`. Both folders' files are mapped, every export
+    read and checked, and every language worked out before the first one is written: a broken export
+    (ExportError) or one that would take back more marks than `withdrawal_cap` allows
+    (WithdrawalError, unless `allow_withdrawals`) stops the run with the repository as it was."""
     table = index()
     english_file = lang_coverage.LangFile(lang / "en_us.json")
     if english_file.problem:
@@ -411,7 +430,18 @@ def sync(translations: Path, approved: Path, lang: Path = LANG, review: Path = R
     wanted = set(english)
     exports = {code: read_export(code, path, wanted) for code, path in sorted(exported.items())}
     checked = {code: read_export(code, path, wanted) for code, path in sorted(proofread.items())}
-    return [sync_language(code, entries, checked.get(code), lang, review, english, write)
+    rows = [sync_language(code, entries, checked.get(code), lang, review, english, write=False)
+            for code, entries in exports.items()]
+    over = [row for row in rows if len(row["withdrawn"]) > withdrawal_cap(row["recorded"])]
+    if over and not allow_withdrawals:
+        raise WithdrawalError("\n".join(
+            f"{row['code']} ({approved.name}): would take back {len(row['withdrawn'])} of its "
+            f"{row['recorded']} proofread marks, more than the {withdrawal_cap(row['recorded'])} one "
+            f"run may; an incomplete approved export? Run by hand with allow_withdrawals if the "
+            f"approvals really were withdrawn" for row in over))
+    if not write:
+        return rows
+    return [sync_language(code, entries, checked.get(code), lang, review, english, write=True)
             for code, entries in exports.items()]
 
 
@@ -468,6 +498,9 @@ def main(argv: list[str] | None = None) -> int:
                              "from (the first run's seed), then exit")
     parser.add_argument("--stage-dir", type=Path, default=ROOT / "l10n/game",
                         help="with --stage: the staging folder Crowdin's `translation` pattern names")
+    parser.add_argument("--allow-withdrawals", action="store_true",
+                        help="take back more review marks in a language than one run may "
+                             "(MIN_WITHDRAWALS, WITHDRAWAL_SHARE); only for a run by hand")
     parser.add_argument("--check", action="store_true",
                         help="only check that the table covers every lang file, then exit")
     arguments = parser.parse_args(argv)
@@ -497,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         rows = sync(arguments.translations, arguments.approved, arguments.lang, arguments.review,
-                    write=not arguments.dry_run)
+                    write=not arguments.dry_run, allow_withdrawals=arguments.allow_withdrawals)
     except ExportError as error:
         print(f"{error}; nothing was written", file=sys.stderr)
         return 1
@@ -515,7 +548,7 @@ def main(argv: list[str] | None = None) -> int:
     for row in rows:
         if row["dropped"]:
             print(f"\n{row['code']}: {len(row['dropped'])} translations change the placeholders of "
-                  f"the English text, cannot be formatted, add a control character or are the "
+                  f"the English text, cannot be formatted, break a text rule (docs/translations.md) or are the "
                   f"English text, and were not written: {', '.join(row['dropped'][:5])}",
                   file=sys.stderr)
     return 0

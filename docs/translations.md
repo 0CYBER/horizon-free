@@ -120,6 +120,35 @@ get in and where a single wrong string is still reported.
 - Keep placeholders as they are (`%s`, `%1$s` in the game, `{name}` in the launcher): `lang_coverage.py` reports a
   changed one, the Crowdin import refuses to write it, and `lang.rs`'s test fails on a bundled one. Both read
   templates the way the game's formatter does (`tests/fixtures/translation_templates.json` holds the cases they share).
+- A game translation keeps what its English text allows; the import drops a string that doesn't, and `lang.rs`'s
+  test fails on a bundled one (`tests/fixtures/translation_text_rules.json` holds the cases both read):
+  - **formatting codes**: the same `§` codes as the English text, in the same order and as many (a `§` hides the
+    character after it, any one; ASCII letters match without case), so no added colour, style or `§k` obfuscation;
+  - **line breaks**: at most twice as many as the English text has, so none where it has none;
+  - **length**: at most 4× the English length in characters or the English length + 80, whichever is more, and no
+    token of more than 60 characters the game cannot wrap unless the English text has a longer one. A token is what
+    lies between spaces and line breaks, the only places the game breaks a line (a no-break or ideographic space
+    doesn't count); letters of a script written without spaces (Han, kana, Hangul syllables, Thai, Lao, Khmer,
+    Myanmar) don't count towards it, everything else in it does, their marks and unassigned code points included;
+  - **invisible characters**: none of these the English text lacks: zero-width space, word joiner, line and
+    paragraph separators, byte order mark, soft hyphen, combining grapheme joiner, Mongolian vowel separator, Hangul
+    fillers, interlinear annotation controls, tags, noncharacters and private-use characters. A variation selector
+    (Mongolian ones included) only after a character. Joiners (U+200C, U+200D) and direction marks (U+200E, U+200F,
+    U+061C) stay allowed;
+  - **combining marks**: at most 4 in a row unless the English text has more, a joiner, emoji modifier or other
+    format character or grapheme extender between them not ending the row (today's files stack at most 3);
+  - **controls**: no control character but a line break, and a tab or a bidi control only where the English text
+    has one; bidi embeddings, overrides and isolates close in order, and no more open than in the English text.
+- Which characters are such letters, marks and extenders comes from `tools/lang_unicode_tables.json`, the one
+  table both sides read. `tools/gen_lang_unicode_tables.py` writes it from three files of the Unicode Character
+  Database (`UnicodeData.txt`, `Scripts.txt`, `auxiliary/GraphemeBreakProperty.txt`), which are not committed; the
+  table records their version and SHA-256. To move to a newer Unicode, download those into an empty folder outside
+  the repository, run `python3 -I tools/gen_lang_unicode_tables.py <the three paths>` and update the version the
+  table test expects.
+- One import takes back at most 3 review marks in a language, or 10% of those the sync recorded for it if that is
+  more; a run that would take back more fails with the language named and writes nothing, since a partial approved
+  export looks just like that. Only a run by hand with `allow_withdrawals` ticked passes `--allow-withdrawals` and
+  lets a real bulk withdrawal through.
 
 ## How the first record was made
 

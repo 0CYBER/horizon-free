@@ -183,6 +183,136 @@ def stray_controls(english: str, text: str) -> list[str]:
         c not in english if c == "\t" or c in BIDI_CONTROLS else unicodedata.category(c) == "Cc")})
 
 
+# What a translated string may carry beyond its English text (docs/translations.md, "Rules"). The
+# text comes from an open Crowdin project, so the limits assume a hostile writer. `lang.rs`'s
+# bundled-file test applies the same rules; `tests/fixtures/translation_text_rules.json` pins both.
+LENGTH_FACTOR = 4  # at most this many times the English length, in characters...
+LENGTH_SLACK = 80  # ...or the English length plus this many, whichever is more
+MAX_RUN = 60  # the longest run without a break, unless the English text has a longer one
+MAX_MARKS = 4  # the most combining marks in a row, unless the English text has more
+
+# Invisible characters a translation may carry only where its English text has the same one:
+# zero-width space and word joiner, line and paragraph separators, the byte order mark, the soft
+# hyphen, the combining grapheme joiner, the Mongolian vowel separator, the Hangul fillers and the
+# interlinear annotation controls. Tag characters, noncharacters and private-use characters are
+# checked by range (`invisible`).
+INVISIBLE = frozenset("\u200b\u2060\u2028\u2029\ufeff\u00ad\u034f\u180e"
+                      "\u115f\u1160\u3164\uffa0\ufff9\ufffa\ufffb")
+# Openers of a bidi embedding or override (closed by U+202C) and of an isolate (closed by U+2069).
+EMBEDDINGS, ISOLATES = frozenset("\u202a\u202b\u202d\u202e"), frozenset("\u2066\u2067\u2068")
+# Character tables both sides read, written by tools/gen_lang_unicode_tables.py from the Unicode
+# Character Database: "spaceless" letters of scripts written without spaces between words, which
+# the game's wrapper cuts where a line overflows, so they don't count towards a token;
+# "combining" marks; and "transparent" characters (format characters, emoji modifiers and other
+# grapheme extenders) that neither count as a mark nor end a row of them.
+UNICODE_TABLES_FILE = ROOT / "tools/lang_unicode_tables.json"
+UNICODE_TABLES = ("spaceless", "combining", "transparent")
+_TABLES: dict[str, list[tuple[int, int]]] = {}
+
+
+def _in_table(name: str, c: str) -> bool:
+    """`c` in one of the sorted, disjoint range lists of tools/lang_unicode_tables.json."""
+    if not _TABLES:
+        body = json.loads(UNICODE_TABLES_FILE.read_text(encoding="utf-8"))
+        _TABLES.update({key: [tuple(r) for r in body[key]] for key in UNICODE_TABLES})
+    table, o = _TABLES[name], ord(c)
+    low, high = 0, len(table)
+    while low < high:
+        middle = (low + high) // 2
+        if table[middle][1] < o:
+            low = middle + 1
+        else:
+            high = middle
+    return low < len(table) and table[low][0] <= o
+
+
+def invisible(c: str) -> bool:
+    o = ord(c)
+    return (c in INVISIBLE or 0xE0000 <= o <= 0xE007F  # tags
+            or 0xFDD0 <= o <= 0xFDEF or o & 0xFFFE == 0xFFFE  # noncharacters
+            or 0xE000 <= o <= 0xF8FF or 0xF0000 <= o <= 0xFFFFD or 0x100000 <= o <= 0x10FFFD)
+
+
+def variation_selector(c: str) -> bool:
+    o = ord(c)
+    return (0xFE00 <= o <= 0xFE0F or 0xE0100 <= o <= 0xE01EF
+            or 0x180B <= o <= 0x180D or o == 0x180F)  # Mongolian free variation selectors
+
+
+def formatting_codes(text: str) -> list[str]:
+    """The legacy codes in `text`, in order: a `§` takes the character after it, whatever it is,
+    and the game draws neither (`Text::resolve_legacy`); an ASCII code is matched without case.
+    A `§` at the end is a code of its own ("")."""
+    found, i = [], 0
+    while (at := text.find("§", i)) != -1:
+        code = text[at + 1:at + 2]
+        found.append(code.lower() if code.isascii() else code)  # to_ascii_lowercase
+        i = at + 2
+    return found
+
+
+def longest_run(text: str) -> int:
+    """The most characters one token holds that the game's wrapper cannot break inside: a token is
+    what lies between spaces and line breaks (`Font::split_lines` breaks there only), and letters of
+    a script written without spaces do not count, since a line of them is cut where it overflows."""
+    return max((sum(1 for c in token if not _in_table("spaceless", c))
+                for line in text.split("\n") for token in line.split(" ")), default=0)
+
+
+def most_marks(text: str) -> int:
+    """The most combining marks in a row; a transparent character between them (a joiner, a
+    direction mark, an emoji modifier) neither counts nor ends the row."""
+    most = current = 0
+    for c in text:
+        if _in_table("transparent", c):
+            continue
+        current = current + 1 if _in_table("combining", c) else 0
+        most = max(most, current)
+    return most
+
+
+def bidi_balanced(english: str, text: str) -> bool:
+    """Every bidi embedding, override and isolate `text` opens it closes, nested, and it opens no
+    more of each than its English text does."""
+    if any(text.count(c) > english.count(c) for c in EMBEDDINGS | ISOLATES):
+        return False
+    open_: list[str] = []
+    for c in text:
+        if c in EMBEDDINGS or c in ISOLATES:
+            open_.append(c)
+        elif c in "\u202c\u2069":
+            closes = EMBEDDINGS if c == "\u202c" else ISOLATES
+            if not open_ or open_.pop() not in closes:
+                return False
+    return not open_
+
+
+def text_problem(english: str, text: str) -> str | None:
+    """The first rule `text`, a translation of `english`, breaks, by its name in
+    `tests/fixtures/translation_text_rules.json`, or None."""
+    if stray_controls(english, text):
+        return "control"
+    for i, c in enumerate(text):
+        if invisible(c) and c not in english:
+            return "invisible"
+        if variation_selector(c) and (i == 0 or text[i - 1].isspace()
+                                      or variation_selector(text[i - 1])):
+            return "invisible"
+    if most_marks(text) > max(MAX_MARKS, most_marks(english)):
+        return "combining_marks"
+    if not bidi_balanced(english, text):
+        return "bidi"
+    if formatting_codes(text) != formatting_codes(english):
+        return "formatting_code"
+    if text.count("\n") > 2 * english.count("\n"):
+        return "line_break"
+    if len(text) > max(LENGTH_FACTOR * len(english), len(english) + LENGTH_SLACK):
+        return "length"
+    if longest_run(text) > max(MAX_RUN, longest_run(english)):
+        return "unbroken_run"
+    return None
+
+
 HOLE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
 

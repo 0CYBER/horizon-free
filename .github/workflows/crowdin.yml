@@ -33,6 +33,10 @@ on:
         description: "First run only: send the translations already in the repository up to Crowdin."
         type: boolean
         default: false
+      allow_withdrawals:
+        description: "Let the import take back more review marks in a language than one run may (approvals really withdrawn in bulk)."
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -106,11 +110,15 @@ jobs:
         env:
           CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
           CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+      # A nightly run never takes back more review marks than tools/crowdin_import.py allows in one run;
+      # only a run by hand with allow_withdrawals ticked can.
       - name: Write the lang files and the review record
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        env:
+          ALLOW_WITHDRAWALS: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_withdrawals && '--allow-withdrawals' || '' }}
         run: |
           python3 tools/crowdin_import.py --check
-          python3 tools/crowdin_import.py --translations l10n/game --approved l10n/game-approved
+          python3 tools/crowdin_import.py --translations l10n/game --approved l10n/game-approved $ALLOW_WITHDRAWALS
           python3 tools/lang_coverage.py --summary
       - name: Open or update the pull request
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
