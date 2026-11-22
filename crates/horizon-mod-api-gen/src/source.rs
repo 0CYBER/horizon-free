@@ -62,21 +62,6 @@ pub(crate) fn crate_files(root: &Path, krate: &str) -> Result<Vec<ModuleFile>, S
     module_files(krate.to_owned(), lib, dir, true)
 }
 
-/// A path without generic arguments or spaces, as listed paths and found ones are compared.
-pub(crate) fn plain_path(path: &str) -> String {
-    let mut out = String::new();
-    let mut depth = 0;
-    for c in path.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' => depth -= 1,
-            c if depth == 0 && !c.is_whitespace() => out.push(c),
-            _ => {}
-        }
-    }
-    out
-}
-
 /// `r#type` as `type`.
 pub(crate) fn unraw(ident: &syn::Ident) -> String {
     ident.to_string().trim_start_matches("r#").to_owned()

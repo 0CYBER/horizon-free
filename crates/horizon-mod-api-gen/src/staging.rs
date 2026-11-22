@@ -113,6 +113,7 @@ pub fn stage(
         started.elapsed().as_secs_f64()
     );
     functions.retain_slotted(&replace.slots, &generic);
+    functions.staged_exports = internals.staged_exports.clone();
     // One line: the index is the largest build-data file, and only programs read it.
     let path = points_json.with_file_name(crate::functions::FILE);
     let text = serde_json::to_string(&Document::new(build, &functions))

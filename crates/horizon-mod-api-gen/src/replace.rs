@@ -7,7 +7,7 @@
 //! ([`crate::patch`]). A function's check is part of its body, so every inlined copy of the
 //! function carries it.
 //!
-//! Replaceable: every free function and inherent method of the game module that [`eligible`]
+//! Replaceable: every free function and method of the game module that [`eligible`]
 //! admits, and each function marked with `#[horizon_mod_api_macros::replaceable]` in the crates below it. The source tree
 //! carries none of this: only a staged copy does, and everything the pass writes stays on the
 //! line it annotates, so the staged source's line numbers are the pinned source's.
@@ -642,21 +642,21 @@ struct Found<'a> {
 impl Found<'_> {
     /// Its path, as a mixin's `target` names it.
     fn target(&self) -> String {
-        match (self.owner, self.trait_name) {
-            (Some(block), Some(trait_name)) => format!(
-                "{}::<{} as {trait_name}>::{}",
-                self.module,
-                source::owner(&block.self_ty),
-                self.sig.ident
-            ),
-            (Some(block), None) => format!(
-                "{}::{}::{}",
-                self.module,
-                source::owner(&block.self_ty),
-                self.sig.ident
-            ),
-            (None, _) => format!("{}::{}", self.module, self.sig.ident),
-        }
+        function_target(&self.module, self.owner, &self.sig.ident)
+    }
+}
+
+/// Name an implementation the same way when finding its marker and when assigning its slot.
+fn function_target(module: &str, block: Option<&syn::ItemImpl>, name: &syn::Ident) -> String {
+    let Some(block) = block else {
+        return format!("{module}::{name}");
+    };
+    let owner = source::owner(&block.self_ty);
+    if let Some((_, path, _)) = &block.trait_ {
+        let trait_name = &path.segments.last().expect("a trait path has a name").ident;
+        format!("{module}::<{owner} as {trait_name}>::{name}")
+    } else {
+        format!("{module}::{owner}::{name}")
     }
 }
 
@@ -818,33 +818,52 @@ fn inventory(
     }
 }
 
-/// Marked lower-crate functions and their source locations.
-pub(crate) fn marked(root: &Path) -> Result<Vec<(String, String)>, String> {
-    fn scan(module: &str, items: &[Item], out: &mut Vec<(String, String)>) -> Result<(), String> {
+/// A lower-crate marker's index key and the module its copied body will use.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MarkedFunction {
+    pub(crate) module: String,
+    pub(crate) target: String,
+    /// The trait path as written in its impl, including any module qualifiers.
+    pub(crate) trait_path: Option<String>,
+}
+
+impl MarkedFunction {
+    fn new(module: &str, block: Option<&syn::ItemImpl>, name: &syn::Ident) -> Self {
+        Self {
+            module: module.to_owned(),
+            target: crate::functions::key(&function_target(module, block, name)),
+            trait_path: block
+                .and_then(|block| block.trait_.as_ref())
+                .map(|(_, path, _)| quote!(#path).to_string().replace(' ', "")),
+        }
+    }
+
+    pub(crate) fn error(&self, reason: &str) -> String {
+        format!(
+            "#[horizon_mod_api_macros::replaceable] on {}: {reason}",
+            self.target
+        )
+    }
+}
+
+/// Marked lower-crate functions and their source modules.
+pub(crate) fn marked(root: &Path) -> Result<Vec<MarkedFunction>, String> {
+    fn scan(module: &str, items: &[Item], out: &mut Vec<MarkedFunction>) -> Result<(), String> {
         for item in items {
             match item {
                 Item::Fn(f) if source::marker(&f.attrs, "replaceable").is_some() => {
-                    let path = format!("{module}::{}", f.sig.ident);
+                    let function = MarkedFunction::new(module, None, &f.sig.ident);
                     if let Some(reason) = signature_exclusion(&f.attrs, &f.sig) {
-                        return Err(format!(
-                            "#[horizon_mod_api_macros::replaceable] on {path}: {reason}"
-                        ));
+                        return Err(function.error(reason));
                     }
-                    out.push((
-                        format!("#[horizon_mod_api_macros::replaceable] on {path}"),
-                        path,
-                    ));
+                    out.push(function);
                 }
                 Item::Impl(block) => {
                     for member in &block.items {
                         if let ImplItem::Fn(f) = member
                             && source::marker(&f.attrs, "replaceable").is_some()
                         {
-                            let path = source::plain_path(&format!(
-                                "{module}::{}::{}",
-                                source::owner(&block.self_ty),
-                                f.sig.ident
-                            ));
+                            let function = MarkedFunction::new(module, Some(block), &f.sig.ident);
                             let reason = signature_exclusion(&f.attrs, &f.sig)
                                 .or_else(|| {
                                     (!lifetimes_only(&block.generics))
@@ -855,14 +874,9 @@ pub(crate) fn marked(root: &Path) -> Result<Vec<(String, String)>, String> {
                                         .then_some("conditional impl")
                                 });
                             if let Some(reason) = reason {
-                                return Err(format!(
-                                    "#[horizon_mod_api_macros::replaceable] on {path}: {reason}"
-                                ));
+                                return Err(function.error(reason));
                             }
-                            out.push((
-                                format!("#[horizon_mod_api_macros::replaceable] on {path}"),
-                                path,
-                            ));
+                            out.push(function);
                         }
                     }
                 }
@@ -921,16 +935,7 @@ pub(crate) fn marked(root: &Path) -> Result<Vec<(String, String)>, String> {
             // What a file marks follows from its text and module path alone.
             let parsed =
                 syn::parse_file(&text).map_err(|e| format!("{}: {e}", file.path.display()))?;
-            let mut found = Vec::new();
-            scan(&file.module, &parsed.items, &mut found)?;
-            let paths: Vec<String> = found.into_iter().map(|(_, path)| path).collect();
-            // Every entry's label is its path in the same words.
-            out.extend(paths.into_iter().map(|path| {
-                (
-                    format!("#[horizon_mod_api_macros::replaceable] on {path}"),
-                    path,
-                )
-            }));
+            scan(&file.module, &parsed.items, &mut out)?;
         }
     }
     out.sort();
@@ -997,7 +1002,7 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
     }];
     let lower: BTreeSet<&str> = list
         .iter()
-        .map(|(_, path)| path.split("::").next().unwrap_or_default())
+        .map(|function| function.module.split("::").next().unwrap_or_default())
         .collect();
     for name in lower {
         if name == "horizon_client" {
@@ -1045,9 +1050,9 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
             functions(&file.module, items, &traits, &types, &mut found);
             if krate.marked_only {
                 found.retain(|found| {
-                    let target = source::plain_path(&found.target());
+                    let target = crate::functions::key(&found.target());
                     list.iter()
-                        .position(|(_, path)| *path == target)
+                        .position(|function| function.target == target)
                         .inspect(|&index| used[index] = true)
                         .is_some()
                 });
@@ -1101,10 +1106,8 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
         staged.functions += count;
         staged.crates += 1;
     }
-    if let Some(((origin, path), _)) = list.iter().zip(&used).find(|(_, used)| !**used) {
-        return Err(format!(
-            "{origin}: {path}: no free function or inherent method every build compiles that can be replaced"
-        ));
+    if let Some((function, _)) = list.iter().zip(&used).find(|(_, used)| !**used) {
+        return Err(function.error("no eligible function or method compiled by every build"));
     }
     Ok(staged)
 }

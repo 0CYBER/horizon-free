@@ -123,6 +123,12 @@ So `src/game/world/autosave.rs` is `horizon_client::game::autosave` (`world/` is
 Any function of the game crate can take a mixin. A function in a crate below it, such as `horizon_world`, needs
 the marker `#[horizon_mod_api_macros::replaceable]` in its source. Otherwise, target a replaceable caller or callee.
 
+For a marked trait method below the game crate, put the marker on the method in the `impl` block and use
+the same `module::<Type as Trait>::method` target. The trait must be a game trait written by its declared
+name, and the implementation's crate must own the type. The target's trait name is its final path
+segment, so two implementations with the same type, trait name and method in one module share a
+target. Staging reports the conflict if either is marked.
+
 These functions are refused:
 
 - generic over types or consts, or inside an `impl` block that is;
