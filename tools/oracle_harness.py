@@ -3,9 +3,11 @@
 A harness supplies a Java oracle (compiled against the pinned client jar and its
 libraries), a Rust example probe, and a text input; both programs write one
 result line per input line and the outputs must be byte-identical."""
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 try:
     from . import lab, test_rust_parity as base, test_model_baking_parity as baking
@@ -16,10 +18,73 @@ except ImportError:
 
 
 def run_logged(command, build, name, timeout=900, **kwargs):
-    with (build / (name + '.log')).open('w') as log:
+    path = build / (name + '.log')
+    with path.open('w') as log:
         runner = run_game if Path(command[0]).name == 'horizon-client' else subprocess.run
-        runner([str(c) for c in command], cwd=lab.ROOT, check=True, timeout=timeout,
-                       stdout=log, stderr=subprocess.STDOUT, **kwargs)
+        try:
+            runner([str(c) for c in command], cwd=lab.ROOT, check=True, timeout=timeout,
+                   stdout=log, stderr=subprocess.STDOUT, **kwargs)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if compile_only(command):
+                try:
+                    log.flush()
+                    print_log_tail(path)
+                except Exception:  # the report is best effort: the caller gets the command's own error
+                    pass
+            raise
+
+
+def compile_only(command):
+    """A cargo command that only compiles (`cargo build`, `cargo test --no-run`): its log holds Cargo's and the
+    compiler's messages about Horizon's own code. Anything that runs a program (a test run, a Java oracle, the game)
+    can print vanilla game data, which never goes into the public artifact, so its log is never shown."""
+    words = [str(word) for word in command]
+    if not words or Path(words[0]).name not in ('cargo', 'cargo.exe') or len(words) < 2:
+        return False
+    words = words[:words.index('--')] if '--' in words else words
+    return words[1] == 'build' or (words[1] == 'test' and '--no-run' in words)
+
+
+LOG_TAIL_BYTES = 256 << 10  # of the log read
+LOG_LINE_CHARS = 400  # per line shown
+
+
+def print_log_tail(path, lines=40):
+    """The end of a failed compile's log, on stderr: only the harness's own output reaches the parity run's
+    artifact, so a failed build otherwise shows just its exit code. Cargo's JSON messages print as the text it
+    would have shown (an error's `rendered` field), other JSON lines not at all. The checkout and home folder
+    show as <checkout> and ~."""
+    with path.open('rb') as file:
+        start = max(0, file.seek(0, os.SEEK_END) - LOG_TAIL_BYTES)
+        file.seek(start)
+        data = file.read(LOG_TAIL_BYTES)  # a timed-out build's children may still be writing
+    if start:
+        data = data.partition(b'\n')[2]  # the cut line: half a JSON record would print as plain text
+    shown = []
+    for line in data.decode('utf-8', errors='replace').splitlines():
+        if line.startswith('{'):
+            try:
+                message = json.loads(line)
+            except ValueError:
+                shown.append(line)
+                continue
+            inner = message.get('message') if isinstance(message, dict) else None
+            if isinstance(inner, dict) and inner.get('level') in ('error', 'error: internal compiler error') \
+                    and isinstance(inner.get('rendered'), str):
+                shown.extend(inner['rendered'].rstrip().splitlines())
+            continue
+        shown.append(line)
+    tail = [redact(line)[:LOG_LINE_CHARS] for line in shown[-lines:]]
+    if tail:
+        print(f'--- last {len(tail)} lines of {path.name} ---', file=sys.stderr)
+        print('\n'.join(tail), file=sys.stderr, flush=True)
+
+
+def redact(line):
+    for folder, name in ((str(lab.ROOT), '<checkout>'), (str(Path.home()), '~')):
+        if len(folder) > 1:
+            line = line.replace(folder, name)
+    return line
 
 
 def compile_oracle(build, oracle_name, jars, libraries, java_major):
