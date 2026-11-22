@@ -322,8 +322,18 @@ pub fn par_chunks_mut<T: Send>(items: &mut [T], chunk: usize, f: impl Fn(&mut [T
     par_chunks_mut_on(items, chunk, lanes, f);
 }
 
-/// [`par_chunks_mut`] on `lanes` threads.
-fn par_chunks_mut_on<T: Send>(
+/// Worker lane count without the 8-lane cap of [`par_chunks_mut`]: 1 when `HORIZON_SERIAL_TICK=all`,
+/// else all workers configured in `horizon_threads`.
+pub fn worker_lanes() -> usize {
+    if horizon_threads::serial_tick_all() {
+        1
+    } else {
+        horizon_threads::worker_count().max(1)
+    }
+}
+
+/// [`par_chunks_mut`] on `lanes` threads of the persistent `tick-helper` pool.
+pub fn par_chunks_mut_on<T: Send>(
     items: &mut [T],
     chunk: usize,
     lanes: usize,
@@ -534,5 +544,23 @@ mod tests {
             })
         });
         assert!(caught.is_err());
+    }
+
+    /// Repeated calls reuse the persistent `tick-helper` pool threads rather than spawning new ones.
+    #[test]
+    fn chunks_reuse_persistent_helper_threads() {
+        use std::collections::HashSet;
+        let seen = Mutex::new(HashSet::new());
+        for _ in 0..8 {
+            let mut items: Vec<u32> = (0..128).collect();
+            par_chunks_mut_on(&mut items, 16, 4, |_| {
+                seen.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(std::thread::current().id());
+            });
+        }
+        let limit =
+            horizon_threads::sizing::for_pool(horizon_threads::sizing::Pool::TickHelper) + 1;
+        assert!(seen.lock().unwrap().len() <= limit);
     }
 }

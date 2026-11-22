@@ -779,7 +779,7 @@ impl Waypoints {
             })
             .collect();
         let (s, waypoints, moves) = (&t.s, &self.waypoints, &moves);
-        horizon_threads::par_chunks_mut(&mut jobs, 8, |jobs| {
+        crate::parallel::par_chunks_mut_on(&mut jobs, 8, crate::parallel::worker_lanes(), |jobs| {
             for job in jobs {
                 let mut to = Receiving {
                     receiver: job.receiver,
