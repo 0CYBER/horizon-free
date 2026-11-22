@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import lzma
 import os
 import shutil
 import sys
@@ -18,6 +19,18 @@ from tests.test_ci_concurrency import yaml
 from tests.symlinks import symlink_or_skip
 
 COMMIT = "c" * 40
+
+
+def tar_members(archive: bytes) -> list[tuple]:
+    """An xz-compressed tar's members with everything but their mode: name, type, size, times, owners, contents."""
+    with tarfile.open(fileobj=io.BytesIO(lzma.decompress(archive))) as tar:
+        return [(m.name, m.type, m.size, m.mtime, m.uid, m.gid, m.uname, m.gname,
+                 tar.extractfile(m).read() if m.isfile() else None) for m in tar.getmembers()]
+
+
+# Packing the Linux fixture (`SdkAssetTests.out`) runs a process pool, and Python can't start one on Windows while
+# `sys.platform` says "linux" (it takes the POSIX spawn path). CI runs these on Linux, where the fixture is native.
+packs_the_linux_fixture = unittest.skipIf(os.name == "nt", "packs the Linux fixture through a process pool")
 
 
 def write_build_data(root: Path, identity: dict | None = None, commit: str = COMMIT) -> None:
@@ -244,6 +257,13 @@ class SdkAssetTests(unittest.TestCase):
     API = ["deps/libmod_api-1.rmeta", "deps/libmod_points-1.rmeta", "host/libserde_derive.so"]
     ENGINE = ["deps/libhorizon_client-1.rmeta", "native/libwindows.a"]
 
+    def setUp(self):
+        # The fixture is a Linux build (`out`), so its executable has no ".exe" on whatever OS the tests run:
+        # `EXECUTABLE` is set when the tool is imported, which the `sys.platform` patches below come after.
+        patcher = patch.object(prebuilt_game, "EXECUTABLE", "horizon-client")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def out(self, root: Path, mtime: int) -> Path:
         out = root / "prebuilt"
         for name in self.RUNTIME + self.API + self.ENGINE + [prebuilt_game.NATIVE_MODS_TEMPLATE]:
@@ -265,6 +285,7 @@ class SdkAssetTests(unittest.TestCase):
         with patch.object(prebuilt_game, "head", return_value=COMMIT), patch.object(prebuilt_game, "run", side_effect=run):
             prebuilt_game.pack(out, dist, stage_tool=Path("horizon-stage"))
 
+    @packs_the_linux_fixture
     def test_pack_writes_three_archives_that_split_the_package_and_the_same_every_run(self):
         import lzma
         import tarfile
@@ -300,6 +321,7 @@ class SdkAssetTests(unittest.TestCase):
                 archives.append([(dist / name).read_bytes() for name in names])
         self.assertEqual(archives[0], archives[1])
 
+    @packs_the_linux_fixture
     def test_parallel_pack_matches_serial_with_spawn(self):
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
@@ -318,6 +340,7 @@ class SdkAssetTests(unittest.TestCase):
             for archive in serial.iterdir():
                 self.assertEqual(archive.read_bytes(), (parallel / archive.name).read_bytes(), archive.name)
 
+    @packs_the_linux_fixture
     def test_worker_failure_names_archive_and_stops_surface_export(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -389,6 +412,7 @@ class SdkAssetTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "horizon-mod-wasm"):
             prebuilt_game.slices(metadata, copied, ["bin/horizon-client"])
 
+    @packs_the_linux_fixture
     def test_gather_takes_every_legs_archives_once_and_one_build_data_that_all_copies_match(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(sys, "platform", "linux"):
             root = Path(directory)
@@ -462,7 +486,7 @@ class SdkAssetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             out = self.out(root, 1000)
-            with patch.object(prebuilt_game, "head", return_value="d" * 40), \
+            with patch.object(prebuilt_game, "head", return_value="d" * 40), patch.object(sys, "platform", "linux"), \
                     self.assertRaisesRegex(SystemExit, "not this source's package"):
                 prebuilt_game.pack(out, root / "dist")
             self.assertFalse((root / "dist").exists())
@@ -477,7 +501,13 @@ class SdkAssetTests(unittest.TestCase):
                 os.utime(path, (0, 0))
             prebuilt_game.tar_xz(root, prebuilt_game.tree(root), root / "fixture.tar.xz")
             fixture = prebuilt_game.ROOT / "crates/horizon-mod-package/src/sdk/fixture.tar.xz"
-            self.assertEqual((root / "fixture.tar.xz").read_bytes(), fixture.read_bytes())
+            written = (root / "fixture.tar.xz").read_bytes()
+            if os.name == "nt":
+                # Windows has no POSIX modes (a folder stats as 0o777, a file as 0o666) and the archive keeps the
+                # folder's own, so there the members are compared without them; the bytes, everywhere else.
+                self.assertEqual(tar_members(written), tar_members(fixture.read_bytes()))
+            else:
+                self.assertEqual(written, fixture.read_bytes())
 
 
 class TrackedBlobsTests(unittest.TestCase):
@@ -1010,7 +1040,9 @@ class PublicationInventoryTests(unittest.TestCase):
                     "crates/horizon-mod-package/src/sdk/package-format": "6\n"}.items():
                 path = source / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(text)
+                # LF as the commit keeps it: Windows' text mode would write CRLF, which the patch copy carries and
+                # the commit's bytes don't.
+                path.write_text(text, newline="\n")
             def git(*args):
                 return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
             git("init", "-q")
