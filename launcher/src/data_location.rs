@@ -370,6 +370,16 @@ fn migrate_locked(
         }
     }
     let target = checked_path(target)?;
+    // Live data in a folder of such a name would look like a stopped move's to a retry.
+    if target
+        .components()
+        .any(|part| part.as_os_str().to_string_lossy().starts_with(STAGING))
+    {
+        return Err(format!(
+            "Destination {} has a {STAGING} folder in its path; choose another folder",
+            target.display()
+        ));
+    }
     for root in [
         &source.launcher,
         &source.game,
@@ -385,17 +395,16 @@ fn migrate_locked(
         }
     }
     if target.exists()
-        && (!target.is_dir()
-            || fs::read_dir(&target)
-                .map_err(|e| problem(&target, e))?
-                .next()
-                .is_some())
+        && (!target.is_dir() || !staging_only(&target).map_err(|e| problem(&target, e))?)
     {
         return Err(format!(
             "Destination {} must be an empty folder",
             target.display()
         ));
     }
+    // Held through the commit: two moves into one destination, from different bootstraps, would
+    // otherwise mix their folders at the final renames.
+    let _destination_lease = lock_destination(&target)?;
     let mut destination = layout(&source, &target);
     // MinGW needs the *physical* path to be ASCII: aliases are canonicalized by rustc.
     // Reserve a fresh sibling, never reuse or modify another location's build data.
@@ -403,16 +412,17 @@ fn migrate_locked(
     if separate_build {
         destination.build = reserve_build_folder(&source, &target, bootstrap)?;
     }
-    let stage = target.join(".relocation-staging");
-    let mut staged = layout(&source, &stage);
-    if separate_build {
-        // This unique folder is not published until the location pointer commits. It need
-        // not be renamed across volumes, and preparation sees its final, tool-safe path.
-        staged.build = destination.build.clone();
-    }
+    let mut ours = None;
     let result = (|| {
         fs::create_dir_all(&target).map_err(|e| problem(&target, e))?;
-        private_dir(&stage)?;
+        let stage = claim_stage(&target)?;
+        ours = Some(stage.clone());
+        let mut staged = layout(&source, &stage);
+        if separate_build {
+            // This unique folder is not published until the location pointer commits. It need
+            // not be renamed across volumes, and preparation sees its final, tool-safe path.
+            staged.build = destination.build.clone();
+        }
         progress("Copying and verifying launcher data");
         // Preparing links other launchers' files into the launcher's data and links them again
         // each time; they are never followed or copied. The server runtime's links are made
@@ -453,12 +463,20 @@ fn migrate_locked(
             fs::create_dir_all(&staged.build).map_err(|e| problem(&staged.build, e))?;
         }
         prepare(&staged, &destination)?;
-        for name in ["launcher", "game", "build"] {
-            let from = stage.join(name);
-            if from.exists() {
-                fs::rename(&from, target.join(name)).map_err(|e| problem(&from, e))?;
+        // The stage always holds launcher and game; build only when it is neither inside
+        // launcher nor in a separate folder. A missing one, or one already at the destination,
+        // fails the move before the commit.
+        let own_build = !separate_build && !within(&source.build, &source.launcher);
+        for (name, required) in [("launcher", true), ("game", true), ("build", own_build)] {
+            let (from, to) = (stage.join(name), target.join(name));
+            if required || from.exists() {
+                if fs::symlink_metadata(&to).is_ok() {
+                    return Err(format!("{} already exists", to.display()));
+                }
+                fs::rename(&from, &to).map_err(|e| problem(&from, e))?;
             }
         }
+        // Before the commit, so a stage that is left never holds data a location names.
         fs::remove_dir(&stage).map_err(|e| problem(&stage, e))?;
         runtime.make(&destination.launcher)?;
         sync_dir(&target)?;
@@ -467,11 +485,136 @@ fn migrate_locked(
         Ok(destination.clone())
     })();
     result.map_err(|e: String| {
+        let args = [
+            ("error", e.as_str()),
+            ("target", &target.display().to_string()),
+            ("build", &destination.build.display().to_string()),
+        ];
+        // A failure after the renames leaves data beside the stage, which a retry refuses.
+        let error = if staging_only(&target).unwrap_or(false) {
+            crate::i18n::trf(
+                "{error}. Original data was kept. Partial copies may remain in {target} and {build}. Retry with the same folder or another empty one",
+                &args,
+            )
+        } else {
+            crate::i18n::trf(
+                "{error}. Original data was kept. Partial copies may remain in {target} and {build}; choose an empty folder to retry",
+                &args,
+            )
+        };
+        match kept_note(&target, ours.as_deref()) {
+            Some(note) => format!("{error}. {note}"),
+            None => error,
+        }
+    })
+}
+
+/// What the stage a move copies into inside its destination starts with: a unique name per run.
+/// A move that failed or was stopped leaves it behind.
+///
+/// A move never touches a staging folder it didn't create in this run: an earlier one may be the
+/// only copy, or another profile's live data (#19607 review).
+const STAGING: &str = ".relocation-staging";
+/// The destination's lock, which a move holds through its commit. It stays once released.
+const LOCK: &str = ".relocation.lock";
+
+/// Creates `target` and takes its lock, refused while another move holds it.
+fn lock_destination(target: &Path) -> Result<MigrationLease> {
+    fs::create_dir_all(target).map_err(|e| problem(target, e))?;
+    let path = target.join(LOCK);
+    // `staging_only` refused a link or folder of that name; this sees one made since.
+    if let Ok(meta) = fs::symlink_metadata(&path) {
+        reject_link(&path, &meta)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| problem(&path, e))?;
+    file.try_lock()
+        .map_err(|_| format!("Another move is using {}", target.display()))?;
+    // Released before it closes, as the migration lease is.
+    Ok(MigrationLease(file))
+}
+
+/// Whether `dir` holds nothing but plain folders whose names start with `STAGING`, which are
+/// never read, and the plain file `LOCK`: a link or any other entry is false.
+fn staging_only(dir: &Path) -> std::io::Result<bool> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let meta = fs::symlink_metadata(&path)?;
+        let name = path.file_name().unwrap_or_default();
+        let fits = if name == LOCK {
+            meta.is_file()
+        } else {
+            name.to_string_lossy().starts_with(STAGING) && meta.is_dir()
+        };
+        if !fits || reject_link(&path, &meta).is_err() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The staging folders in `dir` other than `ours`, by name.
+pub fn kept_copies(dir: &Path, ours: Option<&Path>) -> Vec<PathBuf> {
+    let mut kept: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            Some(path.as_path()) != ours
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(STAGING))
+        })
+        .collect();
+    kept.sort();
+    kept
+}
+
+/// What a player is told about the staging folders in `dir` other than `ours`, if any.
+pub fn kept_note(dir: &Path, ours: Option<&Path>) -> Option<String> {
+    let kept = kept_copies(dir, ours);
+    (!kept.is_empty()).then(|| {
+        let folders = kept
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         crate::i18n::trf(
-            "{error}. Original data was kept. Partial copies may remain in {target} and {build}; choose an empty folder to retry",
-            &[("error", &e), ("target", &target.display().to_string()), ("build", &destination.build.display().to_string())],
+            "Horizon left these folders in {target} as they were: {folders}",
+            &[
+                ("target", &dir.display().to_string()),
+                ("folders", &folders),
+            ],
         )
     })
+}
+
+/// Makes this run's stage under a fresh name, then makes sure no other move came in between.
+fn claim_stage(target: &Path) -> Result<PathBuf> {
+    let stage = tempfile::Builder::new()
+        .prefix(&format!("{STAGING}-"))
+        .tempdir_in(target)
+        .map_err(|e| problem(target, e))?
+        .keep();
+    // A move from another bootstrap may have put its own data beside the stage since the check.
+    if !staging_only(target).map_err(|e| problem(target, e))? {
+        // Ours and still empty: remove_dir removes nothing else.
+        fs::remove_dir(&stage).map_err(|e| problem(&stage, e))?;
+        return Err(format!("Another move is using {}", target.display()));
+    }
+    Ok(stage)
+}
+
+/// Whether a move may use the folder `dir`: it holds nothing, or only staging folders of earlier
+/// moves, which a move leaves alone. The picker asks; the move checks again under its lease.
+pub fn reusable_destination(dir: &Path) -> Result<bool> {
+    staging_only(dir).map_err(|e| problem(dir, e))
 }
 
 /// Prefer the chosen drive's nearest existing ASCII ancestor. If it is not writable

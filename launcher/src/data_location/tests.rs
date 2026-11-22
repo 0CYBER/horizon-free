@@ -228,6 +228,258 @@ fn nonempty_and_file_destinations_preserve_pointer_and_contents() {
     assert_eq!(fs::read(file).unwrap(), b"keep file contents");
 }
 
+fn reusable(target: &Path) -> bool {
+    staging_only(target).unwrap()
+}
+
+/// Fails a move into `target` after its copy, which leaves its stage behind. The new stage.
+fn stopped_move(f: &Fixture, target: &Path) -> (String, PathBuf) {
+    let before = kept_copies(target, None);
+    let error = migrate_with_prepare(
+        &f.source,
+        target,
+        &f.bootstrap,
+        |_| {},
+        |_, _| Err("fixture stop".into()),
+    )
+    .unwrap_err();
+    assert!(error.contains("fixture stop"), "{error}");
+    assert!(error.contains("Retry with the same folder"), "{error}");
+    f.old_pointer();
+    let new: Vec<_> = kept_copies(target, None)
+        .into_iter()
+        .filter(|stage| !before.contains(stage))
+        .collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    assert!(new[0].join("launcher/accounts.json").is_file());
+    assert!(reusable(target));
+    (error, new[0].clone())
+}
+
+#[test]
+fn a_retry_leaves_an_earlier_stage_alone() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let (_, old) = stopped_move(&f, &target);
+    let staged = snapshot(&old);
+    let moved = migrate(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    f.migrated(&moved);
+    assert_eq!(snapshot(&old), staged);
+    assert_eq!(kept_copies(&target, None), std::slice::from_ref(&old));
+    assert!(kept_note(&target, None)
+        .unwrap()
+        .contains(&old.display().to_string()));
+}
+
+#[test]
+fn two_earlier_stages_stay() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let (_, first) = stopped_move(&f, &target);
+    let (error, second) = stopped_move(&f, &target);
+    assert!(error.contains("as they were"), "{error}");
+    assert!(error.contains(&first.display().to_string()), "{error}");
+    assert!(!error.contains(&second.display().to_string()), "{error}");
+    let before = [snapshot(&first), snapshot(&second)];
+    let moved = migrate(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    f.migrated(&moved);
+    assert_eq!([snapshot(&first), snapshot(&second)], before);
+    assert_eq!(kept_copies(&target, None).len(), 2);
+}
+
+#[test]
+fn a_retry_leaves_reserved_build_folders_alone() {
+    let f = Fixture::new("build");
+    // On Windows this name reserves a horizon-build-* sibling, which the stopped move keeps.
+    let target = f.temp.0.join("Игры");
+    let planted = f.temp.0.join("horizon-build-planted/build");
+    fs::create_dir_all(&planted).unwrap();
+    fs::write(planted.join("compiled.bin"), b"other location").unwrap();
+    stopped_move(&f, &target);
+    let reserved = || {
+        fs::read_dir(&f.temp.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("horizon-build-")
+            })
+            .map(|path| (snapshot(&path), path))
+            .collect::<Vec<_>>()
+    };
+    let before = reserved();
+    #[cfg(windows)]
+    assert_eq!(before.len(), 2, "{before:?}");
+    let moved = migrate(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    f.migrated(&moved);
+    for (files, path) in &before {
+        assert_eq!(&snapshot(path), files, "{}", path.display());
+    }
+    assert_eq!(
+        fs::read(planted.join("compiled.bin")).unwrap(),
+        b"other location"
+    );
+}
+
+#[test]
+fn a_stage_beside_other_entries_is_refused() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    stopped_move(&f, &target);
+    fs::write(target.join("sentinel"), b"keep").unwrap();
+    let before = snapshot(&target);
+    assert!(!reusable(&target));
+    assert!(f.refuse(&target).contains("empty folder"));
+    assert_eq!(snapshot(&target), before);
+}
+
+#[test]
+fn a_stage_that_is_a_file_is_refused() {
+    let f = Fixture::new("build");
+    for name in [STAGING.to_owned(), format!("{STAGING}-old")] {
+        let target = f.temp.0.join(format!("file{}", name.len()));
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join(&name), b"not a folder").unwrap();
+        assert!(!reusable(&target));
+        assert!(f.refuse(&target).contains("empty folder"));
+        assert_eq!(fs::read(target.join(&name)).unwrap(), b"not a folder");
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn a_linked_stage_is_refused_without_touching_its_target() {
+    let f = Fixture::new("build");
+    let outside = Temp::new();
+    fs::write(outside.0.join("sentinel"), b"untouched").unwrap();
+    for name in [STAGING.to_owned(), format!("{STAGING}-old")] {
+        let target = f.temp.0.join(format!("linked{}", name.len()));
+        fs::create_dir(&target).unwrap();
+        dir_link(&outside.0, &target.join(&name));
+        assert!(!reusable(&target));
+        assert!(f.refuse(&target).contains("empty folder"));
+        assert!(fs::symlink_metadata(target.join(&name)).is_ok());
+    }
+    assert_eq!(fs::read(outside.0.join("sentinel")).unwrap(), b"untouched");
+}
+
+#[test]
+fn a_destination_inside_a_staging_folder_is_refused() {
+    let f = Fixture::new("build");
+    for target in [
+        f.temp.0.join(STAGING),
+        f.temp.0.join(STAGING).join("data"),
+        f.temp.0.join("data").join(STAGING),
+        f.temp.0.join(format!("{STAGING}-old")).join("data"),
+    ] {
+        let error = f.refuse(&target);
+        assert!(error.contains("in its path"), "{error}");
+        assert!(!target.exists());
+    }
+}
+
+#[test]
+fn a_held_destination_lock_stops_the_move_before_its_stage() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    fs::create_dir(&target).unwrap();
+    let held = File::create(target.join(LOCK)).unwrap();
+    held.try_lock().unwrap();
+    let error = f.refuse(&target);
+    assert!(error.contains("Another move"), "{error}");
+    assert!(kept_copies(&target, None).is_empty());
+    drop(held);
+    // Released, the file left behind is accepted.
+    assert!(reusable(&target));
+    let moved = migrate(&f.source, &target, &f.bootstrap, |_| {}).unwrap();
+    f.migrated(&moved);
+    assert!(target.join(LOCK).is_file());
+    assert!(kept_note(&target, None).is_none());
+}
+
+#[test]
+fn a_lock_that_is_a_folder_is_refused() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    fs::create_dir_all(target.join(LOCK)).unwrap();
+    assert!(!reusable(&target));
+    assert!(f.refuse(&target).contains("empty folder"));
+    assert!(target.join(LOCK).is_dir());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn a_linked_lock_is_refused() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let outside = Temp::new();
+    fs::create_dir(&target).unwrap();
+    dir_link(&outside.0, &target.join(LOCK));
+    assert!(!reusable(&target));
+    assert!(f.refuse(&target).contains("empty folder"));
+    assert!(fs::read_dir(&outside.0).unwrap().next().is_none());
+}
+
+#[test]
+fn a_claim_beside_another_moves_data_is_given_up() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    fs::create_dir(&target).unwrap();
+    // Another bootstrap's move puts its data there between the check and the claim.
+    fs::write(target.join("theirs"), b"keep").unwrap();
+    let error = claim_stage(&target).unwrap_err();
+    assert!(error.contains("Another move"), "{error}");
+    assert!(kept_copies(&target, None).is_empty());
+    assert_eq!(fs::read(target.join("theirs")).unwrap(), b"keep");
+}
+
+#[test]
+fn a_stage_without_its_game_folder_is_not_committed() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let error = migrate_with_prepare(
+        &f.source,
+        &target,
+        &f.bootstrap,
+        |_| {},
+        |stage, _| fs::remove_dir_all(&stage.game).map_err(|e| e.to_string()),
+    )
+    .unwrap_err();
+    f.old_pointer();
+    // The launcher folder was renamed out of the stage, so the same folder no longer works.
+    assert!(target.join("launcher").is_dir());
+    assert!(error.contains("choose an empty folder to retry"), "{error}");
+    assert!(!reusable(&target));
+}
+
+#[test]
+fn a_folder_already_at_the_destination_is_not_replaced() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let error = migrate_with_prepare(
+        &f.source,
+        &target,
+        &f.bootstrap,
+        |_| {},
+        |_, destination| {
+            // Another move publishes its launcher folder there before this one renames.
+            fs::create_dir(&destination.launcher).unwrap();
+            fs::write(destination.launcher.join("theirs"), b"keep").unwrap();
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("already exists"), "{error}");
+    f.old_pointer();
+    assert_eq!(fs::read(target.join("launcher/theirs")).unwrap(), b"keep");
+    let [stage] = &kept_copies(&target, None)[..] else {
+        panic!("one stage");
+    };
+    assert!(stage.join("launcher/accounts.json").is_file());
+}
+
 #[test]
 fn nested_same_and_ancestor_destinations_preserve_pointer() {
     let f = Fixture::new("build");

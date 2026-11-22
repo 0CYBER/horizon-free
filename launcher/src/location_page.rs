@@ -30,10 +30,14 @@ fn open_error(error: &str) -> String {
 
 pub(super) fn startup_note() -> Option<String> {
     env_value("HORIZON_RELOCATION_BACKUP").map(|paths| {
-        trf(
+        let note = trf(
             "Data moved. Old folders still use disk space: {paths}. Verify your worlds and instances before removing them yourself.",
             &[("paths", &paths)],
-        )
+        );
+        match env_value("HORIZON_RELOCATION_KEPT") {
+            Some(kept) => format!("{note} {kept}."),
+            None => note,
+        }
     })
 }
 
@@ -100,18 +104,17 @@ impl Launcher {
                 this.location_error = this.location_blocked();
                 if this.location_error.is_none() {
                     match result {
-                        Ok(Some(path)) => match std::fs::read_dir(&path) {
-                            Ok(mut entries) => match entries.next() {
-                                None => this.location_target = Some(path),
-                                Some(Ok(_)) => {
+                        Ok(Some(path)) => {
+                            match horizon_launcher::data_location::reusable_destination(&path) {
+                                Ok(true) => this.location_target = Some(path),
+                                Ok(false) => {
                                     this.location_error = Some(
                                         tr("Choose an empty folder for Horizon's data.").into(),
                                     );
                                 }
-                                Some(Err(error)) => this.location_picker_error(error.to_string()),
-                            },
-                            Err(error) => this.location_picker_error(error.to_string()),
-                        },
+                                Err(error) => this.location_picker_error(error.to_string()),
+                            }
+                        }
                         Ok(None) => {}
                         Err(error) => this.location_picker_error(error),
                     }
