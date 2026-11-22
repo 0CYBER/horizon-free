@@ -374,6 +374,24 @@ impl Launcher {
             && self.selected().is_some_and(|tag| self.can_start(tag))
     }
 
+    /// Starts Play's request after its version was prepared, once nothing else is starting:
+    /// a start whose pre-launch command still runs owns the window's Stop (Windows), and the
+    /// queued Play waits rather than taking the Stop over.
+    pub(crate) fn start_queued_play(&mut self) {
+        let start_busy = self.preparing
+            || self.pre_launch_stoppable()
+            || self.starting_client.is_some()
+            || self.client.is_some();
+        let Some((tag, instance)) = take_queued_play(&mut self.play_when_prepared, start_busy)
+        else {
+            return;
+        };
+        if backend::check_prepared(&tag) {
+            self.starting_pack = None;
+            self.start_client(tag, Some(instance));
+        }
+    }
+
     /// Whether a server's Join starts the selected instance now: a Java instance too, as Play
     /// would (no game running or starting).
     pub(crate) fn can_join_selected(&self) -> bool {
@@ -602,5 +620,39 @@ impl Launcher {
             }
         })
         .detach();
+    }
+}
+
+/// Takes the Play that waited for its version to be prepared, unless another start is under
+/// way: then it stays queued for [`Launcher::start_queued_play`] to try again.
+fn take_queued_play(
+    queued: &mut Option<(String, String)>,
+    start_busy: bool,
+) -> Option<(String, String)> {
+    if start_busy {
+        return None;
+    }
+    queued.take()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_queued_play;
+
+    fn queued() -> Option<(String, String)> {
+        Some(("nightly-2026-11-19".into(), "instance-1".into()))
+    }
+
+    #[test]
+    fn a_queued_play_waits_for_a_pre_launch_command_to_finish() {
+        let mut waiting = queued();
+        assert_eq!(take_queued_play(&mut waiting, true), None);
+        assert_eq!(
+            waiting,
+            queued(),
+            "a queued Play is kept while another start holds the Stop"
+        );
+        assert_eq!(take_queued_play(&mut waiting, false), queued());
+        assert_eq!(waiting, None, "once no start holds the Stop, it is taken");
     }
 }
