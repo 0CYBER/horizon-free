@@ -515,7 +515,7 @@ fn report(
 pub(crate) fn check_mod(entry: ChildEntry, args: &[String]) -> Result<(), String> {
     let root = Path::new(".");
     let package = Package::read(root)?;
-    package.directory_files(root)?;
+    let cargo_toml = package.directory_files(root)?.remove("Cargo.toml");
     let code = package.manifest.native.is_some() || package.manifest.wasm.is_some();
     if !code {
         println!("{}: the package rules hold.", package.manifest.name);
@@ -537,7 +537,7 @@ pub(crate) fn check_mod(entry: ChildEntry, args: &[String]) -> Result<(), String
             return Err(format!("cargo check for {on} failed"));
         }
     }
-    match uses_table::scan(entry, root, &surface)? {
+    let uses = match uses_table::scan(entry, root, &surface)? {
         Scanned::Uses(uses) => {
             print!(
                 "{}",
@@ -546,14 +546,33 @@ pub(crate) fn check_mod(entry: ChildEntry, args: &[String]) -> Result<(), String
             if args.iter().any(|a| a == "--uses") {
                 print!("{}", uses_table::list(&uses));
             }
+            if package.manifest.native.is_some() && crate::sdk_fetch::game_tree(root)?.is_none() {
+                Ok(Some(uses.table(sdk.build).to_json()))
+            } else {
+                Ok(None)
+            }
         }
-        Scanned::Exact(_) => println!(
-            "{} is made for exactly one build ({}); it has no uses table.",
-            package.manifest.name, sdk.name
-        ),
-        Scanned::Unread(why) => return Err(why),
+        Scanned::Exact(_) => {
+            println!(
+                "{} is made for exactly one build ({}); it has no uses table.",
+                package.manifest.name, sdk.name
+            );
+            Ok(None)
+        }
+        Scanned::Unread(why) => Err(why),
+    };
+    if let Some(hint) = uses_table::compatibility_hint(
+        &package.manifest,
+        cargo_toml.as_deref(),
+        Ok(uses
+            .as_ref()
+            .ok()
+            .and_then(Option::as_deref)
+            .map(str::as_bytes)),
+    ) {
+        eprintln!("{hint}");
     }
-    Ok(())
+    uses.map(|_| ())
 }
 
 #[cfg(test)]

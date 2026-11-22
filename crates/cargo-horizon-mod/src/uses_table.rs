@@ -1,9 +1,10 @@
 //! What a code mod uses of the surface (design-fit.md 10.2): the scan of its source against the
 //! pinned SDK's `surface.json`, the table `build` packs as `uses.json`, and `check`'s summary.
 use crate::sdk_fetch::PinnedSdk;
+use horizon_mod_package::{Manifest, Package, index::native, manifest::MAX_USES};
 use mod_source::mod_uses::{self, ModInput, ReadError};
 use mod_surface::child::ChildEntry;
-use mod_surface::uses::{Built, ManifestFacts, Origin, Uses, uses_contained};
+use mod_surface::uses::{Built, ManifestFacts, Origin, USES_FILE, Uses, UsesTable, uses_contained};
 use mod_surface::{Surface, leaf};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -64,6 +65,52 @@ pub(crate) fn scan(entry: ChildEntry, root: &Path, surface: &Surface) -> Result<
             Err(e) => Scanned::Unread(e.to_string()),
         },
     )
+}
+
+/// The Nightly compatibility hint for a native package.
+pub(crate) fn package_hint(path: &Path) -> Option<String> {
+    let manifest = native::read_manifest(path).ok()?;
+    // Native packages cap all source files together at 64 MiB.
+    let cargo = Package::entry(path, "Cargo.toml", 64 << 20).ok().flatten();
+    let uses = Package::entry(path, USES_FILE, MAX_USES);
+    compatibility_hint(
+        &manifest,
+        cargo.as_deref(),
+        uses.as_ref().map(|bytes| bytes.as_deref()).map_err(|_| ()),
+    )
+}
+
+pub(crate) fn compatibility_hint(
+    manifest: &Manifest,
+    cargo: Option<&[u8]>,
+    uses: Result<Option<&[u8]>, ()>,
+) -> Option<String> {
+    let pin = &manifest.native.as_ref()?.horizon;
+    let cargo: Option<toml::Table> = cargo
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .and_then(|text| toml::from_str(text).ok());
+    let reason = native::changes_game(manifest, cargo.as_ref()).or_else(|| match uses {
+        Ok(None) => Some("missing uses.json"),
+        Ok(Some(bytes)) if UsesTable::read(bytes).is_ok_and(|table| table.made_for == *pin) => None,
+        _ => Some("no valid uses.json for the pinned build"),
+    });
+    if let Some(reason) = reason {
+        return Some(format!(
+            "Nightly compatibility: exact-build-only ({reason}). Pinned to Nightly build {pin}. Rebuild for each Nightly."
+        ));
+    }
+    let Some(cargo) = cargo else {
+        return Some("Nightly compatibility: unknown (could not read Cargo.toml).".into());
+    };
+    if !native::has_mod_api_dependency(&cargo) {
+        return Some("Nightly compatibility: unavailable (Cargo.toml is missing a [dependencies] entry for horizon-mod-api).".into());
+    }
+    if native::all_dependencies(&cargo)
+        .any(|(key, value)| native::check_sdk_dependency(key, value).is_err())
+    {
+        return Some("Nightly compatibility: unavailable (Cargo.toml must use pinned SDK paths under .horizon/sdk/api/crates).".into());
+    }
+    Some("Nightly compatibility: portable. Carries forward automatically across Nightlies while the API items it uses stay unchanged. No daily rebuild needed.".into())
 }
 
 /// `Greeter uses 14 items of the API (6 hooks, 5 methods, 3 types). Made for nightly-….`, then
@@ -150,6 +197,119 @@ fn plural(word: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PIN: &str = "0123456789abcdef0123456789abcdef01234567";
+    const API_CARGO: &[u8] =
+        b"[dependencies]\nhorizon-mod-api = { path = '.horizon/sdk/api/crates/horizon-mod-api' }";
+
+    fn native_manifest(top: &str, patches: &str) -> Manifest {
+        Manifest::parse(&format!(
+            "id = 'greeter'\nname = 'Greeter'\nversion = '0.1.0'\napi = '0.2'\ncapabilities = ['registries']\n{top}\n\
+             [native]\ngame = '26.3'\nhorizon = '{PIN}'\nmixins = '{PIN}'\n{patches}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn native_api_only_mod_with_uses_is_portable() {
+        let manifest = native_manifest("", "");
+        let uses = Uses { items: vec![] }.table(PIN).to_json();
+        assert_eq!(
+            compatibility_hint(&manifest, Some(API_CARGO), Ok(Some(uses.as_bytes()))).as_deref(),
+            Some(
+                "Nightly compatibility: portable. Carries forward automatically across Nightlies while the API items it uses stay unchanged. No daily rebuild needed."
+            )
+        );
+    }
+
+    #[test]
+    fn native_mod_with_uses_requires_an_unconditional_api_dependency() {
+        let manifest = native_manifest("", "");
+        let uses = Uses { items: vec![] }.table(PIN).to_json();
+        for cargo in [
+            b"[dependencies]\nserde = '1'".as_slice(),
+            b"[target.'cfg(unix)'.dependencies]\nhorizon-mod-api = { path = '.horizon/sdk/api/crates/horizon-mod-api' }",
+        ] {
+            assert_eq!(
+                compatibility_hint(&manifest, Some(cargo), Ok(Some(uses.as_bytes()))).as_deref(),
+                Some("Nightly compatibility: unavailable (Cargo.toml is missing a [dependencies] entry for horizon-mod-api).")
+            );
+        }
+        let alias = b"[dependencies]\napi = { package = 'horizon-mod-api', path = '.horizon/sdk/api/crates/horizon-mod-api' }";
+        assert!(
+            compatibility_hint(&manifest, Some(alias), Ok(Some(uses.as_bytes())))
+                .unwrap()
+                .starts_with("Nightly compatibility: portable.")
+        );
+    }
+
+    #[test]
+    fn native_mod_with_uses_requires_pinned_sdk_sources() {
+        let manifest = native_manifest("", "");
+        let uses = Uses { items: vec![] }.table(PIN).to_json();
+        let points = [
+            API_CARGO,
+            b"\n[target.'cfg(unix)'.build-dependencies]\npoints = { package = 'horizon-mod-points', version = '1' }",
+        ]
+        .concat();
+        for cargo in [
+            b"[dependencies]\nhorizon-mod-api = '1'".as_slice(),
+            b"[dependencies]\nhorizon-mod-api = { path = '../horizon-mod-api' }",
+            points.as_slice(),
+        ] {
+            assert_eq!(
+                compatibility_hint(&manifest, Some(cargo), Ok(Some(uses.as_bytes()))).as_deref(),
+                Some(
+                    "Nightly compatibility: unavailable (Cargo.toml must use pinned SDK paths under .horizon/sdk/api/crates)."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn native_patches_and_internals_are_exact_even_with_uses() {
+        let mixin = native_manifest(
+            "",
+            "[[native.mixin]]\nid = 'on_tick'\ntarget = 'Game::tick'\nkind = 'HEAD'\nhelper = 'src/tick.rs'\n",
+        );
+        let internals =
+            native_manifest("internals = [{ path = 'horizon_client::game::Game' }]", "");
+        let facade = format!(
+            "{}\n[target.'cfg(unix)'.dependencies]\nengine = {{ package = 'horizon-internals', path = '.horizon/sdk/api/crates/horizon-internals' }}",
+            std::str::from_utf8(API_CARGO).unwrap()
+        );
+        let uses = Uses { items: vec![] }.table(PIN).to_json();
+        for (manifest, cargo, reason) in [
+            (mixin, API_CARGO, "[[native.mixin]]"),
+            (internals, API_CARGO, "internals"),
+            (native_manifest("", ""), facade.as_bytes(), "internals"),
+        ] {
+            assert_eq!(
+                compatibility_hint(&manifest, Some(cargo), Ok(Some(uses.as_bytes()))).unwrap(),
+                format!(
+                    "Nightly compatibility: exact-build-only ({reason}). Pinned to Nightly build {PIN}. Rebuild for each Nightly."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn native_mod_without_usable_uses_is_exact() {
+        let manifest = native_manifest("", "");
+        assert_eq!(
+            compatibility_hint(&manifest, Some(API_CARGO), Ok(None)).unwrap(),
+            format!(
+                "Nightly compatibility: exact-build-only (missing uses.json). Pinned to Nightly build {PIN}. Rebuild for each Nightly."
+            )
+        );
+        let outdated = Uses { items: vec![] }.table("a".repeat(40)).to_json();
+        assert_eq!(
+            compatibility_hint(&manifest, Some(API_CARGO), Ok(Some(outdated.as_bytes()))).unwrap(),
+            format!(
+                "Nightly compatibility: exact-build-only (no valid uses.json for the pinned build). Pinned to Nightly build {PIN}. Rebuild for each Nightly."
+            )
+        );
+    }
 
     #[test]
     fn a_mod_including_build_script_output_is_unread_not_an_error() {

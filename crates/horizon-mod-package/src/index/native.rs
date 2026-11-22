@@ -13,6 +13,171 @@ pub fn prebuilt_prefix() -> String {
     format!("horizon-prebuilt-v{}-", crate::sdk::PACKAGE_FORMAT)
 }
 
+/// The API package every native mod depends on.
+pub const MOD_API_PACKAGE: &str = "horizon-mod-api";
+
+/// The per-mod facade's package, rewritten to its generated crate by the launcher.
+pub const INTERNALS_PACKAGE: &str = "horizon-internals";
+
+/// The game package that provides native injection points.
+pub const POINTS_PACKAGE: &str = "horizon-mod-points";
+
+/// Each SDK package a native mod may depend on, with its library name.
+pub const SDK_PACKAGES: [(&str, &str); 3] = [
+    (MOD_API_PACKAGE, "mod_api"),
+    (POINTS_PACKAGE, "mod_points"),
+    (INTERNALS_PACKAGE, "internals"),
+];
+
+/// Where a mod's `Cargo.toml` names the SDK package `package`: the copy of its pinned build that
+/// `cargo horizon-mod` fetches into the project (`.horizon/sdk/`).
+fn sdk_path(package: &str) -> String {
+    format!(".horizon/sdk/api/crates/{package}")
+}
+
+/// Whether `value`, a mod's dependency `key` on the SDK package `package`, names the SDK the one
+/// way the launcher takes: by the path to the mod tool's copy of the pinned SDK ([`sdk_path`]).
+/// The launcher builds against its own copy of the same build. Every other form is refused under
+/// one code, each with its own reason: the git form the path form replaced, a version alone (which
+/// Cargo would resolve from crates.io), any other source selector, and a path elsewhere.
+pub fn sdk_source(key: &str, package: &str, value: &toml::Value) -> Result<(), String> {
+    let path = sdk_path(package);
+    let why = if value.get("git").is_some() {
+        "the SDK is no longer named by git".to_owned()
+    } else if let Some(selector) = [
+        "registry",
+        "registry-index",
+        "branch",
+        "tag",
+        "rev",
+        "workspace",
+    ]
+    .into_iter()
+    .find(|selector| value.get(*selector).is_some())
+    {
+        format!("{selector} does not name the SDK")
+    } else {
+        match value.get("path") {
+            None => format!(
+                "a version names no source, so Cargo would take {package} from crates.io, where anyone can publish that name"
+            ),
+            Some(written) if written.as_str() != Some(path.as_str()) => {
+                format!("the path must be \"{path}\", the pinned SDK the mod tool fetches")
+            }
+            Some(_) => return Ok(()),
+        }
+    };
+    Err(format!(
+        "E_SDK_SOURCE: {key}: {why}; write {key} = {{ path = \"{path}\" }}, then any cargo horizon-mod command fetches the pinned SDK there"
+    ))
+}
+
+/// All dependency declarations checked by the launcher, including development and build dependencies.
+pub fn all_dependencies(cargo: &toml::Table) -> impl Iterator<Item = (&String, &toml::Value)> {
+    let targets = cargo
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::Table::values)
+        .filter_map(toml::Value::as_table);
+    std::iter::once(cargo).chain(targets).flat_map(|table| {
+        [
+            "dependencies",
+            "dev-dependencies",
+            "build-dependencies",
+            "dev_dependencies",
+            "build_dependencies",
+        ]
+        .into_iter()
+        .filter_map(|kind| table.get(kind).and_then(toml::Value::as_table))
+        .flatten()
+    })
+}
+
+/// Check a dependency's source when it names an SDK package. Returns whether it names one.
+pub fn check_sdk_dependency(key: &str, value: &toml::Value) -> Result<bool, String> {
+    let package = value
+        .get("package")
+        .and_then(toml::Value::as_str)
+        .unwrap_or(key);
+    let is_sdk = SDK_PACKAGES.iter().any(|(name, _)| *name == package);
+    if is_sdk {
+        sdk_source(key, package, value)?;
+    }
+    Ok(is_sdk)
+}
+
+/// The manifest's regular dependency tables, including target-specific ones.
+pub fn dependency_tables(
+    cargo: &toml::Table,
+) -> impl Iterator<Item = (Option<&str>, &toml::Table)> {
+    let targets = cargo
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+        .map(|(target, config)| (Some(target.as_str()), config.get("dependencies")));
+    std::iter::once((None, cargo.get("dependencies")))
+        .chain(targets)
+        .filter_map(|(target, table)| Some((target, table?.as_table()?)))
+}
+
+fn has_dependency(deps: &toml::Table, package: &str) -> bool {
+    deps.iter().any(|(key, value)| {
+        value
+            .get("package")
+            .and_then(toml::Value::as_str)
+            .unwrap_or(key)
+            == package
+    })
+}
+
+/// Whether the native mod declares the API package in its unconditional dependencies.
+pub fn has_mod_api_dependency(cargo: &toml::Table) -> bool {
+    cargo
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|deps| has_dependency(deps, MOD_API_PACKAGE))
+}
+
+/// The game-code dependency that ties a native mod to its pinned build, when declared.
+pub fn changes_game(
+    manifest: &crate::Manifest,
+    cargo: Option<&toml::Table>,
+) -> Option<&'static str> {
+    // Every row kind by name: a new one does not compile until it is routed here.
+    if let Some(native) = &manifest.native {
+        let crate::manifest::Native {
+            game: _,
+            horizon: _,
+            mixins: _,
+            mixin,
+            module,
+            bridge,
+            state,
+            r#loop,
+            world_control: _,
+            level_reset: _,
+        } = native;
+        for (empty, table) in [
+            (mixin.is_empty(), "[[native.mixin]]"),
+            (module.is_empty(), "[[native.module]]"),
+            (bridge.is_empty(), "[[native.bridge]]"),
+            (state.is_empty(), "[[native.state]]"),
+            (r#loop.is_empty(), "[[native.loop]]"),
+        ] {
+            if !empty {
+                return Some(table);
+            }
+        }
+    }
+    let facade = cargo
+        .into_iter()
+        .flat_map(dependency_tables)
+        .any(|(_, deps)| has_dependency(deps, INTERNALS_PACKAGE));
+    (!manifest.internals.is_empty() || facade).then_some("internals")
+}
+
 /// Whether a valid package is native, irrespective of its install folder.
 pub fn holds(path: &Path) -> bool {
     crate::Package::read(path).is_ok_and(|package| package.is_native())

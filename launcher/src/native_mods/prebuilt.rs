@@ -612,38 +612,10 @@ impl Route {
 /// for: a `[native]` table row (named by its table), or game internals (`internals`); `None` for
 /// a mod on the mod API alone.
 pub(super) fn changes_game(project: &api::Project<'_>) -> Option<&'static str> {
-    let manifest = &project.bundle.manifest;
-    // Every row kind by name: a new one does not compile until it is routed here.
-    if let Some(native) = &manifest.native {
-        let horizon_platform::mod_package::manifest::Native {
-            game: _,
-            horizon: _,
-            mixins: _,
-            mixin,
-            module,
-            bridge,
-            state,
-            r#loop,
-            world_control: _,
-            level_reset: _,
-        } = native;
-        for (empty, table) in [
-            (mixin.is_empty(), "[[native.mixin]]"),
-            (module.is_empty(), "[[native.module]]"),
-            (bridge.is_empty(), "[[native.bridge]]"),
-            (state.is_empty(), "[[native.state]]"),
-            (r#loop.is_empty(), "[[native.loop]]"),
-        ] {
-            if !empty {
-                return Some(table);
-            }
-        }
-    }
-    let facade = project
-        .api_dependencies()
-        .iter()
-        .any(|(_, package)| *package == "internals");
-    (internals::needed(manifest) || facade).then_some("internals")
+    horizon_platform::mod_package::index::native::changes_game(
+        &project.bundle.manifest,
+        Some(&project.cargo),
+    )
 }
 
 /// Whether `project` depends on a crate that is not one of the game's own packages.

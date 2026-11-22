@@ -36,6 +36,7 @@ mod uses_table;
 mod wasm;
 
 use std::{
+    io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
@@ -84,8 +85,7 @@ fn main() -> ExitCode {
         }),
         Some("build") if args.get(1).is_some_and(|a| a == "--wasm") => fetched(Path::new("."))
             .and_then(|()| wasm::build(Path::new("."), &args[2..].windows(2).filter(|a| a[0] == "--with").map(|a| PathBuf::from(&a[1])).collect::<Vec<_>>()))
-            .and_then(|()| build(entry))
-            .map(|p| println!("Built {}", p.display())),
+            .and_then(|()| build(entry)),
         Some("wasm-std") => wasm::wasm_std(&args[1..]),
         Some("build") => {
             let sdk = if code_project(Path::new(".")) {
@@ -94,13 +94,12 @@ fn main() -> ExitCode {
                 Ok(())
             };
             sdk.and_then(|()| build(entry))
-                .map(|p| println!("Built {}", p.display()))
         }
         Some("run") => run(&args[1..]).map_err(|e| e.to_string()),
         Some("check") if args.get(1).is_none_or(|a| a.starts_with("--")) => {
             sdk_cmds::check_mod(entry, &args[1..])
         }
-        Some("check") => check(&args[1..]),
+        Some("check") => check(&args[1..], &mut io::stdout().lock(), &mut io::stderr().lock()),
         Some("hooks") => sdk_cmds::hooks(&args[1..]),
         Some("sdk") => sdk_cmds::sdk(&args[1..]),
         Some("fits") => return sdk_cmds::fits(entry, &args[1..]),
@@ -366,7 +365,7 @@ fn new_code(
 /// the files in `assets/` and `data/`, and for a code mod its source and its uses table, scanned
 /// against the pinned build (none for a mod made for exactly one build, or built against the game
 /// checkout it lies in, which has no published surface to scan against).
-fn build(entry: mod_surface::child::ChildEntry) -> Result<PathBuf, String> {
+fn build(entry: mod_surface::child::ChildEntry) -> Result<(), String> {
     let root = Path::new(".");
     let package = Package::read(root)?;
     let code = package.manifest.native.is_some() || package.manifest.wasm.is_some();
@@ -386,7 +385,14 @@ fn build(entry: mod_surface::child::ChildEntry) -> Result<PathBuf, String> {
     } else {
         None
     };
-    pack_into(root, &root.join("target/horizon-mod"), uses.as_deref())
+    let path = pack_into(root, &root.join("target/horizon-mod"), uses.as_deref())?;
+    println!("Built {}", path.display());
+    if package.manifest.native.is_some()
+        && let Some(hint) = uses_table::package_hint(&path)
+    {
+        eprintln!("{hint}");
+    }
+    Ok(())
 }
 
 fn build_in(root: &Path) -> Result<PathBuf, String> {
@@ -410,7 +416,11 @@ fn pack_into(root: &Path, dir: &Path, uses: Option<&[u8]>) -> Result<PathBuf, St
 
 /// `check <file>`: the registry's checks of a submission, printed; fails
 /// when one does.
-fn check(args: &[String]) -> Result<(), String> {
+fn check(
+    args: &[String],
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> Result<(), String> {
     let file = args
         .first()
         .filter(|a| !a.starts_with("--"))
@@ -430,11 +440,15 @@ fn check(args: &[String]) -> Result<(), String> {
             Ok(r) => serde_json::json!({"ok": true, "report": r.json()}),
             Err(e) => serde_json::json!({"ok": false, "error": e}),
         };
-        println!("{json}");
+        writeln!(stdout, "{json}").map_err(|e| e.to_string())?;
+        return report.map(|_| ());
     }
     let report = report?;
-    if !args.iter().any(|a| a == "--json") {
-        print!("{}", report.text());
+    write!(stdout, "{}", report.text()).map_err(|e| e.to_string())?;
+    if report.kind == horizon_mod_package::index::Kind::NativeMod
+        && let Some(hint) = uses_table::package_hint(path)
+    {
+        writeln!(stderr, "{hint}").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -489,6 +503,53 @@ fn run(args: &[String]) -> Result<(), RunError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_package_check_keeps_the_json_output_contract() {
+        use serde_json::{Value, json};
+        use sha2::{Digest, Sha256};
+        use std::fs;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("greeter.hmod");
+        let pin = "0123456789abcdef0123456789abcdef01234567";
+        let manifest = format!(
+            "id = 'greeter'\nname = 'Greeter'\nversion = '0.1.0'\napi = '0.2'\ncapabilities = ['registries']\n\
+             [native]\ngame = '26.3'\nhorizon = '{pin}'\nmixins = '{pin}'\n"
+        );
+        let cargo = b"[package]\nname = 'greeter'\nversion = '0.1.0'\n\
+                      [dependencies]\nhorizon-mod-api = { path = '.horizon/sdk/api/crates/horizon-mod-api' }\n";
+        let bytes =
+            Package::write_files(&manifest, &[("Cargo.toml", cargo), ("src/lib.rs", b"")]).unwrap();
+        fs::write(&path, &bytes).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let args = [path.to_str().unwrap().to_owned(), "--json".into()];
+        check(&args, &mut stdout, &mut stderr).unwrap();
+
+        assert_eq!(
+            serde_json::from_slice::<Value>(&stdout).unwrap(),
+            json!({
+                "ok": true,
+                "report": {
+                    "kind": "native-mod",
+                    "id": "greeter",
+                    "version": "0.1.0",
+                    "api": format!("native-1/{pin}/{pin}"),
+                    "side": null,
+                    "capabilities": [],
+                    "game": "26.3",
+                    "requires": [],
+                    "sha256": format!("{:x}", Sha256::digest(&bytes)),
+                    "size": bytes.len(),
+                    "signed": false,
+                    "wasm": false
+                }
+            })
+        );
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    }
 
     #[test]
     fn the_content_template_builds_and_checks_with_no_code() {
