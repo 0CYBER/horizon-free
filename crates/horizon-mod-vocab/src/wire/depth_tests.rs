@@ -3,6 +3,12 @@ use crate::item::crafting::Shape;
 use crate::world::snapshots::LootEntity;
 use crate::{Ingredient, ItemPlace, RecipeSlotDisplay, Tag, Text};
 
+/// The native thread that stands in for the guest's shadow stack: the guest reserves 256 KiB and these tests
+/// keep half of it for callers and transport plumbing. On Windows the same depth overflows a 128 KiB thread
+/// (its guard pages come out of the thread's own reservation, which Windows makes in 64 KiB steps), so it
+/// gets the next step up there. Linux CI measures the exact budget.
+const GUEST_STACK: usize = if cfg!(windows) { 160 } else { 128 } * 1024;
+
 fn round<T: Wire>(value: &T, initial: u16) {
     let mut out = Writer::new();
     out.put(value);
@@ -49,9 +55,8 @@ fn ingredient_at_limit_decodes_and_one_record_past_returns_wire_error() {
 
 #[test]
 fn structural_families_fit_the_guest_shadow_stack() {
-    // The guest reserves 256 KiB; retain half for callers and transport plumbing.
     std::thread::Builder::new()
-        .stack_size(128 * 1024)
+        .stack_size(GUEST_STACK)
         .spawn(|| {
             // A raised limit is not safe merely because the depth counter still works.
             assert_eq!(MAX_DEPTH, 32);
@@ -113,7 +118,7 @@ fn structural_families_fit_the_guest_shadow_stack() {
 #[test]
 fn vanilla_trees_keep_their_depth_on_the_guest_shadow_stack() {
     std::thread::Builder::new()
-        .stack_size(128 * 1024)
+        .stack_size(GUEST_STACK)
         .spawn(|| {
             for compound in [false, true] {
                 let mut tag = Tag::Int(7);
@@ -178,7 +183,7 @@ fn vanilla_trees_keep_their_depth_on_the_guest_shadow_stack() {
 #[test]
 fn json_backed_codecs_preflight_before_serde_recursion() {
     std::thread::Builder::new()
-        .stack_size(128 * 1024)
+        .stack_size(GUEST_STACK)
         .spawn(|| {
             let quoted = serde_json::Value::String("[\\\"{".repeat(1024));
             let mut quoted_bytes = Writer::new();
