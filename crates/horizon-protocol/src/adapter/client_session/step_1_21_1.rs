@@ -36,6 +36,44 @@ use crate::{
     packets::{login::Property, play},
 };
 
+/// The pinned (26.3) entity type ids of the two woods 1.21.1's `Boat.Type` lacks, which `pinned_ids::entity_type`
+/// (generated for the older registries) does not name.
+const PALE_OAK_BOAT: i32 = 95;
+const PALE_OAK_CHEST_BOAT: i32 = 96;
+const POPLAR_BOAT: i32 = 106;
+const POPLAR_CHEST_BOAT: i32 = 107;
+
+/// A pinned boat or raft of any wood as 1.21.1 shows it: the plain `boat` (oak) or `chest_boat` type in the
+/// pinned ids, and the wood as `Boat.Type`'s ordinal, which 1.21.1 keeps in entity data (index 11) until 1.21.2
+/// split the entity type per wood (`translate::v1_21_1::boats` is the mirror). Pale oak and poplar, which no
+/// 1.21.1 `Boat.Type` has, are shown as birch.
+pub(super) fn boat(kind: i32) -> Option<(i32, i32)> {
+    use crate::adapter::translate::v1_21_1::boats::{CHEST_TYPES, TYPES};
+    let kind = match kind {
+        PALE_OAK_BOAT | POPLAR_BOAT => TYPES[2],
+        PALE_OAK_CHEST_BOAT | POPLAR_CHEST_BOAT => CHEST_TYPES[2],
+        _ => kind,
+    };
+    let ordinal = |types: [i32; 9]| types.iter().position(|&k| k == kind);
+    if let Some(i) = ordinal(TYPES) {
+        return Some((TYPES[0], i as i32));
+    }
+    ordinal(CHEST_TYPES).map(|i| (CHEST_TYPES[0], i as i32))
+}
+
+/// A boat's entity data in 1.21.1's indexes: the wood took index 11, which pushes the paddles and the bubble
+/// time (11 to 13 from 1.21.2) up by one.
+pub(super) fn boat_data(kind: Option<i32>, data: &mut play::SetEntityData) {
+    use crate::adapter::translate::v1_21_1::boats::{CHEST_TYPES, TYPES};
+    if kind == Some(TYPES[0]) || kind == Some(CHEST_TYPES[0]) {
+        for (index, _, _) in &mut data.values {
+            if (11..=13).contains(index) {
+                *index += 1;
+            }
+        }
+    }
+}
+
 /// The strength written for an explosion. 1.21.2's explode has no radius; `ClientSession` overwrites this with
 /// 26.3's radius, which the steps in between drop. It only chooses the blast's particles and sound volume.
 const EXPLODE_STRENGTH: f32 = 3.0;

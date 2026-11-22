@@ -655,21 +655,31 @@ impl ConnWriter {
         self.stream.flush()?;
         Ok(())
     }
-    /// A packet body as this connection's client takes it: renumbered for a client of an older release
-    /// ([`Connection::serve_older`]), `None` when it has no such packet; as it is otherwise.
-    pub fn for_client<'a>(&self, body: &'a [u8]) -> Result<Option<std::borrow::Cow<'a, [u8]>>> {
+    /// Whether this connection serves a client of an older release ([`Connection::serve_older`]): only
+    /// then does a body become other bodies, so the rest can frame the borrowed body as it is.
+    pub fn serves_older_client(&self) -> bool {
+        self.older_client.is_some()
+    }
+    /// The packet bodies this connection's client takes for one body, in order: renumbered for a client of an
+    /// older release ([`Connection::serve_older`]), none when it has no such packet, and what the packet brought
+    /// with it (a boat's wood, an experience orb's value) after it; the body itself otherwise.
+    pub fn for_client<'a>(&self, body: &'a [u8]) -> Result<Vec<std::borrow::Cow<'a, [u8]>>> {
         match &self.older_client {
-            None => Ok(Some(std::borrow::Cow::Borrowed(body))),
-            Some(client) => Ok(client.clientbound(body)?.map(std::borrow::Cow::Owned)),
+            None => Ok(vec![std::borrow::Cow::Borrowed(body)]),
+            Some(client) => Ok(client
+                .clientbound_all(body)?
+                .into_iter()
+                .map(std::borrow::Cow::Owned)
+                .collect()),
         }
     }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         if self.older_client.is_some() {
-            return match self.for_client(body)? {
-                Some(body) => self.send_contents(&self.contents(&body)?),
-                None => Ok(()),
-            };
+            for body in self.for_client(body)? {
+                self.send_contents(&self.contents(&body)?)?;
+            }
+            return Ok(());
         }
         if let Some(a) = self.adapter.clone() {
             if let Some(body) = a.serverbound(body)? {
