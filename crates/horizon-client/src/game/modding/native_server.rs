@@ -912,6 +912,8 @@ impl Game<'_> {
     /// The local player's `Abilities` on a client: what its game mode gives
     /// (`GameType.updatePlayerAbilities`, `mayBuild` among them), then the
     /// flags and speeds `ClientPacketListener.handlePlayerAbilities` took.
+    /// `flying` is the body's own: a double jump toggles `LocalPlayer`'s
+    /// abilities before the server hears of it, and the server sends none back.
     fn client_abilities(&self) -> PlayerAbilities {
         let mut a = PlayerAbilities::default();
         a.update_for_mode(self.mode_id());
@@ -922,6 +924,9 @@ impl Game<'_> {
             a.instabuild = p.flags & 8 != 0;
             a.flying_speed = p.flying_speed;
             a.walking_speed = p.walking_speed;
+        }
+        if let Some(body) = self.player.as_ref() {
+            a.flying = body.flying;
         }
         a
     }

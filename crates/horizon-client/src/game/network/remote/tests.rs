@@ -2357,6 +2357,18 @@ fn client_player_reads_answer_from_the_local_players_copy() {
         assert!(abilities.may_fly && abilities.flying && !abilities.invulnerable);
         assert!(!abilities.may_build);
         assert_eq!((abilities.fly_speed, abilities.walk_speed), (0.1, 0.2));
+        // A double jump toggles flight on the client first, and the server sends no
+        // abilities back: the read follows the body (`LocalPlayer.getAbilities()`).
+        game.player.as_mut().unwrap().flying = false;
+        assert_eq!(player.abilities(game).map(|a| a.flying), Some(false));
+        game.handle_packet(C::PlayerAbilities(play::PlayerAbilities {
+            flags: 4,
+            flying_speed: 0.1,
+            walking_speed: 0.2,
+        }))
+        .unwrap();
+        game.player.as_mut().unwrap().flying = true;
+        assert_eq!(player.abilities(game).map(|a| a.flying), Some(true));
 
         // Food from SetHealth; the client keeps no exhaustion.
         game.handle_packet(C::SetHealth(play::SetHealth {
