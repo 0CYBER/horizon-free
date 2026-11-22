@@ -17,6 +17,8 @@ def units(html: str) -> list[dict]:
 
 
 def summary(data: list[dict], top: int) -> list[str]:
+    if top < 0:
+        raise ValueError("--top must be non-negative")
     end = max((unit["start"] + unit["duration"] for unit in data), default=0.0)
     lines = [f"units={len(data)} wall={end:.1f}s summed={sum(unit['duration'] for unit in data):.1f}s"]
     for unit in sorted(data, key=lambda unit: unit["duration"], reverse=True)[:top]:
@@ -30,4 +32,6 @@ if __name__ == "__main__":
     parser.add_argument("report", type=Path)
     parser.add_argument("--top", type=int, default=25)
     args = parser.parse_args()
+    if args.top < 0:
+        parser.error("--top must be non-negative")
     print("\n".join(summary(units(args.report.read_text()), args.top)))
