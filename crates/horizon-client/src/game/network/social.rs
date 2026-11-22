@@ -1,10 +1,12 @@
 //! `SocialInteractionsScreen` and `PlayerSocialManager` on the game side: the players Horizon
-//! knows (the tab list's), the ones whose chat the player hid, the screen's page, search and
+//! knows (the tab list's), the ones whose chat the player hid or the account has blocked
+//! outside the game (`UserApiService`'s block list), the screen's page, search and
 //! scroll, and what hiding does to chat (`Minecraft.isBlocked`). The screen is
-//! `social_screen`. Blocking is Mojang's service (`UserApiService.isBlockedPlayer`), which
-//! Horizon does not offer: nobody is blocked, as in vanilla's offline mode.
+//! `social_screen`. Each row's report button is the disabled one vanilla shows when
+//! reporting is off; the reporting screens are a later part.
 use super::{Game, Screen};
 use horizon_client::{
+    social,
     social_screen::{self, Action, Entry, Page, SocialView},
     tab_list::TabPlayer,
     text::Text,
@@ -67,9 +69,11 @@ impl Game<'_> {
             }
         }
     }
-    /// `Minecraft.isBlocked`: whether a player's chat is hidden (never the player's own).
+    /// `Minecraft.isBlocked`: whether a player's chat is hidden by the player
+    /// or the account has blocked them (`PlayerSocialManager
+    /// .shouldHideMessageFrom`), never for the player's own.
     pub(super) fn social_hides(&mut self, id: u128) -> bool {
-        if !self.social.hidden.contains(&id) {
+        if !self.social.hidden.contains(&id) && !social::is_blocked_player(id) {
             return false;
         }
         let (_, me) = self.social_players();
@@ -108,8 +112,14 @@ impl Game<'_> {
         let ids: Vec<u128> = match page {
             Page::All => players.iter().map(|p| p.uuid).collect(),
             Page::Hidden => hidden.iter().copied().collect(),
-            // `UserApiService.isBlockedPlayer`: nobody, without the service.
-            Page::Blocked => Vec::new(),
+            // `SocialInteractionsScreen.showPage`'s BLOCKED tab: the online
+            // players the account has blocked outside the game
+            // (`UserApiService.isBlockedPlayer`).
+            Page::Blocked => players
+                .iter()
+                .filter(|p| social::is_blocked_player(p.uuid))
+                .map(|p| p.uuid)
+                .collect(),
         };
         for id in ids {
             let (name, skin, removed) = match online(id) {

@@ -1,8 +1,8 @@
 //! `SocialInteractionsScreen`: the players of the server in three tabs (All, Hidden, Blocked),
 //! a search box, and a row for each with the button that hides or shows its chat. The
-//! Blocked tab and each row's report button belong to Mojang's services, which Horizon does
-//! not offer: the first lists no one, the second is the disabled button vanilla shows when
-//! reporting is off.
+//! Blocked tab lists the players the account has blocked outside the game (`UserApiService`
+//! 's block list). Each row's report button is the disabled button vanilla shows when
+//! reporting is off; the reporting screens are a later part.
 use crate::{
     hud::{HudAtlas, HudBatch, rgba},
     hud_layout, tab_list,

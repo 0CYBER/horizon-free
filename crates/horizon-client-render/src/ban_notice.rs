@@ -17,11 +17,24 @@ pub struct BanDetails {
     pub reason_message: Option<String>,
 }
 
-/// authlib's `UserProperties`, as far as the title screen and the friends service read it.
+/// authlib's `UserProperties`, as far as the title screen, the friends service and the
+/// chat restrictions read it: the flags `MinecraftServicesUserApiService.fetchProperties`
+/// builds from the attributes response.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UserProperties {
     /// `UserFlag.SERVERS_ALLOWED` (`privileges.multiplayerServer.enabled`).
     pub servers_allowed: bool,
+    /// `UserFlag.REALMS_ALLOWED` (`privileges.multiplayerRealms.enabled`).
+    pub realms_allowed: bool,
+    /// `UserFlag.CHAT_ALLOWED`: `privileges.onlineChat.enabled`, or
+    /// `chatPreferences.textCommunication` as `ENABLED` or `FRIENDS_ONLY`
+    /// (either sets it, as the service's flag building does).
+    pub chat_allowed: bool,
+    /// `UserFlag.CHAT_FRIENDS_ONLY` (`chatPreferences.textCommunication` as
+    /// `FRIENDS_ONLY`).
+    pub chat_friends_only: bool,
+    /// `UserFlag.PROFANITY_FILTER_ENABLED` (`profanityFilterPreferences.enabled`).
+    pub profanity_filter: bool,
     /// `UserFlag.FRIENDS_ENABLED` (`friendsPreferences.friends`).
     pub friends_enabled: bool,
     /// `UserFlag.ACCEPT_FRIEND_INVITES` (`friendsPreferences.acceptInvites`).
@@ -30,10 +43,15 @@ pub struct UserProperties {
     pub multiplayer_ban: Option<BanDetails>,
 }
 impl Default for UserProperties {
-    /// `UserApiService.OFFLINE_PROPERTIES`: what a failed fetch falls back to.
+    /// `UserApiService.OFFLINE_PROPERTIES`: what a failed fetch falls back to —
+    /// chat, realms and servers allowed, nothing else on.
     fn default() -> Self {
         Self {
             servers_allowed: true,
+            realms_allowed: true,
+            chat_allowed: true,
+            chat_friends_only: false,
+            profanity_filter: false,
             friends_enabled: false,
             accept_friend_invites: false,
             multiplayer_ban: None,
@@ -208,11 +226,37 @@ fn parse_instant(value: &serde_json::Value) -> Option<i64> {
 }
 
 /// `UserAttributesResponse` into `UserProperties` (`fetchProperties`). Bad JSON
-/// is an error, which vanilla answers with the offline properties.
+/// is an error, which vanilla answers with the offline properties. The flag
+/// building is the service's: each privilege's `enabled` sets its flag, the
+/// profanity filter only when its preferences say so, and
+/// `chatPreferences.textCommunication` sets `CHAT_ALLOWED` again for `ENABLED`,
+/// `CHAT_ALLOWED` and `CHAT_FRIENDS_ONLY` for `FRIENDS_ONLY` — nothing for
+/// `DISABLED`, leaving the online-chat privilege's answer.
 pub fn parse_properties(body: &str) -> Option<UserProperties> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    let servers_allowed = v
-        .pointer("/privileges/multiplayerServer/enabled")
+    let privilege = |name: &str| {
+        v.pointer(&format!("/privileges/{name}/enabled"))
+            .and_then(|e| e.as_bool())
+            .unwrap_or(false)
+    };
+    let servers_allowed = privilege("multiplayerServer");
+    let realms_allowed = privilege("multiplayerRealms");
+    let mut chat_allowed = privilege("onlineChat");
+    let mut chat_friends_only = false;
+    if let Some(toggle) = v
+        .pointer("/chatPreferences/textCommunication")
+        .and_then(|t| t.as_str())
+    {
+        // `ChatToggleValue`: `ENABLED`, `FRIENDS_ONLY`, `DISABLED`.
+        if toggle.eq_ignore_ascii_case("ENABLED") {
+            chat_allowed = true;
+        } else if toggle.eq_ignore_ascii_case("FRIENDS_ONLY") {
+            chat_allowed = true;
+            chat_friends_only = true;
+        }
+    }
+    let profanity_filter = v
+        .pointer("/profanityFilterPreferences/enabled")
         .and_then(|e| e.as_bool())
         .unwrap_or(false);
     let toggle = |name: &str| {
@@ -235,6 +279,10 @@ pub fn parse_properties(body: &str) -> Option<UserProperties> {
         });
     Some(UserProperties {
         servers_allowed,
+        realms_allowed,
+        chat_allowed,
+        chat_friends_only,
+        profanity_filter,
         friends_enabled,
         accept_friend_invites,
         multiplayer_ban,
@@ -306,6 +354,36 @@ mod tests {
         // The offline fallback has neither flag, as `OFFLINE_PROPERTIES` does.
         assert!(!UserProperties::default().friends_enabled);
         assert!(!UserProperties::default().accept_friend_invites);
+    }
+
+    #[test]
+    fn chat_privileges_read_the_service_flags() {
+        // `privileges.onlineChat` alone decides `CHAT_ALLOWED`...
+        let p = parse_properties(r#"{"privileges":{"onlineChat":{"enabled":true}}}"#).unwrap();
+        assert!(p.chat_allowed && !p.chat_friends_only);
+        let p = parse_properties(r#"{"privileges":{"onlineChat":{"enabled":false}}}"#).unwrap();
+        assert!(!p.chat_allowed);
+        // ...`chatPreferences.textCommunication` sets it again for ENABLED, and
+        // also `CHAT_FRIENDS_ONLY` for FRIENDS_ONLY; DISABLED leaves it.
+        let p = parse_properties(r#"{"chatPreferences":{"textCommunication":"FRIENDS_ONLY"}}"#)
+            .unwrap();
+        assert!(p.chat_allowed && p.chat_friends_only);
+        let p = parse_properties(r#"{"chatPreferences":{"textCommunication":"ENABLED"}}"#).unwrap();
+        assert!(p.chat_allowed && !p.chat_friends_only);
+        let p =
+            parse_properties(r#"{"chatPreferences":{"textCommunication":"DISABLED"}}"#).unwrap();
+        assert!(!p.chat_allowed && !p.chat_friends_only);
+        // The profanity filter and the realms privilege are their own fields.
+        let p = parse_properties(
+            r#"{"privileges":{"multiplayerRealms":{"enabled":true}},"profanityFilterPreferences":{"enabled":true}}"#,
+        )
+        .unwrap();
+        assert!(p.realms_allowed && p.profanity_filter);
+        // The offline fallback has chat, realms and servers allowed and nothing
+        // else, as `OFFLINE_PROPERTIES` holds.
+        let d = UserProperties::default();
+        assert!(d.chat_allowed && d.realms_allowed && d.servers_allowed);
+        assert!(!d.chat_friends_only && !d.profanity_filter);
     }
 
     #[test]
