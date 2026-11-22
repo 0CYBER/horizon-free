@@ -103,9 +103,8 @@ impl Game<'_> {
         let Some(snapshot) = Stats::from_snapshot(&value) else {
             return false;
         };
-        let values = snapshot.values;
         self.native_player_current(player)
-            && self.native_as_player_handle(player, |game| game.stats.replace(values))
+            && self.native_as_player_handle(player, |game| game.stats.replace(snapshot))
     }
 
     /// Whether the player's recipe book knows `recipe`
@@ -341,7 +340,7 @@ mod tests {
         stats.events.clear();
         let json = serde_json::json!({"stats": {"minecraft:custom": {
             "minecraft:jump": 9, "minecraft:walk_one_cm": 3}}});
-        stats.replace(super::Stats::from_json(&json).values);
+        stats.replace(super::Stats::from_json(&json));
         let (custom, mined) = ("minecraft:custom".to_owned(), "minecraft:mined".to_owned());
         let (jump, stone) = ("minecraft:jump".to_owned(), "minecraft:stone".to_owned());
         assert_eq!(

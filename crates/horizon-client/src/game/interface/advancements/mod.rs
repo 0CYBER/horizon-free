@@ -717,7 +717,7 @@ impl Game<'_> {
             level: asked.level.then_some(g.xp_level),
             // The guest's food as last written back from its body.
             food: Some((g.food, g.saturation)),
-            stats: stats.filter(|_| asked.stats).map(|s| s.values.clone()),
+            stats: stats.filter(|_| asked.stats).map(|s| s.merged_values()),
             advancements: asked
                 .advancements
                 .then(|| (self.adv.tree.clone(), g.advancements.clone())),
@@ -759,7 +759,7 @@ impl Game<'_> {
             // `ServerPlayer.getFoodData`, read by every player predicate:
             // two numbers, so always filled.
             food: Some((p.health.food.food, p.health.food.saturation)),
-            stats: (asked.stats && self.stats.loaded).then(|| self.stats.values.clone()),
+            stats: (asked.stats && self.stats.loaded).then(|| self.stats.merged_values()),
             advancements: (asked.advancements && self.adv.loaded)
                 .then(|| (self.adv.tree.clone(), self.adv.progress.clone())),
             recipes: asked

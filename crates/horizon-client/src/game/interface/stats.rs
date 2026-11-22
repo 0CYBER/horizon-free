@@ -122,7 +122,7 @@ impl Game<'_> {
         }
         self.stats.loaded = true;
         if let Some(path) = self.stats_path() {
-            self.stats.values = Stats::read(&path).values;
+            self.stats.load_from(Stats::read(&path));
         }
     }
     /// `ServerStatsCounter.save`.
@@ -175,6 +175,22 @@ impl Game<'_> {
         };
         let alive = !p.health.dead_or_dying();
         let crouching = p.pose == horizon_client::pose::Pose::Crouching;
+        if !self.lan_acting_fake && !mod_api::__private::listened(mod_api::HookId::PlayerStatAward)
+        {
+            let mut mask = (1 << 0) | (1 << 1);
+            if alive {
+                mask |= 1 << 2;
+            }
+            if crouching {
+                mask |= 1 << 3;
+            }
+            if !sleeping {
+                mask |= 1 << 4;
+            }
+            let record_events = !self.score.board.objectives.is_empty();
+            self.stats.add_tick_mask(mask, record_events);
+            return;
+        }
         self.award_custom_stat("play_time", 1);
         self.award_custom_stat("total_world_time", 1);
         if alive {
@@ -464,5 +480,137 @@ mod tests {
             game.spawn_phantoms();
             assert_eq!(with_fake, game.world.random.next_int());
         });
+    }
+
+    #[test]
+    fn tick_mask_stats_roundtrip_snapshots_and_player_predicate() {
+        use super::Stats;
+        use horizon_client::advancements::{self as adv, EntityView, PlayerFacts, World};
+        use std::collections::BTreeMap;
+
+        struct TestWorld;
+        impl World for TestWorld {
+            fn dimension(&self) -> &str {
+                "minecraft:overworld"
+            }
+            fn weather(&self) -> (bool, bool) {
+                (false, false)
+            }
+            fn biome(&self, _: [i32; 3]) -> String {
+                "minecraft:plains".into()
+            }
+            fn structures(&self, _: [i32; 3]) -> Vec<String> {
+                Vec::new()
+            }
+            fn block(&self, _: [i32; 3]) -> (String, BTreeMap<String, String>) {
+                ("minecraft:air".into(), BTreeMap::new())
+            }
+            fn fluid(&self, _: [i32; 3]) -> Option<String> {
+                None
+            }
+            fn can_see_sky(&self, _: [i32; 3]) -> bool {
+                true
+            }
+            fn light(&self, _: [i32; 3]) -> i32 {
+                15
+            }
+            fn smokey(&self, _: [i32; 3]) -> bool {
+                false
+            }
+            fn in_tag(&self, _: &str, _: &str, _: &str) -> bool {
+                false
+            }
+        }
+
+        let predicate = serde_json::json!({
+            "type_specific/player": {
+                "stats": [{
+                    "type": "minecraft:custom",
+                    "stat": "minecraft:play_time",
+                    "value": { "min": 2 }
+                }]
+            }
+        });
+        let matches = |stats: &Stats| {
+            let view = EntityView {
+                kind: "minecraft:player".into(),
+                player_facts: PlayerFacts {
+                    stats: Some(stats.merged_values()),
+                    ..PlayerFacts::default()
+                },
+                ..EntityView::default()
+            };
+            adv::entity(&predicate, &view, &TestWorld, [0.0; 3])
+        };
+
+        let mut stats = Stats::default();
+        // Bits: play_time (0), sneak_time (3), time_since_rest (4).
+        let mask = (1 << 0) | (1 << 3) | (1 << 4);
+        stats.add_tick_mask(mask, false);
+        stats.add_tick_mask(mask, false);
+
+        assert_eq!(stats.get("custom", "minecraft:play_time"), 2);
+        assert_eq!(stats.get("custom", "minecraft:sneak_time"), 2);
+        assert_eq!(stats.get("custom", "minecraft:time_since_rest"), 2);
+        assert_eq!(stats.get("custom", "minecraft:total_world_time"), 0);
+
+        let json = stats.to_json();
+        assert_eq!(json["stats"]["minecraft:custom"]["minecraft:play_time"], 2);
+        assert_eq!(json["stats"]["minecraft:custom"]["minecraft:sneak_time"], 2);
+        assert_eq!(
+            json["stats"]["minecraft:custom"]["minecraft:time_since_rest"],
+            2
+        );
+
+        let dirty = stats.take_dirty();
+        assert_eq!(
+            dirty,
+            vec![
+                ("minecraft:custom".into(), "minecraft:play_time".into(), 2),
+                ("minecraft:custom".into(), "minecraft:sneak_time".into(), 2),
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:time_since_rest".into(),
+                    2
+                ),
+            ]
+        );
+        assert!(matches(&stats));
+
+        let next = Stats::from_snapshot(&serde_json::json!({
+            "stats": {
+                "minecraft:custom": {
+                    "minecraft:play_time": 42
+                }
+            }
+        }))
+        .unwrap();
+        stats.replace(next);
+        assert_eq!(stats.get("custom", "minecraft:play_time"), 42);
+        assert_eq!(stats.get("custom", "minecraft:sneak_time"), 0);
+        assert!(matches(&stats));
+        let replace_dirty = stats.take_dirty();
+        assert_eq!(
+            replace_dirty,
+            vec![
+                ("minecraft:custom".into(), "minecraft:play_time".into(), 42),
+                ("minecraft:custom".into(), "minecraft:sneak_time".into(), 0),
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:time_since_rest".into(),
+                    0
+                ),
+            ]
+        );
+
+        let cleared = Stats::from_snapshot(&serde_json::json!({ "stats": {} })).unwrap();
+        stats.replace(cleared);
+        assert!(stats.is_empty());
+        assert_eq!(stats.get("custom", "minecraft:play_time"), 0);
+        assert!(!matches(&stats));
+        assert_eq!(
+            stats.take_dirty(),
+            vec![("minecraft:custom".into(), "minecraft:play_time".into(), 0)]
+        );
     }
 }

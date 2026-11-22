@@ -3,14 +3,41 @@
 //! killed by, saved to `players/stats/<uuid>.json`.
 use horizon_core::random::RandomSource;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
+const TICK_KEYS: [&str; 5] = [
+    "minecraft:play_time",
+    "minecraft:total_world_time",
+    "minecraft:time_since_death",
+    "minecraft:sneak_time",
+    "minecraft:time_since_rest",
+];
+
+#[inline]
+fn tick_index(ty: &str, key: &str) -> Option<usize> {
+    if ty != "minecraft:custom" {
+        return None;
+    }
+    match key {
+        "minecraft:play_time" => Some(0),
+        "minecraft:total_world_time" => Some(1),
+        "minecraft:time_since_death" => Some(2),
+        "minecraft:sneak_time" => Some(3),
+        "minecraft:time_since_rest" => Some(4),
+        _ => None,
+    }
+}
+
 /// `stats[type][key]`, with `type` and `key` namespaced ids.
 #[derive(Default)]
 pub struct Stats {
-    pub values: BTreeMap<String, BTreeMap<String, i32>>,
+    values: BTreeMap<String, BTreeMap<String, i32>>,
+    tick_counters: [i32; 5],
+    tick_present: u8,
+    tick_dirty: u8,
     pub loaded: bool,
     /// Ticks until the phantom spawner runs again.
     phantom_tick: i32,
@@ -41,10 +68,10 @@ pub fn namespaced<T>(name: &str, f: impl FnOnce(&str) -> T) -> T {
 /// The map under `key`, made when missing, found without an owned key
 /// when there.
 fn entry<'a, V: Default>(map: &'a mut BTreeMap<String, V>, key: &str) -> &'a mut V {
-    if !map.contains_key(key) {
-        map.insert(key.to_owned(), V::default());
+    if map.contains_key(key) {
+        return map.get_mut(key).expect("checked");
     }
-    map.get_mut(key).expect("just inserted")
+    map.entry(key.to_owned()).or_default()
 }
 
 impl Stats {
@@ -63,32 +90,123 @@ impl Stats {
     }
     pub fn add(&mut self, ty: &str, key: &str, n: i32) {
         namespaced(ty, |ty| {
+            if let Some(idx) = tick_index(ty, key) {
+                self.tick_present |= 1 << idx;
+                self.tick_counters[idx] = self.tick_counters[idx].saturating_add(n);
+                self.tick_dirty |= 1 << idx;
+                self.events.push((ty.to_owned(), key.to_owned(), Some(n)));
+                return;
+            }
             let v = entry(entry(&mut self.values, ty), key);
             *v = v.saturating_add(n);
             self.events.push((ty.to_owned(), key.to_owned(), Some(n)));
             self.mark_dirty(ty, key);
         });
     }
+    /// Increment the inline custom tick counters in `mask` (`0..=4`) by 1 without touching
+    /// maps or allocating event strings when `record_events` is false.
+    pub fn add_tick_mask(&mut self, mask: u8, record_events: bool) {
+        for (idx, key) in TICK_KEYS.iter().enumerate() {
+            if mask & (1 << idx) != 0 {
+                self.tick_present |= 1 << idx;
+                self.tick_counters[idx] = self.tick_counters[idx].saturating_add(1);
+                self.tick_dirty |= 1 << idx;
+                if record_events {
+                    self.events
+                        .push(("minecraft:custom".to_owned(), (*key).to_owned(), Some(1)));
+                }
+            }
+        }
+    }
     fn mark_dirty(&mut self, ty: &str, key: &str) {
+        if let Some(idx) = tick_index(ty, key) {
+            self.tick_dirty |= 1 << idx;
+            return;
+        }
         let keys = entry(&mut self.dirty, ty);
         if !keys.contains(key) {
             keys.insert(key.to_owned());
         }
     }
     pub fn get(&self, ty: &str, key: &str) -> i32 {
-        self.values
-            .get(&format!("minecraft:{ty}"))
-            .and_then(|m| m.get(key))
-            .copied()
-            .unwrap_or(0)
+        namespaced(ty, |ty| self.raw_get(ty, key).unwrap_or(0))
+    }
+    fn raw_get(&self, full_ty: &str, key: &str) -> Option<i32> {
+        if let Some(idx) = tick_index(full_ty, key) {
+            return (self.tick_present & (1 << idx) != 0).then_some(self.tick_counters[idx]);
+        }
+        self.values.get(full_ty).and_then(|m| m.get(key)).copied()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.tick_present == 0 && self.values.values().all(BTreeMap::is_empty)
+    }
+    /// Read one stat category (such as `"minecraft:mined"` or `"minecraft:custom"`),
+    /// borrowing directly when no inline tick counter needs merging.
+    pub fn type_map(&self, full_ty: &str) -> Cow<'_, BTreeMap<String, i32>> {
+        static EMPTY: BTreeMap<String, i32> = BTreeMap::new();
+        if full_ty == "minecraft:custom" && self.tick_present != 0 {
+            let mut merged = self.values.get(full_ty).cloned().unwrap_or_default();
+            for (idx, key) in TICK_KEYS.iter().enumerate() {
+                if self.tick_present & (1 << idx) != 0 {
+                    merged.insert((*key).to_owned(), self.tick_counters[idx]);
+                }
+            }
+            return Cow::Owned(merged);
+        }
+        Cow::Borrowed(self.values.get(full_ty).unwrap_or(&EMPTY))
+    }
+    /// All stored statistics including the inline per-tick custom counters.
+    pub fn merged_values(&self) -> BTreeMap<String, BTreeMap<String, i32>> {
+        let mut values = self.values.clone();
+        if self.tick_present != 0 {
+            let custom = values.entry("minecraft:custom".to_owned()).or_default();
+            for (idx, key) in TICK_KEYS.iter().enumerate() {
+                if self.tick_present & (1 << idx) != 0 {
+                    custom.insert((*key).to_owned(), self.tick_counters[idx]);
+                }
+            }
+        }
+        values
+    }
+    /// Store a counter received from a server packet or snapshot without emitting events/dirty flags.
+    pub fn set_received(&mut self, ty: String, key: String, value: i32) {
+        if let Some(idx) = tick_index(&ty, &key) {
+            self.tick_present |= 1 << idx;
+            self.tick_counters[idx] = value;
+        } else {
+            self.values.entry(ty).or_default().insert(key, value);
+        }
+    }
+    /// Replace stored counters from a parsed `Stats` file while preserving load state.
+    pub fn load_from(&mut self, other: Self) {
+        self.values = other.values;
+        self.tick_counters = other.tick_counters;
+        self.tick_present = other.tick_present;
+        self.tick_dirty = 0;
+        self.dirty.clear();
     }
     pub fn reset(&mut self, ty: &str, key: &str) {
-        if let Some(m) = self.values.get_mut(&format!("minecraft:{ty}")) {
-            m.insert(key.to_owned(), 0);
-        }
-        self.mark_dirty(&format!("minecraft:{ty}"), key);
-        self.events
-            .push((format!("minecraft:{ty}"), key.to_owned(), None));
+        namespaced(ty, |ty| {
+            if let Some(idx) = tick_index(ty, key) {
+                if self.tick_present != 0 || self.values.contains_key(ty) {
+                    self.tick_present |= 1 << idx;
+                    self.tick_counters[idx] = 0;
+                }
+                self.tick_dirty |= 1 << idx;
+                self.events.push((ty.to_owned(), key.to_owned(), None));
+                return;
+            }
+            if ty == "minecraft:custom" && self.tick_present != 0 {
+                self.values
+                    .entry(ty.to_owned())
+                    .or_default()
+                    .insert(key.to_owned(), 0);
+            } else if let Some(m) = self.values.get_mut(ty) {
+                m.insert(key.to_owned(), 0);
+            }
+            self.mark_dirty(ty, key);
+            self.events.push((ty.to_owned(), key.to_owned(), None));
+        });
     }
     /// `ServerPlayer.die`'s `resetStat` of `TIME_SINCE_DEATH` and `TIME_SINCE_REST`.
     pub fn reset_death_timers(&mut self) {
@@ -98,22 +216,25 @@ impl Stats {
     pub fn custom(&mut self, key: &str, n: i32) {
         namespaced(key, |key| self.add("custom", key, n));
     }
-    /// `StatsCounter.setValue` for every statistic: `values` in place of the counters, those
+    /// `StatsCounter.setValue` for every statistic: `next` in place of the counters, those
     /// it lacks back to 0. Each changed one is reset then raised to its value for the
     /// scoreboard criteria to follow, and is dirty for the client's next request.
-    pub fn replace(&mut self, values: BTreeMap<String, BTreeMap<String, i32>>) {
-        let old = std::mem::take(&mut self.values);
-        let value = |all: &BTreeMap<String, BTreeMap<String, i32>>, ty: &str, key: &str| {
-            all.get(ty).and_then(|m| m.get(key)).copied().unwrap_or(0)
-        };
-        let keys: BTreeSet<(String, String)> = old
+    pub fn replace(&mut self, next: Self) {
+        let mut keys: BTreeSet<(String, String)> = self
+            .values
             .iter()
-            .chain(&values)
+            .chain(&next.values)
             .flat_map(|(ty, m)| m.keys().map(move |key| (ty.clone(), key.clone())))
             .collect();
+        for (idx, key) in TICK_KEYS.iter().enumerate() {
+            let bit = 1 << idx;
+            if (self.tick_present | next.tick_present) & bit != 0 {
+                keys.insert(("minecraft:custom".to_owned(), (*key).to_owned()));
+            }
+        }
         for (ty, key) in keys {
-            let new = value(&values, &ty, &key);
-            if value(&old, &ty, &key) == new {
+            let new = next.raw_get(&ty, &key).unwrap_or(0);
+            if self.raw_get(&ty, &key).unwrap_or(0) == new {
                 continue;
             }
             self.events.push((ty.clone(), key.clone(), None));
@@ -122,7 +243,9 @@ impl Stats {
             }
             self.mark_dirty(&ty, &key);
         }
-        self.values = values;
+        self.values = next.values;
+        self.tick_counters = next.tick_counters;
+        self.tick_present = next.tick_present;
     }
     /// `ServerStatsCounter.markAllDirty`: everything goes out on the next request.
     pub fn mark_all_dirty(&mut self) {
@@ -131,15 +254,26 @@ impl Stats {
             .iter()
             .map(|(ty, m)| (ty.clone(), m.keys().cloned().collect()))
             .collect();
+        self.tick_dirty = self.tick_present;
     }
     /// `ServerStatsCounter.sendStats`' entries: the dirty statistics and
     /// their values, the set cleared.
     pub fn take_dirty(&mut self) -> Vec<(String, String, i32)> {
-        std::mem::take(&mut self.dirty)
+        let mut dirty = std::mem::take(&mut self.dirty);
+        let tick_dirty = std::mem::take(&mut self.tick_dirty);
+        if tick_dirty != 0 {
+            let custom = entry(&mut dirty, "minecraft:custom");
+            for (idx, key) in TICK_KEYS.iter().enumerate() {
+                if tick_dirty & (1 << idx) != 0 && !custom.contains(*key) {
+                    custom.insert((*key).to_owned());
+                }
+            }
+        }
+        dirty
             .into_iter()
             .flat_map(|(ty, keys)| keys.into_iter().map(move |key| (ty.clone(), key)))
             .map(|(ty, key)| {
-                let v = self.values.get(&ty).and_then(|m| m.get(&key)).copied();
+                let v = self.raw_get(&ty, &key);
                 (ty, key, v.unwrap_or(0))
             })
             .collect()
@@ -163,10 +297,9 @@ impl Stats {
                 let Some(entries) = entries.as_object() else {
                     continue;
                 };
-                let map = stats.values.entry(ty.clone()).or_default();
                 for (key, v) in entries {
                     if let Some(n) = v.as_i64() {
-                        map.insert(key.clone(), n as i32);
+                        stats.set_received(ty.clone(), key.clone(), n as i32);
                     }
                 }
             }
@@ -176,16 +309,44 @@ impl Stats {
     /// `ServerStatsCounter.toJson`: what `write` puts in the file, and what a
     /// hand-over's record carries (`player-export`).
     pub fn to_json(&self) -> serde_json::Value {
-        let stats: serde_json::Map<String, serde_json::Value> = self
-            .values
-            .iter()
-            .filter(|(_, m)| !m.is_empty())
-            .map(|(ty, m)| {
+        const CUSTOM_TY: &str = "minecraft:custom";
+        let mut stats = serde_json::Map::new();
+        let insert_custom = |stats: &mut serde_json::Map<String, serde_json::Value>,
+                             existing: Option<&BTreeMap<String, i32>>| {
+            let mut entries = serde_json::Map::new();
+            if let Some(m) = existing {
+                for (k, v) in m {
+                    entries.insert(k.clone(), (*v).into());
+                }
+            }
+            for (idx, key) in TICK_KEYS.iter().enumerate() {
+                if self.tick_present & (1 << idx) != 0 {
+                    entries.insert((*key).to_owned(), self.tick_counters[idx].into());
+                }
+            }
+            if !entries.is_empty() {
+                stats.insert(CUSTOM_TY.to_owned(), serde_json::Value::Object(entries));
+            }
+        };
+        let mut custom_written = false;
+        for (ty, m) in &self.values {
+            if self.tick_present != 0 && !custom_written && ty.as_str() >= CUSTOM_TY {
+                custom_written = true;
+                if ty == CUSTOM_TY {
+                    insert_custom(&mut stats, Some(m));
+                    continue;
+                }
+                insert_custom(&mut stats, None);
+            }
+            if !m.is_empty() {
                 let entries: serde_json::Map<String, serde_json::Value> =
                     m.iter().map(|(k, v)| (k.clone(), (*v).into())).collect();
-                (ty.clone(), serde_json::Value::Object(entries))
-            })
-            .collect();
+                stats.insert(ty.clone(), serde_json::Value::Object(entries));
+            }
+        }
+        if self.tick_present != 0 && !custom_written {
+            insert_custom(&mut stats, None);
+        }
         serde_json::json!({
             "stats": stats,
             "DataVersion": horizon_world::DATA_VERSION,
@@ -213,9 +374,8 @@ impl Stats {
             ..Self::default()
         };
         for (ty, entries) in all {
-            let map = stats.values.entry(ty.clone()).or_default();
             for (key, v) in entries.as_object()? {
-                map.insert(key.clone(), i32::try_from(v.as_i64()?).ok()?);
+                stats.set_received(ty.clone(), key.clone(), i32::try_from(v.as_i64()?).ok()?);
             }
         }
         Some(stats)
@@ -442,11 +602,10 @@ mod tests {
     fn a_snapshot_is_validated_whole_and_a_save_is_atomic() {
         let ok = serde_json::json!({"stats": {"minecraft:mined": {"minecraft:stone": 3}}});
         let read = Stats::from_snapshot(&ok).unwrap();
-        assert_eq!(read.values["minecraft:mined"]["minecraft:stone"], 3);
+        assert_eq!(read.get("mined", "minecraft:stone"), 3);
         assert!(
             Stats::from_snapshot(&serde_json::json!({"stats": {}}))
                 .unwrap()
-                .values
                 .is_empty()
         );
         for bad in [
@@ -474,5 +633,100 @@ mod tests {
         assert!(error.raw_os_error().is_some(), "{error}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tick_counters_preserve_order_snapshots_json_and_merged_values() {
+        let mut s = Stats::default();
+        s.add_tick_mask(0b11111, true);
+        assert_eq!(
+            s.events,
+            vec![
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:play_time".into(),
+                    Some(1)
+                ),
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:total_world_time".into(),
+                    Some(1)
+                ),
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:time_since_death".into(),
+                    Some(1)
+                ),
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:sneak_time".into(),
+                    Some(1)
+                ),
+                (
+                    "minecraft:custom".into(),
+                    "minecraft:time_since_rest".into(),
+                    Some(1)
+                ),
+            ]
+        );
+        s.events.clear();
+        assert_eq!(s.get("custom", "minecraft:play_time"), 1);
+        assert_eq!(
+            s.merged_values()["minecraft:custom"]["minecraft:play_time"],
+            1
+        );
+        assert_eq!(
+            s.to_json()["stats"]["minecraft:custom"]["minecraft:play_time"],
+            1
+        );
+
+        // Unchanged play_time must emit zero events on replace; changed play_time updates inline store.
+        let snap = Stats::from_snapshot(&serde_json::json!({
+            "stats": {"minecraft:custom": {"minecraft:play_time": 1, "minecraft:sneak_time": 50}}
+        }))
+        .unwrap();
+        assert_eq!(snap.get("custom", "minecraft:sneak_time"), 50);
+        s.replace(snap);
+        assert!(
+            !s.events.iter().any(|(_, k, _)| k == "minecraft:play_time"),
+            "unchanged play_time emitted events: {:?}",
+            s.events
+        );
+        assert_eq!(s.get("custom", "minecraft:play_time"), 1);
+        assert_eq!(s.get("custom", "minecraft:sneak_time"), 50);
+        assert_eq!(s.get("custom", "minecraft:total_world_time"), 0);
+        assert_eq!(
+            s.to_json()["stats"]["minecraft:custom"]["minecraft:sneak_time"],
+            50
+        );
+
+        // Explicit reset clears inline counters too.
+        let reset = Stats::from_snapshot(&serde_json::json!({"stats": {}})).unwrap();
+        s.replace(reset);
+        assert!(s.is_empty());
+        assert_eq!(s.get("custom", "minecraft:play_time"), 0);
+        assert_eq!(s.to_json()["stats"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn reset_custom_non_tick_key_creates_category_when_inline_counters_present() {
+        // With no inline counters and no custom map, reset leaves minecraft:custom absent.
+        let mut empty = Stats::default();
+        empty.reset("custom", "minecraft:jump");
+        assert!(empty.to_json()["stats"].get("minecraft:custom").is_none());
+
+        // With an inline tick counter present, resetting a non-tick custom key stores 0
+        // in minecraft:custom just like pre-PR map storage did.
+        let mut s = Stats::default();
+        s.add_tick_mask(0b00001, true); // play_time
+        s.reset("custom", "minecraft:jump");
+        assert_eq!(
+            s.to_json()["stats"]["minecraft:custom"]["minecraft:jump"],
+            0
+        );
+        assert_eq!(
+            s.to_json()["stats"]["minecraft:custom"]["minecraft:play_time"],
+            1
+        );
     }
 }

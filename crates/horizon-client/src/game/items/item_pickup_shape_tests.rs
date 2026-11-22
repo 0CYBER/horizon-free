@@ -167,7 +167,7 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 );
                 assert_eq!(game.inventory[0].as_ref().unwrap().count, 64);
                 assert_eq!(
-                    game.stats.values["minecraft:picked_up"]["minecraft:apple"],
+                    game.stats.get("picked_up", "minecraft:apple"),
                     2
                 );
                 assert_eq!(

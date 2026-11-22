@@ -305,7 +305,8 @@ impl super::Game<'_> {
                 previous.log |= in_tag("minecraft:logs", &stack.item);
                 previous.plank |= in_tag("minecraft:planks", &stack.item);
             }
-            if let Some(mined) = self.stats.values.get("minecraft:mined")
+            let mined = self.stats.type_map("minecraft:mined");
+            if !mined.is_empty()
                 && let Some(tree) = items
                     .block_tags
                     .get("minecraft:completes_find_tree_tutorial")
@@ -314,7 +315,8 @@ impl super::Game<'_> {
                     .iter()
                     .any(|(id, count)| *count > 0 && tree.contains(id));
             }
-            if let Some(crafted) = self.stats.values.get("minecraft:crafted")
+            let crafted = self.stats.type_map("minecraft:crafted");
+            if !crafted.is_empty()
                 && let Some(planks) = items.item_tags.get("minecraft:planks")
             {
                 previous.crafted_plank = crafted

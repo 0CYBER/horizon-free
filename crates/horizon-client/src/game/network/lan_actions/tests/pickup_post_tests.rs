@@ -207,11 +207,7 @@ fn host_animations(game: &Game<'_>) -> u64 {
 }
 
 fn host_stat(game: &Game<'_>) -> i64 {
-    game.stats
-        .values
-        .get("minecraft:picked_up")
-        .and_then(|items| items.get("minecraft:apple"))
-        .map_or(0, |&n| i64::from(n))
+    i64::from(game.stats.get("picked_up", "minecraft:apple"))
 }
 
 #[test]

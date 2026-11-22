@@ -12,5 +12,5 @@ fn world_entry_invalidates_loaded_progress() {
     reset_world_progress(&mut adv, &mut stats);
     assert!(!adv.loaded && !stats.loaded);
     assert!(adv.progress.criteria.is_empty());
-    assert!(stats.values.is_empty());
+    assert!(stats.is_empty());
 }

@@ -132,14 +132,7 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 .into();
             let before_items = game.dropped.len();
             let before_orbs = game.orbs.len();
-            let stat = |game: &Game<'_>| {
-                game.stats
-                    .values
-                    .get("minecraft:custom")
-                    .and_then(|v| v.get("minecraft:fish_caught"))
-                    .copied()
-                    .unwrap_or(0)
-            };
+            let stat = |game: &Game<'_>| game.stats.get("custom", "minecraft:fish_caught");
             let before_stat = stat(game);
             let damage = mod_platform::testing::with_mods(mods, || {
                 game.retrieve_hook_extracted(&ItemStack::new("minecraft:fishing_rod", 1), &mut hook)

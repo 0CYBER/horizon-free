@@ -162,12 +162,7 @@ const COLUMNS: [(&str, &str); 6] = [
 fn item_rows(stats: &super::stats::Stats, block_item: impl Fn(&str) -> String) -> Vec<String> {
     let mut items: Vec<String> = Vec::new();
     for (ty, _) in COLUMNS {
-        for (k, v) in stats
-            .values
-            .get(&format!("minecraft:{ty}"))
-            .into_iter()
-            .flatten()
-        {
+        for (k, v) in stats.type_map(&format!("minecraft:{ty}")).iter() {
             let item = if ty == "mined" {
                 block_item(k)
             } else {
@@ -373,9 +368,9 @@ impl Game<'_> {
     /// (network id) order, the types killed or killing the player.
     fn stat_mobs(&self) -> Vec<String> {
         let counted = |ty: &str| {
-            let map = self.stats.values.get(&format!("minecraft:{ty}"));
-            map.into_iter()
-                .flatten()
+            self.stats
+                .type_map(&format!("minecraft:{ty}"))
+                .iter()
                 .filter(|(_, v)| **v > 0)
                 .map(|(k, _)| k.clone())
                 .collect::<Vec<_>>()
