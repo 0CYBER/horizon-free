@@ -64,7 +64,7 @@ It starts at the title screen, creates the world `horizon-benchmark` (seed 1234,
 ```sh
 horizon-client --benchmark ab:gpu-culling --render-distance 12
 horizon-ctl --socket $PWD/ctl.sock launch --offscreen --benchmark ab:gpu-culling
-python3 tools/bench_stats.py benchmarks/game-*-ab_gpu-culling.json
+horizon-perf summary benchmarks/game-*-ab_gpu-culling.json
 ```
 
 The game quits when it is done, so `launch` without `--wait` is enough; the report is under `benchmarks/` in the game folder.
