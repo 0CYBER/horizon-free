@@ -1009,6 +1009,8 @@ impl Game<'_> {
                 });
                 // Set apart: one json! with every key goes past the default macro recursion
                 // limit, and horizon-client can't raise it (#8169).
+                // `sitting` is the saved order; clients only learn the rendered pose.
+                state["sitting_pose"] = m.extra.sitting_pose.into();
                 state["head"] = m.extra.head_id().into();
                 state["body"] = m.extra.body_id().into();
                 state["warden"] = serde_json::json!(horizon_client::mobs::warden::describe(m));

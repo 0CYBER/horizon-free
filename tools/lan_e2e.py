@@ -380,6 +380,7 @@ import threading
 import time
 import zlib
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1921,7 +1922,7 @@ def mob_looks(game, centre):
             continue
         key = f"{m['kind'].removeprefix('minecraft:')}@{round(m['pos'][0] - centre[0])}"
         found[key] = {'baby': m['baby'], 'color': m['color'], 'sheared': m['sheared'], 'size': m['size'],
-                      'tame': m['tame'], 'sitting': m['sitting'], 'burning': m['burning'],
+                      'tame': m['tame'], 'sitting_pose': m['sitting_pose'], 'burning': m['burning'],
                       'health': round(m['health'])}
     return found
 
@@ -1937,7 +1938,7 @@ def check_looks(host, guest, out):
         'sheep@1': ('{NoAI:1b,Color:14b,Sheared:1b}', {'color': 14, 'sheared': True}),
         'slime@3': ('{NoAI:1b,Size:3}', {'size': 4}),
         'wolf@5': ('{NoAI:1b,Owner:[I;1,2,3,4],Sitting:1b,CollarColor:11b}',
-                   {'tame': True, 'sitting': True, 'color': 11}),
+                   {'tame': True, 'sitting_pose': True, 'color': 11}),
     }
     sides = {'host': host, 'guest': guest}
     seen = {}
@@ -4892,8 +4893,12 @@ def check_fireworks(host, guest, out):
     host('command', command=f'fill {x - 2} {y + 2} {z + 1} {x + 2} {y + 2} {z + 5} minecraft:stone')
     for game, dx in ((host, -2), (guest, 2)):
         game('command', command='gamemode creative')
-        game('command', command=f'tp @s {x + dx + 0.5} {y} {z + 0.5}')
+        stand = (x + dx + 0.5, y, z + 0.5)
+        game('command', command=f'tp @s {stand[0]} {stand[1]} {stand[2]}')
+        game.until(lambda: pos_of(game), lambda p: math.dist(p, stand) < 0.1, ticks=40)
         game.raw('look-at', x + 0.5, y + 1.5, z + 3.5)
+    # Interact aims at the clicked face. Record the host baseline from that same view.
+    host.raw('look-at-block', *at, 'up')
 
     def reds(path):
         """The red pixels' positions, above the hotbar."""
@@ -4907,23 +4912,25 @@ def check_fireworks(host, guest, out):
     before = {g.name: made(g, 'flash') for g in (host, guest)}
     host('command', command='item replace entity @s weapon.mainhand with minecraft:firework_rocket'
          '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
-    host.raw('interact', *at)
+    host.raw('interact', *at, 'up')
     # The held item's red texture must not count as a burst or a later spark.
     host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
-    for _ in range(30):
-        host.wait(2)
-        if all(made(g, 'flash') > before[g.name] for g in (host, guest)):
-            break
+
+    def capture(game):
+        game.until(lambda: made(game, 'flash') - before[game.name], lambda n: n > 0, ticks=60)
+        # Do not let the other window's readback or decoding use up this client's spark lifetime.
+        burst = game.shot(out, 'fireworks-burst')
+        game.wait(4)
+        trail = game.shot(out, 'fireworks-trail-fade')
+        return burst, trail
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        captures = dict(zip((host.name, guest.name), pool.map(capture, (host, guest))))
     flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
-    assert all(n == 1 for n in flashes.values()), f'configured burst missing or duplicated: {flashes}'
-    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime (48-59 ticks). A
-    # screenshot takes ~0.6 s where the frame is drawn on the CPU (lavapipe), so the later shots come 4 ticks after
-    # the burst's, not more: by then the tracked rocket is gone.
-    burst_shots = {g.name: g.shot(out, 'fireworks-burst') for g in (host, guest)}
-    host.wait(4)
-    trail_shots = {g.name: g.shot(out, 'fireworks-trail-fade') for g in (host, guest)}
-    burst = {name: len(reds(path) - baseline[name]) for name, path in burst_shots.items()}
-    trails = {name: len(reds(path) - baseline[name]) for name, path in trail_shots.items()}
+    assert all(n == 1 for n in flashes.values()), \
+        f'configured burst missing or duplicated: {flashes}'
+    burst = {name: len(reds(burst) - baseline[name]) for name, (burst, _) in captures.items()}
+    trails = {name: len(reds(trail) - baseline[name]) for name, (_, trail) in captures.items()}
     rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
     assert not any(rockets.values()), f'exploded rocket remains: {rockets}'
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
@@ -6591,14 +6598,15 @@ def ride(player, other, label, spot, kind, nbt, ready, stick, test):
             assert math.dist(seated[::2], mine[::2]) < 1.5, f'the {label} sits at {seated}, its {kind} at {mine}'
             result['moved'] = round(moved, 2)
         if 'jump' in test:
-            base = mob_seen(player, mob['id'])['pos'][1]
-            player.raw('key', 'space', 'down')
-            player.wait(10)
-            player.raw('key', 'space', 'up')
-            top = base
-            for _ in range(10):
-                player.wait(2)
-                top = max(top, mob_seen(player, mob['id'])['pos'][1])
+            grounded = player.until(lambda: mob_seen(player, mob['id']),
+                                    lambda m: m is not None and m['on_ground'], ticks=20)
+            base = grounded['pos'][1]
+            # Keep the release and height samples in one socket session to see the short peak.
+            replies = player.script(['key space down', 'wait 10', 'key space up', 'mobs 8']
+                                    + ['wait 1', 'mobs 8'] * 20, every=True)
+            samples = [next((m for m in r['near'] if m['id'] == mob['id']), None) for r in replies[3::2]]
+            assert all(samples), f"the {label}'s {kind} {mob['id']} disappeared during its jump"
+            top = max(m['pos'][1] for m in samples)
             assert top - base > 0.4, f"the {label}'s {kind} jumped {top - base:.2f} blocks"
             result['jumped'] = round(top - base, 2)
         if 'rise' in test:
@@ -8709,7 +8717,7 @@ def check_vehicles(host, guest, out):
     for label, player in (('host', host), ('guest', guest)):
         x, y, z = spots[label]
         seen = result[label] = {}
-        near = lambda kind, at: [o for o in host('status')['objects'] if o['kind'].endswith(kind)
+        near = lambda kind, at: [o for o in host('status')['objects'] if o['kind'] == f'minecraft:{kind}'
                                  and abs(o['position'][0] - at[0]) < 2 and abs(o['position'][2] - at[2]) < 2]
         try:
             cell = (x, y + 1, z + 2)
@@ -8747,22 +8755,34 @@ def check_vehicles(host, guest, out):
             seen['minecart_in_lava'] = len(near('minecart', boat_at))
             booms = player('status')['heard'].get('minecraft:entity.generic.explode', 0)
             player('command', command=f'summon minecraft:tnt_minecart {boat_at[0]} {y} {boat_at[2]}')
-            player.wait(60)
-            seen['tnt_minecart'] = {'left': len(near('tnt_minecart', boat_at)),
-                                    'booms': player('status')['heard'].get('minecraft:entity.generic.explode', 0) - booms}
+
+            def tnt_state():
+                return {'left': len(near('tnt_minecart', boat_at)),
+                        'booms': heard(player, 'minecraft:entity.generic.explode') - booms}
+
+            seen['tnt_minecart'] = host.until(tnt_state, lambda t: t == {'left': 0, 'booms': 1})
 
             player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 6} minecraft:air')
             player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 6} minecraft:stone')
             player('command', command='gamemode survival')
+            rest = (x + 0.5, y, z + 0.5)
+            player('command', command=f'tp @s {rest[0]} {rest[1]} {rest[2]} 0 0')
+            player.until(lambda: pos_of(player), lambda p: math.dist(p, rest) < 0.1, ticks=40)
             cart_at = (x + 0.5, y, z + 1.6)
+            existing = {o['id'] for o in near('minecart', cart_at)}
             player('command', command=f'summon minecraft:minecart {cart_at[0]} {y} {cart_at[2]}')
-            player.wait(10)
-            before = near('minecart', cart_at)[0]['position']
+
+            def new_cart():
+                return next((o for o in near('minecart', cart_at) if o['id'] not in existing), None)
+
+            cart = host.until(new_cart, lambda o: o is not None)
+            before = cart['position']
             # Half into the cart from the north: it is pushed south until they are apart.
             player('command', command=f'tp @s {x + 0.5} {y} {before[2] - 0.4:.2f} 0 0')
             player.wait(20)
-            after = near('minecart', cart_at)[0]['position']
-            seen['cart_pushed'] = round(after[2] - before[2], 3)
+            cart_after = next((o for o in host('status')['objects'] if o['id'] == cart['id']), None)
+            assert cart_after is not None, f"{label}: pushed cart {cart['id']} missing (started at {before})"
+            seen['cart_pushed'] = round(cart_after['position'][2] - before[2], 3)
             player.shot(out, f'vehicles-{label}')
         finally:
             player('command', command='kill @e[type=minecraft:minecart]')
