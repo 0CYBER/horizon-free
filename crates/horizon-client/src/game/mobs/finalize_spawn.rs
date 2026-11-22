@@ -27,15 +27,11 @@ pub(super) fn biome_or_plains(name: Option<String>) -> String {
 }
 
 impl FinalizeGame<'_, '_> {
-    /// The biome id at a block, when its chunk is loaded.
+    /// The biome `LevelReader.getBiome` reads at a block (its zoom can pick a
+    /// neighbouring quart cell), when that cell's chunk is loaded.
     fn biome_name(&self, pos: [i32; 3]) -> Option<String> {
-        let chunk = self.game.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4))?;
-        Some(
-            world_biomes!(self.game)
-                .get(chunk.biome(pos[0], pos[1], pos[2]))
-                .name
-                .clone(),
-        )
+        let id = self.game.zoomed_biome_id(pos)?;
+        Some(world_biomes!(self.game).get(id).name.clone())
     }
 }
 

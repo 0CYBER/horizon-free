@@ -1,7 +1,9 @@
 //! `Game::biome_facts` over what it reads, so a helper thread can ask too.
 use horizon_client::mobs::{farm::Climate, spawning::BiomeFacts};
 
-/// The facts of the biome at a position, for `finalizeSpawn` and the variant rules.
+/// The facts of the biome stored at a position, read without the zoom. Kept
+/// with its old signature; `Game::biome_facts` zooms and calls `biome_facts_of`.
+#[allow(dead_code)]
 pub(in crate::game) fn biome_facts_in(
     world: &horizon_client::world::World,
     biomes: &horizon_client::biome::Biomes,
@@ -13,7 +15,17 @@ pub(in crate::game) fn biome_facts_in(
     let Some(chunk) = world.chunks.get(&(x >> 4, z >> 4)) else {
         return BiomeFacts::default();
     };
-    let b = biomes.get(chunk.biome(x, y, z));
+    biome_facts_of(world, biomes, tags, chunk.biome(x, y, z))
+}
+
+/// The facts of the stored biome `id`, for `finalizeSpawn` and the variant rules.
+pub(in crate::game) fn biome_facts_of(
+    world: &horizon_client::world::World,
+    biomes: &horizon_client::biome::Biomes,
+    tags: &horizon_client::mobs::MobData,
+    id: u16,
+) -> BiomeFacts {
+    let b = biomes.get(id);
     let has = |t: &str| tags.biome_has(t, &b.name);
     let climate = if has("minecraft:spawns_warm_variant_farm_animals") {
         Climate::Warm

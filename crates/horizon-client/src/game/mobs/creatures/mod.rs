@@ -523,16 +523,12 @@ impl Game<'_> {
             }),
         })
     }
-    /// Biome facts at a position for finalizeSpawn and variant rules.
+    /// Biome facts at `level.getBiome(pos)` (zoomed) for finalizeSpawn and variants.
     pub(super) fn biome_facts(&self, x: i32, y: i32, z: i32) -> BiomeFacts {
-        biome_facts::biome_facts_in(
-            &self.world,
-            world_biomes!(self),
-            self.res.mob_data(),
-            x,
-            y,
-            z,
-        )
+        let Some(id) = self.zoomed_biome_id([x, y, z]) else {
+            return BiomeFacts::default();
+        };
+        biome_facts::biome_facts_of(&self.world, world_biomes!(self), self.res.mob_data(), id)
     }
     /// Create a mob of `kind` at a position, finalized like a natural spawn.
     pub(super) fn spawn_mob(

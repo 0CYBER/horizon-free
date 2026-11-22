@@ -1313,18 +1313,23 @@ impl Game<'_> {
         }
         Ok((true, count))
     }
-    /// The biome name at a block position.
-    fn biome_name_at_block(&self, p: [i32; 3]) -> Option<String> {
-        let chunk = self.world.chunks.get(&(p[0] >> 4, p[2] >> 4))?;
+    /// The stored biome id `LevelReader.getBiome(BlockPos)` reads at `p`: the
+    /// quart cell `BiomeManager.getBiome`'s zoom picks among the eight around
+    /// the block, which near a border can be a neighbouring cell. The zoom is
+    /// seeded with `BiomeManager.obfuscateSeed(seed)`. None where the picked
+    /// cell's chunk isn't loaded.
+    pub(in crate::game) fn zoomed_biome_id(&self, p: [i32; 3]) -> Option<u16> {
+        let at = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
+        let [x, y, z] = self.streaming.biome_zoom.quart_at_block(at).map(|q| q << 2);
+        Some(self.world.chunks.get(&(x >> 4, z >> 4))?.biome(x, y, z))
+    }
+    /// The biome name at a block position, as `LevelReader.getBiome` zooms it.
+    pub(in crate::game) fn biome_name_at_block(&self, p: [i32; 3]) -> Option<String> {
+        let id = self.zoomed_biome_id(p)?;
         // The world's table (`world_biomes!`): a packed biome's id is past
         // the built-in list, and `Biomes::get` would clamp it to the last
         // vanilla one.
-        Some(
-            world_biomes!(self)
-                .get(chunk.biome(p[0], p[1], p[2]))
-                .name
-                .clone(),
-        )
+        Some(world_biomes!(self).get(id).name.clone())
     }
     /// A biome id or `#tag` matched against a biome name.
     pub(in crate::game) fn biome_matches(&self, wanted: &str, biome: &str) -> bool {
