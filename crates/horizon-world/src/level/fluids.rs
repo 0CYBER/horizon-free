@@ -903,7 +903,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     }
                 } else if self
                     .b
-                    .tag("minecraft:blocks_lava_fire_spread")
+                    .hot_tags
+                    .lava_fire_spread
+                    .as_deref()
                     .is_some_and(|tag| self.b.in_set(state, tag))
                 {
                     return;

@@ -9,6 +9,8 @@
 //! resources (`block-behaviours.json`, `gameplay-facts.json`,
 //! `block-tags.json`, `cached-collision.nbt`; see
 //! `crates/horizon-prepare`).
+//! Hot-path block tags are resolved with the tables; [`Behaviours::tag`]
+//! still looks up arbitrary tags by name.
 //!
 //! # Driving a level
 //!
@@ -1372,6 +1374,31 @@ pub trait GameplayStateSource {
     fn sound_id(&self, name: &str) -> &str;
 }
 
+/// Named hot-path tags, resolved from `all_tags` on either load path.
+/// Missing tags stay absent rather than being replaced with empty sets.
+struct HotTags {
+    fire: Option<Arc<data::BlockSet>>,
+    lava_fire_spread: Option<Arc<data::BlockSet>>,
+    all_hanging_signs: Option<Arc<data::BlockSet>>,
+    wall_hanging_signs: Option<Arc<data::BlockSet>>,
+    speleothems: Option<Arc<data::BlockSet>>,
+    nether_portal_frame: Option<Arc<data::BlockSet>>,
+}
+
+impl HotTags {
+    fn resolve(all_tags: &HashMap<String, Arc<data::BlockSet>>) -> Self {
+        let tag = |name| all_tags.get(name).cloned();
+        Self {
+            fire: tag("minecraft:fire"),
+            lava_fire_spread: tag("minecraft:blocks_lava_fire_spread"),
+            all_hanging_signs: tag("minecraft:all_hanging_signs"),
+            wall_hanging_signs: tag("minecraft:wall_hanging_signs"),
+            speleothems: tag("minecraft:speleothems"),
+            nether_portal_frame: tag("minecraft:nether_portal_frame"),
+        }
+    }
+}
+
 /// Immutable vanilla block-behaviour tables. Build once with [`Behaviours::load`].
 pub struct Behaviours {
     pub table: StateTable,
@@ -1379,6 +1406,7 @@ pub struct Behaviours {
     pub named: Named,
     pub tags: Tags,
     all_tags: HashMap<String, Arc<data::BlockSet>>,
+    hot_tags: HotTags,
     facts: Vec<StateFacts>,
     shapes: Vec<VoxelShape>,
     shape_info: Vec<data::ShapeInfo>,

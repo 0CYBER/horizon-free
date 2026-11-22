@@ -24,7 +24,7 @@ pub struct Ticks {
     pub(crate) updater: NeighborUpdater,
     /// `ComparatorBlockEntity.output` per comparator position (block-entity
     /// state owned by the level; persist it with the chunk if desired).
-    pub comparator_outputs: std::collections::HashMap<BlockPos, i32>,
+    pub comparator_outputs: FxHashMap<BlockPos, i32>,
     /// `RedstoneTorchBlock.RECENT_TOGGLES` (position, game time).
     pub torch_toggles: Vec<(BlockPos, i64)>,
     /// Moving-piston block entities in ticker order (render and collide

@@ -1,6 +1,6 @@
 //! Behaviour tables built once from the pinned client resources.
 use super::{
-    Behaviours, GameplayStateSource,
+    Behaviours, GameplayStateSource, HotTags,
     classes::{Class, ClassSet, Interface},
     states::{BlockId, PropKey, StateTable},
 };
@@ -762,6 +762,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
         all_tags.insert(name.clone(), Arc::new(set));
     }
     let tags = Tags::resolve(&all_tags);
+    let hot_tags = HotTags::resolve(&all_tags);
     let tag = |name: &str| -> Option<Arc<BlockSet>> {
         all_tags
             .get(name.strip_prefix('#').unwrap_or(name))
@@ -1125,6 +1126,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
         named,
         tags,
         all_tags,
+        hot_tags,
         facts,
         shapes,
         shape_info,

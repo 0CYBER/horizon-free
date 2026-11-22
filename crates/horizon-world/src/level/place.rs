@@ -581,7 +581,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 let above_pos = above(pos);
                 let above_state = self.state(above_pos);
                 let below_hanging = b
-                    .tag("minecraft:all_hanging_signs")
+                    .hot_tags
+                    .all_hanging_signs
+                    .as_deref()
                     .is_some_and(|tag| b.in_set(above_state, tag));
                 let direction = from_y_rot(f64::from(ctx.yaw));
                 let mut attached_to_middle =
@@ -1371,7 +1373,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let facing = b.facing(state);
         let attach = |side: Direction, face: Direction| {
             let attach_state = self.rel_state(pos, side);
-            if b.tag("minecraft:wall_hanging_signs")
+            if b.hot_tags
+                .wall_hanging_signs
+                .as_deref()
                 .is_some_and(|tag| b.in_set(attach_state, tag))
             {
                 axis_of(b.facing(attach_state)) == axis_of(facing)
@@ -1435,7 +1439,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let p = b.props;
         let base = tip.opposite();
         let is_with = |state: BlockStateId, direction: Direction| {
-            b.tag("minecraft:speleothems")
+            b.hot_tags
+                .speleothems
+                .as_deref()
                 .is_some_and(|tag| b.in_set(state, tag))
                 && b.table.dir(state, p.vertical_direction) == Some(direction)
         };

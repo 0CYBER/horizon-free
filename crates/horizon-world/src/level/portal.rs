@@ -39,14 +39,18 @@ fn step(pos: BlockPos, dir: Direction, n: i32) -> BlockPos {
 impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn portal_frame(&self, state: BlockStateId) -> bool {
         let b = self.b;
-        b.tag("minecraft:nether_portal_frame")
+        b.hot_tags
+            .nether_portal_frame
+            .as_deref()
             .is_some_and(|tag| b.in_set(state, tag))
     }
     /// `PortalShape.isEmpty`: air, fire or a portal block.
     fn portal_empty(&self, state: BlockStateId) -> bool {
         let b = self.b;
         b.is_air(state)
-            || b.tag("minecraft:fire")
+            || b.hot_tags
+                .fire
+                .as_deref()
                 .is_some_and(|tag| b.in_set(state, tag))
             || b.is_block(state, b.named.nether_portal)
     }

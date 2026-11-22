@@ -787,6 +787,10 @@ features and rejects bindings from a different block registry. Feature access
 forwards fluid, water-tag and block-tag queries against current resident storage.
 Missing tags have no members; missing chunks remain query errors.
 
+Level behavior also resolves its fixed hot block tags when it loads the
+behavior table, including when restoring a cached table. An absent tag stays
+absent; commands and mods can still look up arbitrary tag names.
+
 The resident query comparison
 matches **29,312,766 lines per reference JAR**, retaining the 192 multi-chunk
 feature/tick fixtures and adding insertion/removal probes for **all 35,723 block

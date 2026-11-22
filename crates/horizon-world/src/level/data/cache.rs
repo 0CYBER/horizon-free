@@ -579,6 +579,7 @@ impl Snapshot {
             .map(|(key, value)| (key, Arc::new(BlockSet(value))))
             .collect();
         let tags = Tags::resolve(&all_tags);
+        let hot_tags = HotTags::resolve(&all_tags);
         let shapes = self
             .shapes
             .into_iter()
@@ -753,6 +754,7 @@ impl Snapshot {
             named,
             tags,
             all_tags,
+            hot_tags,
             facts,
             shapes,
             shape_info,
@@ -989,6 +991,73 @@ mod tests {
             serde_json::to_value(Snapshot::capture(&restored)).unwrap(),
             "all resolved fields, shape grids and identities should roundtrip",
         );
+    }
+
+    #[test]
+    fn resolved_hot_tag_predicates_match_named_queries_on_fresh_and_cached_loads() {
+        let Some(root) = fixture() else {
+            return;
+        };
+        let registry = super::super::load_registry(&root.0).unwrap();
+        let dir = root.0.join("game/.horizon-cache");
+        let bindings = [
+            ("minecraft:fire", "minecraft:fire"),
+            ("minecraft:blocks_lava_fire_spread", "minecraft:stone"),
+            ("minecraft:all_hanging_signs", "minecraft:redstone_torch"),
+            (
+                "minecraft:wall_hanging_signs",
+                "minecraft:redstone_wall_torch",
+            ),
+            ("minecraft:speleothems", "minecraft:pointed_dripstone"),
+            ("minecraft:nether_portal_frame", "minecraft:obsidian"),
+        ];
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        for present in [true, false] {
+            let mut definitions = serde_json::Map::new();
+            let mut define = |name: &str, member: &str| {
+                let tag = serde_json::json!({ "values": [member] }).to_string();
+                definitions.insert(name.into(), tag.into());
+            };
+            define("test:arbitrary", "minecraft:stone");
+            if present {
+                for (tag, member) in bindings {
+                    define(tag, member);
+                }
+            }
+            fs::write(
+                root.0.join("block-tags.json"),
+                serde_json::to_vec(&definitions).unwrap(),
+            )
+            .unwrap();
+
+            assert!(load_from(&dir, &registry, &root.0).is_none());
+            let fresh = super::super::load_uncached(&registry, &root.0).unwrap();
+            write(&dir, &registry, &root.0, &fresh).unwrap();
+            let cached = load_from(&dir, &registry, &root.0).expect("cache hit");
+
+            for b in [&fresh, &cached] {
+                let hot = &b.hot_tags;
+                let handles = [
+                    hot.fire.as_deref(),
+                    hot.lava_fire_spread.as_deref(),
+                    hot.all_hanging_signs.as_deref(),
+                    hot.wall_hanging_signs.as_deref(),
+                    hot.speleothems.as_deref(),
+                    hot.nether_portal_frame.as_deref(),
+                ];
+                let predicate =
+                    |state, tag: Option<&BlockSet>| tag.is_some_and(|set| b.in_set(state, set));
+                for ((name, member), handle) in bindings.into_iter().zip(handles) {
+                    let state = registry.default_state(member).unwrap();
+                    for tag in [handle, b.tag(name)] {
+                        assert_eq!(tag.is_some(), present, "{name}");
+                        assert_eq!(predicate(state, tag), present, "{name} member");
+                        assert!(!predicate(b.air(), tag), "{name} nonmember");
+                    }
+                }
+                assert!(predicate(stone, b.tag("test:arbitrary")));
+            }
+        }
     }
 
     /// A folder's sources are hashed once while they stay as they are; a

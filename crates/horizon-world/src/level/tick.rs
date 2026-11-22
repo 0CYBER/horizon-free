@@ -589,7 +589,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn is_free(&self, state: BlockStateId) -> bool {
         let b = self.b;
         b.is_air(state)
-            || b.tag("minecraft:fire")
+            || b.hot_tags
+                .fire
+                .as_deref()
                 .is_some_and(|tag| b.in_set(state, tag))
             || b.liquid(state)
             || b.is_replaceable(state)
