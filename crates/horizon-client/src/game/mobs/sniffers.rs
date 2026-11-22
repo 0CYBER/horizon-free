@@ -39,6 +39,13 @@ impl Game<'_> {
     /// block's hit sound between the 1.7th and the 6th second of the
     /// digging animation) and `playSearchingSound`.
     pub(super) fn tick_sniffer_effects(&mut self) {
+        if !self
+            .mobs
+            .iter()
+            .any(|m| m.species() == Species::Sniffer && m.alive())
+        {
+            return;
+        }
         // Vanilla runs these on each client: a sniffer within 32 blocks of
         // any player in the level (the host and the guests) shows them.
         let players = self.level_players();

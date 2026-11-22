@@ -117,3 +117,43 @@ fn the_egg_push_comes_from_the_items_own_random() {
         assert_eq!(game.world.random.next_double(), level.next_double());
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn early_exit_skips_when_no_alive_sniffer_exists() {
+    game(|game| {
+        TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
+        game.audio.heard.clear();
+        game.tick_sniffer_effects();
+        assert!(game.audio.heard.is_empty());
+        assert!(posted().is_empty());
+
+        let kind = game
+            .res
+            .mob_types()
+            .get("minecraft:sniffer")
+            .unwrap()
+            .clone();
+        let mut dead = Mob::new(41, kind, Vec3::new(8.5, 100.0, 8.5), 0.0);
+        dead.health = 0.0;
+        dead.age = 20;
+        sniffer::set_state(&mut dead, sniffer::SEARCHING);
+        game.mobs.push(dead);
+        game.tick_sniffer_effects();
+        assert!(game.audio.heard.is_empty());
+        assert!(posted().is_empty());
+
+        let _ = digging_sniffer(game);
+        game.mobs[1].age = 10;
+        game.mobs[1].anim.states[3].start(0.0);
+        game.tick_sniffer_effects();
+        assert_eq!(
+            posted()
+                .iter()
+                .filter(|(event, ..)| *event == "minecraft:entity_action")
+                .count(),
+            1
+        );
+        TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = None);
+    });
+}

@@ -1,0 +1,2 @@
+# Sniffer early-exit test boots Game with prepared resources.
+horizon-client game::sniffers::sniffers_tests::early_exit_skips_when_no_alive_sniffer_exists lib daily resources
