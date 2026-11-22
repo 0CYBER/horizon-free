@@ -475,6 +475,9 @@ const DYNAMIC: &str = "#dynamic:";
 /// The item id standing for a chosen `minecraft:loot_table` entry, whose
 /// table then rolls in full (`NestedLootTable`).
 const NESTED: &str = "#loot_table";
+/// The item id standing for an unexpanded `minecraft:tag` entry, which emits
+/// a stack of every item in the tag when chosen (`TagEntry`).
+const TAG: &str = "#tag";
 thread_local! {
     /// The nested tables rolling now, outermost first: a table never rolls
     /// inside itself (`LootContext.pushVisitedElement`).
@@ -2350,7 +2353,69 @@ impl<R: RandomSource> LootContext<'_, R> {
                 ));
                 true
             }
+            // TagEntry: expanded, one candidate per item in the tag; not
+            // expanded, one candidate that emits every item when chosen.
+            "minecraft:tag" => {
+                if e["expand"].as_bool().unwrap_or(false) {
+                    for item in self.tag_items(&e["items"]) {
+                        out.push((
+                            e["weight"].as_i64().unwrap_or(1) as i32,
+                            ItemStack {
+                                item: Arc::from(item),
+                                count: 1,
+                                damage: 0,
+                                extra: None,
+                            },
+                            e["modifier"].clone(),
+                            true,
+                        ));
+                    }
+                } else {
+                    out.push((
+                        e["weight"].as_i64().unwrap_or(1) as i32,
+                        ItemStack {
+                            item: Arc::from(TAG),
+                            count: 1,
+                            damage: 0,
+                            extra: None,
+                        },
+                        e.clone(),
+                        true,
+                    ));
+                }
+                true
+            }
             _ => false,
+        }
+    }
+    /// A tag entry's `items` (`HolderSet`): a tag's members in `TagLoader`
+    /// order, one item id, or a list of ids.
+    fn tag_items(&self, v: &Value) -> Vec<String> {
+        match v {
+            Value::String(s) => match s.strip_prefix('#') {
+                Some(tag) => {
+                    // `ResourceLocation`: an unqualified tag name defaults to
+                    // the `minecraft` namespace (as in `Items::item_in_tag`).
+                    let normalized;
+                    let tag = if !tag.contains(':') || tag.starts_with(':') {
+                        normalized = format!("minecraft:{}", tag.strip_prefix(':').unwrap_or(tag));
+                        normalized.as_str()
+                    } else {
+                        tag
+                    };
+                    self.items
+                        .tag_members(TagRegistry::Item, tag)
+                        .map(<[String]>::to_vec)
+                        .unwrap_or_default()
+                }
+                None => vec![s.clone()],
+            },
+            Value::Array(a) => a
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
         }
     }
     fn choose(&self, entries: &[Value], random: &mut R, produced: &mut Vec<(ItemStack, bool)>) {
@@ -2379,6 +2444,19 @@ impl<R: RandomSource> LootContext<'_, R> {
         let (_, mut stack, modifiers, emitted) = candidates.swap_remove(pick);
         if &*stack.item == NESTED {
             self.nested(&modifiers, random, produced);
+            return;
+        }
+        if &*stack.item == TAG {
+            for item in self.tag_items(&modifiers["items"]) {
+                let mut stack = ItemStack {
+                    item: Arc::from(item),
+                    count: 1,
+                    damage: 0,
+                    extra: None,
+                };
+                self.modifiers(&modifiers["modifier"], &mut stack, random);
+                produced.push((stack, true));
+            }
             return;
         }
         self.modifiers(&modifiers, &mut stack, random);
@@ -3800,6 +3878,102 @@ mod tests {
         assert_eq!(roll("test:inline"), ["minecraft:diamond 1"]);
         // `test:loop` is already rolling: its own entry adds nothing.
         assert_eq!(roll("test:loop"), ["minecraft:stick 1"]);
+    }
+
+    /// `TagEntry`: with `expand` the tag entry is one choice per item in the
+    /// tag; without it, choosing the entry emits a stack of every item.
+    #[test]
+    fn loot_tag_entries_expand_per_item_or_emit_the_whole_tag() {
+        let mut items = Items::for_tests(HashMap::new());
+        items.set_tags(
+            TagRegistry::Item,
+            HashMap::from([(
+                "minecraft:wool".to_owned(),
+                vec![
+                    "minecraft:white_wool".to_owned(),
+                    "minecraft:orange_wool".to_owned(),
+                    "minecraft:red_wool".to_owned(),
+                ],
+            )]),
+        );
+        let table = |expand: bool| {
+            json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:tag",
+                "items":"#minecraft:wool","expand":expand}]}]})
+        };
+        let summary = |stacks: Vec<ItemStack>| {
+            stacks
+                .into_iter()
+                .map(|s| s.item.to_string())
+                .collect::<Vec<_>>()
+        };
+        // Expanded, a roll takes exactly one of the tag's items, and every
+        // item is a candidate of its own.
+        let mut seen = HashSet::new();
+        for seed in 0..32 {
+            let rolled =
+                summary(items.inline_loot_table(&table(true), &mut LegacyRandom::new(seed)));
+            assert_eq!(
+                rolled.len(),
+                1,
+                "one expanded candidate and one roll is one stack: {rolled:?}"
+            );
+            seen.extend(rolled);
+        }
+        assert_eq!(
+            seen,
+            HashSet::from([
+                "minecraft:white_wool".to_owned(),
+                "minecraft:orange_wool".to_owned(),
+                "minecraft:red_wool".to_owned(),
+            ])
+        );
+        // Unexpanded, the chosen entry emits the whole tag, in tag order.
+        assert_eq!(
+            summary(items.inline_loot_table(&table(false), &mut LegacyRandom::new(1))),
+            [
+                "minecraft:white_wool",
+                "minecraft:orange_wool",
+                "minecraft:red_wool"
+            ]
+        );
+    }
+
+    /// An unqualified tag name (`#wool`) resolves in the `minecraft`
+    /// namespace, exactly like `#minecraft:wool` (`ResourceLocation`).
+    #[test]
+    fn loot_tag_entry_without_namespace_uses_the_minecraft_default() {
+        let mut items = Items::for_tests(HashMap::new());
+        items.set_tags(
+            TagRegistry::Item,
+            HashMap::from([(
+                "minecraft:wool".to_owned(),
+                vec![
+                    "minecraft:white_wool".to_owned(),
+                    "minecraft:orange_wool".to_owned(),
+                    "minecraft:red_wool".to_owned(),
+                ],
+            )]),
+        );
+        let table = |expand: bool| {
+            json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:tag",
+                "items":"#wool","expand":expand}]}]})
+        };
+        // Unexpanded, `#wool` emits every member of `minecraft:wool`.
+        let rolled = items.inline_loot_table(&table(false), &mut LegacyRandom::new(1));
+        assert_eq!(
+            rolled
+                .iter()
+                .map(|s| s.item.to_string())
+                .collect::<Vec<_>>(),
+            [
+                "minecraft:white_wool",
+                "minecraft:orange_wool",
+                "minecraft:red_wool"
+            ]
+        );
+        // Expanded, it yields one candidate per member, so one roll is one stack.
+        let expanded = items.inline_loot_table(&table(true), &mut LegacyRandom::new(1));
+        assert_eq!(expanded.len(), 1, "one expanded candidate: {expanded:?}");
     }
 
     /// `Blocks.wallVariant`: a wall block without a table of its own drops
