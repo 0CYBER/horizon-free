@@ -1,0 +1,2 @@
+# The resource-backed bone-meal vibration regression runs through the generated game module once.
+horizon-client game::bone_meal_vibration_tests::bone_meal_vibrations_respect_remaining_count_and_use_effects lib daily resources
