@@ -1,0 +1,1 @@
+horizon-client game::orb_data_tests::a_loaded_ticks_frozen_is_kept_by_an_orb_and_an_arrow lib daily resources

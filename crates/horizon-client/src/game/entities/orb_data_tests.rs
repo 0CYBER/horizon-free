@@ -208,3 +208,53 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
         assert_eq!(game.orbs.len(), 2);
     });
 }
+
+/// #16909: an orb and an arrow loaded with `TicksFrozen:60` keep it
+/// (`Entity.saveWithoutId` writes it while positive; only a `LivingEntity`
+/// thaws), and a loaded 0 is not written.
+#[test]
+#[ignore = "daily"]
+fn a_loaded_ticks_frozen_is_kept_by_an_orb_and_an_arrow() {
+    game(|game| {
+        let orb = load(
+            game,
+            "{Pos:[4.5d,100d,4.5d],Value:1s,Age:0s,Health:5s,Count:1,TicksFrozen:60}",
+            3,
+        );
+        let tag = game.command_target_nbt(commands::Target::Orb(orb)).unwrap();
+        assert_eq!(tag.get("TicksFrozen"), Some(&Tag::Int(60)));
+        let tag =
+            parse_snbt("{Pos:[4.5d,100d,4.5d],Motion:[0d,0d,0d],Rotation:[0f,0f],TicksFrozen:60}")
+                .unwrap()
+                .0;
+        game.load_listed("minecraft:arrow", Some([9, 0, 0, 4]), None, tag)
+            .unwrap();
+        let arrow = game.next_entity;
+        let tag = game
+            .command_target_nbt(commands::Target::Projectile(arrow))
+            .unwrap();
+        assert_eq!(tag.get("TicksFrozen"), Some(&Tag::Int(60)));
+        let cold = load(
+            game,
+            "{Pos:[5.5d,100d,5.5d],Value:1s,Age:0s,Health:5s,Count:1,TicksFrozen:0}",
+            4,
+        );
+        let tag = game
+            .command_target_nbt(commands::Target::Orb(cold))
+            .unwrap();
+        assert_eq!(tag.get("TicksFrozen"), None);
+        let short = load(
+            game,
+            "{Pos:[6.5d,100d,6.5d],Value:1s,Age:0s,Health:5s,Count:1,TicksFrozen:60s}",
+            5,
+        );
+        let tag = game
+            .command_target_nbt(commands::Target::Orb(short))
+            .unwrap();
+        assert_eq!(
+            tag.get("TicksFrozen"),
+            Some(&Tag::Int(60)),
+            "saved as an int"
+        );
+    });
+}

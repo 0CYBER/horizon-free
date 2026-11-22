@@ -210,6 +210,41 @@ def groups():
             *setup(f'/kill {target}'),
         ])
     fire_reload.extend(setup(f'/forceload remove {chunk}'))
+    # arrow and orb frozen ticks: a summoned value is read back, after ticks, and across a chunk save and reload.
+    frozen_kinds = ('arrow', 'spectral_arrow', 'experience_orb')
+    frozen = []
+    for kind in frozen_kinds:
+        target = f'@e[type={kind},limit=1]'
+        for saved in ('', ',TicksFrozen:100', ',TicksFrozen:0', ',TicksFrozen:-5', ',TicksFrozen:"bad"'):
+            frozen.extend([
+                cmd(f'/summon {kind} 12.5 234 8.5 {{NoGravity:1b{saved}}}'),
+                cmd(f'/data get entity {target} TicksFrozen'),
+                {'op': 'tick', 'n': 3},
+                cmd(f'/data get entity {target} TicksFrozen'),
+                *setup(f'/kill {target}'),
+            ])
+    frozen_reload = [*setup(f'/forceload add {chunk}'), wait]
+    for index, kind in enumerate(frozen_kinds):
+        frozen_reload.append(cmd(
+            f'/summon {kind} {4100 + 4 * index}.5 300 4104.5 {{NoGravity:1b,TicksFrozen:180}}'))
+    frozen_reload.append({'op': 'tick', 'n': 3})
+    for kind in frozen_kinds:
+        frozen_reload.append(cmd(f'/data get entity @e[type={kind},limit=1] TicksFrozen'))
+    frozen_reload.extend([
+        *setup(f'/forceload remove {chunk}'),
+        {'op': 'tick', 'n': 60},
+        cmd('/execute unless loaded 4096 300 4096', expect_result=1),
+        *setup(f'/forceload add {chunk}'),
+        wait,
+    ])
+    for kind in frozen_kinds:
+        target = f'@e[type={kind},limit=1]'
+        frozen_reload.extend([
+            cmd(f'/execute if entity {target}', expect_result=1),
+            cmd(f'/data get entity {target} TicksFrozen'),
+            *setup(f'/kill {target}'),
+        ])
+    frozen_reload.extend(setup(f'/forceload remove {chunk}'))
     return [
         ('projectile common state', summon),
         ('projectile common state reload', reloads),
@@ -220,6 +255,8 @@ def groups():
         ('Rotation on falling blocks, shulkers and clouds reload', extra_reload),
         ('cloud fang and eye fire', fire),
         ('cloud fang and eye fire reload', fire_reload),
+        ('arrow and orb frozen ticks', frozen),
+        ('arrow and orb frozen ticks reload', frozen_reload),
     ]
 
 
