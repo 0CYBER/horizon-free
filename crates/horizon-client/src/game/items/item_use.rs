@@ -627,11 +627,26 @@ pub(super) fn use_pose(
     }
 }
 
+/// `use_pose`, but BLOCK turns a sword (or any `blocks_attacks` item) across
+/// the body; a `ShieldItem` (`shield`) leaves it as it is.
+pub(super) fn held_use_pose(
+    animation: UseAnimation,
+    shield: bool,
+    remaining: f32,
+    duration: f32,
+    partial: f32,
+) -> horizon_client::first_person::ItemPose {
+    if animation == UseAnimation::Block && !shield {
+        return horizon_client::first_person::ItemPose::Block;
+    }
+    use_pose(animation, remaining, duration, partial)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         bow_release_power, consumes_at_once, count_down, duration_leaving, held, release_parts,
-        start_of, tick_left, ticks_left, use_counter_leaving, use_pose,
+        held_use_pose, start_of, tick_left, ticks_left, use_counter_leaving, use_pose,
     };
     use horizon_client::first_person::ItemPose;
     use horizon_core::use_animation::UseAnimation;
@@ -1162,6 +1177,15 @@ mod tests {
         ] {
             assert!(matches!(pose(animation), ItemPose::Using));
         }
+        // BLOCK turns a sword across the body but leaves a `ShieldItem` as it is.
+        assert!(matches!(
+            held_use_pose(UseAnimation::Block, false, 12.0, 32.0, 0.5),
+            ItemPose::Block
+        ));
+        assert!(matches!(
+            held_use_pose(UseAnimation::Block, true, 12.0, 32.0, 0.5),
+            ItemPose::Using
+        ));
     }
 }
 

@@ -16,6 +16,9 @@ pub enum ItemPose {
     /// A STAB swing (`SwingAnimationType` 2): a spear's jab.
     Stab,
     Using,
+    /// A held-up sword or other `blocks_attacks` item that is no shield
+    /// (`ItemUseAnimation.BLOCK`): turned across the body.
+    Block,
     Eat {
         remaining: f32,
         duration: f32,
@@ -84,6 +87,14 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     }
     if matches!(pose, ItemPose::Using) {
         return m;
+    }
+    if matches!(pose, ItemPose::Block) {
+        // `FirstPersonHandsAndItemsRenderer` case BLOCK, after the arm's place.
+        return m
+            * Mat4::from_translation(Vec3::new(invert * -0.14142136, 0.08, 0.14142136))
+            * Mat4::from_rotation_x((-102.25f32).to_radians())
+            * Mat4::from_rotation_y((invert * 13.365f32).to_radians())
+            * Mat4::from_rotation_z((invert * 78.05f32).to_radians());
     }
     if let ItemPose::Brush { remaining, partial } = pose {
         return m * brush_transform(left, remaining, partial);
@@ -221,7 +232,7 @@ pub fn legacy_item_pose(
                 -0.2 * sin(attack * pi),
             )) * first_person(attack)
         }
-        ItemPose::Using => first_person(0.0),
+        ItemPose::Using | ItemPose::Block => first_person(0.0),
         ItemPose::Eat {
             remaining,
             duration,
@@ -1568,6 +1579,36 @@ mod continuous_use_tests {
             item_pose(false, 0.0, 0.3, ItemPose::Trident { ticks_used: 5.0 })
         );
         assert_ne!(swing, item_pose(false, 0.0, 0.3, ItemPose::Using));
+    }
+    #[test]
+    fn a_blocking_sword_is_turned_across_the_body() {
+        // The CASE BLOCK transform of `FirstPersonHandsAndItemsRenderer` after the arm's place
+        // (translate, -102.25 about X, 13.365 about Y, 78.05 about Z), multiplied out by hand:
+        // where the hand's origin and the item's X axis land, for the right then the left arm.
+        let cases: [(bool, [f32; 3], [f32; 3]); 2] = [
+            (false, [0.4186, -0.44, -0.5786], [0.2015, -0.2544, -0.9459]),
+            (true, [-0.4186, -0.44, -0.5786], [0.2015, 0.2544, 0.9459]),
+        ];
+        for (left, origin, x_axis) in cases {
+            let m = item_pose(left, 0.0, 0.3, ItemPose::Block);
+            let at = m.transform_point3(glam::Vec3::ZERO);
+            let along = m.transform_vector3(glam::Vec3::X);
+            for (got, want) in at.to_array().iter().zip(origin) {
+                assert!((got - want).abs() < 2e-3, "{left}: origin {at}");
+            }
+            for (got, want) in along.to_array().iter().zip(x_axis) {
+                assert!((got - want).abs() < 2e-3, "{left}: x axis {along}");
+            }
+        }
+        // Blocking ignores the swing, like a use, and differs from a plain use.
+        assert_eq!(
+            item_pose(false, 0.0, 0.3, ItemPose::Block),
+            item_pose(false, 0.0, 0.0, ItemPose::Block)
+        );
+        assert_ne!(
+            item_pose(false, 0.0, 0.0, ItemPose::Block),
+            item_pose(false, 0.0, 0.0, ItemPose::Using)
+        );
     }
 }
 
