@@ -294,9 +294,11 @@ pub trait LevelsBackend {
     /// finite (NaN or infinite). A minimum above its maximum is the same box
     /// with the two swapped, as vanilla's `AABB`. On a client (`ClientLevel`),
     /// the entities the server tracks to it, other players among them, and the
-    /// window's own player, with the same walk.
+    /// window's own player, with the same walk. A display's zero-size physical
+    /// box intersects when its position is strictly inside the query.
     /// None there before login and for a level it does not show. The walk
-    /// is in entity-list order followed by players. Every entity list is walked
+    /// is in entity-list order, with displays (by entity id on a client)
+    /// before the dragon and the final player entries. Every entity list is walked
     /// once per call: O(entities) regardless of the box. Each overlapping mob
     /// resolves through a mob-list scan: O(K*N) for K overlapping mobs and N mobs. Tridents do not
     /// resolve; frames, paintings and other special entities

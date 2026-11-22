@@ -225,14 +225,10 @@ impl Game<'_> {
             return false;
         }
         match self.native_entity_target(entity) {
-            Some(Target::Mob(id)) => self
-                .mobs
-                .iter_mut()
-                .find(|m| m.id == id)
-                .is_some_and(|m| {
-                    m.fall_distance = distance;
-                    true
-                }),
+            Some(Target::Mob(id)) => self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+                m.fall_distance = distance;
+                true
+            }),
             Some(target @ (Target::Player | Target::Guest(_))) => {
                 let motion = match target {
                     Target::Player => self.player.as_mut(),
@@ -267,9 +263,15 @@ impl Game<'_> {
         )
     }
     /// The entity's box (`Entity.getBoundingBox`): its lowest and highest
-    /// corner. None for the kinds whose box Horizon doesn't keep (displays,
-    /// markers, End crystals, the dragon); a dragon part's is its own. API 379.
+    /// corner. A display's corners both equal its position. None for the kinds
+    /// whose box Horizon doesn't keep (markers, End crystals, the dragon); a
+    /// dragon part's is its own. API 379.
     pub(super) fn entity_bounding_box(&self, entity: EntityRef) -> Option<[[f64; 3]; 2]> {
+        if !self.is_logical_server()
+            && let Some(bounds) = self.native_client_display_bounds(entity)
+        {
+            return Some(corners(bounds));
+        }
         let t = self.native_entity_read_target(entity)?;
         if let Some(p) = self.native_client_player(t) {
             return Some(corners(p.bounds()));
@@ -281,6 +283,10 @@ impl Game<'_> {
             return Some(corners(with_entity!(self, h, e => e.bounds())));
         }
         let (lo, hi) = match t {
+            Target::Other(id) => {
+                let entity = self.others.iter().find(|entity| entity.id == id)?;
+                return entity.display_bounds().map(corners);
+            }
             Target::DragonPart(id) => {
                 let (dragon, part) = self.resident_dragon_part(id)?;
                 return Some(corners(dragon.part_geometry(part).1));

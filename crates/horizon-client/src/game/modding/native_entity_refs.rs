@@ -8,6 +8,9 @@
 //! copy: the local player and the entities the server told it of, in the level
 //! it shows. The entities are those of the level in place (the one a hook runs
 //! in) and the server's players, whatever their level.
+#[cfg(test)]
+#[path = "native_entity_refs/display_query_tests.rs"]
+mod display_query_tests;
 #[path = "native_entity_refs/dragon_parts_table.rs"]
 pub(in crate::game) mod dragon_parts_table;
 #[path = "native_entity_refs/dragon_query.rs"]
@@ -89,6 +92,23 @@ impl Game<'_> {
             return None;
         }
         remote.tracked_entity(i32::try_from(entity.id()).ok()?)
+    }
+
+    /// The tracked display's position at the current interpolation tick.
+    fn native_client_display_position(&self, entity: EntityRef) -> Option<[f64; 3]> {
+        let id = i32::try_from(entity.id()).ok()?;
+        let display = self.text_displays.get(&id)?;
+        self.native_client_tracked(entity)?;
+        Some(display.position().to_array())
+    }
+
+    /// The live client box of a tracked display, which is held outside the entity lists.
+    pub(super) fn native_client_display_bounds(&self, entity: EntityRef) -> Option<Aabb> {
+        let [x, y, z] = self.native_client_display_position(entity)?;
+        let position = Vec3::new(x, y, z);
+        // The dimensions of all three display types are zero. Width and height
+        // metadata enlarge only the renderer's culling box.
+        Some(Aabb::new(position, position))
     }
 
     /// What a handle names now, or None for a stale or foreign one.
@@ -267,6 +287,9 @@ impl Game<'_> {
             return None;
         }
         let mut ids = self.listed_entities_in(bounds);
+        ids.extend(self.others.iter().filter_map(|entity| {
+            (entity.id != 0 && bounds.intersects(entity.display_bounds()?)).then_some(entity.id)
+        }));
         self.append_dragon_query_ids(bounds, false, &mut ids);
         ids.extend(
             self.fishing_hooks_here()
@@ -320,8 +343,9 @@ impl Game<'_> {
     }
     /// `ClientLevel.getEntities` for `level_entities_in`: the entities the server
     /// tracks to this client in entity-list order, other players among them (a
-    /// tracked player has a client copy, so its handle resolves), the dragon and
-    /// then the window's own player unless it spectates, then the dragon's parts.
+    /// tracked player has a client copy, so its handle resolves), displays by id,
+    /// the dragon and then the window's own player unless it spectates, then the
+    /// dragon's parts.
     /// None before login or for a level the client does not show.
     fn client_entities_in(&self, level: LevelRef, bounds: Aabb) -> Option<Vec<EntityRef>> {
         let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
@@ -329,6 +353,18 @@ impl Game<'_> {
             return None;
         }
         let mut ids = self.listed_entities_in(bounds);
+        let first_display = ids.len();
+        ids.extend(self.text_displays.keys().filter_map(|&id| {
+            if id <= 0 {
+                return None;
+            }
+            let id = id as u32;
+            let handle = EntityRef::new(level.epoch(), id);
+            bounds
+                .intersects(self.native_client_display_bounds(handle)?)
+                .then_some(id)
+        }));
+        ids[first_display..].sort_unstable();
         self.append_dragon_query_ids(bounds, false, &mut ids);
         if self.mode_id() != 3
             && let Some(player) = &self.player
@@ -341,7 +377,10 @@ impl Game<'_> {
         Some(
             ids.into_iter()
                 .map(|id| EntityRef::new(level.epoch(), id))
-                .filter(|handle| self.native_entity_read_target(*handle).is_some())
+                .filter(|handle| {
+                    self.native_entity_read_target(*handle).is_some()
+                        || self.native_client_display_position(*handle).is_some()
+                })
                 .collect(),
         )
     }
@@ -803,9 +842,10 @@ impl Game<'_> {
         }
         match self.native_entity_read_target(entity) {
             Some(target) => self.target_position(target),
-            None => self
-                .native_client_tracked(entity)
-                .map(|(_, position)| position),
+            None => self.native_client_display_position(entity).or_else(|| {
+                self.native_client_tracked(entity)
+                    .map(|(_, position)| position)
+            }),
         }
     }
     /// The block the entity's position is in (`Entity.blockPosition`). API

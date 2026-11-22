@@ -5,7 +5,10 @@
 //! game builds the entity data it sends (so a handle reads what clients see),
 //! and a write changes the compound: the next tracking pass sends the changed
 //! entries as `SetEntityData`, and the save holds them.
-use super::{Game, commands::Target};
+use super::{
+    Game,
+    commands::{OtherEntity, Target},
+};
 use horizon_client::{
     items::ItemStack,
     save::item_from_nbt,
@@ -19,9 +22,19 @@ use mod_api::{
     Transformation,
 };
 use {
+    horizon_core::geometry::Aabb,
     horizon_core::nbt::{Compound, Tag},
     horizon_world::registry::BlockStateId,
 };
+
+impl OtherEntity {
+    /// The display's physical box is a single point at its feet. Its NBT width
+    /// and height only change the culling box used by the renderer.
+    pub(super) fn display_bounds(&self) -> Option<Aabb> {
+        DisplayKind::from_entity_type(&self.kind)?;
+        Some(Aabb::new(self.position, self.position))
+    }
+}
 
 /// The entity data entry `id` of a display's compound: what it sets, else the default.
 fn entry(kind: DisplayKind, tag: &Tag, id: u8) -> Option<Value> {

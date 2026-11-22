@@ -163,7 +163,8 @@ pub trait EntitiesBackend {
     fn entity_added_to_level(&self, entity: EntityRef) -> bool;
     /// Side: both.
     /// The entity's position (`Entity.position`): its feet, the middle of
-    /// its box for a painting or an item frame.
+    /// its box for a painting or an item frame. A client display reports the
+    /// current interpolation tick's position.
     #[access(WorldOnly)]
     fn entity_position(&self, entity: EntityRef) -> Option<[f64; 3]>;
     /// Side: server.
@@ -255,9 +256,11 @@ pub trait EntitiesBackend {
     fn entity_on_ground(&self, entity: EntityRef) -> Option<bool>;
     /// Side: both.
     /// The entity's box (`Entity.getBoundingBox`): its lowest and highest
-    /// corner. None for the kinds whose box Horizon doesn't keep (displays,
-    /// markers, End crystals, the dragon); a dragon part's is its own. On a client, reads
-    /// its own copy of a tracked entity, or the local player's predicted box.
+    /// corner. A display has coincident corners at its position; its width and
+    /// height are used for render culling. None for the kinds whose box Horizon
+    /// doesn't keep (markers, End crystals, the dragon); a dragon part's is its
+    /// own. On a client, reads its own copy of a tracked entity, or the local
+    /// player's predicted box.
     #[access(WorldOnly)]
     fn entity_bounding_box(&self, entity: EntityRef) -> Option<[[f64; 3]; 2]>;
     /// Side: both.

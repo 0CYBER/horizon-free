@@ -1,0 +1,2 @@
+horizon-client game::native_entity_refs::display_query_tests::a_client_queries_tracked_display_entities_without_picking_them lib daily resources
+horizon-client game::native_entity_refs::display_query_tests::a_server_queries_display_entity_points_until_discarded lib daily resources
