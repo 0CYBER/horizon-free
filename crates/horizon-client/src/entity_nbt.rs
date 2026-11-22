@@ -2059,7 +2059,9 @@ fn mob_from_nbt_at(
         m.extra.forced_age = tag.get("ForcedAge").and_then(int_value).unwrap_or(0);
         m.extra.age_locked = flag(tag, "AgeLocked");
     }
-    if is_animal(&m.kind.id) {
+    // Animal.readAdditionalSaveData: a content mod's living type reads as its
+    // template does, as `mob_to_nbt` writes it.
+    if is_animal(m.kind.class_id()) {
         m.extra.in_love = tag.get("InLove").and_then(int_value).unwrap_or(0);
         // Animal.readAdditionalSaveData: the player who fed it into love.
         m.extra.love_cause = crate::save::uuid_from_tag(tag.get("LoveCause"));

@@ -438,6 +438,33 @@ fn an_unknown_axolotl_variant_is_lucy_and_a_parrots_is_clamped() {
     assert_eq!([0, 3, 4, 5, 7, -1].map(parrot), [0, 3, 4, 4, 4, 0]);
 }
 
+/// A content mod's living type that copies an animal (`template`) is an
+/// `Animal`: its `InLove` and `LoveCause` load back as they were saved,
+/// not only for the vanilla id.
+#[test]
+fn a_templated_animal_keeps_its_love_through_a_reload() {
+    let mut kind = crate::mobs::sensor_scan_tests::kind();
+    let ty = Arc::make_mut(&mut kind);
+    ty.id = "example:spotted_cow".into();
+    ty.species = crate::mobs::Species::Cow;
+    let types = [("example:spotted_cow".into(), kind)].into();
+    let raw = Tag::compound([
+        ("id", string("example:spotted_cow")),
+        ("Pos", doubles(&[4.5, 220.0, 4.5])),
+        ("InLove", Tag::Int(400)),
+        ("LoveCause", Tag::IntArray(vec![1, 2, 3, 4])),
+    ]);
+    let m = mob_from_nbt(&raw, &types, 1, None).unwrap();
+    assert_eq!(
+        (m.extra.in_love, m.extra.love_cause),
+        (400, Some([1, 2, 3, 4]))
+    );
+    let saved = mob_to_nbt(&m, [0; 4], None, None, |_| None);
+    assert_eq!(number(saved.get("InLove")), Some(400));
+    let again = mob_from_nbt(&saved, &types, 1, None).unwrap();
+    assert_eq!(again.extra.in_love, 400);
+}
+
 /// A mount keeps its body armour and a helmet (say
 /// `/item replace entity <horse> armor.head with minecraft:iron_helmet`)
 /// in their own slots through a save: vanilla holds both (`equipment.body`
