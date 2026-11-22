@@ -19,9 +19,9 @@ use horizon_core::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock, PoisonError, Weak,
         atomic::{AtomicI64, AtomicU8, Ordering},
     },
 };
@@ -84,12 +84,41 @@ fn fill_behind<T: Send + Sync + 'static>(
     }
 }
 
+/// What a finalizer reads [`Data`] into, shared with the thread `load_behind` starts.
+type DataCell = Arc<OnceLock<Option<Data>>>;
+
+/// The cell for a finalizer of `root` and `item_data`: the one a live finalizer of the same
+/// root and item defaults holds, else a new one. `load` takes no dimension, so the overworld
+/// and the Nether of one world read the same files: one read serves both instead of a copy
+/// each (#19996). The cell goes with the world's last finalizer.
+fn shared_cell(root: &Path, item_data: &Arc<ItemData>) -> DataCell {
+    static CELLS: Mutex<Vec<(PathBuf, Weak<ItemData>, Weak<OnceLock<Option<Data>>>)>> =
+        Mutex::new(Vec::new());
+    let mut cells = CELLS.lock().unwrap_or_else(PoisonError::into_inner);
+    cells.retain(|(_, _, cell)| cell.strong_count() > 0);
+    let live = cells.iter().find_map(|(path, data, cell)| {
+        // A held `Weak` keeps its allocation, so no other `ItemData` can take its address.
+        (path == root && std::ptr::eq(data.as_ptr(), Arc::as_ptr(item_data)))
+            .then(|| cell.upgrade())
+            .flatten()
+    });
+    live.unwrap_or_else(|| {
+        let cell = Arc::new(OnceLock::new());
+        cells.push((
+            root.to_owned(),
+            Arc::downgrade(item_data),
+            Arc::downgrade(&cell),
+        ));
+        cell
+    })
+}
+
 pub struct StructureMobFinalizer {
     root: PathBuf,
     item_data: Arc<ItemData>,
     dimension: String,
-    /// Shared with the thread `load_behind` starts.
-    data: Arc<OnceLock<Option<Data>>>,
+    /// Shared with the thread `load_behind` starts and the world's other finalizers.
+    data: DataCell,
     /// The level's difficulty (0 peaceful to 3 hard) and overworld clock.
     difficulty: AtomicU8,
     day_time: AtomicI64,
@@ -98,10 +127,10 @@ pub struct StructureMobFinalizer {
 impl StructureMobFinalizer {
     pub fn new(root: PathBuf, dimension: &str, item_data: Arc<ItemData>) -> Self {
         Self {
+            data: shared_cell(&root, &item_data),
             root,
             item_data,
             dimension: dimension.to_owned(),
-            data: Arc::new(OnceLock::new()),
             difficulty: AtomicU8::new(2),
             day_time: AtomicI64::new(0),
             mob_maps: std::sync::RwLock::new(Arc::clone(
@@ -363,6 +392,27 @@ impl StructureMobFinalizer {
 mod tests {
     use super::*;
     use horizon_world::native_load_context::DataLoadOrigin;
+
+    /// The dimensions of one world read their data once (#19996); another load's item
+    /// defaults read their own, and the read goes when the world's finalizers do.
+    #[test]
+    fn a_worlds_dimensions_share_one_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("items.json"), "{}").unwrap();
+        let root = dir.path().to_owned();
+        let load = || crate::test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad);
+        let item_data = load().unwrap();
+        let overworld =
+            StructureMobFinalizer::new(root.clone(), "minecraft:overworld", item_data.clone());
+        let nether = StructureMobFinalizer::new(root.clone(), "minecraft:the_nether", item_data);
+        assert!(Arc::ptr_eq(&overworld.data, &nether.data));
+        let other =
+            StructureMobFinalizer::new(root.clone(), "minecraft:overworld", load().unwrap());
+        assert!(!Arc::ptr_eq(&overworld.data, &other.data));
+        let read = Arc::downgrade(&overworld.data);
+        drop((overworld, nether));
+        assert!(read.upgrade().is_none());
+    }
 
     #[test]
     #[ignore = "daily"]
