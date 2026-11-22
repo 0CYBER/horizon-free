@@ -106,7 +106,7 @@ impl Game<'_> {
         }
         for (conn, packet) in out {
             if let Some(g) = host.hub.guest(conn) {
-                g.send(&packet);
+                packet.deliver(g);
             }
         }
     }

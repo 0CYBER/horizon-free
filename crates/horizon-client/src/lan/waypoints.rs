@@ -14,6 +14,44 @@ use crate::fast_hash::FxHashMap as HashMap;
 use horizon_protocol::packets::play::{
     Clientbound as C, TrackedWaypoint, WaypointId, WaypointTarget, waypoint_operation,
 };
+use std::sync::{Arc, OnceLock};
+
+/// A waypoint packet encoded once, for every receiver it goes to.
+pub struct Encoded {
+    pub packet: C,
+    pub body: super::Body,
+}
+
+/// What a receiver is sent: a packet of its own, or one shared by every receiver of the same
+/// waypoint this tick (encoded once).
+pub enum Sent {
+    Packet(C),
+    Shared(Arc<Encoded>),
+}
+
+impl Sent {
+    pub fn packet(&self) -> &C {
+        match self {
+            Self::Packet(p) => p,
+            Self::Shared(e) => &e.packet,
+        }
+    }
+    /// Send to `g`: a shared body stays shared up to the wire.
+    pub fn deliver(&self, g: &super::guest::Guest) {
+        match self {
+            Self::Packet(p) => g.send(p),
+            Self::Shared(e) => g.send_shared(&e.packet, &e.body),
+        }
+    }
+}
+
+impl From<C> for Sent {
+    fn from(p: C) -> Self {
+        Self::Packet(p)
+    }
+}
+
+const NONE: u32 = u32::MAX;
 
 /// `Player.createAttributes`: both waypoint ranges.
 pub const PLAYER_RANGE: f64 = 6.0e7;
@@ -142,32 +180,71 @@ struct Memo {
 /// lookup: a crowd has a few hundred in each row, and every move visits them.
 #[derive(Default)]
 struct Row {
-    slots: Vec<Option<(u128, Connection)>>,
-    at: HashMap<u128, usize>,
+    slots: Vec<Option<(u32, u128, Connection)>>,
+    /// The slot of each source, by its id (`Waypoints::ids`); NONE for a source with none.
+    at: Vec<u32>,
+    /// What the pair check reads of each connection, by source number, in a line of its own:
+    /// `[x, y, z, 1]` of a Block connection's last block, zeros for any other or none.
+    last: Vec<[i32; 4]>,
+    live: usize,
+}
+
+/// A Block connection's last block, as [`Row::last`] keeps it.
+fn block_record(kind: &Kind) -> [i32; 4] {
+    match *kind {
+        Kind::Block([x, y, z]) => [x, y, z, 1],
+        _ => [0; 4],
+    }
 }
 
 impl Row {
-    fn get_mut(&mut self, source: u128) -> Option<&mut Connection> {
-        let i = *self.at.get(&source)?;
-        self.slots[i].as_mut().map(|(_, c)| c)
+    fn get_mut(&mut self, id: u32) -> Option<&mut Connection> {
+        let i = *self.at.get(id as usize)?;
+        if i == NONE {
+            return None;
+        }
+        self.slots[i as usize].as_mut().map(|(_, _, c)| c)
     }
-    fn put(&mut self, source: u128, c: Connection) {
-        if let Some(slot) = self.get_mut(source) {
+    /// Brings [`Self::last`] to what the connection to `id` is now.
+    fn sync(&mut self, id: u32) {
+        let now = match self.get_mut(id) {
+            Some(c) => block_record(&c.kind),
+            None => [0; 4],
+        };
+        if let Some(last) = self.last.get_mut(id as usize) {
+            *last = now;
+        }
+    }
+    fn put(&mut self, id: u32, source: u128, c: Connection) {
+        assert!(id != NONE, "a source has a number");
+        if let Some(slot) = self.get_mut(id) {
             *slot = c;
+            self.sync(id);
             return;
         }
-        self.at.insert(source, self.slots.len());
-        self.slots.push(Some((source, c)));
+        if self.at.len() <= id as usize {
+            self.at.resize(id as usize + 1, NONE);
+            self.last.resize(id as usize + 1, [0; 4]);
+        }
+        self.last[id as usize] = block_record(&c.kind);
+        self.at[id as usize] = self.slots.len() as u32;
+        self.live += 1;
+        self.slots.push(Some((id, source, c)));
     }
-    fn take(&mut self, source: u128) -> Option<Connection> {
-        let i = self.at.remove(&source)?;
-        let c = self.slots[i].take().map(|(_, c)| c);
+    fn take(&mut self, id: u32) -> Option<Connection> {
+        let i = std::mem::replace(self.at.get_mut(id as usize)?, NONE);
+        if i == NONE {
+            return None;
+        }
+        self.live -= 1;
+        self.last[id as usize] = [0; 4];
+        let c = self.slots[i as usize].take().map(|(_, _, c)| c);
         // The holes are skipped in order, and packed once they are most of the row.
-        if self.slots.len() > 16 && self.at.len() * 2 < self.slots.len() {
+        if self.slots.len() > 16 && self.live * 2 < self.slots.len() {
             self.slots.retain(Option::is_some);
             for (i, slot) in self.slots.iter().enumerate() {
-                if let Some((s, _)) = slot {
-                    self.at.insert(*s, i);
+                if let Some((id, _, _)) = slot {
+                    self.at[*id as usize] = i as u32;
                 }
             }
         }
@@ -175,7 +252,7 @@ impl Row {
     }
     /// The sources, in the row's order.
     fn sources(self) -> impl Iterator<Item = u128> {
-        self.slots.into_iter().flatten().map(|(s, _)| s)
+        self.slots.into_iter().flatten().map(|(_, s, _)| s)
     }
 }
 
@@ -192,6 +269,11 @@ pub struct Waypoints {
     /// Connections by receiver, then source.
     connections: HashMap<u128, Row>,
     memo: HashMap<u128, Memo>,
+    /// A small number for each player the manager knows, which its rows index their
+    /// connections by (a lookup by number is a load, by UUID a hash and a probe).
+    ids: Arc<HashMap<u128, u32>>,
+    free: Vec<u32>,
+    next_id: u32,
     /// The `locator_bar` game rule as last seen.
     enabled: Option<bool>,
 }
@@ -199,6 +281,9 @@ pub struct Waypoints {
 /// What every row reads this tick: the players, read only.
 struct Shared<'a> {
     players: HashMap<u128, &'a Player>,
+    ids: Arc<HashMap<u128, u32>>,
+    /// One waypoint update per mover and tick, encoded once for the receivers it goes to.
+    updates: HashMap<u128, OnceLock<Option<Arc<Encoded>>>>,
     /// The connections of the players in other levels: one who just left this level is
     /// still told of the waypoints it loses (`removePlayer` disconnects them).
     away: &'a [(u128, u32)],
@@ -212,13 +297,56 @@ struct Receiving<'r> {
     receiver: u128,
     view: View,
     row: &'r mut Row,
-    out: &'r mut Vec<(u32, C)>,
+    out: &'r mut Vec<(u32, Sent)>,
 }
 
 impl Shared<'_> {
+    fn id(&self, uuid: u128) -> u32 {
+        self.ids.get(&uuid).copied().unwrap_or(NONE)
+    }
+    /// What `update_or_create` does for a Block connection whose source has not left its
+    /// block and is not ignored: nothing. True only when that is all it would do (a pair that
+    /// is not quiet may be too: it then takes the long way), read from flat records alone.
+    #[inline]
+    fn quiet(row: &Row, src: &Source, me: &Receiver) -> bool {
+        if row.last.get(src.id as usize) != Some(&src.record) {
+            return false;
+        }
+        // `doesSourceIgnoreReceiver`, from `Player::distance_to`'s own arithmetic.
+        me.spectator
+            || (!src.spectator && {
+                let d = [0, 1, 2].map(|k| (src.position[k] - me.position[k]).powi(2));
+                let range = src.range.min(me.range);
+                f64::from((d[0] + d[1] + d[2]).sqrt() as f32) < range
+            })
+    }
+    /// An update packet of `s`'s waypoint, shared with every receiver given the same.
+    fn update_packet(&self, s: &Player, icon: &Icon, target: WaypointTarget) -> Sent {
+        let own = || Sent::Packet(waypoint(s.uuid, waypoint_operation::UPDATE, icon, target));
+        let Some(cell) = self.updates.get(&s.uuid) else {
+            return own();
+        };
+        let shared = cell.get_or_init(|| {
+            let packet = waypoint(s.uuid, waypoint_operation::UPDATE, icon, target);
+            let body = packet.try_encode().ok()?;
+            Some(Arc::new(Encoded {
+                packet,
+                body: super::Body::shared(body),
+            }))
+        });
+        match shared {
+            Some(e)
+                if matches!(&e.packet, C::TrackedWaypoint(w)
+                    if w.style == icon.style && w.color == icon.color && w.target == target) =>
+            {
+                Sent::Shared(Arc::clone(e))
+            }
+            _ => own(),
+        }
+    }
     fn send(
         &self,
-        out: &mut Vec<(u32, C)>,
+        out: &mut Vec<(u32, Sent)>,
         receiver: u128,
         source: u128,
         operation: i32,
@@ -238,9 +366,9 @@ impl Shared<'_> {
         else {
             return;
         };
-        out.push((conn, waypoint(source, operation, icon, target)));
+        out.push((conn, waypoint(source, operation, icon, target).into()));
     }
-    fn connect(&self, out: &mut Vec<(u32, C)>, receiver: u128, source: u128, c: &Connection) {
+    fn connect(&self, out: &mut Vec<(u32, Sent)>, receiver: u128, source: u128, c: &Connection) {
         let target = match c.kind {
             Kind::Block(p) => WaypointTarget::Block(p),
             Kind::Chunk(p) => WaypointTarget::Chunk(p),
@@ -256,7 +384,7 @@ impl Shared<'_> {
         );
     }
     /// `ClientboundTrackedWaypointPacket.removeWaypoint`: an empty waypoint with the null icon.
-    fn disconnect(&self, out: &mut Vec<(u32, C)>, receiver: u128, source: u128) {
+    fn disconnect(&self, out: &mut Vec<(u32, Sent)>, receiver: u128, source: u128) {
         self.send(
             out,
             receiver,
@@ -338,7 +466,7 @@ impl Shared<'_> {
         }
     }
     /// `Connection.update`: the packet when the waypoint moved.
-    fn update(out: &mut Vec<(u32, C)>, c: &mut Connection, (s, r): (&Player, &Player)) {
+    fn update(&self, out: &mut Vec<(u32, Sent)>, c: &mut Connection, (s, r): (&Player, &Player)) {
         let target = match &mut c.kind {
             Kind::Block(last) => {
                 let now = s.block();
@@ -366,10 +494,7 @@ impl Shared<'_> {
             }
         };
         if let Some(conn) = r.conn {
-            out.push((
-                conn,
-                waypoint(s.uuid, waypoint_operation::UPDATE, &c.icon, target),
-            ));
+            out.push((conn, self.update_packet(s, &c.icon, target)));
         }
     }
 
@@ -385,10 +510,10 @@ impl Shared<'_> {
         {
             Some(c) => {
                 self.connect(to.out, receiver, source, &c);
-                to.row.put(source, c);
+                to.row.put(self.id(source), source, c);
             }
             None => {
-                if to.row.take(source).is_some() {
+                if to.row.take(self.id(source)).is_some() {
                     self.disconnect(to.out, receiver, source);
                 }
             }
@@ -397,19 +522,23 @@ impl Shared<'_> {
     /// The receiver's connection to the source updated in its place
     /// (`updateConnection`), or made if it has none (`createConnection`).
     fn update_or_create(&self, to: &mut Receiving, source: u128) {
+        self.update_or_create_unsynced(to, source);
+        to.row.sync(self.id(source));
+    }
+    fn update_or_create_unsynced(&self, to: &mut Receiving, source: u128) {
         let receiver = to.receiver;
         if receiver == source || !self.enabled {
             return;
         }
         let pair = self.pair(source, receiver);
-        let Some(c) = to.row.get_mut(source) else {
+        let Some(c) = to.row.get_mut(self.id(source)) else {
             return self.create_connection(to, source);
         };
         // A connection to a player who isn't in the level is broken.
         if let Some(pair) = pair
             && !self.broken(to.view, c, pair)
         {
-            Self::update(to.out, c, pair);
+            self.update(to.out, c, pair);
             return;
         }
         match pair.and_then(|pair| self.make(to.view, pair)) {
@@ -419,7 +548,7 @@ impl Shared<'_> {
             }
             None => {
                 self.disconnect(to.out, receiver, source);
-                to.row.take(source);
+                to.row.take(self.id(source));
             }
         }
     }
@@ -439,7 +568,7 @@ fn waypoint(source: u128, operation: i32, icon: &Icon, target: WaypointTarget) -
 struct Tick<'a> {
     s: Shared<'a>,
     view: HashMap<u128, ([i32; 2], i32)>,
-    out: Vec<(u32, C)>,
+    out: Vec<(u32, Sent)>,
 }
 
 impl Tick<'_> {
@@ -452,6 +581,7 @@ impl Tick<'_> {
 /// ([`Waypoints::moves_by_receiver`]).
 struct Move {
     uuid: u128,
+    source: Source,
     /// It ticked since joining: its waypoint and its own connections are updated.
     ticked: bool,
     /// Its waypoint is tracked: every receiver's connection to it is updated.
@@ -459,6 +589,37 @@ struct Move {
     receives: bool,
     /// Its view's new centre, when it changed chunk.
     new_view: View,
+}
+
+/// A transmitter as the pair check reads it: its number, last-block record, position, range
+/// and spectator mode, apart from the `Player`.
+#[derive(Clone, Copy)]
+struct Source {
+    id: u32,
+    record: [i32; 4],
+    position: [f64; 3],
+    range: f64,
+    spectator: bool,
+}
+
+impl Source {
+    fn of(id: u32, p: &Player) -> Self {
+        let [x, y, z] = p.block();
+        Self {
+            id,
+            record: [x, y, z, 1],
+            position: p.position,
+            range: p.transmit_range,
+            spectator: p.spectator,
+        }
+    }
+}
+
+/// A receiver as the pair check reads it.
+struct Receiver {
+    position: [f64; 3],
+    range: f64,
+    spectator: bool,
 }
 
 /// Players at which the moves are worked out on several threads, a share of the receivers each.
@@ -476,7 +637,29 @@ impl Waypoints {
         f(&t.s, &mut to);
     }
     fn take(&mut self, receiver: u128, source: u128) -> Option<Connection> {
-        self.connections.get_mut(&receiver)?.take(source)
+        let id = *self.ids.get(&source)?;
+        self.connections.get_mut(&receiver)?.take(id)
+    }
+    /// Numbers for the players this tick has (a number is freed when its player is gone).
+    fn number(&mut self, players: &[Player]) {
+        for p in players {
+            if !self.ids.contains_key(&p.uuid) {
+                let id = self.free.pop().unwrap_or_else(|| {
+                    self.next_id += 1;
+                    self.next_id - 1
+                });
+                Arc::make_mut(&mut self.ids).insert(p.uuid, id);
+            }
+        }
+    }
+    /// A gone player's number goes back, after no row holds a connection to it.
+    fn release(&mut self, uuid: u128) {
+        if let Some(id) = Arc::make_mut(&mut self.ids).remove(&uuid) {
+            for row in self.connections.values_mut() {
+                row.take(id);
+            }
+            self.free.push(id);
+        }
     }
     /// `createConnection`.
     fn create_connection(&mut self, t: &mut Tick, receiver: u128, source: u128) {
@@ -569,7 +752,7 @@ impl Waypoints {
         players: &[Player],
         respawned: &[u128],
         locator_bar: bool,
-    ) -> Vec<(u32, C)> {
+    ) -> Vec<(u32, Sent)> {
         self.tick_level(players, &[], respawned, locator_bar)
     }
 
@@ -585,7 +768,7 @@ impl Waypoints {
         away: &[(u128, u32)],
         respawned: &[u128],
         locator_bar: bool,
-    ) -> Vec<(u32, C)> {
+    ) -> Vec<(u32, Sent)> {
         self.tick_with(players, away, respawned, locator_bar, MOVES_BY_RECEIVER)
     }
 
@@ -597,10 +780,13 @@ impl Waypoints {
         respawned: &[u128],
         locator_bar: bool,
         by_receiver: usize,
-    ) -> Vec<(u32, C)> {
+    ) -> Vec<(u32, Sent)> {
+        self.number(players);
         let mut t = Tick {
             s: Shared {
                 players: players.iter().map(|p| (p.uuid, p)).collect(),
+                ids: Arc::clone(&self.ids),
+                updates: players.iter().map(|p| (p.uuid, OnceLock::new())).collect(),
                 away,
                 fresh: respawned,
                 enabled: locator_bar,
@@ -626,6 +812,9 @@ impl Waypoints {
         for uuid in gone {
             self.remove_player(&mut t, uuid);
             self.memo.remove(&uuid);
+            if !t.s.players.contains_key(&uuid) {
+                self.release(uuid);
+            }
         }
         if was == Some(true) && !locator_bar {
             self.break_all(&mut t);
@@ -746,6 +935,7 @@ impl Waypoints {
                 transmits: memo.transmitting && self.waypoints.contains(&player.uuid),
                 receives: player.receive_range > 0.0,
                 new_view: moved_view.then(|| (player.chunk(), player.view_distance)),
+                source: Source::of(t.s.id(player.uuid), player),
             });
         }
         if moves.is_empty() {
@@ -758,7 +948,7 @@ impl Waypoints {
             listed: bool,
             view: View,
             row: Row,
-            out: Vec<(u32, C)>,
+            out: Vec<(u32, Sent)>,
         }
         let mut jobs: Vec<Job> = self
             .players
@@ -778,9 +968,20 @@ impl Waypoints {
                 out: Vec::new(),
             })
             .collect();
+        // The transmitters as the rows meet them: player, number, block.
+        let sources: Vec<Option<Source>> = self
+            .waypoints
+            .iter()
+            .map(|u| t.s.players.get(u).map(|&p| Source::of(t.s.id(*u), p)))
+            .collect();
         let (s, waypoints, moves) = (&t.s, &self.waypoints, &moves);
         crate::parallel::par_chunks_mut_on(&mut jobs, 8, crate::parallel::worker_lanes(), |jobs| {
             for job in jobs {
+                let me = s.players.get(&job.receiver).map(|&p| Receiver {
+                    position: p.position,
+                    range: p.receive_range,
+                    spectator: p.spectator,
+                });
                 let mut to = Receiving {
                     receiver: job.receiver,
                     view: job.view,
@@ -791,23 +992,35 @@ impl Waypoints {
                     if m.uuid != job.receiver {
                         // `updateWaypoint`: this receiver's connection to the mover.
                         if job.listed && m.ticked && m.transmits {
-                            s.update_or_create(&mut to, m.uuid);
+                            // Most movers stay in their block: nothing to send or remake.
+                            if !me
+                                .as_ref()
+                                .is_some_and(|me| Shared::quiet(to.row, &m.source, me))
+                            {
+                                s.update_or_create(&mut to, m.uuid);
+                            }
                         }
                         continue;
                     }
                     // `updatePlayer` before and after the view follows the move.
-                    if m.ticked && m.receives {
-                        for &source in waypoints {
-                            s.update_or_create(&mut to, source);
+                    let sweep = |to: &mut Receiving| {
+                        for (&source, known) in waypoints.iter().zip(&sources) {
+                            if let (Some(src), Some(me)) = (known, &me)
+                                && Shared::quiet(to.row, src, me)
+                            {
+                                continue;
+                            }
+                            s.update_or_create(to, source);
                         }
+                    };
+                    if m.ticked && m.receives {
+                        sweep(&mut to);
                     }
                     if m.new_view.is_some() {
                         to.view = m.new_view;
                     }
                     if m.receives {
-                        for &source in waypoints {
-                            s.update_or_create(&mut to, source);
-                        }
+                        sweep(&mut to);
                     }
                 }
             }
@@ -839,10 +1052,10 @@ mod tests {
     }
 
     /// The packets to `conn`, as (operation, target).
-    fn to(out: &[(u32, C)], conn: u32) -> Vec<(i32, WaypointTarget)> {
+    fn to(out: &[(u32, Sent)], conn: u32) -> Vec<(i32, WaypointTarget)> {
         out.iter()
             .filter(|(c, _)| *c == conn)
-            .map(|(_, p)| match p {
+            .map(|(_, p)| match p.packet() {
                 C::TrackedWaypoint(w) => (w.operation, w.target),
                 other => panic!("{other:?}"),
             })
@@ -900,10 +1113,10 @@ mod tests {
     }
 
     /// What a connection to `source` shows, as (operation, style, colour).
-    fn icons(out: &[(u32, C)], conn: u32) -> Vec<(i32, String, Option<i32>)> {
+    fn icons(out: &[(u32, Sent)], conn: u32) -> Vec<(i32, String, Option<i32>)> {
         out.iter()
             .filter(|(c, _)| *c == conn)
-            .map(|(_, p)| match p {
+            .map(|(_, p)| match p.packet() {
                 C::TrackedWaypoint(w) => (w.operation, w.style.clone(), w.color),
                 other => panic!("{other:?}"),
             })
@@ -1006,10 +1219,14 @@ mod tests {
     }
 
     /// Each connection's packets as bytes, in the order it is sent them.
-    fn by_conn(out: &[(u32, C)]) -> std::collections::BTreeMap<u32, Vec<Vec<u8>>> {
+    fn by_conn(out: &[(u32, Sent)]) -> std::collections::BTreeMap<u32, Vec<Vec<u8>>> {
         let mut by = std::collections::BTreeMap::<u32, Vec<Vec<u8>>>::new();
         for (conn, packet) in out {
-            by.entry(*conn).or_default().push(packet.encode());
+            let bytes = packet.packet().encode();
+            if let Sent::Shared(e) = packet {
+                assert_eq!(&*e.body, &bytes[..], "a shared body is its packet's bytes");
+            }
+            by.entry(*conn).or_default().push(bytes);
         }
         by
     }
@@ -1027,7 +1244,7 @@ mod tests {
             seed ^= seed << 17;
             seed % n
         };
-        let mut sent = 0;
+        let (mut sent, mut shared) = (0, 0);
         for level in 0..16 {
             let (mut serial, mut by_receiver) = (Waypoints::default(), Waypoints::default());
             let count = 2 + next(60) as u32;
@@ -1089,6 +1306,10 @@ mod tests {
                 let a = serial.tick_with(&players, &[], &respawned, rule, usize::MAX);
                 let b = by_receiver.tick_with(&players, &[], &respawned, rule, 0);
                 sent += a.len();
+                shared += b
+                    .iter()
+                    .filter(|(_, p)| matches!(p, Sent::Shared(_)))
+                    .count();
                 assert_eq!(by_conn(&a), by_conn(&b), "level {level}, tick {tick}");
             }
         }
@@ -1096,6 +1317,65 @@ mod tests {
             sent > 4_000,
             "the crowds were sent their waypoints ({sent})"
         );
+        assert!(shared > 1_000, "most updates are shared bodies ({shared})");
+    }
+
+    /// The floor of the receiver x mover check, on flat arrays: the source's block compared with
+    /// the one its connections last showed, and the receiver's distance to it against the range
+    /// (`ignores`). Run with `cargo test --release ... flat_pair_floor -- --ignored --nocapture`
+    /// under `perf stat -e instructions:u`: the prototype's cost per ordered pair.
+    #[test]
+    #[ignore = "daily"]
+    fn flat_pair_floor() {
+        let n = 200usize;
+        let mut seed = 12345u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1000) as f64 / 1000.0
+        };
+        let (mut x, mut y, mut z) = (vec![0.0f64; n], vec![0.0f64; n], vec![0.0f64; n]);
+        let mut last = vec![[0i32; 3]; n];
+        for i in 0..n {
+            x[i] = rnd() * 6.0;
+            y[i] = -36.0;
+            z[i] = rnd() * 6.0;
+            last[i] = [
+                x[i].floor() as i32,
+                y[i].floor() as i32,
+                z[i].floor() as i32,
+            ];
+        }
+        let range2 = PLAYER_RANGE * PLAYER_RANGE;
+        let ticks = 2_000;
+        let mut changed = 0u64;
+        for t in 0..ticks {
+            // Each source steps a fraction of a block; its block changes now and then.
+            for i in 0..n {
+                x[i] += 0.2 * (((t + i) % 7) as f64 / 7.0);
+            }
+            for m in 0..n {
+                let b = [
+                    x[m].floor() as i32,
+                    y[m].floor() as i32,
+                    z[m].floor() as i32,
+                ];
+                for r in 0..n {
+                    if r == m {
+                        continue;
+                    }
+                    let (dx, dy, dz) = (x[r] - x[m], y[r] - y[m], z[r] - z[m]);
+                    if b == last[m] && dx * dx + dy * dy + dz * dz < range2 {
+                        continue;
+                    }
+                    changed += 1;
+                }
+                last[m] = b;
+            }
+        }
+        let pairs = (ticks * n * (n - 1)) as u64;
+        println!("flat floor: {pairs} ordered pairs, {changed} needing a packet");
     }
 
     #[test]

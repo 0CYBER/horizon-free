@@ -1,0 +1,2 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities.
+horizon-client-lib lan::waypoints::tests::flat_pair_floor lib daily slow
