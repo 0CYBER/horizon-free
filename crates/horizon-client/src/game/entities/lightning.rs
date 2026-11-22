@@ -271,10 +271,10 @@ impl Game<'_> {
         Some([x, top.y, z])
     }
     pub(super) fn spawn_bolt(&mut self, at: [f64; 3], visual_only: bool) {
-        if !visual_only {
-            let ctx = horizon_client::sculk::Context::default();
-            self.post_game_event("minecraft:lightning_strike", at, ctx);
-        }
+        // LightningBolt.tick: the LIGHTNING_STRIKE game event is posted for
+        // every server bolt; visualOnly only suppresses the fire it spawns.
+        let ctx = horizon_client::sculk::Context::default();
+        self.post_game_event("minecraft:lightning_strike", at, ctx);
         // The LightningBolt constructor: `seed`, then `flashes`.
         let mut random = EntityRandom::own(random_source::entity());
         let seed = random.next_long();
