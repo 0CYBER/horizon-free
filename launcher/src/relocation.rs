@@ -9,6 +9,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 fn remap(value: &mut Value, source: &Roots, target: &Roots) {
@@ -170,17 +171,125 @@ fn ensure_idle(source: &Roots) -> Result<(), String> {
     Ok(())
 }
 
-/// Handled before normal startup, so this process owns no shared data-location lease.
-pub fn run_worker() -> Option<i32> {
-    let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() != Some(std::ffi::OsStr::new("--relocate-data")) {
-        return None;
+/// What the worker is doing, in the order it does it. Checking comes again just before the
+/// commit, when the copies are verified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Checking,
+    /// The lease waits for the window that asked for the move to close.
+    Waiting,
+    Launcher,
+    Game,
+    Build,
+    Committing,
+}
+
+impl Step {
+    /// The English words, which `i18n::tr` looks up.
+    pub fn text(self) -> &'static str {
+        match self {
+            Step::Checking => "Checking for running games and builds",
+            Step::Waiting => "Waiting for the launcher to close",
+            Step::Launcher => "Copying launcher data",
+            Step::Game => "Copying game data",
+            Step::Build => "Copying build data",
+            Step::Committing => "Saving the new location",
+        }
     }
-    let target = args.next().map(PathBuf::from);
-    let restart = args.next().is_some_and(|a| a == "--restart");
-    let result = (|| {
-        let target = target
-            .as_deref()
+}
+
+/// What the worker reports while it moves the data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Update {
+    Step(Step),
+    /// One more file copied and verified.
+    File,
+}
+
+impl Update {
+    /// The update a message of `data_location::progress` stands for.
+    pub fn from_progress(message: &str) -> Option<Self> {
+        use data_location::progress;
+        Some(match message {
+            progress::FILE => Update::File,
+            progress::LAUNCHER => Update::Step(Step::Launcher),
+            progress::GAME => Update::Step(Step::Game),
+            progress::BUILD => Update::Step(Step::Build),
+            progress::COMMIT => Update::Step(Step::Committing),
+            _ => return None,
+        })
+    }
+}
+
+/// What the move has done so far, for a window to show.
+#[derive(Debug, Default)]
+pub struct Progress {
+    pub step: Option<Step>,
+    /// Files copied and verified.
+    pub files: u64,
+}
+
+impl Progress {
+    pub fn apply(&mut self, update: Update) {
+        match update {
+            Update::Step(step) => self.step = Some(step),
+            Update::File => self.files += 1,
+        }
+    }
+}
+
+/// A line on stderr. A closed or broken stream must not stop a move, as `eprintln!` would.
+fn say(line: impl std::fmt::Display) {
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
+/// `horizon-launcher --relocate-data <target> [--restart]`, which the launcher's Move runs after
+/// its window has closed.
+pub struct Worker {
+    target: Option<PathBuf>,
+    restart: bool,
+}
+
+impl Worker {
+    /// This process is a worker. Asked before normal startup, so it owns no shared data-location
+    /// lease.
+    pub fn from_args() -> Option<Self> {
+        let mut args = std::env::args_os().skip(1);
+        if args.next().as_deref() != Some(std::ffi::OsStr::new("--relocate-data")) {
+            return None;
+        }
+        let target = args.next().map(PathBuf::from);
+        let restart = args.next().is_some_and(|a| a == "--restart");
+        Some(Self { target, restart })
+    }
+
+    /// The launcher asked for the move and opens again after it: the player waits for it.
+    pub fn restarts(&self) -> bool {
+        self.restart
+    }
+
+    pub fn target(&self) -> Option<&Path> {
+        self.target.as_deref()
+    }
+
+    /// The whole of a worker's job: the move, then, for the launcher's move, its reopening with
+    /// the result. A panic in the move is a failed move, still reported. stop set ends the move
+    /// before its next file. The exit code.
+    pub fn run_and_finish(&self, mut report: impl FnMut(Update), stop: &AtomicBool) -> i32 {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run(&mut report, stop)))
+                .unwrap_or_else(|_| {
+                    Err(crate::i18n::tr("The move stopped unexpectedly").to_string())
+                });
+        self.finish(&result)
+    }
+
+    /// Moves the data, telling `report` what it does. Ok holds the old roots, which the
+    /// reopened launcher offers to remove.
+    fn run(&self, report: &mut impl FnMut(Update), stop: &AtomicBool) -> Result<String, String> {
+        let target = self
+            .target
+            .as_ref()
             .ok_or("--relocate-data needs an empty destination folder")?;
         data_location::validate()?;
         let source = Roots {
@@ -188,6 +297,7 @@ pub fn run_worker() -> Option<i32> {
             game: backend::game_home(),
             build: backend::build_dir(),
         };
+        report(Update::Step(Step::Checking));
         ensure_idle(&source)?;
         let backup = format!(
             "{}\n{}\n{}",
@@ -195,52 +305,73 @@ pub fn run_worker() -> Option<i32> {
             source.game.display(),
             source.build.display()
         );
+        report(Update::Step(Step::Waiting));
+        // Both callbacks report; the move calls them one at a time.
+        let report = std::cell::RefCell::new(report);
         let destination = data_location::migrate_current_with_prepare(
             &source,
             target,
-            |message| eprintln!("{message}"),
+            |message| {
+                say(message);
+                if let Some(update) = Update::from_progress(message) {
+                    (report.borrow_mut())(update);
+                }
+                if stop.load(Ordering::Relaxed) {
+                    // Between files: the originals are untouched and this run's stage stays.
+                    return Err(crate::i18n::tr(
+                        "The move stopped because its window closed. Your data is where it was.",
+                    )
+                    .to_string());
+                }
+                Ok(())
+            },
             |stage, target| {
+                (report.borrow_mut())(Update::Step(Step::Checking));
                 ensure_idle(&source)?;
                 prepare_paths(stage, &source, target)
             },
         )?;
-        println!("{}", destination.launcher.display());
-        Ok::<_, String>(backup)
-    })();
-    if let Err(error) = &result {
-        eprintln!("Data was not relocated: {error}");
+        let _ = writeln!(std::io::stdout(), "{}", destination.launcher.display());
+        Ok(backup)
     }
-    // The stages earlier retries set aside, which only the player may delete.
-    let kept = target
-        .as_deref()
-        .and_then(|target| data_location::kept_note(target, None));
-    if let Some(kept) = &kept {
-        eprintln!("{kept}");
-    }
-    let code = i32::from(result.is_err());
-    if restart {
-        let mut command = process::command(backend::exe_path());
-        command
-            .env_remove("HORIZON_RELOCATION_ERROR")
-            .env_remove("HORIZON_RELOCATION_BACKUP")
-            .env_remove("HORIZON_RELOCATION_KEPT");
-        match &result {
-            Ok(backup) => {
-                command.env("HORIZON_RELOCATION_BACKUP", backup);
-                if let Some(kept) = &kept {
-                    command.env("HORIZON_RELOCATION_KEPT", kept);
+
+    /// Reports the result and, for the launcher's move, opens it again to show it. The exit code.
+    fn finish(&self, result: &Result<String, String>) -> i32 {
+        if let Err(error) = result {
+            say(format_args!("Data was not relocated: {error}"));
+        }
+        // Staging folders of earlier moves, which the move left as they were.
+        let kept = self
+            .target()
+            .and_then(|target| data_location::kept_note(target, None));
+        if let Some(kept) = &kept {
+            say(kept);
+        }
+        let code = i32::from(result.is_err());
+        if self.restart {
+            let mut command = process::command(backend::exe_path());
+            command
+                .env_remove("HORIZON_RELOCATION_ERROR")
+                .env_remove("HORIZON_RELOCATION_BACKUP")
+                .env_remove("HORIZON_RELOCATION_KEPT");
+            match result {
+                Ok(backup) => {
+                    command.env("HORIZON_RELOCATION_BACKUP", backup);
+                    if let Some(kept) = &kept {
+                        command.env("HORIZON_RELOCATION_KEPT", kept);
+                    }
+                }
+                Err(error) => {
+                    command.env("HORIZON_RELOCATION_ERROR", error);
                 }
             }
-            Err(error) => {
-                command.env("HORIZON_RELOCATION_ERROR", error);
+            if let Err(e) = command.spawn() {
+                say(format_args!("Could not reopen the launcher: {e}"));
+                return 1;
             }
         }
-        if let Err(e) = command.spawn() {
-            eprintln!("Could not reopen the launcher: {e}");
-            return Some(1);
-        }
+        code
     }
-    Some(code)
 }
 
 #[cfg(test)]

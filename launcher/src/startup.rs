@@ -33,6 +33,25 @@ pub(super) fn run() {
     run_launcher();
 }
 
+/// The bundled faces, which every window of the launcher's sets its text in.
+pub(super) fn add_fonts(cx: &mut App) {
+    cx.text_system()
+        .add_fonts(vec![
+            Cow::Borrowed(horizon_theme::fonts::GEIST_MONO),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_REGULAR),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_MEDIUM),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_SEMIBOLD),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_BOLD),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_DISPLAY_BOLD),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_DISPLAY_SEMIBOLD),
+            Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_HEADING_SEMIBOLD),
+            Cow::Borrowed(horizon_theme::fonts::GEIST_REGULAR),
+            Cow::Borrowed(horizon_theme::fonts::GEIST_MEDIUM),
+            Cow::Borrowed(horizon_theme::fonts::GEIST_SEMIBOLD),
+        ])
+        .expect("bundled fonts");
+}
+
 fn run_launcher() {
     // First, before any other thread reads the environment.
     horizon_launcher::update_handoff::take_min_restarted_env();
@@ -56,7 +75,12 @@ fn run_launcher() {
     if let Some(code) = horizon_launcher::installer::run_quiet() {
         std::process::exit(code);
     }
-    if let Some(code) = horizon_launcher::relocation::run_worker() {
+    if let Some(worker) = horizon_launcher::relocation::Worker::from_args() {
+        let code = if worker.restarts() {
+            move_window::run(worker)
+        } else {
+            worker.run_and_finish(|_| {}, &std::sync::atomic::AtomicBool::new(false))
+        };
         std::process::exit(code);
     }
     // A broken location must still open a window: startup() falls back to the default
@@ -92,21 +116,7 @@ fn run_launcher() {
         .with_assets(blocks::Assets)
         // `move`: the closure owns `setup_window`; `run` wants it to outlive this frame.
         .run(move |cx: &mut App| {
-            cx.text_system()
-                .add_fonts(vec![
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_MONO),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_REGULAR),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_MEDIUM),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_SEMIBOLD),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_BOLD),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_DISPLAY_BOLD),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_DISPLAY_SEMIBOLD),
-                    Cow::Borrowed(horizon_theme::fonts::BRICOLAGE_HEADING_SEMIBOLD),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_REGULAR),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_MEDIUM),
-                    Cow::Borrowed(horizon_theme::fonts::GEIST_SEMIBOLD),
-                ])
-                .expect("bundled fonts");
+            add_fonts(cx);
             cx.bind_keys(key_bindings());
             cx.on_action(|_: &Quit, cx| shut_down(cx));
             // The key press is being handled inside the window, so the window can only be

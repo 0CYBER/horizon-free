@@ -283,15 +283,28 @@ fn lock_at(bootstrap: &Path, exclusive: bool) -> Result<File> {
     Ok(file)
 }
 
-pub fn migrate_current(source: &Roots, target: &Path, progress: impl FnMut(&str)) -> Result<Roots> {
-    migrate_current_with_prepare(source, target, progress, |_, _| Ok(()))
+pub fn migrate_current(
+    source: &Roots,
+    target: &Path,
+    mut progress: impl FnMut(&str),
+) -> Result<Roots> {
+    migrate_current_with_prepare(
+        source,
+        target,
+        |message| {
+            progress(message);
+            Ok(())
+        },
+        |_, _| Ok(()),
+    )
 }
 
 /// Called only by the offline helper, after the GUI requests exit. Wait briefly for its lease.
+/// An error from progress stops the move there, between files, like any other failure.
 pub fn migrate_current_with_prepare(
     source: &Roots,
     target: &Path,
-    progress: impl FnMut(&str),
+    progress: impl FnMut(&str) -> Result<()>,
     prepare: impl FnOnce(&Roots, &Roots) -> Result<()>,
 ) -> Result<Roots> {
     if has_override() {
@@ -325,10 +338,14 @@ pub fn migrate_with_prepare(
     source: &Roots,
     target: &Path,
     bootstrap: &Path,
-    progress: impl FnMut(&str),
+    mut progress: impl FnMut(&str),
     prepare: impl FnOnce(&Roots, &Roots) -> Result<()>,
 ) -> Result<Roots> {
     let lease = MigrationLease::take(bootstrap)?;
+    let progress = |message: &str| {
+        progress(message);
+        Ok(())
+    };
     migrate_locked(source, target, bootstrap, progress, prepare, &lease)
 }
 
@@ -354,7 +371,7 @@ fn migrate_locked(
     source: &Roots,
     target: &Path,
     bootstrap: &Path,
-    mut progress: impl FnMut(&str),
+    mut progress: impl FnMut(&str) -> Result<()>,
     prepare: impl FnOnce(&Roots, &Roots) -> Result<()>,
     _lease: &MigrationLease,
 ) -> Result<Roots> {
@@ -423,7 +440,7 @@ fn migrate_locked(
             // not be renamed across volumes, and preparation sees its final, tool-safe path.
             staged.build = destination.build.clone();
         }
-        progress("Copying and verifying launcher data");
+        progress(progress::LAUNCHER)?;
         // Preparing links other launchers' files into the launcher's data and links them again
         // each time; they are never followed or copied. The server runtime's links are made
         // again below, to the same release.
@@ -438,7 +455,7 @@ fn migrate_locked(
             &skip,
             &mut progress,
         )?;
-        progress("Copying and verifying game data");
+        progress(progress::GAME)?;
         // Every instance's cache holds links the game made, which copy_tree refuses; the
         // game rebuilds the cache on its next start.
         copy_tree(
@@ -450,7 +467,7 @@ fn migrate_locked(
             &mut progress,
         )?;
         if separate_build || !within(&source.build, &source.launcher) {
-            progress("Copying and verifying build data");
+            progress(progress::BUILD)?;
             copy_tree(
                 &source.build,
                 &source.build,
@@ -463,6 +480,10 @@ fn migrate_locked(
             fs::create_dir_all(&staged.build).map_err(|e| problem(&staged.build, e))?;
         }
         prepare(&staged, &destination)?;
+        // The last point at which progress may stop the move. From the first rename on it runs
+        // to its commit or fails on its own: a stop between the renames would leave the
+        // destination neither moved nor open to a retry.
+        progress(progress::COMMIT)?;
         // The stage always holds launcher and game; build only when it is neither inside
         // launcher nor in a separate folder. A missing one, or one already at the destination,
         // fails the move before the commit.
@@ -480,7 +501,6 @@ fn migrate_locked(
         fs::remove_dir(&stage).map_err(|e| problem(&stage, e))?;
         runtime.make(&destination.launcher)?;
         sync_dir(&target)?;
-        progress("Committing data location");
         commit(bootstrap, &destination)?;
         Ok(destination.clone())
     })();
@@ -507,6 +527,15 @@ fn migrate_locked(
             None => error,
         }
     })
+}
+
+/// What a move passes to its `progress` callback: each part as it starts, then each file.
+pub mod progress {
+    pub const LAUNCHER: &str = "Copying and verifying launcher data";
+    pub const GAME: &str = "Copying and verifying game data";
+    pub const BUILD: &str = "Copying and verifying build data";
+    pub const FILE: &str = "Verified file";
+    pub const COMMIT: &str = "Committing data location";
 }
 
 /// What the stage a move copies into inside its destination starts with: a unique name per run.
@@ -887,7 +916,7 @@ fn copy_tree(
     dest: &Path,
     bootstrap: &Path,
     skip: &[PathBuf],
-    progress: &mut impl FnMut(&str),
+    progress: &mut impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
     let meta = match fs::symlink_metadata(source) {
         Ok(meta) => meta,
@@ -948,7 +977,7 @@ fn copy_tree(
             ));
         }
         fs::set_permissions(dest, meta.permissions()).map_err(|e| problem(dest, e))?;
-        progress("Verified file");
+        progress(progress::FILE)?;
     } else {
         return Err(format!("Unsupported special file: {}", source.display()));
     }

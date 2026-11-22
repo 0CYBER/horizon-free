@@ -1254,3 +1254,72 @@ fn separate_build_is_staged_without_publishing_until_preparation_succeeds() {
     fs::rename(offline, &moved.build).unwrap();
     assert_eq!(resolve_at(&f.bootstrap).unwrap(), Some(moved));
 }
+
+#[test]
+fn a_move_stopped_between_files_keeps_everything() {
+    let f = Fixture::new("build");
+    let target = f.target();
+    let lease = MigrationLease::take(&f.bootstrap).unwrap();
+    let mut files = 0;
+    let error = migrate_locked(
+        &f.source,
+        &target,
+        &f.bootstrap,
+        |message| {
+            files += usize::from(message == progress::FILE);
+            if files == 1 {
+                return Err("fixture window closed".into());
+            }
+            Ok(())
+        },
+        |_, _| Ok(()),
+        &lease,
+    )
+    .unwrap_err();
+    drop(lease);
+    assert!(error.contains("fixture window closed"), "{error}");
+    assert_eq!(files, 1);
+    f.old_pointer();
+    assert_eq!(kept_copies(&target, None).len(), 1);
+    assert!(reusable(&target));
+}
+
+/// A stop asked for while `prepare` runs is honoured before the first rename; one asked for
+/// after that is not, and the move commits.
+#[test]
+fn a_stop_is_honoured_only_before_the_renames() {
+    for late in [false, true] {
+        let f = Fixture::new("build");
+        let target = f.target();
+        let lease = MigrationLease::take(&f.bootstrap).unwrap();
+        let stop = std::cell::Cell::new(false);
+        let result = migrate_locked(
+            &f.source,
+            &target,
+            &f.bootstrap,
+            |message| {
+                if stop.get() {
+                    return Err("fixture window closed".into());
+                }
+                // The last report: a stop asked for now is already past the last stop point.
+                stop.set(late && message == progress::COMMIT);
+                Ok(())
+            },
+            |_, _| {
+                stop.set(!late);
+                Ok(())
+            },
+            &lease,
+        );
+        drop(lease);
+        if late {
+            f.migrated(&result.unwrap());
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.contains("fixture window closed"), "{error}");
+            f.old_pointer();
+            assert!(!target.join("launcher").exists());
+            assert!(reusable(&target));
+        }
+    }
+}

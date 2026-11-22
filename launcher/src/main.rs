@@ -67,6 +67,7 @@ mod modpacks_page;
 mod mods_page;
 mod mods_project;
 mod motion;
+mod move_window;
 mod multiplayer_page;
 mod native_consent;
 mod native_log_page;
