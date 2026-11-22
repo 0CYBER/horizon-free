@@ -909,6 +909,69 @@ mod death_loot_table_tests {
         assert!(items(0, false).iter().all(|i| i != "minecraft:diamond"));
     }
 
+    /// `LootTable.createStackSplitter` on a death, through `die`, with
+    /// `table`'s ender pearls.
+    fn death_pearls(name: &str, modifier: &str) -> Vec<i32> {
+        let root = std::env::temp_dir().join(format!("drops-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("data/minecraft/loot_table");
+        std::fs::create_dir_all(&dir).unwrap();
+        let table = format!(
+            r#"{{"type":"minecraft:entity","pools":[{{"rolls":1,"entries":[{{"type":"minecraft:item",
+                "name":"minecraft:ender_pearl","modifier":{modifier}}}]}}]}}"#
+        );
+        std::fs::write(dir.join("test.json"), table).unwrap();
+        std::fs::write(root.join("items.json"), "{}").unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loot = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let death = Death {
+            loot: &loot,
+            damage: None,
+            player: None,
+            player_killed: false,
+            luck: 0.0,
+            vehicle: None,
+            mob_drops: true,
+            world_seed: 0,
+        };
+        let kind = crate::mobs::sensor_scan_tests::kind();
+        let mut m = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        m.extra.death_loot_table = Some("minecraft:test".into());
+        let mut sequences = RandomSequences::default();
+        let (out, _) = die(&mut m, &death, &mut sequences, &mut level_random(7));
+        out.into_iter()
+            .filter_map(|d| match d {
+                Drop::Item(s) if s.item == "minecraft:ender_pearl" => Some(s.count),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A death drop splits at its own `max_stack_size` patch: 12 ender pearls
+    /// made to stack to 5 drop as 5, 5 and 2.
+    #[test]
+    fn a_death_drop_splits_at_its_own_max_stack_size() {
+        let pearls = death_pearls(
+            "max-stack",
+            r#"[{"type":"minecraft:set_count","count":12},
+                {"type":"minecraft:set_components","components":{"minecraft:max_stack_size":5}}]"#,
+        );
+        assert_eq!(pearls, [5, 5, 2]);
+    }
+
+    /// The standard removal patch (`"!minecraft:max_stack_size": {}`) leaves a
+    /// stack size of 1: three pearls drop one by one.
+    #[test]
+    fn a_death_drop_without_a_max_stack_size_drops_one_by_one() {
+        let pearls = death_pearls(
+            "no-max-stack",
+            r#"[{"type":"minecraft:set_count","count":3},
+                {"type":"minecraft:set_components","components":{"!minecraft:max_stack_size":{}}}]"#,
+        );
+        assert_eq!(pearls, [1, 1, 1]);
+    }
+
     /// A listener of `enchanted_entity_loot` draws from the level's random in
     /// the middle of a roll on that random: the roll carries on after its
     /// draw, as vanilla's one shared random does.

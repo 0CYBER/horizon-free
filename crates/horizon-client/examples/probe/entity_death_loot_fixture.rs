@@ -313,6 +313,7 @@ pub fn main() -> horizon_client::Result<()> {
                             &mut level_random,
                             Some((&mut sequences, world_seed)),
                         );
+                        let stacks = block_items.split_stacks(stacks);
                         for s in stacks
                             .iter()
                             .filter(|s| enderman::carried_block_drop_kept(s))

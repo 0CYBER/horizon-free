@@ -10,7 +10,7 @@ use horizon_client::{
     containers::{Banner, BlockEntity},
     furnace::FurnaceCooking,
     item_data,
-    items::{BlockLootRoll, ItemStack},
+    items::{BlockLootRoll, ItemStack, Items},
     save,
 };
 use horizon_core::position::BlockPos;
@@ -185,6 +185,20 @@ impl Pending {
             }
             (stack.damage, stack.extra) = item_data::decode_components(Some(&Tag::Compound(patch)));
         }
+    }
+    /// `copy_components` on each loot result of the block at `pos`, then
+    /// `LootTable.createStackSplitter`: what was remembered goes on the first
+    /// result that takes it ([`Self::attach`]) and on every piece of that one.
+    pub(super) fn attach_and_split(
+        &mut self,
+        items: &Items,
+        pos: [i32; 3],
+        mut stacks: Vec<ItemStack>,
+    ) -> Vec<ItemStack> {
+        for stack in &mut stacks {
+            self.attach(pos, stack);
+        }
+        items.split_stacks(stacks)
     }
     /// Remember a decorated pot's sherds from its saved block entity.
     pub(super) fn record_saved(&mut self, pos: [i32; 3], tag: &horizon_core::nbt::Tag) {
@@ -706,10 +720,7 @@ impl GameLevel<'_> {
         };
         let mut drops = self.roll_block_loot(pos, state, entity, roll);
         drops.retain(|stack| &*stack.item != "minecraft:air" && stack.count > 0);
-        for stack in &mut drops {
-            copied.attach(at, stack);
-        }
-        drops
+        copied.attach_and_split(self.items, at, drops)
     }
     /// What `Block.dropResources` does with the loot it rolled for the block
     /// `state` at `pos`: `Block.popResource` builds an item entity for each
@@ -728,10 +739,16 @@ impl GameLevel<'_> {
         stacks: Vec<ItemStack>,
         exp_to_drop: Option<u32>,
     ) -> BlockDrops {
-        let items = stacks
+        let at = [pos.x, pos.y, pos.z];
+        let stacks = stacks
             .into_iter()
             .filter(|stack| &*stack.item != "minecraft:air" && stack.count > 0)
-            .map(|stack| self.block_drop_item([pos.x, pos.y, pos.z], stack))
+            .collect();
+        let items = self
+            .pending
+            .attach_and_split(self.items, at, stacks)
+            .into_iter()
+            .map(|stack| self.block_drop_item(at, stack))
             .collect();
         // `tryDropExperience` samples before the silk touch effect zeroes the
         // part/vanilla starting amount before the global break_block event; a
@@ -762,9 +779,11 @@ impl GameLevel<'_> {
             },
         )
     }
-    /// Build item entities only after vanilla has finished merging stacks.
-    pub(super) fn block_drop_item(&mut self, at: [i32; 3], mut stack: ItemStack) -> BlockItemDrop {
-        self.pending.attach(at, &mut stack);
+    /// Build item entities only after vanilla has finished merging stacks. `stack`
+    /// already carries what the block entity copies ([`Pending::attach_and_split`] in
+    /// `block_dropped`, the explosion's own pass): attaching again would find the record
+    /// gone, and a pot would lose its decorations.
+    pub(super) fn block_drop_item(&mut self, at: [i32; 3], stack: ItemStack) -> BlockItemDrop {
         let position = pop_position(&mut self.world.random, at);
         let random = prepare_item_random(None);
         BlockItemDrop {
@@ -1663,5 +1682,112 @@ mod crafter_drop_name_tests {
                 "actual vanilla crafter drop retained source name: {unexpected:?}"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod split_drop_copy_tests {
+    use super::*;
+
+    fn named(name: &str) -> Compound {
+        let mut patch = Compound::new();
+        patch.insert("minecraft:custom_name".into(), Tag::String(name.into()));
+        patch
+    }
+    fn names(stacks: &[ItemStack]) -> Vec<(u32, Option<String>)> {
+        stacks
+            .iter()
+            .map(|s| {
+                let name = s.data().and_then(|d| d.custom_name.as_ref());
+                (s.count, name.map(|t| format!("{t:?}")))
+            })
+            .collect()
+    }
+
+    /// A table giving 65 player heads copies the head's components onto that
+    /// one result before `LootTable.createStackSplitter` cuts it into 64 + 1,
+    /// so both pieces carry them.
+    #[test]
+    fn every_piece_of_a_split_drop_carries_the_copied_components() {
+        let at = [1, 2, 3];
+        let items = Items::empty();
+        let mut pending = Pending::default();
+        pending.copied.insert(
+            at,
+            ("minecraft:player_head".to_owned(), named("Steve's head")),
+        );
+        let raw = vec![ItemStack::new("minecraft:player_head", 65)];
+        let dropped = pending.attach_and_split(&items, at, raw);
+        let got = names(&dropped);
+        assert_eq!(got.iter().map(|(c, _)| *c).collect::<Vec<_>>(), [64, 1]);
+        assert!(got.iter().all(|(_, n)| n.is_some()), "{got:?}");
+    }
+
+    /// `DecoratedPotBlock`'s table copies the pot's decorations onto its one
+    /// result, and only once: a pot with sherds drops with all four.
+    #[test]
+    fn a_broken_pot_drops_with_its_four_decorations() {
+        let at = [1, 2, 3];
+        let items = Items::empty();
+        let mut pending = Pending::default();
+        let sherd = |id: &str| Some(ItemStack::new(id, 1));
+        let sides = [
+            sherd("minecraft:angler_pottery_sherd"),
+            sherd("minecraft:brick"),
+            sherd("minecraft:skull_pottery_sherd"),
+            sherd("minecraft:heart_pottery_sherd"),
+        ];
+        pending.pot.insert(at, sides.clone());
+        let raw = vec![ItemStack::new("minecraft:decorated_pot", 1)];
+        let dropped = pending.attach_and_split(&items, at, raw);
+        assert_eq!(dropped.len(), 1);
+        let kept = dropped[0]
+            .data()
+            .and_then(|d| d.pot_decorations.as_deref())
+            .expect("the pot's decorations");
+        assert_eq!(kept, &sides);
+    }
+
+    /// A shulker box's contents go on the first box of the roll and no other.
+    #[test]
+    fn a_shulker_box_s_contents_arrive_once() {
+        let at = [1, 2, 3];
+        let items = Items::empty();
+        let mut pending = Pending::default();
+        let contents = vec![(0, ItemStack::new("minecraft:diamond", 3))];
+        pending.shulker.insert(at, contents.clone());
+        let raw = vec![
+            ItemStack::new("minecraft:shulker_box", 1),
+            ItemStack::new("minecraft:shulker_box", 1),
+        ];
+        let dropped = pending.attach_and_split(&items, at, raw);
+        let held: Vec<_> = dropped
+            .iter()
+            .map(|s| s.data().map_or(0, |d| d.container.len()))
+            .collect();
+        assert_eq!(held, [1, 0]);
+        assert_eq!(dropped[0].data().unwrap().container, contents);
+    }
+
+    /// Two separate results of the same item in one roll: as on main, the copy
+    /// goes on the first only, and the second keeps its own components.
+    #[test]
+    fn a_second_result_of_the_same_item_keeps_its_own_components() {
+        let at = [1, 2, 3];
+        let items = Items::empty();
+        let mut pending = Pending::default();
+        pending.copied.insert(
+            at,
+            ("minecraft:player_head".to_owned(), named("Steve's head")),
+        );
+        let mut fixed = ItemStack::new("minecraft:player_head", 1);
+        fixed.data_mut().custom_name = Some(Tag::String("Alex's head".into()));
+        let expected_fixed = names(std::slice::from_ref(&fixed));
+        let raw = vec![ItemStack::new("minecraft:player_head", 1), fixed];
+        let dropped = pending.attach_and_split(&items, at, raw);
+        assert_eq!(dropped.len(), 2);
+        assert!(names(&dropped[..1])[0].1.is_some());
+        assert_ne!(names(&dropped[..1]), expected_fixed);
+        assert_eq!(names(&dropped[1..]), expected_fixed);
     }
 }

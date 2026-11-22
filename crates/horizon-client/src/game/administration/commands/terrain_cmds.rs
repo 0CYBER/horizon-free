@@ -487,7 +487,7 @@ impl Game<'_> {
                         pending.attach(p, drop);
                     }
                 }
-                (drops, Some(table))
+                (items.split_stacks(drops), Some(table))
             }
         };
         let drops: Vec<ItemStack> = drops

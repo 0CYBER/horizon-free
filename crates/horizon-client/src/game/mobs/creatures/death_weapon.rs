@@ -386,6 +386,7 @@ impl Game<'_> {
                         Some(m.id),
                         enderman::carried_block_roll(&tool),
                     );
+                    let drops = self.res.items().split_stacks(drops);
                     stacks.extend(
                         drops
                             .into_iter()

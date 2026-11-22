@@ -24,12 +24,12 @@ impl<R: RandomSource> LootContext<'_, R> {
         random: &mut R,
         id: &str,
     ) -> Vec<ItemStack> {
-        let items = self.evaluate(table, random);
+        let items = self.roll(table, random);
         self.query.finish(Some(id));
         items
     }
     pub(super) fn evaluate_root(&self, table: &Value, random: &mut R) -> Vec<ItemStack> {
-        let items = self.evaluate(table, random);
+        let items = self.roll(table, random);
         self.query.finish(None);
         items
     }
