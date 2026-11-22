@@ -191,6 +191,10 @@ impl Game<'_> {
             self.streaming.complete_commit(&mut self.world, commit)
         });
         self.streaming.extra.truncate(areas);
+        // A lectern read from a save resolves its book pages as its chunk
+        // arrives (`LecternBlockEntity.loadAdditional`): the chunk was decoded
+        // on a worker, which has no game to read a selector or a score with.
+        horizon_client::spans::time("resolve_loaded_lecterns", || self.resolve_loaded_lecterns());
         // The viewed levels' meshing, queued after the player's level's (nothing while no view
         // names one).
         if self.streaming.mesh

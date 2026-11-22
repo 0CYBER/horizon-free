@@ -3,7 +3,12 @@
 //! pixels, 1024 characters, 100 pages), signing it into a written book,
 //! reading written books, and lecterns (placing a book, turning its pages
 //! with a redstone pulse, the comparator output and taking the book).
-use super::{Game, chat::PLAYER_NAME, screen_info};
+use super::{
+    Game,
+    chat::PLAYER_NAME,
+    commands::{Target, execute::Source},
+    screen_info,
+};
 use horizon_client::{
     block_entity_item,
     containers::{BlockEntity, Lectern},
@@ -266,11 +271,25 @@ impl Game<'_> {
         if book.resolved {
             return false;
         }
+        let changed = self.resolve_book_pages(&mut book);
+        if let Some(stack) = self.held_mut() {
+            stack.data_mut().written = Some(book);
+        }
+        // The guest turn restores this inventory to the hub, whose menu
+        // synchronization sends the changed resolved stack back to the client.
+        changed
+    }
+    /// `WrittenBookContent.resolve`: each page's selectors and scores become
+    /// the text they name at the command source in place
+    /// (`ComponentUtils.resolve`), recursing into `extra` and `with`. The book
+    /// is marked resolved either way, so a page that cannot be resolved is not
+    /// retried (a page over 32767 characters cancels the rewrite).
+    fn resolve_book_pages(&mut self, book: &mut WrittenBook) -> bool {
         let string = |v: &Tag| match v {
             Tag::String(s) => Some(s.to_string_lossy()),
             _ => None,
         };
-        let changed = book.resolve(|tag| {
+        book.resolve(|tag| {
             let Tag::Compound(c) = tag else { return None };
             if let Some(Tag::String(selector)) = c.get(&"selector".into()) {
                 let selector = selector.to_string_lossy();
@@ -290,13 +309,89 @@ impl Game<'_> {
                     .score(name, &objective)
                     .map_or_else(String::new, |s| s.value.to_string()),
             )
-        });
-        if let Some(stack) = self.held_mut() {
-            stack.data_mut().written = Some(book);
+        })
+    }
+    /// `LecternBlockEntity.setBook` and `loadAdditional` -> `resolveBook`: the
+    /// book put on a lectern is resolved once for the lectern's own
+    /// `createCommandSourceStack` (the block's centre, its placer as the entity
+    /// when a player put it there), so a page's `@p` or `@e[distance=..]` reads
+    /// from the lectern and not from whoever later opens it. A book with no
+    /// written pages, or an already resolved one, is left as it is.
+    pub(super) fn resolve_lectern_book(
+        &mut self,
+        book: &mut ItemStack,
+        at: [i32; 3],
+        placer: Option<Target>,
+    ) {
+        let Some(mut written) = book.data().and_then(|d| d.written.clone()) else {
+            return;
+        };
+        if written.resolved {
+            return;
         }
-        // The guest turn restores this inventory to the hub, whose menu
-        // synchronization sends the changed resolved stack back to the client.
-        changed
+        let source = Source {
+            entity: placer,
+            pos: [
+                f64::from(at[0]) + 0.5,
+                f64::from(at[1]) + 0.5,
+                f64::from(at[2]) + 0.5,
+            ],
+            rot: [0.0, 0.0],
+            eyes: false,
+            silent: true,
+            store: None,
+            dimension: self.dim,
+            origin_dimension: self.dim,
+            origin_player: false,
+            level: None,
+            block: None,
+            cart: None,
+        };
+        self.with_source(source, |g| g.resolve_book_pages(&mut written));
+        book.data_mut().written = Some(written);
+    }
+    /// `LecternBlockEntity.loadAdditional` -> `resolveBook` for the lecterns a
+    /// chunk just brought in. A chunk is decoded off the game thread, where a
+    /// page's selector or score cannot be read, so its books resolve here as
+    /// the chunk enters the level, with each lectern's own
+    /// `createCommandSourceStack` position, before the tick goes on. A client
+    /// mirroring a server keeps the server's resolved book: the server owns
+    /// the block entity.
+    pub(super) fn resolve_loaded_lecterns(&mut self) {
+        if self.remote.is_some() {
+            return;
+        }
+        let mut lecterns: Vec<[i32; 3]> = Vec::new();
+        for &(x, z, _) in &self.world.loaded_chunks {
+            let Some(saved) = self
+                .world
+                .chunks
+                .get(&(x, z))
+                .and_then(|chunk| chunk.saved.as_deref())
+            else {
+                continue;
+            };
+            for (at, tag) in &saved.block_entity_sources {
+                if horizon_client::save::text(tag.get("id")).as_deref() == Some("minecraft:lectern")
+                {
+                    lecterns.push([at.0, at.1, at.2]);
+                }
+            }
+        }
+        for at in lecterns {
+            let key = (at[0], at[1], at[2]);
+            let mut book = match self.world.block_entities.get_mut(&key) {
+                Some(BlockEntity::Lectern(l)) => match l.book.take() {
+                    Some(book) => book,
+                    None => continue,
+                },
+                _ => continue,
+            };
+            self.resolve_lectern_book(&mut book, at, None);
+            if let Some(BlockEntity::Lectern(l)) = self.world.block_entities.get_mut(&key) {
+                l.book = Some(book);
+            }
+        }
     }
     /// The screen a book in hand opens: `BookEditScreen` for a book and
     /// quill, `BookViewScreen` for a written book.
@@ -1007,6 +1102,12 @@ impl Game<'_> {
         }
         let mut one = book.clone();
         one.count = 1;
+        // `LecternBlockEntity.setBook` from `placeBook`: the placer is the context.
+        let placer = match self.lan_acting {
+            Some(conn) => Some(Target::Guest(conn)),
+            None => self.player.is_some().then_some(Target::Player),
+        };
+        self.resolve_lectern_book(&mut one, pos, placer);
         self.world.block_entities.insert(
             key,
             BlockEntity::Lectern(Lectern {
@@ -1034,12 +1135,21 @@ impl Game<'_> {
     /// `LecternBlock.openScreen`: reading the lectern's book.
     pub(super) fn open_lectern(&mut self, pos: [i32; 3]) -> bool {
         let key = (pos[0], pos[1], pos[2]);
-        let Some(BlockEntity::Lectern(l)) = self.world.block_entities.get(&key) else {
-            return false;
+        let (stored_page, mut book) = match self.world.block_entities.get_mut(&key) {
+            Some(BlockEntity::Lectern(l)) => match l.book.take() {
+                Some(book) => (l.page, book),
+                None => return false,
+            },
+            _ => return false,
         };
-        let Some(book) = &l.book else { return false };
+        // A book a save loaded before this resolution ran is resolved now, with
+        // `createCommandSourceStack`'s lectern source, and stored resolved.
+        self.resolve_lectern_book(&mut book, pos, None);
         let pages = view_pages(book.data());
-        let page = (l.page.max(0) as usize).min(pages.len().saturating_sub(1));
+        let page = (stored_page.max(0) as usize).min(pages.len().saturating_sub(1));
+        if let Some(BlockEntity::Lectern(l)) = self.world.block_entities.get_mut(&key) {
+            l.book = Some(book);
+        }
         self.award_custom_stat("interact_with_lectern", 1);
         self.open_book(BookScreen::View {
             pages,
@@ -2237,5 +2347,189 @@ mod link_cursor_tests {
         };
         assert_eq!(link_cursor(&link), Some(Cursor::PointingHand));
         assert_eq!(link_cursor(&hover_only), None);
+    }
+}
+
+#[cfg(test)]
+mod lectern_page_resolution_tests {
+    use super::super::native_machines::tests::server_game;
+    use horizon_client::{
+        chunk::ChunkExtras,
+        containers::{BlockEntity, Lectern},
+        item_data::WrittenBook,
+        items::ItemStack,
+        motion::PlayerMotion,
+    };
+    use horizon_core::geometry::Vec3;
+    use horizon_core::nbt::Tag;
+    use std::sync::Arc;
+
+    /// Three component pages: the nearest entity within one block of the
+    /// lectern, within three, and a score.
+    fn book() -> ItemStack {
+        let selector = |range: &str| {
+            let raw = format!("@e[distance=..{range}]");
+            Tag::compound([("selector", Tag::String(raw.as_str().into()))])
+        };
+        let score = Tag::compound([(
+            "score",
+            Tag::compound([
+                ("name", Tag::String("Player".into())),
+                ("objective", Tag::String("pages".into())),
+            ]),
+        )]);
+        let mut book = ItemStack::new("minecraft:written_book", 1);
+        book.data_mut().written = Some(WrittenBook {
+            title: "Test".into(),
+            author: "Player".into(),
+            generation: 0,
+            pages: vec![String::new(), String::new(), String::new()],
+            page_tags: vec![selector("1"), selector("3"), score],
+            resolved: false,
+        });
+        book
+    }
+
+    /// `LecternBlockEntity.setBook` -> `WrittenBookContent.resolveForItem`:
+    /// the pages are resolved once, for `createCommandSourceStack` at the
+    /// lectern's centre, so a distance-limited selector reads from the block
+    /// and not from the player who put the book there, and a score page
+    /// becomes its value. Reading the same book in hand already resolves it
+    /// (`Game::resolve_held_book`); the lectern did not.
+    #[test]
+    #[ignore = "daily"]
+    fn a_lectern_resolves_its_books_pages_from_its_own_position() {
+        let mut game = server_game();
+        game.set_allow_commands(true);
+        game.player = Some(
+            PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 10.5)).expect("a player position"),
+        );
+        let key = (8, 64, 8);
+        let state = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:lectern")
+            .unwrap();
+        game.world.set(key.0, key.1, key.2, state).unwrap();
+        assert!(game.run_command("scoreboard objectives add pages dummy"));
+        assert!(game.run_command("scoreboard players set Player pages 7"));
+
+        assert!(game.use_lectern([8, 64, 8], Some(&book())));
+
+        let Some(BlockEntity::Lectern(l)) = game.world.block_entities.get(&key) else {
+            panic!("the book went onto the lectern");
+        };
+        let written = l
+            .book
+            .as_ref()
+            .and_then(|b| b.data())
+            .and_then(|d| d.written.clone())
+            .expect("the placed book");
+        assert!(written.resolved, "the lectern's book is marked resolved");
+        assert_eq!(
+            written.pages,
+            ["", "Player", "7"],
+            "the pages resolve from the lectern (2.2 blocks from the player), not from the reader"
+        );
+
+        // A book a save put in a lectern before the resolution ran is resolved
+        // the first time the lectern's screen opens, and stored resolved.
+        let saved = (10, 64, 8);
+        game.world.set(saved.0, saved.1, saved.2, state).unwrap();
+        game.world.block_entities.insert(
+            saved,
+            BlockEntity::Lectern(Lectern {
+                book: Some(book()),
+                page: 0,
+            }),
+        );
+        assert!(game.open_lectern([10, 64, 8]));
+        let Some(BlockEntity::Lectern(l)) = game.world.block_entities.get(&saved) else {
+            panic!("the saved lectern");
+        };
+        let written = l
+            .book
+            .as_ref()
+            .and_then(|b| b.data())
+            .and_then(|d| d.written.clone())
+            .expect("the saved book");
+        assert!(written.resolved, "opening the lectern resolves its book");
+        assert_eq!(written.pages, ["", "Player", "7"]);
+    }
+
+    /// `LecternBlockEntity.loadAdditional` -> `resolveBook`: a book a save left
+    /// on a lectern resolves its pages with the lectern's own source as its
+    /// chunk loads, so a distance-limited selector reads from the block and
+    /// not from whoever later opens the screen. Nothing opens it here.
+    #[test]
+    #[ignore = "daily"]
+    fn a_saved_lecterns_book_resolves_when_its_chunk_loads() {
+        let mut game = server_game();
+        game.set_allow_commands(true);
+        game.player = Some(
+            PlayerMotion::new(game.motion, Vec3::new(8.5, 64.0, 10.5)).expect("a player position"),
+        );
+        let key = (8, 64, 8);
+        let state = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:lectern")
+            .unwrap();
+        game.world.set(key.0, key.1, key.2, state).unwrap();
+        assert!(game.run_command("scoreboard objectives add pages dummy"));
+        assert!(game.run_command("scoreboard players set Player pages 7"));
+
+        // The lectern as the save holds it: three component pages, unresolved.
+        let saved = horizon_client::save::block_entity_encode::encode(
+            key,
+            &BlockEntity::Lectern(Lectern {
+                book: Some(book()),
+                page: 0,
+            }),
+            "minecraft:lectern",
+        );
+        let (pos, loaded) =
+            horizon_client::save::decode_block_entity(&saved).expect("the saved lectern");
+        assert_eq!(pos, key);
+        let BlockEntity::Lectern(l) = &loaded else {
+            panic!("a lectern");
+        };
+        assert!(
+            !l.book
+                .as_ref()
+                .and_then(|b| b.data())
+                .and_then(|d| d.written.as_ref())
+                .expect("the saved book")
+                .resolved,
+            "the saved book starts unresolved"
+        );
+        game.world.block_entities.insert(pos, loaded);
+        // Its chunk arrives with the save's own block entity NBT beside it.
+        let chunk = Arc::make_mut(game.world.chunks.get_mut(&(0, 0)).unwrap());
+        chunk.saved = Some(Arc::new(ChunkExtras {
+            block_entity_sources: vec![(pos, saved)],
+            ..ChunkExtras::default()
+        }));
+        game.world.loaded_chunks.push((0, 0, false));
+
+        game.update_world();
+
+        let Some(BlockEntity::Lectern(l)) = game.world.block_entities.get(&key) else {
+            panic!("the loaded lectern");
+        };
+        let written = l
+            .book
+            .as_ref()
+            .and_then(|b| b.data())
+            .and_then(|d| d.written.clone())
+            .expect("the loaded book");
+        assert!(written.resolved, "loading the chunk resolves the book");
+        assert_eq!(
+            written.pages,
+            ["", "Player", "7"],
+            "the pages resolve from the lectern (2.2 blocks from the player), not from the reader"
+        );
     }
 }

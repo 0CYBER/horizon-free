@@ -1,0 +1,4 @@
+# Prepared-resource lectern page resolution tests.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::books::lectern_page_resolution_tests::a_lectern_resolves_its_books_pages_from_its_own_position lib daily resources
+horizon-client game::books::lectern_page_resolution_tests::a_saved_lecterns_book_resolves_when_its_chunk_loads lib daily resources
