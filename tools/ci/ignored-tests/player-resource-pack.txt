@@ -1,0 +1,5 @@
+# Pushing and popping a player resource pack needs prepared resources.
+horizon-client game::native_player_pack_tests::a_pack_is_pushed_to_one_player_and_popped lib daily resources
+horizon-client game::native_player_pack_tests::each_pack_refusal_has_its_own_name lib daily resources
+horizon-client game::native_player_pack_tests::a_client_cannot_push_or_pop_a_pack lib daily resources
+horizon-client game::native_player_pack_tests::dead_guests_resource_pack_answers_reach_only_the_v2_hook lib daily resources

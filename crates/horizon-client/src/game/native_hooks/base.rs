@@ -1850,6 +1850,20 @@ impl Game<'_> {
     ) {
         self.fire_resource_pack_status(player, name, status);
     }
+    /// `native_resource_pack_status` with `pack`, the id of the pack it answers
+    /// (`ServerboundResourcePackPacket.id`, the id a pack pushed by
+    /// `player.push_resource_pack` was given). Heard just before the version
+    /// without it, which keeps its arguments and its firing point; also heard
+    /// while the player is dead.
+    pub(in crate::game) fn native_resource_pack_status_v2(
+        &mut self,
+        player: u128,
+        name: &str,
+        pack: u128,
+        status: i32,
+    ) {
+        self.fire_resource_pack_status_v2(player, name, pack, status);
+    }
     /// A server player places a hanging entity: an item frame
     /// (`minecraft:item_frame`, `minecraft:glow_item_frame`), a painting
     /// (`minecraft:painting`) or a leash knot (`minecraft:leash_knot`, when a

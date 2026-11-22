@@ -701,7 +701,7 @@ Paper is server-only, so only the server side of `both` hooks is comparable; no 
 
 | Horizon hook | Paper event / status | Evidence and porting boundary |
 |---|---|---|
-| `resource_pack_status` | **Partial:** [`PlayerResourcePackStatusEvent`][paper-PlayerResourcePackStatusEvent] | Both listen for a client resource-pack answer on the server, but Paper exposes the pack UUID through getID(), which the hook omits. No key. |
+| `resource_pack_status` | **Partial:** [`PlayerResourcePackStatusEvent`][paper-PlayerResourcePackStatusEvent] | Both listen for a client resource-pack answer on the server, but Paper exposes the pack UUID through getID(), which this hook omits; `resource_pack_status_v2` gives it as `pack`. No key. |
 | `right_click_block` | **Partial:** [`PlayerInteractEvent`][paper-PlayerInteractEvent] | Action.RIGHT_CLICK_BLOCK identifies the server interaction, with player, block, hit position/face, hand, item and separate block/item use controls. Paper cannot express cancellation_result and its swing/consumption choices. No key. |
 | `run_mod_command` | **Gap:** none (nearest [`ServerCommandEvent`][paper-ServerCommandEvent]) | The cited event fires early for non-player commands, before permission and argument resolution, while the hook runs after both and exposes the mod invocation and `ran`. No key. |
 | `screen` | **Gap:** none | No cited Paper event opens a block-entity screen or supplies the hidden-slot layout the hook collects; the dossier's candidates are unrelated inventory/recipe events. No key. |

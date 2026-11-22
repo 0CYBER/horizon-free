@@ -18,4 +18,21 @@ pub trait Hooks {
         neoforge = "none (NeoForge has no resource-pack status event)"
     )]
     fn resource_pack_status();
+    /// `resource_pack_status` with the id of the pack the answer is for
+    /// (`ServerboundResourcePackPacket.id`: the id a pack pushed by
+    /// `PlayerRef::push_resource_pack` was given, Paper's
+    /// `PlayerResourcePackStatusEvent.getID`). Heard just before
+    /// `resource_pack_status`, which keeps its arguments and its firing point.
+    /// Once for each answer, on a server, including while the player is dead:
+    /// a resource-pack answer is connection status, not an action. The player's
+    /// state is swapped in, so the helpers and `PlayerRef::tell` work. The pack
+    /// a dedicated server offers in the configuration (`resource-pack` in
+    /// `server.properties`) is answered before the player has joined, and those
+    /// answers are not heard.
+    #[hook(
+        side = "server",
+        contract = "listen",
+        neoforge = "none (NeoForge has no resource-pack status event)"
+    )]
+    fn resource_pack_status_v2();
 }

@@ -1,0 +1,3 @@
+ids = ["handle:PlayerRef::push_resource_pack", "handle:PlayerRef::pop_resource_pack", "type:ResourcePackOffer", "type:PlayerPackRefusal", "hook:resource_pack_status_v2"]
+why = "A mod can offer one connected player a resource pack in play (PlayerRef::push_resource_pack, with an id, URL, SHA-1, required flag and prompt) and take one or all of them off (pop_resource_pack), each refusal named. resource_pack_status_v2 gives the id of the pack an answer is for, so several pushed packs can be told apart, and hears the answers of a dead player."
+migrate = "All additive: resource_pack_status keeps its three arguments and fires as before. A mod that needs the pack id listens to resource_pack_status_v2(player, name, pack, status), heard just before it."

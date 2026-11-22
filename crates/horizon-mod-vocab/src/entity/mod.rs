@@ -8,6 +8,7 @@ pub(crate) mod entity_visibility;
 pub(crate) mod mob_ai_pause;
 pub(crate) mod player_connect;
 pub(crate) mod player_data;
+pub(crate) mod player_pack;
 pub(crate) mod player_world;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]

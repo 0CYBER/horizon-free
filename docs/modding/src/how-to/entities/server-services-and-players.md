@@ -179,6 +179,27 @@ is dropped. An answer longer than a client reads (32767 characters) is replaced 
 the mods do not finish within half a second. With no listener the request is not put to the game thread at all.
 The legacy ping of pre-1.7 clients is not asked.
 
+## Resource packs
+
+`player.push_resource_pack(host, ResourcePackOffer)` offers one player's client a pack while they play, as
+`ClientboundResourcePackPushPacket` does; `player.pop_resource_pack(host, Some(id))` takes it off again, and `None`
+takes off every pack the server pushed, the `resource-pack` of `server.properties` included. Build the offer with
+`ResourcePackOffer::new(id, url)` and set `sha1` (40 hex digits, or empty for no check), `required` and `prompt`.
+A pack pushed with the id of one the client holds replaces it; other ids stack. The client downloads the zip itself,
+so the URL must be reachable from that player.
+Like vanilla, popping does not retract an offer still waiting in an unanswered consent prompt;
+accepting that prompt can load the pack later. It is not a pending-offer cancellation API.
+
+`resource_pack_status_v2(player, name, pack, status)` hears the answers with the pack's id, including while the
+player is dead; `resource_pack_status(player, name, status)` keeps its three arguments and its firing point.
+`required` changes only
+what the client's screen offers: the server does not disconnect a player who declines a pack a mod pushed (it does
+so only for the `server.properties` pack), so a mod that needs the pack kicks on status 1 or 2 itself. Answers to the
+`server.properties` pack are given before the player has joined and are not heard. Both calls return
+`Result<(), PlayerPackRefusal>`: `Client`, `Stale`, `NoConnection`, and for a push `UrlTooLong` (over 32767
+UTF-16 code units), `HashTooLong` (over 40 UTF-16 code units) and `BadPrompt` (text the boundary refuses); a refused
+call sends nothing. Characters outside the BMP count as two code units.
+
 ## Chat lines and respawn
 
 Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`

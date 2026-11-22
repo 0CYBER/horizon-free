@@ -1269,6 +1269,37 @@ pub trait PlayersBackendMut {
         state: BlockState,
     ) -> Result<(), PlayerWorldRefusal>;
     /// Side: server.
+    /// Offers that player's client a resource pack while they play
+    /// (`ClientboundResourcePackPushPacket`; Paper's `Player.sendResourcePacks`). The client
+    /// downloads `pack.url`, checks it against `pack.sha1` when that is not empty, and asks the
+    /// player (with `pack.prompt` when it is set) unless the pack is already loaded or accepted.
+    /// A pack with the id of one the client holds replaces it; other ids stack, the newest on
+    /// top. Its answers come to `resource_pack_status_v2` with `pack` as `pack.id`. `required` only changes
+    /// what the client's screen offers: the server does not disconnect a player who declines
+    /// (only the `server.properties` pack does), so a mod acts on a status 1 itself. Refuses,
+    /// sending nothing, with `PlayerPackRefusal`: `Client`, `Stale`, `NoConnection`, `UrlTooLong`
+    /// (over 32767 UTF-16 code units), `HashTooLong` (over 40 UTF-16 code units) and `BadPrompt`
+    /// (text the boundary refuses).
+    #[access(WorldOnly)]
+    fn player_push_resource_pack(
+        &mut self,
+        player: PlayerRef,
+        pack: ResourcePackOffer,
+    ) -> Result<(), PlayerPackRefusal>;
+    /// Side: server.
+    /// Takes the resource pack `id` off that player's client
+    /// (`ClientboundResourcePackPopPacket`; Paper's `Player.removeResourcePack`), or with None
+    /// every pack the server pushed to them, the `server.properties` pack included. An id the
+    /// client does not hold is ignored by the client. Like vanilla, this does not cancel an
+    /// offer still waiting in a consent prompt: accepting that prompt can load the pack later.
+    /// Refuses, sending nothing, with `PlayerPackRefusal`: `Client`, `Stale` and `NoConnection`.
+    #[access(WorldOnly)]
+    fn player_pop_resource_pack(
+        &mut self,
+        player: PlayerRef,
+        id: Option<u128>,
+    ) -> Result<(), PlayerPackRefusal>;
+    /// Side: server.
     /// Writes `state` at `pos` in `level` for the player, for a state the mod already chose
     /// (an editor's or a schematic's). It is `level_set_block` with a placement's flags
     /// (`NEIGHBORS | CLIENTS`, plus `KNOWN_SHAPE` when `update_neighbour_shapes` is false; without
