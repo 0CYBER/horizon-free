@@ -49,6 +49,7 @@ horizon-client game::item_entities::orb_pickup_tests::a_player_picks_a_random_or
 horizon-client game::lan_actions::pickup_xp_tests::a_guest_picks_an_orb_with_their_own_random lib daily resources
 horizon-client game::lan_entities::tests::glowing_display_metadata_reaches_the_model_silhouettes lib daily resources
 horizon-client game::launch_api::tests::developer_offline_never_consumes_inherited_sessions lib daily child-process
+horizon-client game::levels::tests::a_closed_idle_levels_scheduled_ticks_come_back_at_their_deadlines lib daily resources
 horizon-client game::levels::tests::a_level_keeps_its_portal_palettes_while_another_ticks lib daily resources
 horizon-client game::levels::tests::a_ticket_while_an_idle_close_waits_keeps_the_level lib daily resources
 horizon-client game::levels::tests::a_write_after_a_close_is_listed_keeps_the_level lib daily resources
