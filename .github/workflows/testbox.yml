@@ -28,7 +28,7 @@ jobs:
   testbox:
     name: Blacksmith Testbox
     runs-on: ${{ inputs.runner == 'blacksmith-8vcpu-ubuntu-2404' && 'blacksmith-8vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404' }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       # A failing step, not a skipped job: the CLI then shows why instead of waiting for a runner.
       - name: Check the branch and the Testbox session ID

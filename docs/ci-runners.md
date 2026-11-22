@@ -136,6 +136,13 @@ Cargo's settings (the build folder, mold, `HORIZON_NO_AUDIO`, `HORIZON_TELEMETRY
 would restore the dates of the checkout over files a session had edited, and the next session could reuse what
 someone else's unpushed code built.
 
+A session ends after its idle timeout or at the job's 120-minute limit, whichever comes first. The idle timeout
+(`--idle-timeout`) counts minutes with neither a `testbox run` nor an open SSH connection to the runner: a command
+still running, a copy over SSH or a forgotten interactive session keeps the session alive, and billed, until the limit.
+Billing stops with the session, so the limit costs nothing in normal use and only caps a session that keeps running.
+It is 120 rather than 60 because a new session starts with an empty build folder: a cold release build
+of the game, the server and the bots took 9 minutes on 2026-11-22, and comparing a branch with its base builds twice.
+
 ## Hosted parity
 
 `.github/workflows/parity-hosted.yml` runs vanilla harnesses on Blacksmith's 16-vCPU runners, outside the Mac mini.
