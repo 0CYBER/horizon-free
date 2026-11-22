@@ -848,16 +848,21 @@ def run(package, skip, number=None, count=None, only=None):
         elif SUMMARY.match(line):
             if target_count is not None:
                 last_summary = line
-        elif status := re.search(r"\((signal|exit status): (\d+)", line):
+        elif status := re.search(r"\((signal|exit status): (\d+)(?:, (SIG[A-Z0-9]+))?", line):
             # Emit only the numeric status, never adjacent test output.
-            print(f"{package}: {status[0]})")
+            print(f"{package}: ({status[1]}: {status[2]})")
             # Cargo's own line for a test process that ended: 101 is libtest's "tests failed"; a signal or any
             # other status is a crash, whatever summaries came before it.
             if cargo_failure and "process didn't exit successfully" in line:
                 crash = status[1] == "signal" or status[2] != "101"
                 if crash and ended_by is None:
                     number = int(status[2])
-                    name = signal.Signals(number).name if status[1] == "signal" and number in signal.valid_signals() else None
+                    # The runner's name for it, as Cargo writes it right after the number ("signal: 9, SIGKILL:
+                    # kill"), never one a later status on the line gives: this machine's signal module may have no
+                    # such number (Windows has no 9).
+                    named = status[3] if status[1] == "signal" else None
+                    known = status[1] == "signal" and number in signal.valid_signals()
+                    name = named or (signal.Signals(number).name if known else None)
                     ended_by = f"{status[1]} {number}" + (f" ({name})" if name else "")
                 crashed |= crash
                 cargo_failure = False

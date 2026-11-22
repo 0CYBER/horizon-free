@@ -129,6 +129,19 @@ class IgnoredTests(unittest.TestCase):
         self.assertEqual(ignored_tests._stopped["still_running"],
                          [f"identity withheld (longer than {ignored_tests.IDENTITY_CHARS} characters)"])
 
+    def test_a_crash_is_named_by_its_own_signal_not_a_later_status_on_the_line(self):
+        # Cargo names the signal right after its number; a later status on the line names another process. Signal
+        # 99 is no OS's, so a name could only come from the line, and it has none of its own.
+        output = ("     Running unittests src/lib.rs (target/debug/deps/example)\nrunning 1 tests\n"
+                  "error: test failed, to rerun pass `--lib`\n\nCaused by:\n  process didn't exit successfully: "
+                  "`example` (signal: 99) then (signal: 6, SIGABRT: abort)\n")
+        printed = io.StringIO()
+        with patch.object(ignored_tests.subprocess, "run", return_value=subprocess.CompletedProcess([], 101, output)), \
+                contextlib.redirect_stdout(printed):
+            self.assertIsNone(ignored_tests.run("example", []))
+        self.assertEqual(ignored_tests._stopped["ended_by"], "signal 99")
+        self.assertIn("example: (signal: 99)\n", printed.getvalue())
+
     def test_the_report_names_the_run_in_progress_before_it_ends(self):
         # A job stopped at its time limit kills this script too: what it wrote before the run is what is uploaded.
         with tempfile.TemporaryDirectory() as folder:
