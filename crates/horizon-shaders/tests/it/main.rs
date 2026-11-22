@@ -18,6 +18,7 @@ mod real_packs;
 mod required_blending;
 mod reversed_culling_feature;
 mod signed_builtin_indices;
+mod sky_visibility;
 mod stage_local_reachability;
 mod terrain_fade;
 mod uniform_initial_values;

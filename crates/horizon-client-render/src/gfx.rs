@@ -560,6 +560,7 @@ mod pack_sky;
 mod pack_textures;
 pub mod pack_timing;
 pub mod pack_uniforms;
+mod pack_visibility;
 mod pack_weather;
 mod pass_timing_api;
 use pass_timing_api::{after_culling_pass, pixel_count, world_pass_after_culling};
@@ -10088,6 +10089,7 @@ impl Renderer {
                 .as_ref()
                 .and_then(|p| p.1.as_ref())
                 .is_some_and(|p| p.has_sky());
+        let pack_sky_visibility = self.pack_sky_visibility(pack_post);
         let pack_draws_celestial = pack_post
             && self
                 .pack_post
@@ -10522,21 +10524,7 @@ impl Renderer {
                     && !native_sky_pass
                     && !native_sky
                 {
-                    match self.core_sky.as_ref().filter(|c| c.draws_disc()) {
-                        Some(core) => {
-                            core.draw_disc(&mut pass);
-                            pass.set_bind_group(0, &self.group, &[]);
-                        }
-                        None => {
-                            pass.set_pipeline(&self.sky_base);
-                            pass.draw(0..3, 0..1);
-                        }
-                    }
-                    if frame.sky.sunrise_color[3] > 0.001 {
-                        pass.set_pipeline(&self.sunrise_pipeline);
-                        pass.set_vertex_buffer(0, self.sunrise_buffer.slice(..));
-                        pass.draw(0..sunrise_fan::VERTICES as u32, 0..1);
-                    }
+                    self.draw_visible_sky_disc(&mut pass, frame, pack_sky_visibility);
                     // OptiFine custom sky layers, over the disc and sunrise and under the
                     // sun, moon and stars.
                     if self.custom_sky.is_drawing() {
@@ -10565,26 +10553,35 @@ impl Renderer {
                     }
                     if celestial_vertices > 0 && !pack_draws_celestial {
                         // The Overworld's bodies are the sun's quad and the moon's
-                        // (`Game::celestial_geometry`): a pack sky drawing its own skips one.
+                        // (`Game::celestial_geometry`): a pack sky drawing its own skips
+                        // one, and a pack's `sun`/`moon` switch skips it too.
                         let own = |hides: fn(&external::Capabilities) -> bool| {
                             !frame.end_sky && self.executor.as_ref().is_some_and(hides)
                         };
-                        let own_sun = own(|c| c.hides_sun);
-                        let own_moon = own(|c| c.hides_moon);
                         // A resource pack's core/sky isn't vanilla's sky times the sky's
                         // lift, which the sun's disc pass assumes: today's add there.
                         let lifted = hdr_gain
                             && self.hdr.as_ref().is_some_and(|h| h.lighting)
                             && !self.core_sky.as_ref().is_some_and(|c| c.draws_disc());
                         let quads = &frame.celestial[..celestial_vertices];
-                        let bodies = celestial::bodies(quads, own_sun, own_moon);
+                        let bodies = pack_visibility::visible_bodies(
+                            quads,
+                            frame.end_sky,
+                            (own(|c| c.hides_sun), own(|c| c.hides_moon)),
+                            pack_sky_visibility,
+                        );
                         pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
                         self.celestial.draw_bodies(&mut pass, lifted, bodies);
                     }
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 let own_stars = self.executor.is_some_and(|c| c.hides_stars);
-                if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
+                if !frame.title
+                    && frame.stars.is_some()
+                    && !pack_draws_sky
+                    && !own_stars
+                    && pack_sky_visibility.stars
+                {
                     match self.core_sky.as_ref().filter(|c| c.draws_stars()) {
                         Some(core) => core.draw_stars(&mut pass),
                         None => self.stars.draw(&mut pass),
@@ -10592,8 +10589,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.dark_disc && !pack_draws_sky {
-                    pass.set_pipeline(&self.dark_disc);
-                    pass.draw(0..3, 0..1);
+                    self.draw_visible_void(&mut pass, pack_sky_visibility);
                 }
             }
             // The next stage of the mods' primitives to draw (`RenderLevelStage`): a stage this

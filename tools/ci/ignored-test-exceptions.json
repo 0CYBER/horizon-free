@@ -626,6 +626,30 @@
   {
     "package": "horizon-client-render",
     "target": "lib",
+    "test": "gfx::pack_post::sky_visibility_tests::pack_sun_and_moon_properties_control_independent_pixels",
+    "path": "crates/horizon-client-render/src/gfx/pack_sky_visibility_tests.rs",
+    "reason": "requires a Vulkan/Metal/DX12 adapter",
+    "rationale": "Adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
+    "test": "gfx::pack_post::sky_visibility_tests::pack_sky_property_hides_disc_horizon_sunset_and_void_pixels",
+    "path": "crates/horizon-client-render/src/gfx/pack_sky_visibility_tests.rs",
+    "reason": "requires a Vulkan/Metal/DX12 adapter",
+    "rationale": "Adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
+    "test": "gfx::pack_post::sky_visibility_tests::pack_sky_property_gates_native_fallback_submissions",
+    "path": "crates/horizon-client-render/src/gfx/pack_sky_visibility_tests.rs",
+    "reason": "requires a Vulkan/Metal/DX12 adapter",
+    "rationale": "Adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
     "test": "gfx::pack_uniforms::initial_history_tests::core_matrix_inputs_render_provider_values",
     "path": "crates/horizon-client-render/src/gfx/pack_uniforms.rs",
     "reason": "requires a host GPU; run with --ignored --nocapture",

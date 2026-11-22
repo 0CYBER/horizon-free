@@ -30,6 +30,7 @@ mod post;
 mod preprocess;
 mod properties;
 mod screens;
+mod sky_visibility;
 mod textures;
 mod translate;
 
@@ -60,6 +61,7 @@ pub use post::{
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
 pub use screens::{Item as ScreenItem, Screens};
+pub use sky_visibility::SkyVisibility;
 pub use textures::{
     CustomTexture, Dim as TextureDim, EVERY_STAGE, Texels, Texture, TextureSource, decode_png,
     load_textures, resolve_resources,
