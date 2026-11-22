@@ -2220,21 +2220,67 @@ impl ArmorStand {
             }
             self.fire_ticks -= 1;
         }
-        if lava {
-            self.fire_ticks = self.fire_ticks.max(300);
-        }
-        let fire = crate::motion::environment::fire_contact(world, registry, self.bounds()) > 0.0;
-        // The fire block reaches a stand through `applyEffectsFromBlocks`,
-        // which a NoGravity stand does not feel (measured beside the server).
-        if fire && !self.invisible && !self.marker && !self.no_gravity {
-            if self.fire_ticks > 0 {
-                if !invulnerable(world, "minecraft:in_fire") {
+        // `applyEffectsFromBlocks` reaches a stand with physics only (a marker or
+        // NoGravity stand has `noPhysics`), and none that `baseTick`'s burn just
+        // broke (`isAffectedByBlocks` wants it not removed).
+        let affected =
+            !self.no_physics.unwrap_or(self.marker || self.no_gravity) && self.health > 0.5;
+        // The fire blocks the box (less 1e-5) is in, each visited once by
+        // `Entity.checkInsideBlocks`.
+        let fires = if affected {
+            let b = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+            let (lo, hi) = (b.min_position(), b.max_position());
+            let mut n = 0;
+            for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
+                for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
+                    for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
+                        let name = registry
+                            .state(world.block(x, y, z))
+                            .map(|s| s.name.as_str());
+                        if matches!(name, Some("minecraft:fire" | "minecraft:soul_fire")) {
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            n
+        } else {
+            0
+        };
+        if fires > 0 {
+            // FIRE_IGNITE, `BaseFireBlock.fireIgnite`, once a tick however many
+            // fire blocks: a negative `Fire` counts up by one; from 0 the stand
+            // is lit for 8 seconds, every tick it stays in the fire, against
+            // `baseTick`'s countdown.
+            if self.fire_ticks < 0 {
+                self.fire_ticks += 1;
+            }
+            if self.fire_ticks >= 0 {
+                self.fire_ticks = self.fire_ticks.max(160);
+            }
+            // Then each fire block's `runAfter` `hurt(inFire)`: `ArmorStand.hurtServer`
+            // refuses it for an invulnerable, invisible or marker stand;
+            // IGNITES_ARMOR_STANDS takes 0.15 off a burning stand and lights one
+            // that is not for 5 seconds (`igniteForSeconds(5)`).
+            for _ in 0..fires {
+                if self.health <= 0.5
+                    || self.invisible
+                    || self.marker
+                    || invulnerable(world, "minecraft:in_fire")
+                {
+                    break;
+                }
+                if self.fire_ticks > 0 {
                     self.health -= 0.15;
                     hit_by = Some("minecraft:in_fire");
+                } else {
+                    self.fire_ticks = self.fire_ticks.max(100);
                 }
-            } else {
-                self.fire_ticks = 100;
             }
+        }
+        // LAVA_IGNITE after FIRE_IGNITE (`InsideBlockEffectType` order).
+        if lava {
+            self.fire_ticks = self.fire_ticks.max(300);
         }
         // Dead: the damage type that ran its health out, which vanilla's
         // `brokenByAnything` receives as the `DamageSource`.
