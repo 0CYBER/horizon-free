@@ -179,6 +179,11 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             super::surface_setup::mesh_shader::shader(),
         ),
         (
+            "visibility buffer mesh shader",
+            vec!["terrain.wgsl", "terrain_mesh.wgsl", "terrain_vis_mesh.wgsl"],
+            super::surface_setup::mesh_shader::vis_shader(),
+        ),
+        (
             "world primitives",
             vec!["world_primitives.wgsl"],
             super::world_primitives::shader(),

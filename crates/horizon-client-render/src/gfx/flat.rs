@@ -458,7 +458,7 @@ impl Flat {
         let compute = wgpu::ShaderStages::COMPUTE;
         let (vtm, vm) = if super::surface_setup::mesh_shader::on(device) {
             (
-                vertex | wgpu::ShaderStages::TASK | wgpu::ShaderStages::MESH,
+                vertex | wgpu::ShaderStages::TASK | wgpu::ShaderStages::MESH | compute,
                 vertex | wgpu::ShaderStages::MESH,
             )
         } else {

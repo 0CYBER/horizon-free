@@ -131,6 +131,52 @@ pub(in crate::gfx) fn shader() -> String {
         + include_str!("../terrain_mesh.wgsl")
 }
 
+/// Assembled terrain + Visbuffer mesh shader WGSL source (`HORIZON_VISBUFFER=1` + `HORIZON_MESH_SHADER=1`).
+#[allow(dead_code)]
+pub(in crate::gfx) fn vis_shader() -> String {
+    shader() + include_str!("../terrain_vis_mesh.wgsl")
+}
+
+/// GPU-side meshlet culling + compaction compute shader WGSL source.
+pub(in crate::gfx) fn cull_shader() -> &'static str {
+    include_str!("../terrain_mesh_cull.wgsl")
+}
+
+/// `@group(0)` bind group layout for `terrain_mesh_cull.wgsl`.
+fn cull_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let compute = wgpu::ShaderStages::COMPUTE;
+    let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: compute,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Terrain meshlet GPU cull"),
+        entries: &[
+            storage(0, true),
+            storage(1, false),
+            storage(2, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: compute,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: std::num::NonZeroU64::new(
+                        std::mem::size_of::<MeshCullParams>() as u64,
+                    ),
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
 /// `@group(2)` bind group layout for `terrain_mesh.wgsl` (`meshlets` storage + `mesh_cull` dynamic uniform).
 #[allow(dead_code)]
 pub(in crate::gfx) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -198,7 +244,10 @@ pub(in crate::gfx) fn group1_layout(device: &wgpu::Device) -> wgpu::BindGroupLay
         },
         count: None,
     };
-    let vtm = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::TASK | wgpu::ShaderStages::MESH;
+    let vtm = wgpu::ShaderStages::VERTEX
+        | wgpu::ShaderStages::TASK
+        | wgpu::ShaderStages::MESH
+        | wgpu::ShaderStages::COMPUTE;
     let vm = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::MESH;
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Terrain mesh group 1"),
@@ -485,10 +534,15 @@ struct PreparedPass {
 struct PageGpu {
     storage: wgpu::Buffer,
     storage_capacity: usize,
+    resident_storage: wgpu::Buffer,
+    resident_capacity: usize,
+    resident_uploaded_revision: u64,
+    resident_count: u32,
     uniform: wgpu::Buffer,
     indirect: wgpu::Buffer,
     uniform_slots: u32,
     bind_group: wgpu::BindGroup,
+    cull_bind_group: wgpu::BindGroup,
     uploaded_revision: u64,
     uploaded_full_layout: bool,
     prepared_passes: [Option<PreparedPass>; PASS_SLOTS as usize],
@@ -515,6 +569,9 @@ pub(in crate::gfx) struct MeshSectionStore {
     uniform_stride: u32,
     max_task_workgroups: u32,
     bind_group_layout: wgpu::BindGroupLayout,
+    cull_bind_group_layout: wgpu::BindGroupLayout,
+    cull_pipeline: wgpu::ComputePipeline,
+    finalize_pipeline: wgpu::ComputePipeline,
 }
 
 #[allow(dead_code)]
@@ -594,18 +651,23 @@ impl MeshSectionStore {
         device: &wgpu::Device,
         page: u32,
         needed_meshlets: usize,
+        needed_resident: usize,
         required_uniform_slots: u32,
     ) -> bool {
         let needs_storage_alloc = self
             .gpu_pages
             .get(&page)
             .is_none_or(|pg| needed_meshlets > pg.storage_capacity);
+        let needs_resident_alloc = self
+            .gpu_pages
+            .get(&page)
+            .is_none_or(|pg| needed_resident > pg.resident_capacity);
         let needs_uniform_alloc = self
             .gpu_pages
             .get(&page)
             .is_none_or(|pg| required_uniform_slots > pg.uniform_slots);
 
-        if needs_storage_alloc || needs_uniform_alloc {
+        if needs_storage_alloc || needs_resident_alloc || needs_uniform_alloc {
             let cap = self
                 .gpu_pages
                 .get(&page)
@@ -615,6 +677,19 @@ impl MeshSectionStore {
                 device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Terrain meshlet storage"),
                     size: (cap * std::mem::size_of::<GpuMeshlet>()) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            let res_cap = self
+                .gpu_pages
+                .get(&page)
+                .map_or(0, |pg| pg.resident_capacity)
+                .max(needed_resident.next_power_of_two().max(64));
+            let resident_storage = needs_resident_alloc.then(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Terrain resident meshlet storage"),
+                    size: (res_cap * std::mem::size_of::<GpuMeshlet>()) as u64,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 })
@@ -636,8 +711,11 @@ impl MeshSectionStore {
                     })),
                     Some(device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("Terrain meshlet indirect args"),
-                        size: u64::from(uniform_slots) * 12,
-                        usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                        size: (u64::from(uniform_slots) * 12).max(32),
+                        usage: wgpu::BufferUsages::STORAGE
+                            | wgpu::BufferUsages::INDIRECT
+                            | wgpu::BufferUsages::COPY_DST
+                            | wgpu::BufferUsages::COPY_SRC,
                         mapped_at_creation: false,
                     })),
                 )
@@ -647,17 +725,32 @@ impl MeshSectionStore {
             match self.gpu_pages.entry(page) {
                 std::collections::btree_map::Entry::Vacant(slot) => {
                     let storage = storage.expect("new page must allocate storage");
+                    let resident_storage =
+                        resident_storage.expect("new page must allocate resident storage");
                     let uniform = uniform.expect("new page must allocate uniform");
                     let indirect = indirect.expect("new page must allocate indirect");
                     let bind_group =
                         create_page_bind_group(device, &self.bind_group_layout, &storage, &uniform);
+                    let cull_bind_group = create_cull_bind_group(
+                        device,
+                        &self.cull_bind_group_layout,
+                        &resident_storage,
+                        &storage,
+                        &indirect,
+                        &uniform,
+                    );
                     slot.insert(PageGpu {
                         storage,
                         storage_capacity: cap,
+                        resident_storage,
+                        resident_capacity: res_cap,
+                        resident_uploaded_revision: 0,
+                        resident_count: 0,
                         uniform,
                         indirect,
                         uniform_slots,
                         bind_group,
+                        cull_bind_group,
                         uploaded_revision: 0,
                         uploaded_full_layout: false,
                         prepared_passes: [const { None }; PASS_SLOTS as usize],
@@ -671,6 +764,11 @@ impl MeshSectionStore {
                         pg.uploaded_revision = 0;
                         pg.uploaded_full_layout = false;
                     }
+                    if let Some(resident_storage) = resident_storage {
+                        pg.resident_storage = resident_storage;
+                        pg.resident_capacity = res_cap;
+                        pg.resident_uploaded_revision = 0;
+                    }
                     if let Some(uniform) = uniform {
                         pg.uniform = uniform;
                         pg.indirect = indirect.expect("indirect allocated with uniform");
@@ -680,6 +778,14 @@ impl MeshSectionStore {
                         device,
                         &self.bind_group_layout,
                         &pg.storage,
+                        &pg.uniform,
+                    );
+                    pg.cull_bind_group = create_cull_bind_group(
+                        device,
+                        &self.cull_bind_group_layout,
+                        &pg.resident_storage,
+                        &pg.storage,
+                        &pg.indirect,
                         &pg.uniform,
                     );
                     pg.prepared_passes = [const { None }; PASS_SLOTS as usize];
@@ -717,8 +823,13 @@ impl MeshSectionStore {
         let total_groups = task_workgroups(count);
         let chunk_count = total_groups.div_ceil(self.max_task_workgroups.max(1));
         let required_uniform_slots = PASS_SLOTS * chunk_count;
-        let needs_storage_alloc =
-            self.ensure_page_buffers(device, page, count as usize, required_uniform_slots);
+        let needs_storage_alloc = self.ensure_page_buffers(
+            device,
+            page,
+            count as usize,
+            count as usize,
+            required_uniform_slots,
+        );
         let staged = self.table.staged_page(page);
 
         let pg = self
@@ -826,7 +937,13 @@ impl MeshSectionStore {
             }
             let max_pass_chunks = task_workgroups(opaque_count.max(cutout_count)).div_ceil(max_wg);
             let required_uniform_slots = PASS_SLOTS * max_pass_chunks.max(1);
-            self.ensure_page_buffers(device, page, total_count as usize, required_uniform_slots);
+            self.ensure_page_buffers(
+                device,
+                page,
+                total_count as usize,
+                total_count as usize,
+                required_uniform_slots,
+            );
             let pg = self
                 .gpu_pages
                 .get_mut(&page)
@@ -851,7 +968,12 @@ impl MeshSectionStore {
                     let params = MeshCullParams {
                         planes,
                         eye,
-                        counts: [limit, pass_kind, skip_facing, start + chunk_offset],
+                        counts: [
+                            limit,
+                            pass_kind,
+                            skip_facing | ((page & 0x3f) << 8),
+                            start + chunk_offset,
+                        ],
                     };
                     queue.write_buffer(
                         &pg.uniform,
@@ -879,6 +1001,154 @@ impl MeshSectionStore {
             pg.prepared_passes[PASS_ALL as usize] = None;
         }
         dispatches
+    }
+
+    /// Uploads dirty resident meshlets once per page revision and runs GPU compute culling +
+    /// opaque/cutout compaction into `pg.storage` + `pg.indirect`, eliminating per-frame CPU
+    /// meshlet gathering and `queue.write_buffer(&pg.storage)`.
+    pub fn prepare_gpu_cull_pages(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        flat: &crate::gfx::flat::Flat,
+        planes: [[f32; 4]; 6],
+        eye: [f32; 4],
+        no_eye: bool,
+    ) -> usize {
+        let skip_facing = u32::from(no_eye);
+        let max_wg = self.max_task_workgroups.max(1);
+        let pages: Vec<u32> = self.table.pages.keys().copied().collect();
+        let mut cull_dispatches = Vec::with_capacity(pages.len());
+
+        for page in pages {
+            if flat.page_group(page).is_none() {
+                self.invalidate_page_passes(page);
+                continue;
+            }
+            let (revision, resident_count) = {
+                let entry = self.table.pages.get(&page).expect("page exists in table");
+                let count: usize = entry.sections.values().map(|v| v.len()).sum();
+                (entry.revision, count)
+            };
+            if resident_count == 0 {
+                self.invalidate_page_passes(page);
+                continue;
+            }
+            let opaque_capacity = resident_count.max(1);
+            let needed_active = opaque_capacity * 2 + 64;
+            self.ensure_page_buffers(
+                device,
+                page,
+                needed_active,
+                resident_count.max(64),
+                PASS_SLOTS.max(3),
+            );
+            let needs_resident_upload = self
+                .gpu_pages
+                .get(&page)
+                .is_some_and(|pg| pg.resident_uploaded_revision != revision);
+            if needs_resident_upload {
+                let entry = self
+                    .table
+                    .pages
+                    .get_mut(&page)
+                    .expect("page exists in table");
+                entry.visible_staging.clear();
+                entry.visible_staging.reserve(resident_count);
+                for list in entry.sections.values() {
+                    entry.visible_staging.extend_from_slice(list);
+                }
+                let pg = self
+                    .gpu_pages
+                    .get_mut(&page)
+                    .expect("page GPU storage must exist");
+                queue.write_buffer(
+                    &pg.resident_storage,
+                    0,
+                    bytemuck::cast_slice(&entry.visible_staging),
+                );
+                pg.resident_uploaded_revision = revision;
+                pg.resident_count = resident_count as u32;
+            }
+
+            let pg = self
+                .gpu_pages
+                .get_mut(&page)
+                .expect("page GPU storage must exist");
+            pg.uploaded_full_layout = false;
+            let res_count = pg.resident_count;
+            let op_cap = res_count.max(1);
+            let zero_indirect: [u32; 8] = [0, 1, 1, 0, 1, 1, 0, 0];
+            queue.write_buffer(&pg.indirect, 0, bytemuck::cast_slice(&zero_indirect));
+
+            let cull_params = MeshCullParams {
+                planes,
+                eye,
+                counts: [res_count, op_cap, skip_facing, max_wg],
+            };
+            queue.write_buffer(&pg.uniform, 0, bytemuck::bytes_of(&cull_params));
+
+            let page_bits = (page & 0x3f) << 8;
+            for (pass_kind, limit, indirect_offset, start) in [
+                (PASS_OPAQUE, op_cap, 0u64, 0u32),
+                (PASS_CUTOUT, op_cap * 2, 12u64, op_cap),
+            ] {
+                let uniform_offset = pass_kind * self.uniform_stride;
+                let params = MeshCullParams {
+                    planes,
+                    eye,
+                    counts: [limit, pass_kind, skip_facing | page_bits, start],
+                };
+                queue.write_buffer(
+                    &pg.uniform,
+                    u64::from(uniform_offset),
+                    bytemuck::bytes_of(&params),
+                );
+                pg.prepared_passes[pass_kind as usize] = Some(PreparedPass {
+                    revision,
+                    chunks: vec![PreparedChunk {
+                        uniform_offset,
+                        indirect_offset,
+                        meshlet_count: res_count,
+                        workgroups: 1,
+                    }],
+                });
+            }
+            pg.prepared_passes[PASS_ALL as usize] = None;
+            cull_dispatches.push((page, res_count));
+        }
+
+        if !cull_dispatches.is_empty() {
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Cull terrain meshlets"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&self.cull_pipeline);
+                for &(page, res_count) in &cull_dispatches {
+                    let pg = &self.gpu_pages[&page];
+                    let group1 = flat.page_group(page).expect("checked page_group above");
+                    cpass.set_bind_group(0, &pg.cull_bind_group, &[]);
+                    cpass.set_bind_group(1, group1, &[]);
+                    cpass.dispatch_workgroups(res_count.div_ceil(64), 1, 1);
+                }
+            }
+            {
+                let mut fpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Finalize terrain meshlet indirect args"),
+                    timestamp_writes: None,
+                });
+                fpass.set_pipeline(&self.finalize_pipeline);
+                for &(page, _) in &cull_dispatches {
+                    let pg = &self.gpu_pages[&page];
+                    fpass.set_bind_group(0, &pg.cull_bind_group, &[]);
+                    fpass.dispatch_workgroups(1, 1, 1);
+                }
+            }
+        }
+
+        cull_dispatches.len() * 2
     }
 
     /// Yields every prepared dispatch chunk for `(page, pass_kind)` if that pass was prepared
@@ -952,6 +1222,42 @@ fn create_page_bind_group(
     })
 }
 
+fn create_cull_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    resident_storage: &wgpu::Buffer,
+    active_storage: &wgpu::Buffer,
+    indirect: &wgpu::Buffer,
+    uniform: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Terrain meshlet GPU cull"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: resident_storage.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: active_storage.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: indirect.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: uniform,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(std::mem::size_of::<MeshCullParams>() as u64),
+                }),
+            },
+        ],
+    })
+}
+
 /// Allocates a [`MeshSectionStore`] only when `device` was opened with mesh shaders enabled.
 /// On main's off path this allocates zero GPU buffers.
 #[allow(dead_code)]
@@ -966,12 +1272,47 @@ pub(in crate::gfx) fn new_store(device: &wgpu::Device) -> Option<MeshSectionStor
         .max_task_workgroups_per_dimension
         .min(limits.max_task_workgroup_total_count)
         .max(1);
+    let cull_layout = cull_bind_group_layout(device);
+    let g1_layout = group1_layout(device);
+    let cull_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Terrain meshlet GPU cull layout"),
+        bind_group_layouts: &[Some(&cull_layout), Some(&g1_layout)],
+        ..Default::default()
+    });
+    let finalize_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Terrain meshlet finalize layout"),
+        bind_group_layouts: &[Some(&cull_layout)],
+        ..Default::default()
+    });
+    let cull_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Terrain meshlet GPU cull shader"),
+        source: wgpu::ShaderSource::Wgsl(cull_shader().into()),
+    });
+    let cull_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Terrain meshlet GPU cull"),
+        layout: Some(&cull_pipe_layout),
+        module: &cull_module,
+        entry_point: Some("cs_cull_meshlets"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let finalize_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Terrain meshlet finalize"),
+        layout: Some(&finalize_pipe_layout),
+        module: &cull_module,
+        entry_point: Some("cs_finalize_meshlets"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
     Some(MeshSectionStore {
         table: MeshletTable::new(),
         gpu_pages: std::collections::BTreeMap::new(),
         uniform_stride,
         max_task_workgroups,
         bind_group_layout: bind_group_layout(device),
+        cull_bind_group_layout: cull_layout,
+        cull_pipeline,
+        finalize_pipeline,
     })
 }
 
@@ -1047,6 +1388,58 @@ pub(in crate::gfx) fn draw_mesh_page<'a>(
     }
 }
 
+fn create_vis_mesh_pipeline(
+    device: &wgpu::Device,
+    layout: Option<&wgpu::PipelineLayout>,
+    module: &wgpu::ShaderModule,
+    mesh_entry: &str,
+    fragment_entry: &str,
+    constants: &[(&str, f64)],
+) -> wgpu::RenderPipeline {
+    device.create_mesh_pipeline(&wgpu::MeshPipelineDescriptor {
+        label: Some("Terrain visbuffer mesh pipeline"),
+        layout,
+        task: Some(wgpu::TaskState {
+            module,
+            entry_point: Some("ts_terrain"),
+            compilation_options: Default::default(),
+        }),
+        mesh: wgpu::MeshState {
+            module,
+            entry_point: Some(mesh_entry),
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(fragment_entry),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants,
+                ..Default::default()
+            },
+            targets: &[Some(wgpu::ColorTargetState {
+                format: crate::gfx::visbuffer::IDS,
+                blend: None,
+                write_mask: wgpu::ColorWrites::RED,
+            })],
+        }),
+        multiview: None,
+        cache: None,
+    })
+}
+
 /// Renderer-owned hardware mesh-shader terrain store and pipelines (#17243 step 3/4).
 pub(in crate::gfx) struct MeshTerrain {
     pub(in crate::gfx) store: MeshSectionStore,
@@ -1054,6 +1447,8 @@ pub(in crate::gfx) struct MeshTerrain {
     opaque_hdr: Option<wgpu::RenderPipeline>,
     cutout_plain: wgpu::RenderPipeline,
     cutout_hdr: Option<wgpu::RenderPipeline>,
+    vis_opaque: wgpu::RenderPipeline,
+    vis_cutout: wgpu::RenderPipeline,
 }
 
 impl MeshTerrain {
@@ -1126,12 +1521,34 @@ impl MeshTerrain {
         } else {
             (None, None)
         };
+        let vis_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon terrain visbuffer mesh shader"),
+            source: wgpu::ShaderSource::Wgsl(vis_shader().into()),
+        });
+        let vis_opaque = create_vis_mesh_pipeline(
+            device,
+            Some(&layout),
+            &vis_module,
+            "ms_vis_opaque",
+            "fs_vis_mesh_id",
+            &plain_constants,
+        );
+        let vis_cutout = create_vis_mesh_pipeline(
+            device,
+            Some(&layout),
+            &vis_module,
+            "ms_vis_cutout",
+            "fs_vis_mesh_cutout",
+            &plain_constants,
+        );
         Some(Self {
             store,
             opaque_plain,
             opaque_hdr,
             cutout_plain,
             cutout_hdr,
+            vis_opaque,
+            vis_cutout,
         })
     }
 
@@ -1146,6 +1563,14 @@ impl MeshTerrain {
                     device,
                     &store.bind_group_layout,
                     &pg.storage,
+                    &pg.uniform,
+                );
+                pg.cull_bind_group = create_cull_bind_group(
+                    device,
+                    &store.cull_bind_group_layout,
+                    &pg.resident_storage,
+                    &pg.storage,
+                    &pg.indirect,
                     &pg.uniform,
                 );
                 pg.prepared_passes = [const { None }; PASS_SLOTS as usize];
@@ -1207,6 +1632,7 @@ impl MeshTerrain {
     /// Gathers only the visible sections in front-to-back order, partitions them into disjoint
     /// `PASS_OPAQUE` and `PASS_CUTOUT` ranges per page, uploads descriptors, and prepares indirect
     /// dispatch args. Returns the number of non-empty page-pass dispatches prepared for this frame.
+    #[allow(dead_code)]
     pub fn prepare_visible_frame(
         &mut self,
         device: &wgpu::Device,
@@ -1218,6 +1644,35 @@ impl MeshTerrain {
     ) -> usize {
         self.store
             .prepare_visible_pages(device, queue, visible_sections, planes, eye, no_eye)
+    }
+
+    /// Uploads dirty resident meshlets once per page revision and runs GPU compute culling +
+    /// compaction into `pg.storage` + `pg.indirect`.
+    pub fn prepare_gpu_cull_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        flat: &crate::gfx::flat::Flat,
+        planes: [[f32; 4]; 6],
+        eye: [f32; 4],
+        no_eye: bool,
+    ) -> usize {
+        self.store
+            .prepare_gpu_cull_pages(device, queue, encoder, flat, planes, eye, no_eye)
+    }
+
+    /// Sorted list of arena pages with prepared meshlet draws this frame.
+    pub fn active_pages(&self) -> Vec<u32> {
+        self.store
+            .gpu_pages
+            .keys()
+            .copied()
+            .filter(|&page| {
+                self.store.page_draws(page, PASS_OPAQUE).next().is_some()
+                    || self.store.page_draws(page, PASS_CUTOUT).next().is_some()
+            })
+            .collect()
     }
 
     /// Records the opaque then cutout hardware mesh passes across all prepared arena pages
@@ -1238,6 +1693,25 @@ impl MeshTerrain {
         } else {
             &self.cutout_plain
         };
+        self.draw_passes(pass, flat, opaque_pipe, cutout_pipe);
+    }
+
+    /// Records the Visbuffer ID-only opaque then cutout hardware mesh passes (`R32Uint` + depth).
+    pub fn draw_vis_ids<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        flat: &'a crate::gfx::flat::Flat,
+    ) {
+        self.draw_passes(pass, flat, &self.vis_opaque, &self.vis_cutout);
+    }
+
+    fn draw_passes<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        flat: &'a crate::gfx::flat::Flat,
+        opaque_pipe: &'a wgpu::RenderPipeline,
+        cutout_pipe: &'a wgpu::RenderPipeline,
+    ) {
         for (pass_kind, pipeline) in [(PASS_OPAQUE, opaque_pipe), (PASS_CUTOUT, cutout_pipe)] {
             pass.set_pipeline(pipeline);
             for &page in self.store.gpu_pages.keys() {
@@ -2476,5 +2950,196 @@ mod tests {
         assert_eq!(staged[0], opaque_m.to_gpu(100));
         assert_eq!(staged[1], opaque_m.to_gpu(200));
         assert_eq!(staged[2], cutout_m.to_gpu(100));
+    }
+
+    #[test]
+    fn visbuffer_and_cull_shaders_validate() {
+        for (label, source) in [
+            ("vis_shader", vis_shader()),
+            ("cull_shader", cull_shader().to_owned()),
+        ] {
+            let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| {
+                panic!("{label} WGSL parse failed:\n{}", e.emit_to_string(&source))
+            });
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{label} naga validation failed: {e}"));
+        }
+    }
+
+    #[test]
+    fn gpu_compute_cull_compacts_visible_meshlets_and_zeros_culled_indirect_args() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = mesh_shader_adapter() else {
+            return;
+        };
+        let (device, queue) = open_mesh_device(&adapter, "Mesh GPU compute cull test");
+        let mut store = new_store(&device).expect("mesh shaders are enabled");
+
+        // 2 visible opaque (slot 0), 1 visible cutout (slot 0), 1 occluded section (slot 1, origin.w == 0),
+        // 1 frustum-culled section (slot 2, origin.z = +100 behind near/far).
+        let opaque_m = MeshletDesc::new(0, 4, 2, 0, 0, [0, 0, 0, 4, 4, 4]);
+        let cutout_m = MeshletDesc::new(4, 4, 2, MeshletDesc::FLAG_CUTOUT, 0, [0, 0, 0, 4, 4, 4]);
+        let resident = [
+            opaque_m.to_gpu(0),
+            cutout_m.to_gpu(0),
+            opaque_m.to_gpu(0),
+            opaque_m.to_gpu(64),
+            opaque_m.to_gpu(128),
+        ];
+        let resident_count = resident.len() as u32;
+        let op_cap = resident_count;
+        store.ensure_page_buffers(&device, 0, (op_cap * 2 + 64) as usize, 64, 3);
+        let pg = store.gpu_pages.get(&0).unwrap();
+        queue.write_buffer(&pg.resident_storage, 0, bytemuck::cast_slice(&resident));
+
+        // 6 inward frustum planes: only keep boxes within [-20..20]^3.
+        let planes = [
+            [1.0, 0.0, 0.0, 20.0],
+            [-1.0, 0.0, 0.0, 20.0],
+            [0.0, 1.0, 0.0, 20.0],
+            [0.0, -1.0, 0.0, 20.0],
+            [0.0, 0.0, 1.0, 20.0],
+            [0.0, 0.0, -1.0, 20.0],
+        ];
+        let cull_params = MeshCullParams {
+            planes,
+            eye: [0.0; 4],
+            counts: [resident_count, op_cap, 1, store.max_task_workgroups],
+        };
+        queue.write_buffer(&pg.uniform, 0, bytemuck::bytes_of(&cull_params));
+        let zero_indirect: [u32; 8] = [0, 1, 1, 0, 1, 1, 0, 0];
+        queue.write_buffer(&pg.indirect, 0, bytemuck::cast_slice(&zero_indirect));
+
+        let g1_layout = group1_layout(&device);
+        let block_slots = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test block_slots"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // arena_slot = solid_base (0, 64, 128) >> 8u == 0, wait: 64 >> 8 == 0, so use block 0..2 with solid_base 0, 256, 512!
+        let resident_blocks = [
+            opaque_m.to_gpu(0),
+            cutout_m.to_gpu(0),
+            opaque_m.to_gpu(0),
+            opaque_m.to_gpu(256),
+            opaque_m.to_gpu(512),
+        ];
+        queue.write_buffer(
+            &pg.resident_storage,
+            0,
+            bytemuck::cast_slice(&resident_blocks),
+        );
+        queue.write_buffer(
+            &block_slots,
+            0,
+            bytemuck::cast_slice(&[0u32, 1u32, 2u32, 0u32]),
+        );
+
+        let slot_origins = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test slot_origins"),
+            size: 48,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let origins: [[f32; 4]; 3] = [
+            [0.0, 0.0, 0.0, 1.0],   // slot 0: visible
+            [0.0, 0.0, 0.0, 0.0],   // slot 1: occluded (origin.w == 0)
+            [0.0, 0.0, 100.0, 1.0], // slot 2: outside frustum
+        ];
+        queue.write_buffer(&slot_origins, 0, bytemuck::cast_slice(&origins));
+
+        let dummy_arena = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test arena"),
+            size: 64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("test group1"),
+            layout: &g1_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: block_slots.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: slot_origins.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: crate::gfx::flat::ARENA_BINDING,
+                    resource: dummy_arena.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut cpass = encoder.begin_compute_pass(&Default::default());
+            cpass.set_pipeline(&store.cull_pipeline);
+            cpass.set_bind_group(0, &pg.cull_bind_group, &[]);
+            cpass.set_bind_group(1, &group1, &[]);
+            cpass.dispatch_workgroups(1, 1, 1);
+        }
+        {
+            let mut fpass = encoder.begin_compute_pass(&Default::default());
+            fpass.set_pipeline(&store.finalize_pipeline);
+            fpass.set_bind_group(0, &pg.cull_bind_group, &[]);
+            fpass.dispatch_workgroups(1, 1, 1);
+        }
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("indirect readback"),
+            size: 32,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&pg.indirect, 0, &readback, 0, 32);
+        queue.submit([encoder.finish()]);
+
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let data = slice.get_mapped_range().expect("mapped readback");
+        let words: &[u32] = bytemuck::cast_slice(&data);
+        // 2 opaque (1 wg), 1 cutout (1 wg), counts: opaque=2, cutout=1.
+        assert_eq!(words, &[1, 1, 1, 1, 1, 1, 2, 1]);
+    }
+
+    #[test]
+    fn hardware_visbuffer_mesh_pipeline_renders_opaque_and_cutout_vis_ids() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = mesh_shader_adapter() else {
+            return;
+        };
+        let (device, _queue) = open_mesh_device(&adapter, "Mesh visbuffer pipeline test");
+        let g0 = group0_layout(&device);
+        let g1 = group1_layout(&device);
+        let store = new_store(&device).expect("mesh shaders are enabled");
+        let layout = pipeline_layout(&device, &g0, &g1, store.bind_group_layout());
+        let vis_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Horizon terrain visbuffer mesh shader test"),
+            source: wgpu::ShaderSource::Wgsl(vis_shader().into()),
+        });
+        let _vis_opaque = create_vis_mesh_pipeline(
+            &device,
+            Some(&layout),
+            &vis_module,
+            "ms_vis_opaque",
+            "fs_vis_mesh_id",
+            &[("HDR_LIGHTING", 0.0)],
+        );
+        let _vis_cutout = create_vis_mesh_pipeline(
+            &device,
+            Some(&layout),
+            &vis_module,
+            "ms_vis_cutout",
+            "fs_vis_mesh_cutout",
+            &[("HDR_LIGHTING", 0.0)],
+        );
     }
 }
