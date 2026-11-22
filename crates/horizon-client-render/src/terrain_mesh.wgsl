@@ -93,7 +93,7 @@ fn ts_terrain(
             (vertex_base - PACKED_BASE) >> 2u,
             vertex_base >= PACKED_BASE,
         );
-        let origin = slot_origins[block_slots[arena_slot >> 8u]];
+        let origin = slot_origins[block_slots[arena_slot >> 6u]];
         let pass_kind = mesh_cull.counts.y;
         let is_cutout_pass = (flags & 1u) != 0u || fade_code(origin.w) != 0u;
         let pass_match = pass_kind == 0u
@@ -179,7 +179,7 @@ fn ms_terrain(
         let v_out = lane * 4u;
         let p_out = lane * 2u;
         let s0 = section_corner(q_base);
-        let origin = slot_origins[block_slots[s0.slot >> 8u]];
+        let origin = slot_origins[block_slots[s0.slot >> 6u]];
         terrain_mesh_out.vertices[v_out] = to_wire(corner_vertex(s0.c, origin));
         terrain_mesh_out.vertices[v_out + 1u] =
             to_wire(corner_vertex(section_corner(q_base + 1u).c, origin));

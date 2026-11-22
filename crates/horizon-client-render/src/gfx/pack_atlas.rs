@@ -596,7 +596,7 @@ uvec2 hz_record_rest(uvec3 hz_lo, uvec3 hz_hi, uint hz_k) {\n    \
 /// GLSL: a flat-drawn vertex's inputs, and its quad's four corners' positions (`hz_cp0`..) and
 /// UV words (`hz_uv0`..), pulled from the arena page as terrain.wgsl's `vs_section_flat` pulls
 /// them (`CORNER_FN`): a record is read once for all four, and only the vertex's own light and
-/// colour are worked out. `hz_slot`: the slot its block is found by (`hz_block_slots`, 256 a
+/// colour are worked out. `hz_slot`: the slot its block is found by (`hz_block_slots`, 64 a
 /// block). The colour as the vertex fetch converts a Unorm8x4 (terrain.wgsl's `unorm8x4`).
 const PULL_FLAT: &str = "    uint hz_qv = uint(gl_VertexIndex);\n    \
     uint hz_own = hz_qv & 3u;\n    \
@@ -744,7 +744,7 @@ impl PackAtlas {
                  layout(set = 3, binding = 2) readonly buffer HzTerrainTables { int hz_tables[]; };\n",
             );
             declarations.push_str(CORNER_FN);
-            "hz_slot_origins[hz_block_slots[hz_slot >> 8u]]"
+            "hz_slot_origins[hz_block_slots[hz_slot >> 6u]]"
         } else {
             declarations.push_str("layout(location = 5) in vec4 hz_v_origin;\n");
             "hz_v_origin"

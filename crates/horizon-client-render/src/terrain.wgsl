@@ -393,7 +393,7 @@ fn fade_code(w: f32) -> u32 {
         origin.w));
 }
 // Flat section draws (gfx/flat.rs): one draw per arena page over the frame's
-// index list. A section's vertices fill whole 256-vertex blocks of its page:
+// index list. A section's vertices fill whole 64-vertex blocks of its page:
 // the block gives its resident slot, the slot its camera-relative origin.
 @group(1) @binding(0) var<storage, read> block_slots: array<u32>;
 @group(1) @binding(1) var<storage, read> slot_origins: array<vec4<f32>>;
@@ -402,7 +402,7 @@ fn fade_code(w: f32) -> u32 {
     @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainWire {
-    let origin = slot_origins[block_slots[vertex >> 8u]];
+    let origin = slot_origins[block_slots[vertex >> 6u]];
     return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
         origin.w));
 }
@@ -443,7 +443,7 @@ fn left_out() -> TerrainOut {
     @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainWire {
-    let origin = slot_origins[block_slots[vertex >> 8u]];
+    let origin = slot_origins[block_slots[vertex >> 6u]];
     if !opaque_quad(layer, origin.w) { return to_wire(left_out()); }
     return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
         origin.w));
@@ -453,7 +453,7 @@ fn left_out() -> TerrainOut {
     @location(0) position: vec3<f32>, @location(1) uv: vec2<u32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
 ) -> TerrainWire {
-    let origin = slot_origins[block_slots[vertex >> 8u]];
+    let origin = slot_origins[block_slots[vertex >> 6u]];
     if opaque_quad(layer, origin.w) { return to_wire(left_out()); }
     return to_wire(terrain_vertex(position, terrain_uv(uv, origin.w), layer, color, light, origin.xyz,
         origin.w));
@@ -575,7 +575,7 @@ fn far_corner(lo: vec3<u32>, hi: vec3<u32>, corner: u32) -> ArenaCorner {
     // Word 1 is the layer with the light, word 0 the colour, as a vertex holds them.
     return ArenaCorner(bitcast<vec3<u32>>(pos), vec3(uv.x | (uv.y << 16u), lo.y, lo.x));
 }
-// A solid draw's vertex `vertex`, and the slot its block is found by (`block_slots`, 256
+// A solid draw's vertex `vertex`, and the slot its block is found by (`block_slots`, 64
 // slots a block): the vertex's own, or its quad's record's. `packed`: it has a record.
 struct SectionCorner {
     c: ArenaCorner,
@@ -656,18 +656,18 @@ fn corner_vertex(c: ArenaCorner, origin: vec4<f32>) -> TerrainOut {
 }
 @vertex fn vs_section_flat(@builtin(vertex_index) vertex: u32) -> TerrainWire {
     let s = section_corner(vertex);
-    let origin = slot_origins[block_slots[s.slot >> 8u]];
+    let origin = slot_origins[block_slots[s.slot >> 6u]];
     return to_wire(corner_vertex(s.c, origin));
 }
 @vertex fn vs_section_flat_opaque(@builtin(vertex_index) vertex: u32) -> TerrainWire {
     let s = section_corner(vertex);
-    let origin = slot_origins[block_slots[s.slot >> 8u]];
+    let origin = slot_origins[block_slots[s.slot >> 6u]];
     if !opaque_quad(corner_layer(s.c), origin.w) { return to_wire(left_out()); }
     return to_wire(corner_vertex(s.c, origin));
 }
 @vertex fn vs_section_flat_cutout(@builtin(vertex_index) vertex: u32) -> TerrainWire {
     let s = section_corner(vertex);
-    let origin = slot_origins[block_slots[s.slot >> 8u]];
+    let origin = slot_origins[block_slots[s.slot >> 6u]];
     if opaque_quad(corner_layer(s.c), origin.w) { return to_wire(left_out()); }
     return to_wire(corner_vertex(s.c, origin));
 }

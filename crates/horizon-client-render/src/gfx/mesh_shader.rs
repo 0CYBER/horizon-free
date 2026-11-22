@@ -1826,8 +1826,8 @@ mod tests {
         let p0_meshlets = build_section_meshlets(&p0_sides, &p0_solid, &p0_packed);
         store.insert_section(0, PACKED_BASE, &p0_meshlets);
 
-        // Page 1 (slot_base = 256 -> block_slots[1]): Opaque GREEN in bottom-center (px 16..48, py 32..48).
-        let p1_slot_base = 256u32;
+        // Page 1 (slot_base = GRAIN -> block_slots[1]): Opaque GREEN in bottom-center (px 16..48, py 32..48).
+        let p1_slot_base = crate::gfx::arena::GRAIN as u32;
         let p1_quads = [
             top_quad(3.0, 4.0, 0.0, OPAQUE_LAYER, 0xFF00_FF00),
             top_quad(4.0, 4.0, 0.0, OPAQUE_LAYER, 0xFF00_FF00),

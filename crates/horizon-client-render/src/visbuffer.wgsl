@@ -78,7 +78,7 @@ struct VisIdOut {
 ) -> VisIdOut {
     var out: VisIdOut;
     let s = section_corner(vertex);
-    let origin = slot_origins[block_slots[s.slot >> 8u]];
+    let origin = slot_origins[block_slots[s.slot >> 6u]];
     if !opaque_quad(corner_layer(s.c), origin.w) {
         out.clip = vec4(2.0, 2.0, 2.0, 1.0);
         return out;
@@ -108,7 +108,7 @@ struct VisCutoutOut {
 ) -> VisCutoutOut {
     var out: VisCutoutOut;
     let s = section_corner(vertex);
-    let origin = slot_origins[block_slots[s.slot >> 8u]];
+    let origin = slot_origins[block_slots[s.slot >> 6u]];
     let layer = corner_layer(s.c);
     if opaque_quad(layer, origin.w) {
         out.clip = vec4(2.0, 2.0, 2.0, 1.0);
@@ -310,9 +310,9 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
             first = index + lo.x;
         }
     }
-    // The quad's block (256 slots: 64 quads of vertices, 256 records) names its section, as
+    // The quad's block (64 slots: 16 quads of vertices, 64 records) names its section, as
     // for `vs_section_flat`.
-    let block = select(index >> 6u, index >> 8u, (id & 0x40000000u) != 0u);
+    let block = select(index >> 4u, index >> 6u, (id & 0x40000000u) != 0u);
     let origin = slot_origins[block_slots[page * VIS_BLOCKS_PER_PAGE + block]];
     var p0: vec3<u32>;
     var r0: vec3<u32>;
