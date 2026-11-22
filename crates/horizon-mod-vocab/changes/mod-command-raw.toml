@@ -1,0 +1,3 @@
+ids = ["method:prelude::PlayersServerHost::mod_command_raw"]
+why = "Additive host method: a run_mod_command listener reads the untrusted text of the leaf command it was given, after execute ... run and return run, without changing CommandInvocation's layout or the run_mod_command fingerprint."
+migrate = "Additive. None outside a run_mod_command listener."

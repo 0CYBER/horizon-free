@@ -66,6 +66,11 @@ pub(in crate::game) struct ExecState {
     /// Function IDs in execution order, with the active frame last.
     pub functions: Vec<String>,
     pub prepared_function: Option<super::super::functions::PreparedFunctionCall>,
+    /// Original input for the active parsed mod command, including any execute prefix.
+    pub native_command_input: Option<String>,
+    /// The leaf text of the mod command whose `run_mod_command` listeners run
+    /// (`ServerHost::mod_command_raw`).
+    pub native_command_raw: Option<String>,
 }
 
 /// A modifier that brings the sources to `max_command_forks` ends the chain
@@ -230,13 +235,17 @@ impl Game<'_> {
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let previous = self.command_source.replace(source);
-        let back = self.enter_command_level(source.dimension);
-        let out = f(self);
+        // Opening a level can call mods after the swap, before it returns.
+        let mut back = Some(self.dim);
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            back = self.enter_command_level(source.dimension);
+            f(self)
+        }));
         if let Some(back) = back {
             self.enter_command_level(back);
         }
         self.command_source = previous;
-        out
+        out.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
     /// `CommandSourceStack.getLevel`: the source's own level (`execute in`,
     /// which `with_source` puts in place), the console's Overworld, or the
@@ -251,6 +260,14 @@ impl Game<'_> {
 
     // ---- running commands -----------------------------------------------
 
+    /// Standalone commands can run synchronously from a mod hook in another command.
+    pub(in crate::game) fn with_command_frame<T>(&mut self, run: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = std::mem::take(&mut self.exec);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        self.exec = outer;
+        result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
     /// Run one command line with `source` (no error reporting): the entry
     /// for functions and `execute run`.
     pub(in crate::game) fn execute_line(&mut self, line: &str, source: Source) -> R<i32> {
@@ -258,8 +275,13 @@ impl Game<'_> {
         let parse = d.parse(line, &self.ui.registries);
         let (ctx, _) = parse.executable()?;
         let ctx = ctx.clone();
-        let root = parse.context.clone();
-        self.with_source(source, |g| g.run_chain(&root, &ctx))
+        let input = (ctx.command == Some("native_mod_command")).then_some(parse.input);
+        let saved = std::mem::replace(&mut self.exec.native_command_input, input);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_source(source, |g| g.run_chain(&parse.context, &ctx))
+        }));
+        self.exec.native_command_input = saved;
+        result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
     /// Run a parsed command (`root` is the first context; `ctx` the one with
     /// the executable node): `execute` and `return` walk their own chains.

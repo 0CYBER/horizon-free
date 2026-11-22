@@ -1842,19 +1842,19 @@ impl Game<'_> {
         };
         let outer = self.command_source.replace(server);
         let filter = std::mem::replace(&mut self.native_command_filter, true);
-        let outer_exec = std::mem::take(&mut self.exec);
         let outer_capture = capture.then(|| self.chat_capture.replace(Vec::new()));
-        let ok = self.as_console(|g| g.run_command(line));
+        let result = self.as_console(|game| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| game.run_command(line)))
+        });
         let lines = match outer_capture {
             Some(outer_capture) => {
                 std::mem::replace(&mut self.chat_capture, outer_capture).unwrap_or_default()
             }
             None => Vec::new(),
         };
-        self.exec = outer_exec;
         self.native_command_filter = filter;
         self.command_source = outer;
-        (ok, lines)
+        (result.unwrap_or_else(|panic| std::panic::resume_unwind(panic)), lines)
     }
     /// The open world's folder (`world/`, beside its `level.dat`): a server
     /// mod keeps its data in a folder of its own there, so the world's
@@ -2131,10 +2131,22 @@ impl Game<'_> {
     /// The shared command-node executor, also reached by functions and `execute`.
     pub(super) fn run_native_command(&mut self, context: Context) -> super::commands::R<i32> {
         use super::commands::err;
+        let start = context.range.0;
         let command = self.resolve_native_command(context)?;
+        let raw = self
+            .exec
+            .native_command_input
+            .as_deref()
+            .and_then(|input| input.get(start..))
+            .map(str::to_owned);
         let origin = self.native_command_origin(self.ui.registries.permission)?;
         let mut ran = false;
-        self.native_run_mod_command(&origin, &command, &mut ran);
+        let outer = std::mem::replace(&mut self.exec.native_command_raw, raw);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.native_run_mod_command(&origin, &command, &mut ran)
+        }));
+        self.exec.native_command_raw = outer;
+        result.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
         if ran {
             Ok(1)
         } else {
@@ -2269,6 +2281,26 @@ impl Game<'_> {
         Ok(self.native_invocation(context.literals, arguments))
     }
 
+    /// `ServerHost::mod_command_raw`: the leaf text of the mod command whose
+    /// `run_mod_command` listeners are running, None outside them.
+    pub(super) fn mod_command_raw(&self) -> Option<String> {
+        mod_api::content::crash::current_native_call().filter(|call| call.hook == "run_mod_command")?;
+        self.exec.native_command_raw.clone()
+    }
+
+    /// Dispatch raw input before parsing a registered player command.
+    fn run_registered_player_command(&mut self, line: &str, permission: u8) -> bool {
+        if !mod_api::__private::listened(mod_api::HookId::RegisteredPlayerCommand) {
+            return false;
+        }
+        let Some(player) = self.native_acting_player() else {
+            return false;
+        };
+        let mut handled = false;
+        self.native_registered_player_command(player, permission, line, &mut handled);
+        handled
+    }
+
     /// A guest's command for the mods, inside their swap
     /// (`run_guest_command`): true when one ran it.
     pub(super) fn perform_native_command(&mut self, conn: u32, permission: u8, line: &str) -> bool {
@@ -2286,7 +2318,9 @@ impl Game<'_> {
             return false;
         }
         let previous = std::mem::replace(&mut self.ui.registries.permission, permission);
-        self.run_command(line);
+        if !self.run_registered_player_command(line, permission) {
+            self.run_command(line);
+        }
         self.ui.registries.permission = previous;
         true
     }
@@ -3725,9 +3759,277 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn direct_player_mod_commands_can_validate_their_own_arguments() {
+        #[derive(Default)]
+        struct Observations {
+            raw: Vec<(u128, String)>,
+            cancelled: Vec<String>,
+            typed: Vec<i32>,
+        }
+        struct Commands(Arc<Mutex<Observations>>);
+
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Commands {
+            fn register_commands(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RegisterCommandsEvent<'_>,
+            ) {
+                event
+                    .commands
+                    .push(mod_api::Command::op("raw <coins:integer>", 3));
+            }
+
+            fn registered_player_command(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RegisteredPlayerCommandEvent<'_>,
+            ) -> mod_api::Flow {
+                assert_eq!(event.permission, 3);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .raw
+                    .push((event.player.uuid(), event.raw.to_owned()));
+                match event.raw {
+                    "raw 3" => mod_api::Flow::Continue,
+                    "raw 2" => {
+                        event.cancelled = true;
+                        mod_api::Flow::Continue
+                    }
+                    _ => mod_api::Flow::Cancel,
+                }
+            }
+
+            fn run_mod_command(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RunModCommandEvent<'_>,
+            ) -> mod_api::Flow {
+                let Some(mod_api::CommandArgumentValue::Integer(coins)) =
+                    event.command.argument("coins")
+                else {
+                    panic!("expected typed coins");
+                };
+                self.0.lock().unwrap().typed.push(*coins);
+                mod_api::Flow::Cancel
+            }
+        }
+
+        struct ClearCancellation(Arc<Mutex<Observations>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for ClearCancellation {
+            #[listener(receive_cancelled)]
+            fn registered_player_command(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RegisteredPlayerCommandEvent<'_>,
+            ) -> mod_api::Flow {
+                if event.cancelled {
+                    self.0.lock().unwrap().cancelled.push(event.raw.to_owned());
+                    event.cancelled = false;
+                }
+                mod_api::Flow::Continue
+            }
+        }
+
+        let heard = Arc::new(Mutex::new(Observations::default()));
+        mod_platform::testing::with_mods(
+            vec![
+                mod_api::ModEntry::new("raw_commands", Box::new(Commands(heard.clone()))),
+                mod_api::ModEntry::new("clear_cancel", Box::new(ClearCancellation(heard.clone()))),
+            ]
+            .into(),
+            || {
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    game.build_registries();
+                    game.register_native_commands();
+                    game.as_guest(12, |game| {
+                        let line = "raw 2147483648";
+                        assert!(!game.perform_native_command(12, 0, line));
+                        assert!(game.perform_native_command(12, 3, line));
+                        assert!(game.perform_native_command(12, 3, "raw 1"));
+                        assert!(game.perform_native_command(12, 3, "raw 2"));
+                        assert!(game.perform_native_command(12, 3, "raw 3"));
+                    })
+                    .unwrap();
+                    assert!(game.perform_native_console_command("raw 4"));
+                })
+            },
+        );
+        let heard = heard.lock().unwrap();
+        assert_eq!(
+            heard.raw,
+            [
+                (12, "raw 2147483648".into()),
+                (12, "raw 1".into()),
+                (12, "raw 2".into()),
+                (12, "raw 3".into()),
+            ]
+        );
+        assert_eq!(heard.cancelled, ["raw 2147483648", "raw 1", "raw 2"]);
+        assert_eq!(
+            heard.typed,
+            [3, 4],
+            "only the unhandled player command and the console command reach typed dispatch"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn native_mod_command_raw_is_hidden_from_reentrant_hooks() {
+        struct Menus(Arc<AtomicBool>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Menus {
+            fn register_commands(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RegisterCommandsEvent<'_>,
+            ) {
+                event.commands.push(mod_api::Command::new("open_menu"));
+            }
+
+            fn run_mod_command(
+                &self,
+                host: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RunModCommandEvent<'_>,
+            ) -> mod_api::Flow {
+                let mod_api::CommandSource::Player { player, .. } = event.source else {
+                    panic!("expected a player command");
+                };
+                assert_eq!(host.mod_command_raw().as_deref(), Some("open_menu"));
+                assert!(
+                    host.open_menu(
+                        player.uuid(),
+                        1,
+                        mod_api::Text::literal("Test"),
+                        Vec::new(),
+                        mod_api::MenuReplace::InPlace,
+                    )
+                    .unwrap()
+                    .is_some()
+                );
+                assert!(self.0.load(Ordering::Relaxed));
+                assert_eq!(host.mod_command_raw().as_deref(), Some("open_menu"));
+                mod_api::Flow::Cancel
+            }
+
+            fn player_container_open(
+                &self,
+                host: &mut dyn mod_api::ServerHost,
+                _: &mut mod_api::PlayerContainerOpenEvent<'_>,
+            ) {
+                assert_eq!(host.mod_command_raw(), None);
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let opened = Arc::new(AtomicBool::new(false));
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("menus", Box::new(Menus(opened.clone())))].into(),
+            || {
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    game.build_registries();
+                    game.register_native_commands();
+                    game.as_guest(12, |game| assert!(game.run_command("open_menu")))
+                        .unwrap();
+                });
+            },
+        );
+        assert!(opened.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn nested_native_command_unwind_restores_the_outer_frame() {
+        use crate::game::functions::Outcome;
+        use horizon_client::datapack::{Function, FunctionLine};
+        use mod_api::{CommandSource, PermissionLevel};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        struct Commands;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Commands {
+            fn register_commands(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RegisterCommandsEvent<'_>,
+            ) {
+                event.commands.push(mod_api::Command::new("scoped <message:text>"));
+            }
+
+            fn run_mod_command(
+                &self,
+                host: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::RunModCommandEvent<'_>,
+            ) -> mod_api::Flow {
+                let raw = host.mod_command_raw();
+                if raw.as_deref() == Some("scoped inner") {
+                    assert!(matches!(event.source, CommandSource::Console { .. }));
+                    panic!("nested listener panic");
+                }
+                assert!(matches!(
+                    event.source,
+                    CommandSource::Function { id, permission }
+                        if id.to_string() == "test:outer" && *permission == PermissionLevel::Gamemasters
+                ));
+                match raw.as_deref() {
+                    Some("scoped outer") => {
+                        let panic = catch_unwind(AssertUnwindSafe(|| {
+                            host.commands()
+                                .run_command("execute positioned 1 2 3 run scoped inner")
+                        }))
+                        .unwrap_err();
+                        assert_eq!(panic.downcast_ref::<&str>(), Some(&"nested listener panic"));
+                        assert_eq!(host.mod_command_raw().as_deref(), Some("scoped outer"));
+                    }
+                    Some("scoped return  value") => {}
+                    _ => panic!("unexpected raw command: {raw:?}"),
+                }
+                mod_api::Flow::Cancel
+            }
+        }
+
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("scoped_commands", Box::new(Commands))].into(),
+            || {
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    game.build_registries();
+                    game.register_native_commands();
+                    let function = Function {
+                        id: "test:outer".into(),
+                        lines: vec![
+                            FunctionLine::Command("scoped outer".into()),
+                            FunctionLine::Command("return run scoped return  value".into()),
+                        ],
+                        parameters: Vec::new(),
+                    };
+                    assert_eq!(
+                        game.run_function(&function, None, game.server_source()).unwrap(),
+                        Outcome::Value(1)
+                    );
+                    assert!(game.exec.functions.is_empty());
+                    let panic = catch_unwind(AssertUnwindSafe(|| {
+                        game.execute_line("scoped inner", game.server_source())
+                    }))
+                    .unwrap_err();
+                    assert_eq!(panic.downcast_ref::<&str>(), Some(&"nested listener panic"));
+                    assert!(game.exec.native_command_input.is_none());
+                    assert!(game.exec.native_command_raw.is_none());
+                    assert!(game.command_source.is_none());
+                });
+            },
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn native_typed_commands_reach_listeners_after_parse_and_source_resolution() {
         use mod_api::{CommandArgumentValue as Value, CommandInvocation};
-        struct Commands(Arc<Mutex<Vec<(bool, CommandInvocation)>>>);
+        struct Commands(
+            Arc<Mutex<Vec<(bool, CommandInvocation)>>>,
+            Arc<Mutex<Vec<Option<String>>>>,
+        );
         impl Commands {
             fn record(&self, console: bool, command: &CommandInvocation) {
                 if command.literals == ["typed", "give"] {
@@ -3762,21 +4064,23 @@ mod tests {
             }
             fn run_mod_command(
                 &self,
-                _: &mut dyn mod_api::ServerHost,
+                host: &mut dyn mod_api::ServerHost,
                 event: &mut mod_api::RunModCommandEvent<'_>,
             ) -> mod_api::Flow {
                 self.record(
                     matches!(event.source, mod_api::CommandSource::Console { .. }),
                     event.command,
                 );
+                self.1.lock().unwrap().push(host.mod_command_raw());
                 mod_api::Flow::Cancel
             }
         }
         let heard = Arc::new(Mutex::new(Vec::new()));
+        let raws = Arc::new(Mutex::new(Vec::new()));
         mod_platform::testing::with_mods(
             vec![mod_api::ModEntry::new(
                 "typed_commands",
-                Box::new(Commands(heard.clone())),
+                Box::new(Commands(heard.clone(), raws.clone())),
             )]
             .into(),
             || {
@@ -3803,7 +4107,7 @@ mod tests {
                         assert_eq!(game.world.random.state(), random, "denied selectors must not resolve");
                         assert!(heard.lock().unwrap().is_empty(), "failed input must not reach listeners");
                         for line in [
-                            "typed give guest13 37 hello typed world",
+                            "typed give guest13 37 hello  typed world",
                             "typed give @s -4",
                             "typed opt",
                             "typed opt 9",
@@ -3860,11 +4164,18 @@ mod tests {
                     assert_eq!(heard.len(), 12);
                     let first = &heard[0].1;
                     assert_eq!(first.literals, ["typed", "give"]);
+                    let raws = raws.lock().unwrap();
+                    assert_eq!(
+                        raws[0].as_deref(),
+                        Some("typed give guest13 37 hello  typed world")
+                    );
+                    assert_eq!(raws[11].as_deref(), Some("typed opt 13"));
+                    assert_eq!(game.mod_command_raw(), None, "cleared after the listeners");
                     assert_eq!(first.argument("who"), Some(&Value::Player(other)));
                     assert_eq!(first.argument("amount"), Some(&Value::Integer(37)));
                     assert_eq!(
                         first.argument("message"),
-                        Some(&Value::String("hello typed world".into()))
+                        Some(&Value::String("hello  typed world".into()))
                     );
                     assert_eq!(heard[1].1.argument("who"), Some(&Value::Player(acting)));
                     assert_eq!(heard[1].1.argument("amount"), Some(&Value::Integer(-4)));

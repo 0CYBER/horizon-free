@@ -1,0 +1,3 @@
+horizon-client game::native_server::tests::direct_player_mod_commands_can_validate_their_own_arguments lib daily resources
+horizon-client game::native_server::tests::native_mod_command_raw_is_hidden_from_reentrant_hooks lib daily resources
+horizon-client game::native_server::tests::nested_native_command_unwind_restores_the_outer_frame lib daily resources

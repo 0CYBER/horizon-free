@@ -119,13 +119,16 @@ impl Game<'_> {
             ..self.player_source()
         };
         let outer_admins = std::mem::take(&mut self.admin_feedback);
-        let (ok, lines) = self.run_command_from(source, line, permission);
-        for line in &lines {
-            self.native_send(uuid, system_chat(line));
-        }
-        self.send_admin_feedback(self.lan_acting);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (ok, lines) = self.run_command_from(source, line, permission);
+            for line in &lines {
+                self.native_send(uuid, system_chat(line));
+            }
+            self.send_admin_feedback(self.lan_acting);
+            (ok, lines)
+        }));
         self.admin_feedback = outer_admins;
-        (ok, lines)
+        result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
     /// `line` run from `source` at `permission`, with what it tells its source:
     /// the outer command's source, state and output are kept apart and put back.
@@ -146,16 +149,14 @@ impl Game<'_> {
             &mut self.chat_capture,
             if silent { None } else { Some(Vec::new()) },
         );
-        let outer_exec = std::mem::take(&mut self.exec);
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
-        let ok = self.run_command(line);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_command(line)));
         self.ui.registries.permission = level;
-        self.exec = outer_exec;
         let lines = std::mem::replace(&mut self.chat_capture, capture).unwrap_or_default();
         self.console_broadcast = console;
         self.native_command_filter = filter;
         self.command_source = outer;
-        (ok, lines)
+        (result.unwrap_or_else(|panic| std::panic::resume_unwind(panic)), lines)
     }
 }
 
