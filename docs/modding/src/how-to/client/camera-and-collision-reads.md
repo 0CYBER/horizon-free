@@ -152,6 +152,13 @@ These read the local player as the client sees it. They take no mod-controlled n
   team name, name) and stop at the 80 it draws. Header and footer are `None` when empty. It is what
   this client has been sent and changes as the server updates the list; `None` outside a world.
   There is no NeoForge call for this: it is Horizon's own read.
+- `ClientHost::client_session().client_waypoints()` is the locator bar's tracked waypoints:
+  `ClientWaypoints { entries }`. Each `ClientWaypointEntry` has the waypoint's `id` (`Uuid` for
+  a player's waypoint, `Name` for a named one), its `target` (`Block`, `Chunk`, `Azimuth` or
+  `Empty`), the icon `style` (`waypoint_style` asset id) and the icon `color` as `0xRRGGBB`
+  (`None` when the server sent none — the bar then colours the dot from the waypoint's id).
+  Entries come in the order the server sent them. It is what this client has been sent and
+  changes as the server tracks and untracks waypoints; `None` outside a world.
 - `ClientHost::local_item_use()` is the item in use: `ItemUse { hand, ticks_used, ticks_remaining }`
   (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
   `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world

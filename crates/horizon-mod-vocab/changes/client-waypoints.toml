@@ -1,0 +1,3 @@
+ids = ["method:ClientSession::client_waypoints", "type:ClientWaypoints", "type:ClientWaypointEntry", "type:ClientWaypointId", "type:ClientWaypointTarget"]
+why = "Adds a client read of the locator bar's tracked waypoints: each waypoint's identifier, target, icon style and icon colour, in the order the server sent them."
+migrate = "Additive. Read it on the client; it is None outside a logged-in client world and reflects what the server has sent."

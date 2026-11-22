@@ -31,6 +31,13 @@ impl ClientSession for Game<'_> {
         );
         self.native_client_tab_list()
     }
+    fn client_waypoints(&self) -> Option<ClientWaypoints> {
+        mod_api::__private::check_access(
+            "client_waypoints",
+            mod_api::__private::LoadAccess::ClientSetup,
+        );
+        self.native_client_waypoints()
+    }
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {
         mod_api::__private::check_access(
             "client_frame_stats",

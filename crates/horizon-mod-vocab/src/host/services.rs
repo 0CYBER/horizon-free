@@ -102,6 +102,17 @@ pub trait ClientSession {
         )
     }
     /// Side: client.
+    /// The locator bar's tracked waypoints: each waypoint's identifier, target, icon style and
+    /// icon colour, in the order the server sent them. What this client has been sent; None
+    /// outside a logged-in client world. Sends nothing.
+    fn client_waypoints(&self) -> Option<ClientWaypoints> {
+        crate::world::phase::unprovided(
+            "ClientSession::client_waypoints",
+            "client_waypoints",
+            crate::world::phase::LoadAccess::ClientSetup,
+        )
+    }
+    /// Side: client.
     /// Existing local frame counters; None outside a logged-in client world.
     /// This read collects no history and sends nothing anywhere.
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {

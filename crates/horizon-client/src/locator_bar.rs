@@ -231,6 +231,11 @@ impl ClientWaypoints {
     pub fn has_waypoints(&self) -> bool {
         !self.waypoints.is_empty()
     }
+    /// The tracked waypoints in the order the server sent them, for reads that must not
+    /// change them.
+    pub fn entries(&self) -> &[TrackedWaypoint] {
+        &self.waypoints
+    }
     pub fn clear(&mut self) {
         self.waypoints.clear();
     }
