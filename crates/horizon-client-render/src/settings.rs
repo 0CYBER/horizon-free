@@ -18,13 +18,15 @@ pub fn set_source_volumes(volumes: [f32; 11]) {
 pub fn sound_source(event: &str) -> usize {
     let e = event.trim_start_matches("minecraft:");
     let index = |name: &str| SOUND_SOURCES.iter().position(|n| *n == name).unwrap_or(0);
-    const HOSTILE: [&str; 34] = [
+    const HOSTILE: [&str; 35] = [
         "zombie",
         "skeleton",
         "creeper",
         "spider",
         "cave_spider",
         "enderman",
+        // EnderDragon.getSoundSource: HOSTILE, so muting hostile silences it.
+        "ender_dragon",
         "witch",
         "slime",
         "magma_cube",
@@ -995,6 +997,9 @@ mod tests {
             ("block.note_block.imitate.creeper", 2),
             ("block.note_block.trumpet_exposed", 2),
             ("entity.cow.hurt", 6),
+            ("entity.ender_dragon.flap", 5),
+            ("entity.ender_dragon.growl", 5),
+            ("entity.ender_dragon.hurt", 5),
             ("block.stone.break", 4),
             ("entity.player.hurt", 7),
             ("entity.arrow.hit", 7),
