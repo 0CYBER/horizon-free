@@ -1653,6 +1653,9 @@ impl Def {
             S::Chicken => "chicken_food",
             S::Rabbit => "rabbit_food",
             S::Horse | S::Donkey | S::Mule => "horse_food",
+            // ZombieHorse.isFood: the red mushroom alone, which is also what
+            // tempts it (`ZombieHorse.addBehaviourGoals`).
+            S::ZombieHorse => "zombie_horse_food",
             S::Llama | S::TraderLlama => "llama_food",
             S::Goat => "goat_food",
             S::Sniffer => "sniffer_food",

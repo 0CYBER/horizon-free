@@ -1701,6 +1701,50 @@ mod tests {
         );
     }
 
+    /// `ZombieHorse.addBehaviourGoals` tempts with `#minecraft:zombie_horse_food`,
+    /// which `VanillaItemTagsProvider` fills with the red mushroom alone
+    /// (`ZombieHorse.isFood` reads the same tag): a player holding one tempts a
+    /// zombie horse, one holding its family's wheat does not.
+    #[test]
+    fn a_red_mushroom_tempts_a_zombie_horse() {
+        use crate::mobs::world::{test_player, with_test_world};
+        let tempted = |hand: &str| -> Option<bool> {
+            let mut out = None;
+            let ran = with_test_world(&[], |w, types| {
+                let mut world = w.clone();
+                let mut p = test_player(Vec3::new(5.5, 64.0, 0.5));
+                p.main_hand = Some(hand.into());
+                world.player = Some(p);
+                let kind = Arc::new(types.types["minecraft:zombie_horse"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                register(&mut m);
+                m.on_ground = true;
+                let mut lr = crate::health::TestLevel::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w: &world,
+                    level: &mut lr.level(),
+                    events: &mut events,
+                };
+                let mut goals = std::mem::take(&mut m.ai.goals);
+                goals.tick(&mut m, &mut cx);
+                out = Some(goals.is_running("Tempt"));
+                m.ai.goals = goals;
+            });
+            let _ = ran;
+            out
+        };
+        let Some(mushroom) = tempted("minecraft:red_mushroom") else {
+            return;
+        };
+        assert!(mushroom, "a red mushroom tempts a zombie horse");
+        assert_eq!(
+            tempted("minecraft:wheat"),
+            Some(false),
+            "wheat is horse food, not zombie horse food"
+        );
+    }
+
     /// The zombie-horse half of the test above, built like `horse`.
     fn zombie_horse() -> Mob {
         let mut m = horse(Species::ZombieHorse);

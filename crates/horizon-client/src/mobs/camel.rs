@@ -31,7 +31,7 @@ pub fn register(m: &mut Mob) {
     g.add(0, Float);
     g.add(1, CamelPanic(AnimalPanic::new(4.0)));
     g.add(2, Breed::new(1.0));
-    g.add(3, Tempt::new(2.5, tempt, false));
+    g.add(3, CamelTempt(Tempt::new(2.5, tempt, false)));
     // CamelAi's `triggerIf(Predicate.not(Camel::refuseToMove), ...)` around
     // BabyFollowAdult and RandomStroll: neither gives a sitting camel a walk
     // target (the move control would stand it up for one).
@@ -42,6 +42,36 @@ pub fn register(m: &mut Mob) {
     g.add(7, RandomLookAround::default());
     // finalizeSpawn: fully standing.
     stand_up_instantly(m);
+}
+/// `CamelAi.initIdleActivity`'s `FollowTemptation(camel -> 2.5F, camel ->
+/// camel.isBaby() ? 2.5 : 3.5)`: an adult camel stops 3.5 blocks from the
+/// player holding its food, a baby 2.5 (a camel husk is never a baby).
+#[derive(Clone, Debug)]
+struct CamelTempt(Tempt);
+impl Goal for CamelTempt {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        self.0.flags()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.0.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.start(m, cx);
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.0.stop_distance = if m.is_baby() { 2.5 } else { 3.5 };
+        self.0.tick(m, cx);
+    }
 }
 /// `CamelAi`'s `triggerIf(Predicate.not(Camel::refuseToMove),
 /// BabyFollowAdult.create(...))`: a sitting camel does not start following an
@@ -555,6 +585,10 @@ mod camel_husk_tests;
 
 #[cfg(test)]
 mod camel_pose_tests;
+
+#[cfg(test)]
+#[path = "camel_tempt_tests.rs"]
+mod camel_tempt_tests;
 
 #[cfg(test)]
 mod tests {
