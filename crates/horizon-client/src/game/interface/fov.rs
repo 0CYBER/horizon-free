@@ -272,7 +272,11 @@ impl Game<'_> {
     }
     /// `SpyglassItem.releaseUsing` / `finishUsingItem` (after 1200 ticks).
     pub(super) fn stop_spyglass(&mut self) {
-        let at = self.eye_position();
+        // Entity.playSound: at the feet, like use_spyglass above.
+        let at = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
         self.audio
             .play("minecraft:item.spyglass.stop_using", at, 1.0, 1.0);
     }
