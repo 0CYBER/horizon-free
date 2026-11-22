@@ -93,7 +93,6 @@
   "cauldron": "#18133: a washed banner keeps banner_patterns:[]",
   "command_parse": "#18133: SNBT error text and empty-suggestion ranges differ from Brigadier",
   "crafter": "#18133: crafted tools keep damage:0/max_damage; hopper minecart slot0 record missing",
-  "damage_catalog": "#18133: harness doesn't set HORIZON_TEST_RESOURCES for a fresh-case test",
   "datafix": "#18133: runner's .local resolves into shared-local, so every shard refuses its default root",
   "dedicated_server": "#18133: extra config custom_payload horizon:payloads and one extra recipe_book_add entry",
   "dispenser": "#18133: container-entity slot0 and sapling-growth `set` records missing",
