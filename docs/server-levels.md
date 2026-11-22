@@ -37,6 +37,11 @@ the other dimensions' levels as `Parked` values and swaps one into place (`enter
 The packets of a guest are read in its own level's pass (`Hub::tick_level`), so its actions and
 commands run with its level in place.
 
+For scheduled block and fluid work, `LevelTicks::begin_tick` keeps each due
+chunk's current priority, sub-tick order and deadline in its collection heap.
+It refreshes the head after polling the chunk, and clears the heap before
+dispatch. Callbacks can still schedule work for the next collection.
+
 ## One code path for both
 
 The dedicated server and the server thread are the same code. Each `Game` has an explicit
