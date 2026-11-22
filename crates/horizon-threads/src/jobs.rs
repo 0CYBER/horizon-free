@@ -464,6 +464,7 @@ fn work(inner: &Inner, worker: usize) {
     loop {
         let epoch = inner.epoch.load(Ordering::SeqCst);
         if let Some((entry, far)) = choose(inner) {
+            crate::server_core::leave_reserved();
             if released {
                 inner.released.fetch_sub(1, Ordering::Relaxed);
                 released = false;

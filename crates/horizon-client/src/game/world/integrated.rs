@@ -54,6 +54,17 @@ pub(super) const NO_ANSWER: &str =
 const SERVER_THREAD_STACK: usize =
     horizon_guest_stack::GUEST_STACK_BYTES + horizon_guest_stack::HOST_HEADROOM;
 
+/// `horizon_threads::server_core::take`, told in the log: the server thread keeps one physical
+/// core while cooperating workers avoid it, until the hold drops as the thread ends.
+pub(super) fn take_server_core() -> Option<horizon_threads::server_core::ServerCore> {
+    let core = horizon_threads::server_core::take()?;
+    log::info!(
+        "Horizon: the server thread is pinned to CPUs {:?}",
+        core.cpus()
+    );
+    Some(core)
+}
+
 /// The server thread's stack size: [`SERVER_THREAD_STACK`], or what `RUST_MIN_STACK` asks for
 /// when that is larger. std reads the variable only for a thread spawned without a size, and
 /// harnesses raise it for this thread (`tools/test_wind_burst_hook.py`, the parity tools).
@@ -565,6 +576,8 @@ impl Game<'_> {
             let _finished = Finished(server_flags.clone());
             // MinecraftServer.spin's Thread.setPriority(8).
             horizon_threads::favour_current();
+            // A core of its own, its SMT sibling left empty, while it runs.
+            let _core = take_server_core();
             let result = serve(
                 &res,
                 pack,

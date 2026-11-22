@@ -108,9 +108,10 @@ fn capped_lanes(requested: usize, hardware: Option<usize>) -> usize {
     requested.clamp(1, 8).min(hardware.unwrap_or(1).max(1))
 }
 
-/// The threads the loop may run on, capped at the machine's available parallelism.
+/// The threads the loop may run on, capped at the machine's available parallelism: the whole
+/// CPU set, as the lanes other than the server's leave its reserved core.
 fn lanes() -> usize {
-    let hardware = std::thread::available_parallelism().ok().map(usize::from);
+    let hardware = horizon_threads::available_parallelism().ok().map(usize::from);
     #[cfg(test)]
     if let Some(lanes) = LANES.with(Cell::get) {
         return capped_lanes(lanes, hardware);
@@ -444,6 +445,10 @@ impl Islands<'_> {
                 let handle = std::thread::Builder::new()
                     .name("mob-island".into())
                     .spawn_scoped(s, move || {
+                        // Born on the server thread, so on its reserved core when one is held:
+                        // off it, or every lane would share the server's two CPUs. The keeper's
+                        // scan never sees a thread that lives one tick.
+                        horizon_threads::server_core::leave_reserved();
                         let _done = done;
                         #[cfg(test)]
                         if let Some(failure) = &failure

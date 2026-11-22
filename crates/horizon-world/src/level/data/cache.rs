@@ -270,7 +270,7 @@ fn hash_contents(bytes: &[u8]) -> [u8; 32] {
     }
     let workers = pieces
         .len()
-        .min(std::thread::available_parallelism().map_or(1, |n| n.get()));
+        .min(horizon_threads::available_parallelism().map_or(1, |n| n.get()));
     if workers <= 1 {
         let mut hasher = Sha256::new();
         for piece in pieces {

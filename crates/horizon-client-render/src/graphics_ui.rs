@@ -1175,7 +1175,7 @@ impl H {
     }
 }
 fn max_workers() -> u32 {
-    std::thread::available_parallelism().map_or(8, |n| n.get() as u32)
+    horizon_threads::available_parallelism().map_or(8, |n| n.get() as u32)
 }
 
 impl Item {

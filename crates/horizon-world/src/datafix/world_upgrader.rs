@@ -182,7 +182,7 @@ struct OpenFiles {
 /// Region files are independent, so they are upgraded on all cores but one
 /// (the game keeps that one).
 pub fn worker_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
+    horizon_threads::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
 }
 
 impl RegionStorageUpgrader {

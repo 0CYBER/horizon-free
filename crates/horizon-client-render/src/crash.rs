@@ -253,7 +253,7 @@ pub(crate) fn operating_system() -> String {
 
 /// Logical processors and the CPU's name (`12x AMD Ryzen 5 5600X ...`).
 pub fn cpu() -> String {
-    let threads = std::thread::available_parallelism().map_or(0, |n| n.get());
+    let threads = horizon_threads::available_parallelism().map_or(0, |n| n.get());
     let name = if cfg!(target_os = "linux") {
         read("/proc/cpuinfo").and_then(|t| horizon_system::linux_cpu_name(&t))
     } else if cfg!(target_os = "macos") {

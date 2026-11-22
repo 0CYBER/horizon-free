@@ -1053,6 +1053,10 @@ impl Game<'_> {
     fn run_dedicated_inner(&mut self, startup_began: &mut bool) -> Result<()> {
         // This thread ticks the server (MinecraftServer.spin's priority).
         horizon_threads::favour_current();
+        // Multiple hosted servers would otherwise all select the same core.
+        let _core = horizon_threads::server_core::dedicated_enabled()
+            .then(super::integrated::take_server_core)
+            .flatten();
         self.join_world_rest()?;
         let Setup {
             props,

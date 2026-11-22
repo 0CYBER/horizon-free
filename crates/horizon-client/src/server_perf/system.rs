@@ -28,7 +28,7 @@ impl SystemProbe {
         let stat = std::fs::read_to_string("/proc/stat")
             .ok()
             .and_then(|s| parse_cpu_stat(&s));
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+        let threads = horizon_threads::available_parallelism().map_or(1, |n| n.get()) as f64;
         let mut g = Gauges {
             rss_mb: horizon_bench::rss_bytes(pid).map_or(0.0, |b| (b >> 20) as f32),
             players: counts.players,
@@ -167,7 +167,7 @@ pub fn machine(hardware: Option<&horizon_bench::Hardware>) -> Machine {
     let mut m = Machine {
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
-        cpu_threads: std::thread::available_parallelism().map_or(0, |n| n.get() as u32),
+        cpu_threads: horizon_threads::available_parallelism().map_or(0, |n| n.get() as u32),
         cgroup_cpu_cores: cgroup("cpu.max").and_then(|t| parse_cgroup_cpu(&t)),
         cgroup_memory_mb: cgroup("memory.max").and_then(|t| parse_cgroup_memory(&t)),
         ..Machine::default()

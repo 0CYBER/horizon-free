@@ -1499,7 +1499,7 @@ fn compile(
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Option<(String, String)> {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let threads = std::thread::available_parallelism()
+    let threads = horizon_threads::available_parallelism()
         .map_or(1, |n| n.get())
         .clamp(1, 8)
         .min(jobs.len().max(1));
