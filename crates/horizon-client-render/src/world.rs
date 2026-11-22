@@ -54,6 +54,10 @@ impl DirtySections {
         }
         had
     }
+    /// The dirty section indexes of column (x, z).
+    pub fn column(&self, x: i32, z: i32) -> SectionMask {
+        self.columns.get(&(x, z)).copied().unwrap_or_default()
+    }
     /// The dirty section indexes of column (x, z), removed.
     pub fn take_column(&mut self, x: i32, z: i32) -> SectionMask {
         self.columns.remove(&(x, z)).unwrap_or_default()
@@ -502,22 +506,32 @@ impl World {
     pub fn end_player_edit(&mut self) {
         self.player_edit_depth = self.player_edit_depth.saturating_sub(1);
     }
-    /// Copy dirty sections whose center is within `max_dist_sq` of `camera_block` into
-    /// `immediate_sections` (vanilla `PrioritizeChunkUpdates.NEARBY`, 768.0 squared blocks),
-    /// stopping once `immediate_sections.len() > limit`.
-    pub fn mark_nearby_dirty_immediate(
-        &mut self,
+    /// Dirty sections whose center is within `max_dist_sq` of `camera_block` (vanilla
+    /// `PrioritizeChunkUpdates.NEARBY`, 768.0 squared blocks), nearest first, at most `limit`.
+    /// Returned apart from `immediate_sections` so the player's own edits are never budgeted.
+    pub fn nearby_dirty_sections(
+        &self,
         camera_block: [i32; 3],
         max_dist_sq: f64,
         limit: usize,
-    ) {
+    ) -> Vec<(i32, i32, i32)> {
         let bottom_y = self.bottom_y();
         let (cx0, cy0, cz0) = (
             f64::from(camera_block[0]),
             f64::from(camera_block[1]),
             f64::from(camera_block[2]),
         );
-        for ((cx, cz), sections) in self.dirty_sections.columns() {
+        // Only the columns whose centre can be within reach, not every dirty column loaded.
+        let reach = max_dist_sq.sqrt();
+        let columns = |c0: f64| {
+            ((c0 - 8.0 - reach) / 16.0).ceil() as i32..=((c0 - 8.0 + reach) / 16.0).floor() as i32
+        };
+        let mut nearby = Vec::new();
+        for (cx, cz) in columns(cx0).flat_map(|cx| columns(cz0).map(move |cz| (cx, cz))) {
+            let sections = self.dirty_sections.column(cx, cz);
+            if sections.is_empty() {
+                continue;
+            }
             let sx = f64::from(cx * 16 + 8) - cx0;
             let sz = f64::from(cz * 16 + 8) - cz0;
             let horiz = sx * sx + sz * sz;
@@ -526,14 +540,16 @@ impl World {
             }
             for sy in sections.iter().map(|s| s as i32) {
                 let sy_d = f64::from(bottom_y + sy * 16 + 8) - cy0;
-                if horiz + sy_d * sy_d <= max_dist_sq {
-                    self.immediate_sections.insert((cx, sy, cz));
-                    if self.immediate_sections.len() > limit {
-                        return;
-                    }
+                let dist_sq = horiz + sy_d * sy_d;
+                if dist_sq <= max_dist_sq {
+                    nearby.push((dist_sq, (cx, sy, cz)));
                 }
             }
         }
+        // Hash order differs run to run; the key breaks distance ties deterministically.
+        nearby.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        nearby.truncate(limit);
+        nearby.into_iter().map(|(_, key)| key).collect()
     }
     /// Resident storage write; marks the touched sections (and neighbours on
     /// section borders) for remeshing and the surrounding chunks for relighting.
