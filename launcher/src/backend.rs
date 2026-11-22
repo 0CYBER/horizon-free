@@ -8255,6 +8255,8 @@ pub fn {f}("
         fs::write(&exe, "old").unwrap();
         // Another update swaps the file under the running launcher.
         fs::write(dir.join("other"), "other update").unwrap();
+        // Set, not left to the umask: under 0002 the write makes it 0664 (#19730).
+        fs::set_permissions(dir.join("other"), fs::Permissions::from_mode(0o644)).unwrap();
         fs::rename(dir.join("other"), &exe).unwrap();
         fs::write(dir.join("new"), "new").unwrap();
         replace_binary(&dir.join("new"), &exe).unwrap();
