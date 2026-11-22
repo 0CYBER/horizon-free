@@ -138,6 +138,8 @@ impl PrimedTnt {
                 self.velocity.z *= scale;
             }
         }
+        // Entity.checkInsideBlocks: a column pushes it from every block the
+        // move went through, not only those its box ends in.
         let mut tops = Vec::new();
         let stuck = horizon_client::falling_block::apply_effects_from_blocks(
             from,
@@ -145,29 +147,25 @@ impl PrimedTnt {
             original,
             &mut self.velocity,
             &mut self.fall_distance,
-            &mut Vec::new(),
-            |p| match &*facts.get(world.block(p.x, p.y, p.z)).name {
-                "minecraft:powder_snow" => horizon_client::falling_block::Inside::PowderSnow,
-                "minecraft:cobweb" => horizon_client::falling_block::Inside::Cobweb,
-                _ => horizon_client::falling_block::Inside::Nothing,
+            &mut tops,
+            |p| {
+                use horizon_client::falling_block::Inside;
+                match &*facts.get(world.block(p.x, p.y, p.z)).name {
+                    "minecraft:powder_snow" => Inside::PowderSnow,
+                    "minecraft:cobweb" => Inside::Cobweb,
+                    _ => horizon_client::motion::bubble_column_at(
+                        world,
+                        assets.registry,
+                        facts,
+                        collision,
+                        p,
+                    )
+                    .map_or(Inside::Nothing, Inside::BubbleColumn),
+                }
             },
         );
         if let Some(multiplier) = stuck {
             self.stuck = multiplier;
-        }
-        // `Entity::push_by_bubble_column_over`, whose body is this call: that
-        // trait stays in horizon-client.
-        let bounds = self.bounds();
-        if horizon_client::motion::bubble_column_push_over(
-            world,
-            assets.registry,
-            facts,
-            collision,
-            bounds,
-            &mut self.velocity,
-            |pos| tops.push(pos),
-        ) {
-            self.fall_distance = 0.0;
         }
         tops
     }

@@ -1177,6 +1177,77 @@ mod tests {
         );
     }
 
+    /// #16279: `Entity.checkInsideBlocks` follows the move, Y first, so a
+    /// column the TNT leaves sideways still pushes it that tick, and one it
+    /// crosses in a move over a block long pushes it though its box ends
+    /// beyond it.
+    #[test]
+    fn a_bubble_column_on_the_way_pushes_primed_tnt() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let render = assets
+            .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.to_path_buf(),
+            ))
+            .unwrap();
+        let facts = horizon_client::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let collision = horizon_client::collisions::load(&root, assets.registry).unwrap();
+        let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let default = assets
+            .registry
+            .default_state("minecraft:bubble_column")
+            .unwrap();
+        let mut up = assets.registry.state(default).unwrap().clone();
+        up.properties.insert("drag".into(), "false".into());
+        let column = assets.registry.resolve(&up).unwrap();
+        for y in 3..=8 {
+            world.set(20, y, 20, column).unwrap();
+        }
+        world.set(20, 9, 20, water).unwrap();
+        let pushed = |from: Vec3, to: Vec3| {
+            let mut tnt = PrimedTnt {
+                attachment_lifetime: Default::default(),
+                used_portal: false,
+                rotation: [0.0, 0.0],
+                join: Default::default(),
+                no_gravity: false,
+                id: 0,
+                position: to,
+                previous: from,
+                velocity: Vec3::ZERO,
+                fuse: 80,
+                on_ground: false,
+                fall_distance: 3.0,
+                stuck: Vec3::ZERO,
+                in_water: false,
+                owner: None,
+                guest: None,
+                power: 4.0,
+                block_state: None,
+            };
+            let original = Some(to.subtract(from));
+            tnt.apply_effects_from_blocks(&world, &assets, &facts, &collision, from, original);
+            (tnt.velocity.y, tnt.fall_distance)
+        };
+        // Four blocks west in one move, through the column: its box ends
+        // clear of it.
+        let (lift, fall) = pushed(Vec3::new(22.5, 6.0, 20.5), Vec3::new(18.5, 6.0, 20.5));
+        assert!(lift > 0.0, "the column it crossed lifts it, got {lift}");
+        assert_eq!(fall, 0.0);
+        // Up and out to the east in a short move: the Y step is still in it.
+        let (lift, _) = pushed(Vec3::new(20.5, 6.0, 20.5), Vec3::new(21.5, 6.5, 20.5));
+        assert!(lift > 0.0, "the column it left lifts it, got {lift}");
+        // A move beside the column is not pushed.
+        let (lift, fall) = pushed(Vec3::new(22.5, 6.0, 20.5), Vec3::new(21.5, 6.0, 20.5));
+        assert_eq!((lift, fall), (0.0, 3.0));
+    }
+
     /// `Entity.onAboveBubbleColumn` sends the surface particles only from the top of
     /// a column: `tick` names the column block it is at the top of, and none while
     /// the column has water above it.
