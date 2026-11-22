@@ -4883,6 +4883,42 @@ impl PackPost {
         self.passes.iter().map(|p| p.name.as_str()).collect()
     }
 
+    /// Whether a running pass can read resource-pack companion maps. Resolve this after
+    /// pipeline fallback and texture overrides, independently of whether maps exist yet.
+    pub fn needs_material_maps(&self) -> bool {
+        let entities = self
+            .entities
+            .iter()
+            .flat_map(|e| e.passes.iter().chain(&e.shadow).flatten());
+        self.passes
+            .iter()
+            .chain(
+                [
+                    &self.terrain,
+                    &self.terrain_cutout,
+                    &self.water,
+                    &self.clouds,
+                    &self.lines,
+                    &self.hand_water,
+                    &self.shadow_terrain,
+                    &self.shadow_water,
+                ]
+                .into_iter()
+                .flatten(),
+            )
+            .chain(entities)
+            .chain(self.weather.iter().flatten())
+            .chain(self.hand.iter().map(|h| &h.0))
+            .chain(&self.shadow_comp)
+            .any(|pass| {
+                (pass.material_maps || pass.paged)
+                    && pass
+                        .samplers
+                        .iter()
+                        .any(|s| matches!(s.source, Source::Normals | Source::Specular))
+            })
+    }
+
     /// Drops every pass's cached bind groups, compute stages included: they name views that
     /// were made again.
     fn forget_groups(&mut self) {
@@ -6592,6 +6628,9 @@ mod destination_tests;
 #[cfg(test)]
 #[path = "pack_material_tests.rs"]
 mod material_tests;
+
+#[cfg(test)]
+mod material_demand_tests;
 
 #[cfg(test)]
 #[path = "pack_paged_maps_tests.rs"]

@@ -7202,6 +7202,13 @@ impl Renderer {
     pub fn shader_pack_loading(&self) -> bool {
         self.pack_loading.is_some()
     }
+    /// The finalized classic pack's material-map demand, even while no maps are loaded.
+    pub fn shader_pack_material_maps(&self) -> bool {
+        self.pack_post
+            .as_ref()
+            .and_then(|(_, post)| post.as_ref())
+            .is_some_and(pack_post::PackPost::needs_material_maps)
+    }
     /// The game won't give this renderer the pack whose world it holds (`world_held`): its
     /// load failed. Unless a pack of Horizon's runs, the world follows no pack again.
     pub fn release_world(&mut self) {
@@ -7216,6 +7223,7 @@ impl Renderer {
         self.pack_post = None;
         self.replace_executor(None);
         self.pack_atlas = None;
+        self.pack_material_atlases = None;
         self.separate_ao = false;
     }
     /// Sets whether shader pack terrain inputs pass vertex alpha to `hz_Color.a` (`separateAo=true`).

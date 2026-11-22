@@ -201,7 +201,7 @@ pub(super) fn active_pack<'a>(picked: &'a str, mods: &ModList) -> &'a str {
     }
 }
 
-/// A selected pack may read resource-pack material maps, whether native or GLSL.
+/// Whether the selected pack can read resource-pack material maps.
 pub(super) fn picks_material_pack(settings: &horizon_client::settings::Settings) -> bool {
     let dev = std::env::var("HORIZON_SHADER_PACK").ok();
     let picked = active_pack(
@@ -219,6 +219,103 @@ pub(super) fn picks_material_pack(settings: &horizon_client::settings::Settings)
     };
     path.file_name()
         .is_none_or(|f| !active_pack(&f.to_string_lossy(), &settings.mods).is_empty())
+        && pack_material_maps(
+            &path,
+            picked.starts_with("horizon:"),
+            horizon_client::sprites::labpbr_maps(),
+        )
+}
+
+/// Classic demand is learned from finalized renderer bindings and kept through the resource
+/// reload it requests. A fresh process starts without it; native demand comes from its API.
+fn pack_material_maps(path: &std::path::Path, native_identity: bool, classic_demand: bool) -> bool {
+    if native_identity || horizon_shader_api::package::is_pack(path) {
+        horizon_shader_api::Pack::read_manifest(path)
+            .is_ok_and(|m| super::native_shaders::needs_material_maps(&m))
+    } else {
+        classic_demand
+    }
+}
+
+#[cfg(test)]
+mod material_demand_tests {
+    use super::pack_material_maps;
+
+    #[test]
+    fn only_native_material_stages_request_companion_maps() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-native-material-demand-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let manifest = root.join(horizon_shader_api::MANIFEST);
+        let api = horizon_shader_api::manifest::API;
+        for stage in ["sky", "post", "material"] {
+            let table = match stage {
+                "post" => "[[post]]".to_owned(),
+                _ => format!("[{stage}]"),
+            };
+            std::fs::write(
+                &manifest,
+                format!(
+                    "schema=1\nid=\"demand\"\nname=\"Demand\"\nversion=\"1\"\n\
+                     api=\"{api}\"\n{table}\nfile=\"stage.wgsl\"\n"
+                ),
+            )
+            .unwrap();
+            horizon_shader_api::Pack::read_manifest(&root)
+                .unwrap_or_else(|error| panic!("{stage}: invalid current-API fixture: {error}"));
+            // No shader source is needed to decide whether this native API exposes maps.
+            for previous in [false, true] {
+                assert_eq!(
+                    pack_material_maps(&root, false, previous),
+                    stage == "material",
+                    "{stage}, previous demand {previous}"
+                );
+            }
+        }
+        std::fs::write(&manifest, "not a native manifest").unwrap();
+        assert!(!pack_material_maps(&root, false, true));
+        std::fs::write(
+            &manifest,
+            "schema=1\nid=\"demand\"\nname=\"Demand\"\nversion=\"1\"\napi=\"0.2\"\n\
+             [frame]\nblend=\"linear\"\nprimaries=\"bt2020\"\n\
+             [material]\nfile=\"stage.wgsl\"\n",
+        )
+        .unwrap();
+        horizon_shader_api::Pack::read_manifest(&root)
+            .expect("valid but undrawable native manifest");
+        assert!(!pack_material_maps(&root, false, true));
+        std::fs::write(
+            &manifest,
+            r#"schema=1
+id="demand"
+name="Demand"
+version="1"
+api="0.1"
+[material]
+file="stage.wgsl"
+"#,
+        )
+        .unwrap();
+        assert!(horizon_shader_api::Pack::read_manifest(&root).is_err());
+        assert!(
+            !pack_material_maps(&root, false, true),
+            "a retired native API cannot retain learned material-map demand"
+        );
+        std::fs::remove_file(manifest).unwrap();
+        std::fs::create_dir_all(root.join("shaders")).unwrap();
+        assert!(!pack_material_maps(&root, false, false));
+        assert!(
+            pack_material_maps(&root, false, true),
+            "retain learned PBR demand through reload"
+        );
+        assert!(
+            !pack_material_maps(&root, true, true),
+            "an unavailable native identity cannot inherit classic demand"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 /// Prefer the connection's current block tags, including a local integrated server's.
@@ -421,22 +518,25 @@ impl Game<'_> {
             }
         }
         if picked.is_empty() {
+            if horizon_client::sprites::labpbr_maps()
+                && self.rest_loader.is_none()
+                && self.pack_reload.is_none()
+                && !self.pending_pack_reload
+            {
+                horizon_client::sprites::set_labpbr_maps(false);
+                self.reload_packs();
+            }
             return PackInputs::default();
         }
-        if !horizon_client::sprites::labpbr_maps() {
-            horizon_client::sprites::set_labpbr_maps(true);
-            self.reload_packs();
-            return PackInputs::default();
-        }
+        let native = (dev_pack().is_none() && selected.starts_with("horizon:"))
+            || horizon_shader_api::package::is_pack(&path);
         let name = selected.clone();
         let dimension = match self.dim {
             Dim::Overworld | Dim::Extra(_) => 0,
             Dim::Nether => -1,
             Dim::End => 1,
         };
-        if (dev_pack().is_none() && selected.starts_with("horizon:"))
-            || horizon_shader_api::package::is_pack(&path)
-        {
+        if native {
             // One of Horizon's own packs (game/modding/native_shaders.rs).
             self.tick_native_shader_pack(&path);
         } else if let Some(renderer) = &mut self.renderer
@@ -595,6 +695,27 @@ impl Game<'_> {
             }
         }
         self.sync_block_layers();
+        // Wait for a settled pipeline and resource loader: the no-pack dimension marker
+        // below must not be mistaken for new demand while its resource reload is pending.
+        // This also releases maps after synchronous pack-open errors, which never poll.
+        if !native
+            && self.rest_loader.is_none()
+            && self.pack_reload.is_none()
+            && !self.pending_pack_reload
+            && let Some(renderer) = &mut self.renderer
+            && !renderer.shader_pack_loading()
+            && renderer.shader_pack_dimension() == Some(dimension)
+        {
+            let material_maps = renderer.shader_pack_material_maps();
+            if material_maps != horizon_client::sprites::labpbr_maps() {
+                horizon_client::sprites::set_labpbr_maps(material_maps);
+                // Mark this dimension without a pack until the rebuilt renderer has its
+                // maps, rather than drawing a material shader with temporary stand-ins.
+                let _ = renderer.set_shader_pack(dimension, None, &[]);
+                self.reload_packs();
+                return PackInputs::default();
+            }
+        }
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
         let at = camera.floor().as_ivec3();
         let light = self.world.light(at.x, at.y, at.z);

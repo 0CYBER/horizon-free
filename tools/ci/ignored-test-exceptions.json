@@ -610,6 +610,14 @@
   {
     "package": "horizon-client-render",
     "target": "lib",
+    "test": "gfx::pack_post::material_demand_tests::material_demand_follows_usable_bindings_and_custom_overrides",
+    "path": "crates/horizon-client-render/src/gfx/pack_post/material_demand_tests.rs",
+    "reason": "requires a Vulkan/Metal/DX12 adapter",
+    "rationale": "Adapter-gated GPU lane in tools/ci/ignored-tests/gpu.txt; a real available adapter is required and the runner handles adapter availability separately from prepared-resource daily selection."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
     "test": "gfx::entity_batch::tests::benchmark_entity_batch",
     "path": "crates/horizon-client-render/src/gfx/entity_batch.rs",
     "reason": "manual production-helper microbenchmark",

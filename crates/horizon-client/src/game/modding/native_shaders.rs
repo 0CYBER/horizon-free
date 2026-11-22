@@ -324,14 +324,26 @@ impl Game<'_> {
             manifest_refused.is_some(),
             running,
         );
-        // The resources were loaded without a native pack, so without the resource packs'
-        // LabPBR maps its material stage reads: load them once, now that one runs.
-        if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
-            && !horizon_client::sprites::labpbr_maps()
-        {
-            horizon_client::sprites::set_labpbr_maps(true);
-            log::info!("Horizon: reloading resources for the LabPBR maps a native pack reads");
-            self.reload_packs();
+        // A refused manifest stops its preceding pack; other failed hot reloads keep it.
+        // Only a pack that still runs can retain its preceding material-map demand.
+        let material_maps = match &result {
+            Ok((manifest, _, _)) => manifest.material.is_some(),
+            Err(_) => {
+                manifest_refused.is_none()
+                    && renderer.shader_pack_kind() == Some("native")
+                    && horizon_client::sprites::labpbr_maps()
+            }
+        };
+        if material_maps != horizon_client::sprites::labpbr_maps() {
+            renderer.drop_shader_packs();
+            // An existing resource load resets this pack's stamp when it applies. Let it
+            // finish before changing what its workers read; the next build rechecks demand.
+            if self.rest_loader.is_none() && self.pack_reload.is_none() && !self.pending_pack_reload
+            {
+                horizon_client::sprites::set_labpbr_maps(material_maps);
+                log::info!("Horizon: reloading resources for native pack material-map demand");
+                self.reload_packs();
+            }
         }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         match result {
@@ -376,6 +388,11 @@ fn manifest_refused(path: &Path) -> Option<String> {
         Ok(manifest) => not_drawn(&manifest).map(Into::into),
         Err(e) => Some(e),
     }
+}
+
+/// Whether the served native material stage can read resource-pack companion maps.
+pub(super) fn needs_material_maps(manifest: &Manifest) -> bool {
+    manifest.material.is_some() && not_drawn(manifest).is_none()
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
