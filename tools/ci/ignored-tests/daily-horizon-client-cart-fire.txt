@@ -1,0 +1,5 @@
+# A minecart in a fire block: prepared resources.
+# PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::minecarts::container_drop_tests::a_cart_in_fire_takes_fire_damage_and_breaks lib daily resources
+horizon-client game::minecarts::container_drop_tests::a_cart_is_hurt_by_fire_at_the_positions_the_effects_apply_at lib daily resources
+horizon-client game::minecarts::container_drop_tests::an_invulnerable_cart_in_fire_is_lit_but_not_hurt lib daily resources

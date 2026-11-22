@@ -959,7 +959,7 @@ impl Game<'_> {
         }
     }
     /// `BaseFireBlock.fireDamage` of a fire block at `p`.
-    fn fire_damage_at(&self, p: [i32; 3]) -> Option<f32> {
+    pub(super) fn fire_damage_at(&self, p: [i32; 3]) -> Option<f32> {
         match &*self
             .res
             .facts()

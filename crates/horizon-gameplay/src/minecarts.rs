@@ -188,6 +188,10 @@ pub struct Minecart {
     pub loot: Option<horizon_client::save::PendingContainerLoot>,
     /// `Entity.firstTick`: not ticked yet (saved as `HasTicked`).
     pub first_tick: bool,
+    /// Where the cart stood right after the move of this tick (the old
+    /// behavior's `AbstractMinecart.move` runs `applyEffectsFromBlocks` there);
+    /// taken by the fire pass.
+    pub fire_move_at: Option<Vec3>,
     /// `Entity.isInWater` (`wasTouchingWater`): `AbstractMinecart.tick`
     /// updates it after the move (`updateFluidInteraction`), so the move
     /// goes by where the cart was a tick before, and a new cart's first
@@ -600,6 +604,7 @@ impl Minecart {
             enabled: true,
             loot: None,
             first_tick: true,
+            fire_move_at: None,
             in_water: false,
             command: horizon_client::command_block::CommandBlock::default(),
             tick_count: 0,
