@@ -17,3 +17,4 @@ pub mod entry;
 static ALLOCATOR: horizon_threads::GameAllocator = horizon_threads::GAME_ALLOCATOR;
 pub mod game;
 pub mod orb_limits;
+pub mod server_impulse;

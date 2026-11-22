@@ -34,6 +34,14 @@ impl ImpulseContext {
             self.try_reset();
         }
     }
+    /// `ServerGamePacketListenerImpl.handlePlayerPositionChange`: after an
+    /// accepted move, standing on the ground, a liquid landing, a climbable,
+    /// a spectator, gliding or a spin attack tries to end the context.
+    pub fn after_move(&mut self, reset: bool) {
+        if reset {
+            self.try_reset();
+        }
+    }
     pub fn is_in_grace_time(&self) -> bool {
         self.reset_grace_time > 0
     }
@@ -216,6 +224,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_ground_move_keeps_the_context_for_forty_ticks_then_ends_it() {
+        let mut c = impact();
+        c.set_ignore_fall_damage(true, Some(Vec3::new(0.0, 64.0, 0.0)));
+        for _ in 0..40 {
+            c.after_move(true);
+            assert!(c.ignores_fall_damage());
+            c.tick_grace_time();
+        }
+        c.after_move(true);
+        assert!(!c.ignores_fall_damage());
+    }
     #[test]
     fn a_move_that_lands_in_a_liquid_ends_the_impulse_context() {
         let mut impulse = impact();
