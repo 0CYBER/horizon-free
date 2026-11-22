@@ -215,7 +215,10 @@ impl Game<'_> {
         // at or above `born`, so the set cannot grow, only lose the removed.
         let (done, born, announced) =
             (self.ordered.done, self.ordered.born, self.ordered.announced);
-        let wanted = |j: JoinSeq| done.is_none_or(|d| j > d) && j < cut && j < born;
+        // The late pass holds only TNT and falling blocks the early passes left
+        // for it, however far those went on in the join order: an orb that
+        // joined after them ticked there already (#17269).
+        let wanted = |j: JoinSeq| (late || done.is_none_or(|d| j > d)) && j < cut && j < born;
         let mut pending = std::mem::take(&mut self.ordered.pending_buf);
         pending.clear();
         let ordered = &self.ordered;
@@ -243,7 +246,9 @@ impl Game<'_> {
         let mut obstacles: Option<horizon_client::entities::ObstacleGrid> = None;
         let mut nearby = Vec::new();
         for (key, kind, join) in pending.drain(..) {
-            self.ordered.done = Some(key);
+            // The furthest join ticked: the late pass's earlier joins do not
+            // move it back over an orb that ticked before them.
+            self.ordered.done = Some(self.ordered.done.map_or(key, |d| d.max(key)));
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
             match kind {
                 Pending::Tnt => {

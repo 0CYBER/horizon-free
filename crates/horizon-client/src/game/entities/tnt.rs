@@ -2296,4 +2296,30 @@ mod entity_collision_tests {
             );
         });
     }
+
+    /// `ServerLevel.tick` ticks every entity in the level's tick list, in the
+    /// order they joined: an experience orb that joined after three primed
+    /// TNT leaves them their tick (#17269). Each TNT's fuse counts down once.
+    #[test]
+    #[ignore = "daily"]
+    fn primed_tnt_ticks_when_an_orb_joined_after_it() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.block_ticks
+                .add_empty_chunk(ChunkPos::new(0, 0))
+                .unwrap();
+            assert!(game.run_command("forceload add 0 0"));
+            for x in [3, 6, 9] {
+                assert!(game.run_command(&format!("summon tnt {x}.5 200 8.5 {{fuse:400,NoGravity:1b}}")));
+            }
+            assert!(game.run_command("summon experience_orb 12.5 200 2.5 {Value:3,NoGravity:1b}"));
+            game.tick_world(true).unwrap();
+            let fuses: Vec<i32> = game.tnts.iter().map(|t| t.fuse).collect();
+            assert_eq!(fuses, [399, 399, 399]);
+        });
+    }
 }

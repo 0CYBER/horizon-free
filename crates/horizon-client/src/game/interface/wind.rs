@@ -19,6 +19,7 @@ use horizon_core::{
     random::RandomSource,
 };
 use horizon_world::level::PlayerContext;
+use horizon_world::registry::BlockStateId;
 use std::collections::BTreeSet;
 
 /// `WindCharge.RADIUS` and the knockback multiplier of its damage calculator.
@@ -26,6 +27,40 @@ const PLAYER_RADIUS: f32 = 1.2;
 const PLAYER_KNOCKBACK: f32 = 1.22;
 /// `BreezeWindCharge.RADIUS`.
 const BREEZE_RADIUS: f32 = 3.0;
+
+/// A burst that reaches some entities only after their own tick: vanilla has
+/// ticked them by the time the charge bursts, and here they tick after the
+/// projectiles (`Game::apply_late_wind_pushes`).
+pub(super) struct LateWindBurst {
+    center: [f64; 3],
+    radius: f32,
+    multiplier: f64,
+    blast: Blast,
+    blocks: Vec<[i32; 3]>,
+    /// The entities still to tick when it went off, by id.
+    waiting: BTreeSet<u32>,
+    /// Where its blocks' reaction starts in the tick's `LateWindChanges`:
+    /// `hurtEntities` runs before `interactWithBlocks`, so its held pushes see
+    /// the blocks without its own changes or those of the bursts after it.
+    changes_from: usize,
+}
+
+/// The blocks the tick's bursts changed while pushes were held (a door one
+/// opened, the other half, what a lever it flipped powered), in order: where,
+/// before and after.
+pub(super) type LateWindChanges = Vec<([i32; 3], BlockStateId, BlockStateId)>;
+
+/// The blocks a burst's rays can cross to reach an entity it may push: the
+/// feet within twice the radius of the centre, and the entity's box above
+/// and around them (no late-ticking kind is two blocks across).
+fn exposure_region(center: [f64; 3], radius: f32) -> impl Iterator<Item = [i32; 3]> {
+    let reach = f64::from(radius) * 2.0 + 2.0;
+    let lo = center.map(|c| (c - reach).floor() as i32);
+    let hi = center.map(|c| (c + reach).floor() as i32);
+    (lo[0]..=hi[0]).flat_map(move |x| {
+        (lo[1]..=hi[1]).flat_map(move |y| (lo[2]..=hi[2]).map(move |z| [x, y, z]))
+    })
+}
 
 /// The wind charges that met a boat or a minecart in a tick's projectile pass,
 /// as they were before it: one whose vehicle an earlier charge of the tick
@@ -145,6 +180,20 @@ impl Source {
 /// Whether a wind push must wait for the entity's own tick: it joined before
 /// the charge (`id` below the charge's), so vanilla has ticked it already this
 /// game tick, and its kind ticks after the projectiles here.
+/// Whether an orb, primed TNT or falling block at `key` in the tick order has
+/// still to tick this tick: past the last one ticked (`done`), or held for the
+/// late pass because it joined since the spawn packets (`announced`), however
+/// far `done` went on past it (an orb that joined after it, #17269).
+fn not_ticked_yet<T: PartialOrd>(
+    ticks_after_projectiles: bool,
+    waits_for_spawn_packet: bool,
+    key: T,
+    done: Option<T>,
+    announced: T,
+) -> bool {
+    let deferred = waits_for_spawn_packet && key >= announced;
+    ticks_after_projectiles && (deferred || done.is_none_or(|d| key > d))
+}
 fn push_waits_for_tick<T: PartialOrd>(
     ticks_after_projectiles: bool,
     joined: T,
@@ -507,24 +556,6 @@ impl Game<'_> {
                 .ui
                 .rules
                 .bool_at(horizon_client::gamerules::vanilla::MOB_GRIEFING);
-        let diameter = f64::from(radius * 2.0);
-        let distance = |p: [f64; 3]| {
-            ((p[0] - center[0]).powi(2) + (p[1] - center[1]).powi(2) + (p[2] - center[2]).powi(2))
-                .sqrt()
-        };
-        let direction = |origin: [f64; 3]| {
-            let d = [
-                origin[0] - center[0],
-                origin[1] - center[1],
-                origin[2] - center[2],
-            ];
-            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if l < 1.0e-5 {
-                [0.0; 3]
-            } else {
-                [d[0] / l, d[1] / l, d[2] / l]
-            }
-        };
         // The player, then every other player in the level (LAN guests),
         // each swapped in as the player. In a guest's turn (a mace's wind
         // burst) the player is that guest.
@@ -562,61 +593,135 @@ impl Game<'_> {
             spared: None,
         };
         let source = self.creatures.wind_source;
-        let done = self.ordered.done;
-        let mut late = Vec::new();
+        let (done, announced) = (self.ordered.done, self.ordered.announced);
+        let mut waiting_ids = BTreeSet::new();
         let mut entities = self.take_entities();
         for_each_entity_mut!(entities, entity => {
-            if entity.ignores_explosion(&burst) || !entity.pushed_by_wind() {
-                return;
-            }
-            let feet = entity.position();
-            let feet = [feet.x, feet.y, feet.z];
-            let dist = distance(feet) / diameter;
-            if dist > 1.0 {
-                return;
-            }
-            let b = entity.explosion_box();
-            let (lo, hi) = (b.min_position(), b.max_position());
-            let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
-            let power = (1.0 - dist) * f64::from(exposure) * multiplier;
-            let dir = direction([feet[0], feet[1] + entity.explosion_eye_height(), feet[2]]);
-            let mut push = [dir[0] * power, dir[1] * power, dir[2] * power];
-            let id = Some(entity.id());
-            self.native_explosion_knockback(self.dim.id(), center, blocks, id, &mut push);
-            let push = Vec3::new(push[0], push[1], push[2]);
             // ServerLevel ticks entities in the order they joined. One that
             // joined before the charge has ticked by now in vanilla, so the
-            // push is for its next tick; here its kind ticks after the
-            // projectiles, so the push waits for that tick to run.
-            // Joined before the charge and not ticked yet: the push is for its next tick.
+            // burst finds it where that tick left it; here its kind ticks
+            // after the projectiles, so the burst reaches it after that tick.
             // Where it ticks: where it joined, or where it started ticking again.
             let key = self.ordered.tick_key(entity.join_seq());
-            let waiting = entity.ticks_after_projectiles() && done.is_none_or(|d| key > d);
+            let waiting = not_ticked_yet(
+                entity.ticks_after_projectiles(),
+                entity.waits_for_spawn_packet(),
+                key,
+                done,
+                announced,
+            );
             if push_waits_for_tick(waiting, key, source) {
-                late.push((entity.id(), push));
-            } else {
+                waiting_ids.insert(entity.id());
+            } else if let Some(push) =
+                self.wind_push_on(&*entity, center, radius, multiplier, &burst, blocks)
+            {
                 entity.push_from_explosion(push);
             }
         });
         self.restore_entities(entities);
-        self.creatures.late_wind_pushes.extend(late);
+        if !waiting_ids.is_empty() {
+            self.creatures.late_wind_pushes.push(LateWindBurst {
+                center,
+                radius,
+                multiplier,
+                blast: burst,
+                blocks: blocks.to_vec(),
+                waiting: waiting_ids,
+                changes_from: self.creatures.late_wind_changes.len(),
+            });
+        }
         pushed
     }
-    /// The pushes `wind_knockback` held for entities that tick after the
-    /// projectiles, applied once those entities have ticked.
+    /// `ServerExplosion.hurtEntities` for one entity where it stands now:
+    /// its distance is from its feet, its direction from its eyes. `None`
+    /// when the burst leaves it alone.
+    fn wind_push_on(
+        &mut self,
+        entity: &impl super::entity::Entity,
+        center: [f64; 3],
+        radius: f32,
+        multiplier: f64,
+        blast: &Blast,
+        blocks: &[[i32; 3]],
+    ) -> Option<Vec3> {
+        if entity.ignores_explosion(blast) || !entity.pushed_by_wind() {
+            return None;
+        }
+        let feet = entity.position();
+        let to_feet = [feet.x - center[0], feet.y - center[1], feet.z - center[2]];
+        let dist = (to_feet[0].powi(2) + to_feet[1].powi(2) + to_feet[2].powi(2)).sqrt()
+            / f64::from(radius * 2.0);
+        if dist > 1.0 {
+            return None;
+        }
+        let b = entity.explosion_box();
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
+        let power = (1.0 - dist) * f64::from(exposure) * multiplier;
+        let d = [
+            to_feet[0],
+            to_feet[1] + entity.explosion_eye_height(),
+            to_feet[2],
+        ];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let dir = if l < 1.0e-5 {
+            [0.0; 3]
+        } else {
+            [d[0] / l, d[1] / l, d[2] / l]
+        };
+        let mut push = [dir[0] * power, dir[1] * power, dir[2] * power];
+        let id = Some(entity.id());
+        self.native_explosion_knockback(self.dim.id(), center, blocks, id, &mut push);
+        Some(Vec3::new(push[0], push[1], push[2]))
+    }
+    /// The bursts `wind_knockback` held for entities that tick after the
+    /// projectiles, measured now that those entities have ticked: one that
+    /// moved out of reach is not pushed, one that moved into it is, and one
+    /// its own tick removed is gone.
     pub(super) fn apply_late_wind_pushes(&mut self) {
         let late = std::mem::take(&mut self.creatures.late_wind_pushes);
+        let changes = std::mem::take(&mut self.creatures.late_wind_changes);
         if late.is_empty() {
             return;
         }
-        let mut entities = self.take_entities();
-        for_each_entity_mut!(entities, entity => {
-            // Every burst of the tick pushed it, one after the other.
-            let id = entity.id();
-            for (_, push) in late.iter().filter(|(pushed, _)| *pushed == id) {
-                entity.push_from_explosion(*push);
+        // The blocks the bursts changed go back as the first burst found them,
+        // last change first (storage only: nothing else sees it), unless
+        // something since changed them again; each burst then measures with
+        // the changes of the bursts before it, and the rest come back after.
+        let mut undone = vec![false; changes.len()];
+        for (i, &([x, y, z], before, after)) in changes.iter().enumerate().rev() {
+            undone[i] = self.world.block(x, y, z) == after && self.world.set_stored(x, y, z, before);
+        }
+        let mut redone = 0;
+        let mut redo_to = |game: &mut Self, end: usize| {
+            for i in redone..end.min(changes.len()) {
+                let ([x, y, z], _, after) = changes[i];
+                if undone[i] {
+                    game.world.set_stored(x, y, z, after);
+                }
             }
-        });
+            redone = redone.max(end);
+        };
+        let mut entities = self.take_entities();
+        // Every burst of the tick, one after the other.
+        for b in &late {
+            redo_to(self, b.changes_from);
+            for_each_entity_mut!(entities, entity => {
+                if b.waiting.contains(&entity.id())
+                    && let Some(push) = self.wind_push_on(
+                        &*entity,
+                        b.center,
+                        b.radius,
+                        b.multiplier,
+                        &b.blast,
+                        &b.blocks,
+                    )
+                {
+                    entity.push_from_explosion(push);
+                }
+            });
+        }
+        redo_to(self, changes.len());
         self.restore_entities(entities);
     }
     /// `ServerExplosion.hurtEntities` for the player: the push, less
@@ -743,6 +848,19 @@ impl Game<'_> {
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.wind_positions(center, radius);
         let pushed = self.wind_knockback(center, radius, multiplier, src, &targets);
+        // While pushes are held (this burst's or an earlier one's of the tick),
+        // the blocks their rays cross are kept as they are now, before they
+        // react, for those pushes to be measured against.
+        let region: BTreeSet<[i32; 3]> = self
+            .creatures
+            .late_wind_pushes
+            .iter()
+            .flat_map(|b| exposure_region(b.center, b.radius))
+            .collect();
+        let before: Vec<_> = region
+            .into_iter()
+            .map(|[x, y, z]| ([x, y, z], self.world.block(x, y, z)))
+            .collect();
         self.wind_burst_knockback(center, radius, multiplier, &targets);
         let block_count = targets.len();
         // Explosion.canTriggerBlocks: a breeze's charge needs mob griefing.
@@ -761,6 +879,12 @@ impl Game<'_> {
             self.native_wind_burst(dimension, center, &mut targets);
             for pos in targets {
                 self.wind_trigger_block(pos)?;
+            }
+        }
+        for ([x, y, z], was) in before {
+            let now = self.world.block(x, y, z);
+            if now != was {
+                self.creatures.late_wind_changes.push(([x, y, z], was, now));
             }
         }
         // `ServerLevel.explode`'s `playSound`: a silent source's burst is mute,
@@ -976,6 +1100,25 @@ mod tests {
     /// ServerLevel ticks entities in join order: an orb, falling block or TNT that
     /// joined before the charge has moved by the time the charge bursts, so the
     /// push belongs to its next tick; one that joined after has not.
+    /// A TNT (join 10) summoned since the spawn packets waits for the late
+    /// pass; an orb that joined after it (11) ticked in the early pass, so
+    /// `done` is 11 when a charge (12) bursts. The TNT has not ticked: the
+    /// push waits for its tick. An orb at 10 has.
+    #[test]
+    fn a_tnt_held_for_the_late_pass_has_not_ticked_whatever_done_says() {
+        assert!(not_ticked_yet(true, true, 10, Some(11), 0));
+        assert!(push_waits_for_tick(true, 10, Some(12)));
+        assert!(
+            !not_ticked_yet(true, false, 10, Some(11), 0),
+            "an orb ticked"
+        );
+        assert!(
+            !not_ticked_yet(true, true, 10, Some(11), 20),
+            "announced: it ticked in the early pass"
+        );
+        assert!(not_ticked_yet(true, false, 12, Some(11), 0), "past done");
+        assert!(!not_ticked_yet(false, true, 12, None, 0), "ticks before");
+    }
     #[test]
     fn a_push_waits_only_for_late_ticking_kinds_that_joined_before_the_charge() {
         use crate::game::entity::Entity;

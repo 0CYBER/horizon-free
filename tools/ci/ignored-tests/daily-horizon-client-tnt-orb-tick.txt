@@ -1,0 +1,2 @@
+# A real Game boot checks that an orb does not hide earlier deferred TNT ticks (#17269).
+horizon-client game::tnt::entity_collision_tests::primed_tnt_ticks_when_an_orb_joined_after_it lib daily game-boot
