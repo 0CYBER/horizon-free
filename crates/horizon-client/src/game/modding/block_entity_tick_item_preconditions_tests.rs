@@ -40,6 +40,7 @@ fn finalization_never_retargets_stale_items_or_replaced_placeholders() {
                 failure_generation: game.wasm_dispatch_failures.get(),
                 transaction_depth: 0,
                 unbalanced: false,
+                keeps_contents: false,
             });
             for count in [5, 3] {
                 game.spawn_item(

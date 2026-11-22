@@ -38,6 +38,13 @@ pub trait DefaultCapabilitiesRegistrar {
     fn block_fluids(&mut self, block: &crate::BlockKey, fluids: crate::ModFluidTanks);
     /// Declare this block's energy buffer, validated by the normal game table builder.
     fn block_energy(&mut self, block: &crate::BlockKey, energy: crate::ModEnergyBuffer);
+    /// Keep this mod block's container stacks when its block entity goes: they don't scatter
+    /// (`Containers.dropContents`) as a vanilla container's do, as a Java block entity that isn't
+    /// a `Container` keeps them (Mekanism's machines carry theirs in their item through the loot's
+    /// `copy_components`). The mod carries them itself, from the entity's saved `Items` in
+    /// `block_drops`; a removal that drops nothing (a command, a replacing write) loses them, as
+    /// in vanilla. Parts still add their own stacks through `pre_remove_side_effects`.
+    fn block_container_keeps_contents(&mut self, block: &crate::BlockKey);
     /// Register the type-bound callback used by `item_container`.
     fn register_item_container(
         &mut self,
@@ -56,6 +63,8 @@ pub trait DefaultCapabilitiesCapabilityProviders {
     fn block_fluids(&self, block: &str) -> Option<crate::ModFluidTanks>;
     /// First enabled declaration of this block's energy buffer.
     fn block_energy(&self, block: &str) -> Option<crate::ModEnergyBuffer>;
+    /// Whether an enabled mod keeps this block's container stacks when its block entity goes.
+    fn block_container_keeps_contents(&self, block: &str) -> bool;
     /// Registered item callbacks in registration order, without a global mod scan.
     fn item_container_provider(
         &self,
@@ -73,6 +82,11 @@ impl DefaultCapabilitiesCapabilityProviders for InstalledProviders {
     }
     fn block_energy(&self, block: &str) -> Option<crate::ModEnergyBuffer> {
         first_enabled(installed()?.keys.default_block_energy.get(block)?)
+    }
+    fn block_container_keeps_contents(&self, block: &str) -> bool {
+        installed()
+            .and_then(|installed| installed.keys.kept_block_containers.get(block))
+            .is_some_and(|mods| first_enabled(mods).is_some())
     }
     fn item_container_provider(
         &self,

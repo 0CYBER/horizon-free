@@ -3173,7 +3173,7 @@ impl Game<'_> {
                 self.container_changed(pos);
             }
         } else {
-            self.drop_unreturned_mod_contents(pos, taken);
+            self.drop_unreturned_tick_contents(pos, taken);
         }
     }
     /// Menu button `id` on the mod container at `pos` (`clickMenuButton`),

@@ -12,6 +12,9 @@ pub(super) struct Key {
     pub failure_generation: u64,
     pub transaction_depth: usize,
     pub unbalanced: bool,
+    /// The block the tick began on keeps its container's stacks
+    /// (`block_container_keeps_contents`), read before the call can replace it.
+    pub keeps_contents: bool,
 }
 
 #[derive(Clone)]
@@ -228,7 +231,7 @@ impl Game<'_> {
                 self.restore_unchanged_tick(pos, taken);
             }
         } else {
-            self.drop_unreturned_mod_contents(pos, taken);
+            self.drop_unreturned_tick_contents(pos, taken);
         }
         self.block_entity_tick_key = parent.0;
         self.block_entity_tick_items = parent.1;

@@ -29,6 +29,14 @@ impl Game<'_> {
         if items.len() < slots {
             items.resize(slots, None);
         }
+        let keeps_contents = self
+            .pack
+            .assets
+            .registry
+            .state(horizon_world::registry::BlockStateId(state))
+            .is_some_and(|block| {
+                mod_api::__private::parts_installation::block_container_keeps_contents(&block.name)
+            });
         let parent = (
             self.block_entity_tick_key
                 .replace(crate::game::block_entity_tick_items::Key {
@@ -37,6 +45,7 @@ impl Game<'_> {
                     failure_generation: self.wasm_dispatch_failures.get(),
                     transaction_depth: self.transactions.len(),
                     unbalanced: false,
+                    keeps_contents,
                 }),
             self.block_entity_tick_items.take(),
         );
@@ -55,7 +64,25 @@ impl Game<'_> {
         {
             **entity = taken;
         } else {
-            self.drop_unreturned_mod_contents(pos, taken);
+            self.drop_unreturned_tick_contents(pos, taken);
         }
+    }
+
+    /// A call removed or replaced its holder: a replacing write. Its container's stacks
+    /// scatter, unless this is the holder's own tick and the block it began on keeps them
+    /// (`block_container_keeps_contents`): then they go with the block entity, as for any
+    /// removal that drops nothing.
+    pub(in crate::game) fn drop_unreturned_tick_contents(
+        &mut self,
+        pos: Pos,
+        taken: EngineBlockEntity,
+    ) {
+        if self
+            .block_entity_tick_key
+            .is_some_and(|key| key.pos == pos && key.keeps_contents)
+        {
+            return;
+        }
+        self.drop_unreturned_mod_contents(pos, taken);
     }
 }

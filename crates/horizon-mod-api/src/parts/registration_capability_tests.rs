@@ -68,6 +68,35 @@ mod tests {
         }
     }
 
+    struct Keeper;
+    #[mod_api::__subscriptions]
+    impl Hooks for Keeper {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            let machine = r.block_key("keeper:machine");
+            let chest = r.block_key("keeper:chest");
+            r.block_container(&machine, Default::default());
+            r.block_container(&chest, Default::default());
+            r.block_container_keeps_contents(&machine);
+        }
+    }
+
+    #[test]
+    fn a_kept_container_is_answered_for_its_block_while_its_mod_is_on() {
+        // Installed for dispatch as well, so the mod can be switched off.
+        let mods: crate::Mods = vec![ModEntry::new("keeper", Box::new(Keeper))].into();
+        crate::__private::install(mods.clone());
+        crate::__private::part_tests::install_parts_fixture(&mods).unwrap();
+        let keeps = mod_vocab::__private::parts_installation::block_container_keeps_contents;
+        // Only the block the mod named keeps its stacks; its other container scatters.
+        assert!(keeps("keeper:machine"));
+        assert!(!keeps("keeper:chest"));
+        // A switched-off mod keeps nothing: the game scatters the stacks again.
+        assert!(crate::__private::set_mod_enabled("keeper", false));
+        assert!(!keeps("keeper:machine"));
+        assert!(crate::__private::set_mod_enabled("keeper", true));
+        assert!(keeps("keeper:machine"));
+    }
+
     #[test]
     fn native_default_domains_do_not_evaluate_dynamic_item_providers() {
         let slots = Arc::new(AtomicU32::new(0));

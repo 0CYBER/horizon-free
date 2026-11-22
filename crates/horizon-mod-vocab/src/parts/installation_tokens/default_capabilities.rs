@@ -20,6 +20,13 @@ pub fn block_energy(block: &str) -> Option<crate::ModEnergyBuffer> {
         block,
     )
 }
+/// Whether an enabled mod keeps this block's container stacks when its block entity goes.
+pub fn block_container_keeps_contents(block: &str) -> bool {
+    crate::parts::DefaultCapabilitiesCapabilityProviders::block_container_keeps_contents(
+        &crate::InstalledProviders,
+        block,
+    )
+}
 /// Run only this item's registered dynamic callbacks at the normal runtime lookup moment.
 pub fn item_container_slots(host: &dyn crate::Host, item: &str) -> Option<u32> {
     let table = host.capability_providers();

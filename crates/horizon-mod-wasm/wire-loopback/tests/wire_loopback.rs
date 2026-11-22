@@ -1495,6 +1495,9 @@ fn wire_loopback_provider_queries_return_owned_options_and_atomic_cursor_writeba
         fn block_container(&self, _: &str) -> Option<ModContainer> {
             None
         }
+        fn block_container_keeps_contents(&self, _: &str) -> bool {
+            false
+        }
         fn block_fluids(&self, _: &str) -> Option<ModFluidTanks> {
             None
         }

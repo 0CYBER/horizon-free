@@ -2445,6 +2445,8 @@ horizon-client game::spawner::tests::a_running_delay_counts_down_without_drawing
 horizon-client game::spill::crafter_drop_name_tests::actual_crafter_destruction_keeps_source_name_off_the_dropped_item lib daily resources
 horizon-client game::spill::tests::a_block_entity_part_gives_back_what_it_held_when_removed lib daily resources
 horizon-client game::spill::tests::a_block_entity_removing_itself_in_its_tick_is_not_asked lib daily resources
+horizon-client game::spill::tests::a_kept_block_replaced_in_its_own_tick_drops_nothing lib daily resources
+horizon-client game::spill::tests::a_kept_container_keeps_its_stacks_on_removal_and_an_unmarked_one_scatters lib daily resources
 horizon-client game::spill::tests::block_drops_draws_before_the_event_and_cancel_empties_the_break lib daily resources
 horizon-client game::splash_water::tests::a_doused_campfire_posts_block_change_from_the_potion_owner lib daily resources
 horizon-client game::stand_break_loot_tests::a_burnt_out_stand_drops_its_loot_table lib daily resources

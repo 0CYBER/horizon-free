@@ -46,6 +46,9 @@ impl DefaultCapabilitiesRegistrar for PartRegistrar {
     fn block_energy(&mut self, block: &crate::BlockKey, energy: crate::ModEnergyBuffer) {
         self.default_block(block, energy, |parts| &mut parts.default_block_energy);
     }
+    fn block_container_keeps_contents(&mut self, block: &crate::BlockKey) {
+        self.default_block(block, (), |parts| &mut parts.kept_block_containers);
+    }
     fn register_item_container(
         &mut self,
         item: &crate::ItemKey,
