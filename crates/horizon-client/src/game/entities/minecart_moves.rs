@@ -58,15 +58,18 @@ impl Game<'_> {
                 c.position.z + moved.z,
             );
             c.on_ground = delta.y < 0.0 && moved.y > delta.y;
+            // Entity.restituteMovementAfterCollisions: Mth.equal uses a
+            // 1e-5 tolerance on x/z (exact on y), so a tiny clip is not a
+            // collision. TNT carts use horizontalCollision to detonate.
             c.horizontal_collision =
-                (moved.x - delta.x).abs() > 1.0e-7 || (moved.z - delta.z).abs() > 1.0e-7;
-            if (moved.x - delta.x).abs() > 1.0e-7 {
+                (moved.x - delta.x).abs() >= 1.0e-5 || (moved.z - delta.z).abs() >= 1.0e-5;
+            if (moved.x - delta.x).abs() >= 1.0e-5 {
                 c.velocity.x = 0.0;
             }
-            if (moved.z - delta.z).abs() > 1.0e-7 {
+            if (moved.z - delta.z).abs() >= 1.0e-5 {
                 c.velocity.z = 0.0;
             }
-            if (moved.y - delta.y).abs() > 1.0e-7 {
+            if moved.y != delta.y {
                 c.velocity.y = 0.0;
             }
             // Entity.checkFallDamage: the move's drop counts (not in water, as of
