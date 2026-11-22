@@ -2552,6 +2552,9 @@ impl Game<'_> {
             )
         };
         let frame = |p: [i32; 3]| &*name(p) == "minecraft:obsidian";
+        // findEmptyPortalShape requires numPortalBlocks == 0: a partly
+        // filled frame is not a candidate for fire lighting.
+        let is_portal = |p: [i32; 3]| &*name(p) == "minecraft:nether_portal";
         let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
         let mut bottom = start;
         let mut n = 0;
@@ -2585,6 +2588,7 @@ impl Game<'_> {
             return None;
         }
         let mut height = 0;
+        let mut portal_blocks = 0;
         'rows: while height <= 21 {
             let y = left[1] + height;
             if !frame([left[0] - d[0], y, left[2] - d[2]])
@@ -2593,15 +2597,20 @@ impl Game<'_> {
                 break;
             }
             for i in 0..width {
-                if !empty([left[0] + d[0] * i, y, left[2] + d[2] * i]) {
+                let q = [left[0] + d[0] * i, y, left[2] + d[2] * i];
+                if !empty(q) {
                     break 'rows;
+                }
+                if is_portal(q) {
+                    portal_blocks += 1;
                 }
             }
             height += 1;
         }
         let top_ok =
             (0..width).all(|i| frame([left[0] + d[0] * i, left[1] + height, left[2] + d[2] * i]));
-        ((3..=21).contains(&height) && top_ok).then_some((left, width, height))
+        ((3..=21).contains(&height) && top_ok && portal_blocks == 0)
+            .then_some((left, width, height))
     }
     /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal,
     /// only in the Overworld and the Nether (`inPortalDimension`).
