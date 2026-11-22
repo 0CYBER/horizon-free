@@ -4572,6 +4572,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             assert!(Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "backend::tests::failed_removal_is_incomplete_and_can_be_retried"
                 ])
@@ -4629,6 +4630,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             assert!(Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "backend::tests::a_version_whose_client_predates_runtime_leases_is_removed"
                 ])
@@ -4681,6 +4683,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             assert!(Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "backend::tests::a_running_legacy_version_is_refused_whole_and_removed_once_it_closes"
                 ])
@@ -4733,6 +4736,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             assert!(Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "backend::tests::a_version_a_native_build_takes_its_resources_from_is_kept"
                 ])
@@ -5070,6 +5074,7 @@ pub fn {f}("
             let home = tempfile::tempdir().unwrap();
             assert!(Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "backend::tests::native_resources_resolve_to_the_base_and_prevent_its_removal",
                     "--nocapture"
@@ -7777,6 +7782,7 @@ pub fn {f}("
         assert!(
             // Lists no test and runs none.
             Command::new(&bin)
+                // reexec_include_ignored: skip, `--list` names no real test and runs none
                 .args(["--list", "--exact", "no test has this name"])
                 .stdout(std::process::Stdio::null())
                 .status()

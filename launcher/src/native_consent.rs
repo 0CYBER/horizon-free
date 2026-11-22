@@ -74,7 +74,7 @@ mod tests {
         if std::env::var_os("HORIZON_CONSENT_TEST_CHILD").is_none() {
             let home = tempfile::tempdir().unwrap();
             let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "native_consent::tests::cancel_escape_and_allow_consume_only_the_pending_toggle"])
+                .args(["--include-ignored", "--exact", "native_consent::tests::cancel_escape_and_allow_consume_only_the_pending_toggle"])
                 .env("HORIZON_CONSENT_TEST_CHILD", "1")
                 .env("HORIZON_LAUNCHER_HOME", home.path())
                 .env("HORIZON_HOME", home.path())

@@ -3114,6 +3114,7 @@ mod tests {
             let home = tempfile::tempdir().unwrap();
             let status = Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "native_mods::tests::a_native_build_starts_from_a_release_the_launcher_installed",
                 ])
@@ -4274,6 +4275,7 @@ mod tests {
             let mut command = Command::new(std::env::current_exe().unwrap());
             command
                 .args([
+                    "--include-ignored",
                     "--exact",
                     "native_mods::tests::server_install_is_not_playable_and_export_survives_cache_removal",
                     "--nocapture",

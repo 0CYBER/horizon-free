@@ -43,6 +43,22 @@ class Reruns(unittest.TestCase):
         self.assertIn('.args(["--ignored", "--exact", NAME])', text)
         self.assertEqual(reexec.fix(fixed), fixed)
 
+    def test_a_rerun_marked_skip_is_left_alone(self):
+        source = textwrap.dedent('''\
+            fn game() {
+                let mut game = Command::new(&image);
+                // reexec_include_ignored: skip, the child reads these as launch arguments
+                game.args(["--exact", NAME]).spawn();
+            }
+            fn unmarked() { Command::new(current_exe()).args(["--exact", NAME]).status(); }
+            ''').split("\n")
+        self.assertEqual([start for start, _ in reexec.missing(source)], [5])
+        self.assertIn('game.args(["--exact", NAME])', "\n".join(reexec.fix(list(source))))
+
+    def test_the_launcher_workspace_is_scanned(self):
+        scanned = {path.relative_to(reexec.ROOT).parts[0] for path in reexec.sources()}
+        self.assertIn("launcher", scanned)
+
     def test_the_committed_tree_has_no_rerun_without_it(self):
         result = subprocess.run([sys.executable, str(ROOT / "tools/ci/reexec_include_ignored.py"), "--check"],
                                 capture_output=True, text=True)

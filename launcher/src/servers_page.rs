@@ -3403,7 +3403,7 @@ mod tests {
         if std::env::var_os(CHILD).is_none() {
             let root = tempfile::tempdir().unwrap();
             let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "servers_page::tests::managed_start_and_restart_require_consent_before_running_the_supervisor", "--nocapture"])
+                .args(["--include-ignored", "--exact", "servers_page::tests::managed_start_and_restart_require_consent_before_running_the_supervisor", "--nocapture"])
                 .env(CHILD, "1")
                 .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
                 .env("HORIZON_HOME", root.path().join("cache"))

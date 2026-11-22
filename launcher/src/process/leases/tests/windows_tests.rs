@@ -22,7 +22,7 @@ fn wait_for(path: &Path) {
 fn inherited_exclusion_exact_handles_arguments_and_failure_release() {
     if std::env::var_os("HORIZON_WINDOWS_PRIVATE_TEST").is_none() {
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "process::leases::tests::windows_tests::inherited_exclusion_exact_handles_arguments_and_failure_release", "--nocapture"])
+            .args(["--include-ignored", "--exact", "process::leases::tests::windows_tests::inherited_exclusion_exact_handles_arguments_and_failure_release", "--nocapture"])
             .env("HORIZON_WINDOWS_PRIVATE_TEST", "1").status().unwrap();
         assert!(status.success());
         return;

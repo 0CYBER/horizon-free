@@ -24,6 +24,7 @@ fn command(root: &Path, role: &str, case: &str, number: i32) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args([
+            "--include-ignored",
             "--exact",
             "process::supervisor::tests::actor",
             "--nocapture",

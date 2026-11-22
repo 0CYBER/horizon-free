@@ -683,7 +683,7 @@ mod tests {
         if std::env::var_os(ACTOR).is_none() {
             let home = tempfile::tempdir().unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "native_mods::registry_plan::tests::fetch_retains_actual_feature_closure_and_excludes_unreachable_pins", "--nocapture"])
+                .args(["--include-ignored", "--exact", "native_mods::registry_plan::tests::fetch_retains_actual_feature_closure_and_excludes_unreachable_pins", "--nocapture"])
                 .env(ACTOR, "1")
                 .env("HORIZON_LAUNCHER_HOME", home.path())
                 .output().unwrap();

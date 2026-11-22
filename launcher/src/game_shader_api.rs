@@ -587,6 +587,7 @@ pub mod tests {
         let game = |hangs: &str| {
             let mut game = Command::new(std::env::current_exe().unwrap());
             game.args([
+                "--include-ignored",
                 "--exact",
                 "game_shader_api::tests::a_game_that_does_not_answer_in_time_is_stopped",
                 "--nocapture",

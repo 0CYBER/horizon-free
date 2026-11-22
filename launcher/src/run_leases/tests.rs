@@ -89,6 +89,7 @@ fn killed_holder_releases_production_home_source_and_parent_leases() {
     let mut actor = Actor(
         Command::new(std::env::current_exe().unwrap())
             .args([
+                "--include-ignored",
                 "--exact",
                 "run_leases::tests::lease_holder_actor",
                 "--nocapture",
@@ -188,7 +189,12 @@ fn routed_lifetime(stop: bool) {
         .success());
     let mut supervisor = Actor(
         Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "run_leases::tests::routing_actor", "--nocapture"])
+            .args([
+                "--include-ignored",
+                "--exact",
+                "run_leases::tests::routing_actor",
+                "--nocapture",
+            ])
             .env("ROUTING_ROOT", &data)
             .env("ROUTING_MODE", "launcher")
             .env("ROUTING_STOP", if stop { "1" } else { "0" })
@@ -354,6 +360,7 @@ fn data_directory_leaf_never_leases_ancestors_outside_data() {
     let root = tempfile::tempdir().unwrap();
     assert!(Command::new(std::env::current_exe().unwrap())
         .args([
+            "--include-ignored",
             "--exact",
             "run_leases::tests::data_directory_leaf_never_leases_ancestors_outside_data"
         ])

@@ -196,6 +196,7 @@ fn flat_cache_fits_a_small_descriptor_limit() {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child
             .args([
+                "--include-ignored",
                 "--exact",
                 "cache_cleanup::tests::flat_cache_fits_a_small_descriptor_limit",
                 "--nocapture",

@@ -277,8 +277,13 @@ fn sleeper_actor() {
 #[cfg(windows)]
 fn actor(name: &str, words: &[&str]) -> Command {
     let mut c = Command::new(std::env::current_exe().unwrap());
-    c.args(["--exact", &format!("launch::tests::{name}"), "--"])
-        .args(words);
+    c.args([
+        "--include-ignored",
+        "--exact",
+        &format!("launch::tests::{name}"),
+        "--",
+    ])
+    .args(words);
     c
 }
 

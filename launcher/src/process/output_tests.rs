@@ -19,7 +19,12 @@ fn raw_capture_privacy_flush_and_descendant_drain() {
         }
         let root = tempfile::tempdir().unwrap();
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "process::output_tests::actor", "--nocapture"])
+            .args([
+                "--include-ignored",
+                "--exact",
+                "process::output_tests::actor",
+                "--nocapture",
+            ])
             .env("HORIZON_CAPTURE_TEST_ROOT", root.path())
             .env("HORIZON_CAPTURE_TEST_MODE", mode)
             .stdout(Stdio::null())
@@ -131,7 +136,12 @@ fn actor() {
     }
     if mode == "descendant" {
         let mut descendant = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "process::output_tests::actor", "--nocapture"])
+            .args([
+                "--include-ignored",
+                "--exact",
+                "process::output_tests::actor",
+                "--nocapture",
+            ])
             .env("HORIZON_CAPTURE_TEST_MODE", "hold")
             .spawn()
             .unwrap();

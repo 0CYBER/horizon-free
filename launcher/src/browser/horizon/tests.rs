@@ -786,6 +786,7 @@ fn a_shader_pack_goes_by_the_game_of_the_instance_it_is_for() {
         let root = scratch("two-games");
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
+                "--include-ignored",
                 "--exact",
                 "browser::horizon::tests::a_shader_pack_goes_by_the_game_of_the_instance_it_is_for",
                 "--nocapture",

@@ -151,6 +151,7 @@ fn bridge_actor() {
 fn closed_stdin_does_not_lose_tree() {
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
+            "--include-ignored",
             "--exact",
             "process::leases::tests::child_keeps_gate_and_tree_after_creator_closes_its_copies",
             "--nocapture",
@@ -167,6 +168,7 @@ fn all_closed_stdio_masks_preserve_configured_pipes() {
     for mask in 1..=7 {
         let status = Command::new(std::env::current_exe().unwrap())
             .args([
+                "--include-ignored",
                 "--exact",
                 "process::leases::tests::child_keeps_gate_and_tree_after_creator_closes_its_copies",
                 "--nocapture",
@@ -183,6 +185,7 @@ fn all_closed_stdio_masks_preserve_configured_pipes() {
 fn configured_stdio_cloexec_is_cleared_after_setup() {
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
+            "--include-ignored",
             "--exact",
             "process::leases::tests::child_keeps_gate_and_tree_after_creator_closes_its_copies",
             "--nocapture",
