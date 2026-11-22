@@ -26,6 +26,7 @@ This registration corresponds to NeoForge's `RegisterCapabilitiesEvent`.
 | `r.is_block_capability_registered(&KEY, &block)` | Whether any game or mod provider registered so far covers this block type. |
 | `r.is_entity_capability_registered(&KEY, &entity_type)` | The same type-coverage query for an `EntityTypeKey`, obtained with `r.entity_type_key("minecraft:pig")`. |
 | `r.is_item_capability_registered(&KEY, &item)` | The same query for an `ItemKey`, obtained with `r.item_key("minecraft:stick")`. |
+| `ITEM_ENERGY.covers(host, item)` | After startup, on either side and with a read-only `Host`: whether an enabled mod's provider, or the game's own by item type, answers the item capability for this item type. A menu slot rule (`menu_slot_rules`) uses it on the client, where no place or transaction exists; a provider may still give nothing for one stack. |
 
 A block provider can expose a trash can that voids items or forward a multiblock port to its controller.
 A block with a block entity can have both kinds of provider.

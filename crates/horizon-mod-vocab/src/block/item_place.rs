@@ -324,6 +324,21 @@ impl<T: ?Sized + 'static> ItemCapabilityKey<T> {
             handler: PhantomData,
         }
     }
+
+    /// Whether an enabled mod's part, or the game's own provider by item type, answers this
+    /// capability for `item`: what a menu slot's rule asks (`menu_slot_rules`, on the server and
+    /// on the client alike) when it needs no place, stack or transaction, as NeoForge's
+    /// `ItemCapability` registration is by item. It answers for the type: a provider may still
+    /// give nothing for one stack. A game default that reads the stack itself ([`ITEM_ITEMS`]'s
+    /// container slots) is not counted.
+    pub fn covers(&self, host: &dyn crate::Host, item: crate::ItemKey) -> bool {
+        host.capability_providers()
+            .item_provider(self.name, item, &mut 0)
+            .is_some()
+            || crate::content::registry_keys::item_id(item).is_some_and(|id| {
+                crate::parts::installation::builtin_item_capability_registered(self.name, id)
+            })
+    }
 }
 
 /// Items held by an item, as NeoForge 26.3's `Capabilities.Item.ITEM`: a handler for the item at

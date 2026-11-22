@@ -648,6 +648,33 @@ pub mod tests {
     }
 
     #[test]
+    fn an_item_capability_covers_the_types_its_enabled_providers_name() {
+        struct Pouches;
+        #[mod_api::__subscriptions]
+        impl Hooks for Pouches {
+            fn register(&self, r: &mut dyn Registrar, _: &crate::RegistrationContext) {
+                r.item_capability(&ITEM_ITEMS, "test:ordered_item", |_, _| {
+                    Some(Box::new(Marked(1)))
+                });
+            }
+        }
+        let mods: crate::Mods = vec![ModEntry::new("pouches", Box::new(Pouches))].into();
+        crate::__private::install(mods.clone());
+        install_parts(&mods, &crate::parts::tests::rule_schema(), |_| false).unwrap();
+        mark_game_thread();
+        let host = ordered_world();
+        let pouch = super::super::items::tests::stack("test:ordered_item", 1, 0).item();
+        // The type a provider names, for that capability only.
+        assert!(ITEM_ITEMS.covers(&host, pouch));
+        assert!(!ITEM_FLUIDS.covers(&host, pouch));
+        // A switched-off mod's provider answers nothing.
+        assert!(crate::__private::set_mod_enabled("pouches", false));
+        assert!(!ITEM_ITEMS.covers(&host, pouch));
+        assert!(crate::__private::set_mod_enabled("pouches", true));
+        assert!(ITEM_ITEMS.covers(&host, pouch));
+    }
+
+    #[test]
     pub(crate) fn disabled_capability_providers_are_skipped_and_resume() {
         struct Later;
         #[mod_api::__subscriptions]
