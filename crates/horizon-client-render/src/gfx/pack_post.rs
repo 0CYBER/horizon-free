@@ -67,7 +67,7 @@ mod sky_disc_blend_tests;
 mod undrawn_terrain_tests;
 
 mod image_formats;
-use image_formats::{image_format, storage_formats_of};
+use image_formats::{binds_as, image_format, storage_formats_of};
 #[cfg(test)]
 mod full_outputs_tests;
 #[cfg(test)]
@@ -75,6 +75,8 @@ mod shadow_faces_tests;
 
 #[cfg(test)]
 mod r11f_image_tests;
+#[cfg(test)]
+mod storage_format_tests;
 
 #[cfg(test)]
 mod work_group_fold_tests;
@@ -1846,13 +1848,9 @@ fn bindings(
                 (None, None) => stand_in(&i.name, notes),
             }
         };
-        // An `R11F_G11F_B10F` image or buffer this device makes `RGBA16F` (a float stand-in
-        // that neither clamps nor drops NaN) takes `layout(r11f_g11f_b10f)` as `rgba16f`
-        // (`storage_formats_of`): Iris 1.11.7 stored into and read back such an image with a
-        // probe pack of ours (#10490), where Horizon refused the program.
-        let stand_in = format == wgpu::TextureFormat::Rg11b10Ufloat
-            && actual == wgpu::TextureFormat::Rgba16Float;
-        if actual != format && !stand_in {
+        // The texture's format wins over a qualifier `binds_as` takes for it; the module's image
+        // then declares it too (`storage_formats_of`).
+        if !binds_as(format, actual) {
             notes.push(format!(
                 "{name}: `{}` is {} but its texture is {actual:?}",
                 i.name, i.format
