@@ -149,12 +149,9 @@ impl Game<'_> {
         } else if let Some(c) = self.cushions.iter().find(|c| c.id == id) {
             c.item()
         } else if let Some(f) = self.item_frames.iter().find(|f| f.id == id) {
-            // ItemFrame.getPickResult: what it frames, else the frame itself.
-            return Some(
-                f.item
-                    .clone()
-                    .unwrap_or_else(|| ItemStack::new(f.kind(), 1)),
-            );
+            // ItemFrame.getPickResult: what it frames, else the frame with
+            // its data (getFrameItemStackWithData copies CUSTOM_NAME).
+            return Some(f.item.clone().unwrap_or_else(|| f.item_stack_with_data()));
         } else if self.paintings.iter().any(|p| p.id == id) {
             "minecraft:painting".to_owned()
         } else if self.crystals.iter().any(|c| c.id == id) {
@@ -253,5 +250,42 @@ mod tests {
             ),
             Some(object)
         );
+    }
+}
+
+#[cfg(test)]
+mod frame_pick_tests {
+    use horizon_client::entities::ItemFrame;
+    use horizon_client::items::ItemStack;
+    use horizon_core::nbt::Tag;
+
+    /// `ItemFrame.getPickResult` on an empty frame uses
+    /// `getFrameItemStackWithData`, which copies `DataComponents.CUSTOM_NAME`.
+    #[test]
+    fn picking_a_named_empty_frame_keeps_its_name() {
+        let mut f = ItemFrame {
+            attachment_lifetime: Default::default(),
+            join: Default::default(),
+            id: 1,
+            pos: [0, 64, 0],
+            facing: 3,
+            glow: false,
+            item: None,
+            rotation: 0,
+            drop_chance: 1.0,
+            fixed: false,
+            invisible: false,
+            check_interval: 0,
+            custom_name: Some(Tag::String("Gallery".into())),
+            random: horizon_core::random::EntityRandom::own(
+                horizon_core::random::LegacyRandom::new(0),
+            ),
+        };
+        let picked = f.item.clone().unwrap_or_else(|| f.item_stack_with_data());
+        assert_eq!(&*picked.item, "minecraft:item_frame");
+        assert_eq!(picked.custom_name().as_deref(), Some("Gallery"));
+        // The framed item still wins over the frame itself.
+        f.item = Some(ItemStack::new("minecraft:diamond", 1));
+        assert_eq!(&*f.item.clone().unwrap_or_else(|| f.item_stack_with_data()).item, "minecraft:diamond");
     }
 }
