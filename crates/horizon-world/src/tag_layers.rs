@@ -4,6 +4,35 @@
 //! `replace` file drops what the lower files gave, removals included. The
 //! readers that resolve tags from JSON build each tag from these layers.
 use serde_json::Value;
+use std::{borrow::Cow, collections::HashMap};
+
+mod resolve;
+
+#[cfg(test)]
+pub(crate) mod work_budget {
+    use std::cell::Cell;
+
+    thread_local! { static REMAINING: Cell<Option<usize>> = const { Cell::new(None) }; }
+
+    pub(crate) fn check_step() {
+        REMAINING.with(|budget| {
+            if let Some(remaining) = budget.get() {
+                budget.set(Some(
+                    remaining
+                        .checked_sub(1)
+                        .expect("tag traversal exceeded its work budget"),
+                ));
+            }
+        });
+    }
+
+    pub(crate) fn with_limit<T>(limit: usize, run: impl FnOnce() -> T) -> T {
+        REMAINING.with(|budget| budget.set(Some(limit)));
+        let result = run();
+        REMAINING.with(|budget| budget.set(None));
+        result
+    }
+}
 
 /// A tag's entries over its layers, in order: an id or `#tag`, and whether
 /// the entry removes (`TagLoader.EntryWithSource.remove`).
@@ -71,24 +100,37 @@ impl TagLayers {
     /// to or removes from an insertion-ordered set; a `#tag` adds or removes
     /// every member `members` gives for it. A removal never fails the tag.
     pub fn build(&self, mut members: impl FnMut(&str) -> Vec<String>) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
+        self.build_ordered(|tag| members(tag).into_iter().map(Cow::Owned))
+    }
+
+    fn build_ordered<'a, I: IntoIterator<Item = Cow<'a, str>>>(
+        &'a self,
+        mut members: impl FnMut(&str) -> I,
+    ) -> Vec<String> {
+        let mut positions = HashMap::new();
+        let mut next_position = 0;
         for (entry, remove) in &self.0 {
-            let ids = match entry.strip_prefix('#') {
-                Some(tag) => members(tag),
-                None => vec![entry.clone()],
-            };
-            for id in ids {
-                let at = out.iter().position(|e| *e == id);
-                match (at, remove) {
-                    (Some(i), true) => {
-                        out.remove(i);
-                    }
-                    (None, false) => out.push(id),
-                    _ => {}
+            let mut apply = |id: Cow<'a, str>| {
+                if *remove {
+                    positions.remove(id.as_ref());
+                } else if let std::collections::hash_map::Entry::Vacant(slot) = positions.entry(id)
+                {
+                    slot.insert(next_position);
+                    next_position += 1;
                 }
+            };
+            if let Some(tag) = entry.strip_prefix('#') {
+                members(tag).into_iter().for_each(apply);
+            } else {
+                apply(Cow::Borrowed(entry));
             }
         }
-        out
+        // Removed positions stay empty. Re-adding a value gives it a new position.
+        let mut ordered = vec![None; next_position];
+        for (id, position) in positions {
+            ordered[position] = Some(id.into_owned());
+        }
+        ordered.into_iter().flatten().collect()
     }
 }
 

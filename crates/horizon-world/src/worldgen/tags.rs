@@ -2,7 +2,7 @@
 use super::{DecodeError, Object, optional, required};
 use horizon_core::random::java_string_hash;
 use serde_json::value::RawValue;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TagEntry {
@@ -124,9 +124,7 @@ impl std::fmt::Display for TagBuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::TooManyTags => "tag definitions exceed 8192 entries",
-            Self::DependencyDepth => {
-                "tag dependency depth exceeds 256 or cyclic reachability does not terminate"
-            }
+            Self::DependencyDepth => "tag dependency depth exceeds 256",
             Self::HashTreeBucket => "tag identifiers require an unsupported Java hash tree bucket",
         })
     }
@@ -197,12 +195,12 @@ impl TagDefinitions {
         // that map with put (tail insertion), retaining the reversed order of
         // colliding resource keys. Resizing preserves each split chain's order.
         let order = java_bucket_order(self.insertion_order.iter().rev().map(String::as_str), 16)?;
-        let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
         for mandatory in [true, false] {
             for &name in &order {
                 for entry in &self.entries[name] {
                     let e = &entry.entry;
-                    if e.tag && e.required == mandatory && !reaches(&edges, &e.id, name, 0)? {
+                    if e.tag && e.required == mandatory && !reaches(&edges, &e.id, name) {
                         let children = edges.entry(name).or_default();
                         if !children.contains(&e.id.as_str()) {
                             children.push(&e.id);
@@ -269,26 +267,24 @@ fn apply<T: Clone + Ord>(values: &mut Vec<T>, seen: &mut BTreeSet<T>, value: &T,
         values.retain(|v| v != value);
     }
 }
-fn reaches(
-    edges: &BTreeMap<&str, Vec<&str>>,
-    from: &str,
-    target: &str,
-    depth: usize,
-) -> Result<bool, TagBuildError> {
-    if depth > 256 {
-        return Err(TagBuildError::DependencyDepth);
-    }
-    if let Some(children) = edges.get(from) {
-        if children.contains(&target) {
-            return Ok(true);
-        }
-        for child in children {
-            if reaches(edges, child, target, depth + 1)? {
-                return Ok(true);
+fn reaches<'a>(edges: &HashMap<&'a str, Vec<&'a str>>, from: &'a str, target: &str) -> bool {
+    let mut visited = HashSet::from([from]);
+    let mut pending = vec![from];
+    while let Some(tag) = pending.pop() {
+        #[cfg(test)]
+        crate::tag_layers::work_budget::check_step();
+        if let Some(children) = edges.get(tag) {
+            for &child in children {
+                if child == target {
+                    return true;
+                }
+                if visited.insert(child) {
+                    pending.push(child);
+                }
             }
         }
     }
-    Ok(false)
+    false
 }
 fn visit<'a>(
     name: &'a str,
@@ -349,6 +345,42 @@ fn java_bucket_order<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tag_layers::work_budget;
+    use serde_json::json;
+
+    #[test]
+    fn optional_edge_into_deep_diamond_visits_shared_descendants_once_per_search() {
+        let mut definitions = TagDefinitions::default();
+        let mut add = |name: &str, definition: serde_json::Value| {
+            definitions
+                .apply_json(name, "fixture", &definition.to_string())
+                .unwrap();
+        };
+        for depth in 0..40 {
+            for side in ["left", "right"] {
+                add(
+                    &format!("test:{side}/{depth}"),
+                    json!({"values": [format!("#test:join/{}", depth + 1)]}),
+                );
+            }
+            add(
+                &format!("test:join/{depth}"),
+                json!({"values": [format!("#test:left/{depth}"), format!("#test:right/{depth}")]}),
+            );
+        }
+        add("test:join/40", json!({"values": ["test:damage"]}));
+        add(
+            "test:probe",
+            json!({"values": [{"id": "#test:join/0", "required": false}]}),
+        );
+
+        let built =
+            work_budget::with_limit(25_000, || definitions.build(|id, _| Some(id.to_owned())))
+                .unwrap();
+        assert_eq!(built.tags["test:probe"], ["test:damage"]);
+        assert!(built.missing.is_empty());
+    }
+
     #[test]
     fn invalid_replacement_keeps_entries_and_codec_error_can_create_empty_tag() {
         let mut definitions = TagDefinitions::default();

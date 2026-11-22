@@ -719,16 +719,7 @@ pub(crate) fn load_tag_lists(
             raw.entry(id.to_owned()).or_default().push(&v);
         }
     }
-    fn resolve(name: &str, raw: &HashMap<String, TagLayers>, depth: u32) -> Vec<String> {
-        match raw.get(name) {
-            Some(layers) if depth <= 32 => layers.build(|tag| resolve(tag, raw, depth + 1)),
-            _ => Vec::new(),
-        }
-    }
-    Ok(raw
-        .keys()
-        .map(|k| (k.clone(), resolve(k, &raw, 0)))
-        .collect())
+    Ok(TagLayers::resolve_all(raw))
 }
 /// An entity type id or `#tag` as the set of entity type ids it names.
 fn entity_spec(tags: &HashMap<String, HashSet<String>>, spec: &str) -> HashSet<String> {

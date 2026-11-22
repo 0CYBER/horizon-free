@@ -9,6 +9,7 @@ use crate::items::{ItemStack, Items};
 pub use holder_sets::HolderSetBinding;
 use horizon_core::nbt::Tag;
 use horizon_core::random::{LegacyRandom, RandomSource};
+use horizon_world::tag_layers::TagLayers;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -211,7 +212,7 @@ fn string_list(v: &Value) -> Vec<String> {
         _ => vec![],
     }
 }
-fn read_tag_dir(dir: &Path) -> HashMap<String, horizon_world::tag_layers::TagLayers> {
+fn read_tag_dir(dir: &Path) -> HashMap<String, TagLayers> {
     read_tag_dir_in(dir, "minecraft")
 }
 /// The resource root's `data/` namespaces other than `minecraft`, in name
@@ -222,10 +223,7 @@ fn other_namespaces(root: &Path) -> Vec<String> {
     out.retain(|ns| ns != "minecraft");
     out
 }
-fn read_tag_dir_in(
-    dir: &Path,
-    namespace: &str,
-) -> HashMap<String, horizon_world::tag_layers::TagLayers> {
+fn read_tag_dir_in(dir: &Path, namespace: &str) -> HashMap<String, TagLayers> {
     let Ok(folder) = horizon_world::json_folder::read(dir) else {
         return HashMap::new();
     };
@@ -236,33 +234,10 @@ fn read_tag_dir_in(
             let v = serde_json::from_slice::<Value>(file.bytes().ok()?).ok()?;
             Some((
                 format!("{namespace}:{}", file.name),
-                horizon_world::tag_layers::TagLayers::from_file(&v),
+                TagLayers::from_file(&v),
             ))
         })
         .collect()
-}
-/// Expand a tag keeping first-seen order and applying removals before its parent uses it.
-fn expand_ordered(
-    name: &str,
-    raw: &HashMap<String, horizon_world::tag_layers::TagLayers>,
-    out: &mut Vec<String>,
-    depth: u32,
-) {
-    if depth > 16 {
-        return;
-    }
-    if let Some(layers) = raw.get(name) {
-        let members = layers.build(|tag| {
-            let mut child = Vec::new();
-            expand_ordered(tag, raw, &mut child, depth + 1);
-            child
-        });
-        for member in members {
-            if !out.contains(&member) {
-                out.push(member);
-            }
-        }
-    }
 }
 /// Roman numerals as in `enchantment.level.N` (falls back to the number).
 pub fn level_name(level: u32) -> String {
@@ -385,25 +360,15 @@ impl Enchantments {
                 raw_tags.entry(id.clone()).or_default().push(&v);
             }
         }
-        let tags: HashMap<String, Vec<Arc<str>>> = raw_tags
-            .keys()
-            .map(|k| {
-                let mut v = Vec::new();
-                expand_ordered(k, &raw_tags, &mut v, 0);
-                (
-                    k.clone(),
-                    v.into_iter().map(|s| Arc::from(s.as_str())).collect(),
-                )
-            })
+        let tags: HashMap<String, Vec<Arc<str>>> = TagLayers::resolve_all(raw_tags)
+            .into_iter()
+            .map(|(id, members)| (id, members.into_iter().map(Arc::from).collect()))
             .collect();
-        let unordered = |raw: HashMap<String, horizon_world::tag_layers::TagLayers>| -> HashMap<String, HashSet<String>> {
-            raw.keys()
-                .map(|k| {
-                    let mut v = Vec::new();
-                    expand_ordered(k, &raw, &mut v, 0);
-                    (k.clone(), v.into_iter().collect())
-                })
-                .collect()
+        let unordered = |raw| {
+            TagLayers::resolve_all(raw)
+                .into_iter()
+                .map(|(id, members)| (id, members.into_iter().collect()))
+                .collect::<HashMap<String, HashSet<String>>>()
         };
         let entity_tags = unordered(read_tag_dir(&data.join("tags/entity_type")));
         let damage_tags = match horizon_world::damage_source::Catalog::load(root, overlay) {
