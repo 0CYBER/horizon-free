@@ -34,7 +34,6 @@ impl Game<'_> {
                     self.ambience.reseed(self.visual_ticks() as i64);
                     self.tick_ambience();
                 }
-                self.tick_fov();
             }
             self.tick_win_screen()?;
             self.native_configs_tick_client();

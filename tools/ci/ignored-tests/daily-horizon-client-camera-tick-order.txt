@@ -1,0 +1,2 @@
+# The camera eases toward a new glide pose from the next tick (tick_fov runs once per tick, after remote_handle_input).
+horizon-client game::camera_tick_order_tests::the_camera_eases_toward_a_new_glide_pose_from_the_next_tick lib daily resources

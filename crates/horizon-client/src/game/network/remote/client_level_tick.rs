@@ -94,6 +94,9 @@ impl Game<'_> {
         // Window callbacks only queue clicks, so an interaction cannot leak
         // between CLIENT_TICK_END and a later pong.
         self.remote_handle_input();
+        // GameRenderer.tick, before ClientLevel.tickEntities: Camera.tick eases the eye height and
+        // field of view toward the player as its last tick left it (#16178).
+        self.tick_fov();
         self.tick_remote_player(running, hold)
     }
 }
