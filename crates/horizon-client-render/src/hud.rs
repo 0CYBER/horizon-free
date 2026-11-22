@@ -21,6 +21,8 @@ mod atlas_32x_tests;
 pub mod cit_glint;
 mod clip_corner;
 mod gui_sprite;
+#[cfg(test)]
+mod material_name_tests;
 mod menu_pictures;
 mod model_reducing;
 mod pack_text;
@@ -866,6 +868,19 @@ pub fn dump_atlas(
     Ok(png_path)
 }
 
+/// Whether `name` (`gui/icon_n`) is a LabPBR map of a texture beside it (`gui/icon`) that is
+/// read as one (`read_maps`): the world's sprites own it, so the atlas does not draw it again.
+/// With the maps not read it is an ordinary image like any other.
+fn is_companion_map(root: &ResourceSource, name: &str, read_maps: bool) -> bool {
+    read_maps
+        && name
+            .strip_suffix("_n")
+            .or_else(|| name.strip_suffix("_s"))
+            .is_some_and(|base| {
+                root.contains(&crate::atlas_sources::texture_resource(base, "textures"))
+            })
+}
+
 impl HudAtlas {
     /// `TextureAtlas.dumpContents` for this atlas: `dir` is `screenshots/debug`,
     /// the folder `TextureUtil.getDebugTexturePath` names.
@@ -1348,9 +1363,8 @@ impl HudAtlas {
                 }
             };
             // LabPBR's maps beside a texture are the world's (sprites.rs), not images to draw.
-            if let Some(base) = name.strip_suffix("_n").or_else(|| name.strip_suffix("_s"))
-                && root.contains(&crate::atlas_sources::texture_resource(base, "textures"))
-            {
+            // Only while they are read: otherwise the names are ordinary images.
+            if is_companion_map(root, &name, read_maps) {
                 return None;
             }
             // A texture the pack cannot decode keeps the default it shadows: the
