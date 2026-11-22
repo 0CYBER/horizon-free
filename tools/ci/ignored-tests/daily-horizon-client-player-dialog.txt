@@ -1,0 +1,2 @@
+# Prepared-resource daily test: PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::player_dialog_tests::a_dialog_is_shown_by_value_or_by_registry_id_and_cleared lib daily resources

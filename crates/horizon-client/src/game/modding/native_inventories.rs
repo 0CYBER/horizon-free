@@ -13,6 +13,10 @@ use horizon_client::{
     save::{BODY_SLOT, Level, SADDLE_SLOT, read_dat, write_dat_checked},
 };
 use horizon_core::nbt::{JavaString, Tag};
+use horizon_protocol::packets::{
+    Empty,
+    play::{self, Clientbound as C, DialogHolder},
+};
 use mod_api::{
     __private::game::Fields, PlayerInventoryError as Error, PlayerInventoryKind,
     PlayerInventoryMove, PlayerInventorySnapshot, PlayerRef, TransactionLifecycle,
@@ -509,6 +513,64 @@ impl Game<'_> {
             }),
         )
     }
+    /// Opens `dialog` on the player's screen, sent inline as `/dialog show`
+    /// does for a dialog written out. False for a player not here, a fake
+    /// player and on a client, and for a dialog the client could not read (a
+    /// type or field `Dialog.DIRECT_CODEC` fails on, or one that does not
+    /// survive being written to the wire): vanilla's client leaves the game on
+    /// such a packet, so nothing is sent.
+    pub(super) fn player_show_dialog(
+        &mut self,
+        player: PlayerRef,
+        dialog: &horizon_core::nbt::Compound,
+    ) -> bool {
+        let tag = Tag::Compound(dialog.clone());
+        if horizon_client::dialog::Dialog::parse(&tag).is_none() {
+            return false;
+        }
+        let packet = C::ShowDialog(play::ShowDialog {
+            dialog: DialogHolder::Direct(tag),
+        });
+        if !survives_the_wire(&packet) {
+            return false;
+        }
+        self.send_dialog_packet(player, packet)
+    }
+    /// Opens the dialog `id` of the `minecraft:dialog` registry on the
+    /// player's screen. False for an id the registry doesn't have, and as
+    /// `player_show_dialog`.
+    pub(super) fn player_show_dialog_id(&mut self, player: PlayerRef, id: &str) -> bool {
+        let Some(dialog) = self.registry_dialog(id) else {
+            return false;
+        };
+        self.send_dialog_packet(player, C::ShowDialog(play::ShowDialog { dialog }))
+    }
+    /// Closes the dialog the player's client shows (`ServerPlayer.closeDialog`).
+    pub(super) fn player_clear_dialog(&mut self, player: PlayerRef) -> bool {
+        self.send_dialog_packet(player, C::ClearDialog(Empty))
+    }
+    /// Sends to a real connected player, found by the hub's record so that a player
+    /// whose body a nested player turn has displaced still gets it.
+    fn send_dialog_packet(&mut self, player: PlayerRef, packet: C) -> bool {
+        let real = if self.native_acting_player() == Some(player) {
+            !self.lan_acting_fake
+        } else {
+            self.online_player_record(player)
+                .is_some_and(|guest| !guest.is_fake())
+        };
+        real && self.native_send(player.uuid(), packet)
+    }
+}
+
+/// Whether `packet` reads back as itself from the bytes it is written to: a tag too
+/// deep or too large for the wire is written as no tag, which a client cannot read.
+fn survives_the_wire(packet: &C) -> bool {
+    let body = packet.encode();
+    let mut reader = horizon_protocol::buf::Reader::new(&body);
+    let Ok(id) = reader.varint() else {
+        return false;
+    };
+    C::decode(id, reader.rest()).is_ok_and(|read| &read == packet)
 }
 
 #[cfg(test)]
