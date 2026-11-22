@@ -2949,13 +2949,26 @@ impl Hub {
                 (i, taken, far, bodies)
             })
             .collect();
-        self.encoder.warm(&columns.chunks);
-        let mut encoded = self.encoder.bodies_with(&columns.chunks, world, &|x, z| {
-            ctx.streaming.and_then(|s| s.proto_sections(x, z))
-        });
-        self.encoder.clear_batch_wire();
-        let uses = &mut columns.uses;
         let chunks = &columns.chunks;
+        self.encoder.warm(chunks);
+        // A column one batch takes keeps its own buffer. One that several take is
+        // copied into shared storage once, and each batch queues a reference to it.
+        let mut encoded: Vec<super::Body> = self
+            .encoder
+            .bodies_with(chunks, world, &|x, z| {
+                ctx.streaming.and_then(|s| s.proto_sections(x, z))
+            })
+            .into_iter()
+            .zip(&columns.uses)
+            .map(|(body, &uses)| {
+                if uses == 1 {
+                    super::Body::Owned(body)
+                } else {
+                    super::Body::shared(body)
+                }
+            })
+            .collect();
+        self.encoder.clear_batch_wire();
         for (i, taken, far, batch) in batches {
             let g = &self.guests[i];
             let keys = taken
@@ -2976,11 +2989,11 @@ impl Hub {
                             if memory && !protected {
                                 super::handoff::offer(chunks[j]);
                             }
-                            uses[j] -= 1;
-                            if uses[j] == 0 {
-                                super::Body::Owned(std::mem::take(&mut encoded[j]))
-                            } else {
-                                super::Body::Owned(encoded[j].clone())
+                            match &mut encoded[j] {
+                                super::Body::Owned(body) => {
+                                    super::Body::Owned(std::mem::take(body))
+                                }
+                                super::Body::Shared(body) => super::Body::Shared(Arc::clone(body)),
                             }
                         }
                         Body::Saved(body) => super::Body::Shared(body),
