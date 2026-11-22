@@ -3586,6 +3586,39 @@ fn open_shulker_box_supports_only_through_its_base_plate() {
 }
 
 #[test]
+fn an_open_shulker_box_stops_conducting_redstone_but_a_closed_one_and_stone_do() {
+    let mut w = world!();
+    let box_pos = BlockPos::new(0, 1, 0);
+    let stone_pos = BlockPos::new(2, 1, 0);
+    w.put(box_pos, w.id("shulker_box", &[("facing", "up")]));
+    w.put(stone_pos, w.id("stone", &[]));
+    w.level.shulker_closed.remove(&box_pos);
+    let box_state = w.get(box_pos);
+    let stone_state = w.get(stone_pos);
+    {
+        let sim = w.b().sim(&mut w.level, &mut w.ticks);
+        assert!(
+            sim.is_redstone_conductor(box_state, box_pos),
+            "a closed box is a full cube"
+        );
+        assert!(
+            sim.is_redstone_conductor(stone_state, stone_pos),
+            "a full block still conducts"
+        );
+    }
+    w.level.shulker_closed.insert(box_pos, false);
+    let sim = w.b().sim(&mut w.level, &mut w.ticks);
+    assert!(
+        !sim.is_redstone_conductor(box_state, box_pos),
+        "an open lid takes the box out of the full cube"
+    );
+    assert!(
+        sim.is_redstone_conductor(stone_state, stone_pos),
+        "the open box does not change its neighbours"
+    );
+}
+
+#[test]
 fn torch_survives_on_a_box_opening_down_but_not_on_an_open_lid() {
     let mut w = world!();
     let box_pos = BlockPos::new(0, 1, 0);

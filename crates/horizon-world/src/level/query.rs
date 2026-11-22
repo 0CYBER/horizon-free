@@ -418,7 +418,16 @@ impl<L: super::signal_access::SignalAccess + ?Sized> Signals<'_, L> {
     pub fn is_water_at(&self, pos: BlockPos) -> bool {
         self.b.is_water_fluid(self.b.fluid(self.state(pos)).kind())
     }
-    pub fn is_redstone_conductor(&self, state: BlockStateId, _pos: BlockPos) -> bool {
+    pub fn is_redstone_conductor(&self, state: BlockStateId, pos: BlockPos) -> bool {
+        // `BlockState.isRedstoneConductor` reads the live collision shape. A shulker box's
+        // open lid takes it out of the full cube, so it stops conducting while open, even
+        // though the exported state flag still says it is a conductor.
+        let block = self.b.block(state);
+        if self.b.tags.shulker_boxes.contains(block)
+            && self.level.shulker_is_closed(pos) == Some(false)
+        {
+            return false;
+        }
         self.b.has_flag(state, state_flags::CONDUCTOR)
     }
     pub(crate) fn above_state(&self, pos: BlockPos) -> BlockStateId {
