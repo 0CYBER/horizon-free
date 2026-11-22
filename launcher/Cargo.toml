@@ -121,7 +121,7 @@ winresource = "0.1"
 [dev-dependencies]
 # The mod inventory's `Side` in tests (`mod_api::Side`, which the launcher does not depend on).
 horizon-mod-vocab = { path = "../crates/horizon-mod-vocab" }
-horizon-mod-api-gen = { path = "../crates/horizon-mod-api-gen", features = ["listener-fixture"] }
+horizon-mod-api-gen = { path = "../crates/horizon-mod-api-gen" }
 libc = "0.2"
 # Tokenize source strings for the translation completeness test, including multiline calls.
 syn = "2"

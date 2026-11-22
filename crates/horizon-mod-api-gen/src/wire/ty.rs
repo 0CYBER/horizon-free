@@ -672,21 +672,6 @@ fn generics(item: &Item) -> syn::Generics {
     }
 }
 
-pub(super) fn derives(item: &Item, name: &str) -> bool {
-    let attrs = match item {
-        Item::Struct(item) => &item.attrs,
-        Item::Enum(item) => &item.attrs,
-        _ => return false,
-    };
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("derive")
-            && attr
-                .to_token_stream()
-                .to_string()
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .any(|word| word == name)
-    })
-}
 #[cfg(test)]
 mod tests {
     #[test]

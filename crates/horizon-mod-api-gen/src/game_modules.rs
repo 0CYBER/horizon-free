@@ -109,51 +109,9 @@ pub(crate) fn parse(path: &Path, source: &str) -> Result<syn::File, String> {
     syn::parse_file(&expand(path, source)?).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// [`parse`], for a walk that follows `mod` declarations and `include!`s and reads nothing else:
-/// the file is cut down to those (and its inner attributes), which is all the walk looks at.
-/// While the points cache is on ([`crate::incremental`]), the cut-down file is stored by the
-/// file's content, so only a changed file is parsed in full. A file whose module list is
-/// generated from its folder is always parsed in full and expanded, as [`parse`] does.
+/// [`parse`], for a module walk.
 pub(crate) fn parse_layout(path: &Path, source: &str) -> Result<syn::File, String> {
-    if !crate::incremental::active() || has_generated_include(source) {
-        return parse(path, source);
-    }
-    crate::incremental::cached(
-        "layout",
-        &crate::incremental::digest(&[source.as_bytes()]),
-        || {
-            let file = syn::parse_file(source).map_err(|e| format!("{}: {e}", path.display()))?;
-            Ok(layout(file))
-        },
-        |file| quote::ToTokens::to_token_stream(file).to_string(),
-        |text| syn::parse_file(text).ok(),
-    )
-}
-
-/// `file` without everything a module walk ignores: only inner attributes, `mod`s (inline ones
-/// cut down likewise) and `include!`s remain.
-fn layout(file: syn::File) -> syn::File {
-    fn items(list: Vec<syn::Item>) -> Vec<syn::Item> {
-        list.into_iter()
-            .filter_map(|item| match item {
-                syn::Item::Macro(item) if item.mac.path.is_ident("include") => {
-                    Some(syn::Item::Macro(item))
-                }
-                syn::Item::Mod(mut item) => {
-                    if let Some((_, inner)) = &mut item.content {
-                        *inner = items(std::mem::take(inner));
-                    }
-                    Some(syn::Item::Mod(item))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-    syn::File {
-        shebang: None,
-        attrs: file.attrs,
-        items: items(file.items),
-    }
+    parse(path, source)
 }
 
 #[cfg(test)]

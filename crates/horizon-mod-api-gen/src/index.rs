@@ -15,14 +15,6 @@ const CRATES: &[(&str, &str)] = &[
     ("horizon_mod_package", "crates/horizon-mod-package/src"),
 ];
 
-/// The folders of the crates [`CRATES`] names, above their source folders.
-pub(super) fn crate_folders(root: &Path) -> Vec<std::path::PathBuf> {
-    CRATES
-        .iter()
-        .filter_map(|(_, dir)| root.join(dir).parent().map(Path::to_path_buf))
-        .collect()
-}
-
 /// One module: its crate, its path below the crate root, and its items.
 pub(super) struct Module {
     pub(super) krate: &'static str,
@@ -167,30 +159,11 @@ impl<'a> Index<'a> {
         Ok(id)
     }
 
-    /// Whether a cache key made by `tree_digest` over [`crate_folders`] covers `path`'s content:
-    /// a `#[path]` can name a file elsewhere, or one the digest does not read.
-    fn hashed(&self, path: &Path) -> bool {
-        let Ok(real) = fs::canonicalize(path) else {
-            return false;
-        };
-        crate::incremental::hashed_extension(&real)
-            && crate_folders(self.root).iter().any(|folder| {
-                fs::canonicalize(folder).is_ok_and(|folder| {
-                    real.strip_prefix(&folder).is_ok_and(|inside| {
-                        !inside.components().any(|part| part.as_os_str() == "target")
-                    })
-                })
-            })
-    }
-
     fn parse(&self, krate: &str, file: &str) -> Result<Vec<Item>, String> {
         let dir = self.crate_dir(krate).expect("a known crate").1;
         let path = self.root.join(dir).join(file);
         let source = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         self.read.borrow_mut().push(path.clone());
-        if crate::incremental::active() && !self.hashed(&path) {
-            crate::incremental::note_outside_read();
-        }
         let source = crate::exports::expand(self.root, &source)?;
         let file = syn::parse_file(&source).map_err(|e| format!("{}: {e}", path.display()))?;
         self.expand_includes(file.items)
@@ -391,44 +364,5 @@ pub(super) fn uses(
                 uses(tree, prefix, f);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn put(root: &Path, path: &str, text: &str) {
-        let path = root.join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    }
-
-    #[test]
-    fn a_path_attribute_leaving_the_hashed_crates_is_noted() {
-        let guard = tempfile::tempdir().unwrap();
-        let root = guard.path();
-        put(
-            root,
-            "crates/horizon-mod-vocab/src/lib.rs",
-            "mod inside;\n#[path = \"../../shared_wire.rs\"]\nmod shared;\n",
-        );
-        put(
-            root,
-            "crates/horizon-mod-vocab/src/inside.rs",
-            "struct A;\n",
-        );
-        put(root, "crates/shared_wire.rs", "struct B;\n");
-        let out = tempfile::tempdir().unwrap();
-        crate::incremental::with_cache(out.path(), || {
-            let mut index = Index::new(root, &[]);
-            let before = crate::incremental::outside_reads();
-            index.module("mod_api", &["inside".to_owned()]).unwrap();
-            assert_eq!(crate::incremental::outside_reads(), before);
-            index.module("mod_api", &["shared".to_owned()]).unwrap();
-            assert!(crate::incremental::outside_reads() > before);
-            Ok(())
-        })
-        .unwrap();
     }
 }

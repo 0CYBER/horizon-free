@@ -8,8 +8,6 @@ publish = false
 description = "Build-time typed native mod API generation"
 
 [features]
-# Shared listener integration fixture only; never enabled by gameplay crates.
-listener-fixture = []
 # Isolated generated native/guest boundary fixture; never enabled by game builds.
 mixed-output-fixture = []
 
@@ -38,8 +36,3 @@ tempfile = "3.27.0"
 
 [lints]
 workspace = true
-
-[[example]]
-name = "listener-fixture-catalog"
-path = "../horizon-mod-wasm/tests/support/catalog.rs"
-required-features = ["listener-fixture"]

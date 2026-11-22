@@ -4,7 +4,6 @@ horizon-mod-api-gen a_malformed_note_or_surface_is_refused_by_name test:surface_
 horizon-mod-api-gen a_new_note_naming_an_unchanged_id_fails_and_an_old_or_edited_one_is_ignored test:surface_diff daily child-process
 horizon-mod-api-gen a_parse_that_overflows_ends_the_child_and_names_the_file test:scan_child daily child-process
 horizon-mod-api-gen a_program_that_is_not_a_scans_child_is_stopped test:scan_child daily child-process
-horizon-mod-api-gen build::listed_render_slots_have_eligible_points lib daily slow
 horizon-mod-api-gen crossing::tests::a_stale_crossing_foreign_path_fails_with_its_name lib daily slow
 horizon-mod-api-gen crossing::tests::checked_in_foreign_layouts_match_the_locked_source lib daily slow
 horizon-mod-api-gen dispatch::stack_count_tests::only_container_loot_filled_changes_when_stack_count_marker_is_removed lib daily slow
@@ -37,8 +36,6 @@ horizon-mod-api-gen patch::tests::a_lower_free_function_installs_through_its_lib
 horizon-mod-api-gen patch::tests::a_method_moves_into_a_trait_of_its_own_type lib daily slow
 horizon-mod-api-gen patch::tests::refusals_are_named lib daily slow
 horizon-mod-api-gen patch::tests::support_modules_and_bridges_land_in_the_mirror_their_rows_name lib daily slow
-horizon-mod-api-gen points::tests::no_wire_public_values_refuse_before_point_record_emission lib daily slow
-horizon-mod-api-gen points::tests::point_inventory lib daily slow
 horizon-mod-api-gen replace::tests::trait_installers_compile_with_warnings_denied lib daily child-process
 horizon-mod-api-gen retained_knockback_entries_apply_hook_edits_cancel_and_delegate_once test:knockback_entries daily child-process
 horizon-mod-api-gen surface::tests::the_real_tree_exports lib daily slow

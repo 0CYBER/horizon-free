@@ -3,7 +3,6 @@ mod catalog;
 mod dispatch_fixtures;
 mod exports;
 mod game_modules;
-mod incremental;
 #[cfg(test)]
 mod interface_cache_tests;
 #[cfg(test)]
@@ -574,7 +573,7 @@ fn sources(root: &Path, fill: FillMode) -> Result<Sources, String> {
         ));
     }
     for code in [&code, &host, &areas, &goal_view] {
-        incremental::parses(code)?;
+        syn::parse_file(code).map_err(|e| format!("generated Rust: {e}"))?;
     }
     if matches!(fill, FillMode::Fill) {
         let mut outputs = Vec::new();
@@ -635,7 +634,7 @@ thread_local! {
 
 /// Tracks the stager's stamp, `.horizon-source-staged`, only in a staged copy. Cargo reruns a build
 /// script on every build while a tracked path is missing, so tracking an absent stamp rebuilt
-/// horizon-mod-points, horizon-client and every crate above them on each `cargo` invocation of an
+/// horizon-client and every crate above it on each `cargo` invocation of an
 /// ordinary checkout. A stamp never appears in a tree that was already built: staging writes it
 /// first, into a fresh copy, and refuses a tree that already has one.
 pub(crate) fn rerun_if_staged(root: &std::path::Path) {
@@ -664,14 +663,11 @@ pub mod internals_view;
 pub mod loops;
 pub mod notes;
 pub mod patch;
-pub mod points;
 pub mod replace;
 pub(crate) mod source;
 pub mod staging;
 pub mod surface;
-pub use build::{
-    generate, generate_engine_points, generate_points, generate_render, write_if_changed,
-};
+pub use build::{generate, generate_render, write_if_changed};
 pub use notes::generate as generate_hook_notes;
 mod staged;
 pub use staged::{MODS_STAGE, mob_turn, staged_mods};

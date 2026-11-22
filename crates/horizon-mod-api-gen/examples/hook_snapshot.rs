@@ -1,7 +1,7 @@
 //! Capture generated hook artifacts for a byte-for-byte refactor comparison.
 //! Run with a destination directory argument (empty or new) before and after the split, then `diff -r`.
-//! The generator's cache (`incremental-*`, and `interfaces-*` from older builds, keyed by this executable) and its phase timings
-//! (`points-timing.txt`) are removed from the destination, so two runs of different builds compare equal.
+//! The generator's cache (`incremental-*`, and `interfaces-*` from older builds, keyed by this executable) is removed from the
+//! destination, so two runs of different builds compare equal.
 //! Every error names the step and the path that failed.
 use std::{fs, path::Path, path::PathBuf};
 
@@ -38,18 +38,8 @@ fn main() -> Result<(), String> {
             out.display()
         ));
     }
-    step("points.json", || {
-        write(
-            &out,
-            "points.json",
-            json(&horizon_mod_api_gen::points::game_points(&root)?)?,
-        )
-    })?;
     step("generated API", || {
         horizon_mod_api_gen::generate(&root, &out, horizon_mod_api_gen::Target::Api)
-    })?;
-    step("generated points", || {
-        horizon_mod_api_gen::generate_points(&root, &out)
     })?;
     // The published loops and the exposed internals, as `loops.json` and `internals.json` have them.
     step("loops.json", || {
@@ -82,7 +72,7 @@ fn main() -> Result<(), String> {
             horizon_mod_api_gen::generate_hook_notes(&root)?,
         )
     })?;
-    // The generator's own scratch: a cache keyed by this executable and phase timings.
+    // The generator's own scratch: a cache keyed by this executable.
     for entry in fs::read_dir(&out).map_err(|e| format!("{}: {e}", out.display()))? {
         let path = entry.map_err(|e| format!("{}: {e}", out.display()))?.path();
         let name = path
@@ -91,8 +81,6 @@ fn main() -> Result<(), String> {
             .unwrap_or_default();
         if (name.starts_with("incremental-") || name.starts_with("interfaces-")) && path.is_dir() {
             fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        } else if name == "points-timing.txt" {
-            fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         }
     }
     Ok(())

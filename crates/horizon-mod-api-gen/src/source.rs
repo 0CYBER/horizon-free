@@ -5,8 +5,6 @@
 use mod_source::modules::{ModuleFile, walk_module_files};
 use quote::ToTokens;
 use std::{
-    cell::RefCell,
-    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -21,10 +19,6 @@ pub(crate) fn module_files(
     dir: PathBuf,
     every_build: bool,
 ) -> Result<Vec<ModuleFile>, String> {
-    let key = (module.clone(), path.clone(), dir.clone(), every_build);
-    if let Some(files) = WALKS.with(|walks| walks.borrow().as_ref()?.files.get(&key).cloned()) {
-        return Ok(files);
-    }
     let files = walk_module_files(
         module,
         path,
@@ -33,60 +27,7 @@ pub(crate) fn module_files(
         false,
         crate::game_modules::parse_layout,
     )?;
-    WALKS.with(|walks| {
-        if let Some(walks) = walks.borrow_mut().as_mut() {
-            walks.files.insert(key, files.clone());
-        }
-    });
     Ok(files)
-}
-
-type WalkKey = (String, PathBuf, PathBuf, bool);
-
-/// What [`with_walk_cache`] remembers: the walks, and each tree's marked functions
-/// ([`remember_marked`]).
-struct Walks {
-    files: HashMap<WalkKey, Vec<ModuleFile>>,
-    marked: HashMap<PathBuf, Vec<(String, String)>>,
-}
-
-thread_local! {
-    static WALKS: RefCell<Option<Walks>> = const { RefCell::new(None) };
-}
-
-/// The marked functions of the tree at `root`, when this generation already listed them.
-pub(crate) fn recalled_marked(root: &Path) -> Option<Vec<(String, String)>> {
-    WALKS.with(|walks| walks.borrow().as_ref()?.marked.get(root).cloned())
-}
-
-/// Keeps the marked functions of the tree at `root` for the rest of the generation: the
-/// tracked-path listing and the point scan both ask for them.
-pub(crate) fn remember_marked(root: &Path, marked: &[(String, String)]) {
-    WALKS.with(|walks| {
-        if let Some(walks) = walks.borrow_mut().as_mut() {
-            walks.marked.insert(root.to_owned(), marked.to_vec());
-        }
-    });
-}
-
-/// Runs `run` with [`module_files`] remembering each walk, for one generation whose sources don't
-/// change while it runs (a build script's): it walks and parses the same module trees several
-/// times, once to list what to track and again to read them. Never around a pass that edits the
-/// files it walks, such as staging.
-pub(crate) fn with_walk_cache<T>(run: impl FnOnce() -> T) -> T {
-    struct Reset(Option<Walks>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            WALKS.with(|walks| *walks.borrow_mut() = self.0.take());
-        }
-    }
-    let _reset = Reset(WALKS.with(|walks| {
-        walks.replace(Some(Walks {
-            files: HashMap::new(),
-            marked: HashMap::new(),
-        }))
-    }));
-    run()
 }
 
 /// The files of `horizon_client::game`; see [`module_files`] for `every_build`.
@@ -219,30 +160,6 @@ mod tests {
         // Every build compiles neither, so the point walk leaves the module out.
         let every = module_files("k".into(), src.join("lib.rs"), src, true).unwrap();
         assert_eq!(every.len(), 1);
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// Inside one generation a walk is read once; outside it, every walk reads the tree again.
-    #[test]
-    fn a_generation_reuses_its_module_walks_and_only_inside_its_scope() {
-        let dir = std::env::temp_dir().join(format!("points-walk-cache-{}", std::process::id()));
-        let src = dir.join("src");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::write(src.join("lib.rs"), "mod a;\n").unwrap();
-        std::fs::write(src.join("a.rs"), "pub fn a() {}").unwrap();
-        let modules = |files: Vec<ModuleFile>| {
-            let mut modules: Vec<_> = files.into_iter().map(|file| file.module).collect();
-            modules.sort();
-            modules
-        };
-        let walk = || module_files("k".into(), src.join("lib.rs"), src.clone(), true).unwrap();
-        with_walk_cache(|| {
-            assert_eq!(modules(walk()), ["k", "k::a"]);
-            // The tree is read once: an edit during the generation is not seen.
-            std::fs::write(src.join("lib.rs"), "").unwrap();
-            assert_eq!(modules(walk()), ["k", "k::a"]);
-        });
-        assert_eq!(modules(walk()), ["k"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
