@@ -453,7 +453,7 @@ impl Game<'_> {
     /// `DamageCommand.damage`: retain the accepted hit's player context and run
     /// `Zombie.hurtServer`'s reinforcement requests before the command returns.
     /// Health-changing hits also raise their damage vibration before return.
-    fn command_damage_mob(&mut self, id: u32, amount: f32, damage: Damage) -> bool {
+    pub(super) fn command_damage_mob(&mut self, id: u32, amount: f32, damage: Damage) -> bool {
         let attack = self.combat.attack();
         let by_shulker_bullet = self.command_damage_by_shulker_bullet;
         let mut reinforcements = Vec::new();
