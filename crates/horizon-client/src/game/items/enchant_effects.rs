@@ -1272,6 +1272,16 @@ impl Game<'_> {
     /// for an armor stand: run location effects before travel (including a
     /// piston push), on landing, and for newly equipped items.
     pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+        // Nothing to tell: read without a `&mut`, which the list would count as a touch.
+        {
+            let stand = &self.armor_stands[index];
+            if !landed
+                && stand.enchantment_block == Some(BlockPos::containing(stand.position))
+                && (0..8).all(|i| stand.equipment[i] == stand.enchantment_equipment[i])
+            {
+                return;
+            }
+        }
         let stand = &mut self.armor_stands[index];
         let block = BlockPos::containing(stand.position);
         let moved = !landed && stand.enchantment_block.replace(block) != Some(block);

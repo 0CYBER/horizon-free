@@ -543,6 +543,7 @@ impl Game<'_> {
         self.armor_stand_assets.apply_resources(armor_stand_assets);
         self.random_tick_sections.clear();
         self.portals.sections.clear();
+        self.forget_stand_rests();
         // Each level keeps its own portal answers: the parked ones are stale too.
         for level in self.levels.parked.values_mut() {
             level.portal_sections.clear();

@@ -508,6 +508,13 @@ impl Levels {
         self.requested_saves.retain(|saved| *saved != dim);
     }
 
+    /// Every stand of every parked level forgets its rest key (see `Game::forget_stand_rests`).
+    pub(in crate::game) fn forget_stand_rests(&mut self) {
+        for level in self.parked.values_mut() {
+            level.armor_stands.for_each_quiet(|s| s.rest = None);
+        }
+    }
+
     /// Clear every parked level and dimensions recorded as heard open.
     pub(super) fn clear(&mut self) {
         self.parked.clear();
@@ -2026,6 +2033,41 @@ mod tests {
             0,
             "the Overworld's palettes were read again"
         );
+    }
+
+    /// A reload changes the tags and block data a resting stand's phases read, which its key
+    /// does not cover: the stands of the levels not in place forget the key too.
+    #[test]
+    #[ignore = "daily"]
+    fn a_reload_clears_the_rest_keys_of_stands_in_a_parked_level() {
+        use horizon_client::entities::{ArmorStand, StandRestKey};
+        let mut game = prepared_game();
+        game.enter_level(Dim::Nether).unwrap();
+        let mut stand = ArmorStand::new(1, horizon_core::geometry::Vec3::ZERO, 0.0);
+        stand.rest = Some(StandRestKey {
+            position: [0; 3],
+            velocity: [0; 3],
+            on_ground: true,
+            fire_ticks: 0,
+            health: 0,
+            fall_distance: 0,
+            support: stand.support,
+            flags: [false; 7],
+            blocks: game.world.region_stamp([0; 3], [1; 3]).unwrap(),
+            border: [0; 4],
+        });
+        game.armor_stands.push(stand);
+        game.enter_level(Dim::Overworld).unwrap();
+        let rest = |game: &Game| {
+            game.levels.parked[&Dim::Nether]
+                .armor_stands
+                .iter()
+                .map(|s| s.rest.is_some())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rest(&game), [true]);
+        game.forget_stand_rests();
+        assert_eq!(rest(&game), [false]);
     }
 
     /// An idle close takes two passes: the one that reaches the idle limit only queues the

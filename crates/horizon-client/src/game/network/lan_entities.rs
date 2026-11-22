@@ -337,7 +337,22 @@ impl Game<'_> {
                 _ => {}
             }
         });
+        // A stand nobody has had a `&mut` to since its state was built has the state it had: the
+        // lists hand out no `&mut` without `Joined::touch`, which sets `sync_dirty`.
+        // A test sets `VERIFY_STAND_STATES` to rebuild each clean stand too and check it against
+        // the kept state.
+        let verify = VERIFY_STAND_STATES.load(std::sync::atomic::Ordering::Relaxed);
+        let mut rebuilt = false;
         for a in self.armor_stands.iter().filter(|a| a.id > after) {
+            if !a.sync_dirty
+                && !verify
+                && let Some(kept) = self.stand_states.get(&a.id)
+            {
+                let e = out.add(kept.id, kept.uuid, &kept.kind);
+                e.clone_from(kept);
+                continue;
+            }
+            rebuilt = true;
             let p = a.position;
             let attributes = self.stand_attributes(&a.live);
             let e = add_state(
@@ -411,6 +426,27 @@ impl Game<'_> {
                 }
             }
             e.attributes = attributes;
+            if verify
+                && !a.sync_dirty
+                && let Some(kept) = self.stand_states.get(&a.id)
+            {
+                assert_eq!(&*e, kept, "stand {} kept state", a.id);
+            }
+            self.stand_states.insert(a.id, e.clone());
+        }
+        if rebuilt {
+            // The states of stands that were built; the dirt they carried is told.
+            self.armor_stands.for_each_quiet(|a| {
+                if a.id > after {
+                    a.sync_dirty = false;
+                }
+            });
+        }
+        // Also when every stand was a clean hit: stands that were removed leave their states.
+        if self.stand_states.len() > self.armor_stands.len() + 64 {
+            let live: std::collections::HashSet<u32> =
+                self.armor_stands.iter().map(|a| a.id).collect();
+            self.stand_states.retain(|id, _| live.contains(id));
         }
         for f in self.item_frames.iter().filter(|f| f.id > after) {
             // ItemFrame.getAddEntityPacket: the block it hangs in and its direction.
@@ -1671,6 +1707,9 @@ mod vehicle_meta_tests {
     }
 }
 
+/// Set by a test: every clean stand is rebuilt too and compared with its kept state.
+pub(crate) static VERIFY_STAND_STATES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 #[cfg(test)]
 mod interaction_meta_tests {
     //! A server `minecraft:interaction`'s box and response reach a guest as

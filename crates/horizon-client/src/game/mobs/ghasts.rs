@@ -20,6 +20,11 @@ fn stops_movers(m: &Mob) -> bool {
 }
 
 impl Game<'_> {
+    /// Whether any entity stops movers at all (`stand_entity_collisions` would not be empty): a
+    /// boat, a living shulker, a held-still happy ghast.
+    pub(in crate::game) fn stand_obstacles_exist(&self) -> bool {
+        !self.boats.is_empty() || self.mobs.iter().any(stops_movers)
+    }
     /// Client `EntityGetter.getEntityCollisions` for the player: the
     /// entities that `canBeCollidedWith` it, solid happy ghasts, living
     /// shulkers (`Shulker.canBeCollidedWith`) and boats

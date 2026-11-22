@@ -1279,6 +1279,10 @@ struct Game<'a> {
     /// player's own (taken by `update_world`).
     spawn_wait: Vec<(i32, i32)>,
     mobs: horizon_client::join_seq::JoinList<Mob>,
+    /// The state each armor stand's network entry was last built as, for the stands nobody has
+    /// touched since (`ArmorStand::sync_dirty`).
+    stand_states:
+        horizon_client::fast_hash::FxHashMap<u32, horizon_client::lan::entity::EntityState>,
     /// `mobs` by network id, for the packets that name one (`game/mobs/mob_index.rs`).
     mob_index: mob_index::MobIndex,
     creatures: creatures::Creatures,
@@ -10856,6 +10860,7 @@ impl<'a> Game<'a> {
             player_spawn: None,
             spawn_wait: Vec::new(),
             mobs: Default::default(),
+            stand_states: Default::default(),
             mob_index: Default::default(),
             creatures: Default::default(),
             sculk: Default::default(),
@@ -11709,49 +11714,8 @@ fn test_server_load() -> horizon_world::native_load_context::LoadContext {
 }
 
 #[cfg(test)]
-mod nested_orb_spawn_tests {
-    #[test]
-    #[ignore = "daily"]
-    fn experience_pickup_keeps_nested_orbs_until_the_next_ordered_pass() {
-        crate::game::native_entity_refs::tests::with_game(|game| {
-            game.world.chunks.insert(
-                (0, 0),
-                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
-            );
-            game.block_ticks
-                .add_empty_chunk(horizon_core::position::ChunkPos::new(0, 0))
-                .unwrap();
-            for (x, value) in [(7.5, 1), (9.5, 3), (11.5, 7)] {
-                game.add_orb([x, 80.0, 3.5], value);
-            }
-            let _ = game.orbs.remove(1);
-            let mut expected: Vec<_> = game.orbs.iter().map(|o| (o.id, o.join)).collect();
-            crate::game::entity::taken_pass_tests::with_spawn(
-                |g| g.add_orb([3.5, 80.0, 3.5], 1),
-                || game.tick_experience(),
-            );
-            assert_eq!(game.orbs.len(), 3);
-            let join = game.orbs[2].join;
-            expected.push((game.orbs[2].id, join));
-            assert_eq!(
-                game.orbs.iter().map(|o| (o.id, o.join)).collect::<Vec<_>>(),
-                expected
-            );
-            assert_eq!(game.orbs[2].age, 0);
-            game.ordered.announced = horizon_client::join_seq::JoinSeq::MAX;
-            game.tickets.update(None);
-            game.begin_ordered_ticks();
-            game.run_ordered_ticks(horizon_client::join_seq::JoinSeq::MAX, false)
-                .unwrap();
-            let spawned = game.orbs.iter().find(|o| o.join == join).unwrap();
-            assert_eq!(spawned.age, 1);
-            assert_eq!(
-                game.orbs.iter().map(|o| (o.id, o.join)).collect::<Vec<_>>(),
-                expected
-            );
-        });
-    }
-}
+#[path = "game/interface/tests/nested_orb_spawn_tests.rs"]
+mod nested_orb_spawn_tests;
 
 #[cfg(test)]
 pub(crate) fn in_own_process(name: &str, body: impl FnOnce()) {

@@ -134,6 +134,7 @@ impl Game<'_> {
         });
         self.reload_resources = prepared.resources;
         self.structure_templates.clear();
+        self.forget_stand_rests();
     }
     /// The retained server reload listeners of the last successful reload.
     pub(super) fn reload_resources(&self) -> &dyn ServerReloadResources {

@@ -198,6 +198,21 @@ pub struct World {
     /// (`ShulkerBoxBlockEntity.getBoundingBox`), as `moving_pistons` for pistons.
     pub shulkers: FxHashMap<[i32; 3], crate::block_entity_anim::Shulker>,
 }
+/// See [`World::region_stamp`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionStamp {
+    n: u8,
+    items: [(i32, i32, i32, u64, u32); RegionStamp::MOST],
+}
+impl RegionStamp {
+    /// The most sections (or missing columns) a stamp holds: a box of 16 blocks a side reaches 8.
+    pub const MOST: usize = 8;
+    fn push(&mut self, item: (i32, i32, i32, u64, u32)) -> Option<()> {
+        *self.items.get_mut(usize::from(self.n))? = item;
+        self.n += 1;
+        Some(())
+    }
+}
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Weather {
     pub clear_time: i32,
@@ -672,6 +687,32 @@ impl World {
             None => self.air,
         }
     }
+    /// What a reader that looked at the blocks of the box `lo..=hi` (block coordinates) keeps to
+    /// know later that none of them was written: the identity and write count of each block
+    /// container the box reaches, and which chunk columns it found missing. `None` when the box
+    /// reaches more than [`RegionStamp::MOST`] sections. Equal stamps mean the same containers
+    /// with the same entries, so every read of the box answers as it did.
+    pub fn region_stamp(&self, lo: [i32; 3], hi: [i32; 3]) -> Option<RegionStamp> {
+        let mut stamp = RegionStamp {
+            n: 0,
+            items: [(0, 0, 0, 0, 0); RegionStamp::MOST],
+        };
+        for cx in lo[0] >> 4..=hi[0] >> 4 {
+            for cz in lo[2] >> 4..=hi[2] >> 4 {
+                let Some(chunk) = self.chunks.get_chunk(cx, cz) else {
+                    stamp.push((cx, cz, i32::MIN, 0, 0))?;
+                    continue;
+                };
+                for sy in lo[1] >> 4..=hi[1] >> 4 {
+                    if let Some(s) = chunk.section_index(sy << 4) {
+                        let (uid, edits) = chunk.sections[s].blocks.stamp();
+                        stamp.push((cx, cz, s as i32, uid, edits))?;
+                    }
+                }
+            }
+        }
+        Some(stamp)
+    }
     /// Whether a block of the box `lo..=hi` may match, from the palettes of
     /// the sections it reaches (a palette of the whole registry may hold
     /// anything): `false` means [`Self::block`] matches in none of its cells,
@@ -1131,4 +1172,65 @@ mod tests {
 pub struct BlockEntityExtras {
     pub source: Option<horizon_core::nbt::Tag>,
     pub pending_loot: Option<crate::chunk::PendingContainerLoot>,
+}
+
+#[cfg(test)]
+mod region_stamp_tests {
+    use super::*;
+    use crate::chunk::Chunk;
+    use std::sync::Arc;
+
+    fn world() -> World {
+        let mut w = World::new(BlockStateId(0), 0);
+        for (x, z) in [(0, 0), (1, 0), (0, 1), (1, 1), (5, 5)] {
+            w.chunks.insert((x, z), Arc::new(Chunk::empty(x, z)));
+        }
+        w
+    }
+
+    /// A stamp changes when a block of the box is written (even to the same value's neighbour in
+    /// its section), when a chunk of the box is replaced or appears, and not for a write in a
+    /// section the box does not reach.
+    #[test]
+    fn a_region_stamp_follows_the_writes_of_its_sections() {
+        let mut w = world();
+        let (lo, hi) = ([10, 0, 10], [20, 3, 20]);
+        let a = w.region_stamp(lo, hi).unwrap();
+        assert_eq!(a, w.region_stamp(lo, hi).unwrap(), "nothing written");
+        w.set(80, 0, 80, BlockStateId(1)).unwrap();
+        assert_eq!(a, w.region_stamp(lo, hi).unwrap(), "a write in chunk 5,5");
+        w.set(12, 100, 12, BlockStateId(1)).unwrap();
+        assert_eq!(
+            a,
+            w.region_stamp(lo, hi).unwrap(),
+            "a write in another section of the column"
+        );
+        w.set(12, 1, 12, BlockStateId(1)).unwrap();
+        let b = w.region_stamp(lo, hi).unwrap();
+        assert_ne!(a, b, "a write in the box's section");
+        w.set(12, 1, 12, BlockStateId(0)).unwrap();
+        assert_ne!(
+            b,
+            w.region_stamp(lo, hi).unwrap(),
+            "written back is still a write"
+        );
+        // A chunk replaced by an equal copy is another container.
+        let before = w.region_stamp(lo, hi).unwrap();
+        let copy = Arc::new(Chunk::empty(0, 0));
+        w.chunks.insert((0, 0), copy);
+        assert_ne!(before, w.region_stamp(lo, hi).unwrap(), "a chunk replaced");
+        // A column that is missing, then loaded.
+        let far = ([200, 0, 200], [201, 3, 201]);
+        let missing = w.region_stamp(far.0, far.1).unwrap();
+        w.chunks.insert((12, 12), Arc::new(Chunk::empty(12, 12)));
+        assert_ne!(
+            missing,
+            w.region_stamp(far.0, far.1).unwrap(),
+            "a column loaded"
+        );
+        assert!(
+            w.region_stamp([0, -64, 0], [40, 300, 40]).is_none(),
+            "a box of too many sections"
+        );
+    }
 }

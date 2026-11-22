@@ -1,0 +1,4 @@
+# A resting armor stand's skipped tick equals the full tick.
+horizon-client game::stand_rest::stand_rest_tests::a_resting_stand_ticks_like_the_full_tick lib daily resources
+horizon-client game::stand_sync::stand_sync_flag_tests::a_stand_nobody_touched_has_the_entry_it_had lib daily resources
+horizon-client game::levels::tests::a_reload_clears_the_rest_keys_of_stands_in_a_parked_level lib daily resources

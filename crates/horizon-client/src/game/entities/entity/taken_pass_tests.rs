@@ -69,7 +69,7 @@ pub(in crate::game) struct SlotIdentities {
 }
 
 impl SlotIdentities {
-    pub fn observe<T: HasAttachmentLifetime>(
+    pub fn observe<T: HasAttachmentLifetime + horizon_client::join_seq::Joined>(
         &mut self,
         owners: &mut JoinList<T, false>,
         epoch: WorldEpoch,

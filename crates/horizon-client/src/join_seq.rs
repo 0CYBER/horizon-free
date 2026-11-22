@@ -83,6 +83,11 @@ impl JoinSeq {
 pub trait Joined {
     fn join_seq(&self) -> JoinSeq;
     fn set_join_seq(&mut self, seq: JoinSeq);
+    /// Called by every list on each `&mut` it hands out for this entity (an index, `get_mut`, an
+    /// iterator, an edit callback): the entity may be about to change. A kind that keeps what
+    /// it last told its observers sets a flag here; the lists are the only way to a `&mut`, so
+    /// no write can go round it.
+    fn touch(&mut self) {}
 }
 
 /// The existing pass-specific order of survivors and nested spawns.
@@ -330,6 +335,7 @@ impl<T: Joined> ResidentSlot<T> {
     }
     /// Explicitly retire any previous owner and install its replacement.
     pub fn replace(&mut self, mut entity: T) {
+        entity.touch();
         JoinList::<T>::number(&mut entity);
         self.discard();
         self.0 = Some(entity);
@@ -341,14 +347,17 @@ impl<T: Joined> ResidentSlot<T> {
         self.0.take()
     }
     /// Return an extracted owner, replacing any intervening singleton as before.
-    pub fn put_back(&mut self, entity: T) {
+    pub fn put_back(&mut self, mut entity: T) {
+        entity.touch();
         self.discard();
         self.0 = Some(entity);
         self.emit_current(residency::Change::PutBack);
     }
     /// Borrow entity state; identity and whole-value replacement stay audited.
     pub fn as_mut(&mut self) -> Option<&mut T> {
-        self.0.as_mut()
+        let t = self.0.as_mut()?;
+        t.touch();
+        Some(t)
     }
 }
 
@@ -458,11 +467,15 @@ impl<T: Joined> ResidentList<T> {
     }
     pub fn update<R>(&mut self, index: usize, edit: impl FnOnce(&mut T) -> R) -> R {
         self.0.written();
+        self.0.0[index].touch();
         edit(&mut self.0.0[index])
     }
-    pub fn for_each_mut(&mut self, edit: impl FnMut(&mut T)) {
+    pub fn for_each_mut(&mut self, mut edit: impl FnMut(&mut T)) {
         self.0.written();
-        self.0.0.iter_mut().for_each(edit);
+        self.0.0.iter_mut().for_each(move |t| {
+            t.touch();
+            edit(t)
+        });
     }
     /// Take the owners for a pass, leaving a spawn buffer in their place.
     pub fn lift(&mut self) -> Self {
@@ -753,7 +766,7 @@ impl<T, const DIRECT: bool> JoinList<T, DIRECT> {
     }
 }
 
-impl<T> JoinList<T> {
+impl<T: Joined> JoinList<T> {
     /// Edit one entity while reading every other entity through disjoint slices.
     /// The slices retain list order and exclude the edited entity.
     pub fn with_one_and_rest<R>(
@@ -767,6 +780,7 @@ impl<T> JoinList<T> {
         self.written();
         let (before, at_and_after) = self.0.split_at_mut(index);
         let (at, after) = at_and_after.split_first_mut()?;
+        at.touch();
         Some(edit(at, before, after))
     }
 
@@ -788,6 +802,8 @@ impl<T> JoinList<T> {
         let (low_item, after_low) = low_and_after.split_first_mut()?;
         let (between, high_and_after) = after_low.split_at_mut(high - low - 1);
         let (high_item, after) = high_and_after.split_first_mut()?;
+        low_item.touch();
+        high_item.touch();
         Some(if first == low {
             edit(low_item, high_item, before, between, after)
         } else {
@@ -800,12 +816,21 @@ impl<T> JoinList<T> {
     /// A panicking predicate retains its current row and edits, without emitting
     /// its removal. Only yielded rows retire, using their pre-predicate identity.
     /// No journal lock is held while the predicate runs.
-    pub fn extract_if_mut(&mut self, take: impl FnMut(&mut T) -> bool) -> impl Iterator<Item = T> {
-        self.extract_where(take)
+    pub fn extract_if_mut(
+        &mut self,
+        mut take: impl FnMut(&mut T) -> bool,
+    ) -> impl Iterator<Item = T> {
+        self.extract_where(move |t| {
+            t.touch();
+            take(t)
+        })
     }
-    pub fn retain_mut(&mut self, keep: impl FnMut(&mut T) -> bool) {
+    pub fn retain_mut(&mut self, mut keep: impl FnMut(&mut T) -> bool) {
         self.written();
-        self.retain_where(keep);
+        self.retain_where(move |t| {
+            t.touch();
+            keep(t)
+        });
     }
     /// Run an audited state edit without returning a mutable entity reference.
     /// Whole-entity replacement belongs to the owning residency boundary.
@@ -817,10 +842,20 @@ impl<T> JoinList<T> {
     /// ```
     pub fn update<R>(&mut self, index: usize, edit: impl FnOnce(&mut T) -> R) -> R {
         self.written();
+        self.0[index].touch();
         edit(&mut self.0[index])
     }
     /// Edit each entity in list order without lending out mutable iteration.
-    pub fn for_each_mut(&mut self, edit: impl FnMut(&mut T)) {
+    pub fn for_each_mut(&mut self, mut edit: impl FnMut(&mut T)) {
+        self.written();
+        self.0.iter_mut().for_each(move |t| {
+            t.touch();
+            edit(t)
+        });
+    }
+    /// [`Self::for_each_mut`] that does not [`Joined::touch`]: for the one caller that records
+    /// the observers have been told (clearing what `touch` set) and changes nothing else.
+    pub fn for_each_quiet(&mut self, edit: impl FnMut(&mut T)) {
         self.written();
         self.0.iter_mut().for_each(edit);
     }
@@ -830,11 +865,15 @@ impl<T> JoinList<T> {
     }
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         self.written();
-        self.0.get_mut(index)
+        let t = self.0.get_mut(index)?;
+        t.touch();
+        Some(t)
     }
     pub fn last_mut(&mut self) -> Option<&mut T> {
         self.written();
-        self.0.last_mut()
+        let t = self.0.last_mut()?;
+        t.touch();
+        Some(t)
     }
     /// Borrow distinct entities without lending out a mutable slice.
     pub fn get_disjoint_mut<const N: usize>(
@@ -842,7 +881,11 @@ impl<T> JoinList<T> {
         indices: [usize; N],
     ) -> Result<[&mut T; N], std::slice::GetDisjointMutError> {
         self.written();
-        self.0.get_disjoint_mut(indices)
+        let mut got = self.0.get_disjoint_mut(indices)?;
+        for t in &mut got {
+            t.touch();
+        }
+        Ok(got)
     }
 }
 
@@ -859,15 +902,17 @@ impl<T: horizon_mod_runtime::attachments::HasAttachmentLifetime, const DIRECT: b
     }
 }
 
-impl<T: horizon_mod_runtime::attachments::HasAttachmentLifetime> JoinList<T, false> {
+impl<T: horizon_mod_runtime::attachments::HasAttachmentLifetime + Joined> JoinList<T, false> {
     /// Audited state edit; debug assertions detect a changed bound registration.
     pub fn update<R>(&mut self, index: usize, edit: impl FnOnce(&mut T) -> R) -> R {
         self.written();
+        self.0[index].touch();
         checked_edit(&mut self.0[index], edit)
     }
     pub fn for_each_mut(&mut self, mut edit: impl FnMut(&mut T)) {
         self.written();
         for entity in &mut self.0 {
+            entity.touch();
             checked_edit(entity, &mut edit);
         }
     }
@@ -885,6 +930,7 @@ impl<T: horizon_mod_runtime::attachments::HasAttachmentLifetime> JoinList<T, fal
             return false;
         };
         store_back(&mut self.0[index], entity);
+        self.0[index].touch();
         true
     }
 }
@@ -936,10 +982,12 @@ impl<T, I: SliceIndex<[T]>, const DIRECT: bool> Index<I> for JoinList<T, DIRECT>
         &self.0[index]
     }
 }
-impl<T> IndexMut<usize> for JoinList<T> {
+impl<T: Joined> IndexMut<usize> for JoinList<T> {
     fn index_mut(&mut self, index: usize) -> &mut T {
         self.written();
-        &mut self.0[index]
+        let t = &mut self.0[index];
+        t.touch();
+        t
     }
 }
 
@@ -967,8 +1015,9 @@ impl<T: Joined, const DIRECT: bool> JoinList<T, DIRECT> {
 
     /// Return an extracted owner at its former position, preserving its number.
     /// If other mutations shortened the list, restore it at the end instead.
-    pub fn put_back(&mut self, index: usize, entity: T) {
+    pub fn put_back(&mut self, index: usize, mut entity: T) {
         self.written();
+        entity.touch();
         let index = index.min(self.0.len());
         self.0.insert(index, entity);
         if let Some(binding) = &self.1 {
@@ -983,6 +1032,7 @@ impl<T: Joined, const DIRECT: bool> JoinList<T, DIRECT> {
     }
     pub fn push(&mut self, mut entity: T) {
         self.written();
+        entity.touch();
         Self::number(&mut entity);
         self.0.push(entity);
         if let Some(binding) = &self.1 {
@@ -991,6 +1041,7 @@ impl<T: Joined, const DIRECT: bool> JoinList<T, DIRECT> {
     }
     pub fn insert(&mut self, index: usize, mut entity: T) {
         self.written();
+        entity.touch();
         Self::number(&mut entity);
         self.0.insert(index, entity);
         if let Some(binding) = &self.1 {
@@ -1025,30 +1076,38 @@ impl<'a, T, const DIRECT: bool> IntoIterator for &'a JoinList<T, DIRECT> {
 /// Unlike `slice::IterMut`, this cannot reorder the remaining list as a slice.
 pub struct IterMut<'a, T>(std::slice::IterMut<'a, T>);
 
-impl<'a, T> Iterator for IterMut<'a, T> {
+impl<'a, T: Joined> Iterator for IterMut<'a, T> {
     type Item = &'a mut T;
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
+        let t = self.0.next()?;
+        t.touch();
+        Some(t)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.0.size_hint()
     }
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.0.nth(n)
+        let t = self.0.nth(n)?;
+        t.touch();
+        Some(t)
     }
 }
-impl<T> DoubleEndedIterator for IterMut<'_, T> {
+impl<T: Joined> DoubleEndedIterator for IterMut<'_, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.0.next_back()
+        let t = self.0.next_back()?;
+        t.touch();
+        Some(t)
     }
     fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        self.0.nth_back(n)
+        let t = self.0.nth_back(n)?;
+        t.touch();
+        Some(t)
     }
 }
-impl<T> ExactSizeIterator for IterMut<'_, T> {}
-impl<T> std::iter::FusedIterator for IterMut<'_, T> {}
+impl<T: Joined> ExactSizeIterator for IterMut<'_, T> {}
+impl<T: Joined> std::iter::FusedIterator for IterMut<'_, T> {}
 
-impl<'a, T> IntoIterator for &'a mut JoinList<T> {
+impl<'a, T: Joined> IntoIterator for &'a mut JoinList<T> {
     type Item = &'a mut T;
     type IntoIter = IterMut<'a, T>;
     fn into_iter(self) -> Self::IntoIter {

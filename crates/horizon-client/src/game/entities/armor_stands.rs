@@ -1068,14 +1068,24 @@ impl Game<'_> {
         // `isPassengerOfSameVehicle` leaves those riders out.
         let mut obstacles: Option<horizon_client::entities::ObstacleGrid> = None;
         let mut nearby = Vec::new();
+        // Whether anything stops movers at all, asked once, by the first stand that wants it.
+        let mut obstacle_free: Option<bool> = None;
         for i in 0..self.armor_stands.len() {
             let at = self.armor_stands[i].position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
-                self.armor_stands[i].previous = at;
-                self.armor_stands[i].previous_yaw = self.armor_stands[i].yaw;
+                // Written only if it changes: a `&mut` is a touch, and a stand out of range that
+                // rests does not need to be told again.
+                if self.armor_stands[i].previous != at
+                    || self.armor_stands[i].previous_yaw != self.armor_stands[i].yaw
+                {
+                    self.armor_stands[i].previous = at;
+                    self.armor_stands[i].previous_yaw = self.armor_stands[i].yaw;
+                }
                 continue;
             }
-            self.armor_stands[i].first_tick = false;
+            if self.armor_stands[i].first_tick {
+                self.armor_stands[i].first_tick = false;
+            }
             // Entity.baseTick: the saved invulnerability window counts down
             // (arismoko/horizon#916).
             self.tick_saved_invulnerable_time(self.armor_stands[i].id);
@@ -1098,6 +1108,29 @@ impl Game<'_> {
                 let air = (air + 4).min(300) as i16;
                 map.insert("Air".into(), horizon_core::nbt::Tag::Short(air));
             }
+            // A stand whose last tick changed nothing, and whose surroundings are as they were,
+            // changes nothing again: see `StandRestKey`.
+            let rest_key = {
+                let free = *obstacle_free.get_or_insert_with(|| !self.stand_obstacles_exist());
+                self.stand_rest_key(i, free)
+            };
+            if rest_key.is_some() && rest_key == self.armor_stands[i].rest {
+                {
+                    let a = &self.armor_stands[i];
+                    if a.previous != a.position || a.previous_yaw != a.yaw || !a.speed_instance {
+                        let a = &mut self.armor_stands[i];
+                        a.previous = a.position;
+                        a.previous_yaw = a.yaw;
+                        a.speed_instance = true;
+                    }
+                }
+                let a = &self.armor_stands[i];
+                let (id, at) = (a.id, a.position);
+                self.entity_section_step(id, [at.x, at.y, at.z], [at.x, at.y, at.z]);
+                continue;
+            }
+            let dead_before = dead.len();
+            let mut loud = false;
             let a = &mut self.armor_stands[i];
             a.previous = a.position;
             a.previous_yaw = a.yaw;
@@ -1152,6 +1185,7 @@ impl Game<'_> {
                 });
             }
             let section_step = (a.id, a.previous, a.position);
+            loud |= !tops.is_empty();
             for pos in tops {
                 self.bubble_column_particles(pos);
             }
@@ -1170,6 +1204,7 @@ impl Game<'_> {
             // LivingEntity.checkFallDamage: onChangedBlock before the block's
             // fallOn, then aiStep's applyEffectsFromBlocks (stepOn, then the
             // blocks it is inside).
+            loud |= landed;
             if landed {
                 self.armor_stand_location_effects(i, true);
             }
@@ -1231,7 +1266,22 @@ impl Game<'_> {
             ) {
                 dead.push((i, damage_type));
             }
-            self.armor_stand_powder_snow_tick(i);
+            // Thawing and powder snow act on the stand whatever its key: a stand they touched
+            // is not at rest.
+            loud |= self.armor_stand_powder_snow_tick(i);
+            // This tick started from `rest_key` and, loud or not, may have left the stand at the
+            // same key: then every phase above is a fixed point there.
+            let after = if !loud && dead.len() == dead_before {
+                let free = obstacle_free.unwrap_or(false);
+                self.stand_rest_key(i, free)
+            } else {
+                None
+            };
+            self.armor_stands[i].rest = if rest_key.is_some() && rest_key == after {
+                after
+            } else {
+                None
+            };
             let (id, from, to) = section_step;
             self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
         }
@@ -1324,8 +1374,9 @@ impl Game<'_> {
     /// A marker or `NoGravity` stand has `noPhysics`, so no block reaches it
     /// (`Entity.isAffectedByBlocks`), but it still thaws. A stand's
     /// `TicksFrozen` is its loaded tag's, as its `Air` is. Freeze damage needs
-    /// nothing here: `ArmorStand.hurtServer` ignores it.
-    fn armor_stand_powder_snow_tick(&mut self, i: usize) {
+    /// nothing here: `ArmorStand.hurtServer` ignores it. True when the stand was in snow or
+    /// frozen, a tick that is not a fixed point (see `stand_rest_key`).
+    fn armor_stand_powder_snow_tick(&mut self, i: usize) -> bool {
         let facts = self.res.facts();
         let a = &self.armor_stands[i];
         let snow = if Entity::no_physics(a, a.no_physics) {
@@ -1358,7 +1409,7 @@ impl Game<'_> {
             .map_or(0, crate::game::boats::saved_ticks_frozen);
         let in_snow = !snow.is_empty();
         if !in_snow && frozen == 0 {
-            return;
+            return false;
         }
         let cleared = a.freeze_cleared_by_blocks(&self.world, self.res.facts(), self.pack.assets.registry);
         // ArmorStand inherits LivingEntity.canFreeze: not a spectator, not a
@@ -1395,9 +1446,10 @@ impl Game<'_> {
             .entry(id)
             .or_insert_with(|| horizon_core::nbt::Tag::Compound(Default::default()))
         else {
-            return;
+            return true;
         };
         crate::game::boats::put_ticks_frozen(map, next);
+        true
     }
     /// `ArmorStand.pushEntities`: a plain minecart (`RIDABLE_MINECARTS`,
     /// `AbstractMinecart.isRideable`) whose box meets the stand's is shoved
@@ -2548,141 +2600,11 @@ fn usable_equipment_slot(stand: &ArmorStand, wanted: usize) -> usize {
 }
 
 #[cfg(test)]
-mod swap_tests {
-    use super::*;
-    fn stack(item: &str, count: u32) -> ItemStack {
-        ItemStack::new(item, count)
-    }
-    /// A head-locked stand held a helmet would refuse it in vanilla too —
-    /// `getEquipmentSlotForItem` falls back to MAINHAND, so the stand holds it.
-    #[test]
-    fn a_disabled_equippable_slot_falls_back_to_the_hand() {
-        let mut a = ArmorStand::new(1, horizon_core::geometry::Vec3::ZERO, 0.0);
-        a.show_arms = true;
-        a.disabled_slots = 1 << 4; // head
-        assert_eq!(usable_equipment_slot(&a, 5), 0);
-        assert_eq!(usable_equipment_slot(&a, 4), 4);
-        assert_eq!(usable_equipment_slot(&a, 0), 0);
-        a.disabled_slots = 1 << 5; // off hand
-        assert_eq!(usable_equipment_slot(&a, 1), 0);
-    }
-    #[test]
-    fn disabled_slots_lock_by_filter_flag() {
-        let mut a = ArmorStand::new(1, horizon_core::geometry::Vec3::ZERO, 0.0);
-        // Hands need arms.
-        assert!(a.is_disabled(0) && a.is_disabled(1));
-        a.show_arms = true;
-        assert!(!a.is_disabled(0) && !a.is_disabled(1));
-        // Bit 4 locks the head (equipment index 5), bit 5 the off hand (1).
-        a.disabled_slots = (1 << 4) | (1 << 5);
-        assert!(a.is_disabled(5) && a.is_disabled(1));
-        assert!(!a.is_disabled(4) && !a.is_disabled(0));
-        // Taking (+8) from a filled slot and putting (+16) into an empty one.
-        a.disabled_slots = (1 << (3 + 8)) | (1 << (1 + 16));
-        assert!(!a.swap_locked(4), "an empty chest slot is not take-locked");
-        a.equipment[4] = Some(stack("minecraft:iron_chestplate", 1));
-        assert!(a.swap_locked(4));
-        assert!(a.swap_locked(2), "an empty feet slot is put-locked");
-        a.equipment[2] = Some(stack("minecraft:iron_boots", 1));
-        assert!(!a.swap_locked(2));
-    }
-    #[test]
-    fn creative_swap_gives_the_worn_piece_to_the_hand() {
-        let swap = swap_with_equipment_slot(
-            &stack("minecraft:diamond_chestplate", 1),
-            Some(stack("minecraft:iron_chestplate", 1)),
-            true,
-        );
-        assert_eq!(swap.worn, stack("minecraft:diamond_chestplate", 1));
-        assert_eq!(swap.hand, Some(stack("minecraft:iron_chestplate", 1)));
-        assert_eq!(swap.to_inventory, None);
-    }
-    #[test]
-    fn creative_equip_with_nothing_worn_keeps_the_hand() {
-        let swap = swap_with_equipment_slot(&stack("minecraft:diamond_helmet", 1), None, true);
-        assert_eq!(swap.worn, stack("minecraft:diamond_helmet", 1));
-        assert_eq!(swap.hand, Some(stack("minecraft:diamond_helmet", 1)));
-    }
-    #[test]
-    fn survival_swap_gives_the_worn_piece_or_empties_the_hand() {
-        let worn = Some(stack("minecraft:iron_boots", 1));
-        let swap = swap_with_equipment_slot(&stack("minecraft:diamond_boots", 1), worn, false);
-        assert_eq!(swap.hand, Some(stack("minecraft:iron_boots", 1)));
-        let swap = swap_with_equipment_slot(&stack("minecraft:diamond_boots", 1), None, false);
-        assert_eq!(swap.hand, None);
-    }
-    #[test]
-    fn a_larger_stack_wears_one_and_sends_the_old_piece_to_the_inventory() {
-        // Armour stacks past one only with a max_stack_size component.
-        let worn = Some(stack("minecraft:leather_helmet", 1));
-        let swap =
-            swap_with_equipment_slot(&stack("minecraft:golden_helmet", 3), worn.clone(), false);
-        assert_eq!(swap.worn, stack("minecraft:golden_helmet", 1));
-        assert_eq!(swap.hand, Some(stack("minecraft:golden_helmet", 2)));
-        assert_eq!(swap.to_inventory, worn);
-        let swap =
-            swap_with_equipment_slot(&stack("minecraft:golden_helmet", 3), worn.clone(), true);
-        assert_eq!(swap.hand, Some(stack("minecraft:golden_helmet", 3)));
-        assert_eq!(swap.to_inventory, worn);
-    }
-}
+#[path = "armor_stands/burn_drop_tests.rs"]
+mod burn_drop_tests;
 #[cfg(test)]
-mod burn_drop_tests {
-    use super::*;
-    #[test]
-    fn only_visible_non_marker_stands_are_broken_by_blasts() {
-        let mut stand = ArmorStand::new(1, Vec3::new(0.5, 64.0, 0.5), 0.0);
-        assert!(!spared_by_blast(&stand));
-        stand.invisible = true;
-        assert!(spared_by_blast(&stand));
-        stand.invisible = false;
-        stand.marker = true;
-        assert!(spared_by_blast(&stand));
-    }
-    #[test]
-    fn burnt_equipment_drops_above_the_block_and_vanishing_items_do_not_drop() {
-        let mut stand = ArmorStand::new(1, Vec3::new(-0.1, 4.8, 0.0), 0.0);
-        let kept = ItemStack::new("minecraft:diamond_boots", 1);
-        let mut vanished = ItemStack::new("minecraft:diamond_helmet", 1);
-        vanished
-            .data_mut()
-            .enchantments
-            .push(("minecraft:vanishing_curse".into(), 1));
-        stand.equipment[0] = Some(kept.clone());
-        stand.equipment[1] = Some(vanished);
-        let (pos, drops) = broken_armor_stand_equipment(stand);
-        assert_eq!(pos, [-1, 5, 0]);
-        assert_eq!(drops, vec![kept]);
-    }
-    #[test]
-    fn a_broken_stand_pops_body_and_saddle_after_the_other_six_slots() {
-        use horizon_items::equipment::{BODY, HEAD, MAINHAND, SADDLE};
-        let mut stand = ArmorStand::new(1, Vec3::new(0.5, 4.0, 0.5), 0.0);
-        let stacks: Vec<_> = [SADDLE, BODY, HEAD, MAINHAND]
-            .into_iter()
-            .map(|slot| {
-                let mut stack = ItemStack::new("minecraft:stone", 1 + slot as u32);
-                stack.damage = slot as u32;
-                stand.equipment[slot] = Some(stack.clone());
-                (slot, stack)
-            })
-            .collect();
-        let (_, drops) = broken_armor_stand_equipment(stand);
-        let order = |slots: [usize; 4]| {
-            slots
-                .map(|s| {
-                    stacks
-                        .iter()
-                        .find(|(slot, _)| *slot == s)
-                        .unwrap()
-                        .1
-                        .clone()
-                })
-                .to_vec()
-        };
-        assert_eq!(drops, order([MAINHAND, HEAD, BODY, SADDLE]));
-    }
-}
+#[path = "armor_stands/swap_tests.rs"]
+mod swap_tests;
 #[cfg(test)]
 mod push_tests {
     use super::super::minecarts::{CartKind, Minecart};

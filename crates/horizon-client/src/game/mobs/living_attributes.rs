@@ -83,10 +83,14 @@ impl Game<'_> {
             }
             collect_equipment(&catalog, items, m);
         }
-        for a in self.armor_stands.iter_mut() {
-            if a.equipment.is_empty() && !a.live.has_worn() {
+        for i in 0..self.armor_stands.len() {
+            // Looked at without a `&mut`, which the list counts as a touch: most stands wear
+            // nothing and never did.
+            let stand = &self.armor_stands[i];
+            if stand.equipment.is_empty() && !stand.live.has_worn() {
                 continue;
             }
+            let a = &mut self.armor_stands[i];
             let changed = a.live.collect_equipment_changes(
                 &catalog,
                 "minecraft:armor_stand",
