@@ -1,5 +1,5 @@
 //! Modrinth's public API (api.modrinth.com/v2): no key, files with SHA-512 and SHA-1.
-use super::{details, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME};
+use super::{details, FileRef, Kind, Project, Query, SearchPage, Source, SourceId, Version, GAME};
 use serde_json::Value;
 
 const API: &str = "https://api.modrinth.com/v2";
@@ -274,23 +274,41 @@ pub fn icons(ids: &[String]) -> Result<Vec<(String, String)>, String> {
         .collect())
 }
 
+fn parse_search_page(found: &Value, query: &Query) -> Result<SearchPage, String> {
+    let hits = found["hits"]
+        .as_array()
+        .ok_or_else(|| crate::i18n::tr("The search didn't go through.").to_string())?;
+    let offset = query.offset + hits.len();
+    let more = hits.len() == query.limit.clamp(1, 100)
+        && found["total_hits"]
+            .as_u64()
+            .is_none_or(|total| (offset as u64) < total);
+    let projects = hits
+        .iter()
+        .filter_map(parse_hit)
+        .map(|project| match query.kind {
+            Kind::DataPack => project.as_datapack(),
+            _ => project,
+        })
+        .collect();
+    Ok(SearchPage {
+        projects,
+        next_offset: more.then_some(offset),
+    })
+}
+
 impl Source for Modrinth {
     fn id(&self) -> SourceId {
         SourceId::Modrinth
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
+        self.search_page(query).map(|page| page.projects)
+    }
+
+    fn search_page(&self, query: &Query) -> Result<SearchPage, String> {
         let found = get(&search_url(query))?;
-        Ok(found["hits"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(parse_hit)
-            .map(|p| match query.kind {
-                Kind::DataPack => p.as_datapack(),
-                _ => p,
-            })
-            .collect())
+        parse_search_page(&found, query)
     }
 
     fn project(&self, id: &str) -> Result<Project, String> {
@@ -388,4 +406,38 @@ pub(super) fn encode(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod search_page_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn skipped_hits_count_toward_the_modrinth_offset() {
+        let mut query = Query::new("", Kind::ResourcePack);
+        query.limit = 2;
+        let page = parse_search_page(
+            &json!({
+                "total_hits": 3,
+                "hits": [{"project_id": "unused", "project_type": "unsupported"}, {}]
+            }),
+            &query,
+        )
+        .unwrap();
+        assert!(page.projects.is_empty());
+        query.offset = page.next_offset.unwrap();
+        assert_eq!(query.offset, 2);
+        let last = parse_search_page(
+            &json!({
+                "total_hits": 3,
+                "hits": [{"project_id": "does-fit", "project_type": "resourcepack"}]
+            }),
+            &query,
+        )
+        .unwrap();
+        assert_eq!(last.projects[0].id, "does-fit");
+        assert_eq!(last.next_offset, None);
+        assert!(parse_search_page(&json!({}), &query).is_err());
+    }
 }

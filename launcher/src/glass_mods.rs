@@ -33,7 +33,7 @@ impl Launcher {
             && m.text.text().is_empty()
         {
             // Results come in pages: only a last page gives the real count.
-            if m.more {
+            if m.next_offset.is_some() {
                 return tr("Search Horizon mods").into();
             }
             trf(
@@ -317,14 +317,11 @@ impl Launcher {
             } else {
                 tr("The search didn't go through.")
             };
-            let mut actions = div().flex().flex_wrap().gap(px(8.)).child(
-                button("mods-retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.mods_search(0);
-                        cx.notify();
-                    },
-                )),
-            );
+            let mut actions = div()
+                .flex()
+                .flex_wrap()
+                .gap(px(8.))
+                .child(self.mods_retry_button(cx));
             actions = actions.child(
                 button(
                     "mods-error-details",
@@ -366,11 +363,11 @@ impl Launcher {
         if shown.is_empty() {
             let line = if m.kind == PackKind::Shader && m.java.is_some() {
                 tr("Shader packs for Java instances aren't supported yet.").to_string()
+            } else if m.searching || !m.searched {
+                tr("Searching…").to_string()
             } else if !m.results.is_empty() {
                 tr("Nothing found that runs in Horizon. Show everything lists the rest.")
                     .to_string()
-            } else if m.searching || !m.searched {
-                tr("Searching…").to_string()
             } else if let Some(target) = m.java_for(m.kind) {
                 trf(
                     "Nothing found for {target}.",
@@ -541,9 +538,8 @@ impl Launcher {
     /// The list's More, under `list` while the source has more pages.
     fn glass_mods_more(&self, mut list: Div, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        if self.mods.more {
+        if let Some(offset) = self.mods.next_offset {
             let searching = self.mods.searching;
-            let offset = self.mods.results.len();
             list = list.child(
                 div().flex().p(px(8.)).child(
                     ui::quiet("mods-more", tr("More"), 36., &t)

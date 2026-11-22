@@ -30,6 +30,7 @@ const KINDS: [(PackKind, &str, &str); 5] = [
 /// Java mods checked at once.
 const CHECKING: usize = 2;
 const PAGE: usize = 20;
+const DEFAULT_SCAN_PAGES: usize = 3;
 const SOURCES: [(SourceId, &str); 2] = [
     (SourceId::Horizon, "Horizon"),
     (SourceId::Modrinth, "Modrinth"),
@@ -40,7 +41,7 @@ mod glass_mods;
 
 pub(super) enum Event {
     /// A search's answer, for the search it was (stale answers are dropped) at that offset.
-    Found(u64, usize, Result<Vec<Project>, String>),
+    Found(u64, usize, Result<browser::SearchPage, String>),
     Progress(String, f32),
     Done(Result<String, String>, bool),
     ConfirmPack {
@@ -128,13 +129,15 @@ pub(super) struct Mods {
     pub(super) everything: bool,
     /// Which search is the current one; answers for older ones are dropped.
     search: u64,
+    /// The submitted page, including filters and offset, for More and Try again.
+    submitted: Option<Query>,
     searching: bool,
     searched: bool,
     results: Vec<Project>,
     results_list: cull::Cull,
     installed_list: cull::Cull,
     pub(super) report_list: cull::Cull,
-    more: bool,
+    next_offset: Option<usize>,
     error: Option<String>,
     /// The failed search's own words are shown under its plain message.
     pub(super) error_details: bool,
@@ -256,13 +259,14 @@ impl Mods {
             focused: false,
             everything: false,
             search: 0,
+            submitted: None,
             searching: false,
             searched: false,
             results: Vec::new(),
             results_list: cull::Cull::default(),
             installed_list: cull::Cull::default(),
             report_list: cull::Cull::default(),
-            more: false,
+            next_offset: None,
             error: None,
             error_details: false,
             installed: Vec::new(),
@@ -336,6 +340,51 @@ impl Mods {
         }
     }
 
+    fn new_query(&self) -> Query {
+        let everything = self.everything && self.source() != SourceId::Horizon;
+        match self.java_for(self.kind) {
+            Some(target) => Query {
+                offset: 0,
+                limit: PAGE,
+                ..target.search(self.text.text(), self.kind, &self.browse.filters)
+            },
+            None => Query {
+                everything,
+                offset: 0,
+                limit: PAGE,
+                filters: self.browse.filters.clone(),
+                ..Query::new(self.text.text(), self.kind)
+            },
+        }
+    }
+
+    fn begin_page(&mut self, offset: usize) -> Option<Query> {
+        let query = self.submitted.as_mut()?;
+        query.offset = offset;
+        self.asked = true;
+        self.search += 1;
+        self.searching = true;
+        self.error = None;
+        Some(query.clone())
+    }
+
+    /// Only the filtered default pack browser may advance on its own.
+    fn filtered_pack_defaults(&self) -> bool {
+        self.can_show_everything()
+            && self
+                .submitted
+                .as_ref()
+                .is_some_and(|query| query.text.is_empty() && !query.everything)
+    }
+
+    fn next_default_page(&self) -> Option<usize> {
+        let offset = self.next_offset?;
+        (offset < PAGE * DEFAULT_SCAN_PAGES
+            && self.filtered_pack_defaults()
+            && self.shown().is_empty())
+        .then_some(offset)
+    }
+
     fn reset_browse_context(&mut self) {
         self.asked = false;
         self.everything = false;
@@ -344,10 +393,11 @@ impl Mods {
         self.picked = None;
         self.shown = None;
         self.search += 1;
+        self.submitted = None;
         self.searching = false;
         self.searched = false;
         self.error = None;
-        self.more = false;
+        self.next_offset = None;
         self.results.clear();
         self.results_list.reset();
     }
@@ -398,6 +448,7 @@ impl Mods {
         }
         self.shown.clone().filter(|p| {
             self.searched
+                && !self.filtered_pack_defaults()
                 && !self.searching
                 && self.error.is_none()
                 && p.kind == self.kind
@@ -572,6 +623,7 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> bool {
         let mut changed = false;
+        let mut next_page = None;
         let mut to_check = Vec::new();
         let mut loaded = Vec::new();
         let mut done = false;
@@ -588,20 +640,22 @@ impl Launcher {
                     m.searching = false;
                     m.searched = true;
                     match result {
-                        Ok(found) => {
-                            m.more = found.len() == PAGE;
-                            m.results.truncate(offset);
+                        Ok(page) => {
+                            let found = page.projects;
+                            m.next_offset = page.next_offset;
                             if offset == 0 {
+                                m.results.clear();
                                 m.results_list.reset();
                             }
                             m.results.extend(found.iter().cloned());
                             m.error = None;
+                            next_page = m.next_default_page();
                             to_check.extend(found);
                         }
                         Err(e) => {
                             if offset == 0 {
                                 m.results.clear();
-                                m.more = false;
+                                m.next_offset = None;
                                 m.results_list.reset();
                             }
                             m.error = Some(e);
@@ -715,6 +769,9 @@ impl Launcher {
                 }
             }
         }
+        if let Some(offset) = next_page {
+            self.fetch_mods_page(offset);
+        }
         self.mods_check(to_check);
         if done {
             // A data pack put into a world shows in its list on Home.
@@ -733,43 +790,40 @@ impl Launcher {
     /// Searches; with `keep`, the rows already listed stay on screen until the new ones arrive,
     /// so the page doesn't shrink (and the scroll doesn't jump to the top) while it waits.
     pub(super) fn mods_search_keeping(&mut self, offset: usize, keep: bool) {
+        if offset == 0 {
+            let query = self.mods.new_query();
+            if !keep {
+                self.mods.results.clear();
+                self.mods.next_offset = None;
+                self.mods.results_list.reset();
+            }
+            self.mods.installed_list.reset();
+            self.mods.submitted = Some(query);
+        }
+        self.fetch_mods_page(offset);
+    }
+
+    fn retry_mods_page(&mut self) {
+        if let Some(query) = &self.mods.submitted {
+            self.fetch_mods_page(query.offset);
+        }
+    }
+
+    fn fetch_mods_page(&mut self, offset: usize) {
         let m = &mut self.mods;
         let source = m.source();
-        let everything = m.everything && source != SourceId::Horizon;
-        m.asked = true;
-        m.search += 1;
-        m.searching = true;
-        if offset == 0 {
-            if !keep {
-                m.results.clear();
-                m.more = false;
-                m.results_list.reset();
-            }
-            m.installed_list.reset();
-        }
-        let query = match m.java_for(m.kind) {
-            Some(target) => Query {
-                offset,
-                limit: PAGE,
-                ..target.search(m.text.text(), m.kind, &m.browse.filters)
-            },
-            None => Query {
-                everything,
-                offset,
-                limit: PAGE,
-                filters: m.browse.filters.clone(),
-                ..Query::new(m.text.text(), m.kind)
-            },
+        let Some(query) = m.begin_page(offset) else {
+            return;
         };
         let (tx, search) = (m.tx.clone(), m.search);
         std::thread::spawn(move || {
             let result = browser::source(source)
                 .ok_or_else(|| trf("{source} isn't set up.", &[("source", source.label())]))
-                .and_then(|s| s.search(&query));
+                .and_then(|s| s.search_page(&query));
             let about: HashMap<String, Vec<String>> = match (&result, source) {
-                (Ok(found), SourceId::Horizon) => {
+                (Ok(page), SourceId::Horizon) => {
                     let instance = horizon_launcher::instances::selected();
-                    found
+                    page.projects
                         .iter()
                         .map(|p| {
                             let lines = horizon::trust_and_capabilities(&p.id, Some(&instance));
@@ -1396,8 +1450,15 @@ impl Launcher {
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                let had_text = !this.mods.text.text().trim().is_empty();
                 match line_edit::handle(&mut this.mods.text, ev, cx) {
                     Key::Enter => this.mods_search(0),
+                    _ if had_text
+                        && this.mods.text.text().trim().is_empty()
+                        && this.mods.source() == SourceId::Modrinth =>
+                    {
+                        this.mods_search(0)
+                    }
                     Key::Escape => window.blur(cx),
                     Key::Pass => return,
                     _ => {}
@@ -2090,20 +2151,31 @@ impl Launcher {
         )
     }
 
+    fn mods_retry_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        button("mods-retry", "Try again", Kind::Secondary, &self.theme).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.retry_mods_page();
+                cx.notify();
+            },
+        ))
+    }
+
     fn mods_results(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let m = &self.mods;
         if let Some(e) = &m.error {
-            return div().child(notice(e.clone(), &t));
+            return div()
+                .child(notice(e.clone(), &t))
+                .child(self.mods_retry_button(cx));
         }
         let shown = m.shown();
         if shown.is_empty() {
             let line = if m.kind == PackKind::Shader && m.java.is_some() {
                 tr("Shader packs for Java instances aren't supported yet.")
-            } else if !m.results.is_empty() {
-                tr("Nothing found that runs in Horizon. Show everything lists the rest.")
             } else if m.searching || !m.searched {
                 tr("Searching…")
+            } else if !m.results.is_empty() {
+                tr("Nothing found that runs in Horizon. Show everything lists the rest.")
             } else if let Some(target) = m.java_for(m.kind) {
                 return centered(
                     &trf(
@@ -2245,12 +2317,11 @@ impl Launcher {
     fn mods_more(&self, mut out: Div, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let m = &self.mods;
-        if m.more {
+        if let Some(offset) = m.next_offset {
             let mut more = button("mods-more", "More", Kind::Ghost, &t);
             if m.searching {
                 more = disabled(more);
             } else {
-                let offset = m.results.len();
                 more = more.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.mods_search(offset);
                     cx.notify();
@@ -2400,6 +2471,82 @@ mod tests {
             loaders: Vec::new(),
             blocked: None,
         }
+    }
+
+    #[gpui::test]
+    fn cleared_resource_pack_search_scans_with_the_submitted_filters(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut mods = Mods::new(cx);
+            mods.set_kind(PackKind::ResourcePack);
+            assert_eq!(mods.source(), SourceId::Modrinth);
+            mods.text.set("stone".into());
+            mods.browse.filters.categories.push("realistic".into());
+            mods.submitted = Some(mods.new_query());
+            let mut rejected = project(mods.kind, mods.source());
+            rejected.blocked = Some("Incompatible".into());
+            mods.results = vec![rejected.clone(); PAGE];
+            mods.next_offset = Some(PAGE);
+            assert_eq!(mods.next_default_page(), None);
+
+            mods.text.set(String::new());
+            mods.submitted = Some(mods.new_query());
+            assert_eq!(mods.next_default_page(), Some(PAGE));
+            let submitted = mods.begin_page(PAGE).unwrap();
+            mods.text.set("unsubmitted edit".into());
+            mods.error = Some("connection interrupted".into());
+            let offset = mods.submitted.as_ref().unwrap().offset;
+            assert_eq!(mods.begin_page(offset), Some(submitted.clone()));
+            assert!(submitted.text.is_empty());
+            assert_eq!(submitted.filters.categories, ["realistic"]);
+            assert!(mods.error.is_none() && mods.searching);
+
+            mods.results.resize(2 * PAGE, rejected.clone());
+            mods.next_offset = Some(2 * PAGE);
+            assert_eq!(mods.next_default_page(), Some(2 * PAGE));
+            mods.results.resize(DEFAULT_SCAN_PAGES * PAGE, rejected);
+            mods.next_offset = Some(DEFAULT_SCAN_PAGES * PAGE);
+            assert_eq!(mods.next_default_page(), None);
+            assert_eq!(mods.next_offset, Some(DEFAULT_SCAN_PAGES * PAGE));
+            mods.results.truncate(PAGE);
+            mods.next_offset = Some(2 * PAGE);
+            mods.results.push(project(mods.kind, mods.source()));
+            assert_eq!(mods.next_default_page(), None);
+            mods.reset_browse_context();
+            assert!(mods.begin_page(PAGE).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn pack_scan_respects_show_everything_and_instance_routing(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut mods = Mods::new(cx);
+            for kind in [PackKind::DataPack, PackKind::ResourcePack] {
+                mods.set_kind(kind);
+                mods.submitted = Some(mods.new_query());
+                assert!(mods.filtered_pack_defaults());
+                mods.toggle_everything();
+                mods.submitted = Some(mods.new_query());
+                assert!(!mods.filtered_pack_defaults());
+            }
+            for kind in [PackKind::Mod, PackKind::Shader, PackKind::Modpack] {
+                mods.set_kind(kind);
+                mods.submitted = Some(mods.new_query());
+                assert!(!mods.filtered_pack_defaults());
+            }
+            mods.set_kind(PackKind::ResourcePack);
+            mods.set_target(
+                Some("java".into()),
+                None,
+                Some(Target {
+                    minecraft: "1.21.1".into(),
+                    loader: Some("fabric".into()),
+                }),
+            );
+            mods.submitted = Some(mods.new_query());
+            assert!(!mods.filtered_pack_defaults());
+        });
     }
 
     #[gpui::test]

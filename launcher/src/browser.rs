@@ -257,10 +257,26 @@ impl Query {
     }
 }
 
+/// A page can consume source hits that the launcher cannot turn into projects.
+pub struct SearchPage {
+    pub projects: Vec<Project>,
+    pub next_offset: Option<usize>,
+}
+
 /// A place projects come from.
 pub trait Source: Send + Sync {
     fn id(&self) -> SourceId;
     fn search(&self, query: &Query) -> Result<Vec<Project>, String>;
+    fn search_page(&self, query: &Query) -> Result<SearchPage, String> {
+        let projects = self.search(query)?;
+        let count = projects.len();
+        let next_offset = (count > 0 && count == query.limit).then_some(query.offset + count);
+        Ok(SearchPage {
+            projects,
+            next_offset,
+        })
+    }
+
     fn project(&self, id: &str) -> Result<Project, String>;
     /// Versions, newest first.
     fn versions(&self, project: &Project) -> Result<Vec<Version>, String>;
