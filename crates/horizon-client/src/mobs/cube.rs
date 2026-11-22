@@ -55,6 +55,9 @@ pub fn register(m: &mut Mob) {
 /// magma cube's armor (size * 3), then the health back to the max.
 pub fn set_size(m: &mut Mob, size: i32) {
     use super::finalize::{Attr, set_base};
+    // MagmaCube.setSize computes ARMOR from the raw argument; only the
+    // other bases (and the stored size) use AbstractCubeMob's clamped one.
+    let raw_size = size;
     let size = size.clamp(1, 127);
     m.extra.size = size;
     set_base(m, Attr::MaxHealth, f64::from(size * size));
@@ -65,7 +68,7 @@ pub fn set_size(m: &mut Mob, size: i32) {
     );
     set_base(m, Attr::AttackDamage, f64::from(size));
     if m.species() == super::Species::MagmaCube {
-        set_base(m, Attr::Armor, f64::from(size * 3));
+        set_base(m, Attr::Armor, f64::from(raw_size * 3));
     }
     m.health = super::finalize::max_health(m);
 }
