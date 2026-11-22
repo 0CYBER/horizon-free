@@ -4,10 +4,18 @@ use super::LanSettings;
 use horizon_client::Result;
 
 pub(super) fn open_settings(args: &[&str]) -> Result<LanSettings> {
-    let port = match args.first().copied() {
-        None | Some("commands" | "force") => 0,
-        Some(port) => port.parse::<u16>()?,
-    };
+    let mut ports = args
+        .iter()
+        .copied()
+        .filter(|arg| !matches!(*arg, "commands" | "force"));
+    let port = ports
+        .next()
+        .map(str::parse::<u16>)
+        .transpose()?
+        .unwrap_or(0);
+    if ports.next().is_some() {
+        return Err("lan open accepts at most one port".into());
+    }
     Ok(LanSettings {
         port,
         guest_commands: args.contains(&"commands"),
@@ -34,6 +42,15 @@ mod tests {
             (&["25565", "force"], 25565, false, true),
             (&["25565", "commands", "force"], 25565, true, true),
             (&["65535", "force", "commands"], 65535, true, true),
+            (&["commands", "56010"], 56010, true, false),
+            (&["force", "56010"], 56010, false, true),
+            (&["commands", "56010", "force"], 56010, true, true),
+            (&["force", "56010", "commands"], 56010, true, true),
+            (&["commands", "force", "56010"], 56010, true, true),
+            (&["force", "commands", "56010"], 56010, true, true),
+            (&["commands", "0", "force"], 0, true, true),
+            (&["force", "commands", "0"], 0, true, true),
+            (&["commands", "65535"], 65535, true, false),
         ];
         for &(args, port, commands, force) in cases {
             let settings = open_settings(args).unwrap();
@@ -48,10 +65,25 @@ mod tests {
             );
         }
         for port in ["invalid", "-1", "65536"] {
-            assert!(
-                open_settings(&[port, "commands", "force"]).is_err(),
-                "{port}"
-            );
+            for args in [
+                [port, "commands", "force"],
+                ["commands", port, "force"],
+                ["force", "commands", port],
+            ] {
+                assert!(open_settings(&args).is_err(), "{args:?}");
+            }
+        }
+        let extra_ports: &[&[&str]] = &[
+            &["56010", "56011"],
+            &["commands", "56010", "56011"],
+            &["56010", "force", "56011"],
+            &["56010", "56010"],
+            &["0", "commands", "56010"],
+            &["commands", "0", "0"],
+            &["56010", "unknown"],
+        ];
+        for args in extra_ports {
+            assert!(open_settings(args).is_err(), "{args:?}");
         }
     }
 }
