@@ -3853,6 +3853,9 @@ pub mod teleports;
 mod farmland_event_tests;
 
 #[cfg(test)]
+#[path = "climbable_player_push_tests.rs"]
+mod climbable_player_push_tests;
+#[cfg(test)]
 #[path = "living_climbable_tests.rs"]
 mod climbable_tests;
 #[cfg(test)]

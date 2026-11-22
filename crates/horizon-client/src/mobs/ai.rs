@@ -2572,12 +2572,13 @@ fn hurt_teleports(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 impl Mob {
     /// LivingEntity.isPushable (and the push it takes from `Entity.push(Entity)`):
     /// bats and shulkers are never moved by others, nor is a mob on a climbable
-    /// block (`onClimbable`, cached by the last tick), nor a ridden horse
-    /// (`AbstractHorse.isPushable` is `!isVehicle`).
+    /// block (`onClimbable`, cached by the last tick) unless its own
+    /// `isPushable` says otherwise (`Parrot.isPushable` is a plain true),
+    /// nor a ridden horse (`AbstractHorse.isPushable` is `!isVehicle`).
     pub fn pushable(&self) -> bool {
         self.alive()
             && !matches!(self.species(), Species::Bat | Species::Shulker)
-            && !self.on_climbable
+            && (!self.on_climbable || self.species() == Species::Parrot)
             && (self.species() != Species::Creaking || super::creaking::can_move(self))
             && (self.species() != Species::Warden || !super::warden::digging_or_emerging(self))
             && !(super::equine::is_equine(self.species()) && super::equine::is_vehicle(self))
@@ -2600,7 +2601,7 @@ fn drop_tiny_motion(m: &mut Mob) {
 /// LivingEntity.pushEntities: every pushable entity overlapping the box is
 /// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
 /// mobs are `Push` events their tick picks up.
-fn push_entities(
+pub(super) fn push_entities(
     m: &mut Mob,
     w: &MobWorld,
     level: &mut DamageLevel<'_>,
@@ -2611,7 +2612,7 @@ fn push_entities(
         return;
     }
     let bounds = m.bounds();
-    // The pusher's own isPushable and isVehicle, checked by `e.push(this)`.
+    // The pusher's own isPushable and isVehicle, checked by `e.push(this)` before moving it.
     let self_pushable = m.pushable() && !super::equine::is_vehicle(m);
     // Each passenger with whether it shares this one's root vehicle.
     let mut targets = super::world::take_push_targets();
@@ -2620,6 +2621,9 @@ fn push_entities(
         && m.rider.is_none()
         && p.alive
         && !p.spectator
+        // EntitySelector.pushableBy asks isPushable: a climbing player is left
+        // out, and `doPush` then gives neither of the pair a push.
+        && !p.on_climbable
         && p.bounds.intersects(bounds)
     {
         targets.push((Who::Player, p.position, p.passenger, false, false));

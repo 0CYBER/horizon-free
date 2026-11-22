@@ -469,8 +469,8 @@ impl Game<'_> {
             invulnerable: p.invulnerable
                 || p.health.permanently_invulnerable
                 || p.health.invulnerable_time > 0,
-            // EntitySelector.NO_CREATIVE_OR_SPECTATOR.
             creative: self.creative || self.spectator(),
+            on_climbable: p.on_climbable,
             sneaking: self.keys.held(Action::Sneak),
             swimming: p.swimming,
             look: view_vector(self.yaw, self.pitch),

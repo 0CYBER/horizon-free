@@ -1168,6 +1168,7 @@ pub fn main() -> horizon_client::Result<()> {
                 armor_cover: 0.0,
                 invisible: false,
                 spectator: false,
+                on_climbable: false,
                 gold_armor: false,
                 hurt_by: None,
                 last_hurt: None,

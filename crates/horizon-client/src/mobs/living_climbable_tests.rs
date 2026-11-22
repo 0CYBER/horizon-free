@@ -239,3 +239,37 @@ fn a_horse_pressed_into_a_ladder_gains_no_height() {
     );
     assert!(ran, "vanilla data is missing");
 }
+
+/// `Parrot.isPushable` is a plain `true`: a parrot standing in a ladder is
+/// still pushed by others, where a cow in the same block is held by it.
+#[test]
+fn a_parrot_in_a_ladder_is_still_pushable() {
+    let ran = crate::mobs::world::with_built_test_world(
+        &[],
+        |world, registry| wall_with(Some("minecraft:ladder"), world, registry),
+        |w, types| {
+            let pushable = |id: &str| {
+                let kind = Arc::new(types.types[id].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(1.5, 2.0, 1.5), 0.0);
+                m.on_ground = true;
+                // pushEntities refreshes the cached onClimbable from the block
+                // the mob stands in, then `isPushable` reads it.
+                let mut events = Vec::new();
+                let mut level = crate::health::TestLevel::new(0);
+                crate::mobs::ai::push_entities(&mut m, w, &mut level.level(), &mut events);
+                (m.on_climbable, m.pushable())
+            };
+            assert_eq!(
+                pushable("minecraft:cow"),
+                (true, false),
+                "a cow in the ladder is held by it"
+            );
+            assert_eq!(
+                pushable("minecraft:parrot"),
+                (true, true),
+                "a parrot in the ladder is still pushed"
+            );
+        },
+    );
+    let _ = ran;
+}
