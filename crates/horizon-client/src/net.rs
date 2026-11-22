@@ -829,6 +829,24 @@ impl Reason {
         r.text = r.text.replacen("%s", arg, 1);
         r
     }
+    /// Wraps the session service's reason in vanilla's login failure message.
+    /// Auto-reconnect uses the reason key, treating rate limits like temporary
+    /// outages and other plain-text refusals as permanent.
+    fn login_failure(error: crate::auth::JoinError, lang: &Language) -> Self {
+        let wrapper = "disconnect.loginFailedInfo";
+        let (reason, key) = match error.reason() {
+            Ok(key) => (tr(lang, key), key),
+            Err(message) if matches!(error, crate::auth::JoinError::RateLimited(_)) => (
+                message.to_owned(),
+                "disconnect.loginFailedInfo.serversUnavailable",
+            ),
+            Err(message) => (message.to_owned(), wrapper),
+        };
+        Self {
+            text: plain(&translatable(wrapper, &[&reason]), lang),
+            key: Some(key.to_owned()),
+        }
+    }
     /// A server's disconnect component: the resolved text and the
     /// `translate` key when the component named one (servers' literal
     /// kicks have none; their text is the server's own language).
@@ -1069,23 +1087,8 @@ fn run(
                         .ok_or_else(|| Reason::keyed("horizon.multiplayer.not_signed_in", lang))
                         .and_then(|account| {
                             let hash = server_hash(&hello.server_id, &secret, &hello.public_key);
-                            // The session service's refusal: the wrapped
-                            // `disconnect.loginFailedInfo` text is shown, and
-                            // the inner key (the reason's own) classifies
-                            // (`reconnect::allowed`).
-                            crate::auth::join_server(account, &hash).map_err(|err| {
-                                let (reason, key) = match err.reason() {
-                                    Ok(key) => (tr(lang, key), Some(key.to_owned())),
-                                    Err(message) => (message.to_owned(), None),
-                                };
-                                Reason {
-                                    text: plain(
-                                        &translatable("disconnect.loginFailedInfo", &[&reason]),
-                                        lang,
-                                    ),
-                                    key,
-                                }
-                            })
+                            crate::auth::join_server(account, &hash)
+                                .map_err(|error| Reason::login_failure(error, lang))
                         });
                     if let Err(reason) = authenticated {
                         if !continues_after_failed_join(lan, signed_in) {
@@ -1960,6 +1963,41 @@ mod tests {
 
     use super::*;
     use horizon_world::native_load_context::DataLoadOrigin;
+
+    #[test]
+    fn session_join_retries_only_temporary_failures() {
+        let lang: Language = [(
+            "disconnect.loginFailedInfo".to_owned(),
+            "Failed to log in: %s".to_owned(),
+        )]
+        .into_iter()
+        .collect();
+        for (status, body, message, retry) in [
+            (429, "", "Status: 429", true),
+            (403, "", "Status: 403", false),
+            (
+                403,
+                r#"{"errorMessage":"Request refused"}"#,
+                "Request refused",
+                false,
+            ),
+        ] {
+            let error = crate::auth::JoinError::from_response(status, body);
+            let reason = Reason::login_failure(error, &lang);
+            assert_eq!(reason.text, format!("Failed to log in: {message}"));
+            assert_eq!(
+                crate::reconnect::allowed(&reason.text, reason.key.as_deref(), false),
+                retry,
+                "{status} {body}",
+            );
+        }
+        let unavailable = Reason::login_failure(crate::auth::JoinError::Unavailable, &lang);
+        assert!(crate::reconnect::allowed(
+            &unavailable.text,
+            unavailable.key.as_deref(),
+            false,
+        ));
+    }
 
     fn empty_item_data(name: &str) -> (PathBuf, Arc<ItemData>) {
         let root =

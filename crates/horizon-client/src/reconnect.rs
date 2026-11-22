@@ -95,9 +95,7 @@ fn classified_key(key: &str) -> Option<bool> {
         "disconnect.loginFailedInfo.serversUnavailable",
         "disconnect.timeout",
     ];
-    NEVER
-        .iter()
-        .any(|k| key.starts_with(k))
+    (key == "disconnect.loginFailedInfo" || NEVER.iter().any(|k| key.starts_with(k)))
         .then_some(false)
         .or_else(|| RETRY.iter().any(|k| key.starts_with(k)).then_some(true))
 }
