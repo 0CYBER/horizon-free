@@ -68,6 +68,31 @@ impl PackPrompt {
 }
 
 impl ServerPackState {
+    /// A transfer keeps the original server's pack policy, prompt, download
+    /// queue and mounted stack. Even an empty cookie map denotes a transfer.
+    /// Return whether the caller must configure a new pack connection.
+    fn begin_connection(&mut self, user: (String, u128), transferring: bool) -> bool {
+        if transferring {
+            return false;
+        }
+        self.user = user;
+        self.prompt = None;
+        self.notifiers.clear();
+        true
+    }
+
+    /// Return whether the game must process the removal reload. Transfer
+    /// leaves both in-flight work and active packs owned by the same manager.
+    fn end_connection(&mut self, transferring: bool) -> bool {
+        if transferring {
+            return false;
+        }
+        self.prompt = None;
+        self.notifiers.clear();
+        self.packs.disconnect();
+        true
+    }
+
     /// The `ToastManager` slots the download toasts hold.
     pub(super) fn toast_slots(&self) -> impl Iterator<Item = usize> + '_ {
         self.notifiers
@@ -236,10 +261,20 @@ impl Game<'_> {
     /// (`configureForServerControl`); single player's own server takes them
     /// all, quietly (`configureForLocalWorld`).
     pub(super) fn server_packs_connect(&mut self, address: Option<&str>, user: (String, u128)) {
+        self.server_packs_connect_for(address, user, false);
+    }
+    /// `server_packs_connect` for a connection that carries a transfer's cookies: the
+    /// packs of the connection it replaces stay mounted.
+    pub(super) fn server_packs_connect_for(
+        &mut self,
+        address: Option<&str>,
+        user: (String, u128),
+        transferring: bool,
+    ) {
         let state = &mut self.server_packs;
-        state.user = user;
-        state.prompt = None;
-        state.notifiers.clear();
+        if !state.begin_connection(user, transferring) {
+            return;
+        }
         let Some(address) = address else {
             state.address = None;
             state.packs.local_world();
@@ -261,10 +296,13 @@ impl Game<'_> {
     }
     /// `Minecraft.clearDownloadedResourcePacks`: every server pack goes at once.
     pub(super) fn server_packs_disconnect(&mut self) {
-        self.server_packs.prompt = None;
-        self.server_packs.notifiers.clear();
-        self.server_packs.packs.disconnect();
-        self.tick_server_packs();
+        self.server_packs_disconnect_for(false);
+    }
+    /// `server_packs_disconnect`, or for a protocol transfer (`transferring`) the packs stay.
+    pub(super) fn server_packs_disconnect_for(&mut self, transferring: bool) {
+        if self.server_packs.end_connection(transferring) {
+            self.tick_server_packs();
+        }
     }
 
     /// `handleResourcePackPush`.
@@ -615,6 +653,135 @@ impl Game<'_> {
 mod tests {
     use super::*;
     use download::Progress::*;
+
+    #[test]
+    fn transfers_keep_the_five_pack_stack_until_pop_or_real_disconnect() {
+        let mut state = ServerPackState {
+            address: Some("hub.example".into()),
+            ..Default::default()
+        };
+        let user = ("player".to_owned(), 42);
+        assert!(state.begin_connection(user.clone(), false));
+        state.packs.connect(Prompt::Allowed);
+        let files: Vec<_> = (1..=5)
+            .map(|id| (id, PathBuf::from(format!("pack-{id}.zip"))))
+            .collect();
+        for (id, path) in &files {
+            state.packs.push_local(*id, path.clone());
+        }
+        assert_eq!(state.packs.tick().reload, Some(files.clone()));
+        assert_eq!(state.packs.reloaded(true), None);
+        assert_eq!(state.packs.tick().reload, None);
+        state.packs.take_replies();
+
+        // Hub -> match -> hub, with no push from either destination.
+        for _ in 0..2 {
+            assert!(!state.end_connection(true));
+            assert!(!state.begin_connection(user.clone(), true));
+            assert_eq!(state.address.as_deref(), Some("hub.example"));
+            assert_eq!(state.user, user);
+            assert_eq!(state.packs.prompt(), Prompt::Allowed);
+            let tick = state.packs.tick();
+            assert_eq!(tick.reload, None);
+            assert!(tick.download.is_empty());
+            assert!(state.packs.take_replies().is_empty());
+        }
+        // The destination still owns the original UUIDs and may pop one.
+        state.packs.pop(3);
+        let remaining: Vec<_> = files.into_iter().filter(|(id, _)| *id != 3).collect();
+        assert_eq!(state.packs.tick().reload, Some(remaining));
+        state.packs.reloaded(true);
+        state.packs.tick();
+        assert!(state.end_connection(false));
+        assert_eq!(state.packs.tick().reload, Some(vec![]));
+        state.packs.reloaded(true);
+        state.packs.tick();
+        assert_eq!(state.packs.prompt(), Prompt::Pending);
+        assert!(state.packs.take_replies().is_empty());
+    }
+
+    #[test]
+    fn a_transfer_keeps_downloads_and_reload_callbacks_in_flight() {
+        let mut state = ServerPackState::default();
+        state.packs.connect(Prompt::Allowed);
+        state.packs.push(1, "https://example.com/pack.zip", None);
+        assert_eq!(state.packs.tick().download.len(), 1);
+        state.packs.take_replies();
+        assert!(!state.end_connection(true));
+        assert!(!state.begin_connection(("player".into(), 42), true));
+        state.packs.downloaded(horizon_client::server_packs::Batch {
+            downloaded: vec![(1, PathBuf::from("pack.zip"))],
+            failed: vec![],
+        });
+        assert_eq!(
+            state.packs.tick().reload,
+            Some(vec![(1, PathBuf::from("pack.zip"))])
+        );
+        // A second transfer while that reload is running must keep its callback.
+        assert!(!state.end_connection(true));
+        assert!(!state.begin_connection(("player".into(), 42), true));
+        assert_eq!(state.packs.reloaded(true), None);
+        assert_eq!(state.packs.tick().reload, None);
+        assert_eq!(
+            state.packs.take_replies(),
+            [(1, action::DOWNLOADED), (1, action::SUCCESSFULLY_LOADED)]
+        );
+        // Cancel/failure of a transferred connection follows ordinary cleanup.
+        assert!(state.end_connection(false));
+        assert_eq!(state.packs.tick().reload, Some(vec![]));
+    }
+
+    #[test]
+    fn transfer_keeps_pending_consent_but_an_ordinary_disconnect_clears_it() {
+        let mut state = ServerPackState {
+            prompt: Some(PackPrompt {
+                requests: vec![(9, "https://example.com/pack.zip".into(), String::new())],
+                required: true,
+                prompt: None,
+            }),
+            ..Default::default()
+        };
+        state.notifiers.push(notifier(1, &[RequestStart]));
+        assert!(!state.end_connection(true));
+        assert!(!state.begin_connection(("player".into(), 42), true));
+        assert_eq!(state.prompt.as_ref().unwrap().requests[0].0, 9);
+        assert_eq!(state.notifiers.len(), 1);
+        assert!(state.end_connection(false));
+        assert!(state.prompt.is_none());
+        assert!(state.notifiers.is_empty());
+        assert!(state.begin_connection(("other".into(), 43), false));
+        assert_eq!(state.user, ("other".into(), 43));
+    }
+
+    #[test]
+    fn a_failed_transfer_join_cleans_up_preserved_packs() {
+        let mut state = ServerPackState {
+            address: Some("lobby.example".into()),
+            ..Default::default()
+        };
+        let user = ("player".to_owned(), 42);
+        assert!(state.begin_connection(user.clone(), false));
+        state.packs.connect(Prompt::Allowed);
+        state.packs.push_local(1, PathBuf::from("pack-1.zip"));
+        assert_eq!(
+            state.packs.tick().reload,
+            Some(vec![(1, PathBuf::from("pack-1.zip"))])
+        );
+        assert_eq!(state.packs.reloaded(true), None);
+        state.packs.tick();
+
+        // Destination server transfer initiated: leaving lobby preserves packs.
+        assert!(!state.end_connection(true));
+
+        // Destination server join fails (e.g. connection timeout or refused):
+        // connect_server_with_options_body calls server_packs_disconnect().
+        // Preserved packs must be cleared and an unload reload scheduled.
+        assert!(state.end_connection(false));
+        assert_eq!(state.packs.tick().reload, Some(vec![]));
+        state.packs.reloaded(true);
+        assert_eq!(state.packs.tick().reload, None);
+        assert_eq!(state.packs.prompt(), Prompt::Pending);
+    }
 
     fn notifier(total: usize, events: &[download::Progress]) -> PackNotifier {
         let (send, receive) = std::sync::mpsc::channel();

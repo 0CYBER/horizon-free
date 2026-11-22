@@ -249,7 +249,7 @@ impl Game<'_> {
                         })
                     });
                     if let Some((address, name, cookies)) = transfer {
-                        self.leave_server(None)?;
+                        self.leave_server_for_transfer()?;
                         self.connect_server_with_cookies(&address, &name, Some(cookies))?;
                         return Ok(());
                     }

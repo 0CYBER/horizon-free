@@ -905,6 +905,9 @@ impl Game<'_> {
     pub(super) fn leave_server(&mut self, reason: Option<Text>) -> Result<()> {
         self.leave_server_body(reason)
     }
+    pub(super) fn leave_server_for_transfer(&mut self) -> Result<()> {
+        self.leave_server_for_transfer_body()
+    }
 
     // wire.rs
     fn hud_disconnected(&mut self) {
