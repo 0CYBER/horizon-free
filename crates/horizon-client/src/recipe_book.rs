@@ -1120,7 +1120,7 @@ impl RecipeIndex {
                     first_display: 0,
                     station: crafting_station(kind),
                     notify: v["show_notification"].as_bool().unwrap_or(true),
-                    result: horizon_world::loot::recipe_result_id(&v["result"]).map(str::to_owned),
+                    result: horizon_world::loot::recipe_result_id(&v["result"]),
                 },
             );
         };

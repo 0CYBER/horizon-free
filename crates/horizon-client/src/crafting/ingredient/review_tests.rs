@@ -171,3 +171,12 @@ fn implicit_ominous_components_match_without_encoding_or_allocating() {
     });
     assert_eq!(count.calls, 0, "{count:?}");
 }
+
+/// `Identifier.parse` reads an ingredient's ids: `stick` and `:stick` are `minecraft:stick`.
+#[test]
+fn an_ingredient_id_written_without_a_namespace_names_minecraft() {
+    for written in ["stick", ":stick", "minecraft:stick"] {
+        let ingredient = Ingredient::parse(&serde_json::json!(written), &Items::empty()).unwrap();
+        assert_eq!(ingredient.order, ["minecraft:stick"], "{written}");
+    }
+}

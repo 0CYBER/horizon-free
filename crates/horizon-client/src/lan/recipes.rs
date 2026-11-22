@@ -3,6 +3,7 @@
 //! table slot and brewing stand slot accepts) and the stonecutter's recipes,
 //! read from the data pack's recipe files.
 use super::data::SyncData;
+use horizon_core::identifier::parse_or_keep;
 use horizon_protocol::buf::Writer;
 use serde_json::Value;
 use std::{
@@ -34,15 +35,17 @@ enum Ingredient {
     Items(Vec<String>),
 }
 
+/// An ingredient as its HolderSet: a tag by name, or the items listed. `Item.CODEC` reads
+/// an item id before the registry lookup; a tag's name stays as written.
 fn ingredient(v: &Value) -> Option<Ingredient> {
     match v {
         Value::String(s) => Some(match s.strip_prefix('#') {
             Some(tag) => Ingredient::Tag(tag.to_owned()),
-            None => Ingredient::Items(vec![s.clone()]),
+            None => Ingredient::Items(vec![parse_or_keep(s)]),
         }),
         Value::Array(a) => Some(Ingredient::Items(
             a.iter()
-                .filter_map(|s| s.as_str().map(str::to_owned))
+                .filter_map(|s| s.as_str().map(parse_or_keep))
                 .collect(),
         )),
         // A brewing slot: the item predicate's `item` ingredient.
@@ -315,10 +318,8 @@ pub fn update_recipes(
             None => w.varint(1),
         }
         w.varint(item_stack);
-        w.varint(
-            item(horizon_world::loot::recipe_result_id(&r["result"]).unwrap_or("minecraft:air"))
-                .unwrap_or(0),
-        );
+        let result = horizon_world::loot::recipe_result_id(&r["result"]);
+        w.varint(item(result.as_deref().unwrap_or("minecraft:air")).unwrap_or(0));
         w.varint(r["result"]["count"].as_i64().unwrap_or(1) as i32);
         w.varint(0); // no components added
         w.varint(0); // nor removed
@@ -997,4 +998,74 @@ fn empty_ingredient_network_consumers_exclude_whole_unplaceable_recipes() {
         assert!(packet.stonecutter.is_empty());
         assert!(packet.properties.iter().all(|(_, ids)| ids.is_empty()));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn a_bare_ingredient_id_is_read_before_the_item_lookup() {
+    use horizon_protocol::{
+        buf::{Codec, Reader},
+        packets::{
+            configuration::{RegistryTags, TagEntry},
+            recipes::{HolderSet, UpdateRecipes},
+        },
+        registry::Ids,
+    };
+    use serde_json::json;
+    let mut sync = SyncData::empty();
+    sync.builtin.registries.insert(
+        "minecraft:item".into(),
+        Ids::from_names(vec![
+            "minecraft:air".into(),
+            "minecraft:raw_copper".into(),
+            "minecraft:copper_ingot".into(),
+        ]),
+    );
+    // The tag's ids are another item's, so a tag read as an item name would come out empty.
+    sync.tags.registries.push(RegistryTags {
+        registry: "minecraft:item".into(),
+        tags: vec![TagEntry {
+            name: "minecraft:dyes".into(),
+            ids: vec![2],
+        }],
+    });
+    let mut all = BTreeMap::new();
+    for (id, recipe) in [
+        (
+            "minecraft:copper_ingot_from_smelting_raw_copper",
+            json!({"type":"minecraft:smelting","ingredient":"raw_copper","result":{"id":"minecraft:copper_ingot"}}),
+        ),
+        (
+            "minecraft:copper_ingot_from_blasting_dyes",
+            json!({"type":"minecraft:blasting","ingredient":"#minecraft:dyes","result":{"id":"minecraft:copper_ingot"}}),
+        ),
+        (
+            "minecraft:copper_ingot_from_stonecutting_raw_copper",
+            json!({"type":"minecraft:stonecutting","ingredient":"raw_copper","result":{"id":"minecraft:copper_ingot"}}),
+        ),
+    ] {
+        all.insert(id.into(), recipe.to_string().into_boxed_str());
+    }
+    let bytes = update_recipes(&all, &sync, &Default::default());
+    let packet = UpdateRecipes::read(&mut Reader::new(&bytes)).unwrap();
+    let set = |name: &str| {
+        packet
+            .properties
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, ids)| ids.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        set("minecraft:furnace_input"),
+        [1],
+        "a bare id names its item"
+    );
+    assert_eq!(
+        set("minecraft:blast_furnace_input"),
+        [2],
+        "a `#`-tag keeps its tag"
+    );
+    let stonecutter: Vec<&HolderSet> = packet.stonecutter.iter().map(|(i, _)| i).collect();
+    assert_eq!(stonecutter, [&HolderSet::Items(vec![1])]);
 }

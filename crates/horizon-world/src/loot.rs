@@ -27,7 +27,7 @@ use std::{
 };
 use {
     crate::{lazy_json::LazyJson, native_load_context::LoadContext},
-    horizon_core::nbt::Tag,
+    horizon_core::{identifier::parse_or_keep, nbt::Tag},
 };
 
 /// Raw files a world's data packs add over the game's own data, by
@@ -459,14 +459,20 @@ fn slot_range_equipment(range: &str) -> &'static [&'static str] {
 /// The item a recipe's `result` names. `ItemStackTemplate.CODEC` and `TransmuteResult.CODEC`
 /// read a stack's fields (`id`, `count`, `components`) or, as their alternative, a bare item id
 /// (`Item.CODEC`): `"result": {"id": "mod:item"}` and `"result": "mod:item"` are the same item.
+/// `Item.CODEC` reads the id through `Identifier.CODEC`, which is `Identifier.parse`: an id
+/// written without a namespace (`"stick"`, `":stick"`) names `minecraft:stick`. The id is
+/// canonical here, where the parse boundary is, so everything downstream that compares or sends
+/// it already holds the name the item table knows. An id `Identifier.parse` refuses is returned
+/// as written: whether such a recipe loads is the load's question, not this read's.
 /// None for a stack without an `id` and for anything else, such as the `item` key of older
 /// versions.
-pub fn recipe_result_id(result: &Value) -> Option<&str> {
-    match result {
-        Value::String(id) => Some(id),
-        Value::Object(fields) => fields.get("id")?.as_str(),
-        _ => None,
-    }
+pub fn recipe_result_id(result: &Value) -> Option<String> {
+    let id = match result {
+        Value::String(id) => id,
+        Value::Object(fields) => fields.get("id")?.as_str()?,
+        _ => return None,
+    };
+    Some(parse_or_keep(id))
 }
 /// `LevelBasedValue.calculate`.
 pub fn level_value(v: &Value, level: i32) -> f32 {

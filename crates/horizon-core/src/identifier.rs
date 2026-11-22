@@ -73,6 +73,12 @@ impl Identifier {
         self.0.hash
     }
 }
+/// `Identifier.parse` on an id read from a file: one written without a
+/// namespace, or with an empty one, is `minecraft`'s. Text that is not an
+/// identifier is returned as written.
+pub fn parse_or_keep(text: &str) -> String {
+    Identifier::parse(text).map_or_else(|_| text.to_owned(), |id| id.to_string())
+}
 impl Ord for Identifier {
     fn cmp(&self, other: &Self) -> Ordering {
         self.path()
