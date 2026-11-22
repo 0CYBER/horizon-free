@@ -254,7 +254,7 @@ pub struct HotbarInputs {
     /// that holds an item, then the off hand.
     pub slots: [Option<f32>; 9],
     pub offhand_pop: f32,
-    /// `getAttackStrengthScale(0)` when the attack indicator is in HOTBAR mode.
+    /// Attack indicator progress in HOTBAR mode, usually `getAttackStrengthScale(0)`.
     pub attack: Option<f32>,
 }
 

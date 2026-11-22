@@ -4818,6 +4818,15 @@ impl Game<'_> {
                 if spectator {
                     g.draw_spectator_hotbar(batch);
                 } else {
+                    let attack = (indicator == 2).then(|| {
+                        let mut progress = strength;
+                        g.native_hotbar_attack_indicator_progress(&mut progress);
+                        if (0.0..=1.0).contains(&progress) {
+                            progress
+                        } else {
+                            strength
+                        }
+                    });
                     let partial = g.clock.fraction() as f32;
                     let inputs = hud_layout::HotbarInputs {
                         selected: g.selected as i32,
@@ -4829,7 +4838,7 @@ impl Game<'_> {
                                 .map(|_| (f32::from(g.hotbar_pop[i]) - partial).max(0.0))
                         }),
                         offhand_pop: (f32::from(g.hotbar_pop[9]) - partial).max(0.0),
-                        attack: (indicator == 2).then_some(strength),
+                        attack,
                     };
                     let draws = hud_layout::hotbar(wi, hi, &inputs);
                     hud_layout::paint(batch, &g.gui.atlas, &draws);

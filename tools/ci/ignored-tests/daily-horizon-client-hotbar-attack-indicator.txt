@@ -1,0 +1,2 @@
+# The HUD fixture uses prepared 26.3 resources.
+horizon-client game::native_hooks::hotbar_attack_indicator_progress::tests::hotbar_indicator_uses_a_mods_progress_without_changing_the_crosshair_or_charge lib daily resources
