@@ -225,4 +225,100 @@ mod tests {
             assert!(game.potions.effects.get("raid_omen").is_some());
         });
     }
+
+    /// #15334: a killed captain drops `Raid.getOminousBannerInstance`, not a
+    /// plain white banner. Expected values are vanilla's
+    /// `Raid.getBannerComponentPatch` (26.3).
+    #[test]
+    #[ignore = "daily"]
+    fn a_killed_captain_drops_the_ominous_banner_it_wears() {
+        use horizon_core::nbt::Tag;
+        let ominous_patch = || {
+            let layer = |pattern: &str, color: &str| {
+                Tag::compound([
+                    ("pattern", Tag::String(pattern.into())),
+                    ("color", Tag::String(color.into())),
+                ])
+            };
+            [
+                (
+                    "minecraft:banner_patterns",
+                    Tag::List(vec![
+                        layer("minecraft:rhombus", "cyan"),
+                        layer("minecraft:stripe_bottom", "light_gray"),
+                        layer("minecraft:stripe_center", "gray"),
+                        layer("minecraft:border", "light_gray"),
+                        layer("minecraft:stripe_middle", "black"),
+                        layer("minecraft:half_horizontal", "light_gray"),
+                        layer("minecraft:circle", "light_gray"),
+                        layer("minecraft:border", "black"),
+                    ]),
+                ),
+                (
+                    "minecraft:tooltip_display",
+                    Tag::compound([(
+                        "hidden_components",
+                        Tag::List(vec![Tag::String("minecraft:banner_patterns".into())]),
+                    )]),
+                ),
+                (
+                    "minecraft:item_name",
+                    Tag::compound([(
+                        "translate",
+                        Tag::String("block.minecraft.ominous_banner".into()),
+                    )]),
+                ),
+                ("minecraft:rarity", Tag::String("uncommon".into())),
+            ]
+        };
+        let check = |wrong: &mut Vec<String>, what: &str, stack: &horizon_client::items::ItemStack| {
+            if &*stack.item != "minecraft:white_banner" || stack.count != 1 {
+                wrong.push(format!("{what}: {} x{}", stack.item, stack.count));
+            }
+            let components = horizon_client::item_data::encode_components(stack);
+            for (key, want) in ominous_patch() {
+                let got = components.as_ref().and_then(|c| c.get(key));
+                if got != Some(&want) {
+                    wrong.push(format!("{what}: {key} is {got:?}"));
+                }
+            }
+            // What draws the stack (its icon, the item entity) and what
+            // washing, the loom and shields read: the layers themselves.
+            let layers = horizon_client::banner::layers(stack).len();
+            if layers != 8 {
+                wrong.push(format!("{what}: {layers} layers in memory"));
+            }
+        };
+
+        with_game(|game| {
+            let mut wrong = Vec::new();
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            game.ui.registries.permission = 4;
+            run_dev(game, "raid spawnleader");
+            let captain = game
+                .mobs
+                .iter()
+                .find(|m| &*m.kind.id == "minecraft:pillager")
+                .expect("the captain");
+            // PatrollingMonster.finalizeSpawn: setItemSlot(HEAD, the banner), as
+            // getItemBySlot reads it and as SetEquipment sends it.
+            let head = horizon_items::equipment::HEAD;
+            let worn = captain.extra.slot_stack(head).cloned().expect("a head stack");
+            check(&mut wrong, "worn", &worn);
+            let read = horizon_client::mobs::finalize::item_stack(captain, head).expect("a head stack");
+            check(&mut wrong, "read", &read);
+            let before = game.dropped.len();
+            assert!(game.run_command("kill @e[type=minecraft:pillager]"));
+            let banners: Vec<_> = game
+                .dropped
+                .iter()
+                .skip(before)
+                .filter(|e| &*e.stack.item == "minecraft:white_banner")
+                .map(|e| e.stack.clone())
+                .collect();
+            assert_eq!(banners.len(), 1, "the head drop (chance 2.0)");
+            check(&mut wrong, "dropped", &banners[0]);
+            assert!(wrong.is_empty(), "{wrong:#?}");
+        });
+    }
 }

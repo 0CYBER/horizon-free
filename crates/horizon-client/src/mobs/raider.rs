@@ -152,10 +152,20 @@ pub fn register(m: &mut Mob) {
     m.ai.goals.add(5, Celebration);
 }
 
-/// `Raid.getOminousBannerInstance`.
+/// `Raid.getOminousBannerInstance`: the white banner with
+/// `Raid.getBannerComponentPatch`. The layers are on the stack as a loaded
+/// one has them (what draws, washes and decorates a banner reads them);
+/// `ominous_banner` stands for the name, rarity and hidden tooltip.
 pub fn ominous_banner() -> crate::items::ItemStack {
     let mut stack = crate::items::ItemStack::new(BANNER, 1);
-    stack.data_mut().ominous_banner = true;
+    let data = stack.data_mut();
+    data.banner_patterns = crate::item_data::OMINOUS_LAYERS
+        .iter()
+        .map(|(pattern, color)| {
+            crate::banner::BannerLayer::new(&format!("minecraft:{pattern}"), color)
+        })
+        .collect();
+    data.ominous_banner = true;
     stack
 }
 
