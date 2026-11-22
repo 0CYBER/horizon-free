@@ -1438,3 +1438,74 @@ fn jigsaw_packets_round_trip() {
         Serverbound::decode,
     );
 }
+
+#[test]
+fn a_signature_index_vanilla_never_sends_is_refused() {
+    // MessageSignature.Packed: 0 means a full signature follows, anything else indexes the
+    // last-seen cache (one less than what is written).
+    let mut w = Writer::new();
+    w.varint(-1);
+    assert!(PackedSignature::read(&mut Reader::new(&w.data)).is_err());
+
+    let mut w = Writer::new();
+    w.varint(0);
+    w.bytes(&[7; 256]);
+    assert_eq!(
+        PackedSignature::read(&mut Reader::new(&w.data)),
+        Ok((-1, Some(vec![7; 256])))
+    );
+
+    let mut w = Writer::new();
+    w.varint(4);
+    assert_eq!(
+        PackedSignature::read(&mut Reader::new(&w.data)),
+        Ok((3, None))
+    );
+
+    // The guard has to run on the real packet path, not just when the codec is called directly:
+    // try_encode validates through the generated Codec, so a mod-supplied DeleteChat can no
+    // longer smuggle a malformed marker past the writer (i32::MAX would overflow `v.0 + 1`).
+    let delete = |signature| Clientbound::DeleteChat(DeleteChat { signature });
+    let bad: [(i32, Option<Vec<u8>>); 6] = [
+        (-1, None),              // a full signature without its 256 bytes
+        (-2, None),              // an index vanilla never sends
+        (i32::MAX, None),        // would overflow `v.0 + 1` in write
+        (0, Some(vec![0; 255])), // a full signature with too few bytes
+        (0, Some(vec![0; 256])), // an index that wrongly carries a signature
+        (3, Some(vec![0; 256])), // the same, on a positive index
+    ];
+    for bad in bad {
+        assert!(delete(bad.clone()).try_encode().is_err(), "{bad:?}");
+    }
+    assert!(delete((-1, Some(vec![0; 256]))).try_encode().is_ok());
+    assert!(delete((4, None)).try_encode().is_ok());
+
+    // PlayerChat.last_seen is a List<PackedSignature>: every element must validate as well.
+    let chat = |last_seen| {
+        Clientbound::PlayerChat(PlayerChat {
+            global_index: 0,
+            sender: 5,
+            index: 0,
+            signature: None,
+            content: "hello".into(),
+            timestamp: 1,
+            salt: 2,
+            last_seen,
+            unsigned_content: None,
+            filter: (0, vec![]),
+            chat_type: ChatTypeBound {
+                chat_type: 0,
+                name: literal("Steve"),
+                target: None,
+            },
+        })
+    };
+    assert!(chat(vec![(3, None), (-1, None)]).try_encode().is_err());
+    assert!(chat(vec![(i32::MAX, None)]).try_encode().is_err());
+    assert!(chat(vec![(0, Some(vec![0; 256]))]).try_encode().is_err());
+    assert!(
+        chat(vec![(3, None), (-1, Some(vec![7; 256]))])
+            .try_encode()
+            .is_ok()
+    );
+}

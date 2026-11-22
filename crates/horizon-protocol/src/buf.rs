@@ -517,6 +517,12 @@ impl<T, C: Codec<T>> Codec<Vec<T>> for List<C> {
             C::write(e, w);
         }
     }
+    fn validate(v: &Vec<T>) -> Result<()> {
+        for e in v {
+            C::validate(e)?;
+        }
+        Ok(())
+    }
 }
 /// ByteBufCodecs.list(N): as [`List`], at most N elements.
 pub struct ListN<C, const N: usize>(PhantomData<C>);
@@ -527,6 +533,9 @@ impl<T, C: Codec<T>, const N: usize> Codec<Vec<T>> for ListN<C, N> {
     }
     fn write(v: &Vec<T>, w: &mut Writer) {
         List::<C>::write(v, w)
+    }
+    fn validate(v: &Vec<T>) -> Result<()> {
+        List::<C>::validate(v)
     }
 }
 /// ByteBufCodecs.optional(): a boolean presence flag.
@@ -544,6 +553,12 @@ impl<T, C: Codec<T>> Codec<Option<T>> for Opt<C> {
         if let Some(v) = v {
             C::write(v, w);
         }
+    }
+    fn validate(v: &Option<T>) -> Result<()> {
+        if let Some(v) = v {
+            C::validate(v)?;
+        }
+        Ok(())
     }
 }
 /// ByteBufCodecs.OPTIONAL_VAR_INT: 0 = empty, otherwise value + 1.
@@ -751,6 +766,11 @@ macro_rules! packet {
             #[allow(unused_variables)]
             fn write(v: &$name, w: &mut $crate::buf::Writer) {
                 $(<$codec as $crate::buf::Codec<$ty>>::write(&v.$field, w);)*
+            }
+            #[allow(unused_variables)]
+            fn validate(v: &$name) -> $crate::Result<()> {
+                $(<$codec as $crate::buf::Codec<$ty>>::validate(&v.$field)?;)*
+                Ok(())
             }
         }
     };

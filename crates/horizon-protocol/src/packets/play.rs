@@ -436,17 +436,32 @@ packet!(PlayerAbilities { flags: i8 => Byte, flying_speed: f32 => Float, walking
 pub struct PackedSignature;
 impl Codec<(i32, Option<Vec<u8>>)> for PackedSignature {
     fn read(r: &mut Reader) -> Result<(i32, Option<Vec<u8>>)> {
-        let id = r.varint()?.wrapping_sub(1);
-        Ok(if id == -1 {
-            (-1, Some(r.bytes(256)?.to_vec()))
-        } else {
-            (id, None)
-        })
+        // MessageSignature.Packed.read: 0 means a full signature follows, anything else is an index
+        // (one less than what is written). A negative index is one vanilla never sends, and taking
+        // it as it came would make the writer's `index + 1` overflow.
+        match r.varint()? {
+            0 => Ok((-1, Some(r.bytes(256)?.to_vec()))),
+            id if id > 0 => Ok((id - 1, None)),
+            id => Err(Error::new(format!("message signature index {id}"))),
+        }
     }
     fn write(v: &(i32, Option<Vec<u8>>), w: &mut Writer) {
         w.varint(v.0 + 1);
         if let Some(sig) = &v.1 {
             w.bytes(sig);
+        }
+    }
+    fn validate(v: &(i32, Option<Vec<u8>>)) -> Result<()> {
+        // The marker and the signature go together: an index carries no bytes, and a full signature
+        // carries exactly 256 of them, which is what the reader expects after a 0.
+        if v.0 < -1 || v.0 == i32::MAX {
+            return Err(Error::new(format!("message signature index {}", v.0)));
+        }
+        match (&v.1, v.0) {
+            (Some(sig), -1) if sig.len() == 256 => Ok(()),
+            (None, -1) => Err(Error::new("a full signature carries its bytes")),
+            (Some(_), _) => Err(Error::new("an index carries no signature bytes")),
+            (None, _) => Ok(()),
         }
     }
 }

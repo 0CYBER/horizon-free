@@ -354,3 +354,25 @@ fn duration_parts_preserve_rounding_without_overflow() {
         assert_eq!(duration_parts(millis), expected);
     }
 }
+
+#[test]
+fn a_punishment_that_lasts_no_time_is_refused() {
+    let mut config = Config {
+        mute_minutes: 0,
+        ..Config::default()
+    };
+    assert!(
+        config.check().is_err(),
+        "mute_minutes = 0 with mute_after = 2"
+    );
+    config.mute_minutes = 10;
+    config.tempban_hours = 0;
+    assert!(
+        config.check().is_err(),
+        "tempban_hours = 0 with tempban_after = 3"
+    );
+    // Turned off, the length no longer matters.
+    config.mute_after = 0;
+    config.tempban_after = 0;
+    assert!(config.check().is_ok());
+}

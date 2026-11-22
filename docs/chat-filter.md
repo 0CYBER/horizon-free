@@ -49,7 +49,9 @@ words_file = ""         # your own list, relative to the server's folder; "": th
 log = "logs/chat-filter.log"
 ```
 
-horizon-server checks the section before every start, and the game reads it from the same file.
+horizon-server checks the section before every start, and the game reads it from the same file. A start
+refuses `window_minutes` 0, and a `mute_minutes` or `tempban_hours` of 0 while its threshold is set: a
+punishment that lasts no time would lift itself as it is given.
 
 ## The list
 

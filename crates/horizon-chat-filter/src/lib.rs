@@ -82,6 +82,14 @@ impl Config {
         if self.window_minutes == 0 {
             return Err("chat_filter.window_minutes must be 1 or more".into());
         }
+        // A mute or a ban that lasts no time would lift itself the moment it is given, so the hit
+        // that was meant to stop the player would only refuse one more message.
+        if self.mute_after > 0 && self.mute_minutes == 0 {
+            return Err("chat_filter.mute_minutes must be 1 or more when mute_after is".into());
+        }
+        if self.tempban_after > 0 && self.tempban_hours == 0 {
+            return Err("chat_filter.tempban_hours must be 1 or more when tempban_after is".into());
+        }
         Ok(())
     }
 }
