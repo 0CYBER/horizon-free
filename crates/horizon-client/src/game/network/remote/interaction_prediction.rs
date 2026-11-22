@@ -152,6 +152,9 @@ impl Game<'_> {
     /// MultiPlayerGameMode.useItemOn for `hand`: whether the click ends there
     /// (the block reacts, or a block item is placed).
     pub(super) fn remote_use_item_on(&mut self, hand: Hand) -> bool {
+        self.with_player_block_edit(|g| g.remote_use_item_on_inner(hand))
+    }
+    fn remote_use_item_on_inner(&mut self, hand: Hand) -> bool {
         let held = self.with_hand(hand, |g| g.held().cloned());
         let held_block = held
             .as_ref()

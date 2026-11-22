@@ -748,6 +748,9 @@ pub struct Streaming {
     /// The columns and the next row the band's decoration ranks were given
     /// for (`set_band`).
     band_ranked: Option<(i32, i32, i32)>,
+    /// Cached face visibility and scratch buffers for synchronous edit meshing (`mesh_immediate`).
+    immediate_faces: Faces,
+    immediate_scratch: MeshScratch,
 }
 /// Snapshot only after a scan found no missing candidates. Public range fields
 /// and `World::chunks` can change without going through Streaming, so compare
@@ -1198,12 +1201,14 @@ mod queue_census;
 pub use queue_census::QueueCensus;
 mod forced_cover;
 mod forced_ring;
+pub mod immediate_mesh;
 mod mesh_job;
 mod relight_now;
 mod viewed_meshing;
 use bounded::nearest_first;
 use dynamic_emission::light_region_ready;
 use forced_cover::ForcedCover;
+pub use immediate_mesh::IMMEDIATE_MESH_LIMIT;
 use mesh_job::{Faces, mesh_section};
 pub use viewed_meshing::{
     MAX_VIEWED_SECTIONS, MeshSource, VIEWED_LINGER, VIEWED_MESH_WORKERS, VIEWED_UPLOADS_PER_FRAME,
@@ -1326,6 +1331,8 @@ impl Streaming {
             mesh: true,
             band: None,
             band_ranked: None,
+            immediate_faces: None,
+            immediate_scratch: MeshScratch::default(),
         }
     }
     /// Shares generation resources, but gives distant work its own worker state.
@@ -2326,6 +2333,7 @@ impl Streaming {
         // A server draws nothing: its sections are never meshed.
         if !self.mesh {
             world.dirty_sections.clear();
+            world.immediate_sections.clear();
             self.cover_current = false;
             self.light_scratch = light;
             self.gone_scratch = gone;

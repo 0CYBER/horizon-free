@@ -28,7 +28,7 @@ impl Game<'_> {
     }
 
     pub(super) fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
-        self.carrier_break_block(pos)
+        self.with_player_block_edit(|g| g.carrier_break_block(pos))
     }
 
     /// The window's own player broke a block: the tutorial's counter and the pad's tick. It runs

@@ -10197,6 +10197,7 @@ impl Game<'_> {
                     self.advance_flight();
                     self.tick_world_icon();
                     let ticked = Instant::now();
+                    self.flush_immediate_meshes();
                     let rendered = self.render_and_flip(elapsed)?;
                     self.native_frame_end()?;
                     // The frame's spans, taken every frame they are recorded so they never
