@@ -43,9 +43,8 @@ def main():
         build, 'VanillaInlineObjectOracle', jars, baking.client_libraries(), lock['minecraft']['java_major'])
     harness.java_run(build, classes, dependencies, 'VanillaInlineObjectOracle',
                      [inputs, build / 'client.txt'], 'client')
-    # Text geometry needs neither an audio device nor controller system libraries.
-    harness.run_logged(['cargo', 'build', '--locked', '--no-default-features',
-                        '-p', 'horizon-client-lib', '--example', 'client_probe'], build, 'compile-rust')
+    harness.run_logged(['cargo', 'build', '--locked', '-p', 'horizon-client-lib', '--example', 'client_probe'],
+                       build, 'compile-rust')
     harness.run_logged([lab.cargo_target() / 'debug/examples/client_probe', 'inline_object_fixture',
                         inputs, build / 'rust.txt'], build, 'rust')
     matched = base.compare(build / 'client.txt', build / 'rust.txt')
