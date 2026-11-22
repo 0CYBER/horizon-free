@@ -169,6 +169,10 @@ lookup.
   `event.old`, the stack it shows. `event.slot_changed` says the stack came from another slot (always false for the
   off hand). `event.reequip` starts `false` for the same stack changed in place or an equal one but for its damage.
   It is asked each client tick, for each hand, while the shown and held stacks differ; an empty hand isn't asked.
+- `Hooks::should_cause_reequip_animation_in_slot` is the same question asked right after it, for every mod that
+  listens and whatever the item, with `event.slot` naming the equipment slot (`mainhand` or `offhand`) and
+  `event.reequip` holding the answer the item parts left. `ItemPart::should_cause_reequip_animation` and its fields are
+  unchanged, so a mod built against it keeps working.
 - `ItemPart::should_cause_block_break_reset` is `IItemExtension.shouldCauseBlockBreakReset`: whether a break
   restarts because the main hand changed. `event.stack` is the stack the break began with and `event.held` the main
   hand now. `event.reset` starts `true` when they aren't the same item with the same components (count and damage

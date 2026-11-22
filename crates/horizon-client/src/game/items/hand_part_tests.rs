@@ -6,7 +6,7 @@ use super::Game;
 use horizon_client::items::ItemStack;
 use mod_api::{
     ClientHost, Hooks, ItemPart, Registrar, RegistrationContext, ShouldCauseBlockBreakResetEvent,
-    ShouldCauseReequipAnimationEvent,
+    ShouldCauseReequipAnimationEvent, ShouldCauseReequipAnimationInSlotEvent,
 };
 use std::sync::Mutex;
 
@@ -17,6 +17,8 @@ static RESET: Mutex<Option<bool>> = Mutex::new(None);
 /// and, for a break, whether the break's stack had components.
 static REEQUIP_ASKED: Mutex<Vec<(Option<u32>, u32, mod_api::Hand, bool)>> = Mutex::new(Vec::new());
 static RESET_ASKED: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+/// What the slot-aware hook was asked: `(slot, the answer it arrived with)`.
+static SLOT_ASKED: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
 
 #[derive(Clone)]
 struct Stick;
@@ -58,6 +60,16 @@ impl Hooks for Parts {
         let key = r.item_key("minecraft:stick");
         r.item_part(key, Stick);
     }
+    fn should_cause_reequip_animation_in_slot(
+        &self,
+        _: &dyn ClientHost,
+        event: &mut ShouldCauseReequipAnimationInSlotEvent<'_>,
+    ) {
+        SLOT_ASKED
+            .lock()
+            .unwrap()
+            .push((event.slot.to_owned(), event.reequip));
+    }
 }
 
 /// Runs `body` on a game whose stick has the part.
@@ -79,6 +91,7 @@ fn settle(game: &mut Game<'_>, main: ItemStack) {
     }
     assert_eq!(game.heights.main, 1.0);
     REEQUIP_ASKED.lock().unwrap().clear();
+    SLOT_ASKED.lock().unwrap().clear();
 }
 
 /// The main hand's height over the next six ticks, and the stick count it
@@ -120,6 +133,12 @@ fn a_part_decides_whether_the_hand_lowers_for_a_new_stack() {
                     REEQUIP_ASKED.lock().unwrap().drain(..).collect::<Vec<_>>(),
                     [(Some(1), 1, mod_api::Hand::Main, true)]
                 );
+                // The slot-aware hook is asked after it, with the original's answer
+                // (vanilla's: shown at once) and the hand's equipment slot.
+                assert_eq!(
+                    SLOT_ASKED.lock().unwrap().drain(..).collect::<Vec<_>>(),
+                    [("mainhand".to_owned(), false)]
+                );
 
                 // The same move with the part answering `true`: the hand drops,
                 // takes the new stick at the bottom and rises again.
@@ -129,6 +148,11 @@ fn a_part_decides_whether_the_hand_lowers_for_a_new_stack() {
                 close(
                     &dip(game),
                     &[(0.6, 1), (0.2, 1), (0.0, 1), (0.4, 1), (0.8, 1), (1.0, 1)],
+                );
+                // The slot-aware hook arrived with that `true`.
+                assert_eq!(
+                    SLOT_ASKED.lock().unwrap()[0],
+                    ("mainhand".to_owned(), true)
                 );
 
                 // From one stick to two in the same slot: vanilla dips, the part's
