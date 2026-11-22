@@ -787,8 +787,9 @@ fn wait_loaded(control: &Control, near: impl Fn(&Value) -> bool) -> Result<Insta
 }
 
 /// 80% of the view circle (pi x RD^2): the game keeps 637 columns at RD 12 and 3725 at RD 32
-/// (`tools/perf_bench.py`'s `view_chunks`).
-fn view_chunks(distance: u64) -> u64 {
+/// (`tools/perf_bench.py`'s `view_chunks`). The game and `horizon-ctl wait-ready` use it too:
+/// a world that has not reached it has not received its view yet.
+pub fn view_chunks(distance: u64) -> u64 {
     (0.8 * std::f64::consts::PI * (distance * distance) as f64) as u64
 }
 

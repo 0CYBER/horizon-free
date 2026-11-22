@@ -153,7 +153,12 @@ const STATUS_REPLY: &[Field] = &[
     f(
         "pending_chunks",
         "integer",
-        "chunks still being generated, meshed, uploaded or received",
+        "chunks this client is still generating, meshing or uploading; columns a server has not sent yet are not counted (see terrain_loading)",
+    ),
+    f(
+        "terrain_loading",
+        "boolean",
+        "near terrain still coming in: the view's outermost columns, generation, meshes, uploads or the server's backlog",
     ),
     f(
         "streaming",
@@ -320,7 +325,7 @@ pub const COMMANDS: &[Cmd] = &[
     // Session
     cmd!("launch", Session, "launch [--world NAME] [--seed N] [--creative] [--version TAG] [--game PATH] [--wait] [GAME ARGS...]",
         "start Horizon with the control socket and wait until it answers",
-        "Finds the game in this order: --game PATH; a horizon-client next to horizon-ctl (a build folder, a release folder or a launcher install); the newest version installed by the Horizon launcher (--version TAG picks one). Launcher installs run with their prepared resources and keep saves in the game home ($HORIZON_HOME, else ~/.local/share/horizon). --wait also waits until the player has spawned and chunks are loaded. Other arguments go to the game (horizon-client --help lists them). The game's output goes to a .log file beside the socket.",
+        "Finds the game in this order: --game PATH; a horizon-client next to horizon-ctl (a build folder, a release folder or a launcher install); the newest version installed by the Horizon launcher (--version TAG picks one). Launcher installs run with their prepared resources and keep saves in the game home ($HORIZON_HOME, else ~/.local/share/horizon). --wait also waits until the player has spawned and the world has loaded. Other arguments go to the game (horizon-client --help lists them). The game's output goes to a .log file beside the socket.",
         ["horizon-ctl launch --world Survival --seed 42 --wait", "horizon-ctl launch --world Flat --creative --render-distance 8"],
         &[flag("world", Ty::Str, "world folder to open or create"), flag("seed", Ty::Str, "seed for a new world"), flag("creative", Ty::Bool, "creative mode for a new world"),
           flag("version", Ty::Str, "an installed launcher version tag such as v2026.10.13"), flag("game", Ty::Str, "path to a horizon-client binary"),
@@ -329,7 +334,7 @@ pub const COMMANDS: &[Cmd] = &[
           flag("headless", Ty::Bool, "no display, window or GPU: a player that plays through these commands only (no screenshots)")],
         mcp: true, local: true),
     cmd!("wait-for", Session, "wait-for screen NAME|widget ID|loaded|chat TEXT|event KIND [--timeout S] [--since SEQ]", "wait until the game reaches a state, then reply",
-        "screen takes the names state shows (playing, inventory, paused, dead, title...); widget an id from ui; loaded means a world is open, the player is in it and no chunk is pending; chat a new line containing TEXT; event a kind from events (death, respawn, item, screen...). chat and event count from --since SEQ (take last from events before acting), else from now. A timeout (default 30 s) is an error with kind timeout.",
+        "screen takes the names state shows (playing, inventory, paused, dead, title...); widget an id from ui; loaded means a world is open, the player is in it, its view's columns are in and no chunk is pending; chat a new line containing TEXT; event a kind from events (death, respawn, item, screen...). chat and event count from --since SEQ (take last from events before acting), else from now. A timeout (default 30 s) is an error with kind timeout.",
         ["horizon-ctl wait-for screen inventory", "horizon-ctl wait-for loaded --timeout 120", "horizon-ctl wait-for chat joined the game", "horizon-ctl wait-for event death --timeout 600"],
         &[flag("timeout", Ty::Num, "seconds (default 30)"), flag("since", Ty::Int, "chat and event: count from this event seq"), p("condition", Ty::Enum(&["screen", "widget", "loaded", "chat", "event"]), "what to wait for"), opt("value", Ty::Rest, "the screen name, widget id, chat text or event kind")], mcp: true, local: false),
     cmd!("events", Observe, "events [--since SEQ] [--limit N]", "what happened since SEQ, oldest first: screens, chat, deaths, respawns, items gained or lost, damage taken (hurt, with its cause), healing, food, dimensions, worlds",
@@ -338,8 +343,8 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("input-log", Observe, "input-log [--since SEQ] [--limit N] [--origin user|agent|game]", "recent input and who caused it: a person, an agent or the game",
         "Every event has seq, tick and origin. `user` is the window's own keyboard, mouse or pad; `agent` is the control socket (this tool); `game` is input the game made up. A `user-input` event in `events` means a person stepped in while an agent was driving. The game keeps the newest 512.",
         ["horizon-ctl input-log", "horizon-ctl input-log --origin user --limit 20", "horizon-ctl input-log --since 120"], &[flag("since", Ty::Int, "only events after this seq"), flag("limit", Ty::Int, "newest N events"), flag("origin", Ty::Enum(&["user", "agent", "game"]), "user, agent or game")], mcp: true, local: false),
-    cmd!("wait-ready", Session, "wait-ready [SECONDS]", "wait until the player has spawned and no chunks are pending",
-        "Polls status every 250 ms; replies with the status, or an error after SECONDS (default 120).",
+    cmd!("wait-ready", Session, "wait-ready [SECONDS]", "wait until the player has spawned and the world has loaded",
+        "Polls status every 250 ms until the player is in, no chunk work is pending, the view holds the columns its render distance has (view_chunks) and terrain_loading is false; replies with the status, or an error after SECONDS (default 120).",
         ["horizon-ctl wait-ready 300"], &[opt("seconds", Ty::Num, "how long to wait (default 120)")], mcp: true, local: true),
     cmd!("logs", Session, "logs [--lines N] [--crash]", "the end of the game's log, or its newest crash report",
         "Reads the game home ($HORIZON_HOME, else ~/.local/share/horizon): logs/latest.log (the last N lines, default 100) or, with --crash, the newest file in crash-reports. Read-only; works whether the game runs or not.",

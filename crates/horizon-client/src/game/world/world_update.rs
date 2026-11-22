@@ -318,10 +318,12 @@ impl Game<'_> {
         let view = (self.streaming.center, radius);
         let has = |column: (i32, i32)| self.world.chunks.contains_key(&column);
         let now = Instant::now();
-        let arriving = {
+        let view_arriving = {
             let _span = horizon_client::spans::guard("view_arrival");
-            self.view_arrival.arriving(view, now, has) || self.remote_backlog() > 0
+            self.view_arrival.arriving(view, now, has)
         };
+        self.view_arriving = view_arriving;
+        let arriving = view_arriving || self.remote_backlog() > 0;
         // Which far tiles a zoom magnifies (`lod::ZoomAim`), read before
         // `self.renderer.as_mut()` below borrows self mutably for the rest of
         // this function. Cheap: trigonometry on one angle, or None when the

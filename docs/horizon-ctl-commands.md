@@ -9,7 +9,7 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 | --- | --- | --- | --- |
 | `launch [--world NAME] [--seed N] [--creative] [--version TAG] [--game PATH] [--wait] [GAME ARGS...]` | `launch` | Start Horizon with the control socket and wait until it answers | `--world` (string): world folder to open or create<br>`--seed` (string): seed for a new world<br>`--creative` (boolean): creative mode for a new world<br>`--version` (string): an installed launcher version tag such as v2026.10.13<br>`--game` (string): path to a horizon-client binary<br>`--wait` (boolean): also wait until the world is ready (default in MCP)<br>`--offscreen` (boolean): render without showing a window, splitscreen's too (screenshots still work): locked or headless sessions<br>`--headless` (boolean): no display, window or GPU: a player that plays through these commands only (no screenshots) |
 | `wait-for screen NAME\|widget ID\|loaded\|chat TEXT\|event KIND [--timeout S] [--since SEQ]` | `wait_for` | Wait until the game reaches a state, then reply | `--timeout` (number): seconds (default 30)<br>`--since` (integer): chat and event: count from this event seq<br>`condition` (screen, widget, loaded, chat, event, required): what to wait for<br>`value` (text): the screen name, widget id, chat text or event kind |
-| `wait-ready [SECONDS]` | `wait_ready` | Wait until the player has spawned and no chunks are pending | `seconds` (number): how long to wait (default 120) |
+| `wait-ready [SECONDS]` | `wait_ready` | Wait until the player has spawned and the world has loaded | `seconds` (number): how long to wait (default 120) |
 | `logs [--lines N] [--crash]` | `logs` | The end of the game's log, or its newest crash report | `--lines` (integer): how many lines of latest.log (default 100)<br>`--crash` (boolean): the newest crash report instead |
 | `status` | `status` | Game, renderer and streaming state (the scripting socket's original summary) | none |
 | `hello` | `hello` | The control protocol's version, the game's release and the command groups it serves | none |
@@ -187,7 +187,8 @@ The reply fields of the commands described so far (more follow, a group at a tim
 | `chunks` | integer | chunks loaded |
 | `mobs` | integer | mobs this side knows |
 | `block_entities` | integer | block entities loaded |
-| `pending_chunks` | integer | chunks still being generated, meshed, uploaded or received |
+| `pending_chunks` | integer | chunks this client is still generating, meshing or uploading; columns a server has not sent yet are not counted (see terrain_loading) |
+| `terrain_loading` | boolean | near terrain still coming in: the view's outermost columns, generation, meshes, uploads or the server's backlog |
 | `streaming` | object | chunk streaming stages and their counts |
 | `lod` | object | far terrain: distances, tiles, quads and sampling progress |
 | `renderer` | object, null | GPU, driver, backend, size, draw counts and GPU memory; null without a renderer |

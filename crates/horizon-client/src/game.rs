@@ -971,6 +971,10 @@ struct Game<'a> {
     /// Whether the view's columns have all arrived, and how new it is: large
     /// translucent pages wait for both before they shrink (`set_terrain_loading`).
     view_arrival: horizon_client::streaming::ViewArrival,
+    /// Whether the view's outermost columns are still on their way from a
+    /// server, as the last `update_world` saw them (`ViewArrival::arriving`):
+    /// `Streaming` cannot see columns the server has not sent yet.
+    view_arriving: bool,
     options: Options,
     player: Option<PlayerMotion>,
     spawn: Option<Vec3>,
@@ -10486,6 +10490,7 @@ impl<'a> Game<'a> {
             lod_blue_map: None,
             lod_covered_at: None,
             view_arrival: Default::default(),
+            view_arriving: false,
             options,
             player: None,
             spawn: None,

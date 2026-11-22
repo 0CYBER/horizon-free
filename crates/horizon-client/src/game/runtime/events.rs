@@ -263,10 +263,29 @@ impl Game<'_> {
         }
     }
 
+    /// Whether near terrain is still coming in: the view's outermost columns on
+    /// their way from a server (single player's integrated one too), chunks or
+    /// sections being generated, decorated, lit or meshed, uploads waiting, or
+    /// the server's packets not handled yet. `Streaming::pending` alone reads 0
+    /// while a server is still sending a view's columns.
+    pub(super) fn terrain_loading(&self) -> bool {
+        self.title.is_none()
+            && (self.view_arriving
+                || self.streaming.terrain_loading()
+                || !self.pending_uploads.is_empty()
+                || self.remote_backlog() > 0)
+    }
+
     pub(super) fn loaded(&self) -> bool {
         self.title.is_none()
             && self.player.is_some()
-            && self.streaming.pending() + self.pending_uploads.len() == 0
+            && world_loaded(
+                self.streaming.pending(),
+                self.pending_uploads.len(),
+                self.terrain_loading(),
+                self.world.chunks.len(),
+                self.effective_render_distance(),
+            )
     }
 
     /// Once per event loop turn: record what changed, answer the waits that hold.
@@ -374,9 +393,39 @@ impl Game<'_> {
     }
 }
 
+/// Whether a world has loaded: no chunk queued or uploading here, no terrain
+/// still coming in (the view's outermost columns, generation, meshes or the
+/// server's backlog), and the view's columns resident (`view_chunks` at the
+/// render distance). `Streaming::pending` alone reads 0 while a server is
+/// still sending a view's columns.
+fn world_loaded(
+    pending: usize,
+    uploads: usize,
+    terrain_loading: bool,
+    chunks: usize,
+    render_distance: i32,
+) -> bool {
+    !terrain_loading
+        && pending + uploads == 0
+        && chunks as u64 >= crate::benchmark::view_chunks(render_distance.max(0) as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_world_loads_once_its_view_s_chunks_are_in_and_terrain_is_quiet() {
+        // A brand-new world: nothing is queued here yet, the server is still
+        // sending the view (76 of 3725 columns in the issue's runs).
+        assert!(!world_loaded(0, 0, false, 0, 12));
+        assert!(!world_loaded(0, 0, false, 360, 12), "below view_chunks(12)");
+        // The view's columns are in, but their meshes and uploads are not.
+        assert!(!world_loaded(0, 0, true, 400, 12));
+        assert!(!world_loaded(1, 0, false, 400, 12));
+        // Nothing is left: the world is loaded.
+        assert!(world_loaded(0, 0, false, 400, 12));
+    }
 
     #[test]
     fn events_take_since_and_limit_in_any_order() {

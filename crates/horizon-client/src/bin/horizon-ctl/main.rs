@@ -435,12 +435,7 @@ impl Session {
         let deadline = Instant::now() + Duration::from_secs_f64(limit.max(0.0));
         loop {
             let status = self.game("status")?;
-            // On a server (single player's server thread too), also the
-            // level around the player.
-            if !status["player"].is_null()
-                && status["pending_chunks"] == 0
-                && status["server"]["loaded"] != false
-            {
+            if world_ready(&status) {
                 return Ok(status);
             }
             if Instant::now() > deadline {
@@ -452,6 +447,23 @@ impl Session {
             thread::sleep(Duration::from_millis(250));
         }
     }
+}
+
+/// Whether `status` says a world has arrived: the player is in it, no chunk
+/// work waits here (`pending_chunks`), it holds the columns its render
+/// distance's view has (`view_chunks`), and the terrain has settled
+/// (`terrain_loading`: the view's outermost columns, generation, meshes,
+/// uploads or the server's backlog). A server sends a view's columns nearest
+/// first, so `pending_chunks` alone reads 0 while most of them are unsent.
+fn world_ready(status: &Value) -> bool {
+    !status["player"].is_null()
+        && status["pending_chunks"] == 0
+        && status["server"]["loaded"] != false
+        && !status["terrain_loading"].as_bool().unwrap_or(false)
+        && status["chunks"].as_u64().unwrap_or(0)
+            >= horizon_client::benchmark::view_chunks(
+                status["render_distance"].as_u64().unwrap_or(0),
+            )
 }
 
 /// Whether `look` (a `look-at entity` reply) put entity `id` under the crosshair; if not,
@@ -846,6 +858,43 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wait_ready_waits_for_the_view_s_chunks_and_terrain_to_settle() {
+        let status = |chunks: u64, pending: u64, loading: bool| {
+            json!({
+                "player": {"position": [0.0, 64.0, 0.0]},
+                "pending_chunks": pending,
+                "server": {"loaded": true},
+                "render_distance": 12,
+                "chunks": chunks,
+                "terrain_loading": loading,
+            })
+        };
+        // A brand-new world: nothing is queued here yet, the server is still
+        // sending the view (76 of 3725 columns in the issue's runs).
+        assert!(!world_ready(&status(0, 0, false)));
+        assert!(
+            !world_ready(&status(360, 0, false)),
+            "below view_chunks(12)"
+        );
+        // The view's columns are in, but their meshes and uploads are not.
+        assert!(!world_ready(&status(400, 0, true)));
+        assert!(!world_ready(&status(400, 1, false)));
+        // Nothing is left: the world is ready.
+        assert!(world_ready(&status(400, 0, false)));
+        // A game before `terrain_loading` existed is judged by its columns and queue.
+        let mut old = status(400, 0, false);
+        old.as_object_mut().unwrap().remove("terrain_loading");
+        assert!(world_ready(&old));
+        // No player, or a player the server has not loaded, is not ready.
+        assert!(!world_ready(&json!({
+            "pending_chunks": 0, "chunks": 400, "render_distance": 12, "server": {"loaded": true},
+        })));
+        let mut unloaded = status(400, 0, false);
+        unloaded["server"]["loaded"] = json!(false);
+        assert!(!world_ready(&unloaded));
+    }
 
     #[test]
     fn aimed_at_names_what_is_under_the_crosshair_instead() {
