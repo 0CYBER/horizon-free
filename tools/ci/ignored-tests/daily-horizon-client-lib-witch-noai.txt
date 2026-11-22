@@ -1,0 +1,1 @@
+horizon-client-lib mobs::ai::witch_noai_tests::a_burning_noai_witch_still_drinks_fire_resistance lib daily resources

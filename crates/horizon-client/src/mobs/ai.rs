@@ -1178,6 +1178,10 @@ fn ai_and_finish_tick(
     events: &mut Vec<MobEvent>,
 ) -> bool {
     if m.no_ai {
+        // Witch.aiStep picks and drinks its potions before super.aiStep():
+        // LivingEntity.tick calls aiStep without AI too, so a NoAI witch
+        // on fire still drinks fire resistance.
+        witch_ai_step(m, w, events);
         update_fall_flying(m, w, events);
         reset_effect_fall_distance(m);
         // Mob.aiStep still runs without AI: undead burn, endermites age.
@@ -2435,18 +2439,23 @@ fn reset_effect_fall_distance(m: &mut Mob) {
     }
 }
 
-/// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
-fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut Vec<MobEvent>) {
-    if m.species() == Species::Parrot {
-        super::parrot::ai_step(m, w, level.random(), events);
-    }
-    // Witch.aiStep runs before super.aiStep().
+/// `Witch.aiStep` before `super.aiStep()`, with or without AI (NoAI only
+/// skips `serverAiStep` and travel inside `LivingEntity.aiStep`).
+fn witch_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Witch {
         let far = m
             .target_info(w)
             .is_some_and(|t| t.position.distance_squared(m.position) > 121.0);
         super::witch::ai_step(m, w.loop_context, events, far);
     }
+}
+
+/// LivingEntity.aiStep (and Mob/AgeableMob/Animal additions).
+fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut Vec<MobEvent>) {
+    if m.species() == Species::Parrot {
+        super::parrot::ai_step(m, w, level.random(), events);
+    }
+    witch_ai_step(m, w, events);
     if m.species() == Species::Fox {
         super::fox::pre_ai_step(m);
     }
@@ -6930,6 +6939,42 @@ mod ravager_noai_tests {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod witch_noai_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Vanilla 26.3: `LivingEntity.tick` calls `aiStep` whether or not the
+    /// mob has AI, and `Witch.aiStep` picks a potion (fire resistance while
+    /// it burns) before `super.aiStep()`. A burning NoAI witch drinks it
+    /// (#16909's sweep: vanilla holds the potion, Horizon held nothing).
+    #[test]
+    #[ignore = "daily"]
+    fn a_burning_noai_witch_still_drinks_fire_resistance() {
+        let ran = crate::mobs::world::with_test_world(&[], |w, types| {
+            let kind = Arc::new(types.types["minecraft:witch"].clone());
+            let mut mob = Mob::new(1, kind, Vec3::new(16.5, 101.0, 16.5), 0.0);
+            mob.no_ai = true;
+            mob.no_gravity = true;
+            mob.persistent = true;
+            mob.fire_ticks = 300;
+            let mut test_level = crate::health::TestLevel::new(0);
+            let mut events = Vec::new();
+            let drank = (1..=200).find(|_| {
+                tick(&mut mob, w, &mut test_level.level(), &mut events);
+                mob.has_effect("minecraft:fire_resistance")
+            });
+            assert!(
+                drank.is_some(),
+                "a burning NoAI witch had no fire resistance after 200 ticks"
+            );
+        });
+        if !ran {
+            eprintln!("Prepared mob data unavailable; witch NoAI coverage did not run");
+        }
     }
 }
 
