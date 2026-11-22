@@ -150,6 +150,21 @@ pub struct Connection {
     pub reader: ConnReader,
     pub writer: ConnWriter,
 }
+/// A listener on every address of the machine, IPv6 and IPv4 at once, as Java's `ServerSocketChannel` bound
+/// to no address listens (a vanilla server with `server-ip` empty): `[::]` with `IPV6_V6ONLY` off, so an IPv4
+/// peer arrives as `::ffff:a.b.c.d`. `SO_REUSEADDR` as std's `TcpListener::bind` sets it on Unix, never on
+/// Windows (where it would let another program take the port). Blocking, like std's.
+pub fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(false)?;
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)).into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
+}
+
 fn configure_stream(stream: &TcpStream) -> Result<()> {
     stream.set_nodelay(true)?;
     let sock = socket2::SockRef::from(stream);

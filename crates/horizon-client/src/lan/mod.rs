@@ -938,14 +938,11 @@ impl Lan {
     /// The socket [`Lan::listen`] accepts on, bound ahead so that a failure
     /// can be reported before the hub is at hand.
     pub fn bind(address: Option<std::net::IpAddr>, port: u16) -> io::Result<TcpListener> {
-        let bind = address.unwrap_or_else(|| {
-            if test_loopback() {
-                std::net::Ipv4Addr::LOCALHOST.into()
-            } else {
-                std::net::Ipv4Addr::UNSPECIFIED.into()
-            }
-        });
-        let listener = TcpListener::bind((bind, port))?;
+        let listener = match address {
+            Some(address) => TcpListener::bind((address, port))?,
+            None if test_loopback() => TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))?,
+            None => bind_any(port, horizon_protocol::connection::bind_dual_stack)?,
+        };
         listener.set_nonblocking(true)?;
         Ok(listener)
     }
@@ -1199,10 +1196,37 @@ impl Shared {
     }
 }
 
+/// No address given (`server-ip` empty, Open to LAN): IPv6 and IPv4 at once, as vanilla's listener
+/// (`dual_stack`), or IPv4 alone where that fails for any reason (no IPv6, the option refused). Both failing
+/// gives IPv4's error, the one the start reports today. Says once which it got.
+fn bind_any(
+    port: u16,
+    dual_stack: impl FnOnce(u16) -> io::Result<TcpListener>,
+) -> io::Result<TcpListener> {
+    match dual_stack(port) {
+        Ok(listener) => {
+            log::info!("[lan] listening on IPv6 and IPv4, port {port}");
+            Ok(listener)
+        }
+        Err(e) => {
+            let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port))?;
+            log::info!("[lan] listening on IPv4 only, port {port} (IPv6: {e})");
+            Ok(listener)
+        }
+    }
+}
+
+/// On the dual-stack listener an IPv4 peer is `::ffff:a.b.c.d`: Java reads it as `a.b.c.d`, and so must the
+/// connection caps, the IP bans and the logs.
+fn canonical(addr: SocketAddr) -> SocketAddr {
+    SocketAddr::new(addr.ip().to_canonical(), addr.port())
+}
+
 fn accept_loop(listener: TcpListener, shared: Arc<Shared>, stop: &AtomicBool) {
     while !shared.stop.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, addr)) => {
+                let addr = canonical(addr);
                 // A thread a connection, where vanilla's Netty has a few for all: past the players
                 // the server takes and [`SPARE_CONNECTIONS`] more (logins, server-list pings), a
                 // new one is closed at once, so that a flood of sockets can't use up the threads a
@@ -1404,6 +1428,38 @@ mod tests {
         let hidden = lan.shared.status_json();
         assert!(!hidden.contains("\"sample\""));
         assert!(!hidden.contains("Player"));
+    }
+
+    /// No `server-ip`: vanilla's listener (Java's `ServerSocketChannel` on no address) takes IPv6 and IPv4
+    /// players, and an IPv4 peer reads as its IPv4 address, not `::ffff:`.
+    #[test]
+    fn with_no_address_both_ipv4_and_ipv6_players_get_in() {
+        let listener = Lan::bind(None, 0).unwrap();
+        listener.set_nonblocking(false).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _v4 = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let (_, peer) = listener.accept().unwrap();
+        assert_eq!(super::canonical(peer).ip().to_string(), "127.0.0.1");
+        if TcpListener::bind("[::1]:0").is_err() {
+            eprintln!("skipped: no IPv6 loopback");
+            return;
+        }
+        let _v6 = TcpStream::connect(("::1", port)).expect("an IPv6 player gets in");
+        let (_, peer) = listener.accept().unwrap();
+        assert_eq!(super::canonical(peer).ip().to_string(), "::1");
+    }
+
+    /// Where the dual-stack listener can't be made (no IPv6, the option refused), IPv4 alone; where IPv4
+    /// fails too, its error is the one reported (the start's "FAILED TO BIND TO PORT!").
+    #[test]
+    fn a_failed_dual_stack_listener_falls_back_to_ipv4() {
+        let refused = |_| Err(io::Error::new(io::ErrorKind::Unsupported, "no IPv6"));
+        let listener = super::bind_any(0, refused).unwrap();
+        let address = listener.local_addr().unwrap();
+        assert!(address.is_ipv4(), "{address}");
+        let port = address.port();
+        let err = super::bind_any(port, refused).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AddrInUse, "{err}");
     }
 
     fn status_lan() -> Lan {
