@@ -1,6 +1,5 @@
 //! Derive hook subscriptions from a trait implementation.
 mod payload;
-mod point;
 mod wire;
 
 /// Derive a typed payload's value codec from its fields.
@@ -356,23 +355,6 @@ pub fn horizon_mod(_attribute: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn horizon_part(_attribute: TokenStream, input: TokenStream) -> TokenStream {
     expand(parse_macro_input!(input as ItemImpl), false)
-}
-
-/// `#[point(side = "server" | "client" | "both", name = "…", slot = N, free, api(…), mirror(…))]`
-/// on a function: an injection point (arismoko/horizon#589), where mods listen through the API. The staging pass
-/// that builds the prebuilt game puts it on each replaceable function with an API record, with
-/// the function's replacement cell (`slot`); a function without a record is refused by this
-/// attribute, naming it. The source tree carries none. The function's head is its cell's one load
-/// and a branch, the same check a mixin build's copy is installed through: while a mod listens
-/// at the head or the return, the cell holds the point's dispatcher, which runs the head
-/// listeners, the body (or the installed copy) and the return listeners. An API listener, native
-/// or wasm, gets the side's host (on a `Game` method) and a record holding a copy of every
-/// parameter as an API value (an engine type `mirror(…)` names as its `mod_api` mirror): the
-/// function runs with the record's by-value and `&T` values, and a `&mut T` parameter's place
-/// gets the record's value back.
-#[proc_macro_attribute]
-pub fn point(attribute: TokenStream, input: TokenStream) -> TokenStream {
-    point::expand(attribute.into(), parse_macro_input!(input as ImplItemFn)).into()
 }
 
 /// `#[horizon_loop(name = "…", side = "server" | "client")]` on a published loop's entry function

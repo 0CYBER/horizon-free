@@ -73,6 +73,7 @@
 //! hashes: a newer writer may hash contract fields this reader does not know, and the file's
 //! integrity is the signature's job.
 pub mod boundary;
+pub mod build_data;
 pub mod child;
 pub mod diff;
 pub mod records;

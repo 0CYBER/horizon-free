@@ -159,7 +159,6 @@ version = "0.1.0"
 dependencies = [
  "heck",
  "horizon-game-discovery",
- "horizon-mod-point-shape",
  "horizon-mod-source",
  "horizon-mod-surface",
  "prettyplease",
@@ -177,20 +176,8 @@ dependencies = [
 name = "horizon-mod-api-macros"
 version = "0.1.0"
 dependencies = [
- "horizon-mod-point-shape",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "horizon-mod-point-shape"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
  "syn 2.0.119",
 ]
 

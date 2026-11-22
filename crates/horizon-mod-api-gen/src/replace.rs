@@ -1,9 +1,7 @@
 //! Function replacement: how a patched copy of a game function is installed in place of the
 //! original, with the game prebuilt. The staging pass ([`stage`]) writes one check at the head of
 //! every replaceable function of a staged source copy: a load of the function's slot in its
-//! crate's `__REPLACE` array and, when a copy is installed there, a direct call of it. A function
-//! that is an injection point shares that one check: its `#[point]` writes it, and while a mod
-//! listens there the point's dispatcher is what the slot holds, with the copy behind it. Beside the
+//! crate's `__REPLACE` array and, when a copy is installed there, a direct call of it. Beside the
 //! function it writes the slot's typed reader (`__fnr_read_slot_<index>`) and installer
 //! (`__fnr_<name>`), which a mixin build's patch crate calls with its copy
 //! ([`crate::patch`]). A function's check is part of its body, so every inlined copy of the
@@ -631,7 +629,6 @@ pub fn pointer_type(sig: &syn::Signature) -> proc_macro2::TokenStream {
 /// A replaceable function, as found in a parsed file.
 struct Found<'a> {
     module: String,
-    attrs: &'a [syn::Attribute],
     sig: &'a syn::Signature,
     body: &'a syn::Block,
     /// The `impl` it is a method of.
@@ -643,22 +640,6 @@ struct Found<'a> {
 }
 
 impl Found<'_> {
-    /// The `#[point(…)]` the point staging pass put on it, when it is an injection point.
-    fn point(&self) -> Option<&syn::MetaList> {
-        self.attrs.iter().find_map(|attr| match &attr.meta {
-            syn::Meta::List(list)
-                if list
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "point") =>
-            {
-                Some(list)
-            }
-            _ => None,
-        })
-    }
-
     /// Its path, as a mixin's `target` names it.
     fn target(&self) -> String {
         match (self.owner, self.trait_name) {
@@ -710,7 +691,6 @@ fn functions<'a>(
             {
                 out.push(Found {
                     module: module.to_owned(),
-                    attrs: &function.attrs,
                     sig: &function.sig,
                     body: &function.block,
                     owner: None,
@@ -736,7 +716,6 @@ fn functions<'a>(
                     {
                         out.push(Found {
                             module: module.to_owned(),
-                            attrs: &method.attrs,
                             sig: &method.sig,
                             body: &method.block,
                             owner: Some(block),
@@ -995,15 +974,11 @@ pub(crate) fn library_name(package: &Path) -> Result<String, String> {
 
 /// One crate's files in the staged copy.
 struct Crate {
-    /// Its library's name, as the game crate names it.
-    name: String,
     /// Its library root, where its slot array goes.
     lib: PathBuf,
     files: Vec<ModuleFile>,
     /// Whether only its marked functions are replaceable.
     marked_only: bool,
-    /// Its package folder.
-    package: PathBuf,
 }
 
 /// The staging pass: in the staged copy at `root`, in place, gives every replaceable function its
@@ -1016,11 +991,9 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
     let client = root.join("crates/horizon-client/src");
     let game = root.join("crates/horizon-client");
     let mut crates = vec![Crate {
-        name: "horizon_client".into(),
         lib: client.join("lib.rs"),
         files: source::game_files(&client, true)?,
         marked_only: false,
-        package: game.clone(),
     }];
     let lower: BTreeSet<&str> = list
         .iter()
@@ -1033,25 +1006,22 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
             ));
         }
         let (package, lib) = source::crate_root(root, name)?;
-        // The game crate arms every marked crate: one built on the game crate would be a cycle.
+        // A mixin build patches the game and the crates below it, not a crate built on the game.
         if built_on(&package, &game)? {
             return Err(format!(
-                "{name}: it is built on horizon-client, so the game crate can't arm its replaceable functions; a crate with #[horizon_mod_api_macros::replaceable] must sit below the game crate"
+                "{name}: it is built on horizon-client; a crate with #[horizon_mod_api_macros::replaceable] must sit below the game crate"
             ));
         }
         crates.push(Crate {
-            name: library_name(&package)?,
             lib,
             files: source::crate_files(root, name)?,
             marked_only: true,
-            package,
         });
     }
     let mut staged = Staged::default();
     for krate in &crates {
         let mut count = 0;
         let mut cells = 0;
-        let mut armers = Vec::new();
         let mut trait_methods = 0;
         let mut counts = BTreeMap::new();
         // Each file's text as the pass leaves it, the crate root's included.
@@ -1092,7 +1062,7 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
                 .filter(|function| function.trait_name.is_some())
                 .count();
             count += found.len();
-            let Some(text) = rewrite(&file.path, text, &found, &mut cells, &mut armers)? else {
+            let Some(text) = rewrite(&file.path, text, &found, &mut cells)? else {
                 continue;
             };
             staged.files += 1;
@@ -1124,20 +1094,6 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
         root_text.push_str(&format!(
             "\n/// The replacement of each replaceable function of this crate, or null: see `horizon_mod_api_gen::replace`.\n#[doc(hidden)]\npub static __REPLACE: [::std::sync::atomic::AtomicPtr<()>; {cells}] = [const {{ ::std::sync::atomic::AtomicPtr::new(::std::ptr::null_mut()) }}; {cells}];\n"
         ));
-        // The game crate arms the crates below it too: it is where the points are sealed.
-        let below: Vec<String> = crates
-            .iter()
-            .filter(|other| !krate.marked_only && other.marked_only)
-            .map(|other| format!("::{}::__fnr_arm", other.name))
-            .collect();
-        let calls: String = armers
-            .iter()
-            .chain(&below)
-            .map(|path| format!(" {path}();"))
-            .collect();
-        root_text.push_str(&format!(
-            "/// Installs the dispatcher of each injection point of this crate that a mod listens at as its function's entry: called once, after the points are sealed.\n#[doc(hidden)]\npub fn __fnr_arm() {{{calls} }}\n"
-        ));
         texts.insert(&krate.lib, root_text);
         for (path, text) in texts {
             fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1150,12 +1106,6 @@ pub fn stage(root: &Path) -> Result<Staged, String> {
             "{origin}: {path}: no free function or inherent method every build compiles that can be replaced"
         ));
     }
-    let below: Vec<&Path> = crates
-        .iter()
-        .filter(|krate| krate.marked_only)
-        .map(|krate| krate.package.as_path())
-        .collect();
-    arm_dependencies(root, &game, &below)?;
     Ok(staged)
 }
 
@@ -1209,130 +1159,14 @@ fn built_on(package: &Path, game: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-/// `lock` with `added` in the dependency list of the package `name`, kept in the lock file's
-/// sorted order; none when the lock file has no entry for it.
-fn locked_with(lock: &str, name: &str, added: &[&str]) -> Option<String> {
-    let header = format!("[[package]]\nname = \"{name}\"\n");
-    let start = lock.find(&header)?;
-    let end = lock[start + header.len()..]
-        .find("\n\n")
-        .map_or(lock.len(), |at| start + header.len() + at);
-    let entry = &lock[start..end];
-    let mut lines: Vec<String> = entry.lines().map(str::to_owned).collect();
-    let mut dependencies: Vec<String> = Vec::new();
-    let open = lines.iter().position(|line| line == "dependencies = [");
-    if let Some(open) = open {
-        let close = open + lines[open..].iter().position(|line| line == "]")?;
-        dependencies = lines.drain(open + 1..close).collect();
-    }
-    for name in added {
-        let quoted = format!(" \"{name}\",");
-        if !dependencies.contains(&quoted) {
-            dependencies.push(quoted);
-        }
-    }
-    dependencies.sort();
-    let open = match open {
-        Some(open) => open,
-        None => {
-            // `dependencies` follows `version` and `source`, before `checksum`.
-            let at = lines
-                .iter()
-                .position(|line| line.starts_with("checksum"))
-                .unwrap_or(lines.len());
-            lines.insert(at, "dependencies = [".to_owned());
-            lines.insert(at + 1, "]".to_owned());
-            at
-        }
-    };
-    for (offset, dependency) in dependencies.into_iter().enumerate() {
-        lines.insert(open + 1 + offset, dependency);
-    }
-    Some(format!(
-        "{}{}{}",
-        &lock[..start],
-        lines.join("\n"),
-        &lock[end..]
-    ))
-}
-
-/// Give the staged game crate a path dependency on each crate it arms, in its manifest and its
-/// lock entry: its source manifest needn't name a crate it reaches only through slots.
-fn arm_dependencies(root: &Path, game: &Path, armed: &[&Path]) -> Result<(), String> {
-    if armed.is_empty() {
-        return Ok(());
-    }
-    let mut cargo = manifest(game)?;
-    let game_name = cargo
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(toml::Value::as_str)
-        .ok_or_else(|| format!("{}: no package name", game.display()))?
-        .to_owned();
-    let dependencies = cargo
-        .entry("dependencies")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .ok_or("[dependencies] is not a table")?;
-    let mut added = Vec::new();
-    for package in armed {
-        let name = manifest(package)?
-            .get("package")
-            .and_then(|package| package.get("name"))
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| format!("{}: no package name", package.display()))?
-            .to_owned();
-        // Kept under whatever name the game crate already gives it.
-        let present = dependencies.iter().any(|(key, dependency)| {
-            *key == name
-                || dependency.get("package").and_then(toml::Value::as_str) == Some(name.as_str())
-        });
-        if present {
-            continue;
-        }
-        let folder = package
-            .file_name()
-            .ok_or_else(|| format!("{}: no folder name", package.display()))?
-            .to_string_lossy()
-            .into_owned();
-        dependencies.insert(
-            name.clone(),
-            toml::Value::Table(toml::Table::from_iter([(
-                "path".to_owned(),
-                format!("../{folder}").into(),
-            )])),
-        );
-        added.push(name);
-    }
-    if added.is_empty() {
-        return Ok(());
-    }
-    let lock_path = root.join("Cargo.lock");
-    // A Windows checkout has CRLF line endings; Cargo reads either, and the entries match on LF.
-    let lock = fs::read_to_string(&lock_path)
-        .map_err(|e| format!("{}: {e}", lock_path.display()))?
-        .replace("\r\n", "\n");
-    let added: Vec<&str> = added.iter().map(String::as_str).collect();
-    let lock = locked_with(&lock, &game_name, &added)
-        .ok_or_else(|| format!("Cargo.lock has no entry for {game_name}"))?;
-    let path = game.join("Cargo.toml");
-    fs::write(&path, toml::to_string(&cargo).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    fs::write(&lock_path, lock).map_err(|e| format!("{}: {e}", lock_path.display()))
-}
-
 /// `text` with the head check, reader and installer of each of `found`, numbering their cells
-/// from `cells`, with each `replaced!(f)` of a function it stages answered from `f`'s entry, and
-/// with `arm_points!()` calling the crate's `__fnr_arm`. A function that is an injection point
-/// gets its cell number in its `#[point]` instead of a head check, and its armer's path joins
-/// `armers`.
+/// from `cells`, and with each `replaced!(f)` of a function it stages answered from `f`'s entry.
 /// None when the file has nothing to stage.
 fn rewrite(
     path: &Path,
     text: &str,
     found: &[Found<'_>],
     cells: &mut usize,
-    armers: &mut Vec<String>,
 ) -> Result<Option<String>, String> {
     if found.is_empty() {
         return Ok(None);
@@ -1346,11 +1180,8 @@ fn rewrite(
     let mut names = BTreeSet::new();
     let mut free = BTreeMap::new();
     for function in found {
-        // A point's function has two cells: its entry, which its head loads, and behind it the
-        // copy its dispatcher runs in place of the body.
-        let point = function.point();
         let slot = *cells;
-        *cells += if point.is_some() { 2 } else { 1 };
+        *cells += 1;
         let name = source::unraw(&function.sig.ident);
         let installer = installer(function.trait_name, &function.sig.ident);
         let reader = quote::format_ident!("__fnr_read_slot_{slot}");
@@ -1372,14 +1203,7 @@ fn rewrite(
         // is taken by a plain name first, and bound as written after the check.
         let mut arguments = Vec::new();
         let mut rebind = String::new();
-        // A point's own expansion names the parameters and writes the head check.
-        let plain_inputs = function
-            .sig
-            .inputs
-            .iter()
-            .enumerate()
-            .filter(|_| point.is_none());
-        for (index, input) in plain_inputs {
+        for (index, input) in function.sig.inputs.iter().enumerate() {
             match input {
                 FnArg::Receiver(_) => arguments.push("self".to_owned()),
                 FnArg::Typed(typed) => match &*typed.pat {
@@ -1404,25 +1228,17 @@ fn rewrite(
         } else {
             format!("{reader}()")
         };
-        match point {
-            Some(list) => {
-                let open = at(list.delimiter.span().open().end());
-                edits.push((open, open, format!("slot = {slot}, ")));
-            }
-            None => {
-                // A parameter of an uninhabited type (`Infallible`) makes the call unreachable,
-                // which the SDK build's `-D warnings` refuses.
-                let open = at(function.body.brace_token.span.open().end());
-                edits.push((
-                    open,
-                    open,
-                    format!(
-                        " if let ::std::option::Option::Some(__fnr) = {call} {{ #[allow(unreachable_code)] return __fnr({}); }}{rebind}",
-                        arguments.join(", ")
-                    ),
-                ));
-            }
-        }
+        // A parameter of an uninhabited type (`Infallible`) makes the call unreachable, which the
+        // SDK build's `-D warnings` refuses.
+        let open = at(function.body.brace_token.span.open().end());
+        edits.push((
+            open,
+            open,
+            format!(
+                " if let ::std::option::Option::Some(__fnr) = {call} {{ #[allow(unreachable_code)] return __fnr({}); }}{rebind}",
+                arguments.join(", ")
+            ),
+        ));
         let ty = match function.owner.and_then(|block| block.trait_.as_ref()) {
             Some((_, path, _)) if function.trait_name.is_some() => {
                 pointer_type(&qualified(function.sig, path))
@@ -1439,8 +1255,7 @@ fn rewrite(
                     if installed.is_null() {
                         ::std::option::Option::None
                     } else {
-                        // SAFETY: only this function's installer and its point's dispatcher, both
-                        // of this type, are stored here.
+                        // SAFETY: only this function's installer, of this type, stores here.
                         ::std::option::Option::Some(unsafe { ::std::mem::transmute::<*mut (), #ty>(installed) })
                     }
                 }
@@ -1459,58 +1274,16 @@ fn rewrite(
             }
         };
         let entry = read(&reader, slot);
-        let items = if point.is_some() {
-            // The copy goes behind the entry, where the point's dispatcher finds it, and into
-            // the entry itself unless the dispatcher is there already.
-            let body = slot + 1;
-            let body_reader = quote::format_ident!("__fnr_read_body_{slot}");
-            let (behind, body_read, direct) =
-                (install(body), read(&body_reader, body), install(slot));
-            quote! {
-                #entry
-                #body_read
-                #[doc(hidden)]
-                #[inline]
-                #[allow(dead_code, non_snake_case, clippy::all)]
-                pub fn #installer(replacement: #ty) -> bool {
-                    let installed = #behind;
-                    if installed {
-                        let _ = #direct;
-                    }
-                    installed
-                }
-            }
-        } else {
-            let direct = install(slot);
-            quote! {
-                #entry
-                #[doc(hidden)]
-                #[inline]
-                #[allow(dead_code, non_snake_case, clippy::all)]
-                pub fn #installer(replacement: #ty) -> bool {
-                    #direct
-                }
+        let direct = install(slot);
+        let items = quote! {
+            #entry
+            #[doc(hidden)]
+            #[inline]
+            #[allow(dead_code, non_snake_case, clippy::all)]
+            pub fn #installer(replacement: #ty) -> bool {
+                #direct
             }
         };
-        if point.is_some() {
-            let armer = quote::format_ident!("__pointa_{name}");
-            let arm = quote::format_ident!("__fnr_arm_{slot}");
-            let call = match function.owner {
-                Some(block) => {
-                    let (generics, _, clause) = block.generics.split_for_impl();
-                    let ty = &block.self_ty;
-                    quote!(#[allow(clippy::all)] pub(crate) fn #arm #generics () #clause { <#ty>::#armer() })
-                }
-                None => quote!(#[allow(clippy::all)] pub(crate) fn #arm() { #armer() }),
-            };
-            let end = at(function.end);
-            edits.push((end, end, format!(" {call}")));
-            let module = function
-                .module
-                .split_once("::")
-                .map_or(String::new(), |(_, rest)| format!("{rest}::"));
-            armers.push(format!("crate::{module}{arm}"));
-        }
         let items = match function.owner {
             Some(block) => {
                 let (generics, _, clause) = block.generics.split_for_impl();
@@ -1528,10 +1301,7 @@ fn rewrite(
     for item in parsed.items {
         if let Item::Macro(item) = item
             && item.mac.path.is_ident("macro_rules")
-            && item
-                .ident
-                .as_ref()
-                .is_some_and(|name| name == "replaced" || name == "arm_points")
+            && item.ident.as_ref().is_some_and(|name| name == "replaced")
         {
             let span = syn::spanned::Spanned::span(&item);
             let (start, end) = (at(span.start()), at(span.end()));
@@ -1558,13 +1328,6 @@ fn rewrite(
             ));
         };
         edits.push((start, close + 1, format!("{reader}().is_some()")));
-    }
-    if let Some(start) = text.find("arm_points!()") {
-        edits.push((
-            start,
-            start + "arm_points!()".len(),
-            "crate::__fnr_arm()".into(),
-        ));
     }
     // At one offset, a replacement of a range before an insertion there, each in pushed order.
     edits.sort_by_key(|(start, end, _)| (*start, *end == *start));
@@ -1612,15 +1375,9 @@ mod tests {
             &mut found,
         );
         let mut count = 0;
-        rewrite(
-            Path::new("k.rs"),
-            source,
-            &found,
-            &mut count,
-            &mut Vec::new(),
-        )
-        .unwrap()
-        .unwrap_or_else(|| source.to_owned())
+        rewrite(Path::new("k.rs"), source, &found, &mut count)
+            .unwrap()
+            .unwrap_or_else(|| source.to_owned())
     }
 
     fn eligible_fn(source: &str) -> bool {
@@ -1744,15 +1501,9 @@ mod tests {
             &mut found,
         );
         let mut count = 0;
-        let mut out = rewrite(
-            Path::new("k.rs"),
-            source,
-            &found,
-            &mut count,
-            &mut Vec::new(),
-        )
-        .unwrap()
-        .unwrap();
+        let mut out = rewrite(Path::new("k.rs"), source, &found, &mut count)
+            .unwrap()
+            .unwrap();
         assert_eq!(count, 1);
         out.push_str(" pub static __REPLACE: [std::sync::atomic::AtomicPtr<()>; 1] = [std::sync::atomic::AtomicPtr::new(std::ptr::null_mut())];");
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1818,15 +1569,9 @@ mod tests {
             &mut found,
         );
         let mut count = 7;
-        let out = rewrite(
-            Path::new("k.rs"),
-            source,
-            &found,
-            &mut count,
-            &mut Vec::new(),
-        )
-        .unwrap()
-        .unwrap();
+        let out = rewrite(Path::new("k.rs"), source, &found, &mut count)
+            .unwrap()
+            .unwrap();
         assert_eq!(count, 9);
         assert!(!out.contains("macro_rules!"));
         assert_eq!(source.lines().count(), out.lines().count());
@@ -1851,8 +1596,7 @@ mod tests {
             &OwnerTypes::default(),
             &mut found,
         );
-        let error =
-            rewrite(Path::new("k.rs"), source, &found, &mut 0, &mut Vec::new()).unwrap_err();
+        let error = rewrite(Path::new("k.rs"), source, &found, &mut 0).unwrap_err();
         assert!(error.contains("replaced!(elsewhere)"), "{error}");
     }
 
@@ -1889,7 +1633,7 @@ mod tests {
         );
         let mut found = Vec::new();
         functions("k", &file.items, &traits, &types, &mut found);
-        let out = rewrite(Path::new("k.rs"), source, &found, &mut 0, &mut Vec::new())
+        let out = rewrite(Path::new("k.rs"), source, &found, &mut 0)
             .unwrap()
             .unwrap();
         assert!(
@@ -2194,21 +1938,6 @@ mod tests {
         );
         assert!(low.contains("pub static __REPLACE: [::std::sync::atomic::AtomicPtr<()>; 1]"));
         syn::parse_file(&low).unwrap();
-        // The game crate arms the marked crate, so the staged copy depends on it.
-        assert!(lib.contains("::horizon_low::__fnr_arm();"), "{lib}");
-        let client: toml::Table = toml::from_str(
-            &fs::read_to_string(root.path().join("crates/horizon-client/Cargo.toml")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            client["dependencies"]["horizon-low"]["path"].as_str(),
-            Some("../horizon-low")
-        );
-        let lock = fs::read_to_string(root.path().join("Cargo.lock")).unwrap();
-        assert!(
-            lock.contains("name = \"horizon-client\"\nversion = \"0.1.0\"\ndependencies = [\n \"horizon-low\",\n]"),
-            "{lock}"
-        );
 
         write(
             "crates/horizon-low/src/lib.rs",

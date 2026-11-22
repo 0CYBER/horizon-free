@@ -9,7 +9,6 @@ description = "Horizon's mod files: content mods, modpacks and the registry inde
 [dependencies]
 horizon-mod-vocab = { path = "../horizon-mod-vocab" }
 horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
-horizon-mod-point-shape = { path = "../horizon-mod-point-shape" }
 horizon-core = { path = "../horizon-core" }
 # The uses table's file name and limit (`USES`, `MAX_USES`).
 horizon-mod-surface = { path = "../horizon-mod-surface" }

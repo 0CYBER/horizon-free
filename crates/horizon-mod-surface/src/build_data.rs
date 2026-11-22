@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 /// The build-data schema this source writes and reads. A new field does not bump it; a removed
 /// or redefined one does.
 pub const SCHEMA: u32 = 1;
-/// The injection points and the `Wire` types their records may hold.
+/// An empty point list (`{"points": []}`) since the injection points were removed (#19576).
+/// Launchers released before then read it; drop it once the oldest supported launcher does not.
 pub const POINTS: &str = "points.json";
 /// The staged internals' signatures.
 pub const INTERNALS: &str = "internals.json";

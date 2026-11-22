@@ -318,7 +318,7 @@ fn main() {
     let Some(commit) = commit.to_str() else {
         usage()
     };
-    let build = point_shape::build_data::Build {
+    let build = mod_surface::build_data::Build {
         commit: commit.to_owned(),
     };
     match staging::stage(root, list, internals, mode, &build) {

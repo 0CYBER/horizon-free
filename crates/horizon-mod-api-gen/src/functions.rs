@@ -15,7 +15,7 @@ use syn::spanned::Spanned;
 use syn::{ImplItem, Item};
 
 /// The index's file name in the build data.
-pub const FILE: &str = point_shape::build_data::FUNCTIONS;
+pub const FILE: &str = mod_surface::build_data::FUNCTIONS;
 
 /// The function index of one game build.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

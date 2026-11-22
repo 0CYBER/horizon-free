@@ -13,7 +13,6 @@ mixed-output-fixture = []
 
 [dependencies]
 horizon-game-discovery = { path = "../horizon-game-discovery" }
-horizon-mod-point-shape = { path = "../horizon-mod-point-shape" }
 horizon-mod-surface = { path = "../horizon-mod-surface" }
 horizon-mod-source = { path = "../horizon-mod-source" }
 heck = "0.5"

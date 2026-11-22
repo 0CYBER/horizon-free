@@ -392,12 +392,7 @@ fn bits_struct(tokens: &proc_macro2::TokenStream, name: &str) -> Option<syn::Ite
 }
 
 /// Crates whose types are the mod API's own: the staging pass never widens them.
-const API_CRATES: &[&str] = &[
-    "mod_api",
-    "mod_points",
-    "point_shape",
-    "horizon_engine_slots",
-];
+const API_CRATES: &[&str] = &["mod_api", "mod_points", "horizon_engine_slots"];
 
 /// The game's crate: its paths are spelled from `crate`.
 const GAME: &str = "horizon_client";

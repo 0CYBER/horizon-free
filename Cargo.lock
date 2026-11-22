@@ -2275,7 +2275,6 @@ version = "0.1.0"
 dependencies = [
  "heck",
  "horizon-game-discovery",
- "horizon-mod-point-shape",
  "horizon-mod-source",
  "horizon-mod-surface",
  "prettyplease",
@@ -2307,7 +2306,6 @@ dependencies = [
 name = "horizon-mod-api-macros"
 version = "0.1.0"
 dependencies = [
- "horizon-mod-point-shape",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -2371,7 +2369,6 @@ dependencies = [
  "horizon-core",
  "horizon-mod-api",
  "horizon-mod-api-macros",
- "horizon-mod-point-shape",
  "horizon-mod-surface",
  "horizon-mod-vocab",
  "horizon-shader-api",
@@ -2395,17 +2392,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "xz4rust",
  "zip",
-]
-
-[[package]]
-name = "horizon-mod-point-shape"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -2622,7 +2608,6 @@ dependencies = [
  "horizon-java-properties",
  "horizon-mod-api-gen",
  "horizon-mod-package",
- "horizon-mod-point-shape",
  "horizon-perf-format",
  "horizon-prepare",
  "horizon-protocol",

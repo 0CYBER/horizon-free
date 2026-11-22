@@ -9,7 +9,6 @@ publish = false
 proc-macro = true
 
 [dependencies]
-horizon-mod-point-shape = { path = "../horizon-mod-point-shape" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "visit", "visit-mut"] }

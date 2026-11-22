@@ -95,7 +95,7 @@ LOOPS = "loops.json"
 # launcher's patch step reads it instead of walking the game's source. Only the engine route patches functions, so it
 # is in the `engine` slice, not with the rest of the build data in `api`.
 FUNCTIONS = "functions.json"
-# The SDK's build data (`point_shape::build_data`): each file opens with `schema` and `build.commit`.
+# The SDK's build data (`mod_surface::build_data`): each file opens with `schema` and `build.commit`.
 BUILD_DATA = (FUNCTIONS, INTERNALS, LOOPS, POINTS)
 # The build data the API route reads, in the `api` slice.
 API_BUILD_DATA = (INTERNALS, LOOPS, POINTS)
