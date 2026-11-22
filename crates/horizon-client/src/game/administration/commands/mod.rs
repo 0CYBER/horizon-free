@@ -577,8 +577,16 @@ impl Game<'_> {
             Target::Mob(id) => self.mob_command_name(id),
             other => {
                 // Entity.getDisplayName: the CustomName component, else the type.
+                // An ominous item spawner keeps its compound in its own `raw`.
                 let custom = super::native_entities::target_id(other)
-                    .and_then(|id| self.persist_raw(id))
+                    .and_then(|id| {
+                        self.persist_raw(id).or_else(|| {
+                            self.ominous_spawners
+                                .iter()
+                                .find(|s| s.id == id)
+                                .and_then(|s| s.raw.as_deref())
+                        })
+                    })
                     .and_then(|r| r.get("CustomName"));
                 if let Some(c) = custom {
                     return horizon_client::scoreboard::comp_text(

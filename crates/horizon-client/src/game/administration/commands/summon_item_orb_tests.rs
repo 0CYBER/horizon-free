@@ -3,7 +3,9 @@
 //! the orb is never unstuck, and an empty item is discarded while loading
 //! (`ItemEntity.readAdditionalSaveData`) yet the command still succeeds.
 use super::super::{Audio, Game, Options, Progress, Settings, execution_role, load_resources};
+use super::Target;
 use horizon_client::chunk::Chunk;
+use horizon_client::text::Text;
 use horizon_core::geometry::Vec3;
 use std::sync::Arc;
 
@@ -50,7 +52,7 @@ fn with_game(test: impl FnOnce(&mut Game<'_>)) {
 /// `readAdditionalSaveData` discards such an entity, so `addEntity` adds
 /// nothing; `tryAddFreshEntityWithPassengers` still answers true, so both
 /// summon forms report success. The entity id is taken all the same, and the
-/// name is `ItemStack.EMPTY.getItemName()`: an empty component.
+/// name is the air item's: `ItemStack.EMPTY.getItemName()` is "Air".
 #[test]
 #[ignore = "daily"]
 fn summon_item_succeeds_with_and_without_nbt_without_leaving_an_entity() {
@@ -71,7 +73,7 @@ fn summon_item_succeeds_with_and_without_nbt_without_leaving_an_entity() {
                 game.ui.chat.recent_components(1),
                 vec![serde_json::json!({
                     "translate": "commands.summon.success",
-                    "with": [{ "text": "" }],
+                    "with": [{ "translate": "block.minecraft.air" }],
                 })],
                 "{command}"
             );
@@ -99,5 +101,23 @@ fn a_summoned_orb_keeps_the_position_it_was_asked_for() {
         assert_eq!(orb.velocity, Vec3::ZERO);
         assert_eq!(orb.points(), 0);
         assert_eq!(orb.count, 1);
+    });
+}
+
+/// `Entity.getDisplayName` of an ominous item spawner: its CustomName from the
+/// compound it keeps (`OminousItemSpawner.raw`), else the entity type's name.
+#[test]
+#[ignore = "daily"]
+fn an_ominous_item_spawner_is_named_by_its_custom_name() {
+    with_game(|game| {
+        assert!(
+            game.run_command(
+                r#"summon minecraft:ominous_item_spawner 4.5 200 4.5 {CustomName:"sw"}"#
+            ),
+            "{:?}",
+            game.ui.chat.recent_lines(3)
+        );
+        let id = game.ominous_spawners.last().expect("a spawner").id;
+        assert_eq!(game.target_name(Target::Spawner(id)), Text::literal("sw"));
     });
 }

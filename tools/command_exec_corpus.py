@@ -30,6 +30,18 @@ def setup(*commands):
     return [cmd(c, False) for c in commands]
 
 
+# Feedback names: an item summoned with no item reads as air; a named ominous
+# item spawner is called by its CustomName.
+SUMMON_NAME_CASES = [
+    cmd('/summon minecraft:item 4.5 210 4.5'),
+    cmd('/summon minecraft:item 4.5 210 4.5 {}'),
+    cmd('/kill @e[type=minecraft:item]'),
+    cmd('/summon minecraft:ominous_item_spawner 4.5 210 8.5 {CustomName:"sw",Tags:["n"]}'),
+    cmd('/tp @e[type=minecraft:ominous_item_spawner,tag=n] 4.5 215 8.5'),
+    cmd('/kill @e[type=minecraft:ominous_item_spawner,tag=n]'),
+]
+
+
 def weather_predicate_cases():
     return [('any', None, None), ('rain', True, None), ('dry', False, None),
             ('thunder', None, True), ('quiet', None, False),
@@ -761,6 +773,7 @@ def entities():
         cmd('/summon minecraft:ominous_item_spawner 4.5 210 8.5'),
         cmd('/data get entity @e[type=minecraft:ominous_item_spawner,limit=1] item'),
         cmd('/kill @e[type=minecraft:ominous_item_spawner]'),
+        *SUMMON_NAME_CASES,
         cmd('/summon minecraft:ominous_item_spawner 4.5 210 8.5 {spawn_item_after_ticks:5L}'),
         {'op': 'tick', 'n': 10},
         cmd('/execute if entity @e[type=minecraft:ominous_item_spawner]'),

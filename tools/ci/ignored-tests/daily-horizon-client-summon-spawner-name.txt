@@ -1,0 +1,1 @@
+horizon-client game::commands::summon_item_orb_tests::an_ominous_item_spawner_is_named_by_its_custom_name lib daily resources

@@ -1366,7 +1366,9 @@ impl Game<'_> {
             }
             "attribute.modifier.add" => {
                 // LivingEntity.collectEquipmentChanges: the gear's modifiers are in the map too.
-                let taken_by_gear = worn.as_ref().is_some_and(|w| w.has_modifier(key, modifier_id));
+                let taken_by_gear = worn
+                    .as_ref()
+                    .is_some_and(|w| w.has_modifier(key, modifier_id));
                 let write =
                     AttributeWrite::add(modifier_id, value_arg, operation_named(op), true, false)
                         .ok_or_else(no_attribute)?;

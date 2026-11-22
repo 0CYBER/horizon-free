@@ -166,7 +166,11 @@ fn with_owner_game(test: impl FnOnce(&mut Game<'_>)) {
 fn run(
     game: &mut Game<'_>,
     command: &str,
-) -> (bool, Vec<String>, Vec<(ParticleOptions, [f64; 3], [f64; 3])>) {
+) -> (
+    bool,
+    Vec<String>,
+    Vec<(ParticleOptions, [f64; 3], [f64; 3])>,
+) {
     game.particles.created_requests = Some(Vec::new());
     game.chat_capture = Some(Vec::new());
     let ok = game.run_command(command);
