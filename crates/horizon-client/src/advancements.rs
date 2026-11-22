@@ -568,15 +568,27 @@ pub fn date_millis(text: &str) -> Option<i64> {
     let zone = zone.trim_start_matches(['+', '-']);
     let offset =
         zone.get(0..2)?.parse::<i64>().ok()? * 3600 + zone.get(2..4)?.parse::<i64>().ok()? * 60;
-    // Days from civil (Howard Hinnant's algorithm).
-    let y = if m <= 2 { y - 1 } else { y };
+    // Days from civil (Howard Hinnant's algorithm), checked: a text outside the range of a date is `None`.
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let y = if m <= 2 { y.checked_sub(1)? } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
     let mp = (m + 9) % 12;
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some((days * 86400 + h * 3600 + min * 60 + sec - sign * offset) * 1000)
+    let days = era
+        .checked_mul(146_097)?
+        .checked_add(doe)?
+        .checked_sub(719_468)?;
+    let secs = days
+        .checked_mul(86400)?
+        .checked_add(h.checked_mul(3600)?)?
+        .checked_add(min.checked_mul(60)?)?
+        .checked_add(sec)?
+        .checked_sub(sign * offset)?;
+    secs.checked_mul(1000)
 }
 
 /// The player's progress: advancement -> criterion -> obtained date.
@@ -3597,6 +3609,18 @@ mod tests {
             date_millis("2026-10-17 05:30:00 +0000")
         );
         assert_eq!(date_millis("not a date"), None);
+    }
+    #[test]
+    fn a_date_outside_the_range_is_not_a_date() {
+        // the year would overflow the arithmetic; a month or day that does not exist is no date either
+        assert_eq!(date_millis("999999999999999 01-01 10:00:00 +0000"), None);
+        assert_eq!(
+            date_millis("9223372036854775807-05-05 10:00:00 +0000"),
+            None
+        );
+        assert_eq!(date_millis("2026-13-01 10:00:00 +0000"), None);
+        assert_eq!(date_millis("2026-05-00 10:00:00 +0000"), None);
+        assert_eq!(date_millis(""), None);
     }
     #[test]
     fn simulate_progression_advancements() {

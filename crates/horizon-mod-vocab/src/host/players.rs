@@ -549,6 +549,12 @@ pub trait PlayersBackend {
     fn player_sees(&self, viewer: PlayerRef, target: PlayerRef)
     -> Result<bool, PlayerWorldRefusal>;
     /// Side: server.
+    /// The player's advancement progress as `PlayerAdvancements.save` writes their
+    /// `advancements/<uuid>.json` now: JSON text, each started advancement's `criteria`
+    /// (criterion to the date it was granted, `yyyy-MM-dd HH:mm:ss Z`) and `done`, and
+    /// `DataVersion`. None for a stale or unavailable player and on a client.
+    #[access(WorldOnly)]
+    fn player_advancements(&self, player: PlayerRef) -> Option<String>;
     /// All of the player's statistics as `ServerStatsCounter.toJson` writes their
     /// `stats/<uuid>.json`: `{"stats":{"minecraft:mined":{"minecraft:stone":3},...},
     /// "DataVersion":n}`, types and keys namespaced, empty types left out. None for a stale
@@ -1351,6 +1357,16 @@ pub trait PlayersBackendMut {
         player: PlayerRef,
         data: Compound,
     ) -> Result<(), PlayerDataRefusal>;
+    /// Side: server.
+    /// Replaces a server player's advancement progress with `json` (the text
+    /// `player_advancements` gives, or another server's file), as `PlayerAdvancements.reload`
+    /// then `applyFrom` load a file: advancements this server lacks are dropped, nothing is
+    /// awarded (no toast, chat line or reward), and the player's client is sent the whole
+    /// tree again with the next update. False, with nothing changed, for text that is not a
+    /// JSON object, a stale, unavailable or dead player, a player with no connection, and on
+    /// a client.
+    #[access(WorldOnly)]
+    fn player_set_advancements(&mut self, player: PlayerRef, json: &str) -> bool;
     /// Side: server.
     /// Sets property `name` of the player's game profile (`textures` for
     /// a skin: Mojang's base64 value and its signature, which the client
