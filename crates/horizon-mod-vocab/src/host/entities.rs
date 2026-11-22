@@ -177,9 +177,10 @@ pub trait EntitiesBackend {
     /// for the kinds that don't turn. API 373.
     #[access(WorldOnly)]
     fn entity_rotation(&self, entity: EntityRef) -> Option<[f32; 2]>;
-    /// Side: server.
+    /// Side: both.
     /// The entity's resolved type key (`Entity.getType`). Compare keys directly;
-    /// request `key.id(host)` explicitly when its canonical name is needed. API 373.
+    /// request `key.id(host)` explicitly when its canonical name is needed.
+    /// On the client, reads the local player or a tracked entity's type. API 373.
     #[access(WorldOnly)]
     fn entity_kind(&self, entity: EntityRef) -> Option<EntityTypeKey>;
     /// Side: server.
@@ -357,10 +358,13 @@ pub trait EntitiesBackend {
     /// shulker bullet set it in their constructors and never clear it.
     #[access(WorldOnly)]
     fn entity_no_physics(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// What the entity rides (`Entity.getVehicle`): `None` when it rides
     /// nothing, its actual vehicle is retained off-level and has no resident handle,
-    /// or the supplied handle is stale. `is_passenger` still reports the relationship.
+    /// or the supplied handle is stale. On a client, reads the server's latest
+    /// passenger relationships (or the local player's ride), and returns `None`
+    /// when the vehicle is not tracked in the current client level.
+    /// `is_passenger` remains server-only.
     #[access(WorldOnly)]
     fn entity_vehicle(&self, entity: EntityRef) -> Option<EntityRef>;
     /// Side: server.

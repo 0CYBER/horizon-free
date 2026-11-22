@@ -190,6 +190,34 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     assert_eq!(game.entity_uuid(display), Some(5));
     assert_eq!(game.entity(99), None);
 
+    // Client mods can read the actual vehicle and type, including the local
+    // player's predicted ride and the other passengers the server reports.
+    game.handle_packet(add(22, 22, "minecraft:oak_boat", [3.5, 64.0, 3.5]))
+        .unwrap();
+    let boat = game.entity(22).expect("the boat is tracked");
+    assert_eq!(
+        game.entity_kind(boat).map(|kind| kind.id(&game)).as_deref(),
+        Some("minecraft:oak_boat")
+    );
+    assert_eq!(game.entity_vehicle(me), None);
+    assert_eq!(game.entity_vehicle(stand), None);
+    game.remote_set_passengers(22, &[7, 20]);
+    assert_eq!(game.entity_vehicle(me), Some(boat));
+    assert_eq!(game.entity_vehicle(stand), Some(boat));
+    // The client's own vehicle motion, pose and speed are already exposed
+    // through the generic entity reads, without a boat-specific API.
+    assert!(game.entity_position(boat).is_some());
+    assert!(game.entity_rotation(boat).is_some());
+    assert!(game.entity_velocity(boat).is_some());
+
+    game.remote_set_passengers(22, &[]);
+    assert_eq!(game.entity_vehicle(me), None);
+    assert_eq!(game.entity_vehicle(stand), None);
+    // A retained relationship cannot resolve a vehicle the client lacks.
+    game.remote.as_mut().unwrap().passenger_vehicles.insert(20, 999);
+    assert_eq!(game.entity_vehicle(stand), None);
+    game.remote.as_mut().unwrap().passenger_vehicles.remove(&20);
+
     // Before the chest opens, the player's inventory menu is current.
     let player = game.local_player().unwrap();
     let inventory = game.player_container_menu(player).unwrap();
@@ -285,6 +313,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     .unwrap();
     assert_eq!(game.entity_position(stand), None);
     assert_eq!(game.entity_kind(display), None);
+    assert_eq!(game.entity_vehicle(me), None);
 }
 
 /// #8589: the server sends entity event 42 (the raid sweat) for a villager;

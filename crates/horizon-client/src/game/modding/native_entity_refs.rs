@@ -86,7 +86,7 @@ fn entity_ray_hits(
 
 impl Game<'_> {
     /// An entity tracked by the remote client but absent from local entity lists.
-    fn native_client_tracked(&self, entity: EntityRef) -> Option<(&str, [f64; 3])> {
+    pub(super) fn native_client_tracked(&self, entity: EntityRef) -> Option<(&str, [f64; 3])> {
         let remote = self.remote.as_ref()?;
         if !remote.logged_in || self.native_lifecycle.epoch() != Some(entity.epoch()) {
             return None;

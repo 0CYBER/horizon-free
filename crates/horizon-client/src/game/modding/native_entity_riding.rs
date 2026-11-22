@@ -83,7 +83,24 @@ impl Game<'_> {
     }
     /// What the entity rides (`Entity.getVehicle`): `None` when it rides
     /// nothing, its actual vehicle is off-level, or the input handle is stale.
+    /// Client-side reads use passenger packets and the local player's predicted ride.
     pub(super) fn entity_vehicle(&self, entity: EntityRef) -> Option<EntityRef> {
+        if !self.is_logical_server() {
+            // A remembered passenger relationship must not resurrect an entity
+            // that left this client level, or an old level's entity handle.
+            if self.native_client_entity_target(entity).is_none()
+                && self.native_client_tracked(entity).is_none()
+            {
+                return None;
+            }
+            let remote = self.remote.as_ref().filter(|remote| remote.logged_in)?;
+            let vehicle_id = if i32::try_from(entity.id()).ok()? == remote.entity_id {
+                self.riding
+            } else {
+                remote.passenger_vehicles.get(&entity.id()).copied()
+            }?;
+            return self.entity(vehicle_id);
+        }
         self.native_vehicle(entity).flatten()
     }
     /// Whether the entity rides another object, including a retained off-level vehicle.
