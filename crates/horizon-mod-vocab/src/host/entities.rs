@@ -605,6 +605,20 @@ pub trait EntitiesBackendMut {
     #[access(WorldOnly)]
     fn entity_merge_nbt(&mut self, entity: EntityRef, nbt: Compound) -> bool;
     /// Side: server.
+    /// Keeps the entity out of the level's saves (`saved` false) or puts it
+    /// back in (true, what every entity starts as): the autosave and the save
+    /// of its chunk's unload write the level without it, so it is gone at the
+    /// next start, and a chunk that unloads takes it away unwritten. For an
+    /// entity a mod owns and removes itself (a display that follows another
+    /// entity, a floating number): call it right after `summon`, so a crash
+    /// or an unload before the mod's own cleanup leaves nothing behind.
+    /// Whatever rides it is saved under it, so goes unsaved with it; an
+    /// entity that rides another is saved with its vehicle, so keep the
+    /// vehicle out. The entity gets the UUID the save will find it by. False
+    /// for a player and a stale handle.
+    #[access(WorldOnly)]
+    fn entity_set_saved(&mut self, entity: EntityRef, saved: bool) -> bool;
+    /// Side: server.
     /// Adds tag `tag` (`Entity.addTag`): false when it has it already, holds
     /// 1024, its kind cannot store tags, or the handle is stale. API 386.
     #[access(WorldOnly)]

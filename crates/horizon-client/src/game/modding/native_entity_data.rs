@@ -52,6 +52,38 @@ impl Game<'_> {
         let merged = horizon_client::data_cmd::merged(&old, &nbt);
         merged != old && self.apply_entity_nbt(t, merged).is_ok()
     }
+    /// Keeps the entity out of the level's saves (`saved` false) or puts it
+    /// back in (true, what every entity starts as): the autosave and the save
+    /// of its chunk's unload write the level without it, so it is gone at the
+    /// next start. For an entity a mod owns and removes itself (a display that
+    /// follows another entity, a floating number): call it right after
+    /// `summon`, so a crash or an unload before the mod's own cleanup leaves
+    /// nothing behind. Whatever rides it is saved under it, so goes unsaved
+    /// with it; an entity that rides another is saved with its vehicle, so
+    /// keep the vehicle out. False for a player, a stale handle and on a
+    /// client.
+    pub(super) fn entity_set_saved(&mut self, entity: EntityRef, saved: bool) -> bool {
+        if !self.is_logical_server() {
+            return false;
+        }
+        let Some(t) = self.native_entity_target(entity) else {
+            return false;
+        };
+        if matches!(t, Target::Player | Target::Guest(_)) {
+            return false;
+        }
+        let Some(id) = super::native_entities::target_id(t) else {
+            return false;
+        };
+        if saved {
+            self.persist.unsaved.remove(&id);
+        } else {
+            // The save finds the entity by the UUID it writes: fix one.
+            self.uuid_for(id);
+            self.persist.unsaved.insert(id);
+        }
+        true
+    }
     /// The entity's tags (`Entity.getTags`), as `/tag <entity> list` shows
     /// them. API 386.
     pub(super) fn entity_tags(&self, entity: EntityRef) -> Option<Vec<String>> {

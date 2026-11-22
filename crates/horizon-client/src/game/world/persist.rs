@@ -215,6 +215,9 @@ pub struct EntityMemory {
     /// spawner, a shulker bullet): the value replaces the kind's constructor
     /// default and is never saved.
     pub(super) no_physics: HashMap<u32, bool>,
+    /// The entities a mod kept out of the saves (`entity_set_saved`), by id;
+    /// forgotten with the entity.
+    pub(super) unsaved: HashSet<u32>,
     /// Entities of types Horizon does not simulate, kept per chunk and
     /// written back unchanged.
     unknown: HashMap<(i32, i32), Vec<Tag>>,
@@ -1461,6 +1464,11 @@ impl Game<'_> {
     ) -> Option<(Tag, u32, [i32; 4])> {
         let vehicle = vehicle?;
         let root = parent_vehicle_root(vehicle, others, |id| self.vehicle_of(id))?;
+        // A root vehicle a mod kept out of the saves (`entity_set_saved`) is not in the
+        // rider's file either, or it would come back with the player.
+        if self.persist.unsaved.contains(&root) {
+            return None;
+        }
         let entity = self.vehicle_tree_nbt(root)?;
         let attach = self.uuid_for(vehicle);
         Some((root_vehicle_tag(attach, entity), root, attach))
@@ -1589,6 +1597,7 @@ impl Game<'_> {
         self.entity_attachments.remove(&id);
         self.persist.raw.remove(&id);
         self.persist.no_physics.remove(&id);
+        self.persist.unsaved.remove(&id);
     }
     /// Detach a travelling entity without discarding its in-memory attachments.
     pub(super) fn detach_entity(&mut self, id: u32) {

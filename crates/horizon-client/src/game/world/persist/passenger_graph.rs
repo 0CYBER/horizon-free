@@ -462,6 +462,9 @@ impl Game<'_> {
         let id = entity_nbt::uuid(tag)
             .and_then(|u| self.target_with_uuid(u))
             .and_then(target_id);
-        id.is_none_or(|id| self.passenger_vehicle(id).is_none())
+        // An entity a mod kept out of the saves (`entity_set_saved`) is not written.
+        id.is_none_or(|id| {
+            !self.persist.unsaved.contains(&id) && self.passenger_vehicle(id).is_none()
+        })
     }
 }

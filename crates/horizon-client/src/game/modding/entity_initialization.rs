@@ -149,6 +149,8 @@ impl Game<'_> {
 pub(super) struct TransferredEntityState {
     attachments: Option<horizon_mod_runtime::attachments::Attachments>,
     initialized: bool,
+    /// Kept out of the saves by `entity_set_saved`: the arrival is too.
+    unsaved: bool,
     accepted_hit: Option<std::sync::Arc<horizon_client::health::AcceptedHit>>,
     died: bool,
     /// The source id whose attachment map a transaction open at the take kept: the
@@ -193,8 +195,10 @@ impl Game<'_> {
             .mob_object_mut(id)
             .and_then(|mob| mob.accepted_hit.take());
         let died = self.died.remove(&id);
+        let unsaved = self.persist.unsaved.remove(&id);
         TransferredEntityState {
             attachments,
+            unsaved,
             accepted_hit,
             died,
             journaled,
@@ -219,6 +223,9 @@ impl Game<'_> {
         }
         if state.died {
             self.died.insert(id);
+        }
+        if state.unsaved {
+            self.persist.unsaved.insert(id);
         }
         // Even an empty map marks this as runtime state for `remember_uuid`.
         let mut map = state.attachments.unwrap_or_default();
