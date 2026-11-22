@@ -617,3 +617,89 @@ fn a_mounted_shulker_does_not_push_a_cart() {
     assert!(!takes_push_from_cart(Species::Shulker));
     assert!(takes_push_from_cart(Species::Cow));
 }
+
+/// A pass over loose carts, some of them TNT carts that blow up in the middle of it (the list shrinks
+/// under the pass), plays the same with the boxes taken at the start of each tick as without them.
+#[test]
+#[ignore = "daily"]
+fn a_pass_with_carts_blowing_up_plays_the_same_with_and_without_the_boxes_taken_at_the_start() {
+    use super::near_carts::tests_support::{NEAR_CARTS_ANSWERS, NEAR_CARTS_OFF};
+    // Opt in to the seed uniquifier only in a fresh child, as the other seeded tests do.
+    if crate::game::native_entity_refs::tests::run_fresh_cases(
+        "game::minecarts::tests::a_pass_with_carts_blowing_up_plays_the_same_with_and_without_the_boxes_taken_at_the_start",
+        "HORIZON_TEST_SEEDS",
+        &["1"],
+    ) {
+        return;
+    }
+    type Snapshot = Vec<(u32, [f64; 3], [f64; 3])>;
+    fn play(off: bool) -> (Vec<Snapshot>, u32) {
+        let mut ticks = Vec::new();
+        let mut answers = 0;
+        super::super::native_entity_refs::tests::with_game(|game| {
+            horizon_client::random_source::set_thread_uniquifier(777).unwrap();
+            NEAR_CARTS_OFF.set(off);
+            NEAR_CARTS_ANSWERS.set(0);
+            game.build_registries();
+            game.set_allow_commands(true);
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
+            game.block_ticks
+                .add_empty_chunk(horizon_core::position::ChunkPos::new(0, 0))
+                .unwrap();
+            assert!(game.run_command("forceload add 0 0"));
+            for k in 0..40u32 {
+                let at = horizon_core::geometry::Vec3::new(
+                    2.0 + f64::from(k % 8) * 0.9,
+                    80.0 + f64::from(k / 8) * 1.3,
+                    2.0 + f64::from((k * 5) % 7) * 0.8,
+                );
+                let tnt = k % 9 == 4;
+                let mut cart = super::Minecart::new(
+                    k + 1,
+                    if tnt {
+                        super::CartKind::Tnt
+                    } else {
+                        super::CartKind::Rideable
+                    },
+                    at,
+                );
+                if tnt {
+                    cart.fuse = 4 + (k % 5) as i32;
+                }
+                game.carts.push(cart);
+            }
+            for _ in 0..30 {
+                game.tick_carts();
+                ticks.push(
+                    game.carts
+                        .iter()
+                        .map(|c| {
+                            (
+                                c.id,
+                                [c.position.x, c.position.y, c.position.z],
+                                [c.velocity.x, c.velocity.y, c.velocity.z],
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            answers = NEAR_CARTS_ANSWERS.get();
+        });
+        NEAR_CARTS_OFF.set(false);
+        (ticks, answers)
+    }
+    let (without, none) = play(true);
+    let (with, taken) = play(false);
+    assert_eq!(none, 0);
+    assert!(
+        taken > 100,
+        "the boxes taken at the start answered {taken} times"
+    );
+    // The pass really changed under itself: carts went, and the rest moved.
+    assert!(with.first().unwrap().len() > with.last().unwrap().len());
+    assert_ne!(with.first(), with.last());
+    assert_eq!(without, with);
+}

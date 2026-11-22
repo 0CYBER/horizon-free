@@ -103,4 +103,113 @@ mod tests {
         }
         assert!(!cells.may_meet(at(500.0, 500.0)));
     }
+
+    /// A cart's moves meet the same boxes of other carts, in the same order, whether it asks the
+    /// list or the boxes taken when its tick began, over a pass in which the carts tick and move.
+    #[test]
+    fn the_carts_taken_at_the_start_of_a_tick_give_the_boxes_the_list_gives() {
+        let mut state = 0xD1B5_4A32_D192_ED03u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let unit = |v: u64, span: f64| (v % 10_000) as f64 / 10_000.0 * span;
+        for round in 0..40 {
+            let n = 5 + (next() % 120) as usize;
+            let spread = [10.0, 60.0, 300.0][round % 3];
+            let mut carts: Vec<Minecart> = (0..n)
+                .map(|k| {
+                    let at = Vec3::new(
+                        unit(next(), spread),
+                        64.0 + unit(next(), 4.0),
+                        unit(next(), spread),
+                    );
+                    Minecart::new(k as u32 + 1, CartKind::Rideable, at)
+                })
+                .collect();
+            let mut index = CartIndex {
+                pass: true,
+                ..Default::default()
+            };
+            for i in 0..n {
+                let c = carts[i].clone();
+                let area = c.bounds().inflate(Vec3::new(
+                    NEAR_CARTS_REACH,
+                    NEAR_CARTS_REACH,
+                    NEAR_CARTS_REACH,
+                ));
+                let taken = index.near_snapshot(&carts, i, area);
+                // Every query a move could make: boxes near the start, further along, and past the area.
+                for step in 0..6 {
+                    let at = Vec3::new(
+                        c.position.x + unit(next(), 12.0) - 6.0 * f64::from(step % 3),
+                        c.position.y + unit(next(), 3.0) - 1.0,
+                        c.position.z + unit(next(), 12.0) - 6.0 * f64::from(step % 2),
+                    );
+                    let moved = Minecart::new(c.id, CartKind::Rideable, at);
+                    let near = moved.bounds().inflate(Vec3::new(2.0, 2.0, 2.0));
+                    let by_list: Vec<Aabb> = carts
+                        .iter()
+                        .filter(|o| o.id != c.id)
+                        .map(Minecart::bounds)
+                        .filter(|b| b.intersects(near))
+                        .collect();
+                    if let Some(boxes) = taken.as_ref().and_then(|t| t.meeting(near)) {
+                        assert_eq!(boxes, by_list, "round {round} cart {i} step {step}");
+                    }
+                }
+                // The cart ticks and moves, and the index hears of it, as `section_steps::tick` does.
+                carts[i].position = Vec3::new(
+                    c.position.x + unit(next(), 6.0) - 3.0,
+                    c.position.y,
+                    c.position.z + unit(next(), 6.0) - 3.0,
+                );
+                index.moved(i, carts[i].bounds());
+            }
+        }
+    }
+
+    /// A cart taken out and another put on the end keeps the list's length: the grid is not
+    /// trusted then, and what the cart takes is what the list holds now.
+    #[test]
+    fn a_list_that_lost_a_cart_and_gained_another_is_not_read_through_the_old_grid() {
+        let at = |k: u32| Vec3::new(f64::from(k) * 3.0, 64.0, 0.0);
+        let mut carts: Vec<Minecart> = (1..=12)
+            .map(|k| Minecart::new(k, CartKind::Rideable, at(k)))
+            .collect();
+        let mut index = CartIndex {
+            pass: true,
+            ..Default::default()
+        };
+        let area = |c: &Minecart| {
+            c.bounds().inflate(Vec3::new(
+                NEAR_CARTS_REACH,
+                NEAR_CARTS_REACH,
+                NEAR_CARTS_REACH,
+            ))
+        };
+        assert!(index.near_snapshot(&carts, 0, area(&carts[0])).is_some());
+        // Cart 5 is destroyed and a new cart 13 joins at the end, beside cart 1.
+        carts.remove(4);
+        carts.push(Minecart::new(
+            13,
+            CartKind::Rideable,
+            Vec3::new(f64::from(1u32) * 3.0 + 1.0, 64.0, 0.0),
+        ));
+        assert_eq!(carts.len(), 12);
+        for i in 0..carts.len() {
+            let c = carts[i].clone();
+            let want: Vec<Aabb> = carts
+                .iter()
+                .filter(|o| o.id != c.id)
+                .map(Minecart::bounds)
+                .filter(|b| b.intersects(area(&c)))
+                .collect();
+            // The grid is rebuilt and answers the list as it is.
+            let taken = index.near_snapshot(&carts, i, area(&c));
+            assert_eq!(taken.map(|t| t.boxes), Some(want), "cart slot {i}");
+        }
+    }
 }

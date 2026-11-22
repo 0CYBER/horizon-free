@@ -41,6 +41,9 @@ mod block_effects;
 mod cells;
 #[path = "minecarts/hit.rs"]
 mod hit;
+#[cfg(test)]
+#[path = "minecarts/near_carts.rs"]
+mod near_carts;
 pub(super) use hit::CartHit;
 // The cart state and its pure rules live in horizon-gameplay; the old paths keep working.
 pub(in crate::game) use horizon_gameplay::minecarts::*;
@@ -131,12 +134,24 @@ impl Game<'_> {
         // Every moving cart asks each tick, and the box turns nearly every entity of
         // the level away: it is tested first, and only the mobs near it are read.
         let close = |b: &Aabb| b.intersects(near);
-        let mut boxes: Vec<Aabb> = self
-            .carts
-            .iter()
-            .filter(|o| o.id != c.id)
-            .map(Minecart::bounds)
-            .filter(close)
+        // The carts near it were taken when its tick began; a move past them asks the list.
+        let carts: Vec<Aabb> = match c.near_carts.as_ref().and_then(|n| n.meeting(near)) {
+            Some(boxes) => {
+                #[cfg(test)]
+                near_carts::tests_support::NEAR_CARTS_ANSWERS
+                    .set(near_carts::tests_support::NEAR_CARTS_ANSWERS.get() + 1);
+                boxes
+            }
+            None => self
+                .carts
+                .iter()
+                .filter(|o| o.id != c.id)
+                .map(Minecart::bounds)
+                .filter(close)
+                .collect(),
+        };
+        let mut boxes: Vec<Aabb> = carts
+            .into_iter()
             .chain(
                 self.boats
                     .iter()
@@ -846,6 +861,16 @@ impl Game<'_> {
         slot: usize,
         index: &mut CartIndex,
     ) -> bool {
+        #[cfg(not(test))]
+        let cache_enabled = true;
+        #[cfg(test)]
+        let cache_enabled = !near_carts::tests_support::NEAR_CARTS_OFF.get();
+        if cache_enabled {
+            let reach = NEAR_CARTS_REACH;
+            let area = c.bounds().inflate(Vec3::new(reach, reach, reach));
+            c.near_carts = index.near_snapshot(&self.carts, slot, area).map(Box::new);
+        }
+
         c.tick_count += 1;
         c.previous = c.position;
         c.previous_yaw = c.yaw;
@@ -881,6 +906,8 @@ impl Game<'_> {
         } else {
             self.come_off_track(c);
         }
+        // Only the movement above uses the snapshot. Drop it before storing the cart.
+        c.near_carts = None;
         c.first_tick = false;
         // The old behavior derives yaw once per tick; the experiment has
         // already recorded each step's yaw and pitch.
@@ -1419,7 +1446,10 @@ impl Game<'_> {
         let ridden = self.guest_vehicles();
         // By id: an exploding cart can destroy or prime others mid-loop.
         let ids: Vec<u32> = self.carts.iter().map(|c| c.id).collect();
-        let mut index = CartIndex::default();
+        let mut index = CartIndex {
+            pass: true,
+            ..Default::default()
+        };
         let mut hint = 0;
         for &id in &ids {
             let Some(i) = cart_at(&self.carts, id, hint) else {
@@ -3243,136 +3273,8 @@ mod tnt_cart_power_tests {
 }
 
 #[cfg(test)]
-mod cart_cost_bench {
-    use super::{CartKind, Minecart};
-    use crate::game::game_tests::tests::server_game;
-    use horizon_core::geometry::Vec3;
-
-    /// Times `tick_carts` with many parked carts and some moving ones:
-    /// `CARTS_PARKED` (default 600) carts each on its own rail piece, and
-    /// `CARTS_MOVING` (default 100) on powered tracks. Prints the ms per tick.
-    #[test]
-    #[ignore = "a timing, needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn tick_carts_with_many_parked_carts() {
-        let n = |key: &str, default: usize| {
-            std::env::var(key)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
-        };
-        let (parked, moving) = (n("CARTS_PARKED", 600), n("CARTS_MOVING", 100));
-        let mut resources = None;
-        let mut game = server_game(&mut resources);
-        game.settings.simulation_distance = 6;
-        game.settings.render_distance = 12;
-        game.player = Some(
-            horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 80.0, 12.5))
-                .unwrap(),
-        );
-        for cx in -3..=3 {
-            for cz in -3..=3 {
-                if (cx, cz) != (0, 0) {
-                    let mut chunk = horizon_client::chunk::Chunk::empty(cx, cz);
-                    chunk.lit = true;
-                    game.world
-                        .chunks
-                        .insert((cx, cz), std::sync::Arc::new(chunk));
-                    game.block_ticks
-                        .add_empty_chunk(horizon_core::position::ChunkPos::new(cx, cz))
-                        .unwrap();
-                }
-            }
-        }
-        game.update_chunk_tickets();
-        let registry = game.pack.assets.registry;
-        let stone = registry.default_state("minecraft:stone").unwrap();
-        let rail = registry.default_state("minecraft:rail").unwrap();
-        let powered = registry.default_state("minecraft:powered_rail").unwrap();
-        let with = |base: horizon_world::registry::BlockStateId, shape: &str, on: bool| {
-            let mut s = registry.state(base).unwrap().clone();
-            s.properties.insert("shape".into(), shape.into());
-            if on {
-                s.properties.insert("powered".into(), "true".into());
-            }
-            registry.id(&s).unwrap()
-        };
-        let (rail_ns, rail_ew) = (
-            with(rail, "north_south", false),
-            with(powered, "east_west", true),
-        );
-        for x in -30..46 {
-            for z in -30..46 {
-                game.world.set(x, 63, z, stone).unwrap();
-                game.world.set(x, 69, z, stone).unwrap();
-            }
-        }
-        let mut id = 1;
-        'park: for x in (-28..44).step_by(2) {
-            for z in (-28..44).step_by(2) {
-                if id as usize > parked {
-                    break 'park;
-                }
-                game.world.set(x, 64, z, rail_ns).unwrap();
-                let at = Vec3::new(f64::from(x) + 0.5, 64.0, f64::from(z) + 0.5);
-                game.carts.push(Minecart::new(id, CartKind::Rideable, at));
-                id += 1;
-            }
-        }
-        for lane in 0..10 {
-            let z = -28 + lane * 6;
-            for x in -30..46 {
-                game.world.set(x, 70, z, rail_ew).unwrap();
-            }
-            for k in 0..moving.div_ceil(10) {
-                if id as usize > parked + moving {
-                    break;
-                }
-                let at = Vec3::new(-29.5 + f64::from(k as i32) * 3.0, 70.0, f64::from(z) + 0.5);
-                let mut c = Minecart::new(id, CartKind::Rideable, at);
-                c.velocity = Vec3::new(0.3, 0.0, 0.0);
-                game.carts.push(c);
-                id += 1;
-            }
-        }
-        let chicken = game
-            .res
-            .mob_types()
-            .get("minecraft:chicken")
-            .unwrap()
-            .clone();
-        for k in 0..n("MOBS", 3000) {
-            let (x, z) = (
-                -30.0 + (k % 76) as f64 + 0.5,
-                -30.0 + ((k / 76) % 76) as f64 + 0.5,
-            );
-            game.mobs.push(horizon_client::mobs::Mob::new(
-                1000 + k as u32,
-                chicken.clone(),
-                Vec3::new(x, 75.0, z),
-                0.0,
-            ));
-        }
-        let total = game.carts.len();
-        let (warm, ticks) = (5, n("TICKS", 40));
-        let mut spent = std::time::Duration::ZERO;
-        for t in 0..warm + ticks {
-            game.world.game_time += 1;
-            // Mobs move every tick on a live server: the list is written.
-            if !game.mobs.is_empty() {
-                let _ = &mut game.mobs[0];
-            }
-            let start = std::time::Instant::now();
-            game.tick_carts();
-            if t >= warm {
-                spent += start.elapsed();
-            }
-        }
-        eprintln!(
-            "tick_carts: {total} carts ({parked} parked, {moving} moving): {:.3} ms/tick",
-            spent.as_secs_f64() * 1e3 / ticks as f64
-        );
-    }
-}
+#[path = "minecarts/cart_cost_bench.rs"]
+mod cart_cost_bench;
 
 #[cfg(test)]
 #[path = "minecarts/minecart_riders_tests.rs"]
