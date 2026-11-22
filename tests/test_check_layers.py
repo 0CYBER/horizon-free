@@ -2,6 +2,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -35,6 +36,40 @@ def package(name, *deps):
 def run(*packages, allowed=(), base=None, crates=None):
     config = dict(CONFIG, allowed=list(allowed), crates=dict(CONFIG["crates"], **(crates or {})))
     return check_layers.check(config, check_layers.edges(packages), base)
+
+
+def cargo_packages(source="game", target="cosmetics", *, path=False, rename=None, optional=False, lib_name=None):
+    """Actual offline Cargo metadata, including the real rename field and resolved package IDs."""
+    if not shutil.which("cargo"):
+        raise unittest.SkipTest("requires Cargo")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "Cargo.toml").write_text(
+            f'[workspace]\nresolver = "3"\nmembers = ["{source}", "{target}"]\n'
+            f'[patch.crates-io]\n{target} = {{ path = "{target}" }}\n')
+        for name in (source, target):
+            (root / name / "src").mkdir(parents=True)
+            (root / name / "src/lib.rs").write_text("")
+            manifest = f'[package]\nname = "{name}"\nversion = "1.0.0"\nedition = "2024"\n'
+            if name == target and lib_name:
+                manifest += f'[lib]\nname = "{lib_name}"\n'
+            (root / name / "Cargo.toml").write_text(manifest)
+        location = f'path = "../{target}"' if path else 'version = "=1.0.0"'
+        alias = rename or target
+        # An unrenamed dependency is declared plainly, so Cargo reports rename=null (the `package =` form would
+        # make Cargo report the alias as rename even when it equals the package name).
+        package_key = f'package = "{target}", ' if rename else ''
+        declaration = f'{alias} = {{ {package_key}{location}, optional = {str(optional).lower()} }}\n'
+        with (root / source / "Cargo.toml").open("a") as f:
+            f.write(f'[dependencies]\n{declaration}')
+        subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, check=True,
+                       capture_output=True, text=True)
+        lock = (root / "Cargo.lock").read_bytes()
+        with mock.patch.object(check_layers, "ROOT", root):
+            packages = check_layers.metadata(root / "Cargo.toml")
+        if (root / "Cargo.lock").read_bytes() != lock:
+            raise AssertionError("the layer check changed Cargo.lock")
+        return packages
 
 
 class CheckLayersTests(unittest.TestCase):
@@ -237,6 +272,92 @@ class CheckLayersTests(unittest.TestCase):
     def test_registry_dependencies_are_not_edges(self):
         pkg = {"name": "game", "dependencies": [{"name": "cosmetics", "kind": None, "path": None}]}
         self.assertEqual(check_layers.edges([pkg]), {"game": set()})
+
+    def test_a_patched_registry_dep_is_an_edge_like_a_path_dep(self):
+        """A `[patch.crates-io]` declaration is a registry version in --no-deps metadata (no `path`), but Cargo
+        resolves it to a workspace crate: the layer gate must see the crossing exactly as for a path dep."""
+        for path in (False, True):
+            with self.subTest(path=path):
+                graph = check_layers.edges(cargo_packages(path=path))
+                self.assertEqual(graph, {"game": {"cosmetics"}, "cosmetics": set()})
+                problems, _ = check_layers.check(CONFIG, graph)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("game -> cosmetics: engine may not depend on horizon", problems[0])
+
+    def test_a_renamed_registry_dep_resolves_to_its_package(self):
+        packages = cargo_packages(rename="renamed-dep")
+        dep = next(p for p in packages if p["name"] == "game")["dependencies"][0]
+        self.assertEqual((dep["name"], dep["rename"]), ("cosmetics", "renamed-dep"))
+        self.assertEqual(check_layers.edges(packages), {"game": {"cosmetics"}, "cosmetics": set()})
+
+    def test_an_unrenamed_dep_with_a_custom_lib_name_resolves_to_its_package(self):
+        """Cargo's resolve edge name is the extern crate (lib target) name, which differs from the package name when
+        the crate sets [lib] name. Matching that edge name against the declared package name would fail to resolve."""
+        packages = cargo_packages(lib_name="cosmetics_lib")
+        dep = next(p for p in packages if p["name"] == "game")["dependencies"][0]
+        self.assertIsNone(dep.get("rename"))
+        self.assertEqual(dep["name"], "cosmetics")
+        self.assertEqual(check_layers.edges(packages), {"game": {"cosmetics"}, "cosmetics": set()})
+
+    def test_optional_edges_resolve_a_patched_registry_dep_to_the_local_crate(self):
+        packages = cargo_packages(optional=True)
+        self.assertEqual(check_layers.optional_edges(packages), {"game -> cosmetics"})
+        next(p for p in packages if p["name"] == "game")["dependencies"][0]["optional"] = False
+        self.assertEqual(check_layers.optional_edges(packages), set())
+
+    def test_portable_treats_a_patched_registry_dep_as_a_local_crate(self):
+        config = dict(CONFIG, portable={"crates": ["core"], "forbidden": []})
+        packages = cargo_packages("core", "game")
+        problems = check_layers.portable(config, packages)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("core -> game: a portable crate depends only on the other portable crates", problems[0])
+
+    def test_a_same_name_external_package_is_not_a_local_edge(self):
+        local = "path+file:///x/cosmetics#1.0.0"
+        external = "registry+https://github.com/rust-lang/crates.io-index#cosmetics@2.0.0"
+        game = "path+file:///x/game#1.0.0"
+        dep = {"name": "cosmetics", "rename": "look", "kind": None, "target": None, "path": None,
+               "optional": True, "req": "^2.0"}
+        packages = [{"name": "game", "id": game, "dependencies": [dep]},
+                    {"name": "cosmetics", "id": local, "dependencies": []}]
+        resolved = {"packages": [
+            {"id": local, "name": "cosmetics", "source": None, "manifest_path": "/x/cosmetics/Cargo.toml"},
+            {"id": external, "name": "cosmetics", "source": "registry+https://github.com/rust-lang/crates.io-index"}],
+            "resolve": {"nodes": [{"id": game, "deps": [{"name": "look", "pkg": external,
+                                                       "dep_kinds": [{"kind": None, "target": None}]}]}]}}
+        check_layers.resolve_registry([(packages[0], dep)], resolved)
+        self.assertEqual(check_layers.edges(packages), {"game": set(), "cosmetics": set()})
+        self.assertEqual(check_layers.optional_edges(packages), set())
+        config = dict(CONFIG, portable={"crates": ["game"], "forbidden": ["cosmetics"]})
+        self.assertEqual(len(check_layers.portable(config, packages)), 1)
+
+    def test_a_patch_to_a_crate_in_another_workspace_is_a_local_edge(self):
+        """A registry declaration patched to a crate that isn't a member of this manifest's workspace is still a
+        local edge: layers.json's whole `crates` inventory, not just this workspace's members, drives the candidate
+        filter. Otherwise a launcher -> root-workspace patch bypasses the layer gate."""
+        game = "path+file:///x/game#1.0.0"
+        cosmetics = "path+file:///x/cosmetics#1.0.0"
+        game_pkg = {"name": "game", "id": game, "dependencies": [
+            {"name": "cosmetics", "rename": None, "kind": None, "target": None, "path": None}]}
+        resolved = {"packages": [
+            {"id": game, "name": "game", "source": None},
+            {"id": cosmetics, "name": "cosmetics", "source": None,
+             "manifest_path": "/x/cosmetics/Cargo.toml"}],
+            "resolve": {"nodes": [
+                {"id": game, "deps": [{"name": "cosmetics", "pkg": cosmetics,
+                                       "dep_kinds": [{"kind": None, "target": None}]}]},
+                {"id": cosmetics, "deps": []}]}}
+
+        def run(cmd, **kwargs):
+            payload = {"packages": [game_pkg]} if "--no-deps" in cmd else resolved
+            return mock.Mock(stdout=json.dumps(payload))
+
+        config = dict(CONFIG, workspaces=["launcher/Cargo.toml"])
+        with mock.patch.object(check_layers.subprocess, "run", side_effect=run):
+            packages = check_layers.workspace_packages(config)
+        self.assertEqual(check_layers.edges(packages), {"game": {"cosmetics"}})
+        problems, _ = check_layers.check(CONFIG, check_layers.edges(packages))
+        self.assertTrue(any("game -> cosmetics: engine may not depend on horizon" in p for p in problems), problems)
 
 
 class UpstreamLayerRestorationTests(unittest.TestCase):
