@@ -1,0 +1,2 @@
+horizon-client game::native_player_sidebar::tests::send_sidebar_shows_its_own_objective_and_gives_the_slot_back lib daily resources
+horizon-client game::native_player_sidebar::tests::managed_and_one_shot_sidebars_keep_apart_in_either_order lib daily resources

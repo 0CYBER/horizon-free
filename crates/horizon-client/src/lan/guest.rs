@@ -204,6 +204,12 @@ pub struct Guest {
     /// A mod's personal sidebar is on this client (`Game::native_sidebar`); it is gone with the
     /// connection.
     pub personal_sidebar: bool,
+    /// A mod's one-shot sidebar objective is on this client (`Game::native_send_sidebar`),
+    /// apart from the personal one; it is gone with the connection.
+    pub sent_sidebar_exists: bool,
+    /// The one-shot sidebar uses slot 1 or is waiting for the managed sidebar to clear.
+    /// A world write to slot 1 ends that claim without removing the objective.
+    pub sent_sidebar_claims_slot: bool,
     pub uuid: u128,
     pub name: String,
     /// The properties the player logged in with (`ServerPlayer.getGameProfile`).
@@ -734,6 +740,8 @@ impl Guest {
             disconnect_pending: false,
             leaving: false,
             personal_sidebar: false,
+            sent_sidebar_exists: false,
+            sent_sidebar_claims_slot: false,
             uuid: j.uuid,
             name: j.name,
             properties: j.properties,

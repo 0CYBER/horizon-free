@@ -708,6 +708,21 @@ pub trait PlayersBackendMut {
         sidebar: Option<Sidebar>,
     ) -> Result<bool, TextFormError>;
     /// Side: server.
+    /// Sends a one-shot sidebar to the player's sidebar slot, with the same checks and
+    /// refusals as `player_set_sidebar`. The world's scoreboard can later replace the
+    /// slot, and a team's sidebar slot still wins on the client. The one-shot sidebar
+    /// has its own objective. A managed sidebar installed by `player_set_sidebar`
+    /// defers the one-shot display write until `player_set_sidebar` clears it with
+    /// `None`, even if the world has already taken slot 1. A world update to slot 1
+    /// after the one-shot send cancels the deferred write. `None` removes the one-shot
+    /// objective and restores the world's sidebar if the one-shot sidebar still owns the slot.
+    #[access(WorldOnly)]
+    fn player_send_sidebar(
+        &mut self,
+        player: PlayerRef,
+        sidebar: Option<Sidebar>,
+    ) -> Result<bool, TextFormError>;
+    /// Side: server.
     /// Shows `name` for that player in everyone's Tab list (Paper's `Player.playerListName`,
     /// NeoForge's `ServerPlayer.refreshTabListName`), colours and all; None shows the name the
     /// game would (their nickname or real name). The `player_tab_list_name_format` hook still

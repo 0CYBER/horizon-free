@@ -19,6 +19,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::nbt::Tag;
+use horizon_protocol::packets::play::Clientbound;
 use std::collections::{HashMap, HashSet};
 
 /// What `ServerPlayer` last recorded for the criteria that follow the player.
@@ -481,7 +482,15 @@ impl Game<'_> {
         let view = horizon_client::lan::scoreboard::View::of(&self.score.board);
         host.hub.guests.update_all(|g| {
             if g.placed && g.scoreboard != view {
-                g.send_all(&g.scoreboard.changes(&view));
+                let packets = g.scoreboard.changes(&view);
+                if g.sent_sidebar_claims_slot
+                    && packets.iter().any(
+                        |packet| matches!(packet, Clientbound::SetDisplayObjective(d) if d.slot == 1),
+                    )
+                {
+                    g.sent_sidebar_claims_slot = false;
+                }
+                g.send_all(&packets);
                 g.scoreboard = view.clone();
             }
         });
