@@ -80,6 +80,13 @@ pub fn write_dat(path: &Path, tag: &Tag) -> io::Result<()> {
     };
     let raw = nbt::write_named(&root, Limits::saved()).map_err(|e| invalid(e.to_string()))?;
     let bytes = Compression::Gzip.encode(&raw)?;
+    write_via_temporary(path, &bytes)
+}
+
+/// `bytes` written to `path` through a sibling renamed over it once whole,
+/// which is how the `.dat` and JSON files of a world are written; the sibling
+/// takes the file's own permissions, as writing in place kept them.
+fn write_via_temporary(path: &Path, bytes: &[u8]) -> io::Result<()> {
     // A sibling written and synced, then renamed over the file: a stop or a
     // full disk leaves the old file whole, never an emptied one.
     // A linked file is written where the link points, as `fs::write` did.
@@ -102,12 +109,19 @@ pub fn write_dat(path: &Path, tag: &Tag) -> io::Result<()> {
     if fs::symlink_metadata(&temporary).is_ok_and(|meta| meta.file_type().is_file()) {
         fs::remove_file(&temporary)?;
     }
-    let written = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // A renamed sibling is created with the default mode; keep the file's own
+    // (owner-only, say), as writing in place kept it.
+    #[cfg(unix)]
+    if let Ok(meta) = fs::metadata(path) {
+        let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o777;
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    }
+    let written = options
         .open(&temporary)
         .and_then(|mut file| {
-            file.write_all(&bytes)?;
+            file.write_all(bytes)?;
             file.sync_all()
         })
         .and_then(|()| fs::rename(&temporary, path));
@@ -1257,7 +1271,9 @@ fn upgrade_json_to(path: &Path, ty: Ty, to: i32) -> io::Result<()> {
     update(ty, &mut tag, from, to);
     set(&mut tag, "DataVersion", Tag::Int(to));
     let out = json::to_stable_string(&tag_to_json(&tag));
-    fs::write(path, String::from_utf16_lossy(&out))
+    // In place, a truncated file would not parse, the upgrade would fail before
+    // level.dat is stamped and the world would not open, at every open (#18771).
+    write_via_temporary(path, String::from_utf16_lossy(&out).as_bytes())
 }
 
 /// Everything vanilla upgrades as it reads a world, done at once: every chunk,
@@ -2088,6 +2104,63 @@ mod upgrade_tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A stats file's write that fails leaves the previous JSON whole and
+    /// readable, so the next open can upgrade it: here its temporary file
+    /// cannot be created (#18771). The file is already at the target, so what
+    /// the test exercises is the write, not the fixes (those need the prepared
+    /// tables).
+    #[test]
+    fn a_failed_stats_write_keeps_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("horizon-json-replace-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("player.json");
+        let old = format!(
+            r#"{{"DataVersion":{CURRENT},"stats":{{"minecraft:custom":{{"minecraft:jump":3}}}}}}"#
+        );
+        let units: Vec<u16> = old.encode_utf16().collect();
+        assert!(json::parse_lenient(&units).is_some(), "the old file parses");
+        fs::write(&file, old.as_bytes()).unwrap();
+        let blocked = dir.join("player.json.horizon-new");
+        fs::create_dir(&blocked).unwrap();
+
+        assert!(upgrade_json(&file, Ty::Stats).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), old);
+
+        // Freed, the same write goes through and brings the file to the
+        // target: the first error was the write, not the data.
+        fs::remove_dir(&blocked).unwrap();
+        upgrade_json(&file, Ty::Stats).unwrap();
+        let after = fs::read_to_string(&file).unwrap();
+        let units: Vec<u16> = after.encode_utf16().collect();
+        let parsed = json::parse_lenient(&units).expect("the upgraded file parses");
+        assert_eq!(
+            parsed.get("DataVersion"),
+            Some(&Json::Num(CURRENT.to_string()))
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The sibling takes the file's own permissions, so a rewritten stats file
+    /// stays owner-only instead of becoming world-readable.
+    #[cfg(unix)]
+    #[test]
+    fn a_stats_write_keeps_the_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("horizon-json-mode-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("player.json");
+        let old = format!(r#"{{"DataVersion":{CURRENT}}}"#);
+        fs::write(&file, old.as_bytes()).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+
+        upgrade_json(&file, Ty::Stats).unwrap();
+        let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A temporary left by a stopped `.dat` write is replaced.
     #[test]
     fn a_stale_dat_temporary_is_replaced() {
@@ -2145,6 +2218,39 @@ mod upgrade_tests {
                 .is_symlink()
         );
         assert_eq!(read_dat(&real).unwrap(), Some(new));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A linked stats file is written where the link points, as before: the
+    /// link stays a link and no temporary is left beside it.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_stats_file_is_written_through() {
+        let dir = std::env::temp_dir().join(format!("horizon-json-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("real")).unwrap();
+        let real = dir.join("real/player.json");
+        let before = format!("{{ \"DataVersion\": {CURRENT} }}");
+        fs::write(&real, before.as_bytes()).unwrap();
+        let link = dir.join("player.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        upgrade_json(&link, Ty::Stats).unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let after = fs::read_to_string(&real).unwrap();
+        assert_ne!(after, before);
+        let units: Vec<u16> = after.encode_utf16().collect();
+        let parsed = json::parse_lenient(&units).expect("the upgraded file parses");
+        assert_eq!(
+            parsed.get("DataVersion"),
+            Some(&Json::Num(CURRENT.to_string()))
+        );
+        assert!(!dir.join("player.json.horizon-new").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
