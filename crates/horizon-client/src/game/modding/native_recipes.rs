@@ -163,7 +163,8 @@ impl Game<'_> {
                 let at = |i: usize| (i / w) * size + i % w;
                 let mut grid: [Option<ItemStack>; 9] = Default::default();
                 for (i, stack) in slots.iter().enumerate() {
-                    #[allow(clippy::needless_borrows_for_generic_args)] // TODO(arismoko/horizon#2273)
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    // TODO(arismoko/horizon#2273)
                     {
                         grid[at(i)] = stack.as_ref().map(&read_stack).transpose()?;
                     }
@@ -621,20 +622,36 @@ impl Game<'_> {
             }
             return;
         }
+        // The window's own recipes as it loaded them (`load_world_rest`): the content mods'
+        // files live in the data changes over the root, not in the root.
         let root = &self.options.resources;
-        let overlay = horizon_world::loot::PackOverlay::NONE;
-        let built = horizon_items::recipe_sources::sources(root, &overlay).and_then(|own| {
+        let files = super::world_rest::content_files(&self.pack.data_changes);
+        let built = (|| -> horizon_items::Result<_> {
+            let inventory = horizon_mod_package::enabled::EnabledMods::read(root)?;
+            let conditions = horizon_world::conditions::LoadConditions::new(inventory.server_ids());
+            let overlay = horizon_world::loot::PackOverlay {
+                conditions: &conditions,
+                files: &files,
+            };
+            let own = horizon_items::recipe_sources::sources(root, &overlay)?;
             let all = synced_sources(own, received, &types);
             let index = horizon_client::recipe_book::RecipeIndex::load_from_sources(&all);
-            horizon_client::crafting::Recipes::from_sources(
+            // As `ResolvedSources::load`: the ingredient hooks' fluid ingredients read these tags.
+            let context = self
+                .res
+                .core
+                .item_data
+                .context()
+                .with_fluid_tags(horizon_items::items::fluid_tag_list(root, &overlay)?);
+            let recipes = horizon_client::crafting::Recipes::from_sources(
                 root,
                 self.items(),
                 &overlay,
                 all,
-                self.res.core.item_data.context(),
-            )
-            .map(|recipes| (recipes, index))
-        });
+                &context,
+            )?;
+            Ok((recipes, index))
+        })();
         match built {
             Ok((recipes, index)) => {
                 self.recipe_tables.synced = Some(recipes);
@@ -829,6 +846,38 @@ mod tests {
             assert_eq!(ids.map(|id| book_ids(game, id)), server);
         });
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A content mod's recipes come from the window's data changes, not the prepared root.
+    /// A server that sends only its smelting recipes leaves the window's own crafting
+    /// recipes in place, the content mod's among them.
+    #[test]
+    #[ignore = "daily"]
+    fn a_sync_of_other_types_keeps_the_content_mods_recipes() {
+        use horizon_assets::resource_source::{Resource, ResourceSource};
+        with_game(|game| {
+            let recipe = serde_json::json!({
+                "type": "minecraft:crafting_shaped",
+                "pattern": ["#"],
+                "key": {"#": "minecraft:dirt"},
+                "result": {"id": "minecraft:diamond"},
+            });
+            game.pack.data_changes = ResourceSource::indexed(std::collections::BTreeMap::from([(
+                "data/testpack/recipe/dirt_diamond.json".to_owned(),
+                Resource::bytes(recipe.to_string().into_bytes()),
+            )]));
+            let types = ["minecraft:smelting".to_owned()];
+            let sources = horizon_items::recipe_sources::sources(
+                &game.options.resources,
+                &horizon_world::loot::PackOverlay::NONE,
+            )
+            .unwrap();
+            for part in horizon_client::lan::recipes::encode_content(&types, &sources, false) {
+                game.remote_recipe_content(&part);
+            }
+            assert!(game.synced_recipes().is_some());
+            assert!(game.recipes().recipe("testpack:dirt_diamond").is_some());
+        });
     }
 
     #[test]

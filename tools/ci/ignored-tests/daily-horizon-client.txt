@@ -160,6 +160,7 @@ horizon-client game::native_player_persistent_data_tests::persistent_data_is_kep
 horizon-client game::native_player_respawn_tests::a_dead_player_is_respawned_once lib daily resources
 horizon-client game::native_player_respawn_tests::a_player_who_won_the_game_is_respawned_alive_as_the_button_does lib daily resources
 horizon-client game::native_player_respawn_tests::each_respawn_refusal_has_its_own_name_and_changes_nothing lib daily resources
+horizon-client game::native_recipes::tests::a_sync_of_other_types_keeps_the_content_mods_recipes lib daily resources
 horizon-client game::native_recipes::tests::a_synced_vanilla_recipe_has_one_book_id_the_servers lib daily resources
 horizon-client game::native_recipes::tests::synced_vanilla_recipes_keep_their_book_ids lib daily resources
 horizon-client game::native_server::network_settings_tests::server_settings_follow_the_network_config lib daily slow
