@@ -1,0 +1,141 @@
+name: crowdin
+# The whole translation sync (docs/translations.md, "Crowdin"): main's English text goes up when it
+# changes, the project's translations come down as one pull request, and the strings a proofreader
+# approved are recorded as reviewed in tools/lang_review/game.
+#
+# Inert until the repository has the project: the variable CROWDIN_ENABLED=true and the secrets
+# CROWDIN_PROJECT_ID and CROWDIN_PERSONAL_TOKEN (Settings → Secrets and variables → Actions). A
+# manual run says which half to do; a push uploads the English text only, the nightly run downloads.
+#
+# The pull request is opened with github.token, which does not start other workflows (GitHub's own
+# rule), so its `verify` run waits for a maintainer to push or re-run it. Set the secret CROWDIN_PAT
+# (a fine-grained token with `contents` and `pull requests`) to open it as that account instead, and
+# its checks run on their own.
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/horizon-client/assets/horizon/lang/en_us.json
+      - crowdin.yml
+      - .github/crowdin-approved.yml
+      - tools/crowdin_import.py
+      - .github/workflows/crowdin.yml
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "upload: English text up only. download: translations down and a pull request. both: the two."
+        type: choice
+        default: both
+        options: [both, upload, download]
+      upload_translations:
+        description: "First run only: send the translations already in the repository up to Crowdin."
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  sync:
+    concurrency:
+      group: crowdin
+      cancel-in-progress: false
+    if: vars.CROWDIN_ENABLED == 'true'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # The same credential `gh` uses below: a `github.token` push starts no workflows, so the
+          # pull request below would wait for a maintainer's push before `verify` ran at all.
+          token: ${{ secrets.CROWDIN_PAT || github.token }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Stage the translations the repository already has
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'upload'))
+        # Crowdin reads translations from the `translation` folder in crowdin.yml, which is empty on a
+        # fresh checkout; the first run has to put the repository's own text there first. A folder of
+        # its own, so a language the download carries nothing for cannot keep the staged text.
+        run: python3 tools/crowdin_import.py --stage --stage-dir l10n/game-staged
+      - name: Upload the English text
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'upload'))
+        uses: crowdin/github-action@d651c77756acbe11a31d77a6fb79d8a239e1e05a # v3.6.0
+        with:
+          config: crowdin.yml
+          upload_sources: true
+          upload_translations: ${{ inputs.upload_translations == true }}
+          # The staged copies live in their own folder: `-t` names it here rather than in a second
+          # config file, because the action adds `--config` to the command itself and two of those
+          # would be a coin toss. The download below writes into the folder crowdin.yml names.
+          upload_translations_args: -s crates/horizon-client/assets/horizon/lang/en_us.json -t l10n/game-staged/%locale_with_underscore%.json
+          download_translations: false
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+      - name: Download every translation
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        uses: crowdin/github-action@d651c77756acbe11a31d77a6fb79d8a239e1e05a # v3.6.0
+        with:
+          config: crowdin.yml
+          upload_sources: false
+          download_translations: true
+          # Without this Crowdin writes the English sentence into every untranslated string, and the
+          # import would replace translations with English (tools/crowdin_import.py guards that too).
+          skip_untranslated_strings: true
+          push_translations: false
+          create_pull_request: false
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+      - name: Download the proofread translations
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        uses: crowdin/github-action@d651c77756acbe11a31d77a6fb79d8a239e1e05a # v3.6.0
+        with:
+          config: .github/crowdin-approved.yml
+          upload_sources: false
+          download_translations: true
+          export_only_approved: true
+          skip_untranslated_strings: true
+          push_translations: false
+          create_pull_request: false
+        env:
+          CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+          CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_PERSONAL_TOKEN }}
+      - name: Write the lang files and the review record
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        run: |
+          python3 tools/crowdin_import.py --check
+          python3 tools/crowdin_import.py --translations l10n/game --approved l10n/game-approved
+          python3 tools/lang_coverage.py --summary
+      - name: Open or update the pull request
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.mode == 'both' || inputs.mode == 'download'))
+        env:
+          GH_TOKEN: ${{ secrets.CROWDIN_PAT || github.token }}
+        run: |
+          changed="crates/horizon-client/assets/horizon/lang tools/lang_review/game tools/lang_review/crowdin"
+          git add $changed
+          # Staged, because a record file the import newly wrote is untracked and `git diff` skips it.
+          if git diff --cached --quiet; then
+            echo "no translation changed, so no pull request"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B l10n/crowdin
+          git commit -m "translations from Crowdin"
+          git push --force origin l10n/crowdin
+          body="Translations from [Crowdin](https://crowdin.com/project/horizon-client), written by
+          \`tools/crowdin_import.py\` in \`.github/workflows/crowdin.yml\` from run
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. The text comes from
+          the project; the reviewed marks are its proofreading (docs/translations.md, \"Crowdin\").
+          Only translations change here, so the pull request takes no label."
+          if gh pr view l10n/crowdin > /dev/null 2>&1; then
+            gh pr edit l10n/crowdin --body "$body"
+          else
+            gh pr create --base main --head l10n/crowdin --title "translations from Crowdin" --body "$body"
+          fi

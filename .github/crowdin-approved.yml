@@ -1,0 +1,15 @@
+# The same project as crowdin.yml, exported a second time with only the strings a proofreader
+# approved. tools/crowdin_import.py compares the two: a key whose approved text is the text the game
+# now ships is recorded as reviewed (docs/translations.md, "Crowdin").
+#
+# Used by .github/workflows/crowdin.yml with the `export_only_approved` input; nothing here may
+# carry a token.
+project_id_env: CROWDIN_PROJECT_ID
+api_token_env: CROWDIN_PERSONAL_TOKEN
+# Crowdin resolves paths against the configuration file's own folder, not the repository: `..` is
+# the root here, so both configurations read and write the same staging folders.
+base_path: ".."
+preserve_hierarchy: true
+files:
+  - source: /crates/horizon-client/assets/horizon/lang/en_us.json
+    translation: /l10n/game-approved/%locale_with_underscore%.json
