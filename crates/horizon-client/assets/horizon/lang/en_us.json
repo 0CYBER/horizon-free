@@ -95,6 +95,7 @@
   "horizon.touch.settings": "Touch",
   "horizon.touch.swap": "Swap",
   "horizon.touch.shield": "Shield",
+  "horizon.touch.button": "Button",
   "horizon.options.lightbar": "Lightbar",
   "horizon.options.look_sensitivity": "Look Sensitivity",
   "horizon.options.invert_x": "Invert Look X",

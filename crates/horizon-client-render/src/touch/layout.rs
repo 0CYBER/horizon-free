@@ -195,6 +195,8 @@ pub struct Settings {
     pub button_scale: f32,
     /// The touch marker's diameter in GUI pixels (16-64).
     pub circle_size: f32,
+    /// Buttons the player added (at most 32).
+    pub custom_buttons: Vec<super::CustomButton>,
 }
 
 impl Default for Settings {
@@ -242,6 +244,7 @@ impl Default for Settings {
             dynamic_area_y: 1.0,
             button_scale: 1.0,
             circle_size: 32.0,
+            custom_buttons: Vec::new(),
         }
     }
 }
@@ -275,6 +278,12 @@ impl Settings {
             }
         }
         for p in self.layouts.iter_mut().flatten() {
+            p.sanitize();
+        }
+        self.custom_buttons.truncate(32);
+        self.custom_buttons
+            .retain(|b| super::CustomButton::valid_token(&b.key));
+        for p in self.custom_buttons.iter_mut().flat_map(|b| &mut b.layouts) {
             p.sanitize();
         }
         for v in [

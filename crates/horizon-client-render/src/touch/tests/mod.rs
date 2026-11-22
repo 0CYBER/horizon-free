@@ -1,6 +1,7 @@
 // Adapted from Starling's touch.rs tests (see the header of touch.rs).
 use super::*;
 
+mod custom;
 mod gestures;
 
 fn role(t: &TouchControls, id: u64) -> Role {

@@ -11,12 +11,14 @@
 //! D-pad, a button, or a look gesture on the world) and keeps it until it
 //! lifts, so moving, looking and pressing never take each other's fingers.
 pub mod aim;
+mod custom;
 mod draw;
 pub mod layout;
 pub use aim::{
     attack_indicator, camera_delta, hotbar_slot, item_places_entity_on_tap, item_uses_on_tap,
     projectile_crosshair, screen_direction,
 };
+pub use custom::CustomButton;
 pub use layout::{Control, Mode, Placement, Settings};
 
 use crate::gamepad::{Button, PadState};
@@ -87,6 +89,10 @@ pub struct TouchControls {
     /// How far the block under a world hold is broken (0..1), drawn in the
     /// touch marker.
     pub break_progress: f32,
+    /// The inventory is open: see [`Self::inventory_update`].
+    pub inventory_mode: bool,
+    /// Shift is held in the inventory (the sneak button shows held).
+    pub inventory_shift: bool,
     /// A long hold on the world uses the held item instead of mining. Read when
     /// a finger lands, so a change mid-hold (the last apple eaten) can't turn
     /// eating into mining.
@@ -104,6 +110,8 @@ pub struct TouchControls {
     pub debug_requested: bool,
     pub perspective_requested: bool,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
+    /// The key or action each custom button finger holds.
+    custom_fingers: BTreeMap<u64, String>,
     /// Presses that must reach the game even if released before the next poll.
     pending: PadState,
     /// Key or action presses for the game's key bindings: (token, down).
@@ -171,11 +179,12 @@ impl TouchControls {
 
     /// Whether `point` is on a visible shortcut button.
     pub fn auxiliary_at(&self, point: [f32; 2]) -> bool {
-        Control::ALL.into_iter().any(|c| {
-            Self::auxiliary_control(c)
-                && self.visible(c)
-                && layout::contains(self.placement(c).rect(self.aspect()), point)
-        })
+        self.custom_at(point).is_some()
+            || Control::ALL.into_iter().any(|c| {
+                Self::auxiliary_control(c)
+                    && self.visible(c)
+                    && layout::contains(self.placement(c).rect(self.aspect()), point)
+            })
     }
 
     /// The visible control under `point`, the last-drawn one first.
@@ -186,7 +195,8 @@ impl TouchControls {
             }
             if c == Control::Move && self.dynamic_joystick() {
                 let area = self.dynamic_area();
-                return area[2] > 0.0
+                return !self.inventory_mode
+                    && area[2] > 0.0
                     && area[3] > 0.0
                     && !self.moving()
                     && layout::contains(area, point);
@@ -203,7 +213,7 @@ impl TouchControls {
 
     /// Whether this finger belongs to the touch controls.
     pub fn owns_pointer(&self, id: u64) -> bool {
-        self.fingers.contains_key(&id)
+        self.fingers.contains_key(&id) || self.custom_fingers.contains_key(&id)
     }
 
     /// Hands a finger to something else (a menu) until it lifts.
@@ -363,6 +373,9 @@ impl TouchControls {
     /// lands (`started`), moves, or lifts (`ended`). Returns how far the
     /// camera should turn, in surface fractions (see [`camera_delta`]).
     pub fn update(&mut self, id: u64, point: [f32; 2], started: bool, ended: bool) -> [f32; 2] {
+        if self.custom_update(id, point, started, ended) {
+            return [0.0; 2];
+        }
         if ended {
             self.lift(id);
             return [0.0; 2];
@@ -372,7 +385,8 @@ impl TouchControls {
             return [0.0; 2];
         }
         let aspect = self.aspect();
-        let attack_look = self.settings.attack_button_look && self.crosshair();
+        let attack_look =
+            self.settings.attack_button_look && self.crosshair() && !self.inventory_mode;
         let Some((role, previous)) = self.fingers.get_mut(&id) else {
             return [0.0; 2];
         };
@@ -496,8 +510,11 @@ impl TouchControls {
         }
     }
 
-    /// Lets go of everything: fingers, latched presses, requests.
+    /// Lets go of everything: fingers, latched presses, requests. Released
+    /// keys still go out through [`Self::key_events`].
     pub fn clear(&mut self) {
+        self.inventory_shift = false;
+        self.clear_custom();
         self.fingers.clear();
         self.last_sneak_tap = None;
         self.sprint_latched = false;
