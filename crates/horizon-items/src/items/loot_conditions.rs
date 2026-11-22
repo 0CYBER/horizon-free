@@ -21,9 +21,14 @@ impl<R: RandomSource> LootContext<'_, R> {
                 "minecraft:tool/can_silk_touch" => {
                     self.enchantment_level("minecraft:silk_touch") > 0
                 }
-                "minecraft:tool/can_shear" => {
-                    self.held.is_some_and(|h| &*h.item == "minecraft:shears")
-                }
+                // `match_tool` for the shears, which asks `shears_dig` (`stock_condition`)
+                "minecraft:tool/can_shear" => self.condition(
+                    &serde_json::json!({
+                        "type": "minecraft:match_tool",
+                        "predicate": {"items": "minecraft:shears"},
+                    }),
+                    random,
+                ),
                 _ => false,
             },
         }

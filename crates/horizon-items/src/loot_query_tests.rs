@@ -172,6 +172,54 @@ fn queried_context_and_ability_reach_native_adapter() {
             );
         }
     }
+    // vanilla's `HAS_SHEARS` (leaves, cobweb, grass) asks `shears_dig`, as NeoForge's tables do;
+    // a match_tool with more to its predicate is not the shears check and asks no mod
+    for (tool, expected) in [
+        (None, 0),
+        (Some("minecraft:stick"), 0),
+        (Some("minecraft:shears"), 1),
+        (Some("test:grant"), 1),
+        (Some("test:deny"), 0),
+    ] {
+        let held = tool.map(|item| ItemStack {
+            item: Arc::from(item),
+            count: 1,
+            damage: 0,
+            extra: None,
+        });
+        let drops_with = |condition: Value| {
+            let table = json!({"pools":[{"rolls":1,"condition":condition,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]});
+            let data = data(vec![("test:leaves", table)]);
+            let query = Rc::new(query::LootQuery::new(None, None));
+            query::with_query(query, || {
+                data.loot_table(
+                    "test:leaves",
+                    false,
+                    held.as_ref(),
+                    &mut LegacyRandom::new(9),
+                )
+            })
+            .len()
+        };
+        // the inline check and vanilla's named predicate, which data without it falls back to
+        for condition in [
+            json!({"type":"minecraft:match_tool","predicate":{"items":"minecraft:shears"}}),
+            json!("minecraft:tool/can_shear"),
+        ] {
+            assert_eq!(drops_with(condition), expected, "{tool:?}");
+            assert_eq!(
+                OBSERVED_ABILITY.with(|v| v.take()),
+                tool.map(|item| (item.to_owned(), "shears_dig".to_owned()))
+            );
+        }
+        let enchanted = json!({"type":"minecraft:match_tool","predicate":{"items":"minecraft:shears","predicates":{"minecraft:enchantments":[{"enchantments":"minecraft:silk_touch"}]}}});
+        assert_eq!(drops_with(enchanted), 0, "{tool:?}");
+        // vanilla's `minecraft:tool/can_silk_touch`: a one-key predicate without items, asked
+        // when the shears check fails (leaves broken without shears)
+        let silk = json!({"type":"minecraft:match_tool","predicate":{"predicates":{"minecraft:enchantments":[{"enchantments":"minecraft:silk_touch","levels":{"min":1}}]}}});
+        assert_eq!(drops_with(silk), 0, "{tool:?}");
+        assert_eq!(OBSERVED_ABILITY.with(|v| v.take()), None);
+    }
     let empty_shears = ItemStack {
         item: Arc::from("minecraft:shears"),
         count: 0,

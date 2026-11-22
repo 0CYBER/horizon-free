@@ -1,6 +1,19 @@
 use super::*;
 impl<R: RandomSource> LootContext<'_, R> {
     pub(super) fn stock_condition(&self, c: &Value) -> Option<bool> {
+        // NeoForge's block loot asks the `shears_dig` ability where vanilla's asks for the
+        // shears themselves (`BlockLootSubProvider.HAS_SHEARS`), so a mod's shearing tool drops
+        // what the shears do; the shears still pass, through the ability's default.
+        let shears_dig;
+        let c = if is_has_shears(c) {
+            shears_dig = serde_json::json!({
+                "type": "neoforge:can_item_perform_ability",
+                "ability": "shears_dig",
+            });
+            &shears_dig
+        } else {
+            c
+        };
         if !matches!(
             c["type"].as_str(),
             Some("neoforge:loot_table_id" | "neoforge:can_item_perform_ability")
@@ -140,3 +153,11 @@ impl Items {
 #[cfg(test)]
 #[path = "loot_query_tests.rs"]
 mod tests;
+
+/// Whether `c` is vanilla's `HAS_SHEARS`: a `match_tool` whose whole predicate is the shears.
+fn is_has_shears(c: &Value) -> bool {
+    c["type"].as_str() == Some("minecraft:match_tool")
+        && c["predicate"].as_object().is_some_and(|p| {
+            p.len() == 1 && p.get("items").and_then(Value::as_str) == Some("minecraft:shears")
+        })
+}
