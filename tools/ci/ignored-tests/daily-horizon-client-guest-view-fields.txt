@@ -1,0 +1,6 @@
+# A guest's view for the mobs by the fields it reads, against a turn of the guest: prepared resources.
+# PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::lan_mobs::view_tests::a_panicking_light_view_restores_the_host_and_guest lib daily resources
+horizon-client game::lan_mobs::view_tests::report_which_scenario_each_condition_is_needed_by lib daily resources
+horizon-client game::lan_mobs::view_tests::the_light_view_is_the_view_of_a_turn_and_each_fallback_is_taken_where_it_should lib daily resources
+horizon-client game::lan_mobs::view_tests::the_views_change_when_their_inputs_do lib daily resources

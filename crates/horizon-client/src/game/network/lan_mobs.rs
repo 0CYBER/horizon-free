@@ -10,6 +10,7 @@ use horizon_client::{
 };
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Clientbound as C};
+use winit::keyboard::KeyCode;
 
 /// The guests mobs can see this tick, by connection.
 pub(super) type GuestViews = Vec<(u32, PlayerView)>;
@@ -190,11 +191,152 @@ impl Game<'_> {
             .collect();
         let mut views = Vec::new();
         for (conn, uuid, moved) in conns {
-            if let Some(Some(v)) = self.as_guest(conn, |g| g.player_view()) {
+            if let Some(Some(v)) = self.guest_player_view(conn, Self::player_view) {
                 views.push((conn, guest_view(v, uuid, moved)));
             }
         }
         views
+    }
+
+    /// `as_guest(conn, |g| g.player_view())`: the view of the guest `conn` as mobs see it. The
+    /// view reads a dozen fields of the game (the body, the look, the hands' items, the armour,
+    /// the effects, the mode, the sneak key, the vehicle and bed, the damage record, the name
+    /// for the team); a turn swaps a hundred. This swaps those in and out, nothing else, and
+    /// leaves to the turn what it would have done beyond them (a guest with a hurt direction,
+    /// a teleport, events or a health that differs from its record, or no body yet, a nested
+    /// or a fake one).
+    fn guest_player_view(
+        &mut self,
+        conn: u32,
+        view: impl FnOnce(&Self) -> Option<PlayerView>,
+    ) -> Option<Option<PlayerView>> {
+        #[cfg(test)]
+        if FULL.get() {
+            return self.guest_view_in_a_turn(conn, view);
+        }
+        if !gate(11, self.lan_acting.is_none()) || !gate(12, self.lan_guest_swaps.is_empty()) {
+            return self.guest_view_in_a_turn(conn, view);
+        }
+        let host = self.lan.as_mut()?;
+        let i = host.hub.guests.connection_index(conn)?;
+        let light = {
+            let g = &host.hub.guests[i];
+            // `participates_online` is a network guest: not a fake one either.
+            gate(0, g.motion.is_some())
+                && gate(1, !g.dead)
+                && gate(2, g.health > 0.0)
+                && gate(8, g.participates_online())
+                && g.motion.as_ref().is_none_or(|m| {
+                    gate(3, m.health.health().to_bits() == g.health.to_bits())
+                        && gate(4, !m.health.dead_or_dying())
+                        && gate(5, m.health.indicated_dir.is_none())
+                        && gate(6, !m.teleported)
+                        && gate(7, m.events.is_empty())
+                })
+        };
+        if !light || !gate(10, self.guest_combat.contains_key(&conn)) {
+            return self.guest_view_in_a_turn(conn, view);
+        }
+        #[cfg(test)]
+        VIEWS.with_borrow_mut(|v| v.push((conn, true)));
+        let host = self.lan.as_mut()?;
+        let (mut body, name, uuid) = host.hub.guests.update(i, |g| {
+            let motion = g.motion.take().expect("checked above");
+            std::mem::swap(&mut self.inventory, &mut g.inventory);
+            std::mem::swap(&mut self.armor, &mut g.armor);
+            std::mem::swap(&mut self.offhand, &mut g.offhand);
+            std::mem::swap(&mut self.potions.effects, &mut g.effects);
+            (Some(*motion), g.name.clone(), g.uuid)
+        });
+        let g = &host.hub.guests[i];
+        if let Some(m) = body.as_mut() {
+            m.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
+            m.sprinting = g.sprinting;
+            m.invulnerable = g.abilities.invulnerable || g.handover.is_some();
+            m.health.food.food = g.food;
+            m.health.food.saturation = g.saturation;
+            // The rest of what a turn's entry writes into the body, so that the body is left as
+            // the turn would leave it.
+            m.entity_id = g.entity_id;
+            m.ground.on_ground = g.on_ground;
+            m.yaw = g.yaw;
+            m.pitch = g.pitch;
+            m.may_fly = g.abilities.may_fly;
+            m.flying = g.abilities.flying;
+            m.flying_speed = g.abilities.flying_speed;
+            m.fall_flying = g.fall_flying;
+            m.client_loaded = g.client_loaded();
+            m.collision_exclusions.clone_from(&g.collision_exclusions);
+        }
+        let (position_yaw, selected) = ((g.yaw, g.pitch), g.selected);
+        let (game_mode, vehicle, bed, sleep_timer, sneaking) =
+            (g.game_mode, g.vehicle, g.bed, g.sleep_timer, g.sneaking);
+        std::mem::swap(&mut self.player, &mut body);
+        let (yaw, pitch) = (self.yaw, self.pitch);
+        (self.yaw, self.pitch) = position_yaw;
+        let selected = std::mem::replace(&mut self.selected, selected);
+        let (mode, creative) = (self.mode, self.creative);
+        self.mode = crate::game::game_mode::mode_from_id(game_mode);
+        self.creative = self.mode == horizon_client::command::args::GameMode::Creative;
+        let host_keys = std::mem::take(&mut self.keys);
+        if sneaking {
+            self.keys.insert(KeyCode::ShiftLeft);
+        }
+        let mut combat = self.guest_combat.remove(&conn).expect("checked above");
+        std::mem::swap(&mut self.combat, &mut combat);
+        let riding = std::mem::replace(&mut self.riding, vehicle);
+        let sleeping = std::mem::replace(&mut self.sleeping, bed);
+        let sleep_timer = std::mem::replace(&mut self.sleep_timer, sleep_timer);
+        let acting = (
+            self.lan_acting.replace(conn),
+            self.lan_acting_name.replace(name),
+            self.lan_acting_uuid.replace(uuid),
+            std::mem::replace(&mut self.lan_acting_fake, false),
+        );
+        // The view can call a native armor hook. Restore both players before unwinding.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| view(self)));
+        (
+            self.lan_acting,
+            self.lan_acting_name,
+            self.lan_acting_uuid,
+            self.lan_acting_fake,
+        ) = acting;
+        self.sleep_timer = sleep_timer;
+        self.sleeping = sleeping;
+        self.riding = riding;
+        std::mem::swap(&mut self.combat, &mut combat);
+        self.guest_combat.insert(conn, combat);
+        self.keys = host_keys;
+        (self.mode, self.creative) = (mode, creative);
+        self.selected = selected;
+        (self.yaw, self.pitch) = (yaw, pitch);
+        std::mem::swap(&mut self.player, &mut body);
+        let host = self.lan.as_mut().expect("host was present for the view");
+        host.hub.guests.update(i, |g| {
+            std::mem::swap(&mut self.inventory, &mut g.inventory);
+            std::mem::swap(&mut self.armor, &mut g.armor);
+            std::mem::swap(&mut self.offhand, &mut g.offhand);
+            std::mem::swap(&mut self.potions.effects, &mut g.effects);
+            let mut m = body.take().expect("the guest's body");
+            // What a turn's leave leaves in the stored body: the sprint is the record's.
+            m.sprinting = false;
+            g.motion = Some(Box::new(m));
+        });
+        match result {
+            Ok(view) => Some(view),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    /// The view through a turn of the guest: what every view was.
+    fn guest_view_in_a_turn(
+        &mut self,
+        conn: u32,
+        view: impl FnOnce(&Self) -> Option<PlayerView>,
+    ) -> Option<Option<PlayerView>> {
+        #[cfg(test)]
+        VIEWS.with_borrow_mut(|v| v.push((conn, false)));
+        self.as_guest(conn, |g| view(g))
     }
 
     /// The guest `conn`'s real identity — the uuid its lent view carries and
@@ -703,3 +845,31 @@ mod tests {
         assert_eq!(player_for(&golem, None, &guests, Some(7)), Some(8));
     }
 }
+
+/// A condition of the light view; in a test, one the test has switched off (`SKIP`, a bit a
+/// condition) counts as met, to see which conditions the tests depend on.
+#[inline(always)]
+fn gate(i: u32, met: bool) -> bool {
+    #[cfg(test)]
+    if SKIP.get() >> i & 1 == 1 {
+        return true;
+    }
+    #[cfg(not(test))]
+    let _ = i;
+    met
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test only: the conditions to treat as met.
+    pub(super) static SKIP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Test only: every view through a turn, as it was.
+    pub(super) static FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Test only: for each view, the connection and whether the light path made it.
+    pub(super) static VIEWS: std::cell::RefCell<Vec<(u32, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+#[path = "tests/lan_mobs_views.rs"]
+mod view_tests;
