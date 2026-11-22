@@ -1018,6 +1018,21 @@ impl ItemStack {
     pub fn matches(&self, other: &Self) -> bool {
         self.count == other.count && self.same_item_same_components(other)
     }
+    /// Check that a reloaded stack retains this stack's persistent data.
+    pub fn matches_saved(&self, saved: &Self) -> bool {
+        if self.count != saved.count || self.damage != saved.damage {
+            return false;
+        }
+        if self.same_item_same_components(saved) {
+            return true;
+        }
+        let mut planned = self.clone();
+        let mut saved = saved.clone();
+        normalize_saved_stack(&mut planned);
+        normalize_saved_stack(&mut saved);
+        planned.same_item_same_components(&saved)
+    }
+
     /// `getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS)`: the stack's own
     /// `attribute_modifiers` component when it has one (none at all when it
     /// removed the component), else its item type's. Borrowed unless the stack
@@ -1475,63 +1490,146 @@ pub fn encode_extra_components(stack: &ItemStack) -> Option<Tag> {
 
 fn encode_stack_components(stack: &ItemStack, include_damage: bool) -> Option<Tag> {
     let mut components = components_tag_inner(stack.damage, stack.data(), include_damage)?;
-    // MobEffectInstance.Details' codec always saves the resolved icon flag.
-    // An omitted icon follows show_particles, whose default is true.
     if let Some(Tag::List(effects)) = components
         .get_mut("minecraft:potion_contents")
         .and_then(|potion| potion.get_mut("custom_effects"))
     {
-        for effect in effects {
-            let shown = effect.get("show_particles").and_then(int).unwrap_or(1) != 0;
-            if let Tag::Compound(fields) = effect {
-                fields
-                    .entry(JavaString::from("show_icon"))
-                    .or_insert(Tag::Byte(i8::from(shown)));
-            }
-        }
+        canonical_effect_icons(effects);
     }
-    // LodestoneTracker.CODEC: optionalFieldOf("tracked", true).
-    if let Some(Tag::Compound(tracker)) = components.get_mut("minecraft:lodestone_tracker")
-        && tracker.get(&JavaString::from("tracked")) == Some(&Tag::Byte(1))
-    {
-        tracker.remove(&JavaString::from("tracked"));
+    if let Some(tracker) = components.get_mut("minecraft:lodestone_tracker") {
+        canonical_lodestone_tracker(tracker);
     }
-    if &*stack.item == "minecraft:filled_map"
-        && matches!(components.get("minecraft:map_decorations"), Some(Tag::Compound(entries)) if entries.is_empty())
+    if let Some(key) = elided_prototype_key(&stack.item)
+        && components
+            .get(key)
+            .is_some_and(|value| is_prototype_patch(key, value))
         && let Tag::Compound(entries) = &mut components
     {
-        entries.remove(&JavaString::from("minecraft:map_decorations"));
-        if entries.is_empty() {
-            return None;
-        }
-    }
-    // Items.ENCHANTED_BOOK has empty stored enchantments in its prototype.
-    // Keep the live presence marker; only the saved component patch elides it.
-    if &*stack.item == "minecraft:enchanted_book"
-        && matches!(components.get("minecraft:stored_enchantments"), Some(Tag::Compound(entries)) if entries.is_empty())
-        && let Tag::Compound(entries) = &mut components
-    {
-        entries.remove(&JavaString::from("minecraft:stored_enchantments"));
-        if entries.is_empty() {
-            return None;
-        }
-    }
-    // Items.BEEHIVE/BEE_NEST use this whole block-state map as their prototype.
-    // Empty maps and maps with extra properties are distinct, nondefault patches.
-    if matches!(&*stack.item, "minecraft:beehive" | "minecraft:bee_nest")
-        && matches!(components.get("minecraft:block_state"), Some(Tag::Compound(state))
-            if state.len() == 1
-                && matches!(state.get(&JavaString::from("honey_level")),
-                    Some(Tag::String(level)) if level.to_string_lossy() == "0"))
-        && let Tag::Compound(entries) = &mut components
-    {
-        entries.remove(&JavaString::from("minecraft:block_state"));
+        entries.remove(&JavaString::from(key));
         if entries.is_empty() {
             return None;
         }
     }
     Some(components)
 }
+
+/// The icon follows show_particles when omitted. Its default is true.
+fn canonical_effect_icons(effects: &mut [Tag]) {
+    for effect in effects {
+        let shown = effect.get("show_particles").and_then(int).unwrap_or(1) != 0;
+        if let Tag::Compound(fields) = effect {
+            fields
+                .entry(JavaString::from("show_icon"))
+                .or_insert(Tag::Byte(i8::from(shown)));
+        }
+    }
+}
+
+/// LodestoneTracker.CODEC uses true when tracked is omitted.
+fn canonical_lodestone_tracker(tracker: &mut Tag) {
+    if let Tag::Compound(fields) = tracker {
+        let tracked = JavaString::from("tracked");
+        if fields.get(&tracked) == Some(&Tag::Byte(1)) {
+            fields.remove(&tracked);
+        }
+    }
+}
+
+// These saved patches are redundant for their vanilla item prototypes.
+fn elided_prototype_key(item: &str) -> Option<&'static str> {
+    match item {
+        "minecraft:filled_map" => Some("minecraft:map_decorations"),
+        "minecraft:enchanted_book" => Some("minecraft:stored_enchantments"),
+        "minecraft:beehive" | "minecraft:bee_nest" => Some("minecraft:block_state"),
+        _ => None,
+    }
+}
+
+fn is_prototype_patch(key: &str, value: &Tag) -> bool {
+    let Tag::Compound(entries) = value else {
+        return false;
+    };
+    if key == "minecraft:block_state" {
+        entries.len() == 1
+            && matches!(value.get("honey_level"), Some(Tag::String(level)) if level.to_string_lossy() == "0")
+    } else {
+        entries.is_empty()
+    }
+}
+
+/// Normalize equivalent representations directly so a lossy codec cannot hide a change.
+fn normalize_saved_stack(stack: &mut ItemStack) {
+    let canonical_id = |id: &mut Arc<str>| {
+        if let Ok(parsed) = horizon_core::identifier::Identifier::parse(id) {
+            *id = parsed.to_string().into();
+        }
+    };
+    canonical_id(&mut stack.item);
+    let Some(data) = stack.extra.as_deref_mut() else {
+        return;
+    };
+    data.wire = Wire::default();
+    data.map_post_processing = None;
+    data.custom_name = data.custom_name.take().map(collapsed_text);
+    for (id, _) in data
+        .enchantments
+        .iter_mut()
+        .chain(&mut data.stored_enchantments)
+    {
+        canonical_id(id);
+    }
+    for (key, value) in &mut data.potion_extra {
+        if key == "custom_effects"
+            && let Tag::List(effects) = value
+        {
+            canonical_effect_icons(effects);
+        }
+    }
+    data.potion_extra.sort_by(|a, b| a.0.cmp(&b.0));
+    if let Some(book) = &mut data.written {
+        if book.page_tags.is_empty() {
+            book.page_tags = book
+                .pages
+                .iter()
+                .map(|page| Tag::String(page.as_str().into()))
+                .collect();
+        } else {
+            book.page_tags = book.page_tags.iter().map(plain_component).collect();
+        }
+    }
+    elide_prototype_fireworks(&stack.item, data);
+    if data.pot_decorations.as_deref().is_some_and(all_bricks) {
+        data.pot_decorations = None;
+    }
+    for nested in data
+        .container
+        .iter_mut()
+        .map(|(_, stack)| stack)
+        .chain(&mut data.charged)
+        .chain(&mut data.bundle_contents)
+        .chain(
+            data.pot_decorations
+                .iter_mut()
+                .flat_map(|sides| sides.iter_mut().flatten()),
+        )
+    {
+        normalize_saved_stack(nested);
+    }
+    if let Some(key) = elided_prototype_key(&stack.item) {
+        data.other
+            .retain(|(id, value)| id != key || !is_prototype_patch(key, value));
+    }
+    for (key, value) in &mut data.other {
+        match key.as_str() {
+            "minecraft:map_decorations" => *value = canonical_other_component(key, value),
+            "minecraft:lodestone_tracker" => canonical_lodestone_tracker(value),
+            _ => crate::item_nbt::canonicalize_component_for_comparison(key, value),
+        }
+    }
+    data.other.sort_by(|a, b| a.0.cmp(&b.0));
+    stack.tidy();
+}
+
 /// Saved patch with the loaded item's prototype available.
 /// Context-free callers and the live `components_tag` view stay unchanged.
 pub fn encode_components_with_items(stack: &ItemStack, items: &crate::items::Items) -> Option<Tag> {

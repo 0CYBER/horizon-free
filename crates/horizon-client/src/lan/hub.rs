@@ -28,7 +28,7 @@ use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::{literal, translatable},
 };
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::{Arc, Mutex, Weak, atomic::Ordering};
 use {
     horizon_core::nbt::{JavaString, Tag},
     horizon_mod_runtime::attachments::Holder,
@@ -363,6 +363,9 @@ pub struct Hub {
     pub chunk_watches: ChunkWatchLog,
     /// Kicks waiting for the game thread to notify native mods.
     pending_kicks: Vec<HostEvent>,
+    pending_logouts: crate::fast_hash::FxHashMap<u128, Weak<()>>,
+    /// The disk copy can be stale until this player's next successful logout save.
+    failed_logout_saves: crate::fast_hash::FxHashSet<u128>,
     /// A native mod listens to `player_move`: a changed report waits for the game ([`pending_move`]).
     pub moves_listened: bool,
     /// A native mod listens to `player_move_packet`: every validated movement packet is told to
@@ -879,6 +882,8 @@ impl Hub {
             packet_drain: None,
             deferred_payloads: Default::default(),
             pending_kicks: Vec::new(),
+            pending_logouts: Default::default(),
+            failed_logout_saves: Default::default(),
             moves_listened: false,
             move_packets_listened: false,
             transfers: None,
@@ -2399,6 +2404,10 @@ impl Hub {
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
         self.end_refreshes();
+        if !self.pending_logouts.is_empty() {
+            self.pending_logouts
+                .retain(|_, guard| guard.strong_count() != 0);
+        }
         self.anticheat_tick(ctx.tick_rate);
         let mut events = self.begin_payload_poll();
         self.finish_fake_kicks(&mut events);
@@ -2417,7 +2426,8 @@ impl Hub {
                         .iter()
                         .position(|g| g.uuid == j.uuid && !g.participates_online())
                     {
-                        events.push(HostEvent::Left(Box::new(self.guests.remove(i))));
+                        let guest = self.guests.remove(i);
+                        events.push(self.leave_event(guest));
                     }
                     let conn = self.admit(*j, ctx);
                     events.push(HostEvent::Joined(conn));
@@ -2426,7 +2436,7 @@ impl Hub {
                     credits.push(credit);
                     if let Some(i) = self.guests.iter().position(|g| g.conn == conn) {
                         let g = self.remove_guest(i, &reason);
-                        events.push(HostEvent::Left(Box::new(g)));
+                        events.push(self.leave_event(g));
                     }
                 }
                 NetEvent::Packet(conn, packet, bytes) => {
@@ -2633,6 +2643,42 @@ impl Hub {
         });
     }
 
+    pub fn player_logout_pending(&self, uuid: u128) -> bool {
+        self.pending_logouts
+            .get(&uuid)
+            .is_some_and(|guard| guard.strong_count() != 0)
+    }
+
+    pub fn player_logout_save_failed(&self, uuid: u128) -> bool {
+        self.failed_logout_saves.contains(&uuid)
+    }
+
+    pub fn record_player_logout_save(&mut self, uuid: u128, saved: bool) {
+        if saved {
+            self.failed_logout_saves.remove(&uuid);
+        } else {
+            self.failed_logout_saves.insert(uuid);
+        }
+    }
+
+    /// An offline reader must wait until every queued logout for this player finishes saving.
+    pub fn hold_player_logout(&mut self, uuid: u128) -> Arc<()> {
+        let guard = self.pending_logouts.entry(uuid).or_default();
+        guard.upgrade().unwrap_or_else(|| {
+            let pending = Arc::new(());
+            *guard = Arc::downgrade(&pending);
+            pending
+        })
+    }
+
+    /// The event owns the guard even if the game drops the event without handling it.
+    pub fn leave_event(&mut self, mut guest: Guest) -> HostEvent {
+        if guest.participates_online() {
+            guest.logout_guard = Some(self.hold_player_logout(guest.uuid));
+        }
+        HostEvent::Left(Box::new(guest))
+    }
+
     pub(super) fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
         let mut g = self.guests.remove(i);
         if let Some(terrain) = self.terrain.as_mut() {
@@ -2725,7 +2771,8 @@ impl Hub {
         let mut gone = self.remove_guest(i, "moved to another server");
         gone.released = true;
         gone.handover = None;
-        self.pending_kicks.push(HostEvent::Left(Box::new(gone)));
+        let left = self.leave_event(gone);
+        self.pending_kicks.push(left);
         Ok(())
     }
 

@@ -409,7 +409,7 @@ fn player_set_velocity_replaces_a_guests_motion() {
         }
         let a = game.player(12).unwrap();
         let b = game.player(13).unwrap();
-        let velocity =|game: &super::Game<'_>, conn| {
+        let velocity = |game: &super::Game<'_>, conn| {
             let guest = game.lan.as_ref().unwrap().hub.guest(conn).unwrap();
             guest.motion.as_ref().unwrap().velocity
         };
@@ -438,11 +438,9 @@ fn player_set_velocity_replaces_a_guests_motion() {
 #[test]
 #[ignore = "daily"]
 fn another_guests_services_work_during_a_turn() {
-    use super::{
-        commands::Target,
-        native_inventories::NativeInventoryKind::{Ender, Player},
-    };
+    use super::{api_values::TryIntoApi, commands::Target};
     use horizon_client::{advancements as adv, command::args::Selector, items::ItemStack};
+    use mod_api::PlayerInventoryKind::{Ender, Player};
     use mod_api::{CriterionContext, CriterionTest, CriterionTestError, TriggerCriterionError};
 
     struct Accept;
@@ -495,16 +493,24 @@ fn another_guests_services_work_during_a_turn() {
                 }),
                 [Target::Player]
             );
-            assert!(game.native_inventory(12, Player).is_err());
+            assert!(game.server_player_inventory(12, Player).is_err());
+            let stone = stone.clone().try_into_api().unwrap();
             assert_eq!(
-                game.native_inventory(13, Player).unwrap().slots[0],
+                game.server_player_inventory(13, Player).unwrap().slots[0],
                 Some(stone.clone())
             );
-            game.native_move_stack((13, Player, 0), &stone, (13, Ender))
-                .unwrap();
-            assert_eq!(game.native_inventory(13, Player).unwrap().slots[0], None);
+            game.server_move_inventory_stack(&mod_api::PlayerInventoryMove::new(
+                (13, Player, 0),
+                stone.clone(),
+                (13, Ender),
+            ))
+            .unwrap();
             assert_eq!(
-                game.native_inventory(13, Ender).unwrap().slots[0],
+                game.server_player_inventory(13, Player).unwrap().slots[0],
+                None
+            );
+            assert_eq!(
+                game.server_player_inventory(13, Ender).unwrap().slots[0],
                 Some(stone.clone())
             );
             assert_eq!(
@@ -530,8 +536,8 @@ fn another_guests_services_work_during_a_turn() {
                 Some(ItemStack::new("minecraft:apple", 1))
             );
             game.as_guest(13, |game| {
-                assert!(game.native_inventory(12, Player).is_err());
-                assert!(game.native_inventory(13, Player).is_err());
+                assert!(game.server_player_inventory(12, Player).is_err());
+                assert!(game.server_player_inventory(13, Player).is_err());
                 assert_eq!(
                     a.trigger_criterion(game, &trigger, Arc::new(Accept)),
                     Err(TriggerCriterionError::PlayerUnavailable)
@@ -1529,17 +1535,18 @@ fn run_command_checks_the_line_at_the_level_given() {
 #[test]
 #[ignore = "daily"]
 fn run_command_runs_as_the_entity_from_where_it_is() {
-    use super::native_inventories::NativeInventoryKind::Player;
+    use super::api_values::TryIntoApi;
     use horizon_client::items::ItemStack;
     use mod_api::PermissionLevel::Gamemasters;
+    use mod_api::PlayerInventoryKind::Player;
 
     with_guests(|game| {
         game.build_registries();
         let a = game.player(12).unwrap().entity();
         let b = game.player(13).unwrap().entity();
-        let holds = |game: &super::Game<'_>, uuid: u128, item: &str| {
-            let stack = ItemStack::new(item, 1);
-            let slots = game.native_inventory(uuid, Player).unwrap().slots;
+        let holds = |game: &mut super::Game<'_>, uuid: u128, item: &str| {
+            let stack = ItemStack::new(item, 1).try_into_api().unwrap();
+            let slots = game.server_player_inventory(uuid, Player).unwrap().slots;
             slots.iter().flatten().any(|s| *s == stack)
         };
         let stand = summon_stand(game);
@@ -1629,9 +1636,10 @@ fn run_command_answers_false_for_a_bad_line_or_a_stale_handle() {
 #[test]
 #[ignore = "daily"]
 fn run_command_refuses_a_player_whose_level_is_parked() {
-    use super::native_inventories::NativeInventoryKind::Player;
+    use super::api_values::TryIntoApi;
     use horizon_client::{gamerules::vanilla::SEND_COMMAND_FEEDBACK, items::ItemStack};
     use mod_api::PermissionLevel::Owners;
+    use mod_api::PlayerInventoryKind::Player;
 
     with_guests(|game| {
         game.build_registries();
@@ -1644,9 +1652,9 @@ fn run_command_refuses_a_player_whose_level_is_parked() {
                 .update_guest(13, |guest| guest.dimension = dimension.to_owned())
                 .unwrap();
         };
-        let has_stick = |game: &super::Game<'_>| {
-            let stick = ItemStack::new("minecraft:stick", 1);
-            let slots = game.native_inventory(13, Player).unwrap().slots;
+        let has_stick = |game: &mut super::Game<'_>| {
+            let stick = ItemStack::new("minecraft:stick", 1).try_into_api().unwrap();
+            let slots = game.server_player_inventory(13, Player).unwrap().slots;
             slots.iter().flatten().any(|s| *s == stick)
         };
         assert!(game.ui.rules.bool_at(SEND_COMMAND_FEEDBACK));

@@ -3054,6 +3054,29 @@ pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
     write_dat_as(path, tag, false)
 }
 
+/// Validate the NBT that a reload will see before replacing either file.
+pub fn write_dat_checked(
+    path: &Path,
+    tag: Tag,
+    validate: impl FnOnce(&Tag, &Tag) -> bool,
+) -> Result<bool> {
+    let root = NamedTag {
+        name: "".into(),
+        tag,
+    };
+    let Ok(bytes) = nbt::write_named(&root, Limits::saved()) else {
+        return Ok(false);
+    };
+    let Ok((saved, _)) = crate::recipe_book::read_saved(&bytes) else {
+        return Ok(false);
+    };
+    if !validate(&root.tag, &saved.tag) {
+        return Ok(false);
+    }
+    write_dat_bytes(path, &bytes, false)?;
+    Ok(true)
+}
+
 /// [`write_dat`], synced to the disk: the new file before it is renamed into place, and the
 /// folder after, so a power loss leaves the old file or the new one. A hand-over's commit
 /// point (`player-confirm`) replies only once its files are.
@@ -3105,9 +3128,6 @@ fn sync_folder(path: &Path) -> std::io::Result<()> {
 }
 
 fn write_dat_as(path: &Path, tag: Tag, durable: bool) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
     let bytes = nbt::write_named(
         &NamedTag {
             name: "".into(),
@@ -3116,7 +3136,14 @@ fn write_dat_as(path: &Path, tag: Tag, durable: bool) -> Result<()> {
         Limits::saved(),
     )
     .map_err(|e| e.to_string())?;
-    let compressed = Compression::Gzip.encode(&bytes)?;
+    write_dat_bytes(path, &bytes, durable)
+}
+
+fn write_dat_bytes(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let compressed = Compression::Gzip.encode(bytes)?;
     let file = path
         .file_name()
         .and_then(|n| n.to_str())

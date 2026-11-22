@@ -1424,6 +1424,7 @@ impl Game<'_> {
             if !host.hub.guests[i].participates_in_player_simulation() {
                 continue;
             }
+            let _logout = host.hub.hold_player_logout(host.hub.guests[i].uuid);
             let mut g = host.hub.guests.take_for_save(i);
             self.take_parent_vehicle(&mut g);
             self.save_guest(&mut g);
@@ -1444,15 +1445,18 @@ impl Game<'_> {
         // A proxy released this record to another server, which now owns saving it.
         if guest.placed && !guest.released {
             let _ = self.finish_player_autosaves(true);
-            if self
+            let saved = if self
                 .lan
                 .as_ref()
                 .and_then(|host| host.owner.as_ref())
                 .is_some_and(|o| o.uuid == guest.uuid)
             {
-                playerdata::save_owner(guest, &mut self.level, &self.world_root);
+                playerdata::save_owner(guest, &mut self.level, &self.world_root)
             } else {
-                self.player_autosaves.save_after(guest, &self.world_root);
+                self.player_autosaves.save_after(guest, &self.world_root).1
+            };
+            if let Some(host) = self.lan.as_mut() {
+                host.hub.record_player_logout_save(guest.uuid, saved);
             }
             let directory = playerdata::directory(&self.world_root);
             self.native_player_save_to_file(guest.uuid, &guest.name, &directory);
@@ -2311,6 +2315,7 @@ impl Game<'_> {
                         self.native_guest_left(&guest);
                         continue;
                     }
+                    let logout = guest.take_logout_guard();
                     // The menu they had open closes, in the level they were in
                     // (`ServerPlayer.disconnect` -> `doCloseContainer`).
                     if guest.placed {
@@ -2343,6 +2348,7 @@ impl Game<'_> {
                     // PlayerList.remove: the vehicle it alone rides goes too.
                     self.take_parent_vehicle(&mut guest);
                     self.save_guest(&mut guest);
+                    drop(logout);
                     let host = self.lan.as_mut()?;
                     host.play.remove(&guest.conn);
                     host.forget_menus(guest.conn);
@@ -4690,7 +4696,6 @@ mod tests {
             Admission,
             engine::{Owner, Target},
         };
-        use horizon_client::lan::hub::HostEvent;
         use horizon_client::menu::{Kind, Menu};
         super::super::native_guest_turn_tests::with_guests(|game| {
             let host = game.lan.as_mut().unwrap();
@@ -4702,7 +4707,7 @@ mod tests {
             // The hub takes a guest out of its list before it reports the leave.
             let guest = host.hub.guests.remove(0);
             assert_eq!(guest.conn, 12);
-            let event = HostEvent::Left(Box::new(guest));
+            let event = host.hub.leave_event(guest);
             let host = game.lan.take().unwrap();
             game.lan = game.lan_process_events(host, [event], &[], [0.5, 64.0, 0.5]);
             let host = game.lan.as_ref().unwrap();
@@ -4714,6 +4719,176 @@ mod tests {
                 Err(Admission::MissingHolder)
             ));
             assert!(Target::admit(game, 13, Owner::Inventory).is_ok());
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_pending_logout_blocks_inventory_edits_during_autosave_completion() {
+        use horizon_client::items::ItemStack;
+        use mod_api::{
+            Hooks, PlayerInventoryError, PlayerInventoryKind, PlayerInventoryMove,
+            PlayerSaveToFileEvent, ServerHost,
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        fn assert_unavailable(host: &mut dyn ServerHost, request: &PlayerInventoryMove) {
+            assert!(matches!(
+                host.server_player_inventory(12, PlayerInventoryKind::Player),
+                Err(PlayerInventoryError::LoggingIn)
+            ));
+            assert_eq!(
+                host.server_move_inventory_stack(request),
+                Err(PlayerInventoryError::LoggingIn)
+            );
+        }
+
+        struct Probe {
+            calls: Arc<AtomicUsize>,
+            request: PlayerInventoryMove,
+        }
+
+        #[mod_api::__subscriptions]
+        impl Hooks for Probe {
+            fn player_save_to_file(
+                &self,
+                host: &mut dyn ServerHost,
+                event: &mut PlayerSaveToFileEvent<'_>,
+            ) {
+                if event.player == 12 {
+                    assert_unavailable(host, &self.request);
+                    self.calls.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        super::super::native_guest_turn_tests::with_guests(|game| {
+            let dir = tempfile::tempdir().unwrap();
+            game.world_root = dir.path().to_owned();
+            let apple = ItemStack::new("minecraft:apple", 1);
+            let bread = ItemStack::new("minecraft:bread", 2);
+            let (request, final_stack) = {
+                let hub = &mut game.lan.as_mut().unwrap().hub;
+                hub.update_guest(12, |g| g.inventory[0] = Some(apple));
+                hub.update_guest(13, |g| g.inventory[0] = Some(bread.clone()));
+                let g = hub.guest(12).unwrap();
+                game.player_autosaves.enqueue(g, &game.world_root);
+                let source = game
+                    .server_player_inventory(13, PlayerInventoryKind::Player)
+                    .unwrap();
+                (
+                    PlayerInventoryMove::new(
+                        (13, PlayerInventoryKind::Player, 0),
+                        source.slots[0].clone().unwrap(),
+                        (12, PlayerInventoryKind::Player),
+                    ),
+                    source.slots[0].clone().unwrap(),
+                )
+            };
+
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.update_guest(12, |g| g.inventory[0] = Some(bread));
+            let guest = hub.guests.remove(0);
+            let event = hub.leave_event(guest);
+            assert_unavailable(game, &request);
+
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+                "inventory_logout",
+                Box::new(Probe {
+                    calls: calls.clone(),
+                    request,
+                }),
+            )]
+            .into();
+            mod_platform::testing::with_mods(mods, || {
+                let host = game.lan.take().unwrap();
+                game.lan = game.lan_process_events(host, [event], &[], [0.5, 64.0, 0.5]);
+            });
+
+            assert_eq!(calls.load(Ordering::Relaxed), 2);
+            let snapshot = game
+                .server_player_inventory(12, PlayerInventoryKind::Player)
+                .unwrap();
+            assert!(!snapshot.online);
+            assert_eq!(snapshot.slots[0], Some(final_stack.clone()));
+            let source = game
+                .server_player_inventory(13, PlayerInventoryKind::Player)
+                .unwrap();
+            assert_eq!(source.slots[0], Some(final_stack));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_failed_logout_save_blocks_offline_inventory_until_a_successful_save() {
+        use super::super::{
+            native_guest_turn_tests::with_guests, native_player_death::tests::new_guest,
+        };
+        use horizon_client::{items::ItemStack, lan::playerdata};
+        use mod_api::{PlayerInventoryError, PlayerInventoryKind, PlayerInventoryMove};
+
+        fn leave(game: &mut super::Game<'_>, conn: u32) {
+            let mut host = game.lan.take().unwrap();
+            let index = host.hub.guests.connection_index(conn).unwrap();
+            let guest = host.hub.guests.remove(index);
+            let event = host.hub.leave_event(guest);
+            game.lan = game.lan_process_events(host, [event], &[], [0.5, 64.0, 0.5]);
+        }
+
+        with_guests(|game| {
+            let dir = tempfile::tempdir().unwrap();
+            game.world_root = dir.path().to_owned();
+            let kind = PlayerInventoryKind::Player;
+            let file = playerdata::path(dir.path(), 12);
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.update_guest(12, |g| {
+                g.inventory[0] = Some(ItemStack::new("minecraft:apple", 1));
+            });
+            assert!(playerdata::save(hub.guest(12).unwrap(), dir.path()));
+            let stale = std::fs::read(&file).unwrap();
+            let stack = game.server_player_inventory(12, kind).unwrap().slots[0]
+                .clone()
+                .unwrap();
+            let request = PlayerInventoryMove::new((12, kind, 0), stack, (13, kind));
+            let live_before = game.server_player_inventory(13, kind).unwrap().slots;
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(12, |g| g.inventory[0] = None);
+
+            let temporary = file.with_extension("dat_new");
+            std::fs::create_dir(&temporary).unwrap();
+            leave(game, 12);
+            std::fs::remove_dir(&temporary).unwrap();
+
+            assert_eq!(std::fs::read(&file).unwrap(), stale);
+            assert!(matches!(
+                game.server_player_inventory(12, kind),
+                Err(PlayerInventoryError::File(_))
+            ));
+            assert!(matches!(
+                game.server_move_inventory_stack(&request),
+                Err(PlayerInventoryError::File(_))
+            ));
+            assert_eq!(
+                game.server_player_inventory(13, kind).unwrap().slots,
+                live_before
+            );
+            assert_eq!(std::fs::read(&file).unwrap(), stale);
+
+            let mut returning = new_guest(14, 12);
+            returning.dimension = game.dim.id().to_owned();
+            game.lan.as_mut().unwrap().hub.guests.push(returning);
+            assert!(game.server_player_inventory(12, kind).unwrap().online);
+            leave(game, 14);
+            let offline = game.server_player_inventory(12, kind).unwrap();
+            assert!(!offline.online);
+            assert!(offline.slots[0].is_none());
         });
     }
 

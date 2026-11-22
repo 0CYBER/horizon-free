@@ -51,6 +51,28 @@ pub trait PlayersServerHost {
     #[access(WorldOnly)]
     fn mod_command_raw(&self) -> Option<String>;
     /// Side: server.
+    /// Read a real player's inventory by UUID. Reads live slots when they are online,
+    /// or the existing player file after pending saves finish. Refuses while the
+    /// player is joining, dead or swapped out.
+    #[access(WorldOnly)]
+    fn server_player_inventory(
+        &mut self,
+        uuid: u128,
+        kind: PlayerInventoryKind,
+    ) -> Result<PlayerInventorySnapshot, PlayerInventoryError>;
+    /// Side: server.
+    /// Move the exact stack an inventory snapshot showed. Fills matching stacks before
+    /// empty slots; a player inventory receives into its 36 main slots. The move can
+    /// change one existing saved player file and a live player, or two live inventories.
+    /// A move within one saved player can change both of their inventories in one write.
+    /// Refuses with no change if the stack no longer matches, it cannot fit whole,
+    /// or a required file write fails. Call outside a transaction and a player swap.
+    #[access(WorldOnly)]
+    fn server_move_inventory_stack(
+        &mut self,
+        request: &PlayerInventoryMove,
+    ) -> Result<(), PlayerInventoryError>;
+    /// Side: server.
     /// Define or replace a view owned by the calling mod. Its ID is local to that mod.
     /// An identical definition does nothing. Replacing rules refreshes every selection of that ID.
     #[access(WorldOnly)]

@@ -119,7 +119,7 @@ pub fn load_owner(guest: &mut Guest, world: &Path, saved: Option<&Level>) -> boo
 /// Save the world's single-player owner: its state into `level` (`store`),
 /// then to the file level.dat names, which it loads ([`load_owner`]), and to
 /// its own file, so that the one it loads is never the older of the two.
-pub fn save_owner(guest: &Guest, level: &mut Level, world: &Path) {
+pub fn save_owner(guest: &Guest, level: &mut Level, world: &Path) -> bool {
     // `MinecraftServer.saveAllChunks`: `saveDataTag(worldData, getSingleplayerProfile().id())`
     // — the server's own profile on every save, never the stale `singleplayer_uuid` a
     // world arrived with (a Realms download, a server world). The player file written is
@@ -131,7 +131,7 @@ pub fn save_owner(guest: &Guest, level: &mut Level, world: &Path) {
     if let Err(e) = level.write(world) {
         log::warn!("Horizon: the owner's playerdata is not saved: {e}");
     }
-    save(guest, world);
+    save(guest, world)
 }
 
 /// Move a world that older Horizon builds named by the offline profile to the account's
@@ -352,11 +352,15 @@ pub fn player_tag(guest: &Guest) -> Tag {
     level.player_tag()
 }
 
-/// Save a leaving guest, including its saved vehicle tree.
-pub fn save(guest: &Guest, world: &Path) {
+/// Save a leaving guest, including its saved vehicle tree. True if its file was written.
+pub fn save(guest: &Guest, world: &Path) -> bool {
     let file = path(world, guest.uuid);
-    if let Err(e) = write_dat(&file, player_tag(guest)) {
-        log::warn!("Horizon: {} is not saved: {e}", file.display());
+    match write_dat(&file, player_tag(guest)) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("Horizon: {} is not saved: {e}", file.display());
+            false
+        }
     }
 }
 
@@ -460,10 +464,10 @@ impl Autosaves {
     }
 
     /// Serialize a newer logout snapshot after every queued autosave.
-    pub fn save_after(&mut self, guest: &Guest, world: &Path) -> Vec<SavedPlayer> {
+    /// Returns the completed autosaves and whether the logout snapshot was written.
+    pub fn save_after(&mut self, guest: &Guest, world: &Path) -> (Vec<SavedPlayer>, bool) {
         let saved = self.completed(true);
-        save(guest, world);
-        saved
+        (saved, save(guest, world))
     }
 
     /// Drain completions on the tick thread; `wait` is the durability barrier
@@ -864,7 +868,11 @@ mod tests {
         for uuid in 1..=150 {
             saves.enqueue(&holding(uuid, "minecraft:diamond", 5), &dir);
         }
-        saves.save_after(&holding(1, "minecraft:iron_ingot", 11), &dir);
+        assert!(
+            saves
+                .save_after(&holding(1, "minecraft:iron_ingot", 11), &dir)
+                .1
+        );
         drop(saves);
         assert!(load(&mut loaded, &dir));
         assert_eq!(first_item(&loaded), Some(("minecraft:iron_ingot", 11)));

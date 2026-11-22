@@ -1,0 +1,7 @@
+horizon-client game::lan::tests::a_failed_logout_save_blocks_offline_inventory_until_a_successful_save lib daily resources
+horizon-client game::lan::tests::a_pending_logout_blocks_inventory_edits_during_autosave_completion lib daily resources
+horizon-client game::native_inventories::tests::a_live_stack_moves_to_offline_storage_with_canonical_components lib daily resources
+horizon-client game::native_inventories::tests::a_move_respects_the_stacks_own_limit lib daily resources
+horizon-client game::native_inventories::tests::an_inventory_move_preserves_the_only_readable_backup lib daily resources
+horizon-client game::native_inventories::tests::an_offline_inventory_move_is_visible_on_login lib daily resources
+horizon-client game::native_inventories::tests::lossy_live_to_offline_moves_leave_the_inventory_and_both_files_intact lib daily resources

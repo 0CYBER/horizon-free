@@ -189,6 +189,7 @@ pub struct Guest {
     pub center_sent: Option<(i32, i32)>,
     /// Why the connection closed (the console's "lost connection").
     pub left_reason: String,
+    pub(super) logout_guard: Option<Arc<()>>,
     /// A validated movement report the mods have not ruled on yet (`player_move`).
     pub pending_move: Option<super::hub::PendingMove>,
     /// Validated movement packets waiting to be told to `player_move_packet`, oldest first, and
@@ -672,6 +673,11 @@ impl Guest {
         true
     }
 
+    /// Keep the pending logout registered while this guest is temporarily back in the hub.
+    pub fn take_logout_guard(&mut self) -> Option<Arc<()>> {
+        self.logout_guard.take()
+    }
+
     pub fn participates_online(&self) -> bool {
         self.kind == GuestKind::Network
     }
@@ -736,6 +742,7 @@ impl Guest {
             move_packets_told: (0, 0),
             center_sent: None,
             left_reason: String::new(),
+            logout_guard: None,
             pending_move: None,
             disconnect_pending: false,
             leaving: false,
