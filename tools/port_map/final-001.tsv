@@ -1,4 +1,4 @@
-LocationPredicate.matches	port	crates/horizon-client/src/advancements.rs::location	position, biome, structure, dimension and block checks for advancement criteria
+LocationPredicate.matches	port	crates/horizon-client/src/advancements.rs::location,crates/horizon-world/src/loot.rs::Context::location_matches	advancement criteria read the live world; loot rolls read the place captured around the roll
 MultiLineEditBox.setValue	port	crates/horizon-client-render/src/multiline_edit.rs::MultiLineEdit::set_value	the multiline box's own text setter: truncates at the character limit and keeps the old text when the value would overflow the line limit
 TransferableSelectionList.PackEntry.mouseClicked	inline	crates/horizon-client-render/src/pack_screen.rs::PackScreen::click	entry select, move arrows and double-click transfer
 CompoundTag.getIntArray	skip:java		typed NBT accessor; Rust matches Tag::IntArray where it reads one

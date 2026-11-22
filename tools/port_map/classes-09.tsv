@@ -28,7 +28,7 @@ IntValueCheck.validate	skip:data		datapack validation
 InvertedLootItemCondition.invert	skip:java		static builder
 InvertedLootItemCondition.test	port	crates/horizon-world/src/loot.rs::Context::condition	inverted arm
 LocationCheck.checkLocation	skip:java		static builder
-LocationCheck.test	port	crates/horizon-world/src/loot.rs::Context::condition	gap: minor: biome lists only; block predicate and offsetY are not read here, and block loot (items.rs) passes location_check unconditionally
+LocationCheck.test	port	crates/horizon-world/src/loot.rs::Context::location_matches	position (with offset), dimension, biomes, block (blocks/state/nbt/components), light, fluid and can_see_sky read the place captured around the roll; smokey, structures, custom predicates, fluid-state properties and non-zero-offset block/light/fluid/sky fail because the place has no live world; block loot (items.rs) still passes location_check unconditionally
 LootItemCondition.Builder	skip:java		builders (and, or)
 LootItemEntityPropertyCondition.hasProperties	skip:java		static builder
 LootItemEntityPropertyCondition.test	port	crates/horizon-world/src/loot.rs::Context::condition	entity_properties arm (mob loot); the block-loot arm covers only a bare 'this' check
@@ -38,7 +38,7 @@ LootItemRandomChanceWithEnchantedBonusCondition.test	port	crates/horizon-world/s
 LootPredicates	skip:data		registry bootstrap; loot conditions are matched in loot.rs and items.rs
 MatchBlock.blockMatches	skip:java		static builder
 MatchBlock.getReferencedContextParams	skip:data		validation metadata for context params
-MatchBlock.test	port	crates/horizon-items/src/items.rs::LootContext::condition	match_block arm: block id, state and property ranges; gap: minor: the block-entity part of the predicate is not read
+MatchBlock.test	port	crates/horizon-items/src/items.rs::LootContext::condition	match_block arm: block id, state and property ranges, and the block entity collected `components` via loot.rs::LootPlace.block_entity_components; gap: minor: the block-entity `nbt` and the `predicates` map are not read
 MatchTool.test	port	crates/horizon-items/src/items.rs::LootContext::condition	match_tool arm: item ids and tags, enchantment level ranges and the custom_data predicate; other ItemPredicate parts are not read
 TimeCheck	missing		no `time_check` arm in `loot.rs::condition`; no vanilla data file uses it, so only a datapack reaches it
 WeatherCheck.test	port	crates/horizon-client/src/advancements.rs::conditions	named command predicates compare both optional fields against Game View's effective weather; channeling remains a separate thunder-only caller

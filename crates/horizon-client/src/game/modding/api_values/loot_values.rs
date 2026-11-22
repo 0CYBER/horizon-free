@@ -136,6 +136,7 @@ mod tests {
                     raining: true,
                     thundering: false,
                 }),
+                ..Default::default()
             })),
         }
         .try_into_api()

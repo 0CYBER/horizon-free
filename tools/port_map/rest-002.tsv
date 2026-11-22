@@ -1,8 +1,8 @@
 InputPredicate.matches	inline	crates/horizon-client/src/advancements.rs::input	gap: only the sneak input is read; forward, back, jump and sprint have no source here yet and count as unconstrained
 ItemPredicate.Builder.of	skip:java		builder for item predicates in code
-LightPredicate.matches	inline	crates/horizon-client/src/advancements.rs::location	the light range inside location()
+LightPredicate.matches	inline	crates/horizon-client/src/advancements.rs::location,crates/horizon-world/src/loot.rs::Context::location_matches	the light range inside location(); the loot place captures getMaxLocalRawBrightness
 LocationPredicate.PositionPredicate.of	skip:java		factory: empty when no bound is set; location() reads the position key directly
-LocationPredicate.PositionPredicate.matches	inline	crates/horizon-client/src/advancements.rs::location	the x, y and z ranges inside location()
+LocationPredicate.PositionPredicate.matches	inline	crates/horizon-client/src/advancements.rs::location,crates/horizon-world/src/loot.rs::Context::location_matches	the x, y and z ranges inside location(); the loot path adds LocationCheck's offset
 MinMaxBounds.validateContainedInRange	skip:java		codec validation that one range lies inside another
 MinMaxBounds.Bounds.isAny	inline	crates/horizon-client/src/advancements.rs::range_f	an empty bound matches any value; range_f treats a missing min or max as open
 MinMaxBounds.Bounds.validateSwappedBoundsInCodec	skip:java		codec check rejecting min above max when data loads

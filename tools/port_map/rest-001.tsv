@@ -148,6 +148,6 @@ DataComponentMatchers.isEmpty	inline	crates/horizon-client/src/advancements.rs::
 DataComponentMatchers.Builder.any	skip:data		datagen builder
 EnchantmentPredicate.containedIn	port	crates/horizon-client/src/advancements.rs::item	the enchantments list and level bounds of the item predicate
 EnchantmentPredicate.matchesEnchantment	inline	crates/horizon-client/src/advancements.rs::item	one enchantment and its level
-FluidPredicate.matches	port	crates/horizon-client/src/advancements.rs::location	gap: minor: the fluid id and tags only; fluid state properties are not checked; no vanilla advancement uses fluid
+FluidPredicate.matches	port	crates/horizon-client/src/advancements.rs::location,crates/horizon-world/src/loot.rs::Context::location_matches	gap: minor: the fluid id and tags only; fluid state properties are not checked; the loot place captures water and lava only
 FluidPredicate.Builder.of	skip:data		datagen builder
 FoodPredicate.matches	inline	crates/horizon-client/src/advancements.rs::player_facts	the food key of a player predicate: the level, then the saturation as a double

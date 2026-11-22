@@ -850,6 +850,62 @@ mod tests {
         assert_eq!(place(&fresh, &patch, false), sign);
     }
 
+    /// A loot block predicate's `components` map reads a chest's collected
+    /// components: its container and custom name.
+    #[test]
+    fn a_loot_block_predicate_reads_a_chests_collected_components() {
+        use crate::items::Items;
+        use horizon_world::chunk::BlockProperties;
+        use horizon_world::loot::{LootPlace, with_native_loot_place};
+        use serde_json::json;
+        let source = saved(
+            "{id:\"minecraft:chest\",x:1,y:2,z:3,CustomName:\"Loot\",\
+             Items:[{Slot:4b,id:\"minecraft:stone\",count:5}]}",
+        );
+        // The full save a loot roll carries, then the map its components are
+        // read from, as `Game::loot_place_at` builds them.
+        let (pos, chest) = crate::save::decode_block_entity(&source).expect("chest");
+        let custom_name = source
+            .get("CustomName")
+            .and_then(crate::block_entity_nbt::component);
+        let full = crate::save::full_block_entity_data(
+            pos,
+            &chest,
+            "minecraft:chest",
+            Some(&source),
+            custom_name.as_ref(),
+            source.get("lock"),
+        );
+        let place = LootPlace {
+            block_entity: Some(full.clone()),
+            block_entity_components: Some(Tag::Compound(collected_components(&full))),
+            ..LootPlace::default()
+        };
+        let items = Items::for_tests(Default::default());
+        let props = BlockProperties::new();
+        let matches = |predicate: serde_json::Value| {
+            with_native_loot_place(place.clone(), || {
+                items.matches_block_state(&predicate, "minecraft:chest", &props)
+            })
+        };
+        assert!(
+            matches(json!({"blocks":"minecraft:chest","components":{
+                "minecraft:container":[{"slot":4,"item":{"id":"minecraft:stone","count":5}}],
+                "minecraft:custom_name":"Loot"}})),
+            "the chest's collected container and name match"
+        );
+        assert!(
+            !matches(json!({"blocks":"minecraft:chest","components":{
+                "minecraft:container":[{"slot":4,"item":{"id":"minecraft:stone","count":6}}]}})),
+            "a different container value does not"
+        );
+        assert!(
+            !matches(json!({"blocks":"minecraft:chest","components":{
+                "minecraft:custom_data":{"k":1}}})),
+            "a component the chest does not carry does not"
+        );
+    }
+
     /// A content sign's block entity starts with its declared colour and glow. An item with
     /// no sign text leaves them; an item with sign text replaces them.
     #[test]

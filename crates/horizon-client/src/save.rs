@@ -691,6 +691,62 @@ pub fn block_entity_data(
     }
     tag
 }
+/// `BlockEntity.saveWithFullMetadata` for a modelled entity: the model's
+/// fields plus what Horizon keeps only in the tag it was loaded with (the
+/// `components` a type stores, a container's `lock`, other unmodelled keys),
+/// merged the way a chunk save merges them. `source` is that loaded tag,
+/// `custom_name` is `BaseContainerBlockEntity.name` and `lock` is its
+/// `LockCode`; the result omits the chunk-only `keepPacked`.
+pub fn full_block_entity_data(
+    p: (i32, i32, i32),
+    e: &crate::containers::BlockEntity,
+    block: &str,
+    source: Option<&Tag>,
+    custom_name: Option<&Tag>,
+    lock: Option<&Tag>,
+) -> Tag {
+    let mut current = block_entity_data(p, e, block, lock);
+    if let Some(name) = custom_name
+        && let Tag::Compound(map) = &mut current
+    {
+        map.insert("CustomName".into(), name.clone());
+    }
+    let merged = match source {
+        Some(original)
+            if crate::block_entity_nbt::id(original) == crate::block_entity_nbt::id(&current) =>
+        {
+            let loaded = decode_block_entity(original).map_or_else(
+                || current.clone(),
+                |(q, e)| {
+                    let mut loaded = block_entity_encode::encode(q, &e, block);
+                    if !matches!(
+                        e,
+                        crate::containers::BlockEntity::Banner(_)
+                            | crate::containers::BlockEntity::Sign(_)
+                            | crate::containers::BlockEntity::Mod(_)
+                    ) && let Some(name) = original
+                        .get("CustomName")
+                        .and_then(crate::block_entity_nbt::component)
+                        && let Tag::Compound(map) = &mut loaded
+                    {
+                        // BaseContainerBlockEntity.loadAdditional: the
+                        // external name is also part of the loaded model. Its
+                        // removal must win over the source overlay.
+                        map.insert("CustomName".into(), name);
+                    }
+                    loaded
+                },
+            );
+            merge_block_entity(original, &loaded, &current)
+        }
+        _ => current,
+    };
+    let mut saved = crate::block_entity_nbt::canonical(&merged).unwrap_or(merged);
+    if let Tag::Compound(map) = &mut saved {
+        map.remove(&"keepPacked".into());
+    }
+    saved
+}
 /// `BannerBlockEntity.loadAdditional` (and the `components` a block entity keeps).
 pub fn decode_banner(tag: &Tag) -> crate::containers::Banner {
     crate::containers::Banner {

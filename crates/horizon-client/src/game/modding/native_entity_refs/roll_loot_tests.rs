@@ -336,3 +336,44 @@ fn component_stack_capacity_is_preserved_on_every_split() {
         .unwrap();
     assert_eq!(count_of(&stacks, "minecraft:ender_pearl"), [8, 8, 8, 8, 8]);
 }
+
+/// `Game::loot_place_at` reads a loaded origin's block and light; an unloaded
+/// origin leaves those facts unset so a predicate fails instead of reading the
+/// air and full light an absent chunk falls back to. A state the caller passes
+/// (the block being broken) is kept.
+#[test]
+#[ignore = "daily"]
+fn a_loot_place_reads_only_a_loaded_origin() {
+    let mut resources = None;
+    let (game, _level) = game(&mut resources, "place-residency");
+    let loaded = game.loot_place_at(ORIGIN, None);
+    assert!(loaded.block.is_some(), "a loaded origin has a block");
+    assert!(loaded.light.is_some(), "a loaded origin has a light");
+    assert!(loaded.can_see_sky.is_some());
+    assert!(loaded.structures.is_some());
+
+    let unloaded = game.loot_place_at([40.5, 100.5, 40.5], None);
+    assert_eq!(unloaded.origin, Some([40.5, 100.5, 40.5]));
+    assert!(unloaded.block.is_none(), "an unloaded origin has no block");
+    assert!(unloaded.light.is_none(), "an unloaded origin has no light");
+    assert_eq!(unloaded.can_see_sky, None);
+    assert_eq!(unloaded.fluid, None);
+    assert_eq!(unloaded.structures, None);
+
+    let stone = game
+        .pack
+        .assets
+        .registry
+        .default_state("minecraft:stone")
+        .unwrap();
+    let supplied = game.loot_place_with_block([40.5, 100.5, 40.5], None, Some(stone));
+    assert_eq!(
+        supplied.block.as_ref().map(|block| block.name.as_str()),
+        Some("minecraft:stone"),
+        "an explicitly supplied state is kept"
+    );
+    assert!(
+        supplied.light.is_none(),
+        "the unloaded origin still has no light"
+    );
+}

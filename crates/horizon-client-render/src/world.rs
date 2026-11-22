@@ -784,6 +784,19 @@ impl World {
             .1
             .get("lock")
     }
+    /// The tag a modelled block entity was loaded or set with: the fields
+    /// Horizon keeps outside its model (`components`, `lock`, a container's
+    /// name) survive on it for a save or a loot roll.
+    pub fn block_entity_source(&self, key: (i32, i32, i32)) -> Option<&horizon_core::nbt::Tag> {
+        self.chunks
+            .get(&(key.0 >> 4, key.2 >> 4))?
+            .saved
+            .as_ref()?
+            .block_entity_sources
+            .iter()
+            .find(|(p, _)| *p == key)
+            .map(|(_, tag)| tag)
+    }
     /// `LockCode.addToTag` for a tag a command gives a container (`setblock`,
     /// `data merge`): the tag it was set with keeps the lock, so `data get`
     /// shows it, a player's open checks it and the save writes it.
