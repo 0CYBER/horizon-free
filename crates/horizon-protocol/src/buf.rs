@@ -316,10 +316,9 @@ impl Writer {
         self.data.extend_from_slice(&v.to_be_bytes());
     }
     pub fn nbt(&mut self, tag: &Tag) {
-        match nbt::write_network(tag, nbt::Limits::default()) {
-            Ok(bytes) => self.data.extend_from_slice(&bytes),
-            // Unencodable tags (too deep) are sent as "no tag".
-            Err(_) => self.data.push(0),
+        // An unencodable tag is rolled back and sent as "no tag".
+        if nbt::write_network_into(tag, nbt::Limits::default(), &mut self.data).is_err() {
+            self.data.push(0);
         }
     }
     pub fn long_array(&mut self, v: &[i64]) {
@@ -836,6 +835,20 @@ mod tests {
         );
         let refused = Reader::new(&over).nbt().unwrap_err().to_string();
         assert!(refused.contains("node limit"), "{refused}");
+    }
+
+    #[test]
+    fn over_limit_writer_nbt_is_one_end_byte_between_packet_fields() {
+        let mut tag = Tag::List(Vec::new());
+        for _ in 0..nbt::Limits::default().max_depth {
+            tag = Tag::List(vec![tag]);
+        }
+        let mut w = Writer::new();
+        w.varint(300);
+        w.nbt(&tag);
+        w.nbt(&Tag::Byte(5));
+        w.i16(0x1234);
+        assert_eq!(w.data, [0xac, 0x02, 0, 1, 5, 0x12, 0x34]);
     }
 
     fn round<T: PartialEq + std::fmt::Debug, C: Codec<T>>(v: T) -> Vec<u8> {
