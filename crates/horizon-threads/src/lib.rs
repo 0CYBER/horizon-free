@@ -9,10 +9,16 @@ pub mod allocator_stats;
 #[cfg(target_os = "windows")]
 pub mod boot_paint;
 pub mod callgrind;
+#[cfg(target_os = "macos")]
+pub mod file_acl;
+#[cfg(windows)]
+pub mod file_publish;
 pub mod heap_census;
 #[cfg(target_os = "linux")]
 pub mod heap_sample;
 pub mod jobs;
+#[cfg(windows)]
+pub mod process_job;
 pub mod process_memory;
 #[cfg(target_os = "linux")]
 pub mod profile;

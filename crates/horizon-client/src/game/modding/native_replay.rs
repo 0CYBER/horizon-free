@@ -6,25 +6,16 @@
 use super::{ClientQuit, Game, PendingWorldEntry};
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
+use horizon_client::file_id::{reparse_point, valid_id};
 use horizon_client::studio::ReplayDriver;
 use mod_api::{REPLAY_MAX_SPEED, REPLAY_MIN_SPEED, ReplayError, ReplayState};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread::JoinHandle;
-
-/// The longest recording id, in bytes: a file name most file systems still take with `.mcpr`.
-const MAX_RECORDING_ID: usize = 250;
-
-/// Names Windows gives to devices in every folder, whatever follows them after a dot.
-const DEVICE_NAMES: [&str; 30] = [
-    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5",
-    "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
-    "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
-];
 
 /// A fresh request id for `replay_open`: never zero, never given twice while the game runs; none
 /// once every `u32` has been given (then `replay_open` is `Unavailable`).
@@ -119,32 +110,6 @@ impl Drop for ReplayOpening {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
-}
-
-/// Whether `id` can name a recording, judged as text alone: one plain file name, 1 to 250 bytes,
-/// without a separator, drive, stream, `..`, NUL or control character, not ending in a dot or a
-/// space (Windows drops those, so two ids would name one file), and not a Windows device name.
-fn valid_id(id: &str) -> bool {
-    let mut components = Path::new(id).components();
-    let base = id
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches(' ');
-    !id.is_empty()
-        && id.len() <= MAX_RECORDING_ID
-        && !id.contains("..")
-        && !id.ends_with(['.', ' '])
-        && !id
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
-        && !DEVICE_NAMES
-            .iter()
-            .any(|device| device.eq_ignore_ascii_case(base))
-        && matches!(
-            (components.next(), components.next()),
-            (Some(Component::Normal(_)), None)
-        )
 }
 
 /// The recording file a mod names by `id` in `dir`: `<dir>/<id>.mcpr`. The id is checked as text
@@ -249,19 +214,6 @@ pub(super) fn open_recording(
     }
     let (file, identity) = open_in_folder(&recordings_folder(dir)?, id)?;
     Ok((dir.join(format!("{id}.mcpr")), file, identity))
-}
-
-/// A Windows reparse point (a link, a junction, a cloud placeholder) that `is_file` may not show.
-#[cfg(windows)]
-fn reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn reparse_point(_: &std::fs::Metadata) -> bool {
-    false
 }
 
 impl Game<'_> {

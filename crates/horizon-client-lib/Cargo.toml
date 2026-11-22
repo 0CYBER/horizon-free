@@ -67,6 +67,10 @@ pollster = "0.4"
 bytemuck = { version = "1.24", features = ["derive"] }
 glam = "0.30"
 png = "0.18"
+cap-std = "3"
+cap-fs-ext = "3"
+smallvec = "1"
+shlex = "2"
 sha2 = "0.10.9"
 # Server resource packs are checked and cached by their SHA-1, as vanilla does.
 sha1 = "0.10"
@@ -102,6 +106,7 @@ fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 rustix = { version = "1", default-features = false, features = ["std", "time", "process", "fs"] }
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 # Use the registered URI handler without routing links through Explorer/cmd.
 open = { version = "5.4.5", features = ["shellexecute-on-windows"] }
 # Resolve virtualized folders to shell-compatible physical paths (desktop.rs).

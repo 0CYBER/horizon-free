@@ -54,6 +54,12 @@ horizon-client-lib entities::orb_lava_tests::positive_case_server_orb_in_lava_pl
 horizon-client-lib entities::slime_bounce_tests::a_slime_bounce_marks_the_item_for_immediate_sync lib daily resources
 horizon-client-lib entities::world_border_tests::a_dropped_item_on_soul_sand_or_honey_is_slowed_by_the_move lib daily resources
 horizon-client-lib entities::world_border_tests::the_world_border_stops_items_and_experience_orbs lib daily resources
+horizon-client-lib export::sink::tests::a_stalled_encoder_releases_submission_and_shutdown_with_a_timeout lib daily child-process
+horizon-client-lib export::sink::tests::encoder_early_exit_reports_status_from_write_and_finish lib daily child-process
+horizon-client-lib export::sink::tests::missing_fd_output_leaves_the_export_directory_empty lib daily child-process
+horizon-client-lib export::sink::tests::protocol_probe_times_out_when_a_helper_keeps_stdout_open lib daily child-process
+horizon-client-lib export::sink::tests::slow_encoder_applies_backpressure_and_receives_frames_in_order lib daily child-process
+horizon-client-lib export::sink::tests::successful_encoder_exit_kills_helpers_without_inherited_pipes lib daily child-process
 horizon-client-lib item_render::special_parts_tests::a_parts_tint_reaches_the_vertices_as_a_vanilla_tint_does lib daily resources
 horizon-client-lib join_seq::visibility::tests::unbound_passes_block_until_restore_consumption_and_unwind lib daily child-process
 horizon-client-lib lan::conn::tests::profession_mod_missing_refused_before_pairing lib daily child-process
