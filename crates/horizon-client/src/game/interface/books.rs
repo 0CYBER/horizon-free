@@ -1242,6 +1242,16 @@ impl Game<'_> {
             self.container_changed(key);
         } else if menu.data[0] != before {
             self.set_lectern_powered(key, true);
+            // LecternBlock` schedules a block tick to clear POWERED; the
+            // saved tick restores the pulse after a reload or unload.
+            self.with_level(|b, level, ticks| {
+                b.schedule_tick(
+                    level,
+                    ticks,
+                    BlockPos::new(key.0, key.1, key.2),
+                    2,
+                )
+            });
             self.lectern_pulses.push((key, 2));
             self.level_event_at(1043, [key.0, key.1, key.2], 0);
             self.container_changed(key);
