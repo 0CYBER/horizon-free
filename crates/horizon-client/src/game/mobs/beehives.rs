@@ -17,6 +17,9 @@ use {horizon_core::nbt::Tag, horizon_world::registry::BlockStateId};
 
 struct GameHive<'g, 'a> {
     game: &'g mut Game<'a>,
+    /// The hive cell: `BeehiveBlockEntity.releaseOccupant` posts a
+    /// `block_change` game event there for every bee that leaves.
+    at: [i32; 3],
     /// `bees_stay_in_hive`, once asked: the time and weather it reads hold
     /// for the hive's turn, and every occupant whose time is up asks.
     stay: std::cell::Cell<Option<bool>>,
@@ -25,6 +28,7 @@ impl<'g, 'a> GameHive<'g, 'a> {
     fn new(game: &'g mut Game<'a>) -> Self {
         Self {
             game,
+            at: [0; 3],
             stay: Default::default(),
         }
     }
@@ -69,6 +73,16 @@ impl HiveHost for GameHive<'_, '_> {
         Some(self.game.mobs.remove(i))
     }
     fn add(&mut self, m: Mob) -> bool {
+        // BeehiveBlockEntity.releaseOccupant: sound, then a `block_change`
+        // game event at the hive (sculk sensors hear a bee leaving), then
+        // the entity is added. Matches `addOccupant`'s enter event.
+        let state = self.game.world.block(self.at[0], self.at[1], self.at[2]);
+        self.game.post_block_game_event(
+            "minecraft:block_change",
+            self.at,
+            Some(Who::Mob(m.id)),
+            Some(state),
+        );
         self.game.mobs.push(m);
         true
     }
@@ -216,6 +230,7 @@ impl Game<'_> {
             &*self.res.facts().get(state).name == "minecraft:fire"
         });
         let mut host = GameHive::new(self);
+        host.at = at;
         if fire && !hive.bees.is_empty() {
             hive.release_all(at, facing, honey, Release::Emergency, &mut host);
         }
@@ -250,7 +265,9 @@ impl Game<'_> {
         else {
             return;
         };
-        let stored = hive.add_occupant(at, tag, flower, &mut GameHive::new(self));
+        let mut host = GameHive::new(self);
+        host.at = at;
+        let stored = hive.add_occupant(at, tag, flower, &mut host);
         self.world
             .block_entities
             .put(lease, BlockEntity::Beehive(hive));
@@ -282,7 +299,9 @@ impl Game<'_> {
         else {
             return;
         };
-        hive.release_all(at, facing, None, status, &mut GameHive::new(self));
+        let mut host = GameHive::new(self);
+        host.at = at;
+        hive.release_all(at, facing, None, status, &mut host);
         self.world
             .block_entities
             .put(lease, BlockEntity::Beehive(hive));
@@ -297,13 +316,9 @@ impl Game<'_> {
         honey: Option<i32>,
         facing: [i32; 2],
     ) {
-        let released = hive.release_all(
-            at,
-            facing,
-            honey,
-            Release::Emergency,
-            &mut GameHive::new(self),
-        );
+        let mut host = GameHive::new(self);
+        host.at = at;
+        let released = hive.release_all(at, facing, honey, Release::Emergency, &mut host);
         let sedated = beehive::smokey(&self.mob_world_base(&[]), at);
         if let Some(p) = self.player_view().map(|p| p.position) {
             let ids: Vec<u32> = self
@@ -411,13 +426,9 @@ impl Game<'_> {
         {
             // emptyAllLivingFromHive: the bees within 4 blocks of the player
             // go for them.
-            let released = hive.release_all(
-                pos,
-                facing,
-                None,
-                Release::Emergency,
-                &mut GameHive::new(self),
-            );
+            let mut host = GameHive::new(self);
+            host.at = pos;
+            let released = hive.release_all(pos, facing, None, Release::Emergency, &mut host);
             self.world
                 .block_entities
                 .put(lease, BlockEntity::Beehive(hive));
