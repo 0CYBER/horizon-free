@@ -111,6 +111,7 @@ fn extrude_polygon(
         let y = (base_v + j) as usize;
         x < size && y < size && skin[(y * size + x) * 4 + 3] > ALPHA_CUTOFF
     };
+    let wound = winding(polygon);
     let mut out = Vec::with_capacity((texels_u * texels_v) as usize);
     let step = 1.0 / size as f32;
     for j in 0..texels_v {
@@ -127,6 +128,7 @@ fn extrude_polygon(
                 [p00 + lift, p10 + lift, p11 + lift, p01 + lift],
                 [(ua, va), (ub, va), (ub, vb), (ua, vb)],
                 polygon.normal,
+                wound,
             ));
             // Sides only where the neighbour is not painted: the ones between
             // two texels would be hidden inside the layer and cost fill rate.
@@ -147,6 +149,7 @@ fn extrude_polygon(
                     [s0, s1, s1 + lift, s0 + lift],
                     [uv, uv, uv, uv],
                     normal,
+                    wound,
                 ));
             }
         }
@@ -160,8 +163,23 @@ fn extrude_polygon(
     out
 }
 
-fn quad(positions: [glam::Vec3; 4], uvs: [(f32, f32); 4], normal: [f32; 3]) -> Polygon {
-    Polygon {
+/// Which way a quad is wound against its stored normal: the sign of
+/// `(v1 - v0) x (v2 - v1)` along it. `entity.wgsl` lights back-facing pixels
+/// with the negated normal, so the slabs must wind like the face they came from.
+fn winding(polygon: &Polygon) -> f32 {
+    let p = |k: usize| {
+        let v = polygon.vertices[k];
+        glam::Vec3::new(v[0], v[1], v[2])
+    };
+    let geometric = (p(1) - p(0)).cross(p(2) - p(1));
+    geometric
+        .dot(glam::Vec3::from_array(polygon.normal))
+        .signum()
+}
+
+/// A quad with `normal`, its corners reversed when needed to wind as `wound`.
+fn quad(positions: [glam::Vec3; 4], uvs: [(f32, f32); 4], normal: [f32; 3], wound: f32) -> Polygon {
+    let mut polygon = Polygon {
         normal,
         vertices: std::array::from_fn(|k| {
             [
@@ -173,7 +191,11 @@ fn quad(positions: [glam::Vec3; 4], uvs: [(f32, f32); 4], normal: [f32; 3]) -> P
             ]
         }),
         cull_back: false,
+    };
+    if winding(&polygon) != wound {
+        polygon.vertices.reverse();
     }
+    polygon
 }
 
 fn corner(polygon: &Polygon, u: f32, v: f32) -> Option<glam::Vec3> {
@@ -248,5 +270,52 @@ mod tests {
             children: Vec::new(),
         };
         assert!(extrude(&model, &skin([255, 255, 255, 255]), 64, 1.0).is_none());
+    }
+
+    fn assert_wound_like_source(source: &Polygon, skin: &[u8]) {
+        let model = Part {
+            name: "hat".into(),
+            pose: [0.0; 9],
+            polygons: vec![source.clone()],
+            children: Vec::new(),
+        };
+        let out = extrude(&model, skin, 64, 1.0).expect("a hat");
+        assert!(!out.polygons.is_empty());
+        for quad in &out.polygons {
+            assert_eq!(
+                winding(quad),
+                winding(source),
+                "quad wound against its normal: {quad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn slabs_and_skirts_are_wound_like_the_source_face() {
+        let mut flipped = face();
+        flipped.vertices.reverse();
+        for source in [face(), flipped] {
+            assert_wound_like_source(&source, &skin([255, 0, 255, 0]));
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn the_players_outer_parts_are_wound_like_the_source_faces() {
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let opaque = vec![255; 64 * 64 * 4];
+        for key in ["minecraft:player#main", "minecraft:player_slim#main"] {
+            let model = crate::mobs::load_model(&root, key).expect(key);
+            let mut stack = vec![&model];
+            while let Some(part) = stack.pop() {
+                stack.extend(&part.children);
+                if !OUTER_PARTS.contains(&part.name.as_str()) {
+                    continue;
+                }
+                for source in &part.polygons {
+                    assert_wound_like_source(source, &opaque);
+                }
+            }
+        }
     }
 }
