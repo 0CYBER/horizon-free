@@ -3479,6 +3479,8 @@ impl Game<'_> {
             )
             .chain(self.portal_ticket_areas())
             .chain(self.viewed_extra())
+            // The chunk the world spawn search is waiting for after a reset, which no player has loaded.
+            .chain(self.world_spawn_search_area())
             .collect();
     }
 

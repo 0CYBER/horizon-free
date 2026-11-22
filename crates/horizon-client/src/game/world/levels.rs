@@ -1305,6 +1305,13 @@ impl Game<'_> {
                 self.update_dedicated_streaming();
             });
             horizon_client::spans::time("update_world", || self.update_world());
+            if dim == Dim::Overworld
+                && self.world_spawn_pending
+                && let Err(e) = self.find_pending_world_spawn()
+            {
+                result = Err(e);
+                break;
+            }
             let tick_span = horizon_client::spans::guard("level_tick");
             result = horizon_client::block_contact::in_level(
                 (self.serving.is_some() || self.options.dedicated.is_some()).then_some(dim.id()),
@@ -1586,6 +1593,8 @@ impl Game<'_> {
                     || !self.portal_tickets_in(*d).is_empty()
                     // So does a viewed `Ticking` area (arismoko/horizon#3716), for its chunks only.
                     || self.viewed_level(*d) == Some(true)
+                    // A reset's spawn search runs in the Overworld's turn, whoever else is playing.
+                    || (self.world_spawn_pending && *d == Dim::Overworld)
             })
             .collect();
         if dims.is_empty() {

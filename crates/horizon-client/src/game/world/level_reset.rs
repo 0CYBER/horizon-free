@@ -129,6 +129,8 @@ impl Game<'_> {
         self.end = Default::default();
         // The world spawn is found again, in the new terrain.
         self.level.world_spawn = None;
+        self.level.spawn = None;
+        self.world_spawn_pending = true;
         self.level.world_spawn_dimension = None;
         self.spawn = None;
         self.spawn_origin = None;

@@ -1272,6 +1272,8 @@ struct Game<'a> {
     /// `native_create_spawn_position` was asked, and a mod chose the spawn.
     spawn_hook_fired: bool,
     spawn_hook_cancelled: bool,
+    /// A reset of the vanilla levels cleared the world spawn: the Overworld's tick finds it again, in the new terrain.
+    world_spawn_pending: bool,
     spawn_spiral: horizon_client::world_spawn::ChunkSpiral,
     /// A new player's spawn search, while its candidates' chunks load.
     player_spawn: Option<horizon_client::world_spawn::PlayerSpawnFinder>,
@@ -10856,6 +10858,7 @@ impl<'a> Game<'a> {
             spawn_origin: None,
             spawn_hook_fired: false,
             spawn_hook_cancelled: false,
+            world_spawn_pending: false,
             spawn_spiral: Default::default(),
             player_spawn: None,
             spawn_wait: Vec::new(),
