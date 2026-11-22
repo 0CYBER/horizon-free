@@ -282,6 +282,20 @@ impl MobType {
     pub fn layer(&self, key: &str) -> Option<&Arc<Part>> {
         self.layers.get(key)
     }
+    /// `instanceof Enemy` for the type's mobs. The zombie horse, camel husk and zombie nautilus
+    /// are in the monster category but extend `Animal`/`AbstractNautilus`, and the sulfur cube
+    /// extends `AbstractCubeMob` without `Enemy`, as the slime and magma cube add it: none of
+    /// them implements `Enemy`.
+    pub fn is_enemy(&self) -> bool {
+        self.category == "monster"
+            && !matches!(
+                self.species,
+                Species::ZombieHorse
+                    | Species::CamelHusk
+                    | Species::ZombieNautilus
+                    | Species::SulfurCube
+            )
+    }
 }
 /// Each type's default attribute values, parsed exactly (serde_json's
 /// default float parsing can miss the nearest double by one ulp).
@@ -3806,19 +3820,9 @@ impl Mob {
     pub fn hostile(&self) -> bool {
         self.kind.category == "monster"
     }
-    /// `instanceof Enemy`. The zombie horse, camel husk and zombie nautilus are in
-    /// the monster category but extend `Animal`/`AbstractNautilus`, and the sulfur
-    /// cube extends `AbstractCubeMob` without `Enemy`, as the slime and magma cube
-    /// add it: none of them implements `Enemy`.
+    /// `instanceof Enemy`: its type's ([`MobType::is_enemy`]).
     pub fn is_enemy(&self) -> bool {
-        self.hostile()
-            && !matches!(
-                self.species(),
-                Species::ZombieHorse
-                    | Species::CamelHusk
-                    | Species::ZombieNautilus
-                    | Species::SulfurCube
-            )
+        self.kind.is_enemy()
     }
     #[inline]
     pub fn species(&self) -> Species {

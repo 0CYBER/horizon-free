@@ -389,3 +389,9 @@ unknown items and empty tags return `Ok(None)`. Result objects retain their
 namespace as written: `minecraft:zombie` is in, `zombie` and an unknown id are not. It reads the entity-type registry
 the world loads, so it answers `false` before a world has loaded it. Use it to check configured ids (for example
 whitelist or blacklist entries, which the game drops when unknown) before a mod acts on them.
+
+`host.entity_type_is_enemy(id)` and `host.entity_type_is_animal(id)` answer `instanceof Enemy` and
+`instanceof Animal` for the type's entities, which the type's class decides, not its category: the hoglin is both, the
+zombie horse is in the monster category and only an `Animal`, the shulker and the slime are enemies, the ender dragon is
+one too, fish, dolphins, villagers and golems are neither. A spawn-control mod counts and matches its hostile and
+passive mobs by them. Both read the world's mob types and answer `false` for any other id.

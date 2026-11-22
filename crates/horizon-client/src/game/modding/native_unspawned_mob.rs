@@ -251,6 +251,19 @@ impl Game<'_> {
         self.with_lent_mob(mob, |m| Ok(m.extra.spawn_tags.clone()))
     }
 
+    /// Whether the mob is a baby (`LivingEntity.isBaby`). The dragon, lent without a mob, is
+    /// never one; another lend without its mob can't tell.
+    pub(super) fn unspawned_mob_baby(
+        &self,
+        mob: UnspawnedMobRef,
+    ) -> Result<bool, UnspawnedMobError> {
+        self.with_lent(mob, |l| match &l.mob {
+            Some(m) => Ok(m.is_baby()),
+            None if l.kind == "minecraft:ender_dragon" => Ok(false),
+            None => Err(UnspawnedMobError::Unsupported),
+        })
+    }
+
     /// The mob's custom name, if it has one.
     pub(super) fn unspawned_mob_custom_name(
         &self,
@@ -727,6 +740,41 @@ mod tests {
         assert_eq!(*refused.lock().unwrap(), [Err(UnspawnedMobError::Expired)]);
         let kept = kept.lock().unwrap();
         assert_ne!(kept[0], kept[1], "each call lends anew");
+    }
+
+    /// `baby` is `LivingEntity.isBaby` on the lent mob: a negative age on a type that can be
+    /// one, so a frog with one is still an adult. The dragon, lent without a mob, never is a
+    /// baby, another lend without its mob is `Unsupported`, and a handle kept past its lend is
+    /// expired.
+    #[test]
+    #[ignore = "daily"]
+    fn an_unspawned_mobs_baby_reads_its_age_and_type() {
+        with_game(|game| {
+            let baby = |game: &Game<'_>, kind: &str, mob: Option<&mut Mob>| {
+                game.lend_unspawned(kind, AT, mob, |handle, _| handle.baby(game))
+            };
+            let lent = |game: &mut Game<'_>, kind: &str| {
+                let id = game
+                    .spawn_mob(kind, AT, false, SpawnSite::Finalizing(Reason::Natural))
+                    .unwrap();
+                game.mobs.iter().find(|m| m.id == id).unwrap().clone()
+            };
+            let mut pig = lent(game, "minecraft:pig");
+            assert_eq!(baby(game, "minecraft:pig", Some(&mut pig)), Ok(false));
+            pig.extra.age = -24000;
+            assert_eq!(baby(game, "minecraft:pig", Some(&mut pig)), Ok(true));
+            let mut frog = lent(game, "minecraft:frog");
+            frog.extra.age = -24000;
+            assert_eq!(baby(game, "minecraft:frog", Some(&mut frog)), Ok(false));
+            assert_eq!(baby(game, "minecraft:ender_dragon", None), Ok(false));
+            assert_eq!(
+                baby(game, "minecraft:pig", None),
+                Err(UnspawnedMobError::Unsupported),
+                "a lend without its mob"
+            );
+            let kept = game.lend_unspawned("minecraft:pig", AT, Some(&mut pig), |handle, _| handle);
+            assert_eq!(kept.baby(game), Err(UnspawnedMobError::Expired));
+        });
     }
 
     /// `Flow::Cancel` skips finalization and keeps the listener's edits on

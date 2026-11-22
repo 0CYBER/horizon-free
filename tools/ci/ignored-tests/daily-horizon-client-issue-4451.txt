@@ -1684,6 +1684,7 @@ horizon-client game::native_level_refs::tests::respawn_data_maps_and_ticks_write
 horizon-client game::native_level_refs::tests::review_climate_literals lib daily resources
 horizon-client game::native_level_refs::tests::shared_level_signal_dispatches_and_clamps_part_output lib daily resources
 horizon-client game::native_level_refs::tests::shared_level_signal_reads_live_comparator_and_refuses_other_levels lib daily resources
+horizon-client game::native_level_refs::tests::the_sky_from_below_water_stops_at_kelp_and_not_at_a_bubble_column lib daily resources
 horizon-client game::native_level_refs::tests::validation_drops_a_removed_ticket_and_leaves_the_rest lib daily resources
 horizon-client game::native_level_refs::tests::validation_runs_when_a_parked_level_opens_and_not_without_a_listener lib daily resources
 horizon-client game::native_level_refs::tests::validation_sees_the_saved_tickets_not_ones_added_after_the_load lib daily resources
@@ -1978,6 +1979,7 @@ horizon-client game::native_tick_time::tests::a_server_has_time_until_its_tick_d
 horizon-client game::native_tick_time::tests::the_tick_listeners_see_the_deadline_through_the_host lib daily resources
 horizon-client game::native_unspawned_mob::tests::a_handle_kept_past_its_hook_is_expired lib daily resources
 horizon-client game::native_unspawned_mob::tests::a_panicking_listener_still_ends_the_lend lib daily resources
+horizon-client game::native_unspawned_mob::tests::an_unspawned_mobs_baby_reads_its_age_and_type lib daily resources
 horizon-client game::native_unspawned_mob::tests::both_cancels_keep_their_contract_with_edits lib daily resources
 horizon-client game::native_unspawned_mob::tests::edits_through_the_editor_are_on_the_mob_that_joins lib daily resources
 horizon-client game::native_unspawned_mob::tests::the_group_a_listener_leaves_is_what_finalization_reads lib daily resources
@@ -2443,6 +2445,7 @@ horizon-client game::spawn_yaw_tests::a_dispensed_mob_takes_the_wrapped_draw_too
 horizon-client game::spawn_yaw_tests::a_spawn_eggs_yaw_is_the_wrapped_level_draw lib daily resources
 horizon-client game::spawn_yaw_tests::a_summoned_mob_without_nbt_faces_south lib daily resources
 horizon-client game::spawner::entity_registry::tests::a_type_id_is_looked_up_as_written lib daily resources
+horizon-client game::spawner::entity_registry::tests::a_types_enemy_and_animal_follow_its_class lib daily resources
 horizon-client game::spawner::tests::a_running_delay_counts_down_without_drawing lib daily resources
 horizon-client game::spill::crafter_drop_name_tests::actual_crafter_destruction_keeps_source_name_off_the_dropped_item lib daily resources
 horizon-client game::spill::tests::a_block_entity_part_gives_back_what_it_held_when_removed lib daily resources

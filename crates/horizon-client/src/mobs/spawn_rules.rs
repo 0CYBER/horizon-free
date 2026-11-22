@@ -81,19 +81,33 @@ fn can_see_sky<L: SpawnLevel>(l: &L, x: i32, y: i32, z: i32) -> bool {
 }
 /// `LevelReader.canSeeSkyFromBelowWater`.
 fn can_see_sky_from_below_water<L: SpawnLevel>(l: &L, x: i32, y: i32, z: i32) -> bool {
-    let sea = l.sea_level();
+    sky_from_below_water(
+        l.sea_level(),
+        y,
+        |yy| can_see_sky(l, x, yy, z),
+        |yy| lets_the_sky_through(l.facts(), l.state(x, yy, z)),
+    )
+}
+/// `LevelReader.canSeeSkyFromBelowWater` at height `y` of one column: `sees_sky(y)` is
+/// `canSeeSky` at a height of the column and `clear(y)` whether its block there lets the scan
+/// down from sea level pass ([`lets_the_sky_through`]).
+pub fn sky_from_below_water(
+    sea: i32,
+    y: i32,
+    sees_sky: impl Fn(i32) -> bool,
+    clear: impl Fn(i32) -> bool,
+) -> bool {
     if y >= sea {
-        return can_see_sky(l, x, y, z);
+        return sees_sky(y);
     }
-    if !can_see_sky(l, x, sea, z) {
-        return false;
-    }
-    ((y + 1)..sea).all(|yy| {
-        let f = l.facts().get(l.state(x, yy, z));
-        // `BlockState.liquid()` is water, lava and the bubble column. Kelp,
-        // seagrass and waterlogged blocks hold water and still stop the scan.
-        f.dampening == 0 || liquid_block(&f.name)
-    })
+    sees_sky(sea) && ((y + 1)..sea).all(clear)
+}
+/// Whether `canSeeSkyFromBelowWater`'s scan passes `state`: it dampens no light or is
+/// `liquid()`. `BlockState.liquid()` is water, lava and the bubble column. Kelp, seagrass and
+/// waterlogged blocks hold water and still stop the scan.
+pub fn lets_the_sky_through(facts: &BlockFacts, state: BlockStateId) -> bool {
+    let f = facts.get(state);
+    f.dampening == 0 || liquid_block(&f.name)
 }
 /// `BlockState.liquid()`: the three blocks whose property is set.
 fn liquid_block(name: &str) -> bool {

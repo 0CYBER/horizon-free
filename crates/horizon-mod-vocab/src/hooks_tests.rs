@@ -788,6 +788,20 @@ fn entity_queries_take_a_shared_host(read: &dyn Host, entity: EntityRef) {
     let _: Option<Vec<EntityRef>> = entity.parts(read);
 }
 
+/// Compile-only: what a spawn-control mod's rules read, the entity type's class, the sky from
+/// below water and an unspawned mob's age, all on a shared host.
+#[allow(dead_code)]
+fn spawn_rule_reads_take_a_shared_host(
+    read: &dyn Host,
+    level: LevelRef,
+    mob: crate::UnspawnedMobRef,
+) {
+    let _: bool = read.entity_type_is_enemy("minecraft:zombie");
+    let _: bool = read.entity_type_is_animal("minecraft:cow");
+    let _: Option<bool> = level.can_see_sky_from_below_water(read, [0, 40, 0]);
+    let _: Result<bool, crate::UnspawnedMobError> = mob.baby(read);
+}
+
 /// Compile-only: an entity is sent to another dimension from a server host.
 #[allow(dead_code)]
 fn entity_travel_takes_a_server_host(server: &mut dyn ServerHost, entity: EntityRef) {

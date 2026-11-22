@@ -236,6 +236,15 @@ pub trait MobsBackend {
     #[access(WorldOnly)]
     fn unspawned_mob_tags(&self, mob: UnspawnedMobRef) -> Result<Vec<String>, UnspawnedMobError>;
     /// Side: server.
+    /// Whether the unspawned mob is a baby (`LivingEntity.isBaby`): a negative age on a type
+    /// that can be one. `finalize_spawn` lends the mob before finalization runs, so one that
+    /// finalization makes a baby (a baby zombie, a young animal of a natural spawn's pack) is
+    /// still an adult there. The ender dragon never is a baby; `Unsupported` where the game
+    /// lends no mob of its own (as for `equipment`). `Expired` once the hook that lent it has
+    /// returned.
+    #[access(WorldOnly)]
+    fn unspawned_mob_baby(&self, mob: UnspawnedMobRef) -> Result<bool, UnspawnedMobError>;
+    /// Side: server.
     /// The unspawned mob's custom name, if it has one. `Expired` once the hook that lent it has returned.
     #[access(WorldOnly)]
     fn unspawned_mob_custom_name(

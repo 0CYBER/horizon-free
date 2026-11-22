@@ -52,6 +52,23 @@ pub trait EntitiesHost {
     /// for example whitelist or blacklist entries, which the game drops when unknown.
     #[access(Metadata)]
     fn entity_type_exists(&self, id: &str) -> bool;
+    /// Side: both.
+    /// Whether the entities of type `id` are `Enemy`s (`instanceof Enemy`), which a type's
+    /// class decides, not its category: the monsters, the slimes and magma cubes, the ghast,
+    /// phantom, shulker, hoglin and the ender dragon; not the zombie horse, camel husk or zombie
+    /// nautilus, though they are in the monster category. Golems and conduits pick their targets
+    /// by it, and spawn-control mods their hostile mobs. `id` is compared as written, as
+    /// `entity_type_exists` does; false for every other type and an unknown id.
+    #[access(WorldOnly)]
+    fn entity_type_is_enemy(&self, id: &str) -> bool;
+    /// Side: both.
+    /// Whether the entities of type `id` are `Animal`s (`instanceof Animal`): the mobs whose
+    /// class extends vanilla's `Animal`, the hoglin and the zombie horse included, the fish,
+    /// squids, dolphins, villagers and golems not. Spawn-control mods count passive mobs by it
+    /// (an `Animal` that is no `Enemy`). `id` is compared as written; false for every other type
+    /// and an unknown id.
+    #[access(WorldOnly)]
+    fn entity_type_is_animal(&self, id: &str) -> bool;
 }
 /// The server host's methods of the `entities` area, implemented by the game and reached through [`ServerHost`].
 #[horizon_mod_api_macros::host_area]

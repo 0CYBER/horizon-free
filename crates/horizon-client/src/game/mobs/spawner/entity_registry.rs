@@ -10,6 +10,22 @@ impl Game<'_> {
             .as_ref()
             .is_some_and(|t| t.contains(id))
     }
+    /// `instanceof Enemy` for the entities of type `id`: a mob's from its type, true for the
+    /// ender dragon, false for every other kind and for an id that names no type.
+    pub(in crate::game) fn entity_type_is_enemy(&self, id: &str) -> bool {
+        match self.res.mob_types().get(id) {
+            Some(kind) => kind.is_enemy(),
+            None => id == "minecraft:ender_dragon",
+        }
+    }
+    /// `instanceof Animal` for the entities of type `id`: the mobs whose class extends vanilla's
+    /// `Animal`, false for every other kind and for an id that names no type.
+    pub(in crate::game) fn entity_type_is_animal(&self, id: &str) -> bool {
+        self.res
+            .mob_types()
+            .get(id)
+            .is_some_and(|kind| horizon_client::mobs::drops::is_animal(kind.species))
+    }
     /// Whether `entity_type_exists` has a registry to answer from.
     pub(in crate::game) fn entity_types_loaded(&self) -> bool {
         self.spawners
@@ -72,6 +88,51 @@ mod tests {
             assert!(game.entity_type_exists("minecraft:zombie"));
             assert!(!game.entity_type_exists("zombie"));
             assert!(!game.entity_type_exists("minecraft:no_such_mob"));
+        });
+    }
+
+    /// `instanceof Enemy` and `instanceof Animal` follow the classes, not the category: the
+    /// hoglin is both, the zombie horse and camel husk are monsters by category but only
+    /// `Animal`s, the shulker and the slime are enemies outside `Monster`, the dragon is one
+    /// without being a mob here, and the sulfur cube, fish, dolphins, villagers and golems are
+    /// neither.
+    #[test]
+    #[ignore = "daily"]
+    fn a_types_enemy_and_animal_follow_its_class() {
+        with_game(|game| {
+            let classes = |id: &str| {
+                (
+                    game.entity_type_is_enemy(id),
+                    game.entity_type_is_animal(id),
+                )
+            };
+            for id in ["zombie", "creeper", "shulker", "slime", "ghast", "wither"] {
+                assert_eq!(classes(&format!("minecraft:{id}")), (true, false), "{id}");
+            }
+            assert_eq!(classes("minecraft:ender_dragon"), (true, false));
+            assert_eq!(classes("minecraft:hoglin"), (true, true));
+            for id in [
+                "cow",
+                "axolotl",
+                "zombie_horse",
+                "camel_husk",
+                "zombie_nautilus",
+            ] {
+                assert_eq!(classes(&format!("minecraft:{id}")), (false, true), "{id}");
+            }
+            for id in [
+                "sulfur_cube",
+                "dolphin",
+                "cod",
+                "villager",
+                "iron_golem",
+                "bat",
+                "item",
+                "player",
+            ] {
+                assert_eq!(classes(&format!("minecraft:{id}")), (false, false), "{id}");
+            }
+            assert_eq!(classes("zombie"), (false, false), "an id as written");
         });
     }
 }

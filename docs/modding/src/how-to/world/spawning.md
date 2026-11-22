@@ -104,7 +104,7 @@ an explicit NBT compound follows the load route without finalization.
 
 `event.mob` is the mob itself, an `UnspawnedMobRef`: it is not in a level, so it is not an `EntityRef`, and only this
 hook call can use it. Read it through the host (`kind`, `position`, `equipment`, `attribute_base`, `attribute_value`,
-`tags`, `custom_name`) and change it through `event.edits`, which reaches only this mob: equipment (an API-owned `ItemStack`), an attribute's base or a permanent modifier, tags and the custom name. An edit applies at once, so the
+`tags`, `custom_name`, `baby`) and change it through `event.edits`, which reaches only this mob: equipment (an API-owned `ItemStack`), an attribute's base or a permanent modifier, tags and the custom name. An edit applies at once, so the
 reads and the next listener see it. Once the hook returns, the handle answers `UnspawnedMobError::Expired`, as does a
 handle from another call passed to this call's editor.
 

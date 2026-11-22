@@ -701,6 +701,15 @@ pub trait LevelsBackend {
     #[access(WorldOnly)]
     fn level_can_see_sky(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
     /// Side: server.
+    /// `LevelReader.canSeeSkyFromBelowWater`: at or above the level's sea level (`sea_level`)
+    /// the same as `can_see_sky`; below it, whether the column sees the sky at sea level and
+    /// every block from there down to `pos` (not counted) dampens no light or is water, lava or a
+    /// bubble column. Kelp, seagrass and waterlogged blocks stop it. Natural spawning asks it
+    /// (the guardian's rule), and so do mods that tell open water from caves. None for a stale
+    /// handle, a position that isn't loaded and on a client.
+    #[access(WorldOnly)]
+    fn level_can_see_sky_from_below_water(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
+    /// Side: server.
     /// Whether nothing solid lies on the segment `from`..`to`, as
     /// `LivingEntity.hasLineOfSight` clips between two eyes (`ClipContext.Block.COLLIDER`,
     /// `ClipContext.Fluid.NONE`): `clip`'s miss. Fluids, entities and the border don't block it.

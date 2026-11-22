@@ -3,7 +3,7 @@
 //! reach any loaded level; both-side reads also reach the client's current level.
 //! A handle of an earlier open or an unloaded block reads `None` (or `false`).
 use super::Game;
-use horizon_client::{streaming::Streaming, world::World};
+use horizon_client::{mobs::spawn_rules, streaming::Streaming, world::World};
 use horizon_core::{
     geometry::Direction,
     position::{BlockPos, ChunkPos},
@@ -812,6 +812,29 @@ impl Game<'_> {
     /// `level_brightness`.
     pub(super) fn level_can_see_sky(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool> {
         Some(self.level_brightness(level, LightLayer::Sky, pos)? >= 15)
+    }
+    /// `LevelReader.canSeeSkyFromBelowWater`: at and above the level's sea level `canSeeSky`;
+    /// below it, the sky seen at sea level and nothing on the way down that dampens light but
+    /// water, lava and bubble columns. The spawn rules' own scan. None on a client, for a stale
+    /// handle and for a position that isn't loaded.
+    pub(super) fn level_can_see_sky_from_below_water(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Option<bool> {
+        let world = self.native_level_world(level)?;
+        let [x, y, z] = pos;
+        if !world.is_loaded_at(x, y, z) {
+            return None;
+        }
+        let sea = self.level_sea_level(level)?;
+        let facts = self.res.facts();
+        Some(spawn_rules::sky_from_below_water(
+            sea,
+            y,
+            |y| world_brightness(world, LightLayer::Sky, [x, y, z]) >= 15,
+            |y| spawn_rules::lets_the_sky_through(facts, world.block(x, y, z)),
+        ))
     }
     /// `LevelLightEngine.checkBlock` at `pos`, queued with the level's light edits: the next
     /// update asks a `dynamic_light` block's parts again (`ask_edited_light_emission`) and
@@ -1626,6 +1649,53 @@ mod tests {
             assert_eq!(level.fluid_flow(game, [8, y, 8]), Some(Vec3::ZERO));
             assert_eq!(level.fluid_flow(game, [5, y, 5]), Some(Vec3::ZERO));
             assert_eq!(level.fluid_flow(game, [16, y, 0]), None);
+        });
+    }
+
+    /// `can_see_sky_from_below_water` is the spawn rules' scan down from sea level: kelp stops
+    /// it, a bubble column (`liquid()`) and water don't, and the block at the position itself
+    /// isn't scanned; at and above sea level it is `can_see_sky`. A position that isn't loaded
+    /// and a stale handle read None.
+    #[test]
+    #[ignore = "daily"]
+    fn the_sky_from_below_water_stops_at_kelp_and_not_at_a_bubble_column() {
+        use horizon_client::chunk::Chunk;
+        use std::sync::Arc;
+
+        with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = game.level(game.dim.id()).unwrap();
+            let sea = level.sea_level(game).unwrap();
+            let registry = &game.pack.assets.registry;
+            let water = registry.default_state("minecraft:water").unwrap();
+            let kelp = registry.default_state("minecraft:kelp").unwrap();
+            let column = registry.default_state("minecraft:bubble_column").unwrap();
+            for x in 0..3 {
+                for y in sea - 12..sea {
+                    game.world.set(x, y, 0, water).unwrap();
+                }
+            }
+            game.world.set(0, sea - 8, 0, kelp).unwrap();
+            game.world.set(1, sea - 8, 0, column).unwrap();
+            assert_eq!(level.can_see_sky(game, [0, sea, 0]), Some(true));
+            let below = |x, y| level.can_see_sky_from_below_water(game, [x, y, 0]);
+            assert_eq!(below(0, sea - 12), Some(false), "kelp stops the scan");
+            assert_eq!(
+                below(1, sea - 12),
+                Some(true),
+                "a bubble column is liquid()"
+            );
+            assert_eq!(below(2, sea - 12), Some(true), "open water");
+            assert_eq!(below(0, sea - 8), Some(true), "the kelp's own position");
+            assert_eq!(below(0, sea + 4), Some(true), "above sea level");
+            assert_eq!(below(1_000_000, sea - 12), None, "not loaded");
+            let stale = LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension());
+            assert_eq!(
+                stale.can_see_sky_from_below_water(game, [2, sea - 12, 0]),
+                None
+            );
         });
     }
 
