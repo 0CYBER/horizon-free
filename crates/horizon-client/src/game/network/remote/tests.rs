@@ -2417,9 +2417,23 @@ fn client_player_reads_answer_from_the_local_players_copy() {
             )
         );
 
+        // The body's own movement state, which the client keeps itself (`LocalPlayer`).
+        let me = player.entity();
+        assert_eq!(me.is_sprinting(game), Some(false));
+        assert_eq!(me.is_in_water(game), Some(false));
+        let body = game.player.as_mut().unwrap();
+        body.sprinting = true;
+        body.fluids.was_touching_water = true;
+        body.pose = horizon_client::pose::Pose::Crouching;
+        assert_eq!(me.is_sprinting(game), Some(true));
+        assert_eq!(me.is_in_water(game), Some(true));
+        assert_eq!(me.is_in_lava(game), Some(false));
+        assert_eq!(me.is_crouching(game), Some(true));
+
         // Another player: the client isn't sent their state.
         let epoch = player.entity().epoch();
         let other = mod_api::__private::game::player_ref(EntityRef::new(epoch, 8), 43);
+        assert_eq!(other.entity().is_sprinting(game), None);
         assert_eq!(other.game_mode(game), None);
         assert_eq!(other.food(game), None);
         assert_eq!(other.selected_slot(game), None);

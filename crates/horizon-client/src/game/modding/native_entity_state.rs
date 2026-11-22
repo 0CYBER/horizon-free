@@ -68,6 +68,19 @@ impl Game<'_> {
         self.native_target_body(self.native_entity_target(entity)?)
     }
 
+    /// The body a read of the entity's own movement state answers from: the server's entity,
+    /// or on a client the local player's body, whose sprinting, fluids and pose the client
+    /// keeps itself (`LocalPlayer`). None on a client for any other entity.
+    fn native_own_state_body(&self, entity: EntityRef) -> Option<Body<'_>> {
+        if self.is_logical_server() {
+            return self.native_entity_body(entity);
+        }
+        match self.native_client_entity_target(entity)? {
+            Target::Player => Some(Body::Player(self.player.as_ref()?)),
+            _ => None,
+        }
+    }
+
     fn native_target_body(&self, target: Target) -> Option<Body<'_>> {
         Some(match target {
             Target::Player => Body::Player(self.player.as_ref()?),
@@ -100,7 +113,7 @@ impl Game<'_> {
     /// cat or ocelot dashing after its target (their shared sprinting flag);
     /// false for the other kinds.
     pub(super) fn entity_is_sprinting(&self, entity: EntityRef) -> Option<bool> {
-        Some(match self.native_entity_body(entity)? {
+        Some(match self.native_own_state_body(entity)? {
             Body::Player(p) => p.sprinting,
             Body::Mob(m) => m.extra.sprinting,
             _ => false,
@@ -109,7 +122,7 @@ impl Game<'_> {
     /// Whether the entity touched water at its last fluid update
     /// (`Entity.isInWater`): players and mobs.
     pub(super) fn entity_is_in_water(&self, entity: EntityRef) -> Option<bool> {
-        match self.native_entity_body(entity)? {
+        match self.native_own_state_body(entity)? {
             Body::Player(p) => Some(p.fluids.was_touching_water),
             Body::Mob(m) => Some(m.fluids.in_water),
             Body::Other(_) => None,
@@ -128,7 +141,7 @@ impl Game<'_> {
     }
     /// Whether the entity is in lava (`Entity.isInLava`): players and mobs.
     pub(super) fn entity_is_in_lava(&self, entity: EntityRef) -> Option<bool> {
-        match self.native_entity_body(entity)? {
+        match self.native_own_state_body(entity)? {
             Body::Player(p) => Some(p.is_in_lava()),
             Body::Mob(m) => Some(m.fluids.in_lava),
             Body::Other(_) => None,
@@ -569,7 +582,7 @@ impl Game<'_> {
     /// `crouching`, `swimming`, `sleeping`, a warden's `roaring`... Kinds
     /// with no pose stand.
     pub(super) fn entity_pose(&self, entity: EntityRef) -> Option<&'static str> {
-        Some(match self.native_entity_body(entity)? {
+        Some(match self.native_own_state_body(entity)? {
             Body::Player(p) => player_pose(p.pose),
             Body::Mob(m) => POSES.get(usize::from(sync::pose_id(m))).copied()?,
             Body::Other(_) => POSES[0],

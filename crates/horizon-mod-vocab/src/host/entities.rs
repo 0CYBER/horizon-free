@@ -459,15 +459,17 @@ pub trait EntitiesBackend {
     /// False for non-player entities, None for a stale or unreachable handle.
     #[access(WorldOnly)]
     fn entity_is_shift_key_down(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// Whether the entity crouches (`Entity.isCrouching`: the crouching
     /// pose).
+    /// On a client, the local player's own (`LocalPlayer`'s); None for any other entity there.
     #[access(WorldOnly)]
     fn entity_is_crouching(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// Whether the entity sprints (`Entity.isSprinting`): a player, or a
     /// cat or ocelot dashing after its target (their shared sprinting flag);
     /// false for the other kinds.
+    /// On a client, the local player's own (`LocalPlayer`'s); None for any other entity there.
     #[access(WorldOnly)]
     fn entity_is_sprinting(&self, entity: EntityRef) -> Option<bool>;
     /// Side: both.
@@ -487,13 +489,15 @@ pub trait EntitiesBackend {
     /// client, reads its own copy as `entity_fluid_heights` does.
     #[access(WorldOnly)]
     fn entity_eye_fluid(&self, entity: EntityRef) -> Option<Option<String>>;
-    /// Side: server.
+    /// Side: both.
     /// Whether the entity touched water at its last fluid update
     /// (`Entity.isInWater`): players and mobs.
+    /// On a client, the local player's own (`LocalPlayer`'s); None for any other entity there.
     #[access(WorldOnly)]
     fn entity_is_in_water(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// Whether the entity is in lava (`Entity.isInLava`): players and mobs.
+    /// On a client, the local player's own (`LocalPlayer`'s); None for any other entity there.
     #[access(WorldOnly)]
     fn entity_is_in_lava(&self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
@@ -549,10 +553,11 @@ pub trait EntitiesBackend {
     /// flag.
     #[access(WorldOnly)]
     fn entity_is_invisible(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// The entity's pose (`Entity.getPose`) as `Pose` names it: `standing`,
     /// `crouching`, `swimming`, `sleeping`, a warden's `roaring`... Kinds
     /// with no pose stand.
+    /// On a client, the local player's own (`LocalPlayer`'s); None for any other entity there.
     #[access(WorldOnly)]
     fn entity_pose(&self, entity: EntityRef) -> Option<&'static str>;
     /// Side: server.
