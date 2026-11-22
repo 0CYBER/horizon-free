@@ -151,6 +151,26 @@ pub trait RecipesClientHost {
     /// you use it, rather than keeping an answer from `recipes_received`.
     #[access(WorldOnly)]
     fn recipe_book_ids(&mut self, recipe_id: &str) -> Arc<[i32]>;
+    /// Side: client.
+    /// Shows these recipes in mod `mod_id`'s panel (`panel_items`) instead of
+    /// its items, as many as fit a page, under `title` and a back button,
+    /// with a row of `tabs` between them (each an icon; `tab` is the
+    /// selected one). The game lays each one out (`RecipeView`) with its own
+    /// slots, arrow, flame, fluid wells and action button, and pages them to
+    /// the panel's height. At most 256 recipes and 16 tabs; no recipes shows
+    /// the items again. The same title and tab again keep the page the player
+    /// turned to. The player's clicks on a slot, an action button, the back
+    /// button, a tab and the page arrows come back as `panel_event`
+    /// (`SlotClicked`, `Action`, `Back`, `Tab`, `Page`).
+    #[access(WorldOnly)]
+    fn panel_recipes(
+        &mut self,
+        mod_id: &str,
+        title: &str,
+        tabs: Vec<Stack>,
+        tab: u32,
+        views: Vec<RecipeView>,
+    );
 }
 /// The handles' reads of the `recipes` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

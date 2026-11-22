@@ -25,3 +25,17 @@ viewer configuration screen. Only the page arrows are tinted; the wrench retains
 Switching back to RecipeBook or Viewer restores the normal search text colour, including after
 a failed Classic search. Changing the style does not replace the panel's item list or its event
 handling.
+
+## Recipe pages
+
+`panel_recipes(mod_id, title, tabs, tab, views)` shows a page of recipes in the panel's place, under
+`title` and a back button, with a row of `tabs` (each an item icon; `tab` is the selected one). The
+game lays out each `RecipeView` with its own slots, arrow, flame, fluid wells and action button, and
+pages the recipes to the panel's height. Build a view with `RecipeView::new(layout, slots, results)`,
+then set `width` and `height` for a `Grid`, a `note` (a cooking time) or an `action` (a viewer's
+"+": `Some(true)` enabled, `Some(false)` greyed). Each slot and result cycles through its stacks, one
+a second. At most 256 recipes and 16 tabs are shown; an empty list of views shows the items again.
+
+The player's clicks come back as `panel_event`: `SlotClicked` (the recipe, the slot, results after
+the slots, and the stack shown), `Action`, `Back`, `Tab` and `Page`. Sending the same title and tab
+again keeps the page the player turned to.

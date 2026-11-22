@@ -326,6 +326,21 @@ impl Game<'_> {
     pub(in crate::game) fn panel_style(&mut self, mod_id: &str, style: PanelStyle) {
         self.panel.set_style(mod_id, style);
     }
+    /// Shows these recipes in mod `mod_id`'s panel instead of its items
+    /// (`RecipesClientHost::panel_recipes`), as `native_panel_recipes` does
+    /// for a mixin bundle: the same page, cut to the same limits.
+    pub(in crate::game) fn panel_recipes(
+        &mut self,
+        mod_id: &str,
+        title: &str,
+        tabs: Vec<BrowserStack>,
+        tab: u32,
+        views: Vec<mod_api::RecipeView>,
+    ) {
+        let views = views.into_iter().map(Into::into).collect();
+        let page = RecipePage::new(title, tabs, tab, views);
+        self.panel.show_recipes(mod_id, page);
+    }
     fn browser_batch(&self) -> Option<HudBatch> {
         let r = self.renderer.as_ref()?;
         Some(HudBatch::new(

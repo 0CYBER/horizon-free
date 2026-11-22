@@ -611,6 +611,34 @@ pub(crate) struct NativeRecipeView {
     pub(crate) action: Option<bool>,
 }
 
+impl From<mod_api::RecipeView> for NativeRecipeView {
+    /// A recipe a mod shows through `RecipesClientHost::panel_recipes`, field for field.
+    fn from(view: mod_api::RecipeView) -> Self {
+        Self {
+            layout: match view.layout {
+                mod_api::RecipeLayout::Grid => NativeRecipeLayout::Grid,
+                mod_api::RecipeLayout::Cooking => NativeRecipeLayout::Cooking,
+                mod_api::RecipeLayout::Single => NativeRecipeLayout::Single,
+                mod_api::RecipeLayout::Smithing => NativeRecipeLayout::Smithing,
+                mod_api::RecipeLayout::Brewing => NativeRecipeLayout::Brewing,
+            },
+            width: view.width,
+            height: view.height,
+            slots: view.slots,
+            results: (view.results.into_iter())
+                .map(|r| NativeRecipeResult {
+                    stacks: r.stacks,
+                    chance: r.chance,
+                })
+                .collect(),
+            fluid_inputs: view.fluid_inputs,
+            fluid_outputs: view.fluid_outputs,
+            note: view.note,
+            action: view.action,
+        }
+    }
+}
+
 /// An item of [`NativeRecipes::items`], by its index there, with a count
 /// and the components it has beyond the item's own, in vanilla's item
 /// syntax (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`),

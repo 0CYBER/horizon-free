@@ -934,8 +934,8 @@ pub enum PanelEvent {
         stack: Stack,
     },
     /// A click on a slot of a recipe the panel shows: the recipe's index in
-    /// `native_panel_recipes`' list and the slot's in it (the results come
-    /// after the slots), and the stack it showed then.
+    /// `panel_recipes`' list and the slot's in it (the results come after
+    /// the slots), and the stack it showed then.
     SlotClicked {
         /// The recipe's index in the panel's list.
         recipe: u32,
@@ -955,6 +955,98 @@ pub enum PanelEvent {
     Back,
     /// The player picked the tab at this index.
     Tab(u32),
+}
+
+/// How the panel lays out a recipe of `panel_recipes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// exhaustive: a closed set the game draws, matched without a wildcard
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum RecipeLayout {
+    /// A crafting grid of `width` x `height` slots, an arrow and the result.
+    Grid,
+    /// One input over a flame, an arrow and the result (furnaces, smokers,
+    /// campfires).
+    Cooking,
+    /// One input, an arrow and the result (the stonecutter).
+    Single,
+    /// Template, base and addition, an arrow and the result.
+    Smithing,
+    /// A potion and an ingredient, an arrow and the result.
+    Brewing,
+}
+
+/// One result of a recipe the panel shows (`panel_recipes`): a slot cycling
+/// through `stacks`, one a second, and the chance in percent the recipe gives
+/// it (`Some(25.0)` draws "25%"); `None` gives it every time.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct RecipeResult {
+    /// The stacks the slot cycles through, at most 64.
+    pub stacks: Vec<Stack>,
+    /// The chance in percent, 0 to 100; `None` for every time.
+    pub chance: Option<f32>,
+}
+
+impl RecipeResult {
+    /// A result slot cycling through `stacks`, given every time.
+    pub fn new(stacks: Vec<Stack>) -> Self {
+        Self {
+            stacks,
+            chance: None,
+        }
+    }
+}
+
+/// A recipe the panel shows (`panel_recipes`), laid out by the game with its
+/// own slots, arrow and buttons. Each slot, and each result, cycles through
+/// its stacks, one a second; an empty slot shows nothing.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct RecipeView {
+    /// How the recipe is drawn.
+    pub layout: RecipeLayout,
+    /// The grid's size (`Grid` only), 1 to 3 each; slots past it continue in
+    /// rows under it, 27 in all.
+    pub width: u32,
+    /// The grid's height, as `width`.
+    pub height: u32,
+    /// Each slot's stacks, at most 64 each: a grid's row by row, else the
+    /// layout's inputs in order (`Smithing`: template, base, addition).
+    pub slots: Vec<Vec<Stack>>,
+    /// Up to four, left to right after the arrow.
+    pub results: Vec<RecipeResult>,
+    /// Fluids the recipe takes, `amount` in millibuckets, each in a well with
+    /// its amount under it; at most eight. A well shows the fluid's client
+    /// look (`data/<mod>/horizon/fluid/`: sprite and tint), a flat square of
+    /// vanilla's colour for water and lava, and else grey.
+    pub fluid_inputs: Vec<FluidStack>,
+    /// Fluids the recipe gives, as `fluid_inputs`.
+    pub fluid_outputs: Vec<FluidStack>,
+    /// A short line under the recipe (a cooking time), or "".
+    pub note: String,
+    /// The action button beside it (a viewer's "+"), heard as
+    /// `PanelEvent::Action`: none, enabled (`Some(true)`) or shown greyed.
+    pub action: Option<bool>,
+}
+
+impl RecipeView {
+    /// A recipe of `layout` with these slots and results, in a 1 x 1 grid,
+    /// with no fluids, note or action button: set those fields after.
+    pub fn new(layout: RecipeLayout, slots: Vec<Vec<Stack>>, results: Vec<RecipeResult>) -> Self {
+        Self {
+            layout,
+            width: 1,
+            height: 1,
+            slots,
+            results,
+            fluid_inputs: Vec::new(),
+            fluid_outputs: Vec::new(),
+            note: String::new(),
+            action: None,
+        }
+    }
 }
 
 /// The zoom a native mod asks for (`zoom`): the factor (1 is none), eased through the
