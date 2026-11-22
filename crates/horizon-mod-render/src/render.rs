@@ -26,6 +26,11 @@ pub fn world_drawn_hooked() -> bool {
     replaced!(world_drawn)
 }
 
+/// Whether a mixin replaced the raw hand draw function.
+pub fn hand_drawn_hooked() -> bool {
+    replaced!(hand_drawn)
+}
+
 /// What a mod can draw with once the world is drawn: after the sky, terrain, entities,
 /// particles, weather and the world post pass, before the first-person hand ([`HandDrawn`]),
 /// the HUD and the screens. `color` holds the world's picture (copy it out before reading it: it is the target
@@ -446,5 +451,6 @@ pub fn install() {
             })
         },
         world_drawn_hooked,
+        hand_drawn_hooked,
     });
 }

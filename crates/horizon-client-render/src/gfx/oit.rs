@@ -610,15 +610,14 @@ impl Oit {
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        uploads: &mut super::upload::Uploads,
+        encoder: &mut wgpu::CommandEncoder,
         projection: &Mat4,
         wants: [bool; 2],
     ) {
-        queue.write_buffer(
-            &self.uniform,
-            0,
-            bytemuck::cast_slice(&[projection_terms(projection), [0.0; 2]].concat()),
-        );
+        let [p0, p1] = projection_terms(projection);
+        let terms = [p0, p1, 0.0, 0.0];
+        uploads.buffer(encoder, &self.uniform, 0, bytemuck::cast_slice(&terms));
         let [mask, clouds] = wants;
         let Some(t) = self.targets.as_mut() else {
             return;

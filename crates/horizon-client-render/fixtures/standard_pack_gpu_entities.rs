@@ -50,6 +50,7 @@ fn install_observer() {
         hand_drawn: |_| {},
         render_needs: observe_needs,
         world_drawn_hooked: || true,
+        hand_drawn_hooked: || false,
     });
 }
 

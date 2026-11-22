@@ -60,6 +60,7 @@ pub struct Slots {
     pub hand_drawn: for<'a> fn(&mut HandDrawn<'a>),
     pub render_needs: fn(&mut RenderNeeds),
     pub world_drawn_hooked: fn() -> bool,
+    pub hand_drawn_hooked: fn() -> bool,
 }
 static SLOTS: OnceLock<Slots> = OnceLock::new();
 pub fn install(slots: Slots) {
@@ -84,6 +85,9 @@ pub fn needs() -> RenderNeeds {
 }
 pub fn world_drawn_hooked() -> bool {
     SLOTS.get().is_some_and(|s| (s.world_drawn_hooked)())
+}
+pub fn hand_drawn_hooked() -> bool {
+    SLOTS.get().is_some_and(|s| (s.hand_drawn_hooked)())
 }
 
 /// Gather the provider's requested views, each taken or refused as it is pushed.

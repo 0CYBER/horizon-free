@@ -483,7 +483,8 @@ impl super::Renderer {
             .frame_gen
             .world(&self.device, &self.world_post, &self.config, format);
         let timing = self.own_timing.as_mut();
-        self.world_post.finish(&self.queue, encoder, &world, timing);
+        self.world_post
+            .finish(&mut self.uploads, encoder, &world, timing);
         let peak = self
             .hdr
             .as_ref()
@@ -514,7 +515,7 @@ impl super::Renderer {
         if made || peak.is_some() && generated_only() {
             self.draw_overlay(encoder, frame, made_onto.0, made_onto.1, overlay);
             if let Some(hdr) = &self.hdr {
-                hdr.present(&self.queue, encoder, generated, None);
+                hdr.present_staged(&mut self.uploads, encoder, generated, None);
             }
         }
         if peak.is_some() {

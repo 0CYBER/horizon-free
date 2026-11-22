@@ -784,9 +784,27 @@ impl Hdr {
 
     /// On the layered frame, before `tonemap` and `composite`: what they read, for a frame that
     /// drew a world (`world`) or not.
+    #[cfg(test)]
     pub fn begin(&self, queue: &wgpu::Queue, world: bool) {
         if let Some(l) = &self.layered {
             queue.write_buffer(
+                &l.params,
+                0,
+                bytemuck::cast_slice(&self.params(world, false)),
+            );
+        }
+    }
+
+    /// Like `begin`, staged through `uploads` so Linux's submit thread is not stalled.
+    pub fn begin_staged(
+        &self,
+        uploads: &mut super::upload::Uploads,
+        encoder: &mut wgpu::CommandEncoder,
+        world: bool,
+    ) {
+        if let Some(l) = &self.layered {
+            uploads.buffer(
+                encoder,
                 &l.params,
                 0,
                 bytemuck::cast_slice(&self.params(world, false)),
@@ -900,6 +918,7 @@ impl Hdr {
     }
 
     /// Writes the finished frame to the swapchain image `target`.
+    #[cfg(test)]
     pub fn present(
         &self,
         queue: &wgpu::Queue,
@@ -911,6 +930,34 @@ impl Hdr {
             return;
         };
         queue.write_buffer(
+            &self.params,
+            0,
+            bytemuck::cast_slice(&self.params(false, self.output == Output::Pq)),
+        );
+        let view = target.create_view(&Default::default());
+        Self::draw(
+            encoder,
+            &self.pipeline,
+            &t.group,
+            &view,
+            "HDR output",
+            timing,
+        );
+    }
+
+    /// Like `present`, staged through `uploads` so Linux's submit thread is not stalled.
+    pub fn present_staged(
+        &self,
+        uploads: &mut super::upload::Uploads,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) {
+        let Some(t) = &self.targets else {
+            return;
+        };
+        uploads.buffer(
+            encoder,
             &self.params,
             0,
             bytemuck::cast_slice(&self.params(false, self.output == Output::Pq)),

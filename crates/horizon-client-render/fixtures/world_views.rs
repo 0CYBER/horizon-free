@@ -139,6 +139,7 @@ fn install_mod() {
         hand_drawn: |_| {},
         render_needs: |_| {},
         world_drawn_hooked: || false,
+        hand_drawn_hooked: || false,
     });
 }
 

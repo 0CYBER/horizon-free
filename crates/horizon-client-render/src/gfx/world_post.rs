@@ -87,7 +87,7 @@ pub(super) trait UpscalerBackend {
     /// Write this frame's output and return the bind group that shows it (`draw_onto`).
     fn resolve<'t>(
         &self,
-        queue: &wgpu::Queue,
+        uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         frame: &UpscaleFrame<'_>,
         target: &'t Self::Target,
@@ -104,7 +104,7 @@ impl UpscalerBackend for TaaResources {
 
     fn resolve<'t>(
         &self,
-        queue: &wgpu::Queue,
+        uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         frame: &UpscaleFrame<'_>,
         taa: &'t History,
@@ -121,7 +121,7 @@ impl UpscalerBackend for TaaResources {
                 0.0,
             ],
         };
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
+        uploads.buffer(encoder, &self.uniform, 0, bytemuck::bytes_of(&uniform));
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &taa.history[i],
             resolve_target: None,
@@ -756,7 +756,7 @@ impl Post {
     /// Draw the scaled world onto `screen`, through TAA when this frame's `jitter` had it on.
     pub fn finish(
         &self,
-        queue: &wgpu::Queue,
+        uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         screen: &wgpu::TextureView,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
@@ -766,7 +766,7 @@ impl Post {
             self.finish_with(encoder, screen, &target.group, timing.as_deref_mut());
             return;
         };
-        let shown = res.resolve(queue, encoder, &frame, taa, timing.as_deref_mut());
+        let shown = res.resolve(uploads, encoder, &frame, taa, timing.as_deref_mut());
         let pipeline = if self.taa_upscale() > 1.0 {
             &self.sharpen
         } else {
@@ -780,10 +780,10 @@ impl Post {
     /// the upscaling is held (`hold_upscale`), the history itself. Upscaled, the history
     /// sharpened as without a pack, at its size onto `resolved`, or unsharpened where there is
     /// no video memory for that.
-    pub(super) fn resolve_taa(
+    pub(super) fn resolve_taa_staged(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
     ) -> Option<wgpu::TextureView> {
@@ -792,12 +792,26 @@ impl Post {
             .then(|| self.resolved(device))
             .flatten();
         let (res, frame, taa) = self.taa_frame()?;
-        let shown = res.resolve(queue, encoder, &frame, taa, timing.as_deref_mut());
+        let shown = res.resolve(uploads, encoder, &frame, taa, timing.as_deref_mut());
         let Some(sharpened) = sharpened else {
             return Some(taa.history[(frame.index % 2) as usize].clone());
         };
         self.draw_onto(encoder, &sharpened, shown, &self.sharpen, timing);
         Some(sharpened)
+    }
+
+    #[cfg(test)]
+    pub(super) fn resolve_taa(
+        &mut self,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) -> Option<wgpu::TextureView> {
+        let mut uploads = super::upload::Uploads::new(device);
+        let view = self.resolve_taa_staged(device, &mut uploads, encoder, timing);
+        uploads.finish(encoder);
+        view
     }
 
     /// What TAA resolves this frame, when `jitter` had it on and the target has a history.
