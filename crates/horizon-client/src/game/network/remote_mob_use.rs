@@ -324,6 +324,9 @@ fn mob_swings(m: &Mob, item: &str) -> bool {
         Species::Cat if food && (!m.extra.tame || hurt) => return true,
         // Wolf.mobInteract: food heals a hurt tame wolf (SUCCESS).
         Species::Wolf if food && m.extra.tame && hurt => return true,
+        // Parrot.mobInteract: a wild parrot fed #parrot_food returns SUCCESS
+        // on the client too, so the arm swings before the server answers.
+        Species::Parrot if food && !m.extra.tame => return true,
         _ => {}
     }
     // Animal.mobInteract: a baby's food is SUCCESS, since it ages up; an
