@@ -3,7 +3,8 @@
 
 pub trait Hooks {
     /// A mob entered love mode after player interaction. `player` is the
-    /// feeder when known.
+    /// feeder when known. Use [`Hooks::entity_enter_love_mode_pre`] to
+    /// decide whether entry is allowed.
     #[hook(
         side = "server",
         contract = "listen",

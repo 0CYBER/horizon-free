@@ -1,0 +1,2 @@
+# The server feeding test uses prepared mob and item data.
+horizon-client game::creatures::love_mode_tests::eligible_feeds_veto_only_love_mode_and_continue_with_the_real_feeder lib daily resources

@@ -7,9 +7,12 @@ pub trait PandaLevel: MobLevel {
     fn panda_eats_from_ground(&self, item: &str) -> bool;
     /// Whether the player who clicked has infinite materials.
     fn is_creative(&self) -> bool;
-    /// `Animal.setInLove` for mob `id` fed by the acting player: who gets the credit,
+    /// The panda's current index and whether love mode may start. None when
+    /// the animal left the interaction.
+    fn panda_love_decision(&mut self, index: usize) -> Option<(usize, bool)>;
+    /// `Animal.setInLove` for the panda fed by the acting player: who gets the credit,
     /// the mods' enter-love hook, and entity event 18, the love hearts.
-    fn panda_in_love(&mut self, id: u32);
+    fn panda_in_love(&mut self, index: usize);
     /// `ItemStack.consume(1)` on the held stack of the player who clicked.
     fn consume_held(&mut self);
     /// Called after the mobs were lifted out of the level for a pass and before the pass

@@ -305,6 +305,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`exp_bottle(pos, experience)`**: an experience bottle broke and its orbs were created.
 - **`firework_explode(entity, pos, bursts)`**: a firework rocket completed its damage and explosion effects.
 - **`potion_splash(item, pos)`**: a thrown splash or lingering potion finished applying its hit effects at `pos`. Experience bottles are excluded.
+- **`entity_enter_love_mode_pre(animal, level, feeder)`**: cancel an eligible animal's entry into love mode. The server hook provides handles to the animal, its level and the optional feeder. Cancellation skips the timer, breeding credit, entry hearts and the post-entry notice. The feeding interaction otherwise proceeds normally.
 - **`entity_enter_love_mode(entity, kind, player)`**: a mob entered love mode after a player interaction; `player` is the feeder UUID when known.
 - **`teleport_command(dimension, entity, from, to, cancel)`**: a server entity is about to be teleported by `/tp` or `/teleport`. `dimension` is the level it arrives in, `entity` its network id, `from` its feet now and `to` where the command sends it; move `to` to redirect it, or set `cancel` to keep it where it is (the command still reports success).
 - **`entity_teleport(dimension, entity, from, to)`**: a server entity completed a same-level teleport command. `entity` is its network id; `from` and `to` are coordinates in `dimension`. This reports the move after it happens.

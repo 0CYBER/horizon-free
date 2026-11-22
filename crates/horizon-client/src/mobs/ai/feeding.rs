@@ -5,6 +5,10 @@ use super::{Mob, Species, can_age_up};
 /// that `canFallInLove` (not in love yet) or a baby that `canAgeUp` (not age
 /// locked). Tamed wolves and cats only sit or stand when it does not.
 pub fn takes_food(m: &Mob) -> bool {
+    // Armadillo.mobInteract: a ball takes no food.
+    if super::super::armadillo::scared(m) {
+        return false;
+    }
     // `canFallInLove`: a turtle carrying an egg, a pacified hoglin and a camel
     // husk refuse their food.
     let breedable = m.extra.in_love <= 0

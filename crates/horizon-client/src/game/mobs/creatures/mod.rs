@@ -53,7 +53,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{
         Damage, DamageKind, Mob, MobEvent, MobWorld, PlayerView, Seen, SpawnSetup, Species, Who,
-        ai::{eating_sound, eating_sound_is_bound, feed_animal, takes_food},
+        ai::{eating_sound, eating_sound_is_bound, feed_animal_with_love_decision, takes_food},
         entity_sounds::full_id,
         finalize::Group,
         spawning::{self, BiomeFacts},
@@ -6621,6 +6621,7 @@ impl Game<'_> {
         let mut sound: Option<(&str, f32, f32)> = None;
         // Sounds played as vanilla plays them: (event, volume, pitch) at the feet.
         let mut eat: Option<(&'static str, f32, f32)> = None;
+        let mut fed_mob_left = false;
         let feet = [m.position.x, m.position.y, m.position.z];
         let mut handled = true;
         let mut ignited_creeper = false;
@@ -7098,7 +7099,18 @@ impl Game<'_> {
             {
                 // Animal.mobInteract: breed adults, speed up babies, then
                 // playEatingSound (silent unless the species overrides it).
-                match feed_animal(m, &mut self.world.random, Some(acting)) {
+                let eligible = m.extra.age == 0 && takes_food(m);
+                let Some((current_index, loved)) = self.animal_love_decision(index, eligible)
+                else {
+                    return Ok(true);
+                };
+                index = current_index;
+                match feed_animal_with_love_decision(
+                    &mut self.mobs[index],
+                    &mut self.world.random,
+                    Some(acting),
+                    loved,
+                ) {
                     Some(sound) => {
                         consume = true;
                         eat = sound;
@@ -7119,12 +7131,17 @@ impl Game<'_> {
                         }
                         // Animal.setInLove: entity event 18 (a baby that
                         // only grew is not in love).
-                        if self.mobs[index].extra.in_love > 0 {
+                        if loved && self.mobs[index].extra.in_love > 0 {
                             let id = self.mobs[index].id;
                             self.love_cause.insert(id, self.lan_acting);
                             let kind = self.mobs[index].kind.id.clone();
                             self.native_entity_enter_love_mode(id, &kind, self.lan_acting_uuid);
-                            self.mob_event_particles(id, 18);
+                            if let Some(current_index) = self.feeding_animal_index(index, id) {
+                                index = current_index;
+                                self.mob_event_particles(id, 18);
+                            } else {
+                                fed_mob_left = true;
+                            }
                         }
                     }
                     // Animal.mobInteract still consumes the client click when
@@ -7178,7 +7195,7 @@ impl Game<'_> {
             });
         }
         // PlayerInteractTrigger: the item used on the mob, once the interaction took.
-        if let Some(stack) = &held {
+        if !fed_mob_left && let Some(stack) = &held {
             let target = self.mob_entity(&self.mobs[index]);
             self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
         }
@@ -7212,10 +7229,9 @@ impl Game<'_> {
         if let Some((s, volume, pitch)) = eat {
             let name = full_id(s);
             if eating_sound_is_bound(species) {
-                let id = self.mobs[index].id;
                 let sound =
                     LevelSound::new(&name, feet, volume, pitch).in_source(SoundSource::Neutral);
-                self.play_bound_sound(sound, id, None);
+                self.play_bound_sound(sound, mob.0, None);
             } else {
                 self.audio.play(&name, Some(feet), volume, pitch);
             }
@@ -9423,6 +9439,8 @@ mod shulker_arrow_tests {
 
 #[cfg(test)]
 mod breeding_tests;
+#[cfg(test)]
+mod love_mode_tests;
 
 #[cfg(test)]
 mod projectile_batch_tests;

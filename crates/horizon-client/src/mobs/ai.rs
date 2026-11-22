@@ -3415,22 +3415,28 @@ pub fn feed_animal(
     level: &mut impl RandomSource,
     love_cause: Option<[i32; 4]>,
 ) -> Option<Option<(&'static str, f32, f32)>> {
-    // Armadillo.mobInteract: a ball takes no food.
-    if super::armadillo::scared(m) {
-        return None;
-    }
+    feed_animal_with_love_decision(m, level, love_cause, true)
+}
+/// Apply the ordinary feed, with the server's decision about entering love mode.
+/// A refused entry still accepts the food and plays the eating sound.
+pub fn feed_animal_with_love_decision(
+    m: &mut Mob,
+    level: &mut impl RandomSource,
+    love_cause: Option<[i32; 4]>,
+    enter_love: bool,
+) -> Option<Option<(&'static str, f32, f32)>> {
     if !takes_food(m) {
         return None;
     }
-    if m.extra.age == 0 {
+    if m.extra.age != 0 {
+        // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age), true): a tenth.
+        let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
+        age_up(m, secs, true);
+    } else if enter_love {
         m.extra.in_love = 600;
         m.extra.love_player = true;
         // Animal.setInLove: the player who fed it, for a fox baby to trust.
         m.extra.love_cause = love_cause;
-    } else {
-        // AgeableMob.ageUp(getSpeedUpSecondsWhenFeeding(-age), true): a tenth.
-        let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
-        age_up(m, secs, true);
     }
     let mut sound = eating_sound(m, level);
     if m.species() == Species::Strider && !m.silent {

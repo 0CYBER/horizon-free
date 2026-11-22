@@ -81,9 +81,7 @@ pub fn interact_panda<L: PandaLevel + ?Sized>(l: &mut L, index: usize, item: &st
         panda::got_bamboo(m);
     }
     let at = [m.position.x, m.position.y, m.position.z];
-    let id = m.id;
     let mut dropped = None;
-    let mut loved = false;
     if m.is_baby() {
         // Panda.mobInteract: a baby an age lock holds back passes.
         if !horizon_client::mobs::ai::can_age_up(m) {
@@ -93,9 +91,15 @@ pub fn interact_panda<L: PandaLevel + ?Sized>(l: &mut L, index: usize, item: &st
         let seconds = ((-m.extra.age / 20) as f32 * 0.1) as i32;
         horizon_client::mobs::ai::age_up(m, seconds, true);
     } else if m.extra.age == 0 && m.extra.in_love <= 0 {
-        m.extra.in_love = 600;
-        m.extra.love_player = true;
-        loved = true;
+        let Some((index, loved)) = l.panda_love_decision(index) else {
+            return true;
+        };
+        if loved {
+            let m = &mut l.parts().mobs[index];
+            m.extra.in_love = 600;
+            m.extra.love_player = true;
+            l.panda_in_love(index);
+        }
     } else {
         if panda::is_sitting(m) || m.fluids.in_water {
             return false;
@@ -109,9 +113,6 @@ pub fn interact_panda<L: PandaLevel + ?Sized>(l: &mut L, index: usize, item: &st
             dropped = Some(ItemStack::new(&held, panda::held_count(m)));
         }
         panda::hold(m, item, 1, false);
-    }
-    if loved {
-        l.panda_in_love(id);
     }
     l.consume_held();
     if let Some(stack) = dropped {

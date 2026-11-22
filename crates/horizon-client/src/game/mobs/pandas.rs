@@ -73,17 +73,19 @@ impl PandaLevel for Game<'_> {
     fn is_creative(&self) -> bool {
         self.creative
     }
-    fn panda_in_love(&mut self, id: u32) {
+    fn panda_love_decision(&mut self, index: usize) -> Option<(usize, bool)> {
+        self.animal_love_decision(index, true)
+    }
+    fn panda_in_love(&mut self, index: usize) {
+        let panda = &self.mobs[index];
+        let id = panda.id;
+        let kind = super::native_hooks::mob_kind(panda);
         self.love_cause.insert(id, self.lan_acting);
-        let kind = self
-            .mobs
-            .iter()
-            .find(|m| m.id == id)
-            .map(super::native_hooks::mob_kind)
-            .unwrap_or_default();
         self.native_entity_enter_love_mode(id, &kind, self.lan_acting_uuid);
         // Animal.setInLove: entity event 18, the love hearts.
-        self.mob_event_particles(id, 18);
+        if self.feeding_animal_index(index, id).is_some() {
+            self.mob_event_particles(id, 18);
+        }
     }
     fn consume_held(&mut self) {
         Game::consume_held(self);
