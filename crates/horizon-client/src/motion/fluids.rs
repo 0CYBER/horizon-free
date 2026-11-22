@@ -282,9 +282,78 @@ impl MotionWorld<'_, '_, '_> {
     pub(super) fn fluid_at(&self, p: BlockPos) -> FluidState {
         self.resources.fluids.fluid(self.block(p))
     }
+    pub(super) fn is_dry_air_fast(&self) -> bool {
+        let p = &*self.player;
+        if p.fluids.first_tick
+            || p.fluids.was_touching_water
+            || p.fluids.was_eye_in_water
+            || p.is_in_lava()
+            || p.swimming
+            || p.spectator
+            || p.fire_ticks > 0
+            || !p.fluids.interaction.trackers().is_empty()
+            || p.fluids.boat.is_some()
+        {
+            return false;
+        }
+        let b = p.bounds().deflate(Vec3::new(0.001, 0.001, 0.001));
+        let (a, c) = (b.min_position(), b.max_position());
+        if !a.is_finite()
+            || !c.is_finite()
+            || !p.position.y.is_finite()
+            || !p.dimensions.eye_height.is_finite()
+        {
+            return false;
+        }
+        let eye_y =
+            (p.position.y + f64::from(p.dimensions.eye_height) - 0.111_111_11).floor() as i32;
+        let mut low = BlockPos::new(a.x.floor() as i32, a.y.floor() as i32, a.z.floor() as i32);
+        let mut high = BlockPos::new(
+            (c.x.ceil() as i32).wrapping_sub(1),
+            (c.y.ceil() as i32).wrapping_sub(1),
+            (c.z.ceil() as i32).wrapping_sub(1),
+        );
+        low.y = low.y.min(eye_y);
+        high.y = high.y.max(eye_y);
+        if low.x > high.x
+            || low.y > high.y
+            || low.z > high.z
+            || i64::from(high.x) - i64::from(low.x) > 8
+            || i64::from(high.y) - i64::from(low.y) > 8
+            || i64::from(high.z) - i64::from(low.z) > 8
+        {
+            return false;
+        }
+        for cz in (low.z >> 4)..=(high.z >> 4) {
+            for cx in (low.x >> 4)..=(high.x >> 4) {
+                let Some(chunk) = self.scene.chunks.get(&(cx, cz)) else {
+                    return false;
+                };
+                let z_lo = low.z.max(cz << 4);
+                let z_hi = high.z.min((cz << 4) + 15);
+                let x_lo = low.x.max(cx << 4);
+                let x_hi = high.x.min((cx << 4) + 15);
+                for z in z_lo..=z_hi {
+                    for x in x_lo..=x_hi {
+                        for y in low.y..=high.y {
+                            if self.resources.fluids.fluid(chunk.block(x, y, z)).kind()
+                                != FluidKind::Empty
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
     /// `Entity.baseTick`'s fluid phase: `wasEyeInWater`, `updateFluidInteraction`,
     /// swimming and remaining fire, lava's fall halving, then the first-tick clear.
     pub fn fluid_base_tick(&mut self) -> Result<()> {
+        if self.is_dry_air_fast() {
+            return Ok(());
+        }
         self.player.fluids.was_eye_in_water = self.player.is_eye_in_fluid(WATER);
         self.update_fluids()?;
         // `Player.updateSwimming`'s flying guard over `Entity.updateSwimming`,

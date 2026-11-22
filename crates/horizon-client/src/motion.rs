@@ -7093,4 +7093,121 @@ mod tests {
         );
         assert_eq!(bounce.velocity, bounce_full.velocity);
     }
+
+    #[test]
+    #[ignore = "daily"]
+    fn dry_air_fluid_base_tick_fast_path_matches_full() {
+        let Some(v) = crate::test_fixtures::vanilla() else {
+            return;
+        };
+        let (assets, render, binding, resources) = (&v.assets, &v.render, &v.collision, &v.motion);
+        let mut scene = World::test_scene(assets, render, 2).unwrap();
+        let mut seed = PlayerMotion::new(resources, Vec3::new(20.5, 64.0, 20.5)).unwrap();
+        let mut full = seed.clone();
+        // First tick still runs full path because `fluids.first_tick` is true.
+        let mut w_seed = MotionWorld {
+            tag_items: None,
+            block_registries: None,
+            loop_context: crate::test_resources::server_loop_context(),
+            damage_hooks: &crate::health::DamageHooks::NONE,
+            entities: &[],
+            player: &mut seed,
+            scene: &mut scene,
+            assets,
+            collision_binding: binding,
+            resources,
+            health: &resources.health,
+        };
+        assert!(!w_seed.is_dry_air_fast());
+        w_seed.fluid_base_tick().unwrap();
+        assert!(w_seed.is_dry_air_fast());
+        for tick in 0..5 {
+            assert!(
+                w_seed.is_dry_air_fast(),
+                "dry air tick {tick} must take fast path"
+            );
+            w_seed.fluid_base_tick().unwrap();
+        }
+        // Baseline full path (without dry-air fast skip): clear `first_tick` once then run full body.
+        let mut w_full = MotionWorld {
+            tag_items: None,
+            block_registries: None,
+            loop_context: crate::test_resources::server_loop_context(),
+            damage_hooks: &crate::health::DamageHooks::NONE,
+            entities: &[],
+            player: &mut full,
+            scene: &mut scene,
+            assets,
+            collision_binding: binding,
+            resources,
+            health: &resources.health,
+        };
+        for _ in 0..6 {
+            w_full.player.fluids.was_eye_in_water = w_full.player.is_eye_in_fluid(fluids::WATER);
+            w_full.update_fluids().unwrap();
+            w_full.tick_remaining_fire().unwrap();
+            w_full.player.fluids.first_tick = false;
+        }
+        assert_eq!(
+            seed.fluids.was_touching_water,
+            full.fluids.was_touching_water
+        );
+        assert_eq!(seed.fluids.was_eye_in_water, full.fluids.was_eye_in_water);
+        assert_eq!(seed.swimming, full.swimming);
+        assert_eq!(seed.fire_ticks, full.fire_ticks);
+        assert_eq!(seed.fall_distance, full.fall_distance);
+        assert_eq!(seed.events.len(), full.events.len());
+
+        // Placing water or lava inside the box or at a custom eye height forces fallback.
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let lava = assets.registry.default_state("minecraft:lava").unwrap();
+        let air = assets.registry.default_state("minecraft:air").unwrap();
+        scene.set(20, 64, 20, water).unwrap();
+        let w_check = MotionWorld {
+            tag_items: None,
+            block_registries: None,
+            loop_context: crate::test_resources::server_loop_context(),
+            damage_hooks: &crate::health::DamageHooks::NONE,
+            entities: &[],
+            player: &mut seed,
+            scene: &mut scene,
+            assets,
+            collision_binding: binding,
+            resources,
+            health: &resources.health,
+        };
+        assert!(!w_check.is_dry_air_fast());
+        scene.set(20, 64, 20, lava).unwrap();
+        let w_lava = MotionWorld {
+            tag_items: None,
+            block_registries: None,
+            loop_context: crate::test_resources::server_loop_context(),
+            damage_hooks: &crate::health::DamageHooks::NONE,
+            entities: &[],
+            player: &mut seed,
+            scene: &mut scene,
+            assets,
+            collision_binding: binding,
+            resources,
+            health: &resources.health,
+        };
+        assert!(!w_lava.is_dry_air_fast());
+        scene.set(20, 64, 20, air).unwrap();
+        scene.set(20, 67, 20, water).unwrap();
+        seed.dimensions.eye_height = 3.5;
+        let w_eye = MotionWorld {
+            tag_items: None,
+            block_registries: None,
+            loop_context: crate::test_resources::server_loop_context(),
+            damage_hooks: &crate::health::DamageHooks::NONE,
+            entities: &[],
+            player: &mut seed,
+            scene: &mut scene,
+            assets,
+            collision_binding: binding,
+            resources,
+            health: &resources.health,
+        };
+        assert!(!w_eye.is_dry_air_fast());
+    }
 }
