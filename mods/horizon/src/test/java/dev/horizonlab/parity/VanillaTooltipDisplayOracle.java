@@ -6,19 +6,32 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.item.component.TooltipDisplay;
 
-/** The name and attribute lines returned for a diamond sword's tooltip. */
+/** Tooltip visibility, styled names and jukebox song details. */
 public final class VanillaTooltipDisplayOracle {
     public static void main(String[] args) throws Exception {
         ParityData.init();
         var context = Item.TooltipContext.of(ParityData.lookup);
         var output = new ArrayList<String>();
         for (String line : Files.readAllLines(Path.of(args[0]))) {
+            if (line.startsWith("jukebox\t")) {
+                var stack = ParityData.stack(line.substring("jukebox\t".length()));
+                var tooltip = stack.getTooltipLines(context, null, TooltipFlag.Default.NORMAL);
+                var details = tooltip.stream().skip(1).map(component -> {
+                    if (component.getContents() instanceof TranslatableContents translation) {
+                        return translation.getKey();
+                    }
+                    return component.getString();
+                }).toList();
+                output.add("jukebox\t" + String.join("\t", details));
+                continue;
+            }
             if (line.startsWith("name\t")) {
                 var stack = ParityData.stack("{id:\"minecraft:stick\",count:1,components:{\"minecraft:custom_name\":" + line.substring(5) + "}}");
                 var result = new StringBuilder("name\t");

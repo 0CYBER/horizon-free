@@ -763,19 +763,20 @@ pub fn jukebox_line(
     display: &TooltipDisplay,
     translate: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    if !display.shows("minecraft:jukebox_playable") {
+    const JUKEBOX_PLAYABLE: &str = "minecraft:jukebox_playable";
+    if !display.shows(JUKEBOX_PLAYABLE) {
         return None;
     }
-    let song = match stack
-        .data()
-        .and_then(|d| d.other("minecraft:jukebox_playable"))
-    {
+    let song = match stack.data().and_then(|data| data.other(JUKEBOX_PLAYABLE)) {
         Some(Tag::String(song)) => song.to_string_lossy(),
         // An inline song carries its own description.
         Some(inline) => {
             return inline
                 .get("description")
                 .map(|d| crate::entity_nbt::name_text(d).plain());
+        }
+        None if crate::item_data::ingredient_components::removed(stack, JUKEBOX_PLAYABLE) => {
+            return None;
         }
         None => info?.jukebox_song.clone()?,
     };

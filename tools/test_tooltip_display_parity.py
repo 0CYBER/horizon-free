@@ -28,18 +28,28 @@ def cases(build):
         {'text': 'Gold', 'color': 'gold', 'bold': True, 'italic': False},
         [{'text': 'List ', 'bold': True}, {'text': 'tail', 'bold': False}],
     ]
-    path.write_text('\n'.join('\t'.join(str(v).lower() for v in row) for row in values) + '\n'
-                    + ''.join('name\t' + json.dumps(name, ensure_ascii=False) + '\n' for name in names))
-    return path, len(values) + len(names)
+    jukebox_patches = [
+        {},
+        {'!minecraft:jukebox_playable': {}, 'minecraft:item_name': 'Test'},
+        {'minecraft:jukebox_playable': 'minecraft:cat'},
+        {'minecraft:tooltip_display': {'hidden_components': ['minecraft:jukebox_playable']}},
+    ]
+    rows = ['\t'.join(str(value).lower() for value in row) for row in values]
+    rows.extend('name\t' + json.dumps(name, ensure_ascii=False) for name in names)
+    for patch in jukebox_patches:
+        disc = {'id': 'minecraft:music_disc_13', 'count': 1, 'components': patch}
+        rows.append('jukebox\t' + json.dumps(disc))
+    path.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    return path, len(rows)
 
 
 if __name__ == '__main__':
     harness.differential(
         'tooltip-display-parity', 'VanillaTooltipDisplayOracle', 'tooltip_display_fixture', cases,
-        'Tooltip visibility and styled custom-name colour, italic and bold inheritance',
+        'Tooltip visibility, styled custom names and jukebox song component patches',
         sources=[
             lab.ROOT / 'crates/horizon-client/src/game/blocks/stations.rs',
             lab.ROOT / 'crates/horizon-client/src/item_tooltip.rs',
             lab.ROOT / 'crates/horizon-items/src/item_data.rs',
         ],
-        expected_lines=12)
+        expected_lines=16)
