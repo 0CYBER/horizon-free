@@ -429,10 +429,16 @@ fn service<R>(f: impl FnOnce(&mut Seat) -> R) -> R {
 struct Hooks;
 static HOOKS: Hooks = Hooks;
 
-/// Registers the cosmetics' settings lines, and while they are [`enabled`] their hooks and their
-/// rows on the Extras page. The lines always: a game without cosmetics keeps the Wardrobe's.
+static MAPPINGS: &horizon_hooks::actions::Mappings = &[
+    // The emote wheel (docs/cosmetics.md), on a key vanilla leaves free.
+    ("key.emote", "key.keyboard.b", "multiplayer"),
+];
+
+/// Registers the cosmetics' settings lines, key mappings, and while they are [`enabled`] their hooks and their
+/// rows on the Extras page. The lines and mappings always: a game without cosmetics keeps the Wardrobe's and emoteKey.
 pub(super) fn register() -> Result<(), horizon_hooks::TooLate> {
     horizon_hooks::settings::register(&settings::STORE)?;
+    horizon_hooks::actions::register(MAPPINGS)?;
     if enabled() {
         horizon_hooks::register(&HOOKS)?;
         horizon_hooks::pages::register(&settings::SECTION)?;

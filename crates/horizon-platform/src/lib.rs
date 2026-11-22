@@ -87,6 +87,11 @@ pub mod pages {
     pub use horizon_hooks::pages::{Act, Label, Page, Place, Row, connect, register};
 }
 
+/// Key mappings a crate registers (docs/layers.md, "Platform registries").
+pub mod actions {
+    pub use horizon_hooks::actions::{Mappings, register};
+}
+
 /// The lang files with a crate's text, loaded with the game's own (docs/layers.md, "Platform
 /// registries").
 pub mod lang {

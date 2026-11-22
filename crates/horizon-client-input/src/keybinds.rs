@@ -74,16 +74,37 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.debug.lightmapTexture", "key.keyboard.4", "debug"),
     ("key.debug.improvedTransparency", "key.keyboard.x", "debug"),
 ];
-/// Horizon's own key mappings: bound in Controls like the vanilla ones, but kept in
-/// `horizon-extras.txt` (`emoteKey`), never in `options.txt`, which stays exactly vanilla's
-/// (`MAPPINGS` is what the options parity harness compares with the pinned client).
+/// Registered key mappings (docs/layers.md, "Platform registries"): crate-registered mappings,
+/// kept in `horizon-extras.txt`, never in `options.txt`.
+pub fn crate_mappings() -> &'static [&'static [(&'static str, &'static str, &'static str)]] {
+    horizon_hooks::actions::engine::all()
+}
+/// Horizon's own key mappings: kept with registered defaults so standalone tests and
+/// defaults without external crates registered retain their fallback bindings.
 pub const HORIZON_MAPPINGS: &[(&str, &str, &str)] = &[
     // The emote wheel (docs/cosmetics.md), on a key vanilla leaves free.
     ("key.emote", "key.keyboard.b", "multiplayer"),
 ];
-/// Every mapping the game binds: vanilla's in `Options.keyMappings` order, then Horizon's.
+/// Active non-vanilla mappings: registered crate mappings, falling back to HORIZON_MAPPINGS if empty.
+fn non_vanilla_mappings()
+-> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {
+    active_non_vanilla(crate_mappings())
+}
+fn active_non_vanilla(
+    registered: &'static [&'static [(&'static str, &'static str, &'static str)]],
+) -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {
+    let horizon: &[(&'static str, &'static str, &'static str)] = if registered.is_empty() {
+        HORIZON_MAPPINGS
+    } else {
+        &[]
+    };
+    horizon
+        .iter()
+        .chain(registered.iter().flat_map(|m| m.iter()))
+}
+/// Every mapping the game binds: vanilla's in `Options.keyMappings` order, then registered crate mappings (or fallback).
 pub fn all_mappings() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {
-    MAPPINGS.iter().chain(HORIZON_MAPPINGS)
+    MAPPINGS.iter().chain(non_vanilla_mappings())
 }
 /// Mappings Options builds as `ToggleKeyMapping` (hold or toggle by option).
 pub fn is_toggle(name: &str) -> bool {
@@ -439,8 +460,7 @@ impl KeyBinds {
     }
     /// Horizon's own bindings, for `horizon-extras.txt`.
     pub fn horizon_saved(&self) -> Vec<(&'static str, String)> {
-        HORIZON_MAPPINGS
-            .iter()
+        non_vanilla_mappings()
             .map(|(n, _, _)| (*n, self.get(n).to_owned()))
             .collect()
     }
@@ -737,6 +757,37 @@ mod tests {
     fn display_names() {
         assert_eq!(display_name("key.keyboard.w").plain(), "W");
         assert_eq!(display_name("key.keyboard.slash").plain(), "/");
+    }
+    #[test]
+    fn horizon_saved_falls_back_when_no_crates_registered() {
+        let mut keys = KeyBinds::default();
+        let saved = keys.horizon_saved();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0], ("key.emote", "key.keyboard.b".to_string()));
+        keys.set("key.emote", "key.keyboard.v");
+        let saved_rebound = keys.horizon_saved();
+        assert_eq!(
+            saved_rebound[0],
+            ("key.emote", "key.keyboard.v".to_string())
+        );
+    }
+    #[test]
+    fn active_non_vanilla_uses_registered_mappings_and_drops_fallback() {
+        static CUSTOM: &[(&str, &str, &str)] = &[
+            ("key.custom.test", "key.keyboard.k", "multiplayer"),
+            ("key.emote", "key.keyboard.x", "multiplayer"),
+        ];
+        static REGISTERED: &[&[(&str, &str, &str)]] = &[CUSTOM];
+        let active: Vec<_> = active_non_vanilla(REGISTERED).collect();
+        assert_eq!(active.len(), 2);
+        assert_eq!(active[0].0, "key.custom.test");
+        assert_eq!(active[1].0, "key.emote");
+        assert_eq!(active[1].1, "key.keyboard.x");
+        // Verify fallback is empty when registered is provided
+        let fallback_only: Vec<_> = active_non_vanilla(&[]).collect();
+        assert_eq!(fallback_only.len(), 1);
+        assert_eq!(fallback_only[0].0, "key.emote");
+        assert_eq!(fallback_only[0].1, "key.keyboard.b");
     }
     #[test]
     fn only_a_synced_set_changes_keybind_display() {
