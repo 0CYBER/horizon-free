@@ -453,3 +453,60 @@ fn a_pack_text_shader_without_a_colour_output_is_dropped_not_wrapped() {
     gpu.hud.set_text_shader(&gpu.device, Some(&program));
     assert!(gpu.hud.pack_text.is_none());
 }
+
+/// A pack's `position_tex_color` draws a `PackBlit` with its picture as `Sampler0`, in place of
+/// the native tiles before it (where it discards, nothing shows); without the shader the tiles
+/// draw and the quad doesn't.
+#[test]
+fn a_pack_blit_replaces_its_native_tiles_only_with_the_packs_shader() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some(mut gpu) = Gpu::new() else { return };
+    let image = Arc::new(pictures::Picture {
+        id: u64::MAX - 1,
+        width: 1,
+        height: 1,
+        pixels: vec![255, 0, 0, 255],
+        flags: TextureFlags::default(),
+    });
+    let mut batch = HudBatch::scratch([4, 2]);
+    batch.pictures.push(image.clone());
+    let rect = Rect {
+        u0: 0.0,
+        v0: 0.0,
+        u1: 0.5,
+        v1: 1.0,
+        w: 1,
+        h: 1,
+    };
+    batch.rect_uv(0.0, 0.0, 4.0, 2.0, rect, rgba(0, 255, 0, 255));
+    batch.blend_since(0, Blend::PackBlitNative(image.id));
+    let start = batch.vertices.len();
+    batch.rect_uv(0.0, 0.0, 4.0, 2.0, rect, u32::MAX);
+    batch.blend_since(start, Blend::PackBlit(image.id));
+    let draw = |gpu: &mut Gpu| {
+        let mut uploads = crate::gfx::upload::Uploads::new(&gpu.device);
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        gpu.hud
+            .prepare_pictures(&gpu.device, &mut uploads, &mut encoder, &batch);
+        uploads.finish(&encoder);
+        gpu.queue.submit([encoder.finish()]);
+        gpu.draw(&batch, 0.0, 0.0, true).0
+    };
+    assert!(
+        draw(&mut gpu)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 255, 0, 255])
+    );
+    let program = crate::core_shader::CoreProgram {
+        vertex: naga::front::wgsl::parse_str("@vertex fn main(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4(p.x / 2.0 - 1.0, 1.0 - p.y, 0.0, 1.0); }").unwrap(),
+        fragment: naga::front::wgsl::parse_str("@group(0) @binding(4) var t: texture_2d<f32>; @group(0) @binding(5) var s: sampler; @fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> { if p.x > 2.0 { discard; } return textureSample(t, s, vec2(0.5)); }").unwrap(),
+        other: Vec::new(),
+    };
+    gpu.hud.set_blit_shader(&gpu.device, Some(&program));
+    for row in draw(&mut gpu).as_chunks::<16>().0 {
+        assert_eq!(&row[..8], &[255, 0, 0, 255, 255, 0, 0, 255]);
+        assert_eq!(&row[8..], &[0; 8]);
+    }
+}

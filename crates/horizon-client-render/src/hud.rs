@@ -117,6 +117,9 @@ pub struct HudAtlas {
     /// The packs' `core/sky` and `core/stars`, when a pack replaces them.
     pub sky_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     pub stars_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
+    /// The packs' `core/position_tex_color` (`RenderPipelines.GUI_TEXTURED`), when a pack
+    /// replaces it: [`HudBatch::pack_blit`] draws the menu textures with it.
+    pub blit_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     /// The packs' Polytone screen sprite modifiers.
     pub sprite_modifiers: std::sync::Arc<sprite_modifiers::SpriteModifiers>,
     /// The packs' OptiFine random entity textures, whose variants this atlas packs.
@@ -1081,6 +1084,7 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            blit_shader: None,
             sprite_modifiers: Default::default(),
             random_textures: Default::default(),
             emissive: Arc::default(),
@@ -1150,6 +1154,7 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            blit_shader: None,
             sprite_modifiers: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -1753,6 +1758,7 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            blit_shader: None,
             sprite_modifiers: Default::default(),
             random_textures,
             emissive,
@@ -1887,6 +1893,13 @@ pub enum Blend {
     /// An OptiFine CIT glint layer (`cit_glint`), blended as entry `n` of
     /// `GlintTextures::blends` says.
     CitGlint(u8),
+    /// `GuiGraphicsExtractor.blit(GUI_TEXTURED, texture, ...)` as vanilla draws it: one quad
+    /// with the blit's own UVs, which the pack's `position_tex_color` draws with picture `id`
+    /// as `Sampler0` ([`HudBatch::pack_blit`]).
+    PackBlit(u64),
+    /// The same blit as the atlas tiles it draws natively, translucent: drawn unless the pack's
+    /// shader draws the `PackBlit` of picture `id` after it.
+    PackBlitNative(u64),
 }
 /// What a `Blend::EndPortal` fill samples: the atlas rects (u0, v0, width,
 /// height) of `end_sky.png` and `end_portal.png`, and the `GameTime` uniform.
@@ -2742,6 +2755,10 @@ pub struct HudRenderer {
     atlas_view: wgpu::TextureView,
     /// The resource pack's text shader, when it has one that works.
     pack_text: Option<pack_text::PackText>,
+    /// The resource pack's `position_tex_color`, when it has one that works, and its bind
+    /// group for each picture a `Blend::PackBlit` reads.
+    pack_blit: Option<pack_text::PackText>,
+    pack_blit_groups: HashMap<u64, wgpu::BindGroup>,
     /// Target pixels per window pixel: above 1 for a screenshot drawn larger than the
     /// window (`Renderer::screenshot_quality`).
     pub zoom: f32,
@@ -3025,6 +3042,8 @@ impl HudRenderer {
             coverage,
             atlas_view: view.clone(),
             pack_text: None,
+            pack_blit: None,
+            pack_blit_groups: HashMap::new(),
             zoom: 1.0,
         })
     }
@@ -3047,7 +3066,35 @@ impl HudRenderer {
         shader: Option<&crate::core_shader::CoreProgram>,
     ) {
         self.pack_text = shader.and_then(|shader| {
-            pack_text::PackText::new(device, self.format, &self.atlas_view, shader, self.coverage)
+            pack_text::PackText::new(
+                device,
+                self.format,
+                &self.atlas_view,
+                shader,
+                self.coverage,
+                "text",
+            )
+        });
+    }
+    /// Draw the menu textures `HudBatch::pack_blit` records with `shader`
+    /// (`HudAtlas::blit_shader`), or natively.
+    pub fn set_blit_shader(
+        &mut self,
+        device: &wgpu::Device,
+        shader: Option<&crate::core_shader::CoreProgram>,
+    ) {
+        // The pictures are made again with the new shader's bind groups.
+        self.pictures.clear();
+        self.pack_blit_groups.clear();
+        self.pack_blit = shader.and_then(|shader| {
+            pack_text::PackText::new(
+                device,
+                self.format,
+                &self.atlas_view,
+                shader,
+                self.coverage,
+                "position_tex_color",
+            )
         });
     }
     /// The pictures are made and uploaded again on the next `prepare`: a frame given up
@@ -3133,8 +3180,8 @@ impl HudRenderer {
                 batch.glint_colour,
             )),
         );
-        if let Some(pack_text) = &self.pack_text {
-            pack_text.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
+        for pack in [&self.pack_text, &self.pack_blit].into_iter().flatten() {
+            pack.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
         }
     }
     /// Draw the batch `prepare` staged.
@@ -3255,6 +3302,21 @@ impl HudRenderer {
                         }
                         continue;
                     }
+                    Blend::PackBlit(id) => {
+                        if let (Some(pack), Some(group)) =
+                            (&self.pack_blit, self.pack_blit_groups.get(id))
+                        {
+                            pack.draw_with(&mut pass, group, range.clone(), coverage.is_some());
+                            pass.set_bind_group(0, &self.group, &[]);
+                        }
+                        continue;
+                    }
+                    Blend::PackBlitNative(id)
+                        if self.pack_blit.is_some() && self.pack_blit_groups.contains_key(id) =>
+                    {
+                        continue;
+                    }
+                    Blend::PackBlitNative(_) => &self.pipeline,
                 };
                 let pipeline = pipeline.get(coverage.is_some());
                 match &self.pack_text {

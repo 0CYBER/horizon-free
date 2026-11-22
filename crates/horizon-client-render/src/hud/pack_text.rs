@@ -1,6 +1,9 @@
 //! A resource pack's `core/text` shader on the GUI's text (`RenderPipelines.GUI_TEXT`, the shader
 //! with `IS_GUI`): servers' HUDs that their pack's vertex shader moves to the screen's corners,
 //! and text effects in its fragment shader. Without one the text draws natively.
+//!
+//! The same pipeline runs a pack's `core/position_tex_color` (`RenderPipelines.GUI_TEXTURED`) on
+//! the menu textures the GUI blits whole, each bound on its own as `Sampler0`.
 
 use crate::resource_source::ResourceSource;
 use std::sync::Arc;
@@ -10,7 +13,7 @@ use crate::core_shader::{CoreProgram, Glue};
 use super::{HudBatch, HudVertex};
 use crate::gfx::hud_coverage::Pipeline;
 
-/// GUI text's vertex format (`POSITION_TEX_COLOR`) from the HUD's vertices. A glyph is two
+/// GUI text's and `GUI_TEXTURED`'s vertex format (`POSITION_TEX_COLOR`) from the HUD's vertices. A glyph is two
 /// triangles here, its corners top left, top right, bottom right, top left, bottom right, bottom
 /// left; vanilla's quads go top left, bottom left, bottom right, top right, which is what
 /// `gl_VertexID % 4` tells a pack's shader. The draw passes its first vertex as its instance.
@@ -87,6 +90,8 @@ pub(super) fn load_shaders(
     defaults: &ResourceSource,
 ) {
     atlas.text_shaders.gui = load(root, defaults);
+    // GUI_TEXTURED_SNIPPET sets no shader define.
+    atlas.blit_shader = load_core(root, defaults, "position_tex_color", &[], &GLUE);
     atlas.lines_shader = load_core(
         root,
         defaults,
@@ -112,7 +117,9 @@ const BLOCK_SIZES: [u64; 4] = [48, 64, 160, 48];
 /// The pipeline and its resources.
 pub(super) struct PackText {
     pipeline: Pipeline,
+    /// Every sampler on the atlas, for GUI text.
     group: wgpu::BindGroup,
+    layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
 }
 
@@ -123,16 +130,18 @@ impl PackText {
         atlas: &wgpu::TextureView,
         program: &CoreProgram,
         coverage: bool,
+        name: &str,
     ) -> Option<Self> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = |label, module: &naga::Module| {
+        let module = |label: &str, module: &naga::Module| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module.clone())),
             })
         };
-        let vertex = module("Resource pack text (vertex)", &program.vertex);
-        let fragment = module("Resource pack text (fragment)", &program.fragment);
+        let label = format!("Resource pack {name}");
+        let vertex = module(&format!("{label} (vertex)"), &program.vertex);
+        let fragment = module(&format!("{label} (fragment)"), &program.fragment);
         let visibility = wgpu::ShaderStages::VERTEX_FRAGMENT;
         let mut entries: Vec<wgpu::BindGroupLayoutEntry> = (0..4)
             .map(|binding| wgpu::BindGroupLayoutEntry {
@@ -165,53 +174,29 @@ impl PackText {
             });
         }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Resource pack text"),
+            label: Some(&label),
             entries: &entries,
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Resource pack text uniforms"),
+            label: Some(&format!("{label} uniforms")),
             size: 1024,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         // The font textures' nearest filtering; every sampler a pack names reads the atlas.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Resource pack text"),
+            label: Some(&label),
             ..Default::default()
         });
-        let mut resources: Vec<wgpu::BindGroupEntry> = (0..4)
-            .map(|i| wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform,
-                    offset: BLOCK_OFFSETS[i],
-                    size: wgpu::BufferSize::new(BLOCK_SIZES[i]),
-                }),
-            })
-            .collect();
-        for (_, binding) in crate::core_shader::SAMPLERS {
-            resources.push(wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::TextureView(atlas),
-            });
-            resources.push(wgpu::BindGroupEntry {
-                binding: binding + 1,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            });
-        }
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Resource pack text"),
-            layout: &layout,
-            entries: &resources,
-        });
+        let group = bind_group(device, &layout, &uniform, atlas, &sampler);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Resource pack text"),
+            label: Some(&label),
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4];
         let desc = wgpu::RenderPipelineDescriptor {
-            label: Some("Resource pack text"),
+            label: Some(&label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &vertex,
@@ -243,18 +228,29 @@ impl PackText {
         let source = wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(program.fragment.clone()));
         let pipeline = Pipeline::new(device, &desc, source, coverage);
         if let Some(e) = pollster::block_on(scope.pop()) {
-            log::warn!("the resource pack's text shader is not used: {e}");
+            log::warn!("the resource pack's {name} shader is not used: {e}");
             return None;
         }
         let Some(pipeline) = pipeline else {
-            log::warn!("the resource pack's text shader is not used: it has no colour output");
+            log::warn!("the resource pack's {name} shader is not used: it has no colour output");
             return None;
         };
         Some(Self {
             pipeline,
             group,
+            layout,
             uniform,
         })
+    }
+
+    /// Every sampler on `texture` alone, as `TextureSetup.singleTexture` binds a blit's.
+    pub(super) fn texture_group(
+        &self,
+        device: &wgpu::Device,
+        texture: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        bind_group(device, &self.layout, &self.uniform, texture, sampler)
     }
 
     /// The frame's blocks, as `GuiRenderer` sets them for the GUI.
@@ -277,10 +273,56 @@ impl PackText {
         range: std::ops::Range<u32>,
         coverage: bool,
     ) {
+        self.draw_with(pass, &self.group, range, coverage);
+    }
+
+    /// [`Self::draw`] reading the textures of `group` ([`Self::texture_group`]).
+    pub(super) fn draw_with(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        group: &wgpu::BindGroup,
+        range: std::ops::Range<u32>,
+        coverage: bool,
+    ) {
         pass.set_pipeline(self.pipeline.get(coverage));
-        pass.set_bind_group(0, &self.group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(range.clone(), range.start..range.start + 1);
     }
+}
+
+/// The blocks of `uniform`, and `texture` with `sampler` for every sampler.
+fn bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniform: &wgpu::Buffer,
+    texture: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    let mut resources: Vec<wgpu::BindGroupEntry> = (0..4)
+        .map(|i| wgpu::BindGroupEntry {
+            binding: i as u32,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: uniform,
+                offset: BLOCK_OFFSETS[i],
+                size: wgpu::BufferSize::new(BLOCK_SIZES[i]),
+            }),
+        })
+        .collect();
+    for (_, binding) in crate::core_shader::SAMPLERS {
+        resources.push(wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::TextureView(texture),
+        });
+        resources.push(wgpu::BindGroupEntry {
+            binding: binding + 1,
+            resource: wgpu::BindingResource::Sampler(sampler),
+        });
+    }
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Resource pack core shader"),
+        layout,
+        entries: &resources,
+    })
 }
 
 /// The std140 blocks: `Globals` (`GlobalSettingsUniform.update`: the camera at the origin,

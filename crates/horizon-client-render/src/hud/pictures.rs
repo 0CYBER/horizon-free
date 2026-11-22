@@ -103,6 +103,47 @@ impl HudBatch {
             self.pictures.push(picture);
         }
     }
+
+    /// `GuiGraphicsExtractor.blit(GUI_TEXTURED, texture, x, y, u, v, w, h, tw, th)`. `native`
+    /// draws it from the atlas. When the packs replace `core/position_tex_color`, vanilla's one
+    /// quad follows (UVs `u / tw` to `(u + w) / tw`, the texture repeating), which the renderer
+    /// draws with that shader and `texture` alone instead of `native`'s.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_blit(
+        &mut self,
+        atlas: &HudAtlas,
+        texture: &str,
+        [x, y, w, h]: [f32; 4],
+        [u, v]: [f32; 2],
+        [tw, th]: [f32; 2],
+        color: u32,
+        native: impl FnOnce(&mut Self),
+    ) {
+        let start = self.vertices.len();
+        native(self);
+        if atlas.blit_shader.is_none() || w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let Some(picture) = atlas.pictures.lock().unwrap().get(texture) else {
+            return;
+        };
+        self.blend_since(start, Blend::PackBlitNative(picture.id));
+        let start = self.vertices.len();
+        self.quad(
+            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+            [
+                [u / tw, v / th],
+                [(u + w) / tw, v / th],
+                [(u + w) / tw, (v + h) / th],
+                [u / tw, (v + h) / th],
+            ],
+            color,
+        );
+        self.blend_since(start, Blend::PackBlit(picture.id));
+        if !self.pictures.iter().any(|p| p.id == picture.id) {
+            self.pictures.push(picture);
+        }
+    }
 }
 
 impl HudRenderer {
@@ -129,6 +170,8 @@ impl HudRenderer {
         batch: &HudBatch,
     ) {
         self.pictures
+            .retain(|id, _| batch.pictures.iter().any(|p| p.id == *id));
+        self.pack_blit_groups
             .retain(|id, _| batch.pictures.iter().any(|p| p.id == *id));
         for picture in &batch.pictures {
             if picture.width > device.limits().max_texture_dimension_2d
@@ -176,6 +219,10 @@ impl HudRenderer {
                     address_mode_v: address,
                     ..Default::default()
                 });
+                if let Some(pack) = &self.pack_blit {
+                    self.pack_blit_groups
+                        .insert(picture.id, pack.texture_group(device, &view, &sampler));
+                }
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("GUI picture"),
                     layout: &self.layout,

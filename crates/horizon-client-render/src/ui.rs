@@ -899,7 +899,16 @@ pub fn menu_background(
         "gui/menu_background"
     };
     if atlas.sprites.contains_key(sprite) {
-        tiled(batch, atlas, sprite, x, y, w, h, 32.0, u32::MAX);
+        // Screen.extractMenuBackgroundTexture: u and v 0.
+        batch.pack_blit(
+            atlas,
+            sprite,
+            [x, y, w, h],
+            [0.0, 0.0],
+            [32.0, 32.0],
+            u32::MAX,
+            |batch| tiled(batch, atlas, sprite, x, y, w, h, 32.0, u32::MAX),
+        );
     } else {
         batch.fill(atlas, x, y, w, h, rgba(0, 0, 0, 160));
     }
@@ -921,28 +930,18 @@ pub fn separators(
         ("gui/header_separator", "gui/footer_separator")
     };
     let w = batch.width;
-    tiled_sized(
-        batch,
-        atlas,
-        header,
-        0.0,
-        header_bottom - 2.0,
-        w,
-        2.0,
-        [32.0, 2.0],
-        u32::MAX,
-    );
-    tiled_sized(
-        batch,
-        atlas,
-        footer,
-        0.0,
-        footer_top,
-        w,
-        2.0,
-        [32.0, 2.0],
-        u32::MAX,
-    );
+    // AbstractSelectionList.extractListSeparators: u and v 0, a 32 x 2 texture.
+    for (sprite, y) in [(header, header_bottom - 2.0), (footer, footer_top)] {
+        batch.pack_blit(
+            atlas,
+            sprite,
+            [0.0, y, w, 2.0],
+            [0.0, 0.0],
+            [32.0, 2.0],
+            u32::MAX,
+            |batch| tiled_sized(batch, atlas, sprite, 0.0, y, w, 2.0, [32.0, 2.0], u32::MAX),
+        );
+    }
 }
 /// List background between the separators.
 pub fn list_background(
@@ -957,16 +956,17 @@ pub fn list_background(
     } else {
         "gui/menu_list_background"
     };
-    tiled(
-        batch,
+    let (w, h) = (batch.width, bottom - top);
+    // AbstractSelectionList.extractListBackground: u the list's right edge, v its bottom plus the
+    // scroll amount, which these lists don't pass (their native tiles start at 0 too).
+    batch.pack_blit(
         atlas,
         sprite,
-        0.0,
-        top,
-        batch.width,
-        bottom - top,
-        32.0,
+        [0.0, top, w, h],
+        [w, bottom],
+        [32.0, 32.0],
         u32::MAX,
+        |batch| tiled(batch, atlas, sprite, 0.0, top, w, h, 32.0, u32::MAX),
     );
 }
 /// `AbstractScrollArea.scrollerHeight`: `Mth.clamp((height * height) / content, 32, height - 8)`.
@@ -3081,5 +3081,78 @@ mod tests {
         assert!(scroll.press((0.0, 10.0), 0.0, 10.0, 30.0, 40.0));
         scroll.drag(20.0, 10.0, 30.0, 40.0);
         assert_eq!(scroll.amount, 20.0);
+    }
+
+    /// With a pack's `position_tex_color`, the menu background is vanilla's one blit over the
+    /// whole area (`blit(GUI_TEXTURED, ..., 0, 0, w, h, 32, 32)`) after its native tiles.
+    #[test]
+    fn a_packs_position_tex_color_gets_the_menu_background_as_one_quad() {
+        let root = tempfile::tempdir().unwrap();
+        let gui = root.path().join("assets/minecraft/textures/gui");
+        std::fs::create_dir_all(&gui).unwrap();
+        let mut png = png::Encoder::new(
+            std::fs::File::create(gui.join("menu_background.png")).unwrap(),
+            1,
+            1,
+        );
+        png.set_color(png::ColorType::Rgba);
+        png.set_depth(png::BitDepth::Eight);
+        png.write_header()
+            .unwrap()
+            .write_image_data(&[1, 2, 3, 255])
+            .unwrap();
+        let mut atlas = HudAtlas::build(
+            &horizon_assets::resource_source::ResourceSource::directory(root.path().to_owned()),
+        )
+        .unwrap();
+        let draw = |atlas: &HudAtlas| {
+            let mut batch = HudBatch::scratch([160, 80]);
+            menu_background(&mut batch, atlas, 0.0, 0.0, 80.0, 40.0, false);
+            batch
+        };
+        let native = draw(&atlas);
+        assert!(native.blends.is_empty());
+        let mut tiles = HudBatch::scratch([160, 80]);
+        tiled(
+            &mut tiles,
+            &atlas,
+            "gui/menu_background",
+            0.0,
+            0.0,
+            80.0,
+            40.0,
+            32.0,
+            u32::MAX,
+        );
+        let corners =
+            |b: &HudBatch| -> Vec<_> { b.vertices.iter().map(|v| (v.pos, v.uv)).collect() };
+        assert_eq!(
+            corners(&native),
+            corners(&tiles),
+            "without the shader nothing changes"
+        );
+        let program = crate::core_shader::CoreProgram {
+            vertex: naga::Module::default(),
+            fragment: naga::Module::default(),
+            other: Vec::new(),
+        };
+        atlas.blit_shader = Some(std::sync::Arc::new(program));
+        let pack = draw(&atlas);
+        let tiles = native.vertices.len() as u32;
+        use crate::hud::Blend;
+        let Some((_, Blend::PackBlit(id))) = pack.blends.last().cloned() else {
+            panic!("{:?}", pack.blends);
+        };
+        assert_eq!(
+            pack.blends,
+            [
+                (0..tiles, Blend::PackBlitNative(id)),
+                (tiles..tiles + 6, Blend::PackBlit(id))
+            ]
+        );
+        let quad = &pack.vertices[tiles as usize..];
+        let corners: Vec<_> = quad.iter().map(|v| (v.pos, v.uv)).collect();
+        assert!(corners.contains(&([0.0, 0.0], [0.0, 0.0])));
+        assert!(corners.contains(&([80.0, 40.0], [2.5, 1.25])));
     }
 }
