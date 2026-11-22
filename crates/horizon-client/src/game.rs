@@ -9633,6 +9633,13 @@ impl Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    // A debug modifier on this button is let go whatever is open, so
+                    // a screen opened while it was held does not leave it down.
+                    if !pressed {
+                        let name = horizon_client::keybinds::mouse_name(button);
+                        self.debug_keys
+                            .mouse_button(&self.settings.keys, &name, false);
+                    }
                     if self.studio_mouse_input(pressed, button) {
                         return Ok(());
                     }
@@ -9666,6 +9673,12 @@ impl Game<'_> {
                             if self.key_mapping_canceled(Some(input.as_str()), pressed) {
                                 self.physical_buttons.remove(&button);
                                 return Ok(());
+                            }
+                            // MouseHandler.onButton: `KeyMapping.set(mouseKey, pressed)`
+                            // also holds a debug modifier bound to the button.
+                            if pressed {
+                                self.debug_keys
+                                    .mouse_button(&self.settings.keys, &input, true);
                             }
                             self.extras_mouse(button, pressed);
                             if pressed

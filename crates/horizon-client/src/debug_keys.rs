@@ -217,6 +217,15 @@ impl DebugKeys {
         }
         handles_game && !did
     }
+    /// `MouseHandler.onButton`'s `KeyMapping.set(mouseKey, pressed)`: a debug
+    /// modifier bound to the mouse button `button` (`key.mouse.4`) is down
+    /// while the button is held, so the debug keys pressed meanwhile run
+    /// their actions (`keyDebugModifier.isDown()`).
+    pub fn mouse_button(&mut self, binds: &KeyBinds, button: &str, pressed: bool) {
+        if binds.get("key.debug.modifier") == button {
+            self.modifier_down = pressed;
+        }
+    }
     /// `handleDebugKeys`: every debug mapping on this key, in order.
     fn handle_debug_keys(
         &mut self,
@@ -303,6 +312,27 @@ mod tests {
     }
     fn release(k: &mut DebugKeys, h: &mut Host, b: &KeyBinds, key: &str) -> bool {
         k.key_press(h, b, key, KeyAction::Release, false, false, 0)
+    }
+
+    /// #18734: a debug modifier bound to a mouse button holds the debug keys
+    /// down while the button is held, as `KeyMapping.set` does for a mouse key.
+    #[test]
+    fn a_debug_modifier_on_a_mouse_button_runs_the_combinations() {
+        let (mut k, mut h, mut b) = (DebugKeys::default(), Host::default(), KeyBinds::default());
+        b.set("key.debug.modifier", "key.mouse.4");
+        // Another button leaves it up: G goes to the game.
+        k.mouse_button(&b, "key.mouse.5", true);
+        assert!(press(&mut k, &mut h, &b, "key.keyboard.g", 0));
+        assert!(h.actions.is_empty());
+        k.mouse_button(&b, "key.mouse.4", true);
+        assert!(!press(&mut k, &mut h, &b, "key.keyboard.g", 10));
+        assert_eq!(h.actions, [(DebugAction::ShowChunkBorders, false)]);
+        // Let go of the button: G is the game's again.
+        release(&mut k, &mut h, &b, "key.keyboard.g");
+        k.mouse_button(&b, "key.mouse.4", false);
+        assert!(press(&mut k, &mut h, &b, "key.keyboard.g", 20));
+        assert_eq!(h.actions.len(), 1);
+        assert_eq!(h.overlay, 0);
     }
 
     #[test]

@@ -277,6 +277,24 @@ fn a_callback_click_survives_until_the_next_tick() {
     });
 }
 
+/// #18734: a debug modifier held on a mouse button whose release the screen
+/// takes is let go as the screen opens (`Gui.setScreen` -> `KeyMapping.releaseAll`).
+#[test]
+#[ignore = "daily"]
+fn opening_a_screen_lets_go_of_the_debug_modifier() {
+    with_pressing_game(|game, _, _| {
+        game.settings.keys.set("key.debug.modifier", "key.mouse.4");
+        game.debug_keys
+            .mouse_button(&game.settings.keys, "key.mouse.4", true);
+        assert!(game.debug_keys.modifier_down);
+        game.was_playing = true;
+        game.screen = Screen::Inventory;
+        game.build_screen();
+        game.track_toggle_screens();
+        assert!(!game.debug_keys.modifier_down);
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn opening_a_screen_releases_mod_holds() {
