@@ -15,6 +15,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_protocol::packets::play::{self, Clientbound as C};
 
 /// The player projectiles that meet other players: arrows (their hurt), and
 /// snowballs, eggs and mods' thrown types, which break on them
@@ -334,13 +335,34 @@ impl Game<'_> {
                     .combat
                     .enchantment_projectile_attacker
                     .replace(effect_attacker);
+                g.combat.arrow_hurt_player = false;
                 let r = g.projectile_hit(p, on_player);
                 g.combat.refuse_player_hit = false;
                 g.combat.projectile_attacker = None;
                 g.combat.enchantment_projectile_attacker = saved_effect_attacker;
-                r
+                (r, std::mem::take(&mut g.combat.arrow_hurt_player))
             }),
         };
+        let (result, hurt) = match result {
+            Some((r, hurt)) => (Some(r), hurt),
+            None => (None, false),
+        };
+        // AbstractArrow.onHitEntity: an arrow that hurt a player sends its
+        // shooter, a ServerPlayer other than that player, PLAY_ARROW_HIT_SOUND
+        // (game event 6), the ding their client plays, unless the arrow is silent.
+        if hurt
+            && !self.entity_silent(p.id)
+            && let Some(shooter) = p.guest.filter(|&s| Some(s) != victim.conn())
+            && let Some(host) = self.lan.as_ref()
+        {
+            host.hub.send_to(
+                shooter,
+                &C::GameEvent(play::GameEvent {
+                    event: 6,
+                    param: 0.0,
+                }),
+            );
+        }
         result.unwrap_or(Ok(()))
     }
 

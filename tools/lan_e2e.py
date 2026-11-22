@@ -1564,6 +1564,10 @@ def check_arrows(host, guest, out):
         g('command', command='item replace entity @s weapon.mainhand with minecraft:bow')
         g('command', command='give @s minecraft:arrow 16')
     hits = {}
+    # AbstractArrow.onHitEntity: an arrow that hurt a player sends its shooter game event 6
+    # (PLAY_ARROW_HIT_SOUND), which the shooter's client plays as this sound (#8053).
+    ding = 'minecraft:entity.arrow.hit_player'
+    heard_dings = {}
     try:
         for name, rule, shooter in (('guest shoots host', 'true', guest), ('host shoots guest', 'true', host),
                                     ('pvp off', 'false', guest)):
@@ -1574,9 +1578,11 @@ def check_arrows(host, guest, out):
             shooter.wait(20)
             victim = (lambda: host('state')['player']['health']) if shooter is guest else (lambda: remote(guest)['health'])
             before = victim()
+            dings = heard(shooter, ding)
             shooter.raw('use-item', '--hold', 1.3)  # a full draw (BowItem: 20 ticks)
             shooter.wait(20)
             hits[name] = (before, victim())
+            heard_dings[name] = heard(shooter, ding) - dings
             shooter.shot(out, 'arrows-' + name.replace(' ', '-'))
     finally:
         host('command', command='gamerule pvp true')
@@ -1585,6 +1591,9 @@ def check_arrows(host, guest, out):
     assert hits['guest shoots host'][1] < hits['guest shoots host'][0], f"the guest's arrow did not hurt the host: {hits}"
     assert hits['host shoots guest'][1] < hits['host shoots guest'][0], f"the host's arrow did not hurt the guest: {hits}"
     assert hits['pvp off'][1] >= hits['pvp off'][0], f'pvp off, an arrow still hurts: {hits}'
+    assert heard_dings['guest shoots host'] == 1 and heard_dings['host shoots guest'] == 1, \
+        f'a shooter did not hear one arrow-hit ding for the hit: {heard_dings}'
+    assert heard_dings['pvp off'] == 0, f'pvp off, the refused arrow still dings: {heard_dings}'
     return hits
 
 

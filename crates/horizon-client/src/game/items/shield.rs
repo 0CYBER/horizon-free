@@ -33,11 +33,13 @@ impl Game<'_> {
         p: &horizon_client::projectiles::Projectile,
     ) -> bool {
         self.combat.piercing_hit = p.arrow.as_ref().is_some_and(|a| a.pierce > 0);
-        self.mob_hits_player(
+        let hurt = self.mob_hits_player(
             amount,
             [p.previous.x, p.previous.y, p.previous.z],
             "minecraft:arrow",
-        )
+        );
+        self.combat.arrow_hurt_player |= hurt;
+        hurt
     }
     /// The stack in an inventory slot, the off hand at `OFFHAND_SLOT`.
     pub(super) fn stack_in(&self, slot: usize) -> Option<&ItemStack> {

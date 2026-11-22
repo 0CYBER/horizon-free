@@ -113,6 +113,10 @@ pub(super) struct CombatTracker {
     /// The projectile hitting the player now is another player's that
     /// `ServerPlayer.canHarmPlayer` refuses (the `pvp` rule, an ally).
     pub(super) refuse_player_hit: bool,
+    /// An arrow just hurt the player (`AbstractArrow.onHitEntity`'s
+    /// `hurtOrSimulate` was true), so its shooter, when another player, is
+    /// sent the arrow-hit ding (`projectile_hits_player`).
+    pub(super) arrow_hurt_player: bool,
     /// The hit on the player now runs its post-attack effects (thorns) only
     /// if the player lives through it (`WitherSkull.onHitEntity`).
     pub(super) post_attack_if_alive: bool,
