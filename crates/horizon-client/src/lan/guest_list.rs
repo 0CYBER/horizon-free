@@ -3,26 +3,18 @@ use super::guest::Guest;
 use crate::fast_hash::FxHashMap;
 use std::ops::Deref;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Layout stamps are unique across lists, so a reader never takes one list's stamp for another's.
 static LAYOUTS: AtomicU64 = AtomicU64::new(1);
 
 /// What a reader that keeps a copy of the simulation rows needs to know, without scanning them:
 /// when the set or order of the rows changed, and which rows were written since it last looked.
+#[derive(Default)]
 struct Written {
-    layout: u64,
     rows: Vec<usize>,
     seen: Vec<bool>,
-}
-impl Default for Written {
-    fn default() -> Self {
-        Self {
-            layout: LAYOUTS.fetch_add(1, Ordering::Relaxed),
-            rows: Vec::new(),
-            seen: Vec::new(),
-        }
-    }
+    scratch: Vec<usize>,
 }
 impl Written {
     fn mark(&mut self, row: usize) {
@@ -34,7 +26,6 @@ impl Written {
         }
     }
     fn reset(&mut self) {
-        self.layout = LAYOUTS.fetch_add(1, Ordering::Relaxed);
         self.rows.clear();
         self.seen.clear();
     }
@@ -43,31 +34,56 @@ impl Written {
 /// Collection-owned mutation keeps identity and material-body indexes current.
 /// Ordinary state writes compare only the indexed fields; membership or key
 /// changes rebuild indexes while preserving join order and first-match lookup.
-#[derive(Default)]
 pub struct GuestList {
     rows: Vec<Guest>,
     simulation: Vec<usize>,
     connections: FxHashMap<u32, usize>,
     identities: FxHashMap<(u128, u32), usize>,
+    uuids: FxHashMap<u128, usize>,
     residency: Option<(
         crate::join_seq::residency::Journal,
         fn(&str) -> mod_api::DimensionKey,
     )>,
+    layout: AtomicU64,
+    has_written: AtomicBool,
     written: Mutex<Written>,
 }
+impl Default for GuestList {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            simulation: Vec::new(),
+            connections: FxHashMap::default(),
+            identities: FxHashMap::default(),
+            uuids: FxHashMap::default(),
+            residency: None,
+            layout: AtomicU64::new(LAYOUTS.fetch_add(1, Ordering::Relaxed)),
+            has_written: AtomicBool::new(false),
+            written: Mutex::default(),
+        }
+    }
+}
 impl GuestList {
-    fn written(&mut self) -> &mut Written {
+    fn mark_written(&mut self, index: usize) {
         self.written
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mark(index);
+        self.has_written.store(true, Ordering::Release);
+    }
+    fn reset_written(&mut self) {
+        self.layout
+            .store(LAYOUTS.fetch_add(1, Ordering::Relaxed), Ordering::Release);
+        self.written
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reset();
+        self.has_written.store(false, Ordering::Release);
     }
     /// A stamp that changes whenever the simulation rows are added, removed, reordered or
     /// switch kind: a copy of them taken at one stamp stays row for row valid until it changes.
     pub fn layout(&self) -> u64 {
-        self.written
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .layout
+        self.layout.load(Ordering::Acquire)
     }
     /// Hands `f` each simulation row (its place among them, and the guest) written through
     /// this list since the last call, once each. The writes that can change a row's position,
@@ -75,7 +91,10 @@ impl GuestList {
     /// borrows reach only fields apart from those, and a change of the rows' set or order
     /// changes `layout` instead.
     pub fn drain_written(&self, mut f: impl FnMut(usize, &Guest)) {
-        let rows = {
+        if !self.has_written.load(Ordering::Acquire) {
+            return;
+        }
+        let mut rows = {
             let mut w = self
                 .written
                 .lock()
@@ -84,11 +103,25 @@ impl GuestList {
             for &row in &w.rows {
                 w.seen[row] = false;
             }
-            std::mem::take(&mut w.rows)
+            let mut rows = std::mem::take(&mut w.scratch);
+            rows.clear();
+            std::mem::swap(&mut w.rows, &mut rows);
+            self.has_written.store(false, Ordering::Release);
+            rows
         };
-        for row in rows {
+        for &row in &rows {
             if let Ok(place) = self.simulation.binary_search(&row) {
                 f(place, &self.rows[row]);
+            }
+        }
+        rows.clear();
+        if rows.capacity() <= 4096 {
+            let mut w = self
+                .written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if w.scratch.capacity() < rows.capacity() {
+                w.scratch = rows;
             }
         }
     }
@@ -139,7 +172,7 @@ impl GuestList {
     /// again, including when the callback unwinds. Ordinary state writes do
     /// not scan the collection or rebuild its indexes.
     pub fn update<T>(&mut self, index: usize, update: impl FnOnce(&mut Guest) -> T) -> T {
-        self.written().mark(index);
+        self.mark_written(index);
         let before = index_fields(&self.rows[index]);
         let registration = self.rows[index].attachments.registration();
         let dimension = self
@@ -199,7 +232,7 @@ impl GuestList {
         use super::viewed_levels::entities::tracks_view;
         let viewing = !views.is_empty();
         let (mut outputs, mut views) = (outputs.into_iter(), views.iter_mut());
-        let mut viewers = Vec::new();
+        let mut viewers = Vec::with_capacity(self.rows.len());
         for g in self.rows.iter_mut() {
             let (spectator, horizon) = (g.spectator(), g.is_horizon());
             let (chunks, sources, tracker, out, gone, moved) = if visible(g) {
@@ -293,7 +326,7 @@ impl GuestList {
     /// Borrow a body without exposing the guest's indexed fields or row replacement.
     pub fn motion_mut(&mut self, conn: u32) -> Option<&mut crate::motion::PlayerMotion> {
         let index = self.connection_index(conn)?;
-        self.written().mark(index);
+        self.mark_written(index);
         self.rows[index].motion.as_deref_mut()
     }
 
@@ -323,6 +356,9 @@ impl GuestList {
     pub fn identity_index(&self, uuid: u128, entity: u32) -> Option<usize> {
         self.identities.get(&(uuid, entity)).copied()
     }
+    pub fn uuid_index(&self, uuid: u128) -> Option<usize> {
+        self.uuids.get(&uuid).copied()
+    }
     /// Material player bodies in join order, without visiting connectionless actors.
     pub fn simulation_iter(&self) -> impl Iterator<Item = &Guest> {
         self.simulation_indexed_iter().map(|(_, guest)| guest)
@@ -342,11 +378,12 @@ impl GuestList {
         self.identities
             .entry((guest.uuid, guest.entity_id as u32))
             .or_insert(index);
+        self.uuids.entry(guest.uuid).or_insert(index);
         if guest.participates_in_player_simulation() {
             self.simulation.push(index);
         }
         self.rows.push(guest);
-        self.written().reset();
+        self.reset_written();
         if !self.bind_guest(index) {
             self.rows[index].residency.put_back();
         }
@@ -401,17 +438,19 @@ impl GuestList {
         self.simulation.clear();
         self.connections.clear();
         self.identities.clear();
-        self.written().reset();
+        self.uuids.clear();
+        self.reset_written();
     }
     pub fn reverse(&mut self) {
         self.rows.reverse();
         self.reindex();
     }
     fn reindex(&mut self) {
-        self.written().reset();
+        self.reset_written();
         self.simulation.clear();
         self.connections.clear();
         self.identities.clear();
+        self.uuids.clear();
         for (index, guest) in self.rows.iter().enumerate() {
             if guest.participates_in_player_simulation() {
                 self.simulation.push(index);
@@ -420,6 +459,7 @@ impl GuestList {
             self.identities
                 .entry((guest.uuid, guest.entity_id as u32))
                 .or_insert(index);
+            self.uuids.entry(guest.uuid).or_insert(index);
         }
     }
 }
@@ -470,8 +510,8 @@ impl Drop for Edit<'_> {
         if let Some(old) = &self.registration
             && !self.list.rows[self.index]
                 .attachments
-                .registration()
-                .is_some_and(|current| old.same_registration(&current))
+                .registration_ref()
+                .is_some_and(|current| old.same_registration(current))
         {
             old.unregister();
         }
@@ -484,8 +524,8 @@ impl Drop for Edit<'_> {
             if self.registration.as_ref().is_some_and(|old| {
                 self.list.rows[self.index]
                     .attachments
-                    .registration()
-                    .is_some_and(|current| old.same_registration(&current))
+                    .registration_ref()
+                    .is_some_and(|current| old.same_registration(current))
             }) {
                 self.list.rows[self.index].attachments.retire();
             }
@@ -538,7 +578,72 @@ mod tests {
                 list.identity_index(guest.uuid, guest.entity_id as u32),
                 Some(index)
             );
+            assert_eq!(list.uuid_index(guest.uuid), Some(index));
         }
+    }
+
+    #[test]
+    fn uuid_index_and_lock_free_written_tracking_match_linear_scan() {
+        let mut list = GuestList::default();
+        for conn in 0..500_u32 {
+            list.push(guest(conn));
+        }
+        check(&list);
+
+        // Verify O(1) uuid_index matches linear scan across insert, replace, remove, reverse.
+        list.insert(0, guest(900));
+        check(&list);
+        let _ = list.replace(10, guest(901));
+        check(&list);
+        let _ = list.remove(250);
+        check(&list);
+        list.reverse();
+        check(&list);
+
+        // Verify lock-free drain_written fast path returns nothing when clean, then yields edited rows.
+        let mut seen = Vec::new();
+        list.drain_written(|place, g| seen.push((place, g.conn)));
+        assert!(seen.is_empty());
+
+        let layout_before = list.layout();
+        list.update(0, |g| g.position[0] += 1.0);
+        assert_eq!(list.layout(), layout_before);
+        list.drain_written(|place, g| seen.push((place, g.conn)));
+        assert_eq!(seen.len(), 1);
+        seen.clear();
+        list.drain_written(|place, g| seen.push((place, g.conn)));
+        assert!(seen.is_empty());
+
+        // Benchmark: 20,000 UUID lookups over 500 guests (linear scan vs O(1) uuid_index).
+        let queries: Vec<u128> = (0..500_u32).map(|c| u128::from(c) + 100).collect();
+        let t0 = std::time::Instant::now();
+        let mut acc_lin = 0usize;
+        for _ in 0..40 {
+            for &u in &queries {
+                if let Some(i) = list.iter().position(|g| g.uuid == u) {
+                    acc_lin = acc_lin.wrapping_add(i);
+                }
+            }
+        }
+        let dt_lin = t0.elapsed();
+
+        let t1 = std::time::Instant::now();
+        let mut acc_idx = 0usize;
+        for _ in 0..40 {
+            for &u in &queries {
+                if let Some(i) = list.uuid_index(u) {
+                    acc_idx = acc_idx.wrapping_add(i);
+                }
+            }
+        }
+        let dt_idx = t1.elapsed();
+        assert_eq!(acc_lin, acc_idx);
+        eprintln!(
+            "BENCH guest_list uuid lookup (20k queries / 500 guests): linear={:.3}ms indexed={:.3}ms speedup={:.2}x",
+            dt_lin.as_secs_f64() * 1e3,
+            dt_idx.as_secs_f64() * 1e3,
+            dt_lin.as_secs_f64() / dt_idx.as_secs_f64().max(1e-9),
+        );
     }
     const VALUE: horizon_mod_runtime::attachments::AttachmentType<i32> =
         horizon_mod_runtime::attachments::AttachmentType {

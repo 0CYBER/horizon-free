@@ -38,6 +38,11 @@ impl ResidentAttachments {
         self.lifetime.registration()
     }
 
+    /// Borrow the current registration without cloning its `Arc`.
+    pub fn registration_ref(&self) -> Option<&AttachmentRegistration> {
+        self.lifetime.registration_ref()
+    }
+
     /// Retire before a removed owner is returned or retained across callbacks.
     pub fn retire(&mut self) {
         self.lifetime = AttachmentLifetime::default();
