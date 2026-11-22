@@ -19,6 +19,8 @@ pub enum Error {
     Unsafe(PathBuf),
     /// An installed native build takes its resources from this unit; name it.
     Dependent(String),
+    /// The name of an instance that uses this build.
+    InstanceVersion(String),
     Io(io::Error),
 }
 

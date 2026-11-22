@@ -7,7 +7,7 @@
 //! Before that it was opt-in and played in its own "Nightly" instance (`instances/nightly/`):
 //! that instance, and its worlds, stay, and keep following the Nightly.
 use crate::backend::{self, Release};
-use crate::instances;
+use crate::instances::{self, Channel};
 use horizon_release_sign::NIGHTLY;
 
 /// The id of the instance (its folder in `instances/`) the opt-in Nightly played in.
@@ -180,47 +180,30 @@ fn is_date(text: &str) -> bool {
         })
 }
 
-/// After `version`, a Nightly, installed as an update: the old Nightly instance follows it, and the
-/// older Nightlies go unless the selection or an instance still plays them. Worlds stay.
+/// After a Nightly update, older automatically installed Nightlies can go once no instance
+/// plays them. Manual and legacy installs stay.
 pub fn after_update(version: &str) {
-    let list = instances::list();
-    if list
-        .iter()
-        .any(|i| i.id == INSTANCE && i.version.as_deref().is_some_and(|v| date_of(v).is_some()))
-    {
-        let _ = instances::edit(INSTANCE, |meta| meta.version = Some(version.to_owned()));
-    }
-    let selected = backend::Settings::load().selected;
-    let pinned: Vec<String> = instances::list()
-        .into_iter()
-        .filter_map(|i| i.version)
-        .collect();
-    for old in stale(
-        &backend::installed(),
-        version,
-        selected.as_deref(),
-        &pinned,
-        backend::auto_installed,
-    ) {
+    let installed = backend::installed();
+    let settings = backend::Settings::load();
+    let Ok(protected) = instances::protected_versions(&installed, &settings) else {
+        return;
+    };
+    for old in stale(&installed, version, &protected, backend::auto_installed) {
         let _ = backend::remove(&old);
     }
 }
 
-/// The automatically installed Nightlies to remove once `current` is installed: every other one
-/// that is neither selected nor pinned by an instance. Manual and legacy installs stay.
 fn stale(
     installed: &[String],
     current: &str,
-    selected: Option<&str>,
-    pinned: &[String],
+    protected: &[String],
     auto: impl Fn(&str) -> bool,
 ) -> Vec<String> {
     installed
         .iter()
-        .filter(|v| {
-            date_of(v).is_some() && auto(v) && *v != current && Some(v.as_str()) != selected
-        })
-        .filter(|v| !pinned.contains(v))
+        .skip_while(|v| v.as_str() != current)
+        .skip(1)
+        .filter(|v| date_of(v).is_some() && auto(v) && !protected.contains(v))
         .cloned()
         .collect()
 }
@@ -343,32 +326,64 @@ pub fn install_stable(
     }
 }
 
-/// What a Stable instance set to Latest plays, from the installed builds alone (`selected`: the
-/// launcher's version): the newest release after [`LAST_BEFORE_NIGHTLIES`]; else the launcher's
-/// version, unless it is a release from before the Nightlies; else the newest Nightly. None when
-/// there is none of these: the caller falls back to the launcher's version.
-pub fn stable_latest(installed: &[String], selected: Option<&str>) -> Option<String> {
-    let newest = |keep: &dyn Fn(&str) -> bool| {
-        installed
-            .iter()
-            .filter(|t| keep(t))
-            // The first listed wins a tie (two builds of one day).
-            .reduce(|a, b| match backend::compare_versions(b, a).is_gt() {
-                true => b,
-                false => a,
-            })
-            .cloned()
-    };
-    let before_nightlies = |tag: &str| {
-        backend::is_game_tag(tag) && backend::compare_versions(tag, LAST_BEFORE_NIGHTLIES).is_le()
-    };
-    newest(&|t| backend::is_game_tag(t) && !t.contains('-') && !before_nightlies(t))
+/// The newest installed Stable release, or the newest Nightly while Stable uses weekly builds.
+fn stable_latest(installed: &[String]) -> Option<String> {
+    newest_stable_release(installed).or_else(|| newest(installed, |tag| date_of(tag).is_some()))
+}
+
+fn before_nightlies(tag: &str) -> bool {
+    backend::is_game_tag(tag) && backend::compare_versions(tag, LAST_BEFORE_NIGHTLIES).is_le()
+}
+
+fn newest_stable_release(installed: &[String]) -> Option<String> {
+    newest(installed, |tag| {
+        backend::is_game_tag(tag) && !tag.contains('-') && !before_nightlies(tag)
+    })
+}
+
+/// Reconstructs what the old Stable resolver played before the global pick became an instance pin.
+pub(crate) fn legacy_stable_latest(installed: &[String], selected: Option<&str>) -> Option<String> {
+    newest_stable_release(installed)
         .or_else(|| {
             selected
-                .filter(|s| installed.iter().any(|t| t == s) && !before_nightlies(s))
+                .filter(|tag| !before_nightlies(tag))
                 .map(str::to_owned)
         })
-        .or_else(|| newest(&|t| date_of(t).is_some()))
+        .or_else(|| newest(installed, |tag| date_of(tag).is_some()))
+}
+
+/// The installed build a Horizon instance on Latest plays for its channel.
+pub fn latest_for(
+    channel: Channel,
+    installed: &[String],
+    selected: Option<&str>,
+) -> Option<String> {
+    match channel {
+        Channel::Nightly => newest(installed, |tag| date_of(tag).is_some()).or_else(|| {
+            installed
+                .iter()
+                .find(|tag| Some(tag.as_str()) == selected)
+                .cloned()
+        }),
+        Channel::Stable => stable_latest(installed),
+    }
+    .or_else(|| installed.first().cloned())
+}
+
+fn newest(installed: &[String], keep: impl Fn(&str) -> bool) -> Option<String> {
+    installed
+        .iter()
+        .filter(|tag| keep(tag))
+        // On a tie the first listed wins. The installed list orders same-day Nightlies by
+        // publication time when known.
+        .reduce(|a, b| {
+            if backend::compare_versions(b, a).is_gt() {
+                b
+            } else {
+                a
+            }
+        })
+        .cloned()
 }
 
 #[cfg(test)]
@@ -522,32 +537,43 @@ mod tests {
         ];
         // The release from before the Nightlies, selected: the newest Nightly instead.
         assert_eq!(
-            stable_latest(&installed(&nightlies), Some("v0.2.97")).as_deref(),
+            latest_for(Channel::Stable, &installed(&nightlies), Some("v0.2.97")).as_deref(),
             Some("nightly-2026-11-13-aaaaaaa")
         );
         assert_eq!(
-            stable_latest(&installed(&nightlies), Some("v0.2.97.1")).as_deref(),
+            latest_for(Channel::Stable, &installed(&nightlies), Some("v0.2.97.1")).as_deref(),
             Some("nightly-2026-11-13-aaaaaaa")
         );
         // A release after them wins.
         let with_release = [&["v0.3.0"], &nightlies[..]].concat();
         assert_eq!(
-            stable_latest(
+            latest_for(
+                Channel::Stable,
                 &installed(&with_release),
                 Some("nightly-2026-11-13-aaaaaaa")
             )
             .as_deref(),
             Some("v0.3.0")
         );
-        // An older Nightly picked by hand stays picked.
+        // A weekly install immediately advances Stable Latest, even with an older global pick.
         assert_eq!(
-            stable_latest(&installed(&nightlies), Some("nightly-2026-11-08-ddddddd")).as_deref(),
-            Some("nightly-2026-11-08-ddddddd")
+            latest_for(
+                Channel::Stable,
+                &installed(&nightlies),
+                Some("nightly-2026-11-08-ddddddd")
+            )
+            .as_deref(),
+            Some("nightly-2026-11-13-aaaaaaa")
         );
-        // Only the old release: none, so the caller's fallback (the launcher's version) plays.
+        // Without an eligible Stable or Nightly, fall back to the newest installed build.
         assert_eq!(
-            stable_latest(&installed(&["v0.2.97"]), Some("v0.2.97")),
-            None
+            latest_for(
+                Channel::Stable,
+                &installed(&["v0.2.97", "v0.2.96"]),
+                Some("v0.2.96")
+            )
+            .as_deref(),
+            Some("v0.2.97")
         );
     }
 
@@ -704,6 +730,24 @@ mod tests {
     }
 
     #[test]
+    fn latest_nightly_uses_the_newest_installed_nightly_or_the_installed_fallback() {
+        let (old, newest) = ("nightly-2026-11-21-aaaaaaa", "nightly-2026-11-22-bbbbbbb");
+        let installed = ["v0.2.97", old, newest].map(String::from);
+        let latest = |list: &[String], selected| latest_for(Channel::Nightly, list, selected);
+        assert_eq!(latest(&installed, Some(old)).as_deref(), Some(newest));
+        let without_nightlies = ["v0.2.97", "v0.2.96"].map(String::from);
+        assert_eq!(
+            latest(&without_nightlies, Some("v0.2.96")).as_deref(),
+            Some("v0.2.96")
+        );
+        assert_eq!(
+            latest(&without_nightlies, Some(old)).as_deref(),
+            Some("v0.2.97")
+        );
+        assert_eq!(latest(&[], Some(old)), None);
+    }
+
+    #[test]
     fn only_unused_older_nightlies_are_removed() {
         let installed = [
             "nightly-2026-10-29-aaaaaaa",
@@ -715,25 +759,21 @@ mod tests {
         .map(String::from);
         let pinned = ["nightly-2026-10-27-ddddddd".to_string()];
         assert_eq!(
-            stale(
-                &installed,
-                "nightly-2026-10-29-aaaaaaa",
-                Some("nightly-2026-10-28-ccccccc"),
-                &pinned,
-                |tag| tag != "nightly-2026-10-28-ccccccc"
-            ),
+            stale(&installed, "nightly-2026-10-29-aaaaaaa", &pinned, |tag| tag
+                != "nightly-2026-10-28-ccccccc"),
             ["nightly-2026-10-28-bbbbbbb"]
         );
     }
 
     #[test]
     fn cli_update_keeps_unselected_manual_nightly() {
+        let newer = "nightly-2026-11-06-aaaaaaa";
         let current = "nightly-2026-11-05-aaaaaaa";
         let manual = "nightly-2026-11-03-bbbbbbb";
         let previous_auto = "nightly-2026-11-02-ccccccc";
-        let installed = [current, manual, previous_auto].map(String::from);
+        let installed = [newer, current, manual, previous_auto].map(String::from);
         assert_eq!(
-            stale(&installed, current, None, &[], |tag| tag != manual),
+            stale(&installed, current, &[], |tag| tag != manual),
             [previous_auto]
         );
     }

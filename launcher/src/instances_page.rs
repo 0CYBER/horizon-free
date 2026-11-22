@@ -109,34 +109,17 @@ impl Launcher {
         list.iter().find(|i| i.id == id).or(list.first())
     }
 
-    /// The installed version `instance` plays: its own, else the launcher's.
+    /// The installed build this instance plays.
     pub(super) fn version_of(&self, instance: &Instance) -> Option<&String> {
-        match &instance.version {
-            Some(own) => self.installed.iter().find(|t| *t == own),
-            // Latest of its channel: on Stable the rule `Instance::resolve_version` uses, from
-            // the installed builds; else the launcher's version (which follows the newest
-            // Nightly; also what is left offline).
-            None => match instance.channel {
-                instances::Channel::Stable => horizon_launcher::nightly::stable_latest(
-                    &self.installed,
-                    self.launcher_version().map(String::as_str),
-                )
-                .and_then(|tag| self.installed.iter().find(|t| **t == tag))
-                .or_else(|| self.launcher_version()),
-                instances::Channel::Nightly => self.launcher_version(),
-            },
-        }
+        let tag = instance.installed_version(&self.installed, self.settings.selected.as_deref())?;
+        self.installed.iter().find(|installed| **installed == tag)
     }
 
-    /// Keeps the selected instance on `tag`, or lets it follow the launcher's version.
-    pub(super) fn pin_version(&mut self, tag: Option<String>) {
-        let Some(id) = self.selected_instance().map(|i| i.id.clone()) else {
-            return;
-        };
-        match instances::edit(&id, |m| m.version = tag) {
-            Ok(_) => self.reload_instances(),
-            Err(e) => self.client_error = Some(e),
-        }
+    /// Use an installed build for the instance Play starts and refresh its displayed pin.
+    pub(super) fn use_version_for(&mut self, id: &str, tag: &str) -> Result<(), String> {
+        instances::use_version_for(id, tag)?;
+        self.reload_instances();
+        Ok(())
     }
 
     pub(super) fn select_instance(&mut self, instance: &Instance) {
@@ -458,10 +441,7 @@ impl Launcher {
                 return;
             }
         };
-        // A Horizon version picked but not installed downloads once the instance is saved.
-        let download = self
-            .draft_horizon()
-            .and_then(|tag| self.release_to_install(&tag));
+        let download = self.draft_download();
         // An edited instance switched to another game (`instances::switch`).
         let switch_to = self
             .instances
@@ -512,7 +492,8 @@ impl Launcher {
         let Some(d) = self.instances.dialog.as_mut() else {
             return;
         };
-        let download = download.filter(|_| plays_horizon);
+        let download =
+            download.filter(|release| plays_horizon && !self.removing.contains(&release.tag));
         let (java, name) = match (java, minecraft) {
             (Some(_), Some(None)) => {
                 d.error = Some(tr("Mojang's version list isn't here yet.").into());
@@ -530,16 +511,22 @@ impl Launcher {
         };
         d.busy = true;
         d.error = None;
+        let downloading = download.as_ref().map(|release| release.tag.clone());
         let task = cx.background_executor().spawn(async move {
+            let switch_to = switch_to.map(new_instance::with_loader).transpose()?;
             let id = match (editing, java) {
-                (Some(id), _) => {
-                    if let Some(to) = switch_to {
-                        instances::switch(&id, new_instance::with_loader(to)?)?;
-                    }
-                    id
-                }
+                (Some(id), _) => id,
                 (None, Some((j, mc))) => new_instance::create_java(&j, &name, &mc)?.id,
-                (None, None) => instances::create(&name, copy.as_deref())?.id,
+                (None, None) => {
+                    instances::create_with_installation(
+                        &name,
+                        copy.as_deref(),
+                        pin.clone(),
+                        channel,
+                        downloading.as_deref(),
+                    )?
+                    .id
+                }
             };
             // Finish fallible picture work before committing the edited metadata and commands.
             if let Some(png) = picture {
@@ -550,7 +537,10 @@ impl Launcher {
                     &horizon_launcher::desktop_seams::to_trash,
                 )?;
             }
-            let instance = instances::edit(&id, |m| {
+            instances::edit_installation(&id, downloading.as_deref(), |m| {
+                if let Some(game) = switch_to {
+                    game.apply_to(m);
+                }
                 m.name = Some(name);
                 m.group = group;
                 m.icon = icon;
@@ -568,8 +558,7 @@ impl Launcher {
                     m.version = pin;
                     m.channel = Some(channel);
                 }
-            })?;
-            Ok(instance)
+            })
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -605,6 +594,7 @@ impl Launcher {
                         }
                     }
                     Err(e) => {
+                        this.installed = backend::installed();
                         if let Some(d) = &mut this.instances.dialog {
                             d.busy = false;
                             d.error = Some(e);

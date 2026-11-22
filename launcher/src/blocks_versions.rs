@@ -26,7 +26,7 @@ impl Launcher {
     }
 
     /// Use and Remove for an installed version; Remove asks once more before it deletes.
-    pub(crate) fn version_actions(&self, tag: &str, selected: bool, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn version_actions(&self, tag: &str, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let confirming = self.confirm_remove.as_deref() == Some(tag);
         let (t1, t2) = (tag.to_string(), tag.to_string());
@@ -34,17 +34,20 @@ impl Launcher {
             .flex()
             .items_center()
             .gap(px(4.))
-            .when(!selected && !confirming, |d| {
-                d.child(
-                    button(format!("use-{tag}"), "Use", Kind::Ghost, &t).on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            this.settings.pick(t1.clone());
-                            this.save_settings();
-                            cx.notify();
-                        },
-                    )),
-                )
-            })
+            .children(
+                self.use_version_action(tag)
+                    .filter(|_| !confirming)
+                    .map(|(id, tip)| {
+                        button(format!("use-{tag}"), "Use", Kind::Ghost, &t)
+                            .tooltip(crate::glass_ui::tip(tip))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                if let Err(e) = this.use_version_for(&id, &t1) {
+                                    this.install_error = Some((t1.clone(), e));
+                                }
+                                cx.notify();
+                            }))
+                    }),
+            )
             .child(
                 button(
                     format!("remove-{tag}"),
@@ -107,7 +110,7 @@ impl Launcher {
                         .child(tr("Removing…")),
                 )
         } else {
-            self.version_actions(tag, selected, cx)
+            self.version_actions(tag, cx)
         };
         let error = self
             .install_error
@@ -398,7 +401,7 @@ impl Launcher {
                     }
                     b.into_any_element()
                 } else if installed {
-                    self.version_actions(&tag, selected, cx).into_any_element()
+                    self.version_actions(&tag, cx).into_any_element()
                 } else if release.asset.is_none() {
                     let (line, download) = horizon_launcher::refusals::no_build_card();
                     let line = text(theme::CAPTION).text_color(t.muted).child(line);

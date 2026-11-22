@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn settings_json(s: &backend::Settings) -> serde_json::Value {
     serde_json::json!({
-        "selected_version": backend::resolve_version(None).ok(),
+        "selected_version": instances::selected().resolve_version(None).ok(),
         "game_architecture": s.game_architecture.name(),
         "minecraft_dir": s.minecraft_dir,
         "server_dir": backend::server_dir(None),

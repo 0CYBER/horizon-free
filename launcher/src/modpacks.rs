@@ -360,23 +360,59 @@ pub(crate) struct Listed {
 /// window's thread, and a pack's reports and carried mods can be tens of thousands of files
 /// (#18074).
 pub(crate) fn listed_in(ports: &Path) -> Vec<Listed> {
-    let mut packs: Vec<Listed> = fs::read_dir(ports)
+    listed_results(ports)
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|e| {
-            let work = e.path();
-            let pack: Pack = pipeline::read_json(&work.join("pack.json")).ok()?;
-            let slug = e.file_name().to_string_lossy().into_owned();
-            let title = match pack.name.is_empty() {
-                true => slug.clone(),
-                false => pack.name,
-            };
-            Some(Listed { slug, title, work })
-        })
-        .collect();
-    packs.sort_by_key(|p| p.title.to_ascii_lowercase());
-    packs
+        .collect()
+}
+
+pub(crate) fn listed_checked_in(ports: &Path) -> Result<Vec<Listed>, String> {
+    listed_results(ports)?.collect()
+}
+
+fn listed_results(
+    ports: &Path,
+) -> Result<impl Iterator<Item = Result<Listed, String>> + '_, String> {
+    Ok(pack_folders(ports)?.map(|work| read_listed(work?)))
+}
+
+pub(crate) fn read_listed(work: PathBuf) -> Result<Listed, String> {
+    let pack: Pack = pipeline::read_json(&work.join("pack.json"))?;
+    let slug = work
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let title = if pack.name.is_empty() {
+        slug.clone()
+    } else {
+        pack.name
+    };
+    Ok(Listed { slug, title, work })
+}
+
+/// Missing pack roots are empty. Checked callers preserve errors for every candidate directory.
+pub(crate) fn pack_folders(
+    dir: &Path,
+) -> Result<impl Iterator<Item = Result<PathBuf, String>> + '_, String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => Some(entries),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !dir.is_symlink() => None,
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    Ok(entries.into_iter().flatten().filter_map(move |entry| {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => return Some(Err(format!("{}: {e}", dir.display()))),
+        };
+        let path = entry.path();
+        match fs::metadata(&path) {
+            Ok(meta) if !meta.is_dir() => None,
+            Ok(_) => Some(Ok(path)),
+            Err(e) => Some(Err(format!("{}: {e}", path.display()))),
+        }
+    }))
 }
 
 /// The carried-over mods in a work folder (`mods/<id>/carry/` with its manifest).
@@ -495,7 +531,10 @@ pub fn profile_home(work: &Path) -> PathBuf {
 /// copied in the first time, so keys and video settings carry over) and its carried-over mods.
 /// A modpack from Horizon's registry (`horizon-packs/<id>/`) plays its own profile the same way.
 pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
-    if horizon_pack::is_pack(work) {
+    let parent = work.parent();
+    if parent == Some(ports_dir().as_path()) {
+        read_listed(work.to_owned())?;
+    } else if parent == Some(horizon_pack::packs_dir().as_path()) || horizon_pack::is_pack(work) {
         return horizon_pack::apply(cmd, work);
     }
     // Only mods that load together: the game would refuse the later of two sharing a namespace.

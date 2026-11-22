@@ -412,7 +412,7 @@ impl Launcher {
             .selected_instance()
             .and_then(|i| i.version.as_ref())
             .and_then(|v| {
-                let queued = self.install_next.as_ref().is_some_and(|r| r.tag == *v);
+                let queued = self.install_queue.iter().any(|r| r.tag == *v);
                 let running = self.installing.as_ref().filter(|(t, _)| t == v);
                 running.map(|(_, p)| Some(*p)).or(queued.then_some(None))
             });

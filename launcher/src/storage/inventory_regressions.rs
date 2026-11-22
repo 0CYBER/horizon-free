@@ -303,6 +303,76 @@ fn capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_res
 }
 
 #[test]
+fn storage_protects_a_held_selection_and_a_native_build_pinned_after_inventory() {
+    use std::process::Command;
+    if std::env::var_os("HORIZON_TEST_STORAGE_PIN").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Command::new(std::env::current_exe().unwrap())
+            .args(["--include-ignored", "--exact", "storage::inventory::regressions::storage_protects_a_held_selection_and_a_native_build_pinned_after_inventory"])
+            .env("HORIZON_TEST_STORAGE_PIN", "1")
+            .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+            .env("HORIZON_HOME", root.path().join("game"))
+            .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+            .status().unwrap().success());
+        return;
+    }
+    let native = "native-storage-race";
+    let latest = "nightly-2026-11-22-aaaaaaa";
+    for tag in [native, latest] {
+        let dir = backend::version_dir(tag);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(backend::COMPLETE), "").unwrap();
+    }
+    let native_dir = backend::version_dir(native);
+    fs::write(
+        native_dir.join(backend::CLIENT),
+        horizon_platform::mod_package::holder::CAPABILITY,
+    )
+    .unwrap();
+    crate::run_leases::publish(&native_dir).unwrap();
+    let storage = Storage::open().unwrap();
+    let listed = || {
+        storage
+            .entries()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == native_dir.canonicalize().unwrap())
+            .unwrap()
+    };
+    let mut settings = backend::Settings {
+        selected: Some(native.into()),
+        ..backend::Settings::default()
+    };
+    settings.save().unwrap();
+    assert!(matches!(listed().clear(), Err(Error::InstanceVersion(_))));
+    assert!(backend::remove_version(native)
+        .unwrap_err()
+        .contains("Horizon"));
+    assert!(native_dir.join(backend::COMPLETE).is_file());
+
+    settings.instance_versions_migrated = true;
+    settings.save().unwrap();
+    let entry = listed();
+    assert_eq!(entry.category, Category::SpareGameBuilds);
+
+    instances::use_version_for(instances::DEFAULT, native).unwrap();
+    let report = storage
+        .apply_retaining(vec![entry], Some(Category::SpareGameBuilds), false, true)
+        .unwrap();
+    let row = report
+        .rows
+        .into_iter()
+        .find(|row| row.category == Category::SpareGameBuilds)
+        .unwrap();
+    assert!(row.kept.iter().any(|kept| kept.reason.contains("Horizon")));
+    assert!(native_dir.join(backend::COMPLETE).is_file());
+
+    instances::use_version_for(instances::DEFAULT, latest).unwrap();
+    listed().clear().unwrap();
+    assert!(!native_dir.exists());
+}
+
+#[test]
 fn a_survey_is_summed_again_without_walking_the_folder_again() {
     let home = Home::new();
     home.seed("a/one");

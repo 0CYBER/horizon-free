@@ -275,6 +275,28 @@ impl Entry {
         let Some(root) = &self.directory else {
             return Ok(());
         };
+        // The inventory may have been built before a player pinned this version. Keep the
+        // same lock used for edits until the version has been removed.
+        let _version_lock = if self.category == Category::SpareGameBuilds
+            && self.relative.parent() == Some(Path::new("versions"))
+        {
+            let tag = self
+                .relative
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| Error::Unsafe(self.path.clone()))?;
+            let lock =
+                instances::lock_store(&backend::data_dir()).map_err(std::io::Error::other)?;
+            let installed = backend::installed_checked().map_err(std::io::Error::other)?;
+            if let Some(instance) =
+                instances::version_user(&installed, tag).map_err(std::io::Error::other)?
+            {
+                return Err(Error::InstanceVersion(instance));
+            }
+            Some(lock)
+        } else {
+            None
+        };
         let access = self.access()?;
         if matches!(access, Access::LeasedGame) {
             return crate::cache_cleanup::delete_game_unit_in(
@@ -663,7 +685,10 @@ impl Storage {
                 match result {
                     Ok(()) => resurvey(&entries, &mut surveyed, index)?,
                     Err(
-                        error @ (Error::Busy | Error::UnprovenExclusion | Error::IncompleteUnit),
+                        error @ (Error::Busy
+                        | Error::UnprovenExclusion
+                        | Error::IncompleteUnit
+                        | Error::InstanceVersion(_)),
                     ) => {
                         resurvey(&entries, &mut surveyed, index)?;
                         row.kept.push(Kept {
@@ -817,7 +842,10 @@ impl Storage {
                 match result {
                     Ok(()) => {}
                     Err(
-                        error @ (Error::Busy | Error::UnprovenExclusion | Error::IncompleteUnit),
+                        error @ (Error::Busy
+                        | Error::UnprovenExclusion
+                        | Error::IncompleteUnit
+                        | Error::InstanceVersion(_)),
                     ) if retain => {
                         // Its size is taken once every clear has ended: a later one may remove
                         // files it shares (a `.trash-*` listed under two rows).

@@ -490,6 +490,10 @@ pub fn cache_error(error: crate::storage::Error) -> String {
             "This version supplies resources to native build {build}. Remove that build first.",
             &[("build", &build)],
         ),
+        crate::native_cache::Error::InstanceVersion(instance) => trf(
+            "In use by {names}. Pick another version for it first.",
+            &[("names", &instance)],
+        ),
         crate::native_cache::Error::UnsupportedFilesystem(folder) => {
             crate::refusals::unsupported_filesystem(folder.as_deref(), &backend::data_dir())
         }

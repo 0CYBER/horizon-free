@@ -28,6 +28,27 @@ impl Plays {
         }
     }
 
+    /// Change only the game's metadata so the dialog can save it together with the version pin.
+    pub fn apply_to(self, meta: &mut Meta) {
+        match self {
+            Plays::Horizon => {
+                if let Some(java) = meta.java.take() {
+                    meta.java_kept = Some(java);
+                }
+            }
+            Plays::Java { minecraft, loader } => {
+                let mut java = meta
+                    .java
+                    .take()
+                    .or_else(|| meta.java_kept.take())
+                    .unwrap_or_default();
+                java.minecraft = minecraft;
+                java.loader = loader;
+                meta.java = Some(java);
+            }
+        }
+    }
+
     /// The Minecraft version its worlds are saved by; `horizon` is the one Horizon plays.
     fn minecraft<'a>(&'a self, horizon: &'a str) -> &'a str {
         match self {
@@ -152,21 +173,5 @@ pub(super) fn switch_in(
     if instance.kind != Kind::Own {
         return Err(format!("{} plays what it was made with.", instance.name));
     }
-    edit_in(game_home, data, query, |m| match to {
-        Plays::Horizon => {
-            if let Some(java) = m.java.take() {
-                m.java_kept = Some(java);
-            }
-        }
-        Plays::Java { minecraft, loader } => {
-            let mut java = m
-                .java
-                .take()
-                .or_else(|| m.java_kept.take())
-                .unwrap_or_default();
-            java.minecraft = minecraft;
-            java.loader = loader;
-            m.java = Some(java);
-        }
-    })
+    edit_in(game_home, data, query, |meta| to.apply_to(meta))
 }

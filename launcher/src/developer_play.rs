@@ -51,26 +51,31 @@ impl Launcher {
             self.accounts = Accounts::load();
             // A pack's Play button plays that pack; Play plays the selected instance.
             let pack = self.starting_pack.take();
-            let instance = match &pack {
-                Some(work) => instances::list().into_iter().find(|i| &i.work == work),
-                None => {
-                    let Some(instance) = instances::list()
-                        .into_iter()
-                        .find(|i| Some(&i.id) == instance_id.as_ref())
-                    else {
-                        self.client_error = Some(
-                            tr("This instance no longer exists. Choose another instance to play.")
-                                .into(),
-                        );
-                        self.joining = None;
-                        self.quick_play = None;
-                        account::discard_unread_sessions();
-                        return;
-                    };
-                    Some(instance)
+            let instance = match (&pack, instance_id.as_deref()) {
+                (Some(work), _) => instances::pack_for_launch(work),
+                (None, Some(id)) => instances::for_launch_id(id),
+                (None, None) => Err(tr(
+                    "This instance no longer exists. Choose another instance to play.",
+                )
+                .into()),
+            }
+            .and_then(|instance| {
+                if instance.resolve_version(None)? != tag {
+                    return Err(tr("The instance's version changed. Press Play again.").into());
+                }
+                Ok(instance)
+            });
+            let instance = match instance {
+                Ok(instance) => instance,
+                Err(e) => {
+                    self.client_error = Some(e);
+                    self.joining = None;
+                    self.quick_play = None;
+                    account::discard_unread_sessions();
+                    return;
                 }
             };
-            let run = instance.as_ref().map(|i| i.id.clone());
+            let run = Some(instance.id.clone());
             // What follows the profile's own arguments, in the same order: the player's extra
             // arguments come last, to add to the launcher's or override them.
             let mut after = std::process::Command::new("");
@@ -86,21 +91,14 @@ impl Launcher {
             let after: Vec<_> = after.get_args().map(ToOwned::to_owned).collect();
             // Last, around every argument: the instance's pre-launch command,
             // wrapper and variables.
-            self.client_vars = instance
-                .as_ref()
-                .map(|i| i.vars(cmd.get_program()))
-                .unwrap_or_default();
+            self.client_vars = instance.vars(cmd.get_program());
             let vars = self.client_vars.clone();
-            let launch = instance
-                .as_ref()
-                .map(|i| i.launch.clone())
-                .unwrap_or_default();
+            let launch = instance.launch.clone();
             // The profile on the launch's thread: a pack's carried mods are read whole for it.
             let profile = move |cmd: &mut std::process::Command| {
-                match (&pack, &instance) {
-                    (Some(work), _) => horizon_launcher::modpacks::apply_profile(cmd, work)?,
-                    (None, Some(instance)) => instances::apply(cmd, instance)?,
-                    (None, None) => {}
+                match &pack {
+                    Some(work) => horizon_launcher::modpacks::apply_profile(cmd, work)?,
+                    None => instances::apply(cmd, &instance)?,
                 }
                 cmd.args(after);
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));

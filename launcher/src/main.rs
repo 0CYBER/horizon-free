@@ -294,8 +294,10 @@ struct Launcher {
     /// The Horizon version being installed because an instance was made or saved to play it: it
     /// becomes the launcher's version only when the launcher has none.
     instance_install: Option<String>,
-    /// One for an instance waiting for the install running now to end.
-    install_next: Option<Release>,
+    /// The displayed instance when a manual install started.
+    manual_install_for: Option<instances::ManualInstallTarget>,
+    /// Downloads requested by instance saves, ordered by when they were queued.
+    install_queue: VecDeque<Release>,
     /// The Stable build Home's Update is installing (`nightly::install_stable`).
     stable_install: Option<Release>,
     /// A Stable build whose download failed: not offered again until the release list is read

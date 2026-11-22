@@ -60,14 +60,15 @@ impl WhilePlaying {
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
+    /// Compatibility selection for older launchers and for channels' fallback rules.
     pub selected: Option<String>,
-    /// The version the launcher itself selected (an update, or a newer Nightly installed for an
-    /// instance): while `selected` is this one, it follows each newer Nightly. A person's pick
-    /// leaves it behind, and a settings file from before it has none: neither follows
-    /// ([`selection_after_install`]). Always written, `null` for a pick, so a file from before
-    /// it is told apart ([`Settings::load`]).
+    /// Compatibility record of the last version followed by the launcher.
     #[serde(default)]
     pub following: Option<String>,
+    /// Older settings may hold Latest on a global pick. Once absorbed, a later install can
+    /// advance Latest without turning the former build into a pin at the next start.
+    #[serde(default)]
+    pub instance_versions_migrated: bool,
     /// Game asset architecture. Auto preserves the launcher's process-architecture behavior.
     #[serde(default)]
     pub game_architecture: GameArchitecture,
@@ -190,13 +191,6 @@ impl Settings {
         self.following = saved.following.clone();
     }
 
-    /// A person picks `tag` (Use, an import, the command line): it stays until a person picks
-    /// another, or an update finds it the newest ([`selection_after_install`]).
-    pub fn pick(&mut self, tag: String) {
-        self.selected = Some(tag);
-        self.following = None;
-    }
-
     /// Remember an explicit approval; merely finding an installed toolchain never grants it.
     pub fn allow_native_mods(&mut self) -> Result<(), String> {
         self.native_mods_allowed_at = Some(
@@ -220,6 +214,22 @@ impl Settings {
         Self::from_saved(&text, installed).0
     }
 
+    /// Reads settings for operations that must preserve existing data on any read failure.
+    pub(crate) fn load_checked() -> Result<Self, String> {
+        let path = data_dir().join("settings.json");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => {
+                return Ok(Self {
+                    instance_versions_migrated: true,
+                    ..Self::default()
+                });
+            }
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        Self::parse_checked(&text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
     /// The saved settings when an install of a version just ended, `before` being what was
     /// installed before it. A file from before `following` is judged against `before`, as the
     /// update rule of launchers before it judged it before moving the selection: against the list
@@ -238,6 +248,10 @@ impl Settings {
     /// selection is then judged against `installed` (read only for such a file).
     fn from_saved(text: &str, installed: impl FnOnce() -> Vec<String>) -> (Self, bool) {
         let mut settings = Self::parse(text);
+        if text.is_empty() {
+            // A fresh launcher has no global pick to absorb.
+            settings.instance_versions_migrated = true;
+        }
         let legacy = serde_json::from_str::<serde_json::Value>(text)
             .ok()
             .and_then(|v| v.as_object().map(|o| !o.contains_key("following")))
@@ -283,7 +297,7 @@ impl Settings {
     /// selection on ([`select_after_update`]), so those players keep the behaviour they had; it
     /// can't tell a pick of the newest from following, and doesn't need to. An older one stays a
     /// pick.
-    pub(super) fn adopt_legacy_selection(&mut self, installed: &[String]) {
+    pub(crate) fn adopt_legacy_selection(&mut self, installed: &[String]) {
         let newest = installed
             .iter()
             .find(|t| crate::nightly::date_of(t).is_some());
@@ -301,14 +315,17 @@ impl Settings {
             .as_ref()
             .is_none_or(|s| !installed.contains(s))
         {
-            self.selected = installed.first().cloned();
+            self.selected =
+                crate::nightly::latest_for(crate::instances::Channel::Nightly, installed, None);
             self.following = self.selected.clone();
         }
     }
     pub fn parse(text: &str) -> Self {
-        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
-            return Self::default();
-        };
+        Self::parse_checked(text).unwrap_or_default()
+    }
+
+    fn parse_checked(text: &str) -> serde_json::Result<Self> {
+        let mut value = serde_json::from_str::<serde_json::Value>(text)?;
         if let Some(fields) = value.as_object_mut() {
             // An appearance from a newer launcher is Dark, not a reason to lose every setting.
             if fields
@@ -348,9 +365,9 @@ impl Settings {
                 fields.remove("language");
             }
         }
-        let mut settings: Self = serde_json::from_value(value).unwrap_or_default();
+        let mut settings: Self = serde_json::from_value(value)?;
         look_settings::settle(&mut settings);
-        settings
+        Ok(settings)
     }
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {

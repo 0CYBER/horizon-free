@@ -420,15 +420,9 @@ impl Launcher {
 
     pub(crate) fn picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        // "Nightly · ba6344a", a release's tag: the menu lists the full tags.
-        let label = self.selected().map_or_else(
-            || tr("No version").into(),
-            |tag| {
-                horizon_launcher::nightly::label(tag)
-                    .or_else(|| build_import::label(tag))
-                    .unwrap_or_else(|| tag.clone())
-            },
-        );
+        let instance = self.selected_instance();
+        let label =
+            instance.map_or_else(|| tr("No version").to_string(), |i| self.sheet_version(i));
         // As tall as Play: "Version" over the tag, and a chevron.
         let n = t.night;
         let mut wrap = div().relative().child(
@@ -466,7 +460,7 @@ impl Launcher {
                     cx.notify();
                 })),
         );
-        if self.picker.open {
+        if let Some(instance) = instance.filter(|i| self.picker.open && i.java.is_none()) {
             let mut menu = div()
                 .absolute()
                 .top(px(theme::night::PLAY + 6.))
@@ -484,10 +478,13 @@ impl Launcher {
                     this.menu_closed_at = Some(event.position);
                     cx.notify();
                 }));
-            // Picking a version keeps the selected instance on it; the launcher's own version
-            // (newest unless chosen otherwise on Versions) follows updates.
-            let follows = self.launcher_version().cloned();
+            let follows = horizon_launcher::nightly::latest_for(
+                instance.channel,
+                &self.installed,
+                self.settings.selected.as_deref(),
+            );
             for tag in &self.installed {
+                let id = instance.id.clone();
                 let selected = self.selected() == Some(tag);
                 let tag = tag.clone();
                 let latest = follows.as_ref() == Some(&tag);
@@ -519,7 +516,9 @@ impl Launcher {
                                 .when(selected, |d| d.child(div().size(px(6.)).bg(t.accent))),
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.pin_version((!latest).then(|| tag.clone()));
+                            if let Err(e) = this.use_version_for(&id, &tag) {
+                                this.client_error = Some(e);
+                            }
                             this.picker.open = false;
                             cx.notify();
                         })),

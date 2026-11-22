@@ -1109,13 +1109,42 @@ pub fn installed() -> Vec<String> {
 }
 
 fn installed_in(versions: &Path) -> Vec<String> {
-    let mut tags: Vec<String> = fs::read_dir(versions)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().join(COMPLETE).exists())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
+    installed_checked_in(versions).unwrap_or_default()
+}
+
+pub(crate) fn installed_checked() -> Result<Vec<String>, String> {
+    installed_checked_in(&versions_dir())
+}
+
+fn installed_checked_in(versions: &Path) -> Result<Vec<String>, String> {
+    let read = || -> std::io::Result<Vec<String>> {
+        let entries = match fs::read_dir(versions) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !versions.is_symlink() => {
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(e),
+        };
+        let mut tags = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let Ok(tag) = entry.file_name().into_string() else {
+                continue;
+            };
+            if entry.path().join(COMPLETE).try_exists().or_else(|e| {
+                // The versions folder can also hold temporary files from installation.
+                if e.kind() == std::io::ErrorKind::NotADirectory {
+                    Ok(false)
+                } else {
+                    Err(e)
+                }
+            })? {
+                tags.push(tag);
+            }
+        }
+        Ok(tags)
+    };
+    let mut tags = read().map_err(|e| format!("{}: {e}", versions.display()))?;
     // Read once: a later release list notes the times itself.
     static READ_KEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !newest_first(&mut tags, crate::nightly::published_at)
@@ -1128,7 +1157,7 @@ fn installed_in(versions: &Path) -> Vec<String> {
         }
         newest_first(&mut tags, crate::nightly::published_at);
     }
-    tags
+    Ok(tags)
 }
 
 /// Sorts `tags` newest first: by [`release_order`], then Nightlies of one day by when they came
@@ -1360,13 +1389,25 @@ pub use developer_play::client_as;
 mod installation;
 pub(crate) use installation::install_as;
 
-/// Removes the installed version `tag` unless a program runs from it or a native build takes its
-/// resources. A build that predates runtime leases takes none, so no lease can ever prove its
+/// Removes `tag` unless an instance or program uses it, or a native build takes its resources.
+/// A build that predates runtime leases takes none, so no lease can ever prove its
 /// folder unused: the check [`in_use`] makes here is that proof, and it stands beside the removal
 /// it justifies. Both vetoes belong to this path, so every caller inherits them; the dependency
 /// one runs inside the removal's exclusive publication lock, so an install that finishes in
 /// between cannot lose the base it started from.
-pub fn remove(tag: &str) -> Result<(), String> {
+pub(crate) fn remove(tag: &str) -> Result<(), String> {
+    // Hold the instance store lock through the deletion so a pin cannot land after the check.
+    let _store_lock = crate::instances::lock_store(&data_dir())?;
+    let installed = installed_checked()?;
+    if !installed.iter().any(|t| t == tag) {
+        return Err(format!("{tag} is not installed."));
+    }
+    if let Some(instance) = crate::instances::version_user(&installed, tag)? {
+        return Err(crate::i18n::trf(
+            "In use by {names}. Pick another version for it first.",
+            &[("names", &instance)],
+        ));
+    }
     if in_use(tag) {
         return Err(format!("{tag} is running. Quit it first."));
     }
@@ -3149,7 +3190,7 @@ pub fn agree_eula(folder: &Path) -> Result<(), String> {
 
 // ----- Shared steps for the front ends -----------------------------------------------------------
 
-/// The installed version to use: the one asked for, else the selected one, else the newest.
+/// A requested installed version, or the launcher's default Nightly resolution.
 pub fn resolve_version(requested: Option<&str>) -> Result<String, String> {
     let installed = installed();
     if let Some(tag) = requested {
@@ -3159,10 +3200,13 @@ pub fn resolve_version(requested: Option<&str>) -> Result<String, String> {
             .cloned()
             .ok_or_else(|| format!("{tag} is not installed."));
     }
-    let selected = Settings::load().selected.filter(|s| installed.contains(s));
-    selected
-        .or_else(|| installed.first().cloned())
-        .ok_or_else(no_version_installed)
+    let settings = Settings::load();
+    crate::nightly::latest_for(
+        crate::instances::Channel::Nightly,
+        &installed,
+        settings.selected.as_deref(),
+    )
+    .ok_or_else(no_version_installed)
 }
 
 /// What a command that needs an installed version says when there is none: the way to get one.
@@ -3175,18 +3219,17 @@ pub fn no_version_installed() -> String {
     )
 }
 
-/// Removes an installed version, unless a program runs from it, and moves the selection to the
-/// newest one left if needed. [`remove`] refuses a version a native build takes its resources
-/// from, under the exclusive publication lock a check here could not hold.
+/// Removes an installed version unless an instance or program uses it. Refreshes the compatibility
+/// selection if it pointed at the removed build.
 pub fn remove_version(tag: &str) -> Result<(), String> {
-    if !installed().iter().any(|t| t == tag) {
-        return Err(format!("{tag} is not installed."));
-    }
     remove(tag)?;
     crate::storage::eviction::request_cleanup();
-    let mut settings = Settings::load();
-    if settings.selected.as_deref() == Some(tag) {
-        settings.keep_installed_selection(&installed());
+    let mut settings = Settings::load_checked()?;
+    if [settings.selected.as_deref(), settings.following.as_deref()].contains(&Some(tag)) {
+        let newest =
+            crate::nightly::latest_for(crate::instances::Channel::Nightly, &installed(), None);
+        settings.selected = newest.clone();
+        settings.following = newest;
         settings.save()?;
     }
     Ok(())
@@ -3212,7 +3255,7 @@ pub fn mark_auto_installed(tag: &str) -> Result<(), String> {
 }
 
 /// Keep the newest releases and automatically installed Nightlies separately. Manual and legacy
-/// Nightlies are outside the quota; selected and instance-pinned versions are always protected.
+/// Nightlies are outside the quota. Instance versions stay protected.
 fn stale_versions(
     installed: &[String],
     keep: usize,
@@ -3270,27 +3313,33 @@ pub(crate) fn in_use(_tag: &str) -> bool {
 }
 
 /// Deletes the release versions nothing needs after an install or update, unless the player
-/// turned that off: all but the newest few (`Settings::keep_newest`), the selected version, the
-/// ones instances pin and the ones a program is running from. A version that does not delete
-/// is logged and the rest still go. Returns the versions deleted. They install again from GitHub.
-pub fn prune_old_versions() -> Vec<String> {
+/// turned that off, keeping the just-installed version, the newest few, and the builds in use.
+/// Failed removals are logged. Returns the versions deleted.
+pub fn prune_old_versions(just_installed: &str) -> Vec<String> {
     let settings = Settings::load();
     if !settings.auto_prune() {
         return Vec::new();
     }
-    let mut protected: Vec<String> = settings.selected.iter().cloned().collect();
-    protected.extend(
-        crate::instances::list()
-            .into_iter()
-            .filter_map(|i| i.version),
-    );
-    let mut gone = Vec::new();
-    for tag in stale_versions(
-        &installed(),
+    let installed = installed();
+    let mut protected = match crate::instances::protected_versions(&installed, &settings) {
+        Ok(protected) => protected,
+        Err(e) => {
+            eprintln!("Could not check instance versions before pruning: {e}");
+            return Vec::new();
+        }
+    };
+    protected.push(just_installed.to_owned());
+    prune_versions(stale_versions(
+        &installed,
         settings.keep_newest(),
         &protected,
         auto_installed,
-    ) {
+    ))
+}
+
+fn prune_versions(candidates: Vec<String>) -> Vec<String> {
+    let mut gone = Vec::new();
+    for tag in candidates {
         if crate::native_mods::resource_dependents(&tag) {
             eprintln!("Keeping old version {tag}: a native build uses its resources.");
             continue;
@@ -3581,10 +3630,8 @@ fn architecture_update(releases: &[Release], installed: &[String]) -> Option<Rel
         return None;
     }
     let settings = Settings::load();
-    let tag = settings
-        .selected
-        .filter(|tag| installed.contains(tag))
-        .or_else(|| installed.iter().find(|tag| is_game_tag(tag)).cloned())?;
+    let tag = crate::instances::selected_with(&settings)
+        .installed_version(installed, settings.selected.as_deref())?;
     if !is_game_tag(&tag) {
         return None;
     }
@@ -3600,10 +3647,32 @@ pub fn check_updates() -> Result<Updates, String> {
 mod update_selection;
 pub use update_selection::{select_after_update, selection_after_install, InstallCause};
 
-/// Installs `tag` (or with "latest" the newest release, pre-releases left out), then updates the selection as
-/// `select_after_update` says when `as_update`, or always selects it otherwise.
+/// Installs `tag` (or with "latest" the newest release, pre-releases left out). A manual install
+/// uses it for the instance Play starts. Updates maintain the old launcher's compatibility fields.
 pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result<String, String> {
-    let releases = [releases()?, release_selection::snapshot(tag)?].concat();
+    install_tag_with(
+        tag,
+        as_update,
+        || Ok([releases()?, release_selection::snapshot(tag)?].concat()),
+        |release| install(release, progress),
+    )
+}
+
+fn install_tag_with(
+    tag: &str,
+    as_update: bool,
+    releases: impl FnOnce() -> Result<Vec<Release>, String>,
+    download: impl FnOnce(&Release) -> Result<(), String>,
+) -> Result<String, String> {
+    let target = if as_update {
+        None
+    } else {
+        let id = Settings::load_checked()?
+            .instance
+            .unwrap_or_else(|| crate::instances::DEFAULT.into());
+        Some(crate::instances::manual_install_target(id)?)
+    };
+    let releases = releases()?;
     let release = if tag == "latest" {
         releases
             .iter()
@@ -3621,37 +3690,34 @@ pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result
     if let Some(warning) = &downgrade {
         eprintln!("{warning}");
     }
-    install(release, progress)?;
+    download(release)?;
     if as_update && release.nightly.is_some() {
         if let Err(e) = mark_auto_installed(&release.tag) {
             eprintln!("Could not mark updated Nightly {}: {e}", release.tag);
         }
     }
-    let mut settings = Settings::load_for_install(&before);
-    // An older Nightly is a deliberate rollback: installed, but an update never moves the selection back.
-    let changed = match (as_update, &downgrade) {
-        (false, _) => {
-            settings.pick(release.tag.clone());
-            true
+    if as_update {
+        let mut settings = Settings::load_for_install(&before);
+        if downgrade.is_none()
+            && settings.apply_install(
+                &release.tag,
+                &before,
+                &installed(),
+                InstallCause {
+                    update: true,
+                    instance: None,
+                },
+            )
+        {
+            settings.save()?;
         }
-        (true, Some(_)) => false,
-        (true, None) => settings.apply_install(
-            &release.tag,
-            &before,
-            &installed(),
-            InstallCause {
-                update: true,
-                instance: None,
-            },
-        ),
-    };
-    if changed {
-        settings.save()?;
+    } else if let Some(target) = target {
+        crate::instances::finish_manual_install(&target, &release.tag)?;
     }
     if as_update && release.nightly.is_some() {
         crate::nightly::after_update(&release.tag);
     }
-    prune_old_versions();
+    prune_old_versions(&release.tag);
     Ok(release.tag.clone())
 }
 
@@ -4666,9 +4732,13 @@ mod tests {
             Err(crate::native_cache::Error::UnprovenExclusion)
         ));
         assert_eq!(fs::read(cache.join("pack.hpack")).unwrap(), b"whole pack");
+        // Latest now resolves to a different installation.
+        let newer = versions.join("v0.2.0");
+        fs::create_dir(&newer).unwrap();
+        fs::write(newer.join(COMPLETE), b"").unwrap();
         remove_version("v0.1.0").unwrap();
         assert!(!dir.exists());
-        assert!(installed_in(&versions).is_empty());
+        assert_eq!(installed_in(&versions), ["v0.2.0"]);
     }
 
     /// [#18393](https://github.com/horizon-rust/horizon/issues/18393): the proof is the check that
@@ -4708,6 +4778,9 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(COMPLETE), b"").unwrap();
         fs::write(dir.join(CLIENT), b"pre-holder game").unwrap();
+        let newer = versions.join("v0.2.0");
+        fs::create_dir(&newer).unwrap();
+        fs::write(newer.join(COMPLETE), b"").unwrap();
         // A running image refuses writes the way the loader's own handle does, which is what the
         // check standing in for the missing lease looks at.
         let running = fs::File::options()
@@ -4720,11 +4793,11 @@ mod tests {
             dir.join(COMPLETE).exists(),
             "the version stays whole for the retry"
         );
-        assert_eq!(installed_in(&versions), vec!["v0.1.0".to_owned()]);
+        assert_eq!(installed_in(&versions), ["v0.2.0", "v0.1.0"]);
         drop(running);
         remove_version("v0.1.0").unwrap();
         assert!(!dir.exists());
-        assert!(installed_in(&versions).is_empty());
+        assert_eq!(installed_in(&versions), ["v0.2.0"]);
     }
 
     /// [#18393](https://github.com/horizon-rust/horizon/issues/18393): the dependency veto belongs
@@ -4772,6 +4845,9 @@ mod tests {
             ),
         )
         .unwrap();
+        let newer = versions.join("nightly-2026-11-14-aaaaaaa");
+        fs::create_dir(&newer).unwrap();
+        fs::write(newer.join(COMPLETE), b"").unwrap();
         let refused = remove_version("nightly-2026-11-13-9f42064").unwrap_err();
         assert!(refused.contains("native-phone"), "{refused}");
         assert!(
@@ -6662,20 +6738,19 @@ pub fn {f}("
     }
 
     #[test]
-    fn a_selection_set_on_the_command_line_during_a_download_stays() {
+    fn an_older_launchers_selection_changed_during_a_download_stays() {
         let (n17, n18, n19) = (
             "nightly-2026-11-17-1234567",
             "nightly-2026-11-18-dd67b76",
             "nightly-2026-11-19-f00125f",
         );
-        // The window saw a follower on n18. While n19 downloaded for a pinned instance,
-        // `settings selected-version` saved n17.
+        // The window saw a follower on n18. While n19 downloaded for a pinned instance, an older
+        // launcher saved n17 in the compatibility fields.
         let window = Settings {
             selected: Some(n18.into()),
             following: Some(n18.into()),
             ..Settings::default()
         };
-        // The command saves only `selected`.
         let mut saved = Settings::parse(&serde_json::to_string(&window).unwrap());
         saved.selected = Some(n17.into());
         let mut window = window;
@@ -6697,43 +6772,6 @@ pub fn {f}("
             None
         );
         assert_eq!(window.selected.as_deref(), Some(n17));
-    }
-
-    #[test]
-    fn a_followed_build_picked_again_stays_picked() {
-        let (n18, n19, n20, n21) = (
-            "nightly-2026-11-18-dd67b76",
-            "nightly-2026-11-19-f00125f",
-            "nightly-2026-11-20-0a875da",
-            "nightly-2026-11-21-1111111",
-        );
-        // A follower on n19 picks n18, n20 arrives, then it picks n19 again, now older.
-        let mut settings = Settings {
-            selected: Some(n19.into()),
-            following: Some(n19.into()),
-            ..Settings::default()
-        };
-        settings.pick(n18.into());
-        settings.pick(n19.into());
-        let now = [n21, n20, n19, n18].map(String::from);
-        for instance in [None, Some(true)] {
-            let cause = InstallCause {
-                update: instance.is_none(),
-                instance,
-            };
-            assert_eq!(
-                selection_after_install(
-                    settings.selected.as_deref(),
-                    settings.following.as_deref(),
-                    n21,
-                    &now[1..],
-                    &now,
-                    cause
-                ),
-                None,
-                "{cause:?}"
-            );
-        }
     }
 
     #[test]
@@ -6767,10 +6805,8 @@ pub fn {f}("
         older.adopt_legacy_selection(&[n19.into(), n18.into()]);
         assert_eq!(older.following, None);
         assert_eq!(after(&older), None);
-        // Once saved, a pick reads back as a pick, not as a file from before `following`.
-        let mut picked = Settings::default();
-        picked.pick(n19.into());
-        let text = serde_json::to_string(&picked).unwrap();
+        // An explicit null distinguishes a legacy pick from a file from before `following`.
+        let text = serde_json::to_string(&older).unwrap();
         assert!(text.contains(r#""following":null"#), "{text}");
     }
 
@@ -6842,15 +6878,19 @@ pub fn {f}("
     #[test]
     fn a_removed_selection_moves_to_the_newest_left_which_follows() {
         let left = ["v0.2.49".to_string(), "v0.2.48".to_string()];
-        let mut kept = Settings::default();
-        kept.pick("v0.2.48".into());
+        let mut kept = Settings {
+            selected: Some("v0.2.48".into()),
+            ..Settings::default()
+        };
         kept.keep_installed_selection(&left);
         assert_eq!(
             (kept.selected.as_deref(), kept.following.as_deref()),
             (Some("v0.2.48"), None)
         );
-        let mut gone = Settings::default();
-        gone.pick("v0.2.47".into());
+        let mut gone = Settings {
+            selected: Some("v0.2.47".into()),
+            ..Settings::default()
+        };
         gone.keep_installed_selection(&left);
         assert_eq!(
             (gone.selected.as_deref(), gone.following.as_deref()),
@@ -6859,8 +6899,10 @@ pub fn {f}("
         let mut none = Settings::default();
         none.keep_installed_selection(&left);
         assert_eq!(none.selected.as_deref(), Some("v0.2.49"));
-        let mut empty = Settings::default();
-        empty.pick("v0.2.47".into());
+        let mut empty = Settings {
+            selected: Some("v0.2.47".into()),
+            ..Settings::default()
+        };
         empty.keep_installed_selection(&[]);
         assert_eq!((empty.selected, empty.following), (None, None));
     }
@@ -7897,6 +7939,130 @@ pub fn {f}("
             tags(&["v0.2.88", "v0.2.85", "v0.2.80"])
         );
         assert!(stale_versions(&installed, 9, &[], |_| false).is_empty());
+    }
+
+    #[test]
+    fn manual_install_changes_only_the_instance_selected_when_it_started() {
+        use crate::instances;
+        if std::env::var_os("HORIZON_TEST_MANUAL_INSTALL").is_none() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args(["--include-ignored", "--exact", "backend::tests::manual_install_changes_only_the_instance_selected_when_it_started"])
+                .env("HORIZON_TEST_MANUAL_INSTALL", "1")
+                .env("HORIZON_LAUNCHER_HOME", root.path().join("launcher"))
+                .env("HORIZON_HOME", root.path().join("game"))
+                .env("HORIZON_LAUNCHER_LOCATION_FILE", root.path().join("location.json"))
+                .status().unwrap().success());
+            return;
+        }
+        let (old, newer, newest) = ("v0.2.90", "v0.2.97", "v0.3.0");
+        let marker = |tag: &str| -> std::io::Result<()> {
+            let dir = version_dir(tag);
+            fs::create_dir_all(&dir)?;
+            fs::write(dir.join(CLIENT), b"pre-holder game")?;
+            fs::write(dir.join(COMPLETE), "")
+        };
+        marker(newer).unwrap();
+        marker(newest).unwrap();
+        let first = instances::create("First", None).unwrap();
+        let second = instances::create("Second", None).unwrap();
+        instances::pin_installed_version(&second.id, Some(newest)).unwrap();
+        let install = |tag: &str, while_downloading: &dyn Fn()| {
+            instances::select(&first.id).unwrap();
+            let release = Release {
+                tag: tag.into(),
+                name: tag.into(),
+                body: String::new(),
+                date: String::new(),
+                time: String::new(),
+                asset: Some(("fixture".into(), 1)),
+                prerelease: false,
+                nightly: None,
+            };
+            install_tag_with(
+                tag,
+                false,
+                || Ok(vec![release]),
+                |release| {
+                    instances::select(&second.id)?;
+                    while_downloading();
+                    marker(&release.tag).map_err(|e| e.to_string())
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(install(old, &|| {}), old);
+        assert_eq!(
+            instances::find(&first.id).unwrap().version.as_deref(),
+            Some(old)
+        );
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+        assert_eq!(install(newest, &|| {}), newest);
+        assert_eq!(instances::find(&first.id).unwrap().version, None);
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+
+        // The old build was eligible for pruning once the original instance stopped playing it.
+        assert!(!is_installed(old));
+        let delete_first = || fs::remove_dir_all(&first.home).unwrap();
+        let replace_first = || {
+            delete_first();
+            let replacement = instances::create("First", None).unwrap();
+            assert_eq!(replacement.id, first.id);
+            instances::manual_install_target(replacement.id).unwrap();
+        };
+        assert_eq!(install(old, &replace_first), old);
+        assert_eq!(instances::find(&first.id).unwrap().version, None);
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+        assert!(is_installed(old));
+
+        assert_eq!(install(old, &delete_first), old);
+        assert!(instances::find(&first.id).is_err());
+        assert_eq!(instances::selected().version.as_deref(), Some(newest));
+        assert!(is_installed(old));
+    }
+
+    #[test]
+    fn pruning_rechecks_candidates_after_an_instance_pins_one() {
+        let Some(root) = std::env::var_os("PRUNE_INSTANCE_TEST_ROOT") else {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "backend::tests::pruning_rechecks_candidates_after_an_instance_pins_one"
+                ])
+                .env("PRUNE_INSTANCE_TEST_ROOT", root.path())
+                .env("HORIZON_LAUNCHER_HOME", root.path())
+                .env("HORIZON_HOME", root.path().join("game"))
+                .env(
+                    "HORIZON_LAUNCHER_LOCATION_FILE",
+                    root.path().join("location.json")
+                )
+                .status()
+                .unwrap()
+                .success());
+            return;
+        };
+        let latest = "nightly-2026-11-22-aaaaaaa";
+        let newly_pinned = "nightly-2026-11-21-bbbbbbb";
+        let unused = "nightly-2026-11-20-ccccccc";
+        for tag in [latest, newly_pinned, unused] {
+            let dir = version_dir(tag);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(COMPLETE), b"").unwrap();
+            fs::write(dir.join(CLIENT), b"pre-holder game").unwrap();
+            mark_auto_installed(tag).unwrap();
+        }
+        let installed = installed();
+        let protected =
+            crate::instances::protected_versions(&installed, &Settings::default()).unwrap();
+        let candidates = stale_versions(&installed, 1, &protected, auto_installed);
+        assert_eq!(candidates, [newly_pinned, unused]);
+
+        crate::instances::use_version_for(crate::instances::DEFAULT, newly_pinned).unwrap();
+        assert_eq!(prune_versions(candidates), [unused]);
+        assert!(version_dir(newly_pinned).join(COMPLETE).is_file());
+        assert!(!PathBuf::from(root).join("versions").join(unused).exists());
     }
 
     #[test]

@@ -1,9 +1,9 @@
-//! Whether automatic updates may change the explicit base selection.
+//! Compatibility selection written for launchers that predate per-instance pins.
 use super::*;
 
 /// Whether a version installed as an update becomes the selected one: when the player had none,
-/// was on the newest installed Nightly (an older one picked on Versions stays), or on the newest
-/// installed release (so a player of the release channel moves
+/// was on the newest installed Nightly, or on the newest installed release (so a player of the
+/// release channel moves
 /// to the Nightly at the first check, docs/release-flow.md). An older release picked by hand
 /// stays, and so does an imported build (`build_import`) or a snapshot (installed by its tag
 /// alone); an instance pinned to a version keeps it either way.
@@ -44,12 +44,10 @@ pub struct InstallCause {
 /// the launcher then follows it: `Some(true)` selects and follows it (the caller saves it in
 /// `Settings::following`), `Some(false)` selects it as a person's pick, None keeps the selection.
 ///
-/// `selected` follows the newest only while it is the version the launcher itself chose
-/// (`following`); a person's pick (Use, an install from Versions, an import, the command line) or
-/// a selection saved before the launcher kept `following` doesn't. An update moves a follower,
-/// and otherwise keeps [`select_after_update`]'s rule. A newer Nightly installed only for an
-/// instance pinned to it on the Nightly channel moves a follower too, so Latest never stays
-/// behind it; a Stable build installed for an instance never moves a selection the launcher has.
+/// Older launchers follow the newest only while `selected` is the build the launcher chose
+/// (`following`). An update moves a follower, and otherwise keeps [`select_after_update`]'s rule.
+/// A newer Nightly installed for a Nightly instance pinned to it also moves a follower. A Stable
+/// build installed for an instance keeps an existing selection.
 /// `installed` is every installed version, newest first, `tag` among them, and `before` the
 /// same without `tag`.
 pub fn selection_after_install(

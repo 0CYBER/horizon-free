@@ -82,10 +82,7 @@ impl Session {
                 if self.client.as_ref().is_some_and(|c| c.finished().is_none()) {
                     return Err("The client is already running.".into());
                 }
-                let instance = match arg_str(args, "instance") {
-                    Some(name) => instances::find(name)?,
-                    None => instances::selected(),
-                };
+                let instance = instances::for_launch(arg_str(args, "instance"))?;
                 let tag = instance.resolve_version(arg_str(args, "version"))?;
                 let mut cmd = backend::client(&tag)?;
                 instances::apply(&mut cmd, &instance)?;

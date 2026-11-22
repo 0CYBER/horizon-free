@@ -43,6 +43,8 @@ pub(super) fn import(
     let prepared = backend::check_prepared(&tag);
     if as_json {
         super::json(serde_json::json!({ "imported": tag, "prepared": prepared }));
+    } else if horizon_launcher::instances::selected().java.is_some() {
+        println!("{}", trf("Imported {version}.", &[("version", &tag)]));
     } else if prepared {
         println!("{}", trf("Imported {version} and selected it. It is prepared already, from another installed version.", &[("version", &tag)]));
     } else {

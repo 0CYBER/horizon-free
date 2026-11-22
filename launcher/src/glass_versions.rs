@@ -74,34 +74,30 @@ impl Launcher {
         }
     }
 
-    /// Whether Use on Versions changes the launcher's version, which Nightly instances on Latest
-    /// play: when the instance Play starts plays it too. Otherwise Use changes only that one.
-    pub(crate) fn use_sets_selection(&self) -> bool {
-        self.selected_instance().is_none_or(|i| {
-            i.java.is_some() || (i.version.is_none() && i.channel == instances::Channel::Nightly)
+    /// The action Versions offers for this build on the instance Play starts.
+    pub(super) fn use_version_action(&self, tag: &str) -> Option<(String, String)> {
+        let instance = self.selected_instance().filter(|i| i.java.is_none())?;
+        let latest = horizon_launcher::nightly::latest_for(
+            instance.channel,
+            &self.installed,
+            self.settings.selected.as_deref(),
+        );
+        let follows = latest.as_deref() == Some(tag);
+        let pin = (!follows).then_some(tag);
+        (instance.version.as_deref() != pin).then(|| {
+            let tip = if follows {
+                trf(
+                    "Play the latest in {instance}. It moves to each new one.",
+                    &[("instance", &instance.name)],
+                )
+            } else {
+                trf(
+                    "Keep {instance} on this version. To follow new ones again, choose Latest in its settings, Installation.",
+                    &[("instance", &instance.name)],
+                )
+            };
+            (instance.id.clone(), tip)
         })
-    }
-
-    /// How a player gets Latest following each new Nightly again, once Versions holds an older
-    /// one: Use on the newest there, after setting the instance Play starts to Latest on Nightly
-    /// when Use would change only that one.
-    pub(crate) fn follow_again_hint(&self) -> String {
-        match self.selected_instance().filter(|_| !self.use_sets_selection()) {
-            Some(i) => trf(
-                "Set {instance} to Latest on Nightly, then press Use on the newest on Versions to follow new ones",
-                &[("instance", &i.name)],
-            ),
-            None => tr("Press Use on the newest on Versions to follow new ones").to_string(),
-        }
-    }
-
-    /// The launcher's version when Use picked one older than the newest installed: what an
-    /// instance set to Latest on Nightly plays then, named so "Latest" never says otherwise.
-    pub(crate) fn held_version(&self) -> Option<&String> {
-        self.settings
-            .selected
-            .as_ref()
-            .filter(|tag| self.installed.first() != Some(*tag))
     }
 
     /// The names of the Horizon instances that play `tag`.
@@ -559,7 +555,6 @@ impl Launcher {
     /// again before it removes.
     fn glass_version_actions(&self, tag: &str, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let selected = self.selected().map(String::as_str) == Some(tag);
         let confirming = self.confirm_remove.as_deref() == Some(tag);
         let (t1, t2, t3) = (tag.to_string(), tag.to_string(), tag.to_string());
         let mut d = div().flex().items_center().gap(px(8.));
@@ -589,26 +584,13 @@ impl Launcher {
                     )),
                 );
         }
-        if !selected {
-            // Use changes what the selected instance plays; its label says whom that moves.
-            let follows = self.use_sets_selection();
-            let tip = match (follows, self.selected_instance()) {
-                (false, Some(i)) => trf(
-                    "Play this version only in {instance}. To go back to the latest, choose Latest in its settings, Installation.",
-                    &[("instance", &i.name)],
-                ),
-                _ => tr("Play this version in every Nightly instance set to Latest.")
-                    .to_string(),
-            };
+        if let Some((id, tip)) = self.use_version_action(tag) {
             d = d.child(
                 ui::quiet(SharedString::from(format!("use-{tag}")), tr("Use"), 36., &t)
                     .tooltip(ui::tip(tip))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if follows {
-                            this.settings.pick(t1.clone());
-                            this.save_settings();
-                        } else {
-                            this.pin_version(Some(t1.clone()));
+                        if let Err(e) = this.use_version_for(&id, &t1) {
+                            this.install_error = Some((t1.clone(), e));
                         }
                         cx.notify();
                     })),

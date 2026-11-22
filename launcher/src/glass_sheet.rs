@@ -234,17 +234,8 @@ impl Launcher {
                 ),
                 None => java.minecraft.clone(),
             },
-            // An instance that keeps no version of its own plays the latest, unless Use held
-            // the launcher's version on an older one: then it says which.
-            None if instance.version.is_none() && self.version_of(instance).is_some() => match self
-                .held_version()
-                .filter(|_| instance.channel == Channel::Nightly)
-            {
-                Some(tag) => self.version_name(tag),
-                None => tr("Latest version").to_string(),
-            },
-            None => self.version_of(instance).map_or_else(
-                || tr("No version installed").to_string(),
+            None => instance.version.as_deref().map_or_else(
+                || tr("Latest version").to_string(),
                 |tag| self.version_label(tag),
             ),
         }

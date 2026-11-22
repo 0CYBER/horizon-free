@@ -9,10 +9,11 @@
 use crate::backend;
 use crate::browser::horizon::pack as registry_pack;
 use crate::launch::Launch;
-use crate::modpacks;
+use crate::{modpacks, nightly};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -20,6 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The default instance's id: the game's home itself.
 pub const DEFAULT: &str = "horizon";
 const FILE: &str = "instances.json";
+const IDENTITY: &str = ".horizon-instance-id";
 /// Where new instances live, in the game's home.
 const OWN: &str = "instances";
 
@@ -163,8 +165,8 @@ pub struct Meta {
     pub icon: Option<Icon>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// The Horizon version this instance plays, kept when newer ones are installed. None: the
-    /// launcher's own version, which follows updates.
+    /// The Horizon version this instance plays, kept when newer ones are installed. None follows
+    /// its channel's Latest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// The builds "latest" means for it; missing is [`Channel::Nightly`].
@@ -256,17 +258,45 @@ struct Store {
 }
 
 impl Store {
-    fn load(data: &Path) -> Store {
-        fs::read_to_string(data.join(FILE))
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+    fn load(data: &Path) -> Result<Store, String> {
+        let path = data.join(FILE);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => {
+                return Ok(Self::default());
+            }
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        if !text.trim_start().starts_with('{') {
+            return Err(format!("{}: expected a JSON object", path.display()));
+        }
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
+
+    fn forget_missing(&mut self, own: &[String]) -> bool {
+        let before = self.instances.len();
+        self.instances
+            .retain(|id, _| id == DEFAULT || id.contains(':') || own.contains(id));
+        self.instances.len() != before
+    }
+
     fn save(&self, data: &Path) -> Result<(), String> {
         fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
-        let text = serde_json::to_string_pretty(self).unwrap();
-        fs::write(data.join(FILE), text).map_err(|e| format!("{FILE}: {e}"))
+        // A launcher interrupted during migration must leave either all pins or the old store.
+        let write = || -> std::io::Result<()> {
+            let mut pending = tempfile::NamedTempFile::new_in(data)?;
+            pending.write_all(&serde_json::to_vec_pretty(self).unwrap())?;
+            pending.persist(data.join(FILE))?;
+            Ok(())
+        };
+        write().map_err(|e| format!("{FILE}: {e}"))
     }
+}
+
+/// Serializes instance metadata edits and removal of builds they might use across launchers.
+pub(crate) fn lock_store(data: &Path) -> Result<fs::File, String> {
+    fs::create_dir_all(data).map_err(|e| format!("{}: {e}", data.display()))?;
+    backend::lock_update(&data.join("instances.lock"))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -322,26 +352,37 @@ impl Instance {
         self.version.is_none() && self.java.is_none()
     }
 
-    /// The installed version this instance plays: its pinned one, else `requested` (the
-    /// command line's `--version`), else on Stable its channel's ([`crate::nightly::stable_latest`],
-    /// as Home's), else the launcher's (`backend::resolve_version`).
+    /// The installed build this Horizon instance plays. A missing pin cannot fall back.
+    pub fn installed_version(
+        &self,
+        installed: &[String],
+        selected: Option<&str>,
+    ) -> Option<String> {
+        if self.java.is_some() {
+            return None;
+        }
+        match &self.version {
+            Some(pin) => installed.iter().find(|tag| *tag == pin).cloned(),
+            None => nightly::latest_for(self.channel, installed, selected),
+        }
+    }
+
+    /// The installed version it plays: an explicit CLI request, its pin, or its channel's Latest.
     pub fn resolve_version(&self, requested: Option<&str>) -> Result<String, String> {
         self.horizon()?;
-        match (requested, &self.version) {
-            (None, Some(pinned)) => backend::resolve_version(Some(pinned)).map_err(|_| {
-                format!(
-                    "{} plays {pinned}, which is not installed: install it, or horizon-launcher \
-                     instance version \"{}\" latest",
-                    self.name, self.name
-                )
-            }),
-            (None, None) if self.channel == Channel::Stable => {
-                let selected = backend::Settings::load().selected;
-                crate::nightly::stable_latest(&backend::installed(), selected.as_deref())
-                    .map_or_else(|| backend::resolve_version(None), Ok)
-            }
-            _ => backend::resolve_version(requested),
+        if let Some(tag) = requested {
+            return backend::resolve_version(Some(tag));
         }
+        let installed = backend::installed();
+        if let Some(pinned) = self.missing_pin(&installed) {
+            return Err(crate::i18n::trf(
+                "{instance} plays {version}, which is not installed: install it, or horizon-launcher instance version \"{instance}\" latest",
+                &[("instance", &self.name), ("version", pinned)],
+            ));
+        }
+        let settings = backend::Settings::load();
+        self.installed_version(&installed, settings.selected.as_deref())
+            .ok_or_else(backend::no_version_installed)
     }
 }
 
@@ -352,86 +393,225 @@ pub fn list() -> Vec<Instance> {
 }
 
 fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
-    let mut store = Store::load(data);
-    let mut found = vec![(
-        DEFAULT.to_string(),
-        "Horizon".to_string(),
+    let own = own_folders(game_home).ok().flatten();
+    let mut store = Store::load(data).unwrap_or_default();
+    if own.as_ref().is_some_and(|own| store.forget_missing(own)) {
+        let forget_missing = || {
+            let _lock = lock_store(data)?;
+            let mut saved = Store::load(data)?;
+            if let Some(own) = own_folders(game_home)? {
+                if saved.forget_missing(&own) {
+                    saved.save(data)?;
+                }
+            }
+            Ok::<_, String>(saved)
+        };
+        match forget_missing() {
+            Ok(saved) => store = saved,
+            Err(e) => eprintln!("Horizon: instances.json is not saved: {e}"),
+        }
+    }
+    list_with_store(game_home, own.unwrap_or_default(), &store)
+}
+
+fn own_folders(game_home: &Path) -> Result<Option<Vec<String>>, String> {
+    let path = game_home.join(OWN);
+    let read = || -> std::io::Result<Option<Vec<String>>> {
+        let entries = match fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !path.is_symlink() => {
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let metadata = match fs::metadata(entry.path()) {
+                Ok(metadata) => metadata,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            if metadata.is_dir() {
+                if let Ok(name) = entry.file_name().into_string() {
+                    names.push(name);
+                }
+            }
+        }
+        names.sort();
+        Ok(Some(names))
+    };
+    read().map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn list_with_store(game_home: &Path, own: Vec<String>, store: &Store) -> Vec<Instance> {
+    list_with_packs(
+        game_home,
+        own,
+        store,
+        modpacks::listed_in(&game_home.join("ports")),
+        registry_pack::list_in(&game_home.join("horizon-packs")),
+    )
+}
+
+fn list_checked_with_store(game_home: &Path, store: &Store) -> Result<Vec<Instance>, String> {
+    Ok(list_with_packs(
+        game_home,
+        own_folders(game_home)?.unwrap_or_default(),
+        store,
+        modpacks::listed_checked_in(&game_home.join("ports"))?,
+        registry_pack::list_checked_in(&game_home.join("horizon-packs"))?,
+    ))
+}
+
+fn list_with_packs(
+    game_home: &Path,
+    own: Vec<String>,
+    store: &Store,
+    ports: Vec<modpacks::Listed>,
+    packs: Vec<registry_pack::Installed>,
+) -> Vec<Instance> {
+    let mut out = vec![instance_at(
+        store,
+        DEFAULT.into(),
+        "Horizon".into(),
         Kind::Default,
         game_home.to_path_buf(),
         game_home.to_path_buf(),
     )];
-    let mut own: Vec<_> = fs::read_dir(game_home.join(OWN))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    own.sort();
-    // An own instance whose folder is gone (deleted outside the launcher) is forgotten, so a new
-    // one of that name starts clean. Only when the folder of instances itself can be read.
-    if game_home.join(OWN).is_dir() {
-        let before = store.instances.len();
-        store
-            .instances
-            .retain(|id, _| id == DEFAULT || id.contains(':') || own.contains(id));
-        if store.instances.len() != before {
-            if let Err(e) = store.save(data) {
-                eprintln!("Horizon: instances.json is not saved: {e}");
-            }
-        }
-    }
-    for slug in own {
+    out.extend(own.into_iter().map(|slug| {
         let dir = game_home.join(OWN).join(&slug);
-        found.push((slug.clone(), slug, Kind::Own, dir.clone(), dir));
-    }
-    for p in modpacks::listed_in(&game_home.join("ports")) {
-        let home = modpacks::profile_home(&p.work);
-        found.push((
-            format!("port:{}", p.slug),
-            p.title,
-            Kind::Port,
-            p.work,
-            home,
-        ));
-    }
-    for p in registry_pack::list_in(&game_home.join("horizon-packs")) {
-        let home = registry_pack::home(&p.work);
-        found.push((format!("pack:{}", p.id), p.name, Kind::Pack, p.work, home));
-    }
-    let mut out: Vec<Instance> = found
-        .into_iter()
-        .map(|(id, name, kind, work, home)| {
-            let meta = store.instances.get(&id).cloned().unwrap_or_default();
-            Instance {
-                name: meta.name.unwrap_or(name),
-                icon: meta.icon,
-                group: meta.group,
-                version: meta.version,
-                channel: meta.channel.unwrap_or_default(),
-                native_profile: meta
-                    .native_profile
-                    .unwrap_or(crate::native_mods::Profile::Optimized),
-                played: Duration::from_secs(meta.played_secs),
-                last_played: meta
-                    .last_played
-                    .map(|s| UNIX_EPOCH + Duration::from_secs(s)),
-                launch: meta.launch,
-                java: meta.java,
-                id,
-                kind,
-                work,
-                home,
-            }
-        })
-        .collect();
+        instance_at(store, slug.clone(), slug, Kind::Own, dir.clone(), dir)
+    }));
+    out.extend(ports.into_iter().map(|pack| port_instance(store, pack)));
+    out.extend(packs.into_iter().map(|pack| registry_instance(store, pack)));
     out[1..].sort_by_key(|i| (i.group.clone(), i.name.to_lowercase()));
     out
+}
+
+fn port_instance(store: &Store, pack: modpacks::Listed) -> Instance {
+    let home = modpacks::profile_home(&pack.work);
+    instance_at(
+        store,
+        format!("port:{}", pack.slug),
+        pack.title,
+        Kind::Port,
+        pack.work,
+        home,
+    )
+}
+
+fn registry_instance(store: &Store, pack: registry_pack::Installed) -> Instance {
+    let home = registry_pack::home(&pack.work);
+    instance_at(
+        store,
+        format!("pack:{}", pack.id),
+        pack.name,
+        Kind::Pack,
+        pack.work,
+        home,
+    )
+}
+
+fn instance_at(
+    store: &Store,
+    id: String,
+    name: String,
+    kind: Kind,
+    work: PathBuf,
+    home: PathBuf,
+) -> Instance {
+    let meta = store.instances.get(&id).cloned().unwrap_or_default();
+    Instance {
+        name: meta.name.unwrap_or(name),
+        icon: meta.icon,
+        group: meta.group,
+        version: meta.version,
+        channel: meta.channel.unwrap_or_default(),
+        native_profile: meta
+            .native_profile
+            .unwrap_or(crate::native_mods::Profile::Optimized),
+        played: Duration::from_secs(meta.played_secs),
+        last_played: meta
+            .last_played
+            .map(|d| UNIX_EPOCH + Duration::from_secs(d)),
+        launch: meta.launch,
+        java: meta.java,
+        id,
+        kind,
+        work,
+        home,
+    }
 }
 
 /// The instance an id, a name (any case) or a pack's folder name names.
 pub fn find(query: &str) -> Result<Instance, String> {
     find_in(&list(), query)
+}
+
+/// Read saved metadata before launching. A damaged store cannot select an unpinned default.
+pub fn for_launch(query: Option<&str>) -> Result<Instance, String> {
+    let all = launch_instances()?;
+    match query {
+        Some(query) => find_in(&all, query),
+        None => {
+            let settings = backend::Settings::load_checked()?;
+            let id = settings.instance.as_deref().unwrap_or(DEFAULT);
+            all.into_iter()
+                .find(|i| i.id == id)
+                .ok_or_else(|| instance_unavailable(id))
+        }
+    }
+}
+
+/// A window's Play button targets the exact instance it displayed.
+pub fn for_launch_id(id: &str) -> Result<Instance, String> {
+    launch_instances()?
+        .into_iter()
+        .find(|i| i.id == id)
+        .ok_or_else(|| instance_unavailable(id))
+}
+
+fn instance_unavailable(id: &str) -> String {
+    crate::i18n::trf(
+        "Instance {instance} is no longer available.",
+        &[("instance", id)],
+    )
+}
+
+/// Reads the requested pack's manifest and saved instance metadata before it can be played.
+pub fn pack_for_launch(work: &Path) -> Result<Instance, String> {
+    let store = load_launch_store()?;
+    let parent = work.parent();
+    if parent == Some(modpacks::ports_dir().as_path()) {
+        return Ok(port_instance(
+            &store,
+            modpacks::read_listed(work.to_owned())?,
+        ));
+    }
+    if parent == Some(registry_pack::packs_dir().as_path()) {
+        return Ok(registry_instance(&store, registry_pack::read_record(work)?));
+    }
+    Err(instance_unavailable(&work.display().to_string()))
+}
+
+fn load_launch_store() -> Result<Store, String> {
+    Store::load(&backend::data_dir()).map_err(|e| {
+        crate::i18n::trf(
+            "Could not read instance settings: {error}",
+            &[("error", &e)],
+        )
+    })
+}
+
+fn launch_instances() -> Result<Vec<Instance>, String> {
+    let game_home = backend::game_home();
+    let store = load_launch_store()?;
+    Ok(list_with_store(
+        &game_home,
+        own_folders(&game_home)?.unwrap_or_default(),
+        &store,
+    ))
 }
 
 fn find_in(all: &[Instance], query: &str) -> Result<Instance, String> {
@@ -479,7 +659,10 @@ fn delete_in(
     query: &str,
     trash: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<Instance, String> {
-    let instance = find_in(&list_in(game_home, data), query)?;
+    let _lock = lock_store(data)?;
+    let mut store = Store::load(data)?;
+    let own = own_folders(game_home)?.unwrap_or_default();
+    let instance = find_in(&list_with_store(game_home, own, &store), query)?;
     if instance.kind == Kind::Default {
         return Err(format!(
             "{} is the game's own folder: it can't be deleted.",
@@ -488,7 +671,6 @@ fn delete_in(
     }
     trash(&instance.work)
         .map_err(|e| format!("{} could not go to the Trash: {e}", instance.name))?;
-    let mut store = Store::load(data);
     if store.instances.remove(&instance.id).is_some() {
         store.save(data)?;
     }
@@ -497,11 +679,246 @@ fn delete_in(
 
 /// The instance Play starts: the one picked in the launcher, else Horizon.
 pub fn selected() -> Instance {
-    let all = list();
-    backend::Settings::load()
-        .instance
-        .and_then(|id| all.iter().find(|i| i.id == id).cloned())
-        .unwrap_or_else(|| all[0].clone())
+    selected_with(&backend::Settings::load())
+}
+
+pub(crate) fn selected_with(settings: &backend::Settings) -> Instance {
+    selected_in(&list(), settings).clone()
+}
+
+fn selected_in<'a>(all: &'a [Instance], settings: &backend::Settings) -> &'a Instance {
+    all.iter()
+        .find(|i| Some(i.id.as_str()) == settings.instance.as_deref())
+        .unwrap_or(&all[0])
+}
+
+/// Use an installed build for the instance Play starts. Choosing the channel's Latest follows it.
+pub fn use_version(tag: &str) -> Result<(), String> {
+    use_version_in(None, None, tag).map(|_| ())
+}
+
+/// Use a build for the named instance, even if another launcher changed the selected instance.
+pub fn use_version_for(id: &str, tag: &str) -> Result<(), String> {
+    match use_version_in(Some(id), None, tag)? {
+        true => Ok(()),
+        false => Err(instance_unavailable(id)),
+    }
+}
+
+/// The instance that started a manual download. Recreated folders have their own identity.
+pub struct ManualInstallTarget {
+    id: String,
+    identity: Option<[u8; 16]>,
+}
+
+/// Captures the instance's identity before downloading. The default instance cannot be deleted.
+pub fn manual_install_target(id: String) -> Result<ManualInstallTarget, String> {
+    let identity = if id == DEFAULT {
+        None
+    } else {
+        let _lock = lock_store(&backend::data_dir())?;
+        launch_instances()?
+            .into_iter()
+            .find(|instance| instance.id == id && instance.java.is_none())
+            .map(|instance| ensure_identity(&instance.work))
+            .and_then(|identity| identity.inspect_err(|e| eprintln!("{e}")).ok())
+    };
+    Ok(ManualInstallTarget { id, identity })
+}
+
+fn read_identity(file: &Path) -> std::io::Result<Option<[u8; 16]>> {
+    match fs::read(file) {
+        Ok(bytes) => bytes.try_into().map(Some).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid instance identity")
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn ensure_identity(work: &Path) -> Result<[u8; 16], String> {
+    let path = work.join(IDENTITY);
+    let ensure = || -> std::io::Result<[u8; 16]> {
+        if let Some(existing) = read_identity(&path)? {
+            return Ok(existing);
+        }
+        let mut identity = [0; 16];
+        getrandom::fill(&mut identity).map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut pending = tempfile::NamedTempFile::new_in(work)?;
+        pending.write_all(&identity)?;
+        match pending.persist_noclobber(&path) {
+            Ok(_) => Ok(identity),
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                read_identity(&path)?.ok_or(e.error)
+            }
+            Err(e) => Err(e.error),
+        }
+    };
+    ensure().map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Selects a manual download for the original instance if it still exists.
+pub fn finish_manual_install(target: &ManualInstallTarget, tag: &str) -> Result<(), String> {
+    use_version_in(Some(&target.id), Some(target), tag).map(|_| ())
+}
+
+fn use_version_in(
+    id: Option<&str>,
+    target: Option<&ManualInstallTarget>,
+    tag: &str,
+) -> Result<bool, String> {
+    let data = backend::data_dir();
+    let _lock = lock_store(&data)?;
+    let settings = backend::Settings::load_checked()?;
+    let mut store = Store::load(&data)?;
+    let game_home = backend::game_home();
+    let all = list_with_store(
+        &game_home,
+        own_folders(&game_home)?.unwrap_or_default(),
+        &store,
+    );
+    let instance = match id {
+        Some(id) => all.iter().find(|i| i.id == id),
+        None => Some(selected_in(&all, &settings)),
+    };
+    let Some(instance) = instance else {
+        return Ok(false);
+    };
+    if instance.java.is_some() {
+        return Ok(true);
+    }
+    if let Some(target) = target.filter(|_| instance.id != DEFAULT) {
+        let file = instance.work.join(IDENTITY);
+        if target.identity.is_none()
+            || read_identity(&file).map_err(|e| format!("{}: {e}", file.display()))?
+                != target.identity
+        {
+            return Ok(false);
+        }
+    }
+    let installed = backend::installed_checked()?;
+    if !installed.iter().any(|installed| installed == tag) {
+        return Err(backend::version_gone(tag));
+    }
+    let latest = nightly::latest_for(instance.channel, &installed, settings.selected.as_deref());
+    let pin = (latest.as_deref() != Some(tag)).then(|| tag.to_owned());
+    if instance.version != pin {
+        store
+            .instances
+            .entry(instance.id.clone())
+            .or_default()
+            .version = pin;
+        store.save(&data)?;
+    }
+    Ok(true)
+}
+
+/// Instances' pins and resolved builds that must survive cleanup. A failed read must veto removal.
+fn used_versions(
+    installed: &[String],
+    settings: &backend::Settings,
+) -> Result<impl Iterator<Item = (String, String)>, String> {
+    let game_home = backend::game_home();
+    let store = Store::load(&backend::data_dir())?;
+    let all = list_checked_with_store(&game_home, &store)?;
+    let mut used = Vec::new();
+    for instance in all {
+        if let Some(tag) = instance
+            .version
+            .clone()
+            .or_else(|| instance.installed_version(installed, settings.selected.as_deref()))
+        {
+            used.push((tag, instance.name));
+        }
+    }
+    // Keep saved pins if a removed pack's folder is put back later.
+    used.extend(
+        store
+            .instances
+            .into_iter()
+            .filter(|(id, _)| id.contains(':'))
+            .filter_map(|(id, meta)| Some((meta.version?, meta.name.unwrap_or(id)))),
+    );
+    // A launcher's old selection can still be the only record of which build a world used.
+    if !settings.instance_versions_migrated {
+        if let Some(tag) = &settings.selected {
+            used.push((tag.clone(), crate::i18n::tr("Horizon").into()));
+        }
+    }
+    Ok(used.into_iter())
+}
+
+pub(crate) fn protected_versions(
+    installed: &[String],
+    settings: &backend::Settings,
+) -> Result<Vec<String>, String> {
+    Ok(used_versions(installed, settings)?
+        .map(|(tag, _)| tag)
+        .collect())
+}
+
+pub(crate) fn version_user(installed: &[String], tag: &str) -> Result<Option<String>, String> {
+    let settings = backend::Settings::load_checked()?;
+    Ok(used_versions(installed, &settings)?
+        .find(|(used, _)| used == tag)
+        .map(|(_, name)| name))
+}
+
+/// Preserve what old launchers played before Latest became independent of their global pick.
+pub fn absorb_held_selection() -> Result<(), String> {
+    if backend::Settings::load_checked()?.instance_versions_migrated {
+        return Ok(());
+    }
+    let data = backend::data_dir();
+    let _lock = lock_store(&data)?;
+    let mut settings = backend::Settings::load_checked()?;
+    if settings.instance_versions_migrated {
+        return Ok(());
+    }
+    let installed = backend::installed_checked()?;
+    settings.adopt_legacy_selection(&installed);
+    absorb_held_selection_in(&backend::game_home(), &data, &installed, &mut settings)?;
+    settings.save()
+}
+
+fn absorb_held_selection_in(
+    game_home: &Path,
+    data: &Path,
+    installed: &[String],
+    settings: &mut backend::Settings,
+) -> Result<(), String> {
+    if settings.instance_versions_migrated {
+        return Ok(());
+    }
+    let old_selection = installed
+        .iter()
+        .find(|t| Some(t.as_str()) == settings.selected.as_deref())
+        .or_else(|| installed.first());
+    let newest = nightly::latest_for(Channel::Nightly, installed, None);
+    let mut store = Store::load(data)?;
+    let instances = list_checked_with_store(game_home, &store)?;
+    let mut changed = false;
+    for instance in instances.into_iter().filter(Instance::follows_horizon) {
+        let old = match instance.channel {
+            Channel::Stable => {
+                nightly::legacy_stable_latest(installed, old_selection.map(String::as_str))
+            }
+            Channel::Nightly => None,
+        }
+        .or_else(|| old_selection.cloned());
+        let latest = nightly::latest_for(instance.channel, installed, newest.as_deref());
+        if old != latest {
+            store.instances.entry(instance.id).or_default().version = old;
+            changed = true;
+        }
+    }
+    if changed {
+        store.save(data)?;
+    }
+    settings.selected = newest.clone();
+    settings.following = newest;
+    settings.instance_versions_migrated = true;
+    Ok(())
 }
 
 pub fn select(query: &str) -> Result<Instance, String> {
@@ -545,6 +962,7 @@ pub(crate) fn game_caches(game_home: &Path) -> Vec<PathBuf> {
 /// caches, data collection's state, and sign-in sessions (a session never leaves its folder).
 const NOT_COPIED: &[&str] = &[
     OWN,
+    IDENTITY,
     "ports",
     "horizon-packs",
     "logs",
@@ -570,6 +988,31 @@ pub fn create(name: &str, from: Option<&str>) -> Result<Instance, String> {
         name,
         from.as_ref(),
         None,
+    )
+}
+
+/// Creates a Horizon instance with its pin. The version is checked under the same lock as
+/// deletion, before any files are copied or the instance is published.
+pub fn create_with_installation(
+    name: &str,
+    from: Option<&str>,
+    pin: Option<String>,
+    channel: Channel,
+    downloading: Option<&str>,
+) -> Result<Instance, String> {
+    let from = from.map(find).transpose()?;
+    create_checked_in(
+        &backend::game_home(),
+        &backend::data_dir(),
+        name,
+        from.as_ref(),
+        None,
+        |meta| {
+            validate_new_pin(pin.as_deref(), downloading)?;
+            meta.version = pin;
+            meta.channel = Some(channel);
+            Ok(())
+        },
     )
 }
 
@@ -605,11 +1048,28 @@ fn create_in(
     from: Option<&Instance>,
     minecraft: Option<&str>,
 ) -> Result<Instance, String> {
+    create_checked_in(game_home, data, name, from, minecraft, |_| Ok(()))
+}
+
+fn create_checked_in(
+    game_home: &Path,
+    data: &Path,
+    name: &str,
+    from: Option<&Instance>,
+    minecraft: Option<&str>,
+    change: impl FnOnce(&mut Meta) -> Result<(), String>,
+) -> Result<Instance, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("An instance needs a name.".into());
     }
-    let all = list_in(game_home, data);
+    let _lock = lock_store(data)?;
+    let mut store = Store::load(data)?;
+    let own = own_folders(game_home)?;
+    if let Some(own) = &own {
+        store.forget_missing(own);
+    }
+    let all = list_with_store(game_home, own.unwrap_or_default(), &store);
     if all.iter().any(|i| i.name.eq_ignore_ascii_case(name)) {
         return Err(name_taken(name));
     }
@@ -631,6 +1091,17 @@ fn create_in(
         })
         .find(|s| !taken(s))
         .unwrap();
+    let meta = store.instances.entry(slug.clone()).or_default();
+    meta.name = (name != slug).then(|| name.to_string());
+    meta.icon = from.and_then(|f| f.icon.clone());
+    meta.group = from.and_then(|f| f.group.clone());
+    meta.java = from.and_then(|f| f.java.clone()).or_else(|| {
+        minecraft.map(|v| JavaGame {
+            minecraft: v.to_string(),
+            ..JavaGame::default()
+        })
+    });
+    change(meta)?;
     let dir = game_home.join(OWN).join(&slug);
     let made = match from {
         Some(from) => copy_home(&from.home, &dir),
@@ -650,19 +1121,15 @@ fn create_in(
         return Err(format!("Could not make {}: {e}", dir.display()));
     }
     crate::run_leases::publish(&dir).map_err(crate::native_mods::cache_error)?;
-    let mut store = Store::load(data);
-    let meta = store.instances.entry(slug.clone()).or_default();
-    meta.name = (name != slug).then(|| name.to_string());
-    meta.icon = from.and_then(|f| f.icon.clone());
-    meta.group = from.and_then(|f| f.group.clone());
-    meta.java = from.and_then(|f| f.java.clone()).or_else(|| {
-        minecraft.map(|v| JavaGame {
-            minecraft: v.to_string(),
-            ..JavaGame::default()
-        })
-    });
     store.save(data)?;
-    find_in(&list_in(game_home, data), &slug)
+    find_in(
+        &list_with_store(
+            game_home,
+            own_folders(game_home)?.unwrap_or_default(),
+            &store,
+        ),
+        &slug,
+    )
 }
 
 fn copy_home(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -708,11 +1175,64 @@ fn edit_in(
     query: &str,
     change: impl FnOnce(&mut Meta),
 ) -> Result<Instance, String> {
-    let all = list_in(game_home, data);
+    edit_checked_in(game_home, data, query, |meta| {
+        change(meta);
+        Ok(())
+    })
+}
+
+/// Sets a CLI instance pin, validating the requested install under the same lock as deletion.
+pub fn pin_installed_version(query: &str, pin: Option<&str>) -> Result<Instance, String> {
+    edit_checked_in(&backend::game_home(), &backend::data_dir(), query, |meta| {
+        meta.version = pin
+            .map(|tag| backend::resolve_version(Some(tag)))
+            .transpose()?;
+        Ok(())
+    })
+}
+
+/// Applies a dialog's edits and verifies a new pin before committing them. An absent build can
+/// be pinned only when the dialog has a download ready for it.
+pub fn edit_installation(
+    query: &str,
+    downloading: Option<&str>,
+    change: impl FnOnce(&mut Meta),
+) -> Result<Instance, String> {
+    edit_checked_in(&backend::game_home(), &backend::data_dir(), query, |meta| {
+        let before = meta.version.clone();
+        change(meta);
+        if meta.version != before {
+            validate_new_pin(meta.version.as_deref(), downloading)?;
+        }
+        Ok(())
+    })
+}
+
+fn validate_new_pin(pin: Option<&str>, downloading: Option<&str>) -> Result<(), String> {
+    if let Some(tag) = pin.filter(|tag| Some(*tag) != downloading) {
+        if !backend::installed_checked()?
+            .iter()
+            .any(|installed| installed == tag)
+        {
+            return Err(backend::version_gone(tag));
+        }
+    }
+    Ok(())
+}
+
+fn edit_checked_in(
+    game_home: &Path,
+    data: &Path,
+    query: &str,
+    change: impl FnOnce(&mut Meta) -> Result<(), String>,
+) -> Result<Instance, String> {
+    let _lock = lock_store(data)?;
+    let mut store = Store::load(data)?;
+    let own = own_folders(game_home)?.unwrap_or_default();
+    let all = list_with_store(game_home, own.clone(), &store);
     let instance = find_in(&all, query)?;
-    let mut store = Store::load(data);
     let meta = store.instances.entry(instance.id.clone()).or_default();
-    change(meta);
+    change(meta)?;
     meta.name = meta.name.take().map(|n| n.trim().to_string());
     meta.group = meta
         .group
@@ -735,7 +1255,7 @@ fn edit_in(
         }
     }
     store.save(data)?;
-    find_in(&list_in(game_home, data), &instance.id)
+    find_in(&list_with_store(game_home, own, &store), &instance.id)
 }
 
 /// Adds a finished run of the game to the instance's play time (by id: a renamed instance keeps
@@ -750,7 +1270,8 @@ fn record_play_in(
     played: Duration,
     ended: SystemTime,
 ) -> Result<(), String> {
-    let mut store = Store::load(data);
+    let _lock = lock_store(data)?;
+    let mut store = Store::load(data)?;
     let meta = store.instances.entry(id.to_string()).or_default();
     meta.played_secs = meta.played_secs.saturating_add(played.as_secs());
     meta.last_played = ended.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs());
