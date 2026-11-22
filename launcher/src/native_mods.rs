@@ -18,9 +18,7 @@ use horizon_platform::mod_package::mod_surface;
 
 mod api;
 mod api_route;
-mod inject;
 mod planning;
-mod slots;
 pub use planning::{routes, update_check, UpdateCheck};
 mod crates;
 mod diagnostics;
@@ -551,7 +549,8 @@ fn installed_files(home: &Path) -> Vec<PathBuf> {
 }
 
 /// [`installed_mods`] into `out`, which it empties first. A `.hmod` in the format from before the
-/// SDK is left out, untouched: no build can take it, and it must not stop the others.
+/// SDK is left out, untouched: no build can take it, and it must not stop the others. So is one
+/// turned off that declares the removed `[[inject]]`; one turned on stops the build, by name.
 pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBuf>, String> {
     let _ = fs::remove_dir_all(&out);
     let mut count = 0;
@@ -559,7 +558,16 @@ pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBu
         let bundle = match horizon_platform::mod_package::index::native::Bundle::read(&path) {
             Ok(bundle) => bundle,
             Err(_) if crate::native_status::legacy_format(&path) => continue,
-            Err(e) => return Err(format!("{}: {e}", path.display())),
+            Err(e) => match crate::native_status::retired_inject(&path) {
+                Some(id) if !crate::browser::java::is_enabled(home, &id) => continue,
+                Some(id) => {
+                    return Err(crate::i18n::trf(
+                        "{id} ({file}) uses [[inject]], which was removed: turn it off, or install a version that listens through a typed hook.",
+                        &[("id", &id), ("file", &path.display().to_string())],
+                    ));
+                }
+                None => return Err(format!("{}: {e}", path.display())),
+            },
         };
         if !crate::browser::java::is_enabled(home, &bundle.manifest.id) {
             continue;
@@ -569,15 +577,6 @@ pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBu
             let to = dir.join(name);
             fs::create_dir_all(to.parent().unwrap_or(&dir)).map_err(|e| e.to_string())?;
             fs::write(&to, bytes).map_err(|e| format!("{}: {e}", to.display()))?;
-        }
-        count += 1;
-    }
-    for bundle in crate::native_status::wasm_points(home) {
-        let dir = out.join(&bundle.manifest.id);
-        for (name, bytes) in &bundle.files {
-            let to = dir.join(name);
-            fs::create_dir_all(to.parent().unwrap_or(&dir)).map_err(|e| e.to_string())?;
-            fs::write(&to, bytes).map_err(|e| e.to_string())?;
         }
         count += 1;
     }
@@ -1881,35 +1880,16 @@ fn judge_all(
     projects: &[api::Project<'_>],
     sdk: &sdk_cache::Sdk,
     base: &sdk_cache::Base,
-    stop: &dyn Fn() -> Result<(), String>,
 ) -> Result<Vec<(String, fit::Verdict)>, sdk_cache::Refusal> {
     let mut surface: Option<std::rc::Rc<mod_surface::Surface>> = None;
-    let mut catalog: Option<std::rc::Rc<internals::Catalog>> = None;
     let mut verdicts = Vec::new();
     for project in projects {
-        let verdict = fit::judge(
-            project,
-            sdk.commit(),
-            &mut || {
-                if surface.is_none() {
-                    surface = Some(std::rc::Rc::new(sdk_cache::surface(sdk, base)?));
-                }
-                Ok(surface.clone().expect("read above"))
-            },
-            &mut || {
-                if catalog.is_none() {
-                    let dir = sdk_cache::build_data(sdk, base, stop)?;
-                    let read = internals::Catalog::read(&dir).map_err(|why| {
-                        sdk_cache::Refusal::Refused {
-                            build: sdk.shown(),
-                            why,
-                        }
-                    })?;
-                    catalog = Some(std::rc::Rc::new(read));
-                }
-                Ok(catalog.clone().expect("read above"))
-            },
-        )?;
+        let verdict = fit::judge(project, sdk.commit(), &mut || {
+            if surface.is_none() {
+                surface = Some(std::rc::Rc::new(sdk_cache::surface(sdk, base)?));
+            }
+            Ok(surface.clone().expect("read above"))
+        })?;
         verdicts.push((project.bundle.manifest.id.clone(), verdict));
     }
     Ok(verdicts)
@@ -2190,8 +2170,7 @@ fn pipeline(
     let mut fitted: Vec<String> = Vec::new();
     if let Some(sdk) = &sdk {
         progress(Step::Checking(projects.len()));
-        let verdicts =
-            judge_all(&projects, sdk, &sdk_base, &check_cancelled).map_err(|r| r.to_string())?;
+        let verdicts = judge_all(&projects, sdk, &sdk_base).map_err(|r| r.to_string())?;
         let mut unusable = Vec::new();
         for (id, verdict) in verdicts {
             match verdict {
@@ -2713,7 +2692,7 @@ pub fn build_then<R>(
         let folder = stage()?;
         let folder = folder.as_path();
         let profile = select_build_profile(instance.native_profile, profile, || {
-            planning::classify_until(folder, Some(base), &check_cancelled)
+            planning::classify(folder, Some(base))
                 .map_err(|error| Failed::Other(error.said(caller)))
         })?;
         let built = isolated(
@@ -2827,7 +2806,7 @@ pub fn build_server(
         }
         let lease = cache.map_err(str::to_owned)?;
         let profile = select_build_profile(Profile::default(), profile, || {
-            planning::classify_until(folder, Some(base), &check_cancelled)
+            planning::classify(folder, Some(base))
         })?;
         let built = pipeline(
             lease,
@@ -3834,6 +3813,66 @@ mod tests {
         let bytes = zip.finish().unwrap().into_inner();
         fs::write(path, &bytes).unwrap();
         bytes
+    }
+
+    /// `id`'s project from `d` as a flat `.hmod` in `home`'s native folder, its manifest followed by
+    /// `extra`.
+    fn install_hmod(d: &Path, home: &Path, id: &str, extra: &str) {
+        let mut zip = zip::ZipWriter::new(
+            fs::File::create(home.join(INSTALLED).join(format!("{id}.hmod"))).unwrap(),
+        );
+        for file in [NATIVE_MANIFEST, "Cargo.toml", "src/lib.rs"] {
+            zip.start_file(file, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&fs::read(d.join(file)).unwrap()).unwrap();
+            if file == NATIVE_MANIFEST {
+                zip.write_all(extra.as_bytes()).unwrap();
+            }
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn a_mod_with_the_removed_inject_stops_the_build_only_when_on() {
+        let _guard = scratch_state();
+        let (veinminer, listener) = (dir("inject-src-a"), dir("inject-src-b"));
+        write_native(&veinminer, "veinminer", A, B);
+        write_native(&listener, "listener", A, B);
+        let home = dir("inject-home");
+        fs::create_dir_all(home.join(INSTALLED)).unwrap();
+        install_hmod(&veinminer, &home, "veinminer", "");
+        install_hmod(
+            &listener,
+            &home,
+            "listener",
+            "[[inject]]\nid='tick'\nat='game::tick'\nkind='head'\nwith='tick'\n",
+        );
+        crate::browser::java::set_enabled(&home, "veinminer", true).unwrap();
+        crate::browser::java::set_enabled(&home, "listener", false).unwrap();
+        let ids: Vec<_> = bundles(&installed_mods(&home).unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|b| b.manifest.id)
+            .collect();
+        assert_eq!(ids, ["veinminer"]);
+        let on = |home: &Path| -> Vec<String> {
+            crate::native_status::enabled(home)
+                .into_iter()
+                .map(|m| m.0)
+                .collect()
+        };
+        assert_eq!(on(&home), ["veinminer"]);
+
+        crate::browser::java::set_enabled(&home, "listener", true).unwrap();
+        let error = installed_mods(&home).unwrap_err();
+        assert!(
+            error.starts_with("listener (") && error.contains("[[inject]]"),
+            "{error}"
+        );
+        assert_eq!(on(&home), ["listener", "veinminer"]);
+        for d in [veinminer, listener, home] {
+            let _ = fs::remove_dir_all(d);
+        }
     }
 
     #[test]

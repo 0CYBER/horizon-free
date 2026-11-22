@@ -24,8 +24,7 @@ your mod's crate, which is compiled first. So they can call your crate, but your
 bridge. A bridge's method is a trait implemented for the type, imported into the module of every copied
 game-crate function.
 
-Rows of several mods on one function go into one copy, ordered by the tool (by `priority` at one place). An `[[inject]]` listener on the
-same function shares its replacement cell: head listeners run first, then the copy, then return listeners.
+Rows of several mods on one function go into one copy, ordered by the tool (by `priority` at one place).
 
 ## horizon-mixins
 

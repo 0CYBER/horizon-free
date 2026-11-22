@@ -2,11 +2,7 @@
 
 Implement catalog hooks as methods of `mod_api::Hooks`.
 
-For function-slot listeners, declare `[[inject]]` with `id`, a target in `at`,
-`kind` (`"head"`, `"return"` or `"replace"`), and a crate-root listener in `with`.
-The optional `hash` pins the function fingerprint; when you omit it, the build
-uses the pinned game's catalog. The schema rejects `hook` and `hook_version`.
-See [Injections](../../concepts/injections.md).
+The manifest schema rejects `hook` and `hook_version`.
 
 Native rendering callbacks such as `horizon_mod_render::render::world_drawn`,
 `hand_drawn` and `world_views` use a HEAD mixin. The launcher compiles the patched

@@ -34,8 +34,7 @@ nightly-2026-11-20 (9a8b7c6)  does not fit: 2 items changed
 Before it repins, `update` lists every item the mod uses that changed between the two builds, the source line that
 uses it, for a removed item the closest one in the new build (one with the same counterpart name first, then the
 nearest id and doc text), and the change note's `migrate` line when the change has one. A mod made for exactly one
-build is only named; its internals and `[[inject]]` declarations are checked as the pin moves, and a change to an
-injection's point refuses the update until `--accept <inject id>` takes it.
+build is only named; its internals declarations are checked as the pin moves.
 
 The same checks without the tool, from a build's `surface.json` and a mod folder, are `horizon-stage uses` and
 `horizon-stage fits` ([Checking a mod against a build](../../how-to/native-mods/14-checking-a-mod-against-a-build.md)).

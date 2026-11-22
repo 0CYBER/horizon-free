@@ -1,7 +1,7 @@
 //! The native mod: the launcher compiles this crate against the pinned game and calls `hooks()`.
 //! Each method of `Hooks` is one moment in the game; implement the ones the mod needs
 //! (docs/modding/src/start/writing-hooks.md). Need a moment no hook covers? See
-//! docs/modding/src/concepts/injections.md.
+//! docs/modding/src/concepts/native-route.md.
 use mod_api::{self, Hooks, PlayerLoggedInEvent, ServerHost, Text};
 
 #[derive(Default)]

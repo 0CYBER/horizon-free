@@ -10,7 +10,6 @@ horizon-mod-wasm generated_mixed_outputs_cross_real_guest_boundary by-hand manua
 horizon-mod-wasm module_cache::tests::measure_child_compile by-hand manual # local child measurement; set HORIZON_CACHE_BENCH_WASM
 horizon-mod-wasm module_cache::tests::measure_compile_and_cached_load by-hand manual # local timing measurement; set HORIZON_CACHE_BENCH_WASM
 horizon-mod-wasm module_cache::tests::measure_serialized_sizes by-hand manual # local size measurement; set HORIZON_CACHE_SIZE_MODULES
-horizon-mod-wasm real_guest_point_is_refused_without_staging by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
 horizon-mod-wasm real_member by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
 horizon-mod-wasm real_member_self_refusal by-hand manual # needs locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD
 horizon-mod-wasm real_wasm_command_listener_receives_ordered_selector_handles by-hand manual # requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree

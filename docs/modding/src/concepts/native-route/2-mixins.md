@@ -3,8 +3,8 @@
 A mixin changes one game function. You name the function and the place in it (its start, its return value,
 one call inside it, or its whole body), and write your code there as a small Rust function, the **helper**.
 
-Use a mixin when you need private fields, a change in the middle of a function, or a new body. To run code at
-the start or end of a function with `mod_api` values, an [`[[inject]]` listener](../injections.md) is enough.
+Use a mixin when no hook fits: you need private fields, code at the start or end of a game function, a change in
+the middle of it, or a new body.
 
 ## Example
 
@@ -139,8 +139,7 @@ The one generic function you can target is a [published loop's body](3-loops.md#
 ## With other mods
 
 Several mods' rows on one function all apply. An `OVERWRITE` must be the only mixin on its function,
-from any mod including its own. An `[[inject]]` listener may share a function with mixins: head listeners run first, then the
-mixed-in function, then return listeners.
+from any mod including its own.
 
 ## Errors
 

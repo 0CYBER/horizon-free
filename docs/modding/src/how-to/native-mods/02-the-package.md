@@ -11,7 +11,6 @@ my_mod/
   Cargo.toml             # one crate; Cargo metadata is not mod identity
   Cargo.lock             # registry dependency pins, when needed
   src/lib.rs             # impl Hooks
-  src/frame.rs           # optional injection callback module
 ```
 
 A native source package requires both `Cargo.toml` and `[native]`; inconsistent declarations
@@ -37,4 +36,4 @@ Unknown fields are refused. `icon.png` has no manifest key: when present it must
 nonzero square PNG, at most 512 × 512 pixels and 256 KiB encoded. It is optional for both content
 and code mods; the scaffold does not create one.
 
-Injections belong in the same manifest as top-level `[[inject]]` tables. Changing game code itself is `[[native.mixin]]` ([Mixins](../../concepts/native-route/2-mixins.md)). See [Injections](../../concepts/injections.md) for the available forms and fields.
+Changing game code itself is `[[native.mixin]]` ([Mixins](../../concepts/native-route/2-mixins.md)).

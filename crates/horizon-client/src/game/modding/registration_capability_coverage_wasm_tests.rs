@@ -21,8 +21,7 @@ fn run() {
     crate::entry::runtime_environment::capture(&launch);
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let path = std::path::PathBuf::from(std::env::var_os("HORIZON_WASM_FIXTURE").unwrap());
-    let mut manifest = Package::read(&path).unwrap().manifest;
-    manifest.inject.clear();
+    let manifest = Package::read(&path).unwrap().manifest;
     let inventory = [
         PackageInfo::new(
             manifest.id.clone(),

@@ -858,8 +858,7 @@ mod tests {
                 use horizon_mod_package::manifest::Package;
                 use horizon_mod_wasm::{WasmPackage, load};
                 let package_path = PathBuf::from(std::env::var_os("HORIZON_WASM_FIXTURE").unwrap());
-                let mut manifest = Package::read(&package_path).unwrap().manifest;
-                manifest.inject.clear();
+                let manifest = Package::read(&package_path).unwrap().manifest;
                 let info = mod_api::PackageInfo::new(
                     manifest.id.clone(),
                     manifest.version.clone(),

@@ -778,7 +778,6 @@ pub(super) fn compile(
             &library_entry(
                 &api::template(&game.join(super::api_route::TEMPLATE))?,
                 &[&project.bundle.manifest],
-                &catalog,
                 sdk.commit(),
                 id,
                 &project.bundle.manifest.version.to_string(),
@@ -810,7 +809,6 @@ pub(super) fn compile(
         let mut entry = library_entry(
             &template,
             &[],
-            &catalog,
             sdk.commit(),
             "horizon_patch",
             "0",
@@ -875,13 +873,12 @@ pub(super) fn dylib_name(krate: &str) -> String {
 pub(super) fn library_entry(
     template: &str,
     mods: &[&horizon_platform::mod_package::Manifest],
-    catalog: &internals::Catalog,
     build: &str,
     id: &str,
     version: &str,
     installs: &[String],
 ) -> String {
-    api::main_rs(template, mods, catalog)
+    api::main_rs(template, mods)
         .replace("mod_0::", "crate::")
         .replace(
             "/* NATIVE_BUILD */",

@@ -8,10 +8,3 @@ capabilities = ["registries"]
 
 [dependencies]
 wasm_test_library = "0.1.0"
-
-[[inject]]
-id = "tick"
-at = "horizon_client::game::Game<'_>::tick"
-kind = "head"
-with = "on_tick"
-hash = "fixture"

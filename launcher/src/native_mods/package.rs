@@ -14,9 +14,7 @@ pub(super) fn read(dir: &Path) -> Result<Option<Bundle>, String> {
         return Ok(None);
     }
     let package = Package::read(dir)?;
-    if package.manifest.native.is_none()
-        && (package.manifest.wasm.is_none() || package.manifest.inject.is_empty())
-    {
+    if package.manifest.native.is_none() {
         return Ok(None);
     }
     if let Some(state) = package

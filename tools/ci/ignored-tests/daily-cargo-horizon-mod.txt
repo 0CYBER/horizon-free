@@ -6,7 +6,6 @@ cargo-horizon-mod bounded_manifest_commands test:bounded_reads daily child-proce
 cargo-horizon-mod bounded_special_manifests test:bounded_reads daily child-process
 cargo-horizon-mod compiler_wrapper_preserves_diagnostics_exit_code_and_signal test:wasm_rustc_status daily child-process
 cargo-horizon-mod git_project_build_checks_only_the_files_it_packages test:content_project daily child-process
-cargo-horizon-mod inject_add_head_uses_launcher_module_catalog_hash test:module_discovery daily child-process
 cargo-horizon-mod internals_add_refuses_missing_gated_and_shape_only_paths_without_partial_edits test:internals daily child-process
 cargo-horizon-mod internals_add_requires_kind_for_ambiguous_paths_and_update_keeps_it test:internals daily child-process
 cargo-horizon-mod internals_add_uses_launcher_module_catalog_hash test:module_discovery daily child-process

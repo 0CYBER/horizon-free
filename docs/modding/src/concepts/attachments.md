@@ -76,10 +76,6 @@ can make the next live mutation copy row metadata and shared pointers once;
 retaining many batches keeps their old bindings alive. Values from an incompatible Rust type domain report `TypeMismatch` rather than
 falling back to saved decoding.
 
-
-
-For injection listeners, see [The typed API from injection listeners](injections/typed-api.md).
-
 ## Holders and persistence
 
 Use `Holder::Level`, `Holder::Chunk([x, z])`, `Holder::BlockEntity([x, y, z])`,

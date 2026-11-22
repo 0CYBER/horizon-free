@@ -609,7 +609,7 @@ impl Launcher {
                         Some(Err(tr("Wait for the current operation to finish.").into()));
                     return;
                 };
-                github_mods::remove(&home, &n.id).map(|_| ())
+                github_mods::remove_installed(&home, n)
             }
             (None, Some(e)) => {
                 // `mods_remove` says what it did itself.

@@ -10,8 +10,6 @@ struct Member {
     /// The library's crate root, relative to the package.
     lib: PathBuf,
     package: String,
-    registrations: String,
-    points: String,
 }
 
 /// The wrapper config a member was last built with, beside it in the stage ([`track_wrapper`]).
@@ -163,9 +161,8 @@ fn writable(path: &Path) -> Result<(), String> {
     std::fs::set_permissions(path, permissions).map_err(|e| e.to_string())
 }
 
-/// Cargo doesn't see what the wrapper hands a member's rustc (its registrations, points, and the
-/// id and version in its metadata): an edit of only an `[[inject]]` priority changes none of the
-/// member's sources. The member's config is recorded beside it, and a changed one gives the crate
+/// Cargo doesn't see what the wrapper hands a member's rustc (the id and version in its
+/// metadata): an edit of only the manifest's version changes none of the member's sources. The member's config is recorded beside it, and a changed one gives the crate
 /// root a fresh time, so cargo rebuilds the member.
 fn track_wrapper(stage: &Path, crate_root: &Path, config: &Value) -> Result<(), String> {
     let record = serde_json::to_vec(config).map_err(|e| e.to_string())?;
@@ -194,8 +191,6 @@ fn wrapper_config(member: &Member, crates: &[String]) -> Value {
         "id": member.manifest["id"].as_str(),
         "version": member.manifest["version"].as_str(),
         "stage": member.stage,
-        "registrations": member.registrations,
-        "points": member.points,
         "provided": crates
             .iter()
             .filter(|c| **c != member.krate)
@@ -354,11 +349,7 @@ fn mod_dependencies(
     }
 }
 
-pub(super) fn build(
-    root: &Path,
-    catalog: Option<&Path>,
-    additional: &[PathBuf],
-) -> Result<(), String> {
+pub(super) fn build(root: &Path, additional: &[PathBuf]) -> Result<(), String> {
     let root = dunce::canonicalize(root).map_err(|e| e.to_string())?;
     let toolchain = toolchain()?;
     let target = root.join("target/horizon-mod");
@@ -414,8 +405,6 @@ pub(super) fn build(
             lib: lib_src_path(package)?,
             package: package["name"].as_str().ok_or("no package name")?.into(),
             manifest,
-            registrations: String::new(),
-            points: String::new(),
         });
     }
     let mut needed = std::collections::BTreeSet::new();
@@ -492,17 +481,14 @@ pub(super) fn build(
             || name == "Cargo.lock"
             || members.iter().any(|m| m.stage.file_name() == Some(name))
     })?;
-    for member in &mut members {
+    for member in &members {
         let mut manifest = member.manifest.clone();
         manifest["wasm"]["sha512"] = toml_edit::value("0".repeat(128));
         manifest["wasm"]["toolchain"] = toml_edit::value("pending");
-        let (registrations, points) = super::registrations(&manifest, catalog)?;
-        member.registrations = registrations;
-        member.points = points;
+        super::validate(&manifest)?;
     }
     let mut configs = serde_json::Map::new();
     let mut features = Vec::new();
-    let mut point_names = std::collections::BTreeSet::<String>::new();
     for member in &members {
         copy(&member.root, &member.stage, &["Cargo.toml", WRAPPER_RECORD])?;
         let path = member.stage.join("Cargo.toml");
@@ -605,9 +591,6 @@ pub(super) fn build(
         cargo["lib"]["crate-type"] =
             toml_edit::value(["rlib", "cdylib"].into_iter().collect::<toml_edit::Array>());
         write_changed(&path, cargo.to_string().as_bytes())?;
-        point_names.extend(
-            serde_json::from_str::<Vec<String>>(&member.points).map_err(|e| e.to_string())?,
-        );
         let config = wrapper_config(member, &crates);
         track_wrapper(&member.stage, &member.stage.join(&member.lib), &config)?;
         configs.insert(member.package.clone(), config);
@@ -678,10 +661,6 @@ pub(super) fn build(
     workspace["workspace"]["resolver"] = toml_edit::value("3");
     write_changed(&stage.join("Cargo.toml"), workspace.to_string().as_bytes())?;
     let mut command = cargo_command("build", "member", &stage, &target, &toolchain)?;
-    command.env(
-        "HORIZON_POINT_NAMES",
-        serde_json::to_string(&point_names).map_err(|e| e.to_string())?,
-    );
     command.arg("--workspace").env(
         "HORIZON_GROUP_WRAPPER",
         serde_json::to_string(&configs).map_err(|e| e.to_string())?,
@@ -807,25 +786,12 @@ pub fn rustc(mut args: Vec<String>) -> Result<(), String> {
         std_identity(&mut args, &package, &version);
     }
     let mut command = Command::new(compiler);
-    command
-        .env_remove("HORIZON_GUEST_REGISTRATIONS")
-        .env_remove("HORIZON_POINT_NAMES")
-        .env_remove(PROVIDED_ENV);
+    command.env_remove(PROVIDED_ENV);
     if config.is_object() && args.iter().any(|a| a == "cdylib") {
-        command
-            .env("HORIZON_GROUP_PACKAGE", &package)
-            .env(
-                "HORIZON_GUEST_REGISTRATIONS",
-                config["registrations"].as_str().ok_or("no registrations")?,
-            )
-            .env(
-                "HORIZON_POINT_NAMES",
-                config["points"].as_str().ok_or("no points")?,
-            )
-            .env(
-                PROVIDED_ENV,
-                config["provided"].as_str().ok_or("no provided crates")?,
-            );
+        command.env("HORIZON_GROUP_PACKAGE", &package).env(
+            PROVIDED_ENV,
+            config["provided"].as_str().ok_or("no provided crates")?,
+        );
         // Cargo's default disambiguator includes the staging package path. A mod's stable
         // identity must instead agree when its author and its dependents build separately.
         strip_metadata(&mut args);
@@ -849,10 +815,6 @@ pub fn rustc(mut args: Vec<String>) -> Result<(), String> {
         // The group rejects symbol overrides: export this unit without making its own
         // vtables and statics preemptible through self-imported GOT entries.
         args.push("-Zdefault-visibility=protected".into());
-        args.push(format!(
-            "--cfg=horizon_guest_registration=\"{}\"",
-            sha512_of(format!("{}{}", config["registrations"], config["points"]).as_bytes())
-        ));
     }
     let status = command.args(args).status().map_err(|e| e.to_string())?;
     if status.success() {
@@ -1113,7 +1075,7 @@ mod tests {
         );
     }
 
-    /// An `[[inject]]` priority edit changes only the registrations the wrapper hands rustc.
+    /// A version edit changes only the metadata the wrapper hands rustc.
     #[test]
     fn a_changed_wrapper_config_rebuilds_the_member() {
         let dir = tempfile::tempdir().unwrap();
@@ -1127,8 +1089,6 @@ mod tests {
             krate: "m".into(),
             lib: "lib.rs".into(),
             package: "mod-m".into(),
-            registrations: "listen(\"m:tick\", 0)".into(),
-            points: "[]".into(),
         };
         let built = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
         let track = |member: &Member| {
@@ -1139,7 +1099,7 @@ mod tests {
         set_time(&crate_root, built);
         track(&member);
         assert_eq!(modified(&crate_root), built);
-        member.registrations = "listen(\"m:tick\", 5)".into();
+        member.manifest["version"] = toml_edit::value("1.0.1");
         track(&member);
         assert!(modified(&crate_root) > built);
     }

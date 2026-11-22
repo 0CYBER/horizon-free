@@ -41,17 +41,12 @@ pub(super) fn template(path: &Path) -> Result<String, String> {
         .ok_or_else(|| crate::i18n::tr("This game source has no native inventory entry template. Update Horizon and rebuild the mods against this game.").to_string())
 }
 
-pub(super) fn main_rs(
-    template: &str,
-    mods: &[&horizon_platform::mod_package::Manifest],
-    catalog: &internals::Catalog,
-) -> String {
+pub(super) fn main_rs(template: &str, mods: &[&horizon_platform::mod_package::Manifest]) -> String {
     // Own the bytes even when the staged SDK template references a static in a dylib.
     let template = template.replace(
         "std::hint::black_box(&horizon_mod_package::holder::CAPABILITY);",
         "#[used] static HOLDER_CAPABILITY: [u8; horizon_mod_package::holder::CAPABILITY.len()] = horizon_mod_package::holder::CAPABILITY; std::hint::black_box(&HOLDER_CAPABILITY);",
     );
-    let listed = &catalog.points;
     let entries = mods
         .iter()
         .enumerate()
@@ -61,22 +56,8 @@ pub(super) fn main_rs(
         "    mod_api::__private::native::BuiltMod {{ id: {:?}, version: {:?}, side: mod_api::Side::{:?} }},\n",
         m.id, m.version, m.side,
     )).collect::<String>();
-    let api_points = listed
-        .iter()
-        .map(super::inject::ListedPoint::emitted)
-        .collect::<Vec<_>>();
-    let raw = mods
-        .iter()
-        .enumerate()
-        .flat_map(|(i, manifest)| {
-            horizon_mod_point_emit::api(manifest, &api_points, &format!("mod_{i}::"))
-                .expect("API slots checked")
-                .into_iter()
-                .map(|expression| format!("        {expression},\n"))
-        })
-        .collect::<String>();
     let markers = [
-        ("/* MOD_SLOTS */", &raw),
+        ("/* MOD_SLOTS */", &String::new()),
         ("/* MOD_ENTRIES */", &entries),
         ("/* BUILT_MODS */", &inventory),
     ];
@@ -596,7 +577,7 @@ pub(super) fn stage(
         .iter()
         .map(|(_, project)| &project.bundle.manifest)
         .collect();
-    let mut main = main_rs(&template, &manifests, catalog);
+    let mut main = main_rs(&template, &manifests);
     if official {
         main = main.replace(
             "fn main() {",
@@ -656,11 +637,7 @@ mod tests {
             .success());
         let template =
             "fn main() { std::hint::black_box(&horizon_mod_package::holder::CAPABILITY); }";
-        fs::write(
-            &source,
-            main_rs(template, &[], &internals::Catalog::default()),
-        )
-        .unwrap();
+        fs::write(&source, main_rs(template, &[])).unwrap();
         assert!(std::process::Command::new("rustc")
             .args(["--edition=2021", "-O", "-Cprefer-dynamic", "--extern"])
             .arg(format!("horizon_mod_package={}", library.display()))
@@ -796,16 +773,13 @@ mod tests {
         extra.side = mod_vocab::Side::Client;
         let mods = [&base, &extra];
         for count in 0..=2 {
-            let text = main_rs(template, &mods[..count], &internals::Catalog::default());
+            let text = main_rs(template, &mods[..count]);
             let padded = ["/* MOD_ENTRIES */", "/* MOD_SLOTS */", "/* BUILT_MODS */"]
                 .into_iter()
                 .fold(template.to_owned(), |text, marker| {
                     text.replace(marker, &format!("    {marker}"))
                 });
-            assert_eq!(
-                main_rs(&padded, &mods[..count], &internals::Catalog::default()),
-                text
-            );
+            assert_eq!(main_rs(&padded, &mods[..count]), text);
             let facts: Vec<_> = text
                 .lines()
                 .filter(|line| line.contains(" => mod_"))

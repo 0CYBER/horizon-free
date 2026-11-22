@@ -19,9 +19,7 @@ fn compiled_guest_strict_math_matches_literal_jdk_vectors() {
         use horizon_mod_wasm::{WasmPackage, load};
         let fixture = std::env::var("HORIZON_WASM_FIXTURE").unwrap();
         let path = std::path::Path::new(&fixture);
-        let mut manifest = Package::read(path).unwrap().manifest;
-        // Only ordinary generated hook transport is needed for this check.
-        manifest.inject.clear();
+        let manifest = Package::read(path).unwrap().manifest;
         let info = mod_api::PackageInfo::new(
             manifest.id.clone(),
             manifest.version.clone(),

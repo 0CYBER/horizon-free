@@ -162,8 +162,7 @@ metadata-check game dependencies; it does not compile or link a game executable.
 check cache is not a native mod build route. `[[native.state]]` is refused with
 `E_MIXIN_STATE_LAYOUT`; use attachments for per-object mod data.
 
-Without support modules, `internals add`, `inject add`, `inject update` and `update` read `internals.json` and
-`points.json` from the build data (`build-data.tar.xz`) of each pin's SDK release, `sdk-<build id>`, fetched and
+Without support modules, `internals add` and `update` read `internals.json` from the build data (`build-data.tar.xz`) of each pin's SDK release, `sdk-<build id>`, fetched and
 checked against its signed `SHA256SUMS` as every SDK is, from `HORIZON_SDK_BASE` when it is set. A build with no
 SDK release is refused by name; there is no other source. No game or mod code is run. With support modules, they run
 `horizon-launcher native-build --catalog` (which needs trusted native code), stage the pinned source with the

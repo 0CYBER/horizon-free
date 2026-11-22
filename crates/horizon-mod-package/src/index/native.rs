@@ -64,6 +64,26 @@ pub fn legacy_format(path: &Path) -> bool {
     })
 }
 
+/// The manifest id of the flat `.hmod` at `path` when its manifest declares the removed `[[inject]]`
+/// ([`crate::manifest::INJECT_REMOVED`]), which no read of the package accepts any more. It lets
+/// the on/off list, keyed by that id, say whether the player still wants it. An id a manifest could
+/// not have ([`crate::manifest::valid_mod_id`]) gives none: it would be written into that list.
+pub fn retired_inject(path: &Path) -> Option<String> {
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(path).ok()?).ok()?;
+    let mut text = String::new();
+    zip.by_name(crate::manifest::MANIFEST)
+        .ok()?
+        .take(crate::manifest::MAX_MANIFEST + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    let table = toml::from_str::<toml::Table>(&text).ok()?;
+    if !table.contains_key("inject") {
+        return None;
+    }
+    let id = table.get("id")?.as_str()?;
+    crate::manifest::valid_mod_id(id).then(|| id.to_owned())
+}
+
 /// A flat native mod and its checked, archive-relative files.
 pub struct Bundle {
     pub manifest: crate::Manifest,
@@ -119,6 +139,28 @@ impl Bundle {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_retired_inject_gives_only_an_id_a_manifest_could_have() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("listener.hmod");
+        for (id, recovered) in [
+            ("'tick_listener'", Some("tick_listener")),
+            ("\"tick\\nmod.other:true\"", None),
+            ("'Tick'", None),
+        ] {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            zip.start_file(
+                crate::manifest::MANIFEST,
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(format!("id = {id}\n[[inject]]\nid = 'tick'\n").as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+            assert_eq!(retired_inject(&path).as_deref(), recovered, "{id}");
+        }
+    }
 
     fn manifest() -> String {
         format!(

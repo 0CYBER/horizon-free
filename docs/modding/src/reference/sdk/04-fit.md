@@ -23,10 +23,9 @@ The launcher asks, for each enabled native mod of an instance, in this order:
    - a hook whose version the manifest names still has that version;
    - a trait member the mod reaches through a trait it calls (a sub-host trait's method called on
      `&mut dyn ServerHost`) is still reached from that trait.
-5. **Do its `[[inject]]` points hold?** Each row's point must be the same in this build's `points.json`.
-6. **Do the mods it needs fit?** A mod whose library mod is left out is left out too: "it needs Corelib, which
+5. **Do the mods it needs fit?** A mod whose library mod is left out is left out too: "it needs Corelib, which
    doesn't fit".
-7. **Does it compile?** The compile against the build is the final check. A mod that fits and fails to compile is
+6. **Does it compile?** The compile against the build is the final check. A mod that fits and fails to compile is
    left out of that build, and the other mods build.
 
 A mod that doesn't fit stays installed and is left out of the build, with the changed items named (at most five; the

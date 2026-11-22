@@ -248,28 +248,12 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
     }
     let export = if export && part.is_none() {
         let ty = &implementation.self_ty;
-        let registrations: proc_macro2::TokenStream =
-            match std::env::var("HORIZON_GUEST_REGISTRATIONS") {
-                Ok(source) => match source.parse::<proc_macro2::TokenStream>() {
-                    Ok(tokens) => tokens,
-                    Err(error) => {
-                        return syn::Error::new_spanned(
-                            &implementation,
-                            format!("guest registrations: {error}"),
-                        )
-                        .to_compile_error()
-                        .into();
-                    }
-                },
-                Err(_) => quote!(),
-            };
         quote! {
             pub fn hooks() -> Box<dyn mod_api::Hooks> { Box::new(<#ty as Default>::default()) }
             /// The mod's hooks for the guest runtime in `mod_api::wire::guest`, when built to wasm.
             #[cfg(target_arch = "wasm32")]
             #[unsafe(no_mangle)]
             fn __horizon_mod_hooks() -> Box<dyn mod_api::Hooks> {
-                #registrations
                 hooks()
             }
         }

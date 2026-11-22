@@ -237,22 +237,12 @@ pub fn wasm_std(args: &[String]) -> Result<(), String> {
     let target = std::env::current_dir()
         .map_err(|e| e.to_string())?
         .join("target/horizon-mod");
-    std::fs::write(out, std_member(&target, &toolchain)?).map_err(|e| format!("{out}: {e}"))?;
-    if let Some(input) = super::flag(&args[1..], "--catalog") {
-        let path = Path::new(out)
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("points.json");
-        let bytes = std::fs::read(input).map_err(|e| format!("{input}: {e}"))?;
-        std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    Ok(())
+    std::fs::write(out, std_member(&target, &toolchain)?).map_err(|e| format!("{out}: {e}"))
 }
 
-fn registrations(
-    manifest: &toml_edit::DocumentMut,
-    catalog: Option<&Path>,
-) -> Result<(String, String), String> {
+/// Parse the member's manifest as the package will, so a refused one (`[[inject]]` among them)
+/// fails before the build.
+fn validate(manifest: &toml_edit::DocumentMut) -> Result<(), String> {
     let mut parsed = manifest.clone();
     if !parsed.contains_key("wasm") {
         let mut wasm = toml_edit::Table::new();
@@ -260,49 +250,11 @@ fn registrations(
         wasm["toolchain"] = toml_edit::value("pending");
         parsed["wasm"] = toml_edit::Item::Table(wasm);
     }
-    let parsed = horizon_mod_package::Manifest::parse(&parsed.to_string())?;
-    let (registrations, point_names) = if parsed.inject.is_empty() {
-        (String::new(), "[]".to_owned())
-    } else {
-        let std_member = std::env::var_os("HORIZON_WASM_STD")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::current_exe()
-                    .ok()
-                    .map(|p| p.with_file_name("horizon-wasm-std.wasm"))
-            });
-        let default_catalog = std_member.and_then(|p| p.parent().map(|p| p.join("points.json")));
-        let path = catalog.map(Path::to_path_buf).or(default_catalog).ok_or(
-            "[[inject]] requires --catalog <points.json> or HORIZON_WASM_STD beside points.json",
-        )?;
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("{}: {e}; supply --catalog <points.json>", path.display()))?;
-        let (_, json): (_, Value) =
-            horizon_mod_package::build_data::read(horizon_mod_package::build_data::POINTS, &text)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-        let points: Vec<horizon_mod_point_emit::Point> =
-            serde_json::from_value(json["points"].clone())
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-        let expressions = horizon_mod_point_emit::api(&parsed, &points, "crate::")
-            .map_err(|e| format!("{}:{e}", parsed.id))?;
-        let names = horizon_mod_point_emit::places(&parsed, &points)
-            .map_err(|e| format!("{}:{e}", parsed.id))?;
-        let registrations = expressions
-            .iter()
-            .map(|e| {
-                format!("mod_points::register(&{e}).expect(\"validated guest API listener\");\n")
-            })
-            .collect();
-        (
-            registrations,
-            serde_json::to_string(&names).map_err(|e| e.to_string())?,
-        )
-    };
-    Ok((registrations, point_names))
+    horizon_mod_package::Manifest::parse(&parsed.to_string()).map(drop)
 }
 
-pub fn build(root: &Path, catalog: Option<&Path>, additional: &[PathBuf]) -> Result<(), String> {
-    group::build(root, catalog, additional)
+pub fn build(root: &Path, additional: &[PathBuf]) -> Result<(), String> {
+    group::build(root, additional)
 }
 
 fn member_export(name: &str) -> bool {
@@ -312,12 +264,7 @@ fn member_export(name: &str) -> bool {
 }
 
 fn group_export(name: &str, krate: &str) -> bool {
-    if GUEST_EXPORTS.contains(&name)
-        || name == "horizon_layout_ext"
-        || name == "horizon_mod_points_register"
-        || name == "horizon_mod_points_seal"
-        || name.starts_with("__wasm_")
-    {
+    if GUEST_EXPORTS.contains(&name) || name.starts_with("__wasm_") {
         return true;
     }
     let Ok(symbol) = rustc_demangle::try_demangle(name) else {
@@ -455,9 +402,6 @@ pub fn link(role: &str, args: Vec<String>) -> Result<(), String> {
         out.push("-Bsymbolic".to_owned());
         for name in GUEST_EXPORTS {
             out.push(format!("--export={name}"));
-        }
-        if std::env::var("HORIZON_GUEST_REGISTRATIONS").is_ok_and(|s| !s.is_empty()) {
-            out.push("--export=horizon_layout_ext".to_owned());
         }
     }
     let status = Command::new(&lld)
@@ -635,15 +579,9 @@ mod export_tests {
 #[cfg(test)]
 mod refusal_tests {
     #[test]
-    fn wasm_registration_refusal_names_mod_target_and_type() {
-        let dir = std::env::temp_dir().join(format!("horizon-wire-refusal-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let catalog = dir.join("points.json");
-        std::fs::write(&catalog, r#"{"schema":1,"build":{"commit":"c"},"points":[{"target":"game::tick","name":"tick","at_return":true,"api_refusal":"argument 1 `value` (`&RegistrationData`) has no API type yet"}]}"#).unwrap();
-        let manifest = "id = 'addon'\nname = 'Addon'\nversion = '1.0.0'\napi = '0.2'\ncapabilities = ['registries']\n[[inject]]\nid = 'before'\nat = 'game::tick'\nkind = 'head'\nwith = 'before'\nhash = 'pin'\n".parse().unwrap();
-        assert_eq!(
-            super::registrations(&manifest, Some(&catalog)).unwrap_err(),
-            "addon:before: no API listener at game::tick: argument 1 `value` (`&RegistrationData`) has no API type yet"
-        );
+    fn a_member_declaring_inject_is_refused_as_removed() {
+        let manifest = "id = 'addon'\nname = 'Addon'\nversion = '1.0.0'\napi = '0.2'\ncapabilities = ['registries']\n[[inject]]\nid = 'before'\nat = 'game::tick'\nkind = 'head'\nwith = 'before'\n".parse().unwrap();
+        let error = super::validate(&manifest).unwrap_err();
+        assert!(error.contains("[[inject]] was removed"), "{error}");
     }
 }

@@ -106,41 +106,21 @@ fn internals_add_uses_launcher_module_catalog_hash() {
 
 #[test]
 #[ignore = "daily"]
-fn inject_add_head_uses_launcher_module_catalog_hash() {
-    let fixture = Fixture::new(true);
-    fixture.run(&[
-        "inject", "add", METHOD, "--kind", "head", "--with", "listen",
-    ]);
-    let declared = fixture.manifest();
-    assert_eq!(declared.inject.len(), 1);
-    assert_eq!(declared.inject[0].at, METHOD);
-    assert_eq!(declared.inject[0].hash, Some(fixture.catalog_hash()));
-    assert!(fixture.root.join("launcher-called").is_file());
-}
-
-#[test]
-#[ignore = "daily"]
 fn module_free_add_commands_keep_prebuilt_output_and_never_run_launcher() {
-    for args in [
-        vec!["internals", "add", METHOD, "--kind", "method"],
-        vec![
-            "inject", "add", METHOD, "--kind", "head", "--with", "listen",
-        ],
-    ] {
-        let modules = Fixture::new(true);
-        let prebuilt = Fixture::new(false);
-        let expected = modules.run(&args);
-        let actual = prebuilt.run(&args);
-        assert_eq!(actual.stdout, expected.stdout);
-        assert_eq!(actual.stderr, expected.stderr);
-        assert!(!prebuilt.root.join("launcher-called").exists());
-        let mut declared: toml::Value =
-            toml::from_str(&fs::read_to_string(modules.root.join("horizon-mod.toml")).unwrap())
-                .unwrap();
-        declared["native"].as_table_mut().unwrap().remove("module");
-        let prebuilt_text: toml::Value =
-            toml::from_str(&fs::read_to_string(prebuilt.root.join("horizon-mod.toml")).unwrap())
-                .unwrap();
-        assert_eq!(declared, prebuilt_text);
-    }
+    let args = ["internals", "add", METHOD, "--kind", "method"];
+    let modules = Fixture::new(true);
+    let prebuilt = Fixture::new(false);
+    let expected = modules.run(&args);
+    let actual = prebuilt.run(&args);
+    assert_eq!(actual.stdout, expected.stdout);
+    assert_eq!(actual.stderr, expected.stderr);
+    assert!(!prebuilt.root.join("launcher-called").exists());
+    let mut declared: toml::Value =
+        toml::from_str(&fs::read_to_string(modules.root.join("horizon-mod.toml")).unwrap())
+            .unwrap();
+    declared["native"].as_table_mut().unwrap().remove("module");
+    let prebuilt_text: toml::Value =
+        toml::from_str(&fs::read_to_string(prebuilt.root.join("horizon-mod.toml")).unwrap())
+            .unwrap();
+    assert_eq!(declared, prebuilt_text);
 }

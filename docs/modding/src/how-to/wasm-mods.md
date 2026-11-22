@@ -84,8 +84,7 @@ the mod when:
   transport");
 - a call it imports is missing from the game, or has another signature or layout there;
 - a hook it answers (an export row in its call table) is missing from the game or changed. A hook
-  the game added after the mod's build is fine: the mod just doesn't answer it;
-- its mod points layout, when it carries one, differs from the game's.
+  the game added after the mod's build is fine: the mod just doesn't answer it.
 
 A newer SDK can bring calls an older game lacks, so build for the oldest Nightly you support and
 test the build on each Nightly you support. As reported for the November 2026 Nightlies, the
@@ -97,12 +96,6 @@ on the 2026-11-20 game, and players of the 18 November Nightly needed a build of
 [horizon-mods](https://github.com/horizon-rust/horizon-mods) registry a wasm mod's source sits under
 `native/` beside the native mods. Its `horizon-mod.toml` has a `[wasm]` table and no `[native]` one,
 and its registry entry's kind is `mod`, not `native-mod`.
-
-A mod with `[[inject]]` listeners builds against the game's staged point catalog. Pass
-`--catalog path/to/points.json`, or set `HORIZON_WASM_STD` to the toolchain's std member
-with `points.json` beside it. Mods without listeners need no catalog. When packaging the
-wasm toolchain, `cargo horizon-mod wasm-std <out.wasm> --catalog <staged-points.json>`
-copies that catalog beside the std member.
 
 A dependency group shares its handler table and cache budget. A handler registered by one
 member is usable by other members of that group.
@@ -150,17 +143,7 @@ the Mods page. An optional dependency is built in with the Cargo feature of its 
 entry in `Cargo.toml` is `optional = true` under that id; an absent one is left out of the group at
 load, and `if_installed!` keeps the mod from calling it.
 
-## Injection points
-
-API-typed `[[inject]]` listeners use the same generated `mod_points` records and constructors as
-native listeners. When injections are declared, the wasm build requires the pinned game's staged
-`points.json`, supplied via `--catalog` or beside the configured std member.
-Listeners register in the host's ordinary point list, with the same priority, dependency order,
-owner enable flag and stop behavior as native listeners. Mixins are native-only.
-
-A point's record is a copy of every parameter as an API value, `&mut` parameters copied back
-after the listener, exactly as for a native listener; a point with a parameter that has no API type
-refuses the listener at registration, naming the parameter. The `access` key on `[[inject]]` is refused by name on both targets. Native code needing game internals uses `[[native.mixin]]`; wasm cannot declare `[[internals]]` or native transformations.
+Mixins are native-only: wasm cannot declare `[[internals]]` or native transformations.
 
 ## ABI reference
 
@@ -198,8 +181,6 @@ Each guest exports:
 
 - `horizon_layout() -> u64`: the hash of what every call shares: the reserved IDs, group state,
   the prepared ABI and the hand-written codecs. A mismatch is refused.
-- `horizon_layout_ext() -> u64`, when `mod_points` is linked: the point protocol's hash. Each
-  point is checked by name when the mod subscribes to it.
 - `horizon_in(len) -> ptr`: the buffer into which the game writes the next call's input.
 - `horizon_hook(id) -> u64`: runs export `id` after the input is written. An export's ID is a hash
   of its name (`Owner::method`), the same in every build. The high 32 bits are the reply pointer
@@ -216,14 +197,6 @@ reaches. The game asks for it first and compares each call the mod imports and e
 have with its own; one that differs, or an export the game no longer has, refuses the mod, naming
 the call. A hook reply contains its return value followed by writable arguments in
 field order.
-
-Points use that same hook export, call arena and execution budget. Place IDs are
-`0x8000_0000 + place`, `place` being the guest's own index. The subscription query
-`0xBFFF_FFFF` returns `(place, point name, point hash, injection_id)`: the game finds each point
-by name and refuses one it doesn't have or has with another hash (its host and record
-layout). Point call input starts with the `u32` subscription index. A `HostSide` point then carries
-a server/client boolean, followed by its listener record. Calls reply with unit and the record,
-which the host decodes completely before writing any field back.
 
 Wire values use little-endian numbers; lengths and collection counts are `u32`, strings are a
 byte length followed by UTF-8 bytes, options have a byte tag (`0` or `1`), enums have a `u32`

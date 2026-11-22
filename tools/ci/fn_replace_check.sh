@@ -3,9 +3,6 @@
 # launcher's normal native build against a PREBUILT game, with no game rebuild, then run on a
 # dedicated server.
 #   [FNR_MODS="alpha beta"] [FNR_MOD_ROOT=DIR] [FNR_ROUTE=prebuilt|prebuilt-api] [FNR_TARGET=HOST] tools/ci/fn_replace_check.sh LAUNCHER SDK_BASE SCRATCH [RESOURCES]
-# FNR_WASM_LAYOUT_PACKAGE=valid.hmod FNR_WASM_STD=std.wasm adds a wasm point-layout refusal check
-# to the with-RESOURCES server run (not the build/link-only CI mode):
-# its exported layout fingerprint is changed to zero, and its integrity hash is updated.
 # SDK_BASE is a folder holding one `sdk-<commit>/` release folder (the SDK's archives, `sdk.json`, `SHA256SUMS` and its
 # signature) of this checkout's HEAD: the launcher reads its SDK from there (HORIZON_SDK_BASE), checking the signature
 # as it does a release's. A CI dry run signs its candidate SDK with a throwaway key and passes the public key in
@@ -170,12 +167,6 @@ if [ -n "$resources" ]; then
   run=$scratch/run
   mkdir -p "$run"
   echo eula=true > "$run/eula.txt"
-  layout_mod=
-  if [ -n "${FNR_WASM_LAYOUT_PACKAGE:-}" ]; then
-    cp "${FNR_WASM_STD:?set FNR_WASM_STD to the matching horizon-wasm-std.wasm}" "$scratch/engine/horizon-wasm-std.wasm"
-    layout_mod=$(python3 "$root/tools/ci/mismatch_wasm_layout.py" "$FNR_WASM_LAYOUT_PACKAGE" "$run/horizon-mods/layout-refused.hmod")
-    printf 'mod.%s:true\n' "$layout_mod" > "$run/horizon-mods.txt"
-  fi
   # Compile a changed copy of one mod, then swap only its library into the first build.
   # Its public probe adds compiled code without changing the hooks the check asserts below.
   executable_hash=$(sha256sum "$scratch/engine/horizon-engine" | cut -d' ' -f1)
@@ -247,9 +238,6 @@ fill 0 100 0 9 100 9 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:"minecraft
     (cd "$run" && env "${env_vars[@]}" timeout 180 "$scratch/engine/horizon-engine" --resources "$(realpath "$resources")" \
       --dedicated --nogui) > "$scratch/server.log" 2>&1 || true
   grep -F 'fnr:' "$scratch/server.log"
-  if [ -n "$layout_mod" ]; then
-    grep -F "wasm mod $layout_mod refused: built for another version of the mod points API (mod layout 0, game layout " "$scratch/server.log"
-  fi
   if [[ " ${FNR_MODS:-alpha beta} " == *" alpha "* ]]; then
     grep -F 'OVERWRITE by fnr_alpha' "$scratch/server.log"
   fi
@@ -271,10 +259,8 @@ fill 0 100 0 9 100 9 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:"minecraft
     grep -F 'fnr: loop count own #1: fnr_loop:counter' "$scratch/server.log"
     grep -F 'fnr: loop throttle skips #1:' "$scratch/server.log"
     grep -F 'fnr: loop HEAD tick_block_entities' "$scratch/server.log"
-    # A call-site row inside the loop body ran in the loop's copy, and an API listener at the entry
-    # fired through the same cell as the loop.
+    # A call-site row inside the loop body ran in the loop's copy.
     grep -F 'fnr: loop MODIFY_EXPRESSION_VALUE chunk check inside the loop' "$scratch/server.log"
-    grep -F 'fnr: loop api head listener at tick_block_entities' "$scratch/server.log"
     grep -F "Published loops: 1 filled by $slots mod slots" "$log"
     # The slot ran the loop again from inside it: the nested run was the game's own, logged once.
     grep -F 'fnr: loop count ran the loop again inside it: true' "$scratch/server.log"
@@ -287,7 +273,6 @@ fill 0 100 0 9 100 9 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:"minecraft
   fi
   if [[ " ${FNR_MODS:-alpha beta} " == *" api_only "* ]]; then
     grep -F 'fnr: api_only server_started, sin 0.479' "$scratch/server.log"
-    grep -F 'fnr: api_only listener at tick_block_entities' "$scratch/server.log"
   fi
   if [[ " ${FNR_MODS:-alpha beta} " == *" fdshape "* ]]; then
     grep -F 'fnr: native_server_started dedicated=true' "$scratch/server.log"

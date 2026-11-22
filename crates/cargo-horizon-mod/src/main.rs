@@ -6,9 +6,6 @@
 //!   SDK unless `--horizon` names another build (`nightly-<date>` or a sha), with that SDK fetched
 //!   into `.horizon/sdk/` (`sdk_fetch.rs`).
 //! - `update [--horizon <build>]`: repin this native mod and diff/refresh declared internals.
-//! - `inject update [--accept <id>]…`: refresh declarations without repinning.
-//! - `inject sync --repo <game checkout>`: validate API injection pins against a game catalog.
-//! - `inject add <at> --kind <kind> [--call <callee>] [--nth N] [--with <fn>]`: pin an inject.
 //! - `internals sync [--repo <path>]`: sync declarations for native or wasm mods.
 //! - `internals add <path>… [--kind <kind>]`: declare internals from the prebuilt catalog.
 //! - `build`: the `.hmod` in `target/horizon-mod/`, with the mod's `assets/`
@@ -29,8 +26,6 @@
 use horizon_mod_package::{Content, Manifest, Package, manifest::MANIFEST};
 mod bounded;
 mod check;
-mod inject;
-mod inject_sync;
 mod internals;
 mod jar;
 mod layouts;
@@ -88,7 +83,7 @@ fn main() -> ExitCode {
             None => Ok(()),
         }),
         Some("build") if args.get(1).is_some_and(|a| a == "--wasm") => fetched(Path::new("."))
-            .and_then(|()| wasm::build(Path::new("."), flag(&args[2..], "--catalog").map(Path::new), &args[2..].windows(2).filter(|a| a[0] == "--with").map(|a| PathBuf::from(&a[1])).collect::<Vec<_>>()))
+            .and_then(|()| wasm::build(Path::new("."), &args[2..].windows(2).filter(|a| a[0] == "--with").map(|a| PathBuf::from(&a[1])).collect::<Vec<_>>()))
             .and_then(|()| build(entry))
             .map(|p| println!("Built {}", p.display())),
         Some("wasm-std") => wasm::wasm_std(&args[1..]),
@@ -112,23 +107,14 @@ fn main() -> ExitCode {
         Some("registry") => registry::main(&args[1..]),
         Some("use-jar") => jar::run(&args[1..]),
         Some("internals") => internals::run(&args[1..]),
-        Some("inject") => inject::run(&args[1..]),
         Some("update") => {
             sdk_cmds::update_report(entry, Path::new("."), flag(&args[1..], "--horizon"))
                 .and_then(|()| {
-                    update(
-                        Path::new("."),
-                        flag(&args[1..], "--horizon"),
-                        &args[1..]
-                            .windows(2)
-                            .filter(|pair| pair[0] == "--accept")
-                            .map(|pair| pair[1].as_str())
-                            .collect::<Vec<_>>(),
-                    )
+                    update(Path::new("."), flag(&args[1..], "--horizon"))
                 })
                 .map(|()| println!("Run `cargo horizon-mod check`."))
         }
-        _ => Err("usage: cargo horizon-mod new <path> [--name \"Name\"] [--template content|native|wasm [--horizon <build>]] | update [--horizon <build>] | inject update [--accept <id>]… | inject sync --repo <game checkout> | inject add <at> --kind <kind> [--call <canonical callee>] [--nth N] [--with <fn>] | internals sync [--repo <path>] | internals add <path>… [--kind <kind>] | build [--wasm] | wasm-std <out.wasm> | run [--game <horizon-client>] [-- <game args>] | check [--uses] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | hooks <text> [--all] | sdk diff <build> <build> | fits [<file.hmod>] [--build <name>]… | registry build|review|check|list | use-jar <path>".into()),
+        _ => Err("usage: cargo horizon-mod new <path> [--name \"Name\"] [--template content|native|wasm [--horizon <build>]] | update [--horizon <build>] | internals sync [--repo <path>] | internals add <path>… [--kind <kind>] | build [--wasm] | wasm-std <out.wasm> | run [--game <horizon-client>] [-- <game args>] | check [--uses] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | hooks <text> [--all] | sdk diff <build> <build> | fits [<file.hmod>] [--build <name>]… | registry build|review|check|list | use-jar <path>".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -278,7 +264,7 @@ fn pin(horizon: Option<&str>) -> Result<String, String> {
 
 /// Repins the native mod, reporting signature changes before writing. Its `Cargo.toml` names the
 /// SDK by path, so only the pin moves; the next command fetches the new SDK.
-fn update(dir: &Path, horizon: Option<&str>, accept: &[&str]) -> Result<(), String> {
+fn update(dir: &Path, horizon: Option<&str>) -> Result<(), String> {
     let path = dir.join(MANIFEST);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let manifest = Manifest::parse(&text)?;
@@ -293,20 +279,10 @@ fn update(dir: &Path, horizon: Option<&str>, accept: &[&str]) -> Result<(), Stri
         .parse()
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let horizon = pin(horizon)?;
-    if !manifest.internals.is_empty() || manifest.inject.iter().any(|i| i.hash.is_none()) {
+    if !manifest.internals.is_empty() {
         // arismoko/horizon#2593: these become the pinned catalogs with the mod's own modules applied.
         let old = internals::load(dir, &native.horizon)?;
         let new = internals::load(dir, &horizon)?;
-        let (reports, refused) = inject::update::pin_moves(&manifest, &old, &new, accept);
-        for report in reports {
-            println!("{report}");
-        }
-        if refused {
-            return Err(
-                "update refused; no files changed (pass --accept <inject id> to take a change)"
-                    .into(),
-            );
-        }
         print!("{}", internals::refresh(&manifest, &mut doc, &old, &new)?);
     }
     internals::set_string(
@@ -681,7 +657,7 @@ mod tests {
             .contains("is not a build")
         );
         let newer = "89abcdef0123456789abcdef0123456789abcdef";
-        update(&path, Some(newer), &[]).unwrap();
+        update(&path, Some(newer)).unwrap();
         let manifest =
             Manifest::parse(&std::fs::read_to_string(path.join(MANIFEST)).unwrap()).unwrap();
         assert_eq!(manifest.native.unwrap().horizon, newer);

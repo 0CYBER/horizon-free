@@ -1120,14 +1120,6 @@
     "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built locally from this tree. Not selected by daily shards."
   },
   {
-    "package": "horizon-mod-wasm",
-    "target": "test:unstaged",
-    "test": "real_guest_point_is_refused_without_staging",
-    "path": "crates/horizon-mod-wasm/tests/unstaged.rs",
-    "reason": "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods",
-    "rationale": "Explicit by-hand runner in tools/ci/ignored-tests/manual-horizon-mod-wasm.txt: supply locally built HORIZON_WASM_FIXTURE and HORIZON_WASM_STD. The fork's wasm-mods workflow is not adopted. Not selected by daily shards."
-  },
-  {
     "package": "horizon-perf",
     "target": "test:it",
     "test": "pacing_fixture::write_the_pacing_fixture",

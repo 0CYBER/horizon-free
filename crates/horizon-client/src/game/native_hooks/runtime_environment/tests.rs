@@ -229,8 +229,7 @@ fn run(wasm: bool) {
     let mut loaded = wasm.then(|| {
         use horizon_mod_package::manifest::Package;
         let path = std::path::PathBuf::from(std::env::var_os("HORIZON_WASM_FIXTURE").unwrap());
-        let mut manifest = Package::read(&path).unwrap().manifest;
-        manifest.inject.clear();
+        let manifest = Package::read(&path).unwrap().manifest;
         inventory.push(PackageInfo::new(
             manifest.id.clone(),
             manifest.version.clone(),

@@ -216,12 +216,11 @@ A wasm mod keeps running on a newer game while the hooks it imports are unchange
 always builds for `wasm32-unknown-unknown`: a hook that needs an engine type takes a plain-data type of the
 API's own, converted on the game side.
 
-## Injections stay, and the API comes first
+## The API comes first
 
-`[[inject]]` is the shared native/wasm escape hatch for what the API does not yet reach. The rule is
-API first: a mod needing something the API lacks asks for the hook that replaces the injection, and the
-injection is the stopgap until it exists. The [injections chapter](../../modding/src/concepts/injections.md) holds the current forms,
-the decision ladder and the hook-request format.
+A mod needing something the API lacks asks for the hook. `[[inject]]`, the native/wasm escape hatch at
+generated injection points, was removed unused (#19547, #19576); a native mod that cannot wait takes the
+native route.
 
 ## The order of the build route
 
@@ -230,15 +229,12 @@ rests on the one before:
 
 1. **The prebuilt game.** The game as a dylib with its metadata, built daily and published as prerelease
    builds, so a native mod compiles against it instead of rebuilding the game.
-2. **Slots.** `[[inject]]` listeners fill compiled points without compiling game code.
-   A missing slot is refused, including on native.
-3. **The internals tier.** A per-mod declared list of game internals the prebuilt game exposes. It is native
+2. **The internals tier.** A per-mod declared list of game internals the prebuilt game exposes. It is native
    only and logged, and each internal a mod needs is a request for an API.
-4. **Wasm points.** API `[[inject]]` listeners use the same records on native and wasm.
    Engine internals and listed call sites are native only.
 
 A native mod that needs a supported source edit uses [mixins](../../modding/src/concepts/native-route/2-mixins.md),
-which compile game code. An inject never falls back to one.
+which compile game code.
 
 ## No telemetry
 

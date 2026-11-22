@@ -3123,7 +3123,6 @@ dependencies = [
  "horizon-launcher-scenery",
  "horizon-mcp",
  "horizon-mod-api-gen",
- "horizon-mod-point-emit",
  "horizon-mod-vocab",
  "horizon-platform",
  "horizon-port-pack",
@@ -3246,14 +3245,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "xz4rust",
  "zip",
-]
-
-[[package]]
-name = "horizon-mod-point-emit"
-version = "0.1.0"
-dependencies = [
- "horizon-mod-package",
- "serde",
 ]
 
 [[package]]

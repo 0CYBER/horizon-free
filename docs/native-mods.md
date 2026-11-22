@@ -1,6 +1,6 @@
 # Native mods
 
-Native mod docs live in the modding book: [native mods](modding/src/how-to/native-mods.md), [trait mods, Parts and attachments](modding/src/concepts/parts.md), [injections](modding/src/concepts/injections.md) and the [hook notes](https://github.com/horizon-rust/horizon/tree/main/crates/horizon-mod-vocab/src/hooks).
+Native mod docs live in the modding book: [native mods](modding/src/how-to/native-mods.md), [trait mods, Parts and attachments](modding/src/concepts/parts.md) and the [hook notes](https://github.com/horizon-rust/horizon/tree/main/crates/horizon-mod-vocab/src/hooks).
 
 ## Living death version 2
 
@@ -48,8 +48,8 @@ Build the matching real guest and standard module, then run both selectors:
 ```sh
 cargo build -p cargo-horizon-mod
 # From crates/horizon-mod-wasm/tests/fixture, with ROOT set to the repository:
-"$ROOT/target/debug/cargo-horizon-mod" horizon-mod build --wasm --catalog points.json
-"$ROOT/target/debug/cargo-horizon-mod" horizon-mod wasm-std "$ROOT/target/horizon-wasm-std.wasm" --catalog points.json
+"$ROOT/target/debug/cargo-horizon-mod" horizon-mod build --wasm
+"$ROOT/target/debug/cargo-horizon-mod" horizon-mod wasm-std "$ROOT/target/horizon-wasm-std.wasm"
 # From the repository root:
 cargo test -p horizon-mod-wasm --features listener-fixture --test native_listener collect_positions_copy_in_and_out_natively_as_in_the_real_guest -- --exact
 HORIZON_WASM_FIXTURE="$PWD/crates/horizon-mod-wasm/tests/fixture/target/horizon-mod/wasm_fixture.hmod" HORIZON_WASM_STD="$PWD/target/horizon-wasm-std.wasm" cargo test -p horizon-mod-wasm --features listener-fixture --test real_member real_member -- --ignored --exact

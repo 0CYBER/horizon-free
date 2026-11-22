@@ -90,7 +90,6 @@ LAUNCHER_PATHS = [
     "crates/horizon-mod-api-gen/",
     "crates/horizon-mod-api-macros/",
     "crates/horizon-mod-package/",
-    "crates/horizon-mod-point-emit/",
     "crates/horizon-mod-point-shape/",
     "crates/horizon-mod-runtime/",
     "crates/horizon-mod-source/",

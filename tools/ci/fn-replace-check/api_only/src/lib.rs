@@ -1,4 +1,4 @@
-//! An API-only mod: hooks and one `[[inject]]` listener. Alone it takes the API route (compiled
+//! An API-only mod: hooks only. Alone it takes the API route (compiled
 //! against the API metadata into its own library); beside a mod with a `[native]` table row the
 //! whole set takes the engine route. It runs the same on both.
 use mod_api::{Hooks, ServerHost};
@@ -19,9 +19,4 @@ impl Hooks for Mod {
         let angle = std::hint::black_box(0.5f32);
         eprintln!("fnr: api_only server_started, sin {:.3}", angle.sin());
     }
-}
-
-pub fn entry_listener(_host: mod_api::HostSide<'_>, _args: &mut mod_points::TickBlockEntitiesArgs) {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| eprintln!("fnr: api_only listener at tick_block_entities"));
 }

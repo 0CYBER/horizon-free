@@ -18,8 +18,7 @@ fn compiled_guest_reads_predicted_like_native() {
             std::env::var("HORIZON_WASM_FIXTURE").expect("build tests/fixture from this tree");
         let std = std::env::var("HORIZON_WASM_STD").expect("build this tree's shared wasm std");
         let path = std::path::Path::new(&path);
-        let mut manifest = Package::read(path).unwrap().manifest;
-        manifest.inject.clear();
+        let manifest = Package::read(path).unwrap().manifest;
         let info = |id: &str| {
             mod_api::PackageInfo::new(
                 id.into(),

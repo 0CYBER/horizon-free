@@ -138,48 +138,12 @@ pub fn horizon_label(version: &str) -> String {
     }
 }
 
-/// Enabled wasm packages that need the patchable engine, never native compilation.
-pub fn wasm_points(home: &Path) -> Vec<horizon_platform::mod_package::index::native::Bundle> {
-    use horizon_platform::mod_package::manifest::{Package, WASM};
-    use std::io::{BufReader, Read};
-    wasm_hmods(home)
-        .into_iter()
-        .filter_map(|path| {
-            let file = fs::File::open(&path).ok()?;
-            let mut zip = zip::ZipArchive::new(BufReader::new(file)).ok()?;
-            // Home also asks for this status. Packages without a wasm module cannot
-            // contribute listeners, so avoid opening and validating every resource entry.
-            zip.index_for_name(WASM)?;
-            let package = Package::read_zip(&mut zip).ok()?;
-            if package.manifest.wasm.is_none()
-                || package.manifest.inject.is_empty()
-                || !java::is_enabled(home, &package.manifest.id)
-            {
-                return None;
-            }
-            let mut files = std::collections::BTreeMap::new();
-            for i in 0..zip.len() {
-                let mut entry = zip.by_index(i).ok()?;
-                if entry.is_dir() {
-                    continue;
-                }
-                let name = entry.name().ok()?.into_owned();
-                let mut bytes = Vec::new();
-                entry.read_to_end(&mut bytes).ok()?;
-                files.insert(name, bytes);
-            }
-            Some(horizon_platform::mod_package::index::native::Bundle {
-                manifest: package.manifest,
-                files,
-            })
-        })
-        .collect()
-}
-
 /// The native mods turned on in game folder `home`, read from their `.hmod`s. One that can't be
 /// read always counts, with its file name and no version, so it needs a build (which says why):
-/// the on/off list is keyed by the manifest id, which an unreadable file can't give. One in the
-/// format from before the SDK never counts: no build can take it (`native_mods::stage_installed`).
+/// the on/off list is keyed by the manifest id, which an unreadable file can't give. One that
+/// declares the removed `[[inject]]` gives its id ([`retired_inject`]) and counts only when on. One
+/// in the format from before the SDK never counts: no build can take it
+/// (`native_mods::stage_installed`).
 pub fn enabled(home: &Path) -> Vec<Mod> {
     let mut out = Vec::new();
     for path in hmods(home) {
@@ -192,13 +156,13 @@ pub fn enabled(home: &Path) -> Vec<Mod> {
                 }
             }
             Err(_) if legacy_format(&path) => {}
-            Err(_) => out.push((stem(&path), String::new(), None)),
+            Err(_) => match retired_inject(&path) {
+                Some(id) if java::is_enabled(home, &id) => out.push((id, String::new(), None)),
+                Some(_) => {}
+                None => out.push((stem(&path), String::new(), None)),
+            },
         }
     }
-    out.extend(wasm_points(home).into_iter().map(|b| {
-        let digest = native_mods::digest(b.files.iter().map(|(n, d)| (n.as_str(), d.as_slice())));
-        (b.manifest.id, b.manifest.version, Some(digest))
-    }));
     out
 }
 
@@ -246,6 +210,9 @@ pub struct Installed {
     /// Whether it is a native mod in the format from before the `.hmod` SDK
     /// ([`legacy_format`]): it stays installed but no build takes it.
     pub legacy: bool,
+    /// Whether it declares the removed `[[inject]]` ([`retired_inject`]): its id comes from its
+    /// manifest, but no build takes it.
+    pub inject: bool,
 }
 
 impl Installed {
@@ -255,11 +222,22 @@ impl Installed {
         self.file.ends_with(".hnmod")
     }
 
+    /// Whether it is a retired `[[inject]]` file whose id another mod has: its row has no switch,
+    /// and removing it leaves `mod.<id>` to that other mod.
+    pub fn shares_id(&self) -> bool {
+        self.inject && !self.switch
+    }
+
     /// Why the file can't load, shown instead of where it came from.
     pub fn note(&self) -> Option<&'static str> {
         if self.retired() {
             return Some(crate::i18n::tr(
                 "Old format (.hnmod): ask its author to republish it as .hmod",
+            ));
+        }
+        if self.shares_id() {
+            return Some(crate::i18n::tr(
+                "Uses the removed [[inject]] and shares its id with another mod: remove this file.",
             ));
         }
         self.legacy.then(legacy_note)
@@ -284,6 +262,11 @@ pub fn asks_for_build<'a>(files: impl IntoIterator<Item = &'a Installed>) -> boo
 /// Whether the native `.hmod` at `path` is in the format from before the `.hmod` SDK.
 pub fn legacy_format(path: &Path) -> bool {
     horizon_platform::mod_package::index::native::legacy_format(path)
+}
+
+/// The manifest id of the `.hmod` at `path` when it declares the removed `[[inject]]`.
+pub fn retired_inject(path: &Path) -> Option<String> {
+    horizon_platform::mod_package::index::native::retired_inject(path)
 }
 
 /// Whether the browser-tracked `file` (relative to the game folder `home`) is a native mod that
@@ -328,10 +311,18 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 return None;
             }
             let package = horizon_platform::mod_package::manifest::Package::read(&path);
+            // A package refused for the removed `[[inject]]` still names its id, so its row can
+            // switch it off, as the build's refusal says to.
+            let retired = package.is_err().then(|| retired_inject(&path)).flatten();
             let (id, version) = package
                 .as_ref()
                 .map(|p| (p.manifest.id.clone(), p.manifest.version.clone()))
-                .unwrap_or_else(|_| (stem(&path), String::new()));
+                .unwrap_or_else(|_| {
+                    (
+                        retired.clone().unwrap_or_else(|| stem(&path)),
+                        String::new(),
+                    )
+                });
             // A GitHub install's Remove deletes `<id>.hmod`: an old `.hnmod` is removed as a file.
             // GitHub installs only go into the native folder.
             let hmod = path.extension().is_some_and(|e| e == "hmod");
@@ -350,8 +341,9 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 internals,
                 origin,
                 // A retired `.hnmod` never switches the live mod, even when the archive reads.
-                switch: hmod && package.is_ok(),
+                switch: hmod && (package.is_ok() || retired.is_some()),
                 legacy: github && package.is_err() && legacy_format(&path),
+                inject: retired.is_some(),
                 icon: package.map(|p| p.icon.map(Arc::new)),
             })
         })
@@ -372,7 +364,8 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 .iter()
                 .enumerate()
                 .any(|(j, id)| j != i && id.as_ref() == Some(&row.id));
-        if !row.native() && shared {
+        // A retired `[[inject]]` file beside its replacement would switch the replacement too.
+        if (!row.native() || row.inject) && shared {
             row.switch = false;
         }
     }
@@ -588,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn wasm_listeners_select_patchable_build_without_native_compilation() {
+    fn an_enabled_wasm_mod_needs_no_native_build() {
         let home = tempfile::tempdir().unwrap();
         let folder = home
             .path()
@@ -611,32 +604,15 @@ mod tests {
         }
         section(7, &exports);
         section(10, &[1, 2, 0, 0x0b]);
-        for inject in [false, true] {
-            let rows = if inject {
-                "[[inject]]\nid='count'\nat=\"horizon_client::game::Game<'_>::tick\"\nkind='head'\nwith='tick'\n"
-            } else {
-                ""
-            };
-            let manifest = format!("id='wasm_test'\nname='Wasm test'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n{rows}[wasm]\nsha512='{}'\ntoolchain='1.99.1'\nbuilt_with='selection fixture'\n", horizon_platform::mod_package::manifest::sha512_of(&module));
-            let bytes = horizon_platform::mod_package::Package::write_files(
-                &manifest,
-                &[("mod.wasm", &module)],
-            )
-            .unwrap();
-            fs::write(folder.join("test.hmod"), bytes).unwrap();
-            java::set_enabled(home.path(), "wasm_test", true).unwrap();
-            assert_eq!(enabled(home.path()).len(), usize::from(inject));
-            if inject {
-                let staged = native_mods::stage_installed(home.path(), home.path().join("staged"))
-                    .unwrap()
-                    .unwrap();
-                let bundles = native_mods::bundles(&staged).unwrap();
-                assert_eq!(bundles.len(), 1);
-                assert!(bundles[0].manifest.native.is_none());
-            }
-            java::set_enabled(home.path(), "wasm_test", false).unwrap();
-            assert!(enabled(home.path()).is_empty());
-        }
+        let manifest = format!("id='wasm_test'\nname='Wasm test'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n[wasm]\nsha512='{}'\ntoolchain='1.99.1'\nbuilt_with='selection fixture'\n", horizon_platform::mod_package::manifest::sha512_of(&module));
+        let bytes = horizon_platform::mod_package::Package::write_files(
+            &manifest,
+            &[("mod.wasm", &module)],
+        )
+        .unwrap();
+        fs::write(folder.join("test.hmod"), bytes).unwrap();
+        java::set_enabled(home.path(), "wasm_test", true).unwrap();
+        assert!(enabled(home.path()).is_empty());
     }
 
     #[test]
@@ -891,6 +867,129 @@ capabilities = ['registries']
         assert_eq!(files[0].note(), Some(legacy_note()));
         assert!(!asks_for_build(&files));
         assert!(enabled(home.path()).is_empty());
+    }
+
+    /// `<file>.hmod` in `home`'s native folder: a package whose id is the TOML value `id`, with
+    /// `[[inject]]` when `inject`.
+    fn write_hmod(home: &Path, file: &str, id: &str, inject: bool) {
+        use std::io::Write;
+        let folder = home.join(native_mods::INSTALLED);
+        fs::create_dir_all(&folder).unwrap();
+        let pin = "a".repeat(40);
+        let mut manifest = format!(
+            "id = {id}\nname = 'Tick'\nversion = '1.0'\napi = '0.2'\ncapabilities = ['registries']\n[native]\ngame = '26.3'\nhorizon = '{pin}'\nmixins = '{pin}'\n"
+        );
+        if inject {
+            manifest +=
+                "[[inject]]\nid = 'tick'\nat = 'game::tick'\nkind = 'head'\nwith = 'tick'\n";
+        }
+        let mut zip =
+            zip::ZipWriter::new(fs::File::create(folder.join(format!("{file}.hmod"))).unwrap());
+        for (name, bytes) in [
+            ("horizon-mod.toml", manifest.as_str()),
+            (
+                "Cargo.toml",
+                "[package]\nname = 'tick'\nversion = '1.0.0'\n",
+            ),
+            ("src/lib.rs", "pub fn hooks() {}\n"),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn a_mod_with_the_removed_inject_keeps_its_id_and_switch() {
+        let home = tempfile::tempdir().unwrap();
+        write_hmod(home.path(), "listener", "'tick_listener'", true);
+        let files = untracked(home.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].id, "tick_listener",
+            "the manifest's id, not the file name"
+        );
+        assert!(files[0].switch, "the Mods page can turn it off");
+        assert_eq!(files[0].note(), None);
+    }
+
+    #[test]
+    fn a_retired_inject_file_beside_its_replacement_switches_only_the_replacement() {
+        let home = tempfile::tempdir().unwrap();
+        write_hmod(home.path(), "old_listener", "'tick_listener'", true);
+        write_hmod(home.path(), "tick_listener", "'tick_listener'", false);
+        let rows: Vec<_> = untracked(home.path())
+            .iter()
+            .map(|f| (f.file.clone(), f.id.clone(), f.switch, f.note().is_some()))
+            .collect();
+        let folder = native_mods::INSTALLED;
+        assert_eq!(
+            rows,
+            [
+                (
+                    format!("{folder}/old_listener.hmod"),
+                    "tick_listener".into(),
+                    false,
+                    true
+                ),
+                (
+                    format!("{folder}/tick_listener.hmod"),
+                    "tick_listener".into(),
+                    true,
+                    false
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn removing_a_github_retired_inject_file_leaves_its_replacement_on() {
+        let home = tempfile::tempdir().unwrap();
+        write_hmod(home.path(), "tick_listener", "'tick_listener'", true);
+        write_hmod(home.path(), "tick_v2", "'tick_listener'", false);
+        let origin = crate::github_mods::Origin {
+            id: "tick_listener".into(),
+            version: "1.0".into(),
+            owner: "acme".into(),
+            repo: "tick".into(),
+            tag: None,
+            commit: "a".repeat(40),
+            asset: None,
+            sha256: String::new(),
+        };
+        let folder = home.path().join(native_mods::INSTALLED);
+        fs::write(
+            folder.join("tick_listener.origin.json"),
+            serde_json::to_string(&origin).unwrap(),
+        )
+        .unwrap();
+        java::set_enabled(home.path(), "tick_listener", true).unwrap();
+        let files = untracked(home.path());
+        let old = files
+            .iter()
+            .find(|f| f.file.ends_with("/tick_listener.hmod"))
+            .unwrap();
+        assert!(old.origin.is_some() && old.shares_id());
+        crate::github_mods::remove_installed(home.path(), old).unwrap();
+        assert!(!folder.join("tick_listener.hmod").exists());
+        assert!(folder.join("tick_v2.hmod").exists());
+        assert!(
+            java::is_enabled(home.path(), "tick_listener"),
+            "the replacement stays on"
+        );
+    }
+
+    #[test]
+    fn a_retired_inject_file_with_an_id_no_manifest_could_have_gets_no_switch() {
+        let home = tempfile::tempdir().unwrap();
+        for (file, id) in [("broken", "\"tick\\nmod.other:true\""), ("upper", "'Tick'")] {
+            write_hmod(home.path(), file, id, true);
+        }
+        for file in untracked(home.path()) {
+            assert!(!file.switch, "{}", file.file);
+            assert!(!file.id.contains('\n'), "{:?}", file.id);
+        }
     }
 
     #[test]

@@ -552,11 +552,7 @@ impl Launcher {
                         cx.notify();
                         return;
                     };
-                    let result = if row.origin.is_some() {
-                        github_mods::remove(&home, &row.id).map(|_| ())
-                    } else {
-                        std::fs::remove_file(home.join(&row.file)).map_err(|e| e.to_string())
-                    };
+                    let result = github_mods::remove_installed(&home, &row);
                     this.mods.message =
                         Some(result.map(|_| trf("Removed {name}.", &[("name", &row.id)])));
                     this.github.reread(&home);

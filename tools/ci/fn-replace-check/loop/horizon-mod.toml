@@ -1,19 +1,11 @@
 id = "fnr_loop"
 name = "Function replacement check: loop"
 version = "0.1.0"
-description = "fn-replace: two slots in the published loop block_entities.tick, one counting its mod's own ticking block entities, a nested run of the loop, a HEAD mixin on its entry and a call-site mixin inside the loop body and an API listener at its entry"
+description = "fn-replace: two slots in the published loop block_entities.tick, one counting its mod's own ticking block entities, a nested run of the loop, a HEAD mixin on its entry and a call-site mixin inside the loop body"
 authors = []
 api = "0.2"
 side = "both"
 capabilities = ["registries"]
-
-# An API listener at the loop's entry: its point's dispatcher and the loop's copy share the entry's
-# one replacement cell.
-[[inject]]
-id = "listen"
-at = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities"
-kind = "head"
-with = "entry_listener"
 
 [native]
 game = "26.3"

@@ -50,12 +50,7 @@ fn judged(dir: &Path, build: &str, target: &mod_surface::Surface) -> Verdict {
     let bundle = crate::native_mods::bundle_in(dir).unwrap().unwrap();
     let project = api::Project::read(&bundle).unwrap();
     let target = Rc::new(target.clone());
-    judge(&project, build, &mut || Ok(target.clone()), &mut || {
-        Err(sdk_cache::Refusal::Cache(
-            "no [[inject]] rows: never read".into(),
-        ))
-    })
-    .unwrap()
+    judge(&project, build, &mut || Ok(target.clone())).unwrap()
 }
 
 fn pin(dir: &Path) -> String {

@@ -6,14 +6,10 @@ and the launcher applies them to the prebuilt game without rebuilding the game.
 
 ## When to use it
 
-Try these first. They work on native and wasm:
+Try a **hook** first, a method of `mod_api::Hooks` that the game calls at one moment, or a **Part** method
+([Your first native mod](../start/first-mod.md)). They work on native and wasm.
 
-1. a **hook**, a method of `mod_api::Hooks` that the game calls at one moment, or a **Part** method
-   ([Your first native mod](../start/first-mod.md));
-2. an **`[[inject]]` listener**: your function, run at the start or end of a game function with `mod_api`
-   values ([Injections](injections.md)).
-
-Take the native route when neither can do it: you need the game's real types or private fields, a change in
+Take the native route when they can't do it: you need the game's real types or private fields, a change in
 the middle of a function, a whole function replaced, or a change inside a hot loop. It is not for a wasm mod,
 which cannot declare `[native]` tables. Data kept on one entity or block is an
 [attachment](attachments.md), not this route.
@@ -28,7 +24,7 @@ which cannot declare `[native]` tables. Data kept on one entity or block is an
 | `[[native.module]]` | add a module of your own code inside a game source file, for your mixin code to share | [Support modules](native-route/5-support-modules.md) |
 | `[[native.state]]` | add a field to a game type: refused, use an attachment | [Native state](native-route/6-native-state.md) |
 
-Every row of these tables has an `id`. No two rows of one mod share an `id`, counting `[[inject]]` rows too.
+Every row of these tables has an `id`. No two rows of one mod share an `id`.
 
 ## It is tied to one game build
 

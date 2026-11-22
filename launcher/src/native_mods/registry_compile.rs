@@ -191,7 +191,6 @@ pub(super) fn compile(
                     prebuilt::library_entry(
                         &template,
                         &[&bundle.manifest],
-                        &catalog,
                         sdk.commit(),
                         id,
                         &bundle.manifest.version.to_string(),
@@ -354,15 +353,8 @@ pub(super) fn compile(
         .as_ref()
         .map(|patch| patch.installs.as_slice())
         .unwrap_or(&[]);
-    let mut entry = prebuilt::library_entry(
-        &template,
-        &[],
-        &catalog,
-        sdk.commit(),
-        "horizon_patch",
-        "0",
-        installs,
-    );
+    let mut entry =
+        prebuilt::library_entry(&template, &[], sdk.commit(), "horizon_patch", "0", installs);
     entry.push_str(prebuilt::PATCH_HOST_LINK);
     fs::write(out.join("src/lib.rs"), entry).map_err(|e| e.to_string())?;
     let mut manifest = toml::toml! { [package] name = "horizon_patch" version = "0.0.0" edition = "2024" [lib] crate-type = ["dylib"] [workspace] resolver = "2" };
@@ -765,11 +757,7 @@ mod tests {
             "[package]\nname='registry-game'\nversion='0.0.0'\nedition='2024'\n[workspace]\n",
         )
         .unwrap();
-        fs::write(
-            wrapper.join("src/main.rs"),
-            api::main_rs(&template, &[], &internals::Catalog::default()),
-        )
-        .unwrap();
+        fs::write(wrapper.join("src/main.rs"), api::main_rs(&template, &[])).unwrap();
         let bindings = prebuilt::wrapper_externs(&game.join("deps")).unwrap();
         let mut wrapper_plan = compiler_plan(
             &rust,

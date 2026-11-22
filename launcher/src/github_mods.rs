@@ -583,6 +583,20 @@ pub fn install(home: &Path, found: &Resolved, packed: &Packed) -> Result<Origin,
 
 /// Removes mod `id` installed from GitHub; false when it wasn't.
 pub fn remove(home: &Path, id: &str) -> Result<bool, String> {
+    remove_with(home, id, true)
+}
+
+/// Removes the untracked native file `row`: through [`remove`] when it came from GitHub, else as
+/// a file. A retired `[[inject]]` file whose id another mod shares keeps `mod.<id>`, which is
+/// that other mod's setting too.
+pub fn remove_installed(home: &Path, row: &crate::native_status::Installed) -> Result<(), String> {
+    if row.origin.is_none() {
+        return fs::remove_file(home.join(&row.file)).map_err(|e| e.to_string());
+    }
+    remove_with(home, &row.id, !row.shares_id()).map(|_| ())
+}
+
+fn remove_with(home: &Path, id: &str, turn_off: bool) -> Result<bool, String> {
     let _lock = crate::browser::lock_home(home).map_err(|e| e.to_string())?;
     if origin(home, id).is_none() {
         return Ok(false);
@@ -597,7 +611,9 @@ pub fn remove(home: &Path, id: &str) -> Result<bool, String> {
             }
         }
     }
-    java::set_enabled(home, id, false)?;
+    if turn_off {
+        java::set_enabled(home, id, false)?;
+    }
     Ok(true)
 }
 

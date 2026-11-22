@@ -1,50 +1,18 @@
-//! Load a real point-bearing guest into the plain engine and require a named refusal.
-#[path = "support/no_hooks.rs"]
-mod no_hooks;
-use horizon_mod_package::manifest::Package;
-use horizon_mod_wasm::{WasmPackage, load};
+//! A wasm package that still declares the removed `[[inject]]` is refused when it is read, with
+//! the retirement's diagnostic, before any module is loaded.
+use horizon_mod_package::manifest::{INJECT_REMOVED, MANIFEST, Package};
 
 #[test]
-#[ignore = "needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods"]
-fn real_guest_point_is_refused_without_staging() {
-    crate::test_stack::on_guest_stack(|| {
-        if mod_points::STAGED {
-            return;
-        }
-        let fixture = std::env::var("HORIZON_WASM_FIXTURE").unwrap();
-        let path = std::path::Path::new(&fixture);
-        let manifest = Package::read(path).unwrap().manifest;
-        let info = mod_api::PackageInfo::new(
-            manifest.id.clone(),
-            manifest.version.clone(),
-            mod_api::PackageKind::Code,
-            mod_api::Side::Both,
-            vec![manifest.id.clone()],
-            vec![],
-        );
-        let loaded = load(
-            &std::fs::read(std::env::var("HORIZON_WASM_STD").unwrap()).unwrap(),
-            vec![WasmPackage {
-                manifest,
-                module: Package::read_wasm(path).unwrap(),
-            }],
-        );
-        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
-        let refused = loaded
-            .initialize(&[info])
-            .expect_err("plain engine refuses game points");
-        assert_eq!(refused.len(), 1);
-        let (id, reason) = &refused[0];
-        assert_eq!(id, "wasm_fixture");
-        let message = reason.to_string();
-        assert!(
-            message.contains("wasm_fixture")
-                && message.contains("::tick")
-                && message.contains("no point sites"),
-            "{message}"
-        );
-    })
+fn a_package_with_inject_is_refused_as_removed() {
+    let package = tempfile::tempdir().unwrap();
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixture/horizon-mod.toml"
+    );
+    let manifest = std::fs::read_to_string(fixture).unwrap()
+        + "\n[[inject]]\nid = 'tick'\nat = 'horizon_client::game::Game::tick'\nkind = 'head'\nwith = 'on_tick'\n";
+    std::fs::write(package.path().join(MANIFEST), manifest).unwrap();
+    std::fs::write(package.path().join("mod.wasm"), b"\0asm\x01\0\0\0").unwrap();
+    let error = Package::read(package.path()).err().expect("refused");
+    assert_eq!(error, format!("{MANIFEST}: {INJECT_REMOVED}"));
 }
-
-#[path = "../src/test_stack.rs"]
-mod test_stack;

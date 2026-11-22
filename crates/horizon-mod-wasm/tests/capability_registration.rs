@@ -53,14 +53,11 @@ fn package_info(id: &str) -> mod_api::PackageInfo {
 
 fn with_guest(conflict: Option<&str>, f: impl FnOnce() + Send) {
     test_stack::on_guest_stack(|| {
-        let path = std::env::var("HORIZON_WASM_FIXTURE").expect(
-            "build tests/fixture with cargo horizon-mod build --wasm --catalog points.json",
-        );
+        let path = std::env::var("HORIZON_WASM_FIXTURE")
+            .expect("build tests/fixture with cargo horizon-mod build --wasm");
         let std = std::env::var("HORIZON_WASM_STD").expect("build the fixture's shared wasm std");
         let path = std::path::Path::new(&path);
-        let mut manifest = Package::read(path).unwrap().manifest;
-        // No injection points: this regression exercises only the generated public API.
-        manifest.inject.clear();
+        let manifest = Package::read(path).unwrap().manifest;
         let mut infos = vec![package_info("wasm_fixture"), package_info(fixture::PROBE)];
         if let Some(marker) = conflict {
             infos.push(package_info(marker));

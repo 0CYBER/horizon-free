@@ -25,7 +25,6 @@
 - [Registry keys](concepts/registry-keys.md)
 - [Wire types](concepts/wire-types.md)
 - [Dependencies between mods](concepts/dependencies.md)
-- [Injections](concepts/injections.md)
 - [The native route](concepts/native-route.md)
 - [Testing a mod](concepts/testing.md)
 

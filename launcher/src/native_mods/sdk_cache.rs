@@ -519,22 +519,6 @@ pub(super) fn surface(sdk: &Sdk, base: &Base) -> Result<mod_surface::Surface, Re
     mod_surface::Surface::read(&bytes).map_err(|error| refused(error.to_string()))
 }
 
-/// The folder of `sdk`'s build data (`points.json`, `internals.json`, `loops.json`,
-/// `functions.json`): unpacked once, then used again on its stamp. `stop` as [`slices`] asks it
-/// (a build's own check; planning outside a build never stops).
-pub(super) fn build_data(
-    sdk: &Sdk,
-    base: &Base,
-    stop: &dyn Fn() -> Result<(), String>,
-) -> Result<PathBuf, Refusal> {
-    const NAME: &str = "build-data.tar.xz";
-    let into = sdk.dir.join("build-data");
-    let mut fetched = Fetched::default();
-    // Route checks fetch it without the build lease, maybe beside a build: their own download.
-    fetch_into(sdk, base, NAME, &into, true, &mut fetched, &|_| {}, stop)?;
-    Ok(into)
-}
-
 /// What a download reports as it goes: bytes done of the whole route's.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Fetched {

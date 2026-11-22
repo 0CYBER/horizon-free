@@ -1,6 +1,6 @@
 //! Build each API-only native mod as its own Rust dylib from SDK metadata.
 //! The executable is fixed and the engine archive is never read.
-use super::{api, dependencies, internals, prebuilt};
+use super::{api, dependencies, prebuilt};
 use crate::rust_toolchain::Toolchain;
 use std::collections::HashMap;
 use std::fs;
@@ -51,7 +51,6 @@ pub(super) fn compile(
             &prebuilt::library_entry(
                 &api::template(&api.join(TEMPLATE))?,
                 &[&project.bundle.manifest],
-                &internals::Catalog::read(api)?,
                 sdk.commit(),
                 &project.bundle.manifest.id,
                 &project.bundle.manifest.version.to_string(),

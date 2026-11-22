@@ -111,9 +111,7 @@ fn real_wasm_datapack_reads_preserve_values_and_ordering() {
         use horizon_mod_package::manifest::Package;
         use horizon_mod_wasm::{WasmPackage, load};
         let path = std::env::var("HORIZON_WASM_FIXTURE").unwrap();
-        let mut manifest = Package::read(std::path::Path::new(&path)).unwrap().manifest;
-        // This fixture variant exercises ordinary hooks and Parts, not game points.
-        manifest.inject.clear();
+        let manifest = Package::read(std::path::Path::new(&path)).unwrap().manifest;
         let info = PackageInfo::new(
             manifest.id.clone(),
             manifest.version.clone(),

@@ -41,15 +41,3 @@ impl mod_api::BlockEntityPart for Counter {
 pub fn note(what: &str) {
     eprintln!("fnr: loop {what}");
 }
-
-static ENTRY_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The API listener at the loop's entry, `[[inject]] listen`.
-pub fn entry_listener(_host: mod_api::HostSide<'_>, _args: &mut mod_points::TickBlockEntitiesArgs) {
-    let calls = ENTRY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    if calls % 200 == 1 {
-        note(&format!(
-            "api head listener at tick_block_entities, call {calls}"
-        ));
-    }
-}

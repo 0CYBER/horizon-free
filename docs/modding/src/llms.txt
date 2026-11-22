@@ -2,7 +2,7 @@
 
 > Horizon is Minecraft: Java Edition 26.3 in Rust. A mod is one `.hmod`: content (`assets/`, `data/`) and, for a code mod, a Rust crate built natively by the launcher or to `mod.wasm`, against the `mod_api` crate (`horizon-mod-api`).
 
-Rules for code: implement `mod_api::Hooks` at the crate root with `#[mod_api::horizon_mod]`; prefer a hook or Part method; otherwise an `[[inject]]` listener at a published point (native and wasm); change the game's own code only through the native route (`[[native.mixin]]`, `[[native.loop]]`, `[[native.bridge]]`, `[[native.module]]`, native only). Hook names follow NeoForge 26.3; events are `&mut`; writes take a `ServerHost`. The id and version come only from `horizon-mod.toml`; ids are `[a-z0-9_]`. A mod is `[native]` or `[wasm]`, never both; unknown manifest fields are refused.
+Rules for code: implement `mod_api::Hooks` at the crate root with `#[mod_api::horizon_mod]`; prefer a hook or Part method; change the game's own code only through the native route (`[[native.mixin]]`, `[[native.loop]]`, `[[native.bridge]]`, `[[native.module]]`, native only). Hook names follow NeoForge 26.3; events are `&mut`; writes take a `ServerHost`. The id and version come only from `horizon-mod.toml`; ids are `[a-z0-9_]`. A mod is `[native]` or `[wasm]`, never both; unknown manifest fields are refused.
 
 ## Getting started
 
@@ -18,7 +18,7 @@ Rules for code: implement `mod_api::Hooks` at the crate root with `#[mod_api::ho
 - [Load phases and access](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/load-phases.md)
 - [Parts](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/parts.md), [Capabilities](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/capabilities.md), [Attachments](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/attachments.md), [Transactions](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/transactions.md)
 - [Registry keys](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/registry-keys.md), [Wire types](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/wire-types.md), [Dependencies between mods](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/dependencies.md)
-- [Injections](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/injections.md) and [the native route](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/native-route.md)
+- [The native route](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/native-route.md)
 
 ## How-to
 

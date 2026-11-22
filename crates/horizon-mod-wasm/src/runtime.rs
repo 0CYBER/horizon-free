@@ -450,12 +450,6 @@ impl WeakWasmMod {
     pub(crate) fn equip_instance(&self) -> usize {
         Arc::as_ptr(&self.prepared) as usize
     }
-    /// Whether the module's group has stopped or the module has been dropped.
-    pub(crate) fn is_stopped(&self) -> bool {
-        self.running
-            .upgrade()
-            .is_some_and(|running| running.poisoned.load(Ordering::Relaxed))
-    }
     pub(crate) fn prepare(&self, bytes: &[u8]) -> Option<(u32, u32)> {
         if self
             .running
@@ -1011,22 +1005,6 @@ impl WasmMod {
                     built: layout,
                     game: *mod_api::wire::LAYOUT,
                 });
-            }
-            if instance
-                .get_func(&mut group.store, "horizon_layout_ext")
-                .is_some()
-            {
-                let built = instance
-                    .get_typed_func::<(), u64>(&mut group.store, "horizon_layout_ext")
-                    .map_err(load)?
-                    .call(&mut group.store, ())
-                    .map_err(load)?;
-                if built != mod_points::points_layout() {
-                    return Err(Refusal::PointLayout {
-                        built,
-                        game: mod_points::points_layout(),
-                    });
-                }
             }
             let input = instance
                 .get_typed_func(&mut group.store, "horizon_in")

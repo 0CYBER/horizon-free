@@ -5,7 +5,7 @@
 //! and wasm32-unknown-unknown installed:
 //! ```sh
 //! cargo build -p cargo-horizon-mod
-//! (cd crates/horizon-mod-wasm/tests/fixture && "$OLDPWD/target/debug/cargo-horizon-mod" horizon-mod build --wasm --catalog points.json && "$OLDPWD/target/debug/cargo-horizon-mod" horizon-mod wasm-std "$OLDPWD/target/horizon-wasm-std.wasm" --catalog points.json)
+//! (cd crates/horizon-mod-wasm/tests/fixture && "$OLDPWD/target/debug/cargo-horizon-mod" horizon-mod build --wasm && "$OLDPWD/target/debug/cargo-horizon-mod" horizon-mod wasm-std "$OLDPWD/target/horizon-wasm-std.wasm")
 //! HORIZON_WASM_STD="$PWD/target/horizon-wasm-std.wasm" HORIZON_WASM_FIXTURE="$PWD/crates/horizon-mod-wasm/tests/fixture/target/horizon-mod/wasm_fixture.hmod" cargo test --release -p horizon-mod-wasm --features listener-fixture --test bench empty_subscribed_listener -- --ignored --exact --nocapture
 //! ```
 //! Building the fixture rewrites its `horizon-mod.toml` with the generated wasm
@@ -136,9 +136,7 @@ fn block_entity_ticks() {
         let path = std::env::var("HORIZON_WASM_FIXTURE").unwrap();
         let path = std::path::Path::new(&path);
         let std = std::fs::read(std::env::var("HORIZON_WASM_STD").unwrap()).unwrap();
-        let mut manifest = Package::read(path).unwrap().manifest;
-        // This fixture variant exercises ordinary hooks and Parts, not game points.
-        manifest.inject.clear();
+        let manifest = Package::read(path).unwrap().manifest;
         let info = mod_api::PackageInfo::new(
             manifest.id.clone(),
             manifest.version.clone(),
@@ -211,9 +209,7 @@ fn empty_subscribed_listener() {
         let path = std::env::var("HORIZON_WASM_FIXTURE").unwrap();
         let path = std::path::Path::new(&path);
         let std = std::fs::read(std::env::var("HORIZON_WASM_STD").unwrap()).unwrap();
-        let mut manifest = Package::read(path).unwrap().manifest;
-        // This fixture variant exercises ordinary hooks and Parts, not game points.
-        manifest.inject.clear();
+        let manifest = Package::read(path).unwrap().manifest;
         let info = mod_api::PackageInfo::new(
             manifest.id.clone(),
             manifest.version.clone(),

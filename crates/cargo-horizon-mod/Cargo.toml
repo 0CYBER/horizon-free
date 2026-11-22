@@ -20,7 +20,6 @@ horizon-mod-source = { path = "../horizon-mod-source" }
 # `canonicalize` that keeps plain Windows paths (no verbatim prefix), as `cargo metadata` prints them.
 dunce = "1.0.5"
 horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index", "prebuilt"] }
-horizon-mod-point-emit = { path = "../horizon-mod-point-emit" }
 # The transport's group-state size, which the std member is written with (already a dependency
 # of `horizon-mod-package`).
 horizon-mod-vocab = { path = "../horizon-mod-vocab" }

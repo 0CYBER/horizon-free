@@ -77,8 +77,7 @@ impl Hooks for Override {
 }
 ```
 
-`priority` is an `i32`, 0 when omitted; mods of equal priority keep dependency order, as `[[inject]]`
-priorities do ([Injections](injections.md#ordering)). Each hook's order is fixed once, when the mods are
+`priority` is an `i32`, 0 when omitted; mods of equal priority keep dependency order. Each hook's order is fixed once, when the mods are
 installed. Every cancellable hook's event has a `cancelled` field: a mod without `receive_cancelled` always sees
 `false`, since it is not called once the event is cancelled. A mod that receives cancelled events and sets it back to
 `false` lets the game's behaviour run, and the mods after it are told again. An event the game hands over already
@@ -188,9 +187,3 @@ in `mod_api`. Raw GPU access is native-only, unstable and outside that API, in
 `mod_render::render` (`horizon-mod-render`). Replace its frame functions with native HEAD mixins compiled against the prebuilt game.
 `render_needs` collects requests; `world_drawn` runs before the hand and HUD, and
 `hand_drawn` runs after the hand, on the render thread. Use API draw contexts for API-typed drawing.
-
-## Hooks and injections
-
-A hook is not an injection point: an `[[inject]]` never runs inside a hook's dispatch. A `head` injection that
-cancels the game function which calls a hook keeps that hook from firing at all
-([Injections](injections.md)).

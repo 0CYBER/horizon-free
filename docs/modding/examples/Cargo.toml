@@ -12,7 +12,6 @@ path = "src/lib.rs"
 
 [dependencies]
 horizon-mod-api = { path = "../../../crates/horizon-mod-api" }
-horizon-mod-points = { path = "../../../crates/horizon-mod-points" }
 
 [lints]
 workspace = true

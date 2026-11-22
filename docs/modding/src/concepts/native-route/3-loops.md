@@ -5,7 +5,7 @@ asks your mod's type what to do. You fill the slot with a `[[native.loop]]` row;
 `block_entities.tick`.
 
 Use a slot to change how individual block entities tick, at tick speed. To run code once around the whole
-block entity tick, an [`[[inject]]` listener](../injections.md) or a `HEAD` mixin on the loop is enough.
+block entity tick, a `HEAD` mixin on the loop is enough.
 
 ## Example
 
@@ -165,7 +165,7 @@ Its saved data is `entity.nbt`, its item slots `entity.items` and its menu data 
 ## Mixins on the loop
 
 The loop's entry is `horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities`. A `HEAD` or
-`RETURN` mixin and an `[[inject]]` listener on it run around the loop. To change a place inside the loop,
+`RETURN` mixin on it runs around the loop. To change a place inside the loop,
 target the loop's body, `…::tick_block_entities_with`. Such a mixin does not apply when the loop runs
 without slots, from inside a slot or after a panic.
 

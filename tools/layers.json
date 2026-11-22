@@ -81,7 +81,6 @@
     "horizon-internals": "platform",
     "horizon-mod-api": "platform",
     "horizon-mod-api-macros": "engine",
-    "horizon-mod-point-emit": "platform",
     "horizon-mod-point-shape": "engine",
     "horizon-mod-surface": "engine",
     "horizon-mod-source": "engine",

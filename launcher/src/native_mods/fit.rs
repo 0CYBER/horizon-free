@@ -8,7 +8,7 @@
 //!
 //! People read "made for" (a mod's pin) and "fits"; builds by their Nightly names; and items as
 //! what they are ("the hook `player_logged_in`"), never surface ids or hashes.
-use super::{api, internals, prebuilt, sdk_cache};
+use super::{api, prebuilt, sdk_cache};
 use crate::i18n::{tr, trf};
 use horizon_platform::mod_package::mod_surface;
 use mod_surface::uses::{self, Change, Fit, ItemKind, Misfit, UsesTable};
@@ -36,8 +36,6 @@ pub enum Verdict {
         made_for: String,
         misfits: Vec<Misfit>,
     },
-    /// An `[[inject]]` row's point is not the same in this build: why.
-    Points { made_for: String, why: String },
 }
 
 impl Verdict {
@@ -59,12 +57,11 @@ pub(super) fn table(dir: &Path) -> Option<UsesTable> {
 }
 
 /// How `project` stands against build `build`, whose surface `surface` gives (asked for only when
-/// the mod was made for another build) and whose build data `catalog` holds.
+/// the mod was made for another build).
 pub(super) fn judge(
     project: &api::Project<'_>,
     build: &str,
     surface: &mut dyn FnMut() -> Result<std::rc::Rc<mod_surface::Surface>, sdk_cache::Refusal>,
-    catalog: &mut dyn FnMut() -> Result<std::rc::Rc<internals::Catalog>, sdk_cache::Refusal>,
 ) -> Result<Verdict, sdk_cache::Refusal> {
     let made_for = project.bundle.native().horizon.clone();
     if made_for == build {
@@ -79,14 +76,6 @@ pub(super) fn judge(
     let target = surface()?;
     if let Fit::DoesNotFit(misfits) = uses::fits(&table.entries, target.as_ref()) {
         return Ok(Verdict::DoesNotFit { made_for, misfits });
-    }
-    if !project.bundle.manifest.inject.is_empty() {
-        if let Err(error) = catalog()?.check(&project.bundle.manifest) {
-            return Ok(Verdict::Points {
-                made_for,
-                why: error.to_string(),
-            });
-        }
     }
     Ok(Verdict::Fits { made_for })
 }
@@ -237,10 +226,6 @@ pub fn line(name: &str, verdict: &Verdict, build: &str) -> String {
                 )
             }
         }
-        Verdict::Points { made_for, why } => trf(
-            "It was made for {made_for} and this instance runs {build}, where a point it hooks is not the same: {why}",
-            &[("made_for", &made(made_for)), ("build", build), ("why", why)],
-        ),
     }
 }
 
@@ -251,9 +236,7 @@ pub fn headline(name: &str, verdict: &Verdict) -> String {
         Verdict::Exact { .. } | Verdict::NoList { .. } => {
             trf("{mod} works on another version only.", &[("mod", name)])
         }
-        Verdict::DoesNotFit { .. } | Verdict::Points { .. } => {
-            trf("{mod} doesn't fit this game.", &[("mod", name)])
-        }
+        Verdict::DoesNotFit { .. } => trf("{mod} doesn't fit this game.", &[("mod", name)]),
     }
 }
 
@@ -277,7 +260,6 @@ pub fn short(verdict: &Verdict) -> String {
         Verdict::Exact { .. } => tr("it changes the game's own code").to_owned(),
         Verdict::NoList { .. } => tr("its package doesn't say what it uses").to_owned(),
         Verdict::DoesNotFit { misfits, .. } => changes(misfits),
-        Verdict::Points { why, .. } => why.clone(),
     }
 }
 

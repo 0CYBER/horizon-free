@@ -65,7 +65,6 @@ members = [
     "crates/horizon-mod-point-shape",
     "crates/horizon-mod-source",
     "crates/horizon-mod-surface",
-    "crates/horizon-mod-point-emit",
     "crates/horizon-mod-api-gen/dispatch-tests",
     "crates/horizon-mod-wasm/wire-loopback",
     "crates/cargo-horizon-mod",

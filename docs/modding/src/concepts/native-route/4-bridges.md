@@ -5,7 +5,7 @@ launcher generates an extension trait and its implementation in the function-rep
 Your helpers call the trait method with ordinary method syntax.
 
 Use one when a [mixin helper](2-mixins.md#writing-a-helper) needs a field or method that Rust's privacy hides
-from the target's module. For a value a hook or `[[inject]]` listener already gets, you need no bridge.
+from the target's module. For a value a hook already gets, you need no bridge.
 
 ## Example
 
