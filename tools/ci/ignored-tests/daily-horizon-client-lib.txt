@@ -46,7 +46,8 @@ horizon-client-lib entities::honey_slide_tests::a_resting_item_skips_move_three_
 horizon-client-lib entities::honey_slide_tests::an_item_at_the_top_of_a_bubble_column_is_at_its_surface lib daily resources
 horizon-client-lib entities::orb_lava_tests::a_burning_server_orb_is_hurt_every_twenty_ticks_and_burns_out lib daily resources
 horizon-client-lib entities::orb_lava_tests::a_server_orb_takes_lava_damage_after_moving_and_discards_at_zero lib daily resources
-horizon-client-lib entities::orb_lava_tests::an_invulnerable_orb_keeps_its_health_but_still_emits_lava_sound lib daily resources
+horizon-client-lib entities::orb_lava_tests::an_invulnerable_orb_keeps_its_health_and_makes_no_lava_sound lib daily resources
+horizon-client-lib entities::orb_lava_tests::an_invulnerable_orb_keeps_its_health_on_fire lib daily resources
 horizon-client-lib entities::orb_lava_tests::boundary_case_surviving_and_discarding_and_multi_contact_in_one_tick lib daily resources
 horizon-client-lib entities::orb_lava_tests::legacy_orb_in_air_or_water_or_non_lava_does_not_play_sound_or_consume_random lib daily resources
 horizon-client-lib entities::orb_lava_tests::negative_case_non_contact_or_client_orb_does_not_play_burn_sound lib daily resources

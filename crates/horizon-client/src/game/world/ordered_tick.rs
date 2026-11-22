@@ -336,7 +336,11 @@ impl Game<'_> {
                         })
                         .near(area.inflate(Vec3::new(1.0, 1.0, 1.0)), &mut nearby);
                     let orb_id = self.orbs[i].id;
-                    let vanilla = self.saved_refuses_damage(orb_id, "minecraft:lava", false);
+                    // The orb's saved `Invulnerable` refuses lava and its burn alike.
+                    let refuses = [
+                        self.saved_refuses_damage(orb_id, "minecraft:lava", false),
+                        self.saved_refuses_damage(orb_id, "minecraft:on_fire", false),
+                    ];
                     let registry = self.pack.assets.registry;
                     let tags = world_items!(self);
                     let block_registries = &self.pack.block_registries;
@@ -367,9 +371,14 @@ impl Game<'_> {
                             &self.loop_context,
                             &mut on_sound,
                             &nearby,
-                            &mut |world| {
+                            &mut |world, damage| {
+                                let (damage_type, vanilla) = if damage == "minecraft:on_fire" {
+                                    ("minecraft:on_fire", refuses[1])
+                                } else {
+                                    ("minecraft:lava", refuses[0])
+                                };
                                 let source = horizon_client::health::HurtSource {
-                                    damage_type: "minecraft:lava",
+                                    damage_type,
                                     causing: 0,
                                     direct: 0,
                                     position: None,

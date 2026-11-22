@@ -86,14 +86,30 @@ impl Game<'_> {
     }
     /// `ExperienceOrb.tick`'s `applyEffectsFromBlocks` after its move: each
     /// cactus its box is in takes a point off its 5 health
-    /// (`ExperienceOrb.hurtServer`, no event). True when that destroyed it.
+    /// (`ExperienceOrb.hurtServer`, no event), unless its
+    /// `isInvulnerableToBase` refuses `cactus` (an `Invulnerable` orb, or a
+    /// mod's hook). True when that destroyed it.
     pub(super) fn orb_cactus_hits(&mut self, i: usize) -> bool {
         if self.remote.is_some() {
             return false;
         }
         let bounds = self.orbs[i].bounds();
         let hits = cells_named(self, bounds, "minecraft:cactus").len();
-        (0..hits).any(|_| self.orbs[i].hurt(1.0))
+        let id = self.orbs[i].id;
+        (0..hits).any(|_| {
+            let source = horizon_client::health::HurtSource {
+                damage_type: "minecraft:cactus",
+                causing: 0,
+                direct: 0,
+                position: None,
+            };
+            let vanilla = self.saved_refuses_damage(id, "minecraft:cactus", false);
+            let refused = crate::game::entity::damage_level_of!(self).invulnerability_check(
+                horizon_client::health::Hurting::Entity(id as i32, "minecraft:experience_orb", source),
+                vanilla,
+            );
+            !refused && self.orbs[i].hurt(1.0)
+        })
     }
 }
 
