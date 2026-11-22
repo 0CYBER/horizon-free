@@ -14,6 +14,7 @@ pub(crate) mod enchantment_damage;
 pub mod enchantments;
 pub(crate) mod energy_capability;
 pub(crate) mod item_component_handlers;
+pub mod mod_slots;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod item_attributes;
