@@ -1,0 +1,2 @@
+# Boat track regression using prepared vanilla resources.
+horizon-client game::boats::friction_tests::ice_beside_bottom_slabs_keeps_vanilla_boat_speed lib daily resources
