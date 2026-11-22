@@ -81,7 +81,8 @@ merged pull request, release, shipped item and weekly summary, newest first, the
 { "format": "horizon-journal", "version": 2, "generated": "…", "url": "https://playhorizon.dev/hub#journal",
   "entries": [
     { "id": "pr-1234", "kind": "merge", "date": "…", "title": "the pull request's title", "url": "…",
-      "number": 1234, "item": "example", "item_title": "Example" },
+      "number": 1234, "item": "example", "item_title": "Example",
+      "author": "…", "merged_by": "…", "labels": ["…"] },
     { "id": "release-v0.2.57", "kind": "release", "date": "…", "title": "…", "plain": "one line", "url": "…",
       "tag": "v0.2.57" },
     { "id": "shipped-server-resource-packs", "kind": "shipped", "date": "the release's", "title": "…",
@@ -92,7 +93,9 @@ merged pull request, release, shipped item and weekly summary, newest first, the
 ```
 
 - An `id` never changes: readers post each one once. `merge` entries are the pull requests players see (no
-  `skip-release` label), plus any that moves a roadmap item; `item` is absent when none does.
+  `skip-release` label), plus any that moves a roadmap item; `item` is absent when none does. `author` and
+  `merged_by` are GitHub logins (`merged_by` can be `null`) and `labels` lists the pull request's label names. All
+  three are optional: older entries do not have them, and readers must cope without.
 - `announce: true` (the item's `announce` key) asks Kira to post the shipped item on X too, with `post`.
 - `https://playhorizon.dev/data/roadmap.json` is `roadmap.toml` as JSON (`areas`, `items` with every key above,
   `overview`, the weekly summaries); an item's page is `https://playhorizon.dev/hub#<id>`.
