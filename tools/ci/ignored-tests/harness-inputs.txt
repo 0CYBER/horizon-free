@@ -3,6 +3,7 @@
 # Not known failures.
 horizon-client game::end::cooldown_tests::gateway_counters_match_actual_vanilla_methods HORIZON_PORTAL_REFERENCE needs
 horizon-client game::nether_portal::cooldown_tests::portal_contact_and_waiting_handoff_match_vanilla_counters HORIZON_PORTAL_REFERENCE needs
+horizon-client game::nether_portal::persistence_tests::live_and_saved_portal_counters_follow_runtime_and_data_updates HORIZON_PORTAL_REFERENCE needs
 horizon-client game::functions::typed_state_range_read_tests::loaded_pack_state_ranges_match_typed_controls HORIZON_TYPED_RANGE_PACK needs
 horizon-client game::functions::typed_state_range_read_tests::loaded_pack_direction_ranges_keep_full_and_filtered_domains HORIZON_TYPED_RANGE_PACK needs
 horizon-client game::potions::arrow_contents::actual_arrow_contents_match_pinned_methods HORIZON_POTION_INPUT needs

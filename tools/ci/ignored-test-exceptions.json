@@ -362,6 +362,14 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::nether_portal::persistence_tests::live_and_saved_portal_counters_follow_runtime_and_data_updates",
+    "path": "crates/horizon-client/src/game/blocks/tests/portal_persistence_tests.rs",
+    "reason": "needs explicit HORIZON_TEST_RESOURCES and HORIZON_PORTAL_REFERENCE",
+    "rationale": "Existing separately supplied input HORIZON_PORTAL_REFERENCE in tools/ci/ignored-tests/harness-inputs.txt; its dedicated workflow/harness must supply this input, which ordinary prepared resources do not contain. needs explicit HORIZON_TEST_RESOURCES and HORIZON_PORTAL_REFERENCE"
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::payload_transport::wasm_config_tests::compiled_guest_runs_on_configuration_connection_thread",
     "path": "crates/horizon-client/src/game/modding/payload_transport/wasm_config_tests.rs",
     "reason": "requires prepared resources and compiled HORIZON_WASM_FIXTURE/HORIZON_WASM_STD",

@@ -179,7 +179,9 @@ impl Game<'_> {
             Target::Stand(id) => {
                 let uuid = self.uuid_for(id);
                 let a = self.armor_stands.iter().find(|a| a.id == id)?;
-                entity_nbt::armor_stand_to_nbt(a, uuid, self.persist.raw.get(&id))
+                let mut tag = entity_nbt::armor_stand_to_nbt(a, uuid, self.persist.raw.get(&id));
+                self.save_portal_cooldown(id, &mut tag);
+                tag
             }
             Target::Frame(id) => {
                 let uuid = self.uuid_for(id);
@@ -881,6 +883,14 @@ impl Game<'_> {
         | Target::Fangs(id)
         | Target::Projectile(id) = t
         {
+            // Entity.load: only the kinds whose data reads overlay the live
+            // counter, so an unrelated merge writes back what it just read.
+            if matches!(
+                t,
+                Target::Item(_) | Target::Stand(_) | Target::Boat(_) | Target::Cart(_)
+            ) {
+                self.restore_portal_cooldown(id, &tag);
+            }
             self.persist.raw.insert(id, tag);
         }
         Ok(())
