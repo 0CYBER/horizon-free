@@ -94,7 +94,9 @@ pub enum PackFinderError {
     Text(crate::TextFormError),
     /// The requested directory is outside the package's logical root.
     InvalidPath,
-    /// No loaded package matches the location's namespace, or it cannot be opened.
+    /// No loaded package matches the location's namespace, the file at its path cannot be opened,
+    /// or that file fails the package's own checks: an entry they refuse, or a manifest naming
+    /// another mod than the location does.
     MissingPackage,
     /// The directory does not contain readable pack metadata.
     InvalidMetadata,

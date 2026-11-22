@@ -224,6 +224,15 @@ impl Zip {
     pub fn directory(&self) -> Arc<[u8]> {
         self.archive.clone().into_inner().tail
     }
+    /// A reader of the bytes this archive was opened from, at their start: the same file
+    /// and the same tail every entry above was indexed from. A caller that checks those
+    /// entries and then mounts this archive checks what it mounts; reopening the pathname
+    /// instead could check a package written since.
+    pub fn reader(&self) -> impl Read + Seek + 'static {
+        let mut reader = self.archive.clone().into_inner();
+        reader.position = 0;
+        reader
+    }
     /// The files, as `FilePackResources.listResources` lists them (folder
     /// entries skipped).
     pub fn names(&self) -> impl Iterator<Item = &str> {

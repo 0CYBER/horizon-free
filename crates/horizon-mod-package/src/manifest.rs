@@ -888,9 +888,7 @@ impl Package {
             return Err("archive I/O is unavailable on wasm32".into());
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-                let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-                return Self::read_zip(&mut zip);
+                return Self::read_stream(std::fs::File::open(path).map_err(|e| e.to_string())?);
             }
         };
         let mut package = Self::from_parts(&toml, icon, has_cargo, has_source, has_wasm)?;
@@ -907,6 +905,22 @@ impl Package {
             wasm.check(&bytes).map_err(|e| e.to_string())?;
         }
         Ok(package)
+    }
+
+    /// Read and validate an archive from bytes the caller has already opened: the same rule
+    /// [`read_zip`](Self::read_zip) applies, so what a caller mounts is what these checks read
+    /// rather than a pathname that may hold another package by the time it is opened again.
+    pub fn read_stream<R: Read + std::io::Seek>(reader: R) -> Result<Self, String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = reader;
+            Err("archive I/O is unavailable on wasm32".into())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut zip = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
+            Self::read_zip(&mut zip)
+        }
     }
 
     /// Read and validate an archive, including all selected source and resource entries.
