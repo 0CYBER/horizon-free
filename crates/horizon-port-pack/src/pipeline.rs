@@ -135,7 +135,7 @@ pub fn carry(
             .ok()
     });
     let allowed = |b: &str| vanilla.as_ref().is_none_or(|v| v.contains(b));
-    let conventions = crate::worldgen::loader_biome_tags(work);
+    let conventions = crate::worldgen::loader_tags(work);
     let minecraft = minecraft(work);
     // A data-only jar is a data pack (`datapacks`), never also a content mod.
     let chosen = |r: &inventory::Record| {

@@ -913,7 +913,7 @@ pub fn structure_set_tags<R: Read + std::io::Seek>(
     raw.keys().map(|t| (t.clone(), expand(t))).collect()
 }
 
-/// The `#c:` biome tags `v` names.
+/// The `#c:` tags `v` names.
 pub fn convention_tags(v: &Value, out: &mut BTreeSet<String>) {
     match v {
         Value::String(s) => {
@@ -927,10 +927,14 @@ pub fn convention_tags(v: &Value, out: &mut BTreeSet<String>) {
     }
 }
 
-/// The loader's own convention biome tags (`data/c/tags/worldgen/biome/`),
-/// by path, read from the loader jar `fetch` keeps in `<work>/loader/`.
-pub fn loader_biome_tags(work: &Path) -> BTreeMap<String, Value> {
-    let mut out = BTreeMap::new();
+/// The loader's own convention tags (`data/c/tags/`), by registry (`item`, `worldgen/biome`...)
+/// and then by path.
+pub type LoaderTags = BTreeMap<String, BTreeMap<String, Value>>;
+
+/// The loader's own convention tags of every registry, read from the loader jar `fetch` keeps
+/// in `<work>/loader/`: NeoForge's `c:is_plains` biome tag, its `c:dusts/redstone` item tag.
+pub fn loader_tags(work: &Path) -> LoaderTags {
+    let mut out = LoaderTags::new();
     let Ok(dir) = std::fs::read_dir(work.join("loader")) else {
         return out;
     };
@@ -946,13 +950,13 @@ pub fn loader_biome_tags(work: &Path) -> BTreeMap<String, Value> {
             let Ok(mut entry) = zip.by_index(i) else {
                 continue;
             };
-            let Some(path) = entry
+            let Some((registry, path)) = entry
                 .name()
                 .ok()
                 .as_deref()
-                .and_then(|n| n.strip_prefix("data/c/tags/worldgen/biome/"))
+                .and_then(|n| n.strip_prefix("data/c/tags/"))
                 .and_then(|p| p.strip_suffix(".json"))
-                .map(str::to_owned)
+                .and_then(tag_registry)
             else {
                 continue;
             };
@@ -960,11 +964,21 @@ pub fn loader_biome_tags(work: &Path) -> BTreeMap<String, Value> {
             if let Ok(text) = budget.read_text(&mut entry, declared, crate::entry::MAX_TEXT)
                 && let Ok(v) = serde_json::from_str(&text)
             {
-                out.insert(path, v);
+                out.entry(registry).or_default().insert(path, v);
             }
         }
     }
     out
+}
+
+/// A tag file's registry and path under a `tags/` folder: the worldgen registries take two
+/// segments (`worldgen/biome/is_plains`), the others one (`item/dusts/redstone`).
+fn tag_registry(rel: &str) -> Option<(String, String)> {
+    let segments = if rel.starts_with("worldgen/") { 2 } else { 1 };
+    let mut parts = rel.splitn(segments + 1, '/');
+    let registry: Vec<&str> = parts.by_ref().take(segments).collect();
+    let path = parts.next().filter(|p| !p.is_empty())?;
+    (registry.len() == segments).then(|| (registry.join("/"), path.to_owned()))
 }
 
 /// `tags` and the convention tags they include, in `conventions`.
@@ -1529,6 +1543,56 @@ mod tests {
             placed["placement"][0],
             json!({"type": "minecraft:offset", "x": 2, "y": 1, "z": 2})
         );
+    }
+
+    /// The loader jar's convention tags, by registry: a worldgen registry is two folders deep
+    /// (`worldgen/biome`), the others one (`item`), and a tag path keeps its own folders.
+    #[test]
+    fn loader_tags_are_read_by_registry() {
+        use std::io::Write;
+        let work = std::env::temp_dir().join(format!(
+            "horizon-loader-tags-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(work.join("loader")).unwrap();
+        let mut zip = zip::ZipWriter::new(
+            std::fs::File::create(work.join("loader/neoforge-21.1.1-universal.jar")).unwrap(),
+        );
+        for (name, body) in [
+            (
+                "data/c/tags/item/dusts/redstone.json",
+                r#"{"values": ["minecraft:redstone"]}"#,
+            ),
+            (
+                "data/c/tags/worldgen/biome/is_plains.json",
+                r#"{"values": ["minecraft:plains"]}"#,
+            ),
+            ("data/c/tags/block/ores.json", r#"{"values": []}"#),
+            ("data/minecraft/tags/item/planks.json", r#"{"values": []}"#),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        let tags = loader_tags(&work);
+        let paths =
+            |registry: &str| -> Vec<&str> { tags[registry].keys().map(String::as_str).collect() };
+        assert_eq!(
+            tags.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["block", "item", "worldgen/biome"]
+        );
+        assert_eq!(paths("item"), ["dusts/redstone"]);
+        assert_eq!(paths("worldgen/biome"), ["is_plains"]);
+        assert_eq!(
+            tags["item"]["dusts/redstone"],
+            json!({"values": ["minecraft:redstone"]})
+        );
+        std::fs::remove_dir_all(&work).unwrap();
     }
 
     #[test]
