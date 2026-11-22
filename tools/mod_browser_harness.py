@@ -166,7 +166,7 @@ def main():
     ap.add_argument("--query", default="macaw", help="the search text that finds it")
     ap.add_argument("--launcher", default=str(ROOT / "launcher/target/debug/horizon-launcher"))
     ap.add_argument("--bin", default=str(ROOT / "target/fast"), help="folder with horizon-client and horizon-ctl")
-    ap.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
+    ap.add_argument("--resources", default=str(lab.RESOURCES))
     ap.add_argument("--keep", action="store_true", help="keep the scratch game folder")
     args = ap.parse_args()
 

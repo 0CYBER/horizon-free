@@ -467,7 +467,7 @@ def main():
     p.add_argument('--ticks', type=int, default=40)
     p.add_argument('--only', nargs='*', help='machine names')
     p.add_argument('--profile', default='fast', help='the cargo profile of the built horizon-client and horizon-ctl')
-    p.add_argument('--resources', default=str(ROOT / '.local/horizon-client/26.3'))
+    p.add_argument('--resources', default=str(lab.RESOURCES))
     p.add_argument('--near', nargs=4, type=int, metavar=('DX', 'DY', 'DZ', 'R'),
                    help='keep only the setup commands within R blocks of this offset from the machine\'s origin')
     p.add_argument('--drop', nargs='*', type=int, default=[], help='with --near: leave out these setblock commands (by index)')

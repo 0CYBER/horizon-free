@@ -51,7 +51,7 @@ FLEET_SHARED = Path.home() / "code" / "horizon-parity" / "shared-local" / "parit
 if "PARITY_SHARED" not in os.environ and not (ROOT / ".local" / "minecraft").exists() and FLEET_SHARED.is_dir():
     # A fleet worktree without vanilla data still knows each harness's dependencies.
     os.environ["PARITY_SHARED"] = str(FLEET_SHARED)
-from tools import parity, process_tree, release_train  # noqa: E402
+from tools import lab, parity, process_tree, release_train  # noqa: E402
 from tools.ci import rust_changes  # noqa: E402
 
 RBUILD = Path.home() / "fleet" / "rbuild"
@@ -934,8 +934,9 @@ def block(args, base, merge_base, changed, counts, steps, label, elapsed, revisi
         lines.append(f"| {step.name} | {MARK[step.status]}{detail}{took} |")
     content = next((step for step in steps if step.name == "content root tests"), None)
     resource_override = os.environ.get("HORIZON_TEST_RESOURCES")
+    resources = lab.RESOURCES.relative_to(lab.ROOT)
     resource_roots = [Path(resource_override)] if resource_override is not None else [
-        ROOT / ".local/horizon-client/26.3", ROOT.parent.parent / ".local/horizon-client/26.3"]
+        ROOT / resources, ROOT.parent.parent / resources]
     if args.host == "local" and not any((root / "gameplay-facts.json").is_file() for root in resource_roots):
         data_tests = "data-backed tests not run: no prepared data here"
     elif content and content.status in {"pass", "fail"}:

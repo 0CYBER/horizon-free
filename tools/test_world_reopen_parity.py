@@ -29,7 +29,7 @@ import fast_bins  # noqa: E402
 import lab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-RESOURCES = ROOT / '.local' / 'horizon-client' / '26.3'
+RESOURCES = lab.RESOURCES
 RUN = ROOT / '.local' / 'world-reopen'
 CYCLES = 3
 

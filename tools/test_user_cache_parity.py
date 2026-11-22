@@ -216,7 +216,7 @@ def main():
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', f'-Dminecraft.api.discovery.host={discovery}',
                       '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    horizon_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
     os.environ['HORIZON_API_DISCOVERY'] = discovery
     try:
         vanilla = run_side('vanilla', vanilla_server, build, services)

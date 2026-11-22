@@ -178,7 +178,7 @@ def main():
         assert a.binary
         meta=json.loads((a.reference_dir/'reference-client.json').read_text())
         client=meta['command'];world=Path(meta['world'])
-        actual=run_side('native',[str(a.binary),'--resources',str(net.lab.LOCAL/'horizon-client/26.3'),'--dedicated','--nogui'],client,a.work_dir,world)
+        actual=run_side('native',[str(a.binary),'--resources',str(net.lab.RESOURCES),'--dedicated','--nogui'],client,a.work_dir,world)
         ref=json.loads((a.reference_dir/'java-report.json').read_text());report=compare(ref,actual)
         (a.work_dir/'comparison.json').write_text(json.dumps(report,indent=2)+'\n');print(report)
         return 0 if report['all_pass'] else 1

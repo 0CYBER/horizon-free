@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest import mock
 
-from tools import pr_ready
+from tools import lab, pr_ready
 
 PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/horizon-client",
             "horizon-theme": "crates/horizon-theme", "xtask": "xtask"}
@@ -184,7 +184,7 @@ class PrReadyTests(unittest.TestCase):
                 return pr_ready.block(args(), "origin/main", "abcdef123", [], {}, [step], "skip-release", 0,
                                       ("a" * 40, "", ""))
             self.assertIn("data-backed tests not run: no prepared data here", render())
-            prepared = pr_ready.ROOT / ".local/horizon-client/26.3"
+            prepared = pr_ready.ROOT / lab.RESOURCES.relative_to(lab.ROOT)
             prepared.mkdir(parents=True)
             self.assertIn("data-backed tests not run: no prepared data here", render())
             (prepared / "gameplay-facts.json").write_text("{}")

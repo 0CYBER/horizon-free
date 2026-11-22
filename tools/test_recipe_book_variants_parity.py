@@ -159,7 +159,7 @@ def main():
                                                  args.binary.resolve() if args.binary else None)
     import test_rust_parity as base
     _, jars, _ = base.verify_artifacts()
-    admitted = recipe_bytes(jars['server'], net.lab.LOCAL / 'horizon-client/26.3')
+    admitted = recipe_bytes(jars['server'], net.lab.RESOURCES)
     (build / 'recipe-bytes.json').write_text(json.dumps(admitted, indent=2) + '\n')
     assert admitted['java'] == admitted['native'], admitted
     world = build / 'generate/world'

@@ -269,7 +269,7 @@ def main():
     servers = {
         'vanilla': ['java', '-Xmx2g', '-Duser.timezone=UTC', f'-Dminecraft.api.discovery.host={discovery}',
                     '-cp', dependencies, 'net.minecraft.server.Main', 'nogui'],
-        'horizon': [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui'],
+        'horizon': [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui'],
     }
 
     def client(port, scenario, out):

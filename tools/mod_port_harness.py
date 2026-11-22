@@ -31,6 +31,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:  # run as a script: its folder holds lab.py
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import lab
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECKS = ['blocks', 'properties', 'sounds', 'shapes', 'drops', 'placement', 'tags', 'recipes', 'items', 'item_stats']
 EXAMPLES = 8
@@ -222,7 +228,7 @@ def compare_mod(mod, oracle, horizon, carry, upgrades, old_items, carry_dir=None
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--work', required=True)
-    parser.add_argument('--resources', default=str(ROOT / '.local/horizon-client/26.3'))
+    parser.add_argument('--resources', default=str(lab.RESOURCES))
     parser.add_argument('--jars', help='export the oracle facts from these jars first')
     parser.add_argument('--deps')
     parser.add_argument('mods', nargs='*')

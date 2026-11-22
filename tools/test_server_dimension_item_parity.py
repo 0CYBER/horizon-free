@@ -96,7 +96,7 @@ def main():
                    cwd=lab.ROOT, check=True, capture_output=True)
     binary = lab.cargo_target() / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    horizon_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
     world = generate_world(vanilla_server, build)
     vanilla = run_side('vanilla', vanilla_server, build, world)
     horizon = run_side('horizon', horizon_server, build, world)

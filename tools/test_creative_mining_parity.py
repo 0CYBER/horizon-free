@@ -9,7 +9,7 @@ except ImportError:
 
 
 def make_input(build):
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     items = json.loads((resources / 'items.json').read_text())
     rows = [dict(item=item, creative=creative, count=count, tool=tool)
             for item in sorted(items)

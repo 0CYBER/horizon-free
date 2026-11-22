@@ -23,7 +23,7 @@ TEST = 'game::end::cooldown_tests::gateway_counters_match_actual_vanilla_methods
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work-dir', type=Path)
-    parser.add_argument('--resources', type=Path, default=lab.LOCAL / 'horizon-client/26.3')
+    parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     parser.add_argument('--reference-only', action='store_true')
     args = parser.parse_args()
     build = (args.work_dir or lab.LOCAL / 'rust-gateway-cooldown-parity').resolve()

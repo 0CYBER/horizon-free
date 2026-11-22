@@ -27,6 +27,12 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:  # run as a script: its folder holds lab.py
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Preferred properties where several states share the top light level.
@@ -237,7 +243,7 @@ def gallery(names, states):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--world", type=Path, required=True, help="the world's save folder")
-    parser.add_argument("--resources", type=Path, default=ROOT / ".local/horizon-client/26.3")
+    parser.add_argument("--resources", type=Path, default=lab.RESOURCES)
     args = parser.parse_args()
     if not (args.world / "level.dat").exists():
         sys.exit(f"{args.world}: no level.dat, not a world folder")

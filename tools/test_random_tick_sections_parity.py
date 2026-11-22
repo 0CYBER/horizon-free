@@ -24,7 +24,7 @@ SECTIONS = 24
 
 
 def make_cases(build):
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     states = json.loads((resources / 'gameplay-facts.json').read_text())['states']
     ticking = [s['id'] for s in states if s['random_ticks']]
     still = [s['id'] for s in states if not s['random_ticks']]

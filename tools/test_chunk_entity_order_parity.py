@@ -50,8 +50,7 @@ def vanilla():
 
 
 def engine():
-    resources = os.environ.get('HORIZON_TEST_RESOURCES') or str(
-        lab.LOCAL / 'horizon-client' / '26.3')
+    resources = os.environ.get('HORIZON_TEST_RESOURCES') or str(lab.RESOURCES)
     return subprocess.check_output([
         'cargo', 'test', '-p', 'horizon-client', '--lib', TEST,
         '--', '--ignored', '--exact', f'game::persist::lookup_order_tests::{TEST}',

@@ -56,7 +56,7 @@ def recipes(resources):
 
 
 def make_cases(build):
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     catalog = json.loads((resources / 'items.json').read_text())
     all_recipes = recipes(resources)
     fuels = sorted(item for item, data in catalog.items()

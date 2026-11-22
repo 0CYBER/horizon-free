@@ -64,7 +64,7 @@ def cases(build):
     for easing in [json.dumps(e) for e in EASINGS] + [json.dumps({'cubic_bezier': b}) for b in BEZIERS] + BAD_EASINGS:
         lines += [f'ease\t{easing}\t{x!r}' for x in xs]
 
-    timelines = lab.LOCAL / 'horizon-client/26.3/data/minecraft/timeline'
+    timelines = lab.RESOURCES / 'data/minecraft/timeline'
     for name in ('day', 'moon', 'early_game'):
         data = json.loads((timelines / f'{name}.json').read_text())
         for attribute, track in data['tracks'].items():

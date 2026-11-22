@@ -142,7 +142,7 @@ def main():
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main',
                       'nogui']
-    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    horizon_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
     vanilla, horizon = [], []
     for case in CASES:
         vanilla += run_case('vanilla', vanilla_server, build, case)

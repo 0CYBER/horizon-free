@@ -61,7 +61,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game', type=Path, default=ROOT / f'target/fast/horizon-client{EXE}')
     parser.add_argument('--ctl', type=Path, default=ROOT / f'target/fast/horizon-ctl{EXE}')
-    parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
+    parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     output = (args.output or Path(tempfile.mkdtemp(prefix='attack-swap-'))).resolve()

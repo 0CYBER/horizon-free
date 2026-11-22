@@ -179,7 +179,7 @@ def print_timeline(steps, marks, floor_ms):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin", default=str(lab.binary(ROOT / "target/release", "horizon-client")))
-    ap.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
+    ap.add_argument("--resources", default=str(lab.RESOURCES))
     ap.add_argument("--world", help="open (or create) this world from the command line")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--server", help="join this server from the command line")

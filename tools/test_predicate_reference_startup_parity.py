@@ -234,9 +234,9 @@ def run(kind, case, parent, binary, timeout, reload=False):
     (game / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (game / 'eula.txt').write_text('eula=true\n')
     java = shutil.which('java')
-    command = ([java, '-Xms256M', '-Xmx2G', '-jar', str(ROOT / '.local/minecraft/26.3/jars/server.jar'), '--nogui']
+    command = ([java, '-Xms256M', '-Xmx2G', '-jar', str(lab.GAME / 'jars/server.jar'), '--nogui']
                if kind == 'java' else
-               [str(binary), '--resources', str(ROOT / '.local/horizon-client/26.3'), '--dedicated', '--nogui'])
+               [str(binary), '--resources', str(lab.RESOURCES), '--dedicated', '--nogui'])
     env = lab.game_env(HORIZON_HOME=out / 'homes/horizon', HORIZON_LAUNCHER_HOME=out / 'homes/launcher',
                        XDG_DATA_HOME=out / 'homes/xdg-data', XDG_CONFIG_HOME=out / 'homes/xdg-config')
     start = time.monotonic()
@@ -341,7 +341,7 @@ def run_integrated(case, parent, binary, timeout):
         HORIZON_COMMAND_SCRIPT=script, HORIZON_COMMAND_OUTPUT=result,
         HORIZON_API_DISCOVERY='http://127.0.0.1:9/', HORIZON_PLAYER_NAME='PredicateProbe',
         HORIZON_HARNESS_LOADED_FIXTURE='1', HORIZON_HARNESS_TIMEOUT=str(int(timeout)))
-    command = [str(binary), '--resources', str(ROOT / '.local/horizon-client/26.3'),
+    command = [str(binary), '--resources', str(lab.RESOURCES),
                '--world', 'prg', '--seed', '121', '--radius', '2', '--headless']
     with (out / 'server.log').open('w', encoding='utf-8') as log:
         completed = subprocess.run(command, cwd=game, env=env, stdout=log, stderr=subprocess.STDOUT,

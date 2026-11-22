@@ -600,7 +600,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--label", default="horizon")
     parser.add_argument("--build", default=str(lab.ROOT / "target/fast"))
-    parser.add_argument("--resources", default=str(lab.ROOT / ".local/horizon-client/26.3"))
+    parser.add_argument("--resources", default=str(lab.RESOURCES))
     parser.add_argument("--distances", default="32")
     parser.add_argument("--scenarios", default=",".join(SCENARIOS))
     parser.add_argument("--timeout", type=float, default=600)

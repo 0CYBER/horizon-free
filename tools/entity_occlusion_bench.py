@@ -140,7 +140,7 @@ def args_for():
     return Namespace(
         build=str(ROOT / 'target/release'),
         game='horizon',
-        resources=str(ROOT / '.local/horizon-client/26.3'),
+        resources=str(lab.RESOURCES),
         width=1280,
         height=720,
         offscreen=True,

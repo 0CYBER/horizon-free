@@ -10,7 +10,14 @@ import hashlib
 import json
 import os
 import statistics
+import sys
 from pathlib import Path
+
+try:
+    from . import lab
+except ImportError:  # run as a script: its folder holds lab.py
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import lab
 from profile_shared_json import percentile, run
 
 
@@ -18,7 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path,
                         default=Path("target/release/examples/gameplay_decode_profile"))
-    parser.add_argument("--resources", type=Path, default=Path(".local/horizon-client/26.3"))
+    parser.add_argument("--resources", type=Path, default=lab.RESOURCES)
     parser.add_argument("--repeats", type=int, default=8)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

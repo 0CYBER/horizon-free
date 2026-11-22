@@ -143,7 +143,7 @@ def edge_cases():
 def cases(build):
     rng = random.Random(0x46495245)
     path = build / 'cases.txt'
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     lines = [stack(rng) for _ in range(COUNT)]
     if '--no-edges' not in sys.argv:
         lines += edge_cases()

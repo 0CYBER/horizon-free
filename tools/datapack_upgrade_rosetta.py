@@ -114,7 +114,7 @@ def main():
     parser.add_argument("--show", type=int, default=6, help="diff paths shown per registry")
     parser.add_argument("--keep", type=pathlib.Path, help="copy both trees here to inspect them")
     args = parser.parse_args()
-    new_jar = ROOT / ".local/minecraft/26.3/jars/server-game.jar"
+    new_jar = lab.GAME / 'jars/server-game.jar'
     for jar in (args.jar_26_2, new_jar):
         if not jar.exists():
             sys.exit(f"missing {jar}")

@@ -37,7 +37,7 @@ def f32(x):
 
 
 def cases(build):
-    data_root = lab.LOCAL / 'horizon-client/26.3/data/minecraft'
+    data_root = lab.RESOURCES / 'data/minecraft'
     data = {}
     for path in sorted((data_root / 'worldgen/biome').glob('*.json')):
         data['biome:' + path.stem] = json.loads(path.read_text()).get('attributes', {})

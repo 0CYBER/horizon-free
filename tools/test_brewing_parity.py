@@ -126,7 +126,7 @@ def tick_cases():
 
 
 def make_cases(build):
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     catalog = json.loads((resources / 'items.json').read_text())
     all_recipes = recipes(resources)
     potions = sorted({p for r in all_recipes

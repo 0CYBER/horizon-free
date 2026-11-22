@@ -43,7 +43,7 @@ def main():
     inputs.write_text('\n'.join(scenarios) + '\n')
     with tempfile.TemporaryDirectory(prefix='hz-shoot-home-') as home, (out / 'game.log').open('w') as log:
         env = dict(os.environ, HOME=home, HORIZON_SCULK_FIXTURE=f'{inputs},{output}')
-        result = integration_env.run_game([args.bin.resolve(), '--resources', lab.LOCAL / 'horizon-client/26.3'],
+        result = integration_env.run_game([args.bin.resolve(), '--resources', lab.RESOURCES],
                                           env=env, stdout=log, stderr=log, timeout=180)
         if result.returncode:
             raise RuntimeError(f'game failed ({result.returncode}); see {out / "game.log"}')

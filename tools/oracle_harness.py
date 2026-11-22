@@ -173,13 +173,13 @@ def explain(build, message):
         return out
     left, right = sections(build / 'client.txt'), sections(build / 'rust.txt')
     report, count = '', 0
-    for name in left:
-        if left[name] != right.get(name):
+    for name in sorted(set(left) | set(right)):
+        if left.get(name) != right.get(name):
             count += 1
             if count <= 25:
                 case = build / 'cases' / name
                 text = case.read_text(encoding='utf-8', errors='replace') if case.is_file() else ''
-                a, b = left[name], right.get(name, [])
+                a, b = left.get(name, []), right.get(name, [])
                 diffs = [(x, y) for x, y in zip(a, b) if x != y][:4]
                 if len(a) != len(b):
                     diffs.append((f'<{len(a)} lines>', f'<{len(b)} lines>'))
