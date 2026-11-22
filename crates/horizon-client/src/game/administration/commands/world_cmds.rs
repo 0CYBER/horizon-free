@@ -3,6 +3,7 @@
 use super::{Arg, Context, Game, R, Target, err, wrap_degrees};
 use crate::game::living_attributes::AttributeWrite;
 use crate::game::minecarts::CartHit;
+use crate::game::vehicle_teleport::TeleportMotion;
 use horizon_client::{
     mobs::{Damage, DamageKind, MobEvent, NamedDamage, Who, finalize},
     text::Text,
@@ -1774,12 +1775,13 @@ impl Game<'_> {
         let respect = matches!(ctx.get("respectTeams"), Some(Arg::Bool(true)));
         let max_y = match ctx.get("maxHeight") {
             Some(Arg::Int(h)) => *h,
-            _ => self.world.top_y(),
+            _ => self.world.shape.max_y(),
         };
-        if max_y < self.world.bottom_y() {
+        let min_y = self.world.shape.min_y;
+        if max_y < min_y {
             return Err(err(
                 "commands.spreadplayers.failed.invalid.height",
-                &[&max_y, &self.world.bottom_y()],
+                &[&max_y, &min_y],
             ));
         }
         let targets = super::without_knots(self.entities(ctx, "targets", false)?)?;
@@ -1931,7 +1933,9 @@ impl Game<'_> {
                 index - 1
             };
             let p = points[i];
-            let y = self.spread_spawn_y(p, max_y);
+            let y = self
+                .spread_spawn_y(p, max_y)
+                .unwrap_or_else(|| max_y.saturating_add(1));
             let mut to = [p[0].floor() + 0.5, f64::from(y), p[1].floor() + 0.5];
             let mut skip = false;
             if mod_api::__private::listened(mod_api::HookId::SpreadPlayersTeleport)
@@ -1956,7 +1960,16 @@ impl Game<'_> {
                     to = moved;
                 }
             }
-            if !skip {
+            if !skip
+                && !self.teleport_across(
+                    t,
+                    self.source_level(),
+                    to,
+                    None,
+                    false,
+                    TeleportMotion::Stop,
+                )?
+            {
                 self.teleport_to(t, to, None, false);
                 self.teleport_stops(t);
             }
@@ -1990,33 +2003,47 @@ impl Game<'_> {
         Ok(points.len() as i32)
     }
     /// `SpreadPlayersCommand.Position.getSpawnY`.
-    fn spread_spawn_y(&self, p: [f64; 2], max_y: i32) -> i32 {
+    /// Vanilla's `Level.getBlockState` loads the candidate column during this scan.
+    fn spread_spawn_y(&mut self, p: [f64; 2], max_y: i32) -> Option<i32> {
         let (x, z) = (p[0].floor() as i32, p[1].floor() as i32);
+        let chunk = (x >> 4, z >> 4);
+        // Level.isInValidBoundsHorizontal checks ChunkPyramid.MAX_CHUNK_COORDINATE_VALUE.
+        const MAX_CHUNK_COORDINATE: i32 = 2_097_061;
+        if chunk.0.abs().max(chunk.1.abs()) > MAX_CHUNK_COORDINATE {
+            return None;
+        }
+        self.streaming.load_full_chunk(&mut self.world, chunk);
         let air = |y: i32| {
+            if !self.world.shape.contains_y(y) {
+                return true;
+            }
             let name: &str = &self.res.facts().get(self.world.block(x, y, z)).name;
             matches!(
                 name,
                 "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
             )
         };
-        let mut y = max_y + 1;
+        let mut y = max_y.min(self.world.shape.max_y()) + 1;
         let mut air2 = air(y);
         y -= 1;
         let mut air1 = air(y);
-        while y > self.world.bottom_y() {
+        while y > self.world.shape.min_y {
             y -= 1;
             let current = air(y);
             if !current && air1 && air2 {
-                return y + 1;
+                return Some(y + 1);
             }
             air2 = air1;
             air1 = current;
         }
-        max_y + 1
+        None
     }
     /// `SpreadPlayersCommand.Position.isSafe`.
-    fn spread_safe(&self, p: [f64; 2], max_y: i32) -> bool {
-        let y = self.spread_spawn_y(p, max_y) - 1;
+    fn spread_safe(&mut self, p: [f64; 2], max_y: i32) -> bool {
+        let Some(spawn_y) = self.spread_spawn_y(p, max_y) else {
+            return false;
+        };
+        let y = spawn_y - 1;
         let (x, z) = (p[0].floor() as i32, p[1].floor() as i32);
         let name = self.res.facts().get(self.world.block(x, y, z)).name.clone();
         let liquid = matches!(&*name, "minecraft:water" | "minecraft:lava");
