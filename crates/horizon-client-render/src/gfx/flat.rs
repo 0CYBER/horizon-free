@@ -223,10 +223,10 @@ fn parse_mesa_version(driver_info: &str) -> Option<(u32, u32, u32)> {
     parts.next().is_none().then_some(version)
 }
 
-/// Intel Gen11 (Ice Lake) and Gen12 (Tiger Lake, Rocket Lake, Alder Lake,
-/// Raptor Lake) ANV Vulkan drivers had broken `first_instance` for
-/// instance-step vertex attributes (#3529, #4599), causing terrain sections to
-/// be drawn with another section's origin and flicker.
+/// Intel Gen11 (Ice Lake, Jasper Lake) and Gen12 (Tiger Lake, Rocket Lake,
+/// Alder Lake, Raptor Lake) ANV Vulkan drivers had broken `first_instance` for
+/// instance-step vertex attributes (#3529, #4599, #19080), causing terrain
+/// sections to be drawn with another section's origin and flicker.
 ///
 /// PR #15007 tested Raptor Lake (RPL-U, 0xa7a1) on Mesa 26.0.8 without terrain
 /// flicker. Allow indirect multi-draw and GPU culling for Raptor Lake from that
@@ -249,6 +249,9 @@ pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
     matches!(
         info.device,
         0x8a50..=0x8a71 // Gen11: Ice Lake
+            | 0x4e55 // Gen11: Jasper Lake (UHD Graphics, #19080)
+            | 0x4e61
+            | 0x4e71
             | 0x9a40..=0x9a7f // Gen12: Tiger Lake
             | 0x4c80..=0x4c9a // Gen12: Rocket Lake
             | 0x4600..=0x46ff // Gen12: Alder Lake (incl. 0x46a8 in #4599)
@@ -256,6 +259,8 @@ pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
     ) || [
         "ICL",
         "Ice Lake",
+        "JSL",
+        "Jasper Lake",
         "TGL",
         "Tiger Lake",
         "RKL",
@@ -1335,6 +1340,9 @@ mod tests {
         // Earlier families keep their workaround even with a modern Mesa release.
         for (device, name) in [
             (0x8a52, "Intel Ice Lake"),
+            (0x4e55, "Intel(R) UHD Graphics (JSL)"),
+            (0x4e61, "Intel UHD Graphics"),
+            (0x4e71, "JasperLake [UHD Graphics]"),
             (0x9a49, "Intel Tiger Lake"),
             (0x4c8a, "Intel Rocket Lake"),
             (0x46a8, "Intel Alder Lake"),
@@ -1343,12 +1351,38 @@ mod tests {
             info.name = name.into();
             assert!(is_broken_intel_vulkan(&info), "{name}");
         }
+        // Jasper Lake by name alone too, with no PCI device id reported.
+        info.device = 0;
+        info.name = "Intel(R) UHD Graphics (JSL)".into();
+        assert!(is_broken_intel_vulkan(&info));
         // A Mesa-looking version cannot turn on this workaround for other backends/vendors.
         info.backend = wgpu::Backend::Dx12;
         assert!(!is_broken_intel_vulkan(&info));
         info.backend = wgpu::Backend::Vulkan;
         info.vendor = 0x10de;
         assert!(!is_broken_intel_vulkan(&info));
+    }
+
+    /// #19080: Jasper Lake flickers with indirect first-instance draws, so
+    /// vanilla terrain must take the flat path there at any section count.
+    #[test]
+    fn jasper_lake_draws_vanilla_terrain_flat() {
+        let info = wgpu::AdapterInfo {
+            name: "Intel(R) UHD Graphics (JSL)".into(),
+            vendor: 0x8086,
+            device: 0x4e55,
+            device_type: wgpu::DeviceType::IntegratedGpu,
+            device_pci_bus_id: String::new(),
+            driver: "Intel open-source Mesa driver".into(),
+            driver_info: "Mesa 26.0.8".into(),
+            backend: wgpu::Backend::Vulkan,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        assert!(is_broken_intel_vulkan(&info));
+        assert!(for_vanilla(&info));
     }
 
     /// Draws as `render` writes them: solid (page, quads at a base vertex)
