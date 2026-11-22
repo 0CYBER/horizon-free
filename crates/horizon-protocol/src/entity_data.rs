@@ -378,7 +378,10 @@ impl Particle {
             ParticleData::Trail(at, c, d) => {
                 at.iter().for_each(|v| w.f64(*v));
                 w.i32(*c);
-                w.varint(*d);
+                // 1.21.4 added the duration.
+                if !ids::quirks_written().trail_without_duration {
+                    w.varint(*d);
+                }
             }
             ParticleData::Item(s) => Template::write(s, w),
             ParticleData::Mod(name) => w.string(name),

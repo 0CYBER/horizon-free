@@ -1,6 +1,7 @@
 //! 1.21's packets in 1.20.6's layout for a 1.20.6 client (and 1.20.5): the mirror of `translate`'s `v1_20_6`
-//! (1.20.6 to 1.21). Clientbound: explode's holder sound becomes
-//! an inline sound event (the holder id goes), projectile_power sends a zero vector (1.21 sends only the power), and
+//! (1.20.6 to 1.21). Clientbound: explode's sound holder passes as it is
+//! when inline (both releases write the holder: 0, then the sound event), a registry holder becomes the inline generic
+//! explosion sound, projectile_power sends a zero vector (1.21 sends only the power), and
 //! merchant_offers' trade items become 1.20.6 stacks, an empty stack for a missing second cost. Serverbound, a 1.20.6
 //! client's use_item gets the head's yaw and pitch, which 1.21 reads and 1.20.6 does not send.
 //!
@@ -85,7 +86,8 @@ pub(super) fn serverbound(
     Ok(Some(w.data))
 }
 
-/// explode: 1.21's sound holder (a VarInt, 0 for an inline sound event) goes; the inline sound follows as it is.
+/// explode: 1.20.6's `ClientboundExplodePacket` ends with the sound as a holder, as 1.21's does (`ByteBufCodecs.holder`
+/// over the sound event: a VarInt, 0 for an inline sound event, which follows). An inline sound passes as it is.
 // TODO(step3): a registry sound (a holder id other than 0) has no name in Horizon's tables; the generic explosion
 // sound is sent in its place, which is what most explosions play.
 fn explode(payload: &[u8]) -> Result<Vec<u8>> {
@@ -100,6 +102,7 @@ fn explode(payload: &[u8]) -> Result<Vec<u8>> {
     let mut w = Writer::new();
     w.bytes(r.since(0));
     let holder = r.varint()?;
+    w.varint(0);
     if holder == 0 {
         w.bytes(r.rest());
     } else {
@@ -291,11 +294,54 @@ mod tests {
         assert_eq!(r.varint().unwrap(), 0);
         assert_eq!(r.varint().unwrap(), 2);
         assert_eq!(r.varint().unwrap(), 3);
+        assert_eq!(r.varint().unwrap(), 0);
         assert_eq!(r.string(32767).unwrap(), "minecraft:entity.generic.explode");
         let up = translate::client_layout_v1_20_6::clientbound(&session, State::Play, id, &down)
             .unwrap()
             .unwrap();
         assert_eq!(up, original);
+    }
+
+    #[test]
+    fn a_1_20_6_explosion_keeps_its_inline_sound_holder_byte() {
+        // Literal bytes: centre (1,2,3), power 4, no records, knockback 0, interaction 0, particles 2 and 3, then
+        // the holder 0 and the inline sound "a:b" without a range. 1.20.6's client reads the holder first.
+        let mut input = Vec::new();
+        for v in [1.0f64, 2.0, 3.0] {
+            input.extend_from_slice(&v.to_be_bytes());
+        }
+        input.extend_from_slice(&4.0f32.to_be_bytes());
+        input.push(0); // records
+        input.extend_from_slice(&[0u8; 12]);
+        input.extend_from_slice(&[0, 2, 3]); // interaction, small, large
+        input.extend_from_slice(&[0, 3, b'a', b':', b'b', 0]); // holder 0, "a:b", no range
+        let id = packet_ids::play::clientbound::EXPLODE;
+        let down = clientbound(
+            State::Play,
+            id,
+            &input,
+            ServerVersion::V1_20_6.ids().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(down, input);
+        // A registry holder becomes the generic explosion sound, still behind holder 0.
+        let mut registry = input[..input.len() - 6].to_vec();
+        registry.extend_from_slice(&[7]);
+        let down = clientbound(
+            State::Play,
+            id,
+            &registry,
+            ServerVersion::V1_20_6.ids().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        let mut want = input[..input.len() - 6].to_vec();
+        want.push(0);
+        want.push(32);
+        want.extend_from_slice(b"minecraft:entity.generic.explode");
+        want.push(0);
+        assert_eq!(down, want);
     }
 
     #[test]

@@ -303,11 +303,11 @@ pub(super) fn player_info(payload: &[u8], list_order: bool) -> Result<Vec<u8>> {
 /// the block interaction (0 keep), and two particles: the small and the large one. Both are the one particle here.
 fn explode(payload: &[u8]) -> Result<Vec<u8>> {
     let mut r = Reader::new(payload);
-    // The knockback arrives as 1.21.4's step leaves it: a double, then two floats.
+    // The knockback is three doubles, as it is in every release from 1.21.2 on.
     let (center, knockback, particle, sound) = super::read_in_client_ids(|| {
         let center = Vec3d::read(&mut r)?;
         let knockback = if r.bool()? {
-            Some([r.f64()?, f64::from(r.f32()?), f64::from(r.f32()?)])
+            Some([r.f64()?, r.f64()?, r.f64()?])
         } else {
             None
         };
@@ -724,14 +724,14 @@ mod tests {
 
     #[test]
     fn an_explosion_is_1_21_1_s_bytes() {
-        // 1.21.4's step out: centre, a knockback (a double, two floats), the particle (id 5, no data), the sound
-        // inline ("a:b", no range).
+        // 1.21.2's explode: centre, a knockback (three doubles), the particle (id 5, no data), the sound inline
+        // ("a:b", no range).
         let mut i = Writer::new();
         [1.0, 2.0, 3.0].iter().for_each(|v| i.f64(*v));
         i.bool(true);
         i.f64(0.5);
-        i.f32(0.0);
-        i.f32(-1.0);
+        i.f64(0.0);
+        i.f64(-1.0);
         i.varint(5);
         i.varint(0);
         i.string("a:b");

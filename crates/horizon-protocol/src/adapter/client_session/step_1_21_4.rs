@@ -1,9 +1,9 @@
 //! 1.21.5 to 1.21.4 (protocol 770 to 769): the mirror of `translate`'s `v1_21_4` (1.21.4 to 1.21.5), for a
 //! [`super::ClientSession`] whose client is 1.21.4 (roadmap `older-clients`).
 //!
-//! Clientbound, what 1.21.5 added is taken out again: the explosion's player knockback is a double and two floats,
-//! the player chat has no leading global index, the team's name tag visibility and collision rule are names rather
-//! than VarInt enums, and the advancements have no trailing show flag.
+//! Clientbound, what 1.21.5 added is taken out again: the player chat has no leading global index, the team's name
+//! tag visibility and collision rule are names rather than VarInt enums, and the advancements have no trailing show
+//! flag.
 //! Serverbound, the chat packets have no trailing checksum (the client sends none: the server reads a 0 as "not
 //! checked"), and a container click's changed slots and carried item are full stacks, not hashes: they are hashed
 //! here with `HashedStack`'s rules (`Hashed::of`), with the client's item ids mapped to the pinned ones first.
@@ -42,7 +42,6 @@ pub(super) fn clientbound(state: State, id: i32, payload: &[u8]) -> Result<Optio
         return Ok(None);
     }
     Ok(Some(match id {
-        cb::EXPLODE => explode_down(payload)?,
         cb::PLAYER_CHAT => {
             // The global index goes; 1.21.4 numbers no messages globally.
             // A packet the text rewrite can't read keeps its text as it is.
@@ -319,24 +318,6 @@ fn chunks_biomes_down(payload: &[u8]) -> Result<Vec<u8>> {
     Ok(w.data)
 }
 
-/// The explosion's player knockback: a double and two floats in 1.21.4, three doubles in 1.21.5.
-fn explode_down(payload: &[u8]) -> Result<Vec<u8>> {
-    let mut r = Reader::new(payload);
-    let mut w = Writer::new();
-    for _ in 0..3 {
-        w.f64(r.f64()?);
-    }
-    let knockback = r.bool()?;
-    w.bool(knockback);
-    if knockback {
-        w.f64(r.f64()?);
-        w.f32(r.f64()? as f32);
-        w.f32(r.f64()? as f32);
-    }
-    w.bytes(r.rest());
-    Ok(w.data)
-}
-
 fn text_nbt(mut tag: Tag) -> Tag {
     text::component_down(&mut tag);
     tag
@@ -431,8 +412,10 @@ mod tests {
             .unwrap()
     }
 
+    /// The knockback of an explosion is three doubles (Vec3.STREAM_CODEC, as the centre is) in every release from
+    /// 1.21.2 on (checked in the 1.21.2, 1.21.4, 1.21.5 and 1.21.8 client jars): nothing changes at 1.21.5.
     #[test]
-    fn an_explosion_knockback_is_three_doubles_and_back() {
+    fn an_explosion_passes_unchanged_to_1_21_4() {
         let mut w = Writer::new();
         w.f64(1.5);
         w.f64(-2.0);
@@ -443,26 +426,8 @@ mod tests {
         w.f64(-0.25);
         w.varint(7);
         w.bytes(&[9, 9]);
-        let pinned = w.data;
         let id = packet_ids::play::clientbound::EXPLODE;
-        let older = clientbound(State::Play, id, &pinned).unwrap().unwrap();
-        assert_ne!(older, pinned);
-        assert_eq!(read_back_clientbound(id, &older), pinned);
-    }
-
-    #[test]
-    fn an_explosion_without_knockback_is_the_same_in_both() {
-        let mut w = Writer::new();
-        w.f64(1.0);
-        w.f64(2.0);
-        w.f64(3.0);
-        w.bool(false);
-        w.varint(0);
-        let pinned = w.data;
-        let id = packet_ids::play::clientbound::EXPLODE;
-        let older = clientbound(State::Play, id, &pinned).unwrap().unwrap();
-        assert_eq!(older, pinned);
-        assert_eq!(read_back_clientbound(id, &older), pinned);
+        assert_eq!(clientbound(State::Play, id, &w.data).unwrap(), None);
     }
 
     #[test]

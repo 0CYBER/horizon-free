@@ -1645,7 +1645,6 @@ pub(crate) mod client_layout_v1_21_4 {
             return Ok(None);
         }
         Ok(Some(match id {
-            cb::EXPLODE => explode_up(payload)?,
             cb::PLAYER_CHAT => player_chat_up(payload)?,
             cb::SET_PLAYER_TEAM => team_up(payload)?,
             cb::UPDATE_ADVANCEMENTS => advancements_up(payload),
@@ -1676,25 +1675,6 @@ pub(crate) mod client_layout_v1_21_4 {
             .position(|n| *n == name)
             .map(|i| i as i32)
             .ok_or_else(|| crate::Error::new(format!("unknown team enum {name}")))
-    }
-
-    /// The explosion's player knockback: 1.21.4 writes a double, then two floats; 1.21.5 three doubles.
-    #[cfg(test)]
-    fn explode_up(payload: &[u8]) -> Result<Vec<u8>> {
-        let mut r = Reader::new(payload);
-        let mut w = Writer::new();
-        for _ in 0..3 {
-            w.f64(r.f64()?);
-        }
-        let knockback = r.bool()?;
-        w.bool(knockback);
-        if knockback {
-            w.f64(r.f64()?);
-            w.f64(f64::from(r.f32()?));
-            w.f64(f64::from(r.f32()?));
-        }
-        w.bytes(r.rest());
-        Ok(w.data)
     }
 
     /// A player chat with the global index 1.21.5 starts it with.
@@ -2102,8 +2082,8 @@ pub(crate) mod client_layout_v1_21_8 {
 
 /// 1.20.6 to 1.21 (protocol 766 to 767): the mirror of `client_session::step_1_20_6`. Clientbound, from the two
 /// Packets pages:
-/// - `explode`'s sound is a sound event holder in 1.21 (a VarInt, 0 for an inline one, then the location and the
-///   range); 1.20.6 sends the inline one alone.
+/// - `explode`'s sound is a sound event holder in both (a VarInt, 0 for an inline one, then the location and the
+///   range; javap on both clients' `ClientboundExplodePacket`), so it is the same bytes.
 /// - `projectile_power` is one double, the power, in 1.21; 1.20.6 sends the vector.
 /// - `merchant_offers`: a trade's costs are trade items in 1.21 (an item id, a count and the components they add,
 ///   no stack flag), and the second cost is optional. The stacks are read under 1.20.6's ids and components.
@@ -2163,8 +2143,7 @@ pub(crate) mod client_layout_v1_20_6 {
         })
     }
 
-    /// explode: the sound is a holder in 1.21, and an inline one (0) here; the two explosion particles have no
-    /// data, so they are read as their ids alone.
+    /// explode: the sound is a holder in both releases; the packet is the same bytes.
     #[cfg(test)]
     fn explode(payload: &[u8]) -> Result<Vec<u8>> {
         let mut r = Reader::new(payload);
@@ -2177,7 +2156,6 @@ pub(crate) mod client_layout_v1_20_6 {
         r.varint()?; // the large explosion particle's id
         let mut w = Writer::new();
         w.bytes(r.since(0));
-        w.varint(0);
         w.bytes(r.rest());
         Ok(w.data)
     }
