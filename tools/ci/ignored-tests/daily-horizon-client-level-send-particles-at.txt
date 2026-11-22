@@ -1,0 +1,2 @@
+# Prepared-resource daily test: PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::native_level_effects::tests::particles_at_queues_every_position_or_none lib daily resources

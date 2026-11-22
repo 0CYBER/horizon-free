@@ -348,7 +348,7 @@ impl Game<'_> {
             // The players a server serves are sent them too (the window of the server thread).
             self.lan_send_particles(super::lan_particles::QueuedParticle {
                 dimension: self.dim.id(),
-                options: indicator,
+                options: indicator.into(),
                 state: None,
                 at: [feet[0], feet[1] + height * 0.5, feet[2]],
                 spread: [0.1, 0.0, 0.1],

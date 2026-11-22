@@ -891,7 +891,7 @@ impl Game<'_> {
             self.particles.add(&options, at, [0.0; 3]);
             self.lan_send_particles(super::lan_particles::QueuedParticle {
                 dimension: self.dim.id(),
-                options,
+                options: options.into(),
                 state: None,
                 at,
                 spread: [0.0; 3],

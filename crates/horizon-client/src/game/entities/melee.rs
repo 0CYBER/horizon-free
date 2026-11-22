@@ -89,7 +89,7 @@ impl Game<'_> {
         let spread = [at[0] - origin[0], 0.0, at[2] - origin[2]];
         self.lan_send_particles(lan_particles::QueuedParticle {
             dimension: self.dim.id(),
-            options: arc,
+            options: arc.into(),
             state: None,
             at,
             spread,
@@ -372,7 +372,7 @@ impl Game<'_> {
                 // The players a server serves are sent them too.
                 self.lan_send_particles(lan_particles::QueuedParticle {
                     dimension: self.dim.id(),
-                    options: indicator,
+                    options: indicator.into(),
                     state: None,
                     at: [feet[0], feet[1] + height * 0.5, feet[2]],
                     spread: [0.1, 0.0, 0.1],

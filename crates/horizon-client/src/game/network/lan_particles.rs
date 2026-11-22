@@ -33,7 +33,7 @@ pub(super) struct LanExplosion {
 /// A particle request awaiting delivery to players in its level.
 pub(super) struct QueuedParticle {
     pub dimension: &'static str,
-    pub options: ParticleOptions,
+    pub options: std::sync::Arc<ParticleOptions>,
     pub state: Option<BlockStateId>,
     pub at: [f64; 3],
     pub spread: [f64; 3],
@@ -381,7 +381,7 @@ impl Game<'_> {
         }
         self.lan_send_particles(QueuedParticle {
             dimension: self.dim.id(),
-            options,
+            options: options.into(),
             state: None,
             at,
             spread: [0.0; 3],
@@ -766,7 +766,7 @@ impl Game<'_> {
         }
         self.lan_send_particles(QueuedParticle {
             dimension: self.dim.id(),
-            options,
+            options: options.into(),
             state: None,
             at,
             spread: [1.0; 3],

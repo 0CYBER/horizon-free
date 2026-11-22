@@ -201,7 +201,7 @@ impl Game<'_> {
             .send_particles(&plume, plume_at, [0.0; 3], 0.0, 7);
         self.lan_send_particles(super::lan_particles::QueuedParticle {
             dimension: self.dim.id(),
-            options: plume,
+            options: plume.into(),
             state: None,
             at: plume_at,
             spread: [0.0; 3],

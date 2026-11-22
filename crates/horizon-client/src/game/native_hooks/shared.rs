@@ -1837,7 +1837,7 @@ impl GameLevel<'_> {
         self.native_particles
             .push(super::lan_particles::QueuedParticle {
                 dimension: dimension_id(self.dimension),
-                options: options.clone(),
+                options: options.clone().into(),
                 state,
                 at,
                 spread,

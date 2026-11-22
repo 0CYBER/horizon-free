@@ -1306,6 +1306,23 @@ pub trait LevelsBackendMut {
         count: i32,
     ) -> bool;
     /// Side: server.
+    /// `level_send_particles` around each of `positions`, in order, in one call:
+    /// every position is checked as the single one is, and all of them are
+    /// queued or none if any would be refused. It saves the mod's calls only:
+    /// each position is still a request of its own. An empty list queues
+    /// nothing and answers true; more than 4096 positions answer false.
+    #[access(WorldOnly)]
+    fn level_send_particles_at(
+        &mut self,
+        level: LevelRef,
+        options: &ParticleOptions,
+        state: Option<BlockState>,
+        positions: &[[f64; 3]],
+        spread: [f64; 3],
+        speed: f64,
+        count: i32,
+    ) -> bool;
+    /// Side: server.
     /// Plays level event `id` at `pos` with `data` for the players near it
     /// (`Level.levelEvent(null, id, pos, data)`): `1000`s are sounds, `2000`s
     /// particles, as vanilla's `LevelEvent` numbers them (`2001` breaks a
