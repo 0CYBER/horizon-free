@@ -438,22 +438,12 @@ impl Game<'_> {
                     continue;
                 }
             }
-            let height = match (a.marker, a.small) {
-                (true, _) => 0.0,
-                (false, true) => 0.9875,
-                (false, false) => 1.975,
-            };
+            let height = f64::from(a.box_size().1);
             let distance_sqr =
                 glam::DVec3::new(a.position.x, a.position.y, a.position.z).distance_squared(camera);
             let position = a.render_position(alpha);
             // Same dimensions and dragon-head growth as armor_stand_geometry.
-            let width = if a.marker {
-                0.0
-            } else if a.small {
-                0.25
-            } else {
-                0.5
-            };
+            let width = f64::from(a.box_size().0);
             let dragon = a.equipment[5]
                 .as_ref()
                 .is_some_and(|i| &*i.item == "minecraft:dragon_head");

@@ -29,7 +29,160 @@ pub(super) struct ObjectHit {
     pub location: [f64; 3],
 }
 
+/// What the crosshair's entity is, for the turn that follows: one of the objects
+/// [`Game::remote_object_hit`] knows, a mob (by index), a projectile a blow turns (by index
+/// in `creatures.projectiles`), or anything else vanilla can pick (an End crystal or dragon
+/// part on a use, a fence knot on an attack, a falling block).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PickKind {
+    Object,
+    Mob(usize),
+    Projectile(usize),
+    Other,
+}
+
+/// The crosshair's entity (`Minecraft.hitResult` as an `EntityHitResult`): its id, how far
+/// along the view, where it was hit (`getLocation` minus its position, the interact
+/// packet's location) and what it is.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct EntityPick {
+    pub id: i32,
+    pub distance: f64,
+    pub location: [f64; 3],
+    pub kind: PickKind,
+}
+
+impl EntityPick {
+    /// The pick as one of the objects [`Game::remote_object_hit`] knows.
+    pub(super) fn object_hit(&self) -> ObjectHit {
+        ObjectHit {
+            id: self.id,
+            distance: self.distance,
+            location: self.location,
+        }
+    }
+}
+
 impl Game<'_> {
+    /// `MultiPlayerGameMode.interact` on `pick`: the click goes to the server whatever
+    /// comes of it, carrying the hand and where the view met the entity.
+    pub(super) fn send_interact(&mut self, pick: &EntityPick, hand: i32, secondary: bool) {
+        self.send(S::Interact(play::Interact {
+            id: pick.id,
+            hand,
+            location: pick.location,
+            secondary,
+        }));
+    }
+
+    /// `GameRenderer.pick`'s entity: the nearest entity vanilla can pick
+    /// (`EntitySelector.CAN_BE_PICKED`) along the view within reach and before the block
+    /// aimed at, of every kind at once. Attacks and uses both go to it, so a click reaches
+    /// the server for every entity a vanilla client's would, and never passes through one
+    /// to what is behind. `attacking` keeps the special cases of each turn's own hit tests.
+    pub(super) fn crosshair_entity(&self, attacking: bool) -> Option<EntityPick> {
+        let (eye, dir) = self.aim()?;
+        let reach = self.entity_reach;
+        let at = |d: f64, origin: Vec3| {
+            [
+                eye[0] + dir[0] * d - origin.x,
+                eye[1] + dir[1] * d - origin.y,
+                eye[2] + dir[2] * d - origin.z,
+            ]
+        };
+        let mut best: Option<EntityPick> = None;
+        let mut offer = |p: EntityPick| {
+            if best.is_none_or(|b| p.distance < b.distance) {
+                best = Some(p);
+            }
+        };
+        if let Some(hit) = self.remote_object_hit(attacking) {
+            offer(EntityPick {
+                id: hit.id,
+                distance: hit.distance,
+                location: hit.location,
+                kind: PickKind::Object,
+            });
+        }
+        if attacking {
+            // LeashFenceKnotEntity is pickable for a blow as for a use.
+            if let Some((id, d, p)) = self.remote_knot_hit() {
+                offer(EntityPick {
+                    id,
+                    distance: d,
+                    location: at(d, Vec3::new(p[0], p[1], p[2])),
+                    kind: PickKind::Other,
+                });
+            }
+        } else {
+            // EndCrystal and EnderDragonPart are pickable for a use too; their interact
+            // passes (`Entity.interact`), so the item is used after it.
+            for c in self.crystals.iter().filter(|c| c.id != 0) {
+                let p = c.position;
+                let bounds = Aabb::new(
+                    Vec3::new(p.x - 1.0, p.y, p.z - 1.0),
+                    Vec3::new(p.x + 1.0, p.y + 2.0, p.z + 1.0),
+                );
+                if let Some(d) = ray_box(eye, dir, reach, bounds) {
+                    offer(EntityPick {
+                        id: c.id as i32,
+                        distance: d,
+                        location: at(d, p),
+                        kind: PickKind::Other,
+                    });
+                }
+            }
+            if let Some((id, d, p)) = self.remote_dragon_part_hit(eye, dir, reach) {
+                offer(EntityPick {
+                    id,
+                    distance: d,
+                    location: at(d, Vec3::new(p[0], p[1], p[2])),
+                    kind: PickKind::Other,
+                });
+            }
+        }
+        if let Some((i, d, location)) = self.mob_hit() {
+            offer(EntityPick {
+                id: self.mobs[i].id as i32,
+                distance: d,
+                location,
+                kind: PickKind::Mob(i),
+            });
+        }
+        // AbstractHurtingProjectile (a wind charge, a fireball) and ShulkerBullet are
+        // pickable, the former with a pick radius of 1 around its box.
+        if let Some((i, d)) = self.redirectable_hit()
+            && self.creatures.projectiles[i].id != 0
+        {
+            let p = &self.creatures.projectiles[i];
+            offer(EntityPick {
+                id: p.id as i32,
+                distance: d,
+                location: at(d, p.position),
+                kind: PickKind::Projectile(i),
+            });
+        }
+        // FallingBlockEntity is pickable (`!isRemoved`): a 0.98 cube. Primed TNT is among the
+        // objects `remote_object_hit` knows.
+        let cube = |p: Vec3| {
+            Aabb::new(
+                Vec3::new(p.x - 0.49, p.y, p.z - 0.49),
+                Vec3::new(p.x + 0.49, p.y + 0.98, p.z + 0.49),
+            )
+        };
+        for f in self.falling.iter().filter(|f| f.id != 0) {
+            if let Some(d) = ray_box(eye, dir, reach, cube(f.position)) {
+                offer(EntityPick {
+                    id: f.id as i32,
+                    distance: d,
+                    location: at(d, f.position),
+                    kind: PickKind::Other,
+                });
+            }
+        }
+        best.filter(|b| self.before_block(b.distance))
+    }
+
     /// BlockAttachedEntity.isPickable: the nearest fence knot's box the view meets, with its id,
     /// distance and position. Its box is wider than the post inside it, so the crosshair meets it
     /// first and LeashFenceKnotEntity.interact takes the click. The fence block behind only ties
@@ -52,13 +205,12 @@ impl Game<'_> {
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
-    /// Whether a use starts on an entity: the crosshair's `EntityHitResult`, or a fence knot.
-    /// Only a use: Horizon's attacks still go to the fence behind a knot.
+    /// Whether a use starts on an entity: the crosshair's `EntityHitResult`.
     pub(super) fn remote_use_targets_entity(&self) -> bool {
-        self.entity_targeted()
-            || self
-                .remote_knot_hit()
-                .is_some_and(|(_, d, _)| self.before_block(d))
+        if self.targeting().entity.is_some() {
+            return self.entity_targeted();
+        }
+        self.crosshair_entity(false).is_some() || self.entity_targeted()
     }
 
     /// The nearest pickable non-mob object within reach; also End crystals when attacking,

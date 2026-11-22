@@ -3,7 +3,7 @@
 //! nothing, and an interact ends at them: `SUCCESS` when they respond (the arm
 //! swings), `CONSUME` otherwise (the click still goes to the server, nothing
 //! behind them is used).
-use super::{Game, ray_box};
+use super::Game;
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::entity_data::Value;
 
@@ -62,16 +62,6 @@ impl RemoteInteraction {
 }
 
 impl Game<'_> {
-    /// `Interaction` under the crosshair within the entity reach, as its id
-    /// and the hit distance along the view.
-    pub(super) fn interaction_hit(&self) -> Option<(i32, f64)> {
-        let (eye, dir) = self.aim()?;
-        let reach = self.entity_reach;
-        self.interactions
-            .iter()
-            .filter_map(|(&id, i)| ray_box(eye, dir, reach, i.bounds()).map(|d| (id, d)))
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-    }
     /// An `Interaction` keeps `Entity`'s no-op interpolation handler: the
     /// server's position replaces its own at once.
     pub(super) fn move_remote_interaction(&mut self, id: i32, position: [f64; 3]) {

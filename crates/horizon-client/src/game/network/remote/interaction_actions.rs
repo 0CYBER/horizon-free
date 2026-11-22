@@ -112,26 +112,13 @@ impl Game<'_> {
             return false;
         }
         let mut instant = false;
-        // A ghast's fireball or a wind charge nearer than a mob or primed TNT: the
-        // server turns it (game/items/deflect.rs).
-        if let Some((i, distance)) = self.redirectable_hit()
-            && self.mob_hit().is_none_or(|(_, d, _)| distance <= d)
-            && self
-                .primed_tnt_hit(self.entity_reach)
-                .is_none_or(|(_, d)| distance <= d)
-            && self.before_block(distance)
-            && self.creatures.projectiles[i].id != 0
-        {
-            self.remote_attack_entity(self.creatures.projectiles[i].id as i32, distance);
-        } else if let Some(hit) = self.remote_object_hit(true)
-            && self.mob_hit().is_none_or(|(_, d, _)| hit.distance < d)
-            && self.before_block(hit.distance)
-        {
-            self.remote_attack_entity(hit.id, hit.distance);
-        } else if let Some((i, distance, _)) = self.mob_hit()
-            && self.before_block(distance)
-        {
-            self.remote_attack_entity(self.mobs[i].id as i32, distance);
+        // The crosshair's entity, of any kind (`Minecraft.hitResult`): the nearest one
+        // vanilla picks, before the block aimed at.
+        if let Some(pick) = self.crosshair_entity(true) {
+            // A ghast's fireball or a wind charge the server turns (game/items/deflect.rs),
+            // a vehicle, frame, stand, painting, crystal, falling block or TNT it hurts: the
+            // server decides; a mob is the one the held item's attack range must hold.
+            self.remote_attack_entity(pick.id, pick.distance);
         } else if !self.entity_targeted()
             && let Some(hit) = self.pick()
         {

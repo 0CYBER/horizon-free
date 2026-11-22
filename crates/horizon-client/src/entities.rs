@@ -1810,6 +1810,9 @@ pub struct ArmorStand {
     pub no_base_plate: bool,
     pub invisible: bool,
     pub marker: bool,
+    /// Its `minecraft:scale` attribute (`LivingEntity.getScale`), which sizes its box as any
+    /// living entity's: servers build balls, NPC parts and holograms from scaled stands.
+    pub scale: f32,
     /// `Entity.isNoGravity` (`NoGravity` in the save). `ArmorStand.hasPhysics`
     /// is false with it, as with `Marker`: `travel` does nothing, so the stand
     /// never moves, and the blocks it stands in do not touch it.
@@ -2084,6 +2087,7 @@ impl ArmorStand {
             no_base_plate: false,
             invisible: false,
             marker: false,
+            scale: 1.0,
             no_gravity: false,
             no_physics: None,
             custom_name: None,
@@ -2286,9 +2290,10 @@ impl ArmorStand {
         // `brokenByAnything` receives as the `DamageSource`.
         (self.health <= 0.5).then(|| hit_by.unwrap_or("minecraft:generic"))
     }
-    /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975F, half for small).
+    /// EntityType.ARMOR_STAND dimensions (0.5 x 1.975F, half for small), times its scale
+    /// (`LivingEntity.getDimensions`: `getDefaultDimensions(pose).scale(getScale())`).
     pub fn bounds(&self) -> Aabb {
-        let s = if self.small { 0.5 } else { 1.0 };
+        let s = if self.small { 0.5 } else { 1.0 } * f64::from(self.scale);
         // EntityDimensions.makeBoundingBox adds the float height, widened
         // (halving it for the small stand is exact).
         let (w, h) = (0.25 * s, f64::from(1.975_f32) * s);
@@ -2297,6 +2302,15 @@ impl ArmorStand {
             Vec3::new(p.x - w, p.y, p.z - w),
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
+    }
+    /// `getBbWidth` and `getBbHeight`: none for a marker, half for a small stand, times its
+    /// `minecraft:scale` as `bounds` (a server's scaled stand draws, culls and tags at that size).
+    pub fn box_size(&self) -> (f32, f32) {
+        if self.marker {
+            return (0.0, 0.0);
+        }
+        let s = if self.small { 0.5 } else { 1.0 } * self.scale;
+        (0.5 * s, 1.975 * s)
     }
     /// Leather boots on its feet: it walks on powder snow (`PowderSnowBlock.canEntityWalkOnPowderSnow`).
     fn feet_are_leather_boots(&self) -> bool {
@@ -2985,6 +2999,23 @@ mod armor_stand_light_tests {
 
     fn stand(x: f64, y: f64, z: f64) -> ArmorStand {
         ArmorStand::new(1, Vec3::new(x, y, z), 0.0)
+    }
+
+    /// `LivingEntity.getDimensions`: a server's `minecraft:scale` sizes the stand's box, the
+    /// one clicks pick and the one drawn, on top of `Small`; a marker has none.
+    #[test]
+    fn scale_sizes_the_box() {
+        let mut a = stand(0.0, 0.0, 0.0);
+        a.scale = 0.5;
+        assert_eq!(a.box_size(), (0.25, 0.9875));
+        let b = a.bounds();
+        assert!((b.max_position().y - f64::from(1.975_f32) * 0.5).abs() < 1e-9);
+        assert!((b.max_position().x - 0.125).abs() < 1e-9);
+        a.scale = 2.0;
+        a.small = true;
+        assert_eq!(a.box_size(), (0.5, 1.975));
+        a.marker = true;
+        assert_eq!(a.box_size(), (0.0, 0.0));
     }
 
     /// `ArmorStand.getLightProbePosition` for a stand that is not a marker is

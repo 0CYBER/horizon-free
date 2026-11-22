@@ -49,6 +49,8 @@ impl Game<'_> {
         let jump = self.remote_attribute_value("minecraft:jump_strength", values);
         let nameplate = self.remote_nameplate_values(values);
         let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) else {
+            // An armor stand is living too: `minecraft:scale` sizes its box and model.
+            self.armor_stand_attributes(id as u32, scale);
             if let Some(a) = self.armor_stands.iter_mut().find(|a| a.id == id as u32) {
                 if let Some(value) = nameplate.name_tag {
                     a.nameplate.name_tag = Some(value);

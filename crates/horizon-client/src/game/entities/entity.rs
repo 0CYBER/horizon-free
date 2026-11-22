@@ -423,7 +423,7 @@ impl RenderEntityBounds for ArmorStand {
         // 0.5 x 1.975 collision box (especially raised arms and head banners).
         // This axis-aligned envelope contains every vanilla pose while staying
         // independent of the stand's yaw and partial-tick rotation.
-        let scale = if self.small { 0.5 } else { 1.0 };
+        let scale = if self.small { 0.5 } else { 1.0 } * f64::from(self.scale);
         let equipped = self.equipment.iter().any(Option::is_some);
         let horizontal = if equipped { 2.0 } else { 1.5 * scale };
         let lower = if equipped { -1.0 } else { -0.5 * scale };
