@@ -231,7 +231,7 @@ fn erase_terrain(root: &Path, id: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_terrain, erase_terrain};
+    use super::erase_terrain;
     use std::fs;
 
     fn write(path: &std::path::Path) {
@@ -289,7 +289,7 @@ mod tests {
         assert!(outside.join("region/r.0.0.mca").exists());
         // A link under one level refuses the whole reset up front, so no other level is erased first.
         write(&root.join("dimensions/minecraft/the_nether/region/r.0.0.mca"));
-        assert!(check_terrain(&root).is_err());
+        assert!(super::check_terrain(&root).is_err());
         assert!(root.join("dimensions/minecraft/the_nether/region/r.0.0.mca").exists());
         fs::remove_dir_all(&root).unwrap();
     }
