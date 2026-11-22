@@ -1076,6 +1076,8 @@ fn level_in(list: &[(Arc<str>, u32)], id: &str) -> u32 {
 }
 /// `ItemEnchantments.Mutable.upgrade`.
 pub fn upgrade(list: &mut Levels, id: &str, level: u32) {
+    // ItemEnchantments.Mutable.upgrade: Math.min(level, 255).
+    let level = level.min(255);
     if level == 0 {
         return;
     }
@@ -1086,6 +1088,8 @@ pub fn upgrade(list: &mut Levels, id: &str, level: u32) {
 }
 /// `ItemEnchantments.Mutable.set` (level 0 removes).
 pub fn set_level(list: &mut Levels, id: &str, level: u32) {
+    // ItemEnchantments.Mutable.set: Math.min(level, 255).
+    let level = level.min(255);
     if level == 0 {
         list.retain(|(e, _)| &**e != id);
     } else {
