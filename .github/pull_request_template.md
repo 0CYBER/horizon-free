@@ -44,9 +44,12 @@
 
 <!-- Paste the block `python3 tools/pr_ready.py` prints (`--base upstream/main` from a fork). -->
 
-## Screenshots
+## Proof
 
-<!-- For anything players see: before and after. Delete this section otherwise. -->
+<!-- For a change players see or feel in the game: show it working on this pull request's head commit
+     (CONTRIBUTING.md "Pull requests"). Before and after screenshots or a short video, or the lan_e2e, harness or
+     horizon-ctl commands you ran with their output. A unit test alone isn't proof. Without it the pull request gets
+     needs-proof and waits. Delete this section only for tooling, docs, tests or a refactor. -->
 
 <!-- Please tick "Allow edits by maintainers": we push small fixups ourselves instead of a round trip.
      See CONTRIBUTING.md. -->
