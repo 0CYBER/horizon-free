@@ -51,11 +51,15 @@ fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
         "execute if items entity @s weapon.mainhand #p:shiny run scoreboard players add #item p 1\n\
          execute if block ~ ~ ~ #p:stopper run scoreboard players add #block p 1\n",
     );
+    write(
+        "data/p/function/replace.mcfunction",
+        "fill 5 200 4 6 200 4 minecraft:air replace #p:stopper\n",
+    );
     game.world_root = dir.clone();
     game.player = Some(
         horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap(),
     );
-    game.build_registries();
+    game.open_world_datapacks(&[]).unwrap();
     game.set_allow_commands(true);
     game.world
         .chunks
@@ -64,7 +68,6 @@ fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
     assert!(game.run_command("scoreboard objectives add p dummy"));
-    assert!(game.run_command("reload"));
     assert!(
         game.fns.store.errors.is_empty(),
         "{:?}",
@@ -98,6 +101,11 @@ fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
     assert!(game.run_command("function p:t"));
     assert_eq!(score(&game, "#item"), 1, "the diamond is in #p:shiny");
     assert_eq!(score(&game, "#block"), 1, "the stone is in #p:stopper");
+    game.world.set(5, 200, 4, stone).unwrap();
+    game.world.set(6, 200, 4, dirt).unwrap();
+    assert!(game.run_command("function p:replace"));
+    assert_eq!(game.world.block(5, 200, 4), game.world.air);
+    assert_eq!(game.world.block(6, 200, 4), dirt);
     // The same tag, a member it doesn't hold: the function still runs, and
     // neither test matches.
     game.world.set(4, 200, 4, dirt).unwrap();
@@ -106,6 +114,7 @@ fn a_packs_own_item_and_block_tags_admit_and_match_its_functions() {
     assert_eq!(score(&game, "#item"), 1, "a stick is not in #p:shiny");
     assert_eq!(score(&game, "#block"), 1, "dirt is not in #p:stopper");
     // Both match again.
+    assert!(game.run_command("reload"));
     game.world.set(4, 200, 4, stone).unwrap();
     assert!(game.run_command("item replace entity @s weapon.mainhand with minecraft:diamond"));
     assert!(game.run_command("function p:t"));

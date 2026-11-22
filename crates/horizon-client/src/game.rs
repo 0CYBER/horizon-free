@@ -6213,7 +6213,6 @@ impl Game<'_> {
         self.score = Default::default();
         let stack = self.open_world_datapacks(&level.enabled_features)?;
         let root = self.options.resources.clone();
-        self.open_world_tables(&stack, &root)?;
         self.invalidate_tagged_shader_ids();
         self.damage_tag_generation = self.damage_tag_generation.wrapping_add(1);
         self.resolve_parts()?;

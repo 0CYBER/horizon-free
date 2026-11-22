@@ -209,6 +209,13 @@ impl FnState {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PackLoad {
+    OpenWorld,
+    LibraryOnly,
+    Reload,
+}
+
 impl Game<'_> {
     // ---- loading -----------------------------------------------------------
 
@@ -229,13 +236,28 @@ impl Game<'_> {
         // Function admission parses commands immediately, including block arguments.
         // Populate static registries on first open; admission synchronizes pack IDs.
         self.build_registries();
-        self.reload_datapacks(false, enabled_features)
+        self.load_datapacks(enabled_features, PackLoad::OpenWorld)
     }
 
     pub(super) fn reload_datapacks(
         &mut self,
         run_load: bool,
         enabled_features: &[String],
+    ) -> Result<PackStack, ReloadStageError> {
+        let mode = if run_load {
+            PackLoad::Reload
+        } else {
+            PackLoad::LibraryOnly
+        };
+        self.load_datapacks(enabled_features, mode)
+    }
+
+    /// `ServerFunctionLibrary.reload`: the world's registry and tags must be
+    /// available to the command compilation context before functions load.
+    fn load_datapacks(
+        &mut self,
+        enabled_features: &[String],
+        mode: PackLoad,
     ) -> Result<PackStack, ReloadStageError> {
         horizon_client::mod_content::check_jars(
             &self.options.resources,
@@ -287,7 +309,7 @@ impl Game<'_> {
             .prepare_loop_context(&resources)
             .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
         let prepared = self.apply_server_reload_callbacks(prepared);
-        let world = if run_load && self.remote.is_none() {
+        let world = if mode == PackLoad::Reload && self.remote.is_none() {
             Some(
                 self.prepare_world_reload(&stack, &resources)
                     .map_err(|error| ReloadStageError::DataSource(error.to_string()))?,
@@ -302,17 +324,20 @@ impl Game<'_> {
             self.mods.data_switched = true;
         }
         self.install_loop_context(context);
-        if !run_load {
+        if mode != PackLoad::Reload {
             self.fns = Default::default();
         }
         self.fns.packs = stack.packs.clone();
         self.fns.enabled = stack.enabled.clone();
         self.pack.additional_data = additional.into();
+        // Explicit reloads and fresh world opens both bind the content tables
+        // before admission. A library-only load keeps the caller's world tables.
+        if mode == PackLoad::OpenWorld {
+            self.open_world_tables(&stack, &resources)
+                .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
+        }
         self.fns.loaded = true;
         self.fns.load_pending = true;
-        // An explicit reload (`/reload`, `/datapack`) also rebuilds the
-        // content tables, as `ReloadableServerResources` does; on world open
-        // `finish_open_world` builds them right after this.
         if let Some(world) = world {
             self.install_world_tables(world);
         }
@@ -339,7 +364,6 @@ impl Game<'_> {
         if let Ok(tags) = stack.validate() {
             tags.expand_predicates(&mut store.predicates);
         }
-        // On explicit reload the actual content tables have already refreshed.
         // The candidate's named predicates/modifiers must also be available to
         // argument codecs before any of its functions can be exposed.
         self.sync_enchantment_registries();
@@ -355,10 +379,14 @@ impl Game<'_> {
         registries.function_tags = store.function_tags.keys().cloned().collect();
         registries.predicates = store.predicates.keys().cloned().collect();
         registries.item_modifiers = store.item_modifiers.keys().cloned().collect();
-        // On world open the content tables get the world's packs only after this: the
-        // candidate's own loot tables are named here, as its predicates and modifiers are.
-        let pack_tables = store.files.keys().filter_map(|id| id.strip_prefix("loot_table/"));
-        registries.loot_tables.extend(pack_tables.map(str::to_owned));
+        // A library-only load also needs the candidate's loot-table names.
+        let pack_tables = store
+            .files
+            .keys()
+            .filter_map(|id| id.strip_prefix("loot_table/"));
+        registries
+            .loot_tables
+            .extend(pack_tables.map(str::to_owned));
         registries.loot_tables.sort();
         registries.loot_tables.dedup();
         let sources = registries
