@@ -2360,7 +2360,9 @@ impl Game<'_> {
     /// a bundle's contents do (`ClientBundleTooltip`).
     pub(super) fn tooltip_with_carried(&self, stack: &ItemStack) -> bool {
         self.carried.is_none()
-            || horizon_client::bundle::Contents::of(self.items(), stack).is_some()
+            || (horizon_client::item_tooltip::tooltip_display(stack)
+                .shows("minecraft:bundle_contents")
+                && horizon_client::bundle::Contents::of(self.items(), stack).is_some())
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
     pub(super) fn draw_slot_tooltip(&mut self, batch: &mut HudBatch) {
