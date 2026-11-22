@@ -2131,6 +2131,15 @@ pub(super) fn network_stack(
                 horizon_protocol::item::Component::Unit,
             ));
         }
+        // Glider too: the client starts a glide on its own (`LocalPlayer.aiStep`:
+        // `tryToStartFallFlying` reads `canGlideUsing`), so a chestplate given
+        // `glider` by a command or a mod glides only if its client sees it.
+        if d.other("minecraft:glider").is_some() {
+            stack.added.push((
+                horizon_protocol::item::component::GLIDER,
+                horizon_protocol::item::Component::Unit,
+            ));
+        }
         if let Some(component) = d
             .other("minecraft:kinetic_weapon")
             .and_then(|value| crate::item_sync::kinetic::encode(value, synced_id))
@@ -2964,6 +2973,22 @@ mod tests {
             received.component(component::LORE),
             Some(&Component::Lore(lines))
         );
+    }
+
+    #[test]
+    fn a_saved_glider_reaches_the_client() {
+        let mut item = ItemStack::new("minecraft:diamond_chestplate", 1);
+        item.data_mut()
+            .set_other("minecraft:glider", Some(Tag::Compound(Default::default())));
+        let sent = stack_to_network(|_| 7, |_, _| None, &Some(item));
+        let mut writer = Writer::new();
+        horizon_protocol::item::Slot::write(&sent, &mut writer);
+        let mut reader = Reader::new(&writer.data);
+        let received = horizon_protocol::item::Slot::read(&mut reader)
+            .unwrap()
+            .unwrap();
+        // A unit component: the client reads its presence (`glider_and_slot`).
+        assert!(received.component(component::GLIDER).is_some());
     }
 
     #[test]
