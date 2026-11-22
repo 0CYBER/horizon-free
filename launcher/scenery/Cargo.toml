@@ -7,7 +7,7 @@ description = "The Horizon launcher's scenery: the sunset scene, painted skies, 
 publish = false
 
 [dependencies]
-gpui = { package = "gpui-fast", version = "0.1.13" }
+gpui = { package = "gpui-fast", version = "0.1.15" }
 horizon-theme = { path = "../../crates/horizon-theme" }
 image = { version = "0.25", default-features = false }
 
