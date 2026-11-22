@@ -1936,7 +1936,8 @@ struct Shared {
     /// On small machines, hold queued far meshing while near terrain loads.
     mesh_held: AtomicBool,
     /// The near terrain is loading: the far threads step behind it
-    /// (`horizon_threads::far_terrain_behind`) and come back once it is in.
+    /// (`horizon_threads::far_terrain_behind`) and, on macOS, come back once
+    /// it is in.
     near_loading: AtomicBool,
 }
 /// Puts the calling far terrain thread behind the near terrain while it

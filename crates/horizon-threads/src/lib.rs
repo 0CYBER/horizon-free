@@ -488,14 +488,17 @@ fn far() -> bool {
 /// terrain on the efficiency cores long after the near chunks were in, and
 /// it took minutes to settle. On Linux and Android an unprivileged thread
 /// can't raise its priority again: it stays behind (`behind_server`), as it
-/// always has there, and this changes nothing. Whether the OS took it.
-#[cfg(any(target_vendor = "apple", windows))]
+/// always has there, and this changes nothing. On Windows it stays below
+/// normal for good too: back at normal, the far threads stood level with the
+/// game's other helpers and the rest of the desktop, the suspected cause of a
+/// world entry freezing a 16-thread PC (#19952). Whether the OS took it.
+#[cfg(target_vendor = "apple")]
 pub fn far_terrain_behind(behind: bool) -> bool {
-    // Both set the class or priority outright: calling again is harmless.
+    // Both set the class outright: calling again is harmless.
     if behind { far() } else { far_back() }
 }
 
-#[cfg(not(any(target_vendor = "apple", windows)))]
+#[cfg(not(target_vendor = "apple"))]
 pub fn far_terrain_behind(_behind: bool) -> bool {
     false
 }
@@ -504,15 +507,6 @@ pub fn far_terrain_behind(_behind: bool) -> bool {
 fn far_back() -> bool {
     // SAFETY: sets the calling thread's own QoS class; no pointers.
     unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_DEFAULT, 0) == 0 }
-}
-
-#[cfg(windows)]
-fn far_back() -> bool {
-    use windows_sys::Win32::System::Threading::{
-        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_NORMAL,
-    };
-    // SAFETY: GetCurrentThread's pseudo handle needs no closing.
-    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL) != 0 }
 }
 
 /// Run the calling thread only on a core nothing else wants: work that may
@@ -1052,6 +1046,27 @@ mod tests {
             }
         );
         assert_eq!(frame, THREAD_PRIORITY_ABOVE_NORMAL);
+    }
+
+    /// #19952: on Windows a far terrain thread stays below normal priority
+    /// once the near terrain is in, so the frame, the near terrain and the
+    /// desktop keep going first however many far threads there are.
+    #[cfg(windows)]
+    #[test]
+    fn a_far_terrain_thread_stays_below_normal_once_near_terrain_is_in() {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, GetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+        };
+        let priority = std::thread::spawn(|| {
+            assert!(super::far_terrain_current());
+            super::far_terrain_behind(false);
+            // SAFETY: reads the priority of the thread it runs on; the
+            // pseudo handle needs no closing.
+            unsafe { GetThreadPriority(GetCurrentThread()) }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(priority, THREAD_PRIORITY_BELOW_NORMAL);
     }
 
     /// A helper goes behind only once a dedicated server asks for it, and

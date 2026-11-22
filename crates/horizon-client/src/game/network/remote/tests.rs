@@ -4646,3 +4646,31 @@ fn flint_and_steel_use_on_ends_the_click() {
     let done = game.remote_use_block(Hand::Main);
     assert!(done, "flint and steel useOn must end the click");
 }
+
+/// #19952: an unfocused window doesn't pause a world whose level loading
+/// screen is still up over `Screen::Playing` (vanilla's screen is the
+/// `LevelLoadingScreen` then); once the screen closes, it pauses as before.
+#[test]
+#[ignore = "daily"]
+fn an_unfocused_window_waits_for_the_loading_screen_to_pause() {
+    use horizon_client::{level_loading::Reason, motion::PlayerMotion};
+    use horizon_core::geometry::Vec3;
+    super::super::native_entity_refs::tests::with_client_game(|game| {
+        let (client, _server) = horizon_protocol::connection::Pipe::pair();
+        game.connect_local(client, "focus-pause-test").unwrap();
+        game.title = None;
+        game.screen = crate::game::Screen::Playing;
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.remote
+            .as_mut()
+            .unwrap()
+            .level_load
+            .start_client_load(0, Reason::Other);
+        game.focus_lost = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        game.pause_if_inactive();
+        assert_eq!(game.screen, crate::game::Screen::Playing, "loading screen up");
+        game.remote.as_mut().unwrap().level_load.finish();
+        game.pause_if_inactive();
+        assert_eq!(game.screen, crate::game::Screen::Paused, "loading screen closed");
+    });
+}
