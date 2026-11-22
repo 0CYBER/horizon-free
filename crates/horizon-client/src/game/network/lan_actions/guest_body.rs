@@ -150,10 +150,17 @@ impl Game<'_> {
             let freeze_immune = game.wears_freeze_immune();
             let burn_immune = game.wears_burn_from_stepping_immunity();
             let boat = game.riding_boat_fluid_box();
+            // LivingEntity.getAirSupply reduction: the helmet's Respiration
+            // level, which the window's sync_player_body sets but a served
+            // guest's own body tick must set too.
+            let respiration = game.armor[0]
+                .as_ref()
+                .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
             player.fluids.boat = boat;
+            player.respiration = respiration;
             let mut w = MotionWorld {
                 entities: &[],
                 player,
