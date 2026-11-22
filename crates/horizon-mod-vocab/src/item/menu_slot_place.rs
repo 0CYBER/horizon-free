@@ -76,9 +76,16 @@ impl MenuSlotPlace {
     ) -> Option<(Capability<dyn ResourceHandler<ItemResource>>, usize)> {
         match self {
             Self::HeldItem { hand, slot } => {
-                let held = ItemPlace::PlayerHand {
+                // The inventory slot holding the hand's stack (`forPlayerSlot`), not the hand
+                // as an interaction reaches it (`forPlayerInteraction`): a creative player's
+                // hand would keep the old stack and take the rewritten one as another.
+                let index = match hand {
+                    Hand::Off => -106,
+                    _ => i32::try_from(player.selected_slot(host)?).ok()?,
+                };
+                let held = ItemPlace::PlayerSlot {
                     player: player.uuid(),
-                    hand,
+                    slot: index,
                 };
                 Some((held.capability(host, &ITEM_ITEMS)?, slot))
             }

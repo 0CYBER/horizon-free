@@ -716,6 +716,34 @@ mod tests {
 
     #[test]
     #[ignore = "daily"]
+    fn a_creative_shift_click_fills_the_held_backpack_not_a_copy() {
+        with_game(|game| {
+            let window = backpack_menu(game);
+            edit_guest(game, |g| g.game_mode = 1);
+            let host: &mut dyn ServerHost = game;
+            let menu = host.menu(123, window).unwrap();
+            let player = menu.fields().player;
+            let places = held_places(Hand::Main, 0..27);
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, places),
+                Ok(())
+            );
+            assert!(game.place_menu_click(123, window, 27, 0, 1));
+            let host: &mut dyn ServerHost = game;
+            assert_eq!(held_slot(0).amount(host), 64, "the box in the hand holds it");
+            let guest = game.lan.as_ref().unwrap().hub.guest(1).unwrap();
+            let boxes = guest
+                .inventory
+                .iter()
+                .flatten()
+                .filter(|s| &*s.item == "minecraft:shulker_box")
+                .count();
+            assert_eq!(boxes, 1, "no second box");
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
     fn a_write_into_the_box_is_mirrored_at_its_notice() {
         with_game(|game| {
             let window = backpack_menu(game);

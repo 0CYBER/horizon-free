@@ -129,6 +129,7 @@ horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::gue
 horizon-client game::native_hooks::runtime_environment::server_data_version_tests::host_data_version_matches_a_freshly_saved_chunk lib daily resources
 horizon-client game::native_hooks::sky_environment::sky_environment_tests::a_client_mod_draws_its_own_time_and_weather lib daily game-boot
 horizon-client game::native_menu_places::tests::a_backing_names_why_it_refuses lib daily resources
+horizon-client game::native_menu_places::tests::a_creative_shift_click_fills_the_held_backpack_not_a_copy lib daily resources
 horizon-client game::native_menu_places::tests::a_shift_click_into_a_held_backpack_writes_through_its_handler lib daily resources
 horizon-client game::native_menu_places::tests::a_write_into_the_box_is_mirrored_at_its_notice lib daily resources
 horizon-client game::native_menu_places::tests::another_hotbar_slot_selected_closes_the_menu lib daily resources
