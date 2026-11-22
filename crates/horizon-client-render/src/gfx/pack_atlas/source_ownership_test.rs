@@ -168,11 +168,13 @@ fn terrain_source_ownership_gpu() {
     });
     let slots = storage(bytemuck::cast_slice(&[0u32]));
     let origins = storage(bytemuck::cast_slice(&[[128.0f32, -32.0, -256.0, -1.0]]));
+    let zero = crate::mesher::TerrainSource::default();
+    let s0 = crate::mesher::TerrainSource::new(0, [2, 3, 4], 0, false);
+    let s1 = crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, false);
+    let s2 = crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, false);
+    let s3 = crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, true);
     let ids = storage(bytemuck::cast_slice(&[
-        crate::mesher::TerrainSource::new(0, [2, 3, 4], 0, false),
-        crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, false),
-        crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, false),
-        crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, true),
+        s0, zero, zero, zero, s1, zero, zero, zero, s2, zero, zero, zero, s3, zero, zero, zero,
     ]));
     let vertex_storage = storage(bytemuck::cast_slice(&vertices));
     let rects = storage(bytemuck::cast_slice(
@@ -421,5 +423,418 @@ fn terrain_source_ownership_gpu() {
     for i in 0..vertices.len() {
         assert_eq!(neutral[2 * i], [-1.0, 0.0, 0.0, 0.0]);
         assert_eq!(neutral[2 * i + 1], [0.0; 4]);
+    }
+}
+
+#[test]
+fn packed_and_fallback_sources_reach_shader_gpu() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let atlas = PackAtlas::new(&device, &mut encoder, &[texture], 1, 1, 1).unwrap();
+    let inputs = atlas.terrain_inputs(true);
+
+    // Quad 0: unit-grid top face at (2, 3, 4) -> compact record at slot 0.
+    // Quad 1: inset face at (6.0, 3.25, 4.0) -> FULL fallback record at slot 1 -> vertices at 4..8.
+    // Quad 2: unit-grid top face at (4, 3, 4) -> compact record at slot 2 (keeps 3+1+4=8 < 12).
+    let q0 = [
+        [2.0, 4.0, 4.0],
+        [2.0, 4.0, 5.0],
+        [3.0, 4.0, 5.0],
+        [3.0, 4.0, 4.0],
+    ]
+    .map(|pos| crate::mesher::TerrainVertex::new(pos, [0.0; 2], 0, u32::MAX, 0));
+    let q1 = [
+        [6.0, 3.25, 4.0],
+        [6.0, 3.25, 4.5],
+        [6.5, 3.25, 4.5],
+        [6.5, 3.25, 4.0],
+    ]
+    .map(|pos| crate::mesher::TerrainVertex::new(pos, [0.0; 2], 0, u32::MAX, 0));
+    let q2 = [
+        [4.0, 4.0, 4.0],
+        [4.0, 4.0, 5.0],
+        [5.0, 4.0, 5.0],
+        [5.0, 4.0, 4.0],
+    ]
+    .map(|pos| crate::mesher::TerrainVertex::new(pos, [0.0; 2], 0, u32::MAX, 0));
+    let packed = crate::mesher::packed::place(
+        &[
+            crate::mesher::packed::pack_quad(&q0, crate::mesher::packed::WHITE),
+            None,
+            crate::mesher::packed::pack_quad(&q2, crate::mesher::packed::WHITE),
+        ],
+        &[q0, q1, q2],
+    );
+    assert_eq!(packed.len(), 8);
+    assert_eq!(packed[0][5] & crate::mesher::packed::FULL, 0);
+    assert_ne!(packed[1][5] & crate::mesher::packed::FULL, 0);
+    assert_eq!(packed[2][5] & crate::mesher::packed::FULL, 0);
+
+    let s0 = crate::mesher::TerrainSource::new(0, [2, 3, 4], 0, false);
+    let s1 = crate::mesher::TerrainSource::new(1, [6, 3, 4], 13, true);
+    let s2 = crate::mesher::TerrainSource::new(0, [4, 3, 4], 0, false);
+    let expanded = crate::gfx::arena::expand_packed_sources(&packed, &[s0, s1, s2]);
+
+    let declarations = inputs
+        .declarations
+        .lines()
+        .filter(|l| !l.starts_with("layout(location"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let attribute = |name: &str| {
+        inputs
+            .attributes
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap()
+            .1
+            .as_str()
+    };
+    let source = format!(
+        "#version 450\n{declarations}\n\
+         layout(local_size_x=1) in;\n\
+         layout(set=0,binding=0) buffer Results {{ vec4 result[]; }};\n\
+         void main() {{\n\
+         uint out_idx=gl_GlobalInvocationID.x;\n\
+         uint hz_index=0x10000000u + out_idx;\n\
+         vec3 hz_v_pos=vec3(0.0); uvec2 hz_v_uv=uvec2(0); uint hz_v_layer=0u; vec4 hz_v_color=vec4(1); uvec2 hz_v_light=uvec2(0);\n\
+         vec4 hz_Vertex, hz_MultiTexCoord0, hz_MultiTexCoord1, hz_MultiTexCoord2, hz_Color; vec3 hz_Normal;\n\
+         {}\nresult[2u*out_idx]={}; result[2u*out_idx+1u]={};\n}}",
+        inputs.body.replace("gl_VertexIndex", "hz_index"),
+        attribute("mc_Entity"),
+        attribute("at_midBlock")
+    );
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = frontend
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Compute),
+            &source,
+        )
+        .unwrap();
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Packed terrain source ownership"),
+        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+    });
+    let layouts: Vec<_> = [1, 2, 0, 3]
+        .into_iter()
+        .map(|count| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &(0..count)
+                    .map(|binding| wgpu::BindGroupLayoutEntry {
+                        binding,
+                        visibility: if count == 1 {
+                            wgpu::ShaderStages::COMPUTE
+                        } else {
+                            wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX
+                        },
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage {
+                                read_only: binding != 0 || count != 1,
+                            },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
+        ..Default::default()
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let storage = |bytes: &[u8]| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        })
+    };
+    let result = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 12 * 32,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let slots = storage(bytemuck::cast_slice(&[0u32]));
+    let origins = storage(bytemuck::cast_slice(&[[0.0f32, 0.0, 0.0, 1.0]]));
+    let ids = storage(bytemuck::cast_slice(&expanded));
+    let vertex_storage = storage(bytemuck::cast_slice(&packed));
+    let rects = storage(bytemuck::cast_slice(
+        &super::super::pack_post::terrain_tables(&[31, -1, 47, 59], &[0, 1]),
+    ));
+    let group = |set: u32, buffers: &[&wgpu::Buffer]| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(set),
+            entries: &buffers
+                .iter()
+                .enumerate()
+                .map(|(i, b)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
+        })
+    };
+    let groups = [
+        group(0, &[&result]),
+        group(1, &[&slots, &origins]),
+        group(2, &[]),
+        group(3, &[&ids, &vertex_storage, &rects]),
+    ];
+    queue.submit([encoder.finish()]);
+    let actual = dispatch(&device, &queue, &pipeline, &groups, &result);
+    for i in 0..4 {
+        assert_eq!(actual[i * 2], [31.0, 0.0, 0.0, 0.0], "compact corner {i}");
+        assert_eq!(actual[i * 2 + 1][3], 0.0, "compact emission {i}");
+    }
+    for i in 4..8 {
+        assert_eq!(actual[i * 2], [59.0, 1.0, 0.0, 0.0], "fallback corner {i}");
+        assert_eq!(actual[i * 2 + 1][3], 13.0, "fallback emission {i}");
+    }
+    for i in 8..12 {
+        assert_eq!(actual[i * 2], [31.0, 0.0, 0.0, 0.0], "compact2 corner {i}");
+        assert_eq!(actual[i * 2 + 1][3], 0.0, "compact2 emission {i}");
+    }
+}
+
+#[test]
+fn far_packed_sources_reach_shader_gpu() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let atlas = PackAtlas::new(&device, &mut encoder, &[texture], 1, 1, 1).unwrap();
+    let inputs = atlas.terrain_inputs(true);
+
+    let tiled_quad = |x0: u32, z0: u32| {
+        crate::lod::packed::corners([u32::MAX, 0, 64, x0, z0, (4 << 3) | (4 << 14)]).unwrap()
+    };
+    let fq0 = tiled_quad(0, 0);
+    // Non-grid fractional quad forces FULL fallback.
+    let fq1 = [
+        [6.0, 32.25, 4.0],
+        [6.0, 32.25, 4.5],
+        [6.5, 32.25, 4.5],
+        [6.5, 32.25, 4.0],
+    ]
+    .map(|pos| crate::mesher::TerrainVertex::new(pos, [0.0; 2], 0, u32::MAX, 0));
+    let fq2 = tiled_quad(8, 0);
+    let r0 = crate::lod::packed::pack(&fq0).expect("far quad 0 packs");
+    let r2 = crate::lod::packed::pack(&fq2).expect("far quad 2 packs");
+    let packed = crate::mesher::packed::place(&[Some(r0), None, Some(r2)], &[fq0, fq1, fq2]);
+    assert_eq!(packed.len(), 8);
+    assert_eq!(packed[0][5] & crate::mesher::packed::FULL, 0);
+    assert_ne!(packed[1][5] & crate::mesher::packed::FULL, 0);
+    assert_eq!(packed[2][5] & crate::mesher::packed::FULL, 0);
+
+    let s0 = crate::mesher::TerrainSource::new(0, [0, 4, 0], 0, false);
+    let s1 = crate::mesher::TerrainSource::new(1, [6, 2, 4], 13, true);
+    let s2 = crate::mesher::TerrainSource::new(0, [8, 4, 0], 0, false);
+    let expanded = crate::gfx::arena::expand_packed_sources(&packed, &[s0, s1, s2]);
+
+    let declarations = inputs
+        .declarations
+        .lines()
+        .filter(|l| !l.starts_with("layout(location"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let attribute = |name: &str| {
+        inputs
+            .attributes
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap()
+            .1
+            .as_str()
+    };
+    let source = format!(
+        "#version 450\n{declarations}\n\
+         layout(local_size_x=1) in;\n\
+         layout(set=0,binding=0) buffer Results {{ vec4 result[]; }};\n\
+         void main() {{\n\
+         uint out_idx=gl_GlobalInvocationID.x;\n\
+         uint hz_index=0x20000000u + out_idx;\n\
+         vec3 hz_v_pos=vec3(0.0); uvec2 hz_v_uv=uvec2(0); uint hz_v_layer=0u; vec4 hz_v_color=vec4(1); uvec2 hz_v_light=uvec2(0);\n\
+         vec4 hz_Vertex, hz_MultiTexCoord0, hz_MultiTexCoord1, hz_MultiTexCoord2, hz_Color; vec3 hz_Normal;\n\
+         {}\nresult[2u*out_idx]={}; result[2u*out_idx+1u]=vec4(hz_v_pos, ({}).a);\n}}",
+        inputs.body.replace("gl_VertexIndex", "hz_index"),
+        attribute("mc_Entity"),
+        attribute("at_midBlock")
+    );
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = frontend
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Compute),
+            &source,
+        )
+        .unwrap();
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Far packed terrain source ownership"),
+        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+    });
+    let layouts: Vec<_> = [1, 2, 0, 3]
+        .into_iter()
+        .map(|count| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &(0..count)
+                    .map(|binding| wgpu::BindGroupLayoutEntry {
+                        binding,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage {
+                                read_only: binding != 0 || count != 1,
+                            },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
+        ..Default::default()
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let storage = |bytes: &[u8]| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+        })
+    };
+    let result = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 12 * 32,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let slots = storage(bytemuck::cast_slice(&[0u32]));
+    let origins = storage(bytemuck::cast_slice(&[[0.0f32, 0.0, 0.0, 1.0]]));
+    let ids = storage(bytemuck::cast_slice(&expanded));
+    let vertex_storage = storage(bytemuck::cast_slice(&packed));
+    let rects = storage(bytemuck::cast_slice(
+        &super::super::pack_post::terrain_tables(&[31, -1, 47, 59], &[0, 1]),
+    ));
+    let group = |set: u32, buffers: &[&wgpu::Buffer]| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(set),
+            entries: &buffers
+                .iter()
+                .enumerate()
+                .map(|(i, b)| wgpu::BindGroupEntry {
+                    binding: i as u32,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>(),
+        })
+    };
+    let groups = [
+        group(0, &[&result]),
+        group(1, &[&slots, &origins]),
+        group(2, &[]),
+        group(3, &[&ids, &vertex_storage, &rects]),
+    ];
+    queue.submit([encoder.finish()]);
+    let actual = dispatch(&device, &queue, &pipeline, &groups, &result);
+    for i in 0..4 {
+        assert_eq!(
+            actual[i * 2],
+            [31.0, 0.0, 0.0, 0.0],
+            "far compact corner {i}"
+        );
+        assert_eq!(actual[i * 2 + 1][..3], fq0[i].pos, "far compact pos {i}");
+        assert_eq!(actual[i * 2 + 1][3], 0.0, "far compact emission {i}");
+    }
+    for i in 4..8 {
+        assert_eq!(
+            actual[i * 2],
+            [59.0, 1.0, 0.0, 0.0],
+            "far fallback corner {i}"
+        );
+        assert_eq!(
+            actual[i * 2 + 1][..3],
+            fq1[i - 4].pos,
+            "far fallback pos {i}"
+        );
+        assert_eq!(actual[i * 2 + 1][3], 13.0, "far fallback emission {i}");
+    }
+    for i in 8..12 {
+        assert_eq!(
+            actual[i * 2],
+            [31.0, 0.0, 0.0, 0.0],
+            "far compact2 corner {i}"
+        );
+        assert_eq!(
+            actual[i * 2 + 1][..3],
+            fq2[i - 8].pos,
+            "far compact2 pos {i}"
+        );
+        assert_eq!(actual[i * 2 + 1][3], 0.0, "far compact2 emission {i}");
     }
 }

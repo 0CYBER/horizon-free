@@ -82,7 +82,7 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
             &device,
             &queue,
             arena.sources(third.0).unwrap(),
-            third.1 / 4 * 8,
+            third.1 * 8,
             8
         ),
         bytemuck::bytes_of(&source)
@@ -92,7 +92,7 @@ fn terrain_source_arena_gpu_grow_move_recycle_and_refusal() {
             &device,
             &queue,
             arena.sources(first.0).unwrap(),
-            first.1 / 4 * 8,
+            first.1 * 8,
             8
         ),
         [0; 8]

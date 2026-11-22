@@ -5674,6 +5674,13 @@ impl Renderer {
         });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         if solid_slots > 0 {
+            let expanded_sources;
+            let solid_sources = if packed {
+                expanded_sources = arena::expand_packed_sources(&mesh.packed, &mesh.solid_sources);
+                expanded_sources.as_slice()
+            } else {
+                &mesh.solid_sources
+            };
             self.arena.write_sources(
                 &self.device,
                 encoder,
@@ -5681,7 +5688,7 @@ impl Renderer {
                 page,
                 start,
                 solid_slots,
-                if packed { &[] } else { &mesh.solid_sources },
+                solid_sources,
             );
         }
         if translucent_vertices > 0 {
@@ -6240,17 +6247,22 @@ impl Renderer {
             flat.set_translucent_page_vertices(arena.page_vertices());
         }
     }
-    /// Uploads solid quads in the compact layout (`packed_quads`) unless a non-native `shaders/`
-    /// pack is active: packed sections skip `arena::write_sources` (`p.sources` is sized for 4-slot
-    /// unpacked quads and `pack_atlas.rs` indexes `hz_sources` by `gl_VertexIndex / 4u`), which
-    /// leaves `mc_Entity = -1` and `at_midBlock = 0` on packed chunks (#19558).
+    /// Uploads solid quads in the compact layout (`packed_quads`) unless a pack reads the
+    /// arena's vertices as `TerrainVertex`es: a `shaders/` pack's terrain and shadow
+    /// programs outside flat draws (flat ones unpack the records via `pack_atlas::PULL_FLAT`
+    /// and read per-slot `solid_sources`).
     /// Leaving it drops every section and far tile for the game to mesh again.
     fn follow_packed_layout(&mut self) {
         if self.world_held {
             return;
         }
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref()).is_some();
-        let want = want_packed_layout(self.flat.is_some(), pack, self.packed_on);
+        let want = want_packed_layout(
+            self.flat.is_some(),
+            pack,
+            self.pack_terrain_flat,
+            self.packed_on,
+        );
         if want == self.packed_quads {
             return;
         }
@@ -12825,8 +12837,13 @@ fn facing_runs_from(
 #[cfg(test)]
 mod frame_policy_tests;
 
-fn want_packed_layout(has_flat: bool, has_pack: bool, packed_on: bool) -> bool {
-    has_flat && !has_pack && packed_on
+fn want_packed_layout(
+    has_flat: bool,
+    has_pack: bool,
+    pack_terrain_flat: bool,
+    packed_on: bool,
+) -> bool {
+    has_flat && (!has_pack || pack_terrain_flat) && packed_on
 }
 
 #[cfg(test)]
@@ -12834,11 +12851,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_native_shader_pack_disables_packed_layout() {
-        assert!(want_packed_layout(true, false, true));
-        assert!(!want_packed_layout(true, true, true));
-        assert!(!want_packed_layout(false, false, true));
-        assert!(!want_packed_layout(true, false, false));
+    fn flat_shader_pack_keeps_packed_layout() {
+        assert!(want_packed_layout(true, false, false, true));
+        assert!(want_packed_layout(true, true, true, true));
+        assert!(!want_packed_layout(true, true, false, true));
+        assert!(!want_packed_layout(false, false, false, true));
+        assert!(!want_packed_layout(true, false, false, false));
     }
     /// #16769: a graphics driver that never answers the device search must end the
     /// start with a message, not hold it on the boot screen forever.

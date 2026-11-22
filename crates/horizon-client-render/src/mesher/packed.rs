@@ -35,7 +35,7 @@ pub const ALPHA_STEP: u32 = 51;
 pub const PACKED_BASE: u32 = 1 << 28;
 
 /// Whether meshes sorted from now on get the compact layout: set by the renderer while its
-/// passes read it (no shader pack).
+/// passes read it (including flat shader packs).
 static PACK: AtomicBool = AtomicBool::new(false);
 
 pub fn pack_quads(on: bool) {

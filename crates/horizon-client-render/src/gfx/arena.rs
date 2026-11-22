@@ -386,13 +386,14 @@ impl Arena {
     }
 
     fn source_buffer(device: &wgpu::Device, capacity: u64) -> Option<wgpu::Buffer> {
-        if capacity / 4 * 8 > device.limits().max_storage_buffer_binding_size {
+        let bytes = capacity * 8;
+        if bytes > device.limits().max_storage_buffer_binding_size {
             return None;
         }
         try_create(
             device,
             "Terrain quad sources",
-            capacity / 4 * 8,
+            bytes,
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
@@ -525,18 +526,20 @@ impl Arena {
             p.sources = Self::source_buffer(device, p.capacity);
         }
         if let Some(buffer) = &p.sources {
-            let bytes = vertices / 4 * 8;
+            let bytes = vertices * 8;
             if bytes > 0 {
                 // Recycled ranges must never keep another mesh's identity, even for a
                 // missing or incomplete sidecar. Zero records have no valid bit.
-                encoder.clear_buffer(buffer, start / 4 * 8, Some(bytes));
-                if sources.len() as u64 == vertices / 4 {
-                    uploads.buffer(
-                        encoder,
-                        buffer,
-                        start / 4 * 8,
-                        bytemuck::cast_slice(sources),
-                    );
+                encoder.clear_buffer(buffer, start * 8, Some(bytes));
+                if sources.len() as u64 == vertices {
+                    uploads.buffer(encoder, buffer, start * 8, bytemuck::cast_slice(sources));
+                } else if sources.len() as u64 == vertices / 4 {
+                    let mut scattered =
+                        vec![crate::mesher::TerrainSource::default(); vertices as usize];
+                    for (q, &src) in sources.iter().enumerate() {
+                        scattered[q * 4] = src;
+                    }
+                    uploads.buffer(encoder, buffer, start * 8, bytemuck::cast_slice(&scattered));
                 }
             }
         }
@@ -756,17 +759,17 @@ impl Arena {
             vertices * self.stride,
         );
         if let Some(to_sources) = self.sources(to.0) {
-            let bytes = vertices / 4 * 8;
+            let bytes = vertices * 8;
             if bytes > 0 {
                 match self.sources(from.0) {
                     Some(from_sources) => encoder.copy_buffer_to_buffer(
                         from_sources,
-                        from.1 / 4 * 8,
+                        from.1 * 8,
                         to_sources,
-                        to.1 / 4 * 8,
+                        to.1 * 8,
                         bytes,
                     ),
-                    None => encoder.clear_buffer(to_sources, to.1 / 4 * 8, Some(bytes)),
+                    None => encoder.clear_buffer(to_sources, to.1 * 8, Some(bytes)),
                 }
             }
         }
@@ -911,6 +914,27 @@ impl Arena {
         }
         released
     }
+}
+
+/// Expands per-quad `sources` to match `packed` arena slots: compact records (`FULL == 0`)
+/// store their source at their record slot `q`, while fallback quads (`FULL != 0`) store their
+/// source at their first vertex slot `q + rec[0]`, matching `pack_atlas::PULL_FLAT`.
+pub(crate) fn expand_packed_sources(
+    packed: &[[u32; 6]],
+    sources: &[crate::mesher::TerrainSource],
+) -> Vec<crate::mesher::TerrainSource> {
+    if sources.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![crate::mesher::TerrainSource::default(); packed.len()];
+    for (q, (&rec, &src)) in packed.iter().zip(sources).enumerate() {
+        if rec[5] & crate::mesher::packed::FULL == 0 {
+            out[q] = src;
+        } else if let Some(slot) = out.get_mut(q + rec[0] as usize) {
+            *slot = src;
+        }
+    }
+    out
 }
 
 /// Frames a released page waits before it is freed: by then the GPU is done with the frames that
@@ -2094,5 +2118,126 @@ mod tests {
             roomy.pages[page as usize].as_ref().unwrap().capacity,
             64 * GRAIN
         );
+    }
+
+    #[test]
+    fn write_sources_stores_packed_and_unpacked_quad_sources_by_slot() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut arena = Arena::new(&device, 24, 4 * GRAIN, false);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut uploads = super::super::upload::Uploads::new(&device);
+
+        let (p0, s0) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+        let packed_sources: Vec<_> = (0..GRAIN as u32)
+            .map(|i| crate::mesher::TerrainSource::new(100 + i, [1, 2, 3], 4, false))
+            .collect();
+        arena.write_sources(
+            &device,
+            &mut encoder,
+            &mut uploads,
+            p0,
+            s0,
+            GRAIN,
+            &packed_sources,
+        );
+
+        let (p1, s1) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+        let unpacked_sources: Vec<_> = (0..(GRAIN / 4) as u32)
+            .map(|i| crate::mesher::TerrainSource::new(200 + i, [4, 5, 6], 7, true))
+            .collect();
+        arena.write_sources(
+            &device,
+            &mut encoder,
+            &mut uploads,
+            p1,
+            s1,
+            GRAIN,
+            &unpacked_sources,
+        );
+
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+
+        let read_range = |page: u32, start: u64, count: u64| -> Vec<crate::mesher::TerrainSource> {
+            let buffer = arena.sources(page).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            wgpu::util::DownloadBuffer::read_buffer(
+                &device,
+                &queue,
+                &buffer.slice(start * 8..(start + count) * 8),
+                move |r| tx.send(r.unwrap().to_vec()).unwrap(),
+            );
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            bytemuck::pod_collect_to_vec(&rx.recv().unwrap())
+        };
+
+        assert_eq!(read_range(p0, s0, GRAIN), packed_sources);
+        let read_unpacked = read_range(p1, s1, GRAIN);
+        for (q, expected) in unpacked_sources.iter().enumerate() {
+            assert_eq!(read_unpacked[q * 4], *expected);
+            assert_eq!(read_unpacked[q * 4 + 1], Default::default());
+        }
+    }
+
+    #[test]
+    fn expand_packed_sources_handles_padding_and_fallback_quads() {
+        use crate::mesher::{TerrainSource, packed::FULL};
+        let s0 = TerrainSource::new(10, [1, 2, 3], 0, false);
+        let s1 = TerrainSource::new(20, [4, 5, 6], 5, true);
+        // 2 compact quads padded to 4 slots.
+        let padded = [[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0], [0; 6], [0; 6]];
+        let expanded_padded = expand_packed_sources(&padded, &[s0, s1]);
+        assert_eq!(
+            expanded_padded,
+            vec![s0, s1, TerrainSource::default(), TerrainSource::default()]
+        );
+
+        // 2 quads: q0 compact, q1 fallback pointing +3 slots to slot 4 (plus 2 padding slots at 2..4, 4 vertex slots at 4..8).
+        let mixed = [
+            [0, 0, 0, 0, 0, 0],
+            [3, 0, 0, 0, 0, FULL],
+            [0; 6],
+            [0; 6],
+            [0; 6],
+            [0; 6],
+            [0; 6],
+            [0; 6],
+        ];
+        let expanded_mixed = expand_packed_sources(&mixed, &[s0, s1]);
+        assert_eq!(expanded_mixed.len(), 8);
+        assert_eq!(expanded_mixed[0], s0);
+        assert_eq!(expanded_mixed[1], TerrainSource::default());
+        assert_eq!(expanded_mixed[4], s1);
+    }
+
+    #[test]
+    fn no_pack_packed_sections_keep_sources_disabled() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, _queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let packed = [[0; 6]; 4];
+        let expanded = expand_packed_sources(&packed, &[]);
+        assert!(expanded.is_empty());
+
+        let mut arena = Arena::new(&device, 24, 4 * GRAIN, false);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut uploads = super::super::upload::Uploads::new(&device);
+        let (page, start) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+        arena.write_sources(
+            &device,
+            &mut encoder,
+            &mut uploads,
+            page,
+            start,
+            4,
+            &expanded,
+        );
+        assert!(arena.sources(page).is_none());
     }
 }
