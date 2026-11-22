@@ -6,14 +6,37 @@ use horizon_client::{
     lan::waypoints::{self, HIDING_HEADS, PLAYER_RANGE},
 };
 
-/// `waypoint_transmit_range`: hidden by crouching, invisibility or a head worn.
-fn transmit_range(crouching: bool, invisible: bool, head: Option<&ItemStack>) -> f64 {
+/// `waypoint_transmit_range`: hidden by crouching, invisibility or a head worn,
+/// else the player's attribute value (`/attribute ... waypoint_transmit_range
+/// base set 300` limits how far the locator bar shows them), `PLAYER_RANGE`
+/// when the body has no such attribute.
+fn transmit_range(
+    crouching: bool,
+    invisible: bool,
+    head: Option<&ItemStack>,
+    attribute: Option<f64>,
+) -> f64 {
     let hiding_head = head.is_some_and(|s| HIDING_HEADS.contains(&&*s.item));
     if crouching || invisible || hiding_head {
         0.0
     } else {
-        PLAYER_RANGE
+        attribute.map_or(PLAYER_RANGE, |v| v.max(0.0))
     }
+}
+
+/// A player's computed `waypoint_transmit_range` and `waypoint_receive_range`
+/// (`LivingEntity.getAttributeValue`), `None` each without a body or the
+/// attribute.
+fn waypoint_attributes(
+    motion: Option<&mut horizon_client::motion::PlayerMotion>,
+) -> [Option<f64>; 2] {
+    let Some(m) = motion else {
+        return [None, None];
+    };
+    [
+        m.attribute("minecraft:waypoint_transmit_range").ok(),
+        m.attribute("minecraft:waypoint_receive_range").ok(),
+    ]
 }
 
 impl Game<'_> {
@@ -27,11 +50,25 @@ impl Game<'_> {
         };
         let mut players: Vec<(&str, waypoints::Player)> = Vec::new();
         let mut respawned = Vec::new();
-        for g in host
+        // `PlayerMotion::attribute` needs `&mut`, which `GuestList` only hands
+        // out per connection: read both ranges first, in the same row order.
+        let conns: Vec<u32> = host
             .hub
             .guests
             .iter()
             .filter(|g| g.placed && g.participates_online())
+            .map(|g| g.conn)
+            .collect();
+        let ranges: Vec<[Option<f64>; 2]> = conns
+            .iter()
+            .map(|c| waypoint_attributes(host.hub.guests.motion_mut(*c)))
+            .collect();
+        for (g, [transmit, receive]) in host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| g.placed && g.participates_online())
+            .zip(ranges)
         {
             // PlayerList.respawn makes a new ServerPlayer.
             if g.dead {
@@ -52,8 +89,10 @@ impl Game<'_> {
                         crouching,
                         g.effects.get("invisibility").is_some(),
                         g.armor[0].as_ref(),
+                        transmit,
                     ),
-                    receive_range: PLAYER_RANGE,
+                    receive_range: receive.map_or(PLAYER_RANGE, |v| v.max(0.0)),
+                    ranges_known: transmit.is_some() && receive.is_some(),
                     first_tick: g.ticks == 0,
                     view_distance: g.view_distance,
                     team: self.score.board.players_team(&g.name).map(|team| {
