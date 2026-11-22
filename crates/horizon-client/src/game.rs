@@ -3690,7 +3690,13 @@ impl Game<'_> {
                             f64::from(pos.y) + 0.5,
                             f64::from(pos.z) + 0.5,
                         ];
-                        self.audio.play(sound, Some(at), 3.0, 1.0);
+                        // NoteBlock: a custom-head sound still plays on
+                        // SoundSource.RECORDS whatever its sound id is.
+                        let records = horizon_client::settings::SOUND_SOURCES
+                            .iter()
+                            .position(|n| *n == "record")
+                            .unwrap_or(0);
+                        self.audio.play_on(records, sound, Some(at), 3.0, 1.0);
                     }
                 }
                 // `level.addParticle`: only the local player's own click draws it.
