@@ -173,6 +173,19 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
 
 /// Start the game and wait for its control endpoint; Ok(reply) or Err(reply).
 pub fn launch(socket: &Path, args: &[String]) -> Result<Value, Value> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| json!({ "error": format!("the current directory: {e}"), "kind": "launch" }))?;
+    launch_from(&cwd, socket, args)
+}
+
+/// [`launch`] for a caller in `cwd`. A launcher install runs the game in the game home, so a relative
+/// socket would name one file here and another there: the game gets the path made absolute.
+fn launch_from(cwd: &Path, socket: &Path, args: &[String]) -> Result<Value, Value> {
+    // A Windows drive-relative `C:ctl.sock` stays relative after the join: `absolute` resolves it against the
+    // ctl's directory on that drive, as the ctl's own opens would.
+    let socket = &std::path::absolute(cwd.join(socket)).map_err(
+        |e| json!({ "error": format!("--socket {}: {e}", socket.display()), "kind": "usage" }),
+    )?;
     let o = parse(args).map_err(|e| json!({ "error": e, "kind": "usage" }))?;
     horizon_client::control::check_path(socket).map_err(
         |e| json!({ "error": format!("--socket {}: {e}", socket.display()), "kind": "usage" }),
@@ -273,6 +286,36 @@ mod tests {
         assert_eq!(reply["kind"], "usage", "{reply}");
         assert!(reply["error"].as_str().unwrap().contains("too long"));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    }
+
+    /// The game starts in another directory than the caller's, yet gets the socket the ctl polls.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "daily"]
+    fn launch_gives_the_game_a_relative_socket_as_an_absolute_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let caller = temp("relative-socket");
+        let game = temp("relative-socket-game").join(CLIENT);
+        let seen = game.with_file_name("args");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 1\n",
+            seen.display()
+        );
+        std::fs::write(&game, script).unwrap();
+        std::fs::set_permissions(&game, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let args = ["--game".to_owned(), game.display().to_string()];
+        let reply = launch_from(&caller, Path::new("ctl.sock"), &args).unwrap_err();
+        assert_eq!(reply["kind"], "launch", "{reply}");
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let given = seen.lines().skip_while(|a| *a != "--control-socket").nth(1);
+        assert_eq!(
+            given,
+            Some(caller.join("ctl.sock").to_str().unwrap()),
+            "{seen}"
+        );
+        assert!(caller.join("ctl.log").is_file(), "{reply}");
+        let _ = std::fs::remove_dir_all(caller);
+        let _ = std::fs::remove_dir_all(game.parent().unwrap());
     }
 
     fn temp(name: &str) -> PathBuf {

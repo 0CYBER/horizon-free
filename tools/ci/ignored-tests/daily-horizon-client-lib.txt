@@ -100,6 +100,7 @@ horizon-client-lib lan::tests::actor_ids_never_wrap lib daily network
 horizon-client-lib lan::viewed_levels::tests::a_viewed_sound_reaches_a_viewer_holding_its_chunk_within_its_distance lib daily network
 horizon-client-lib lan::viewed_levels::tests::with_no_viewer_no_copy_is_built lib daily network
 horizon-client-lib lan::waypoints::tests::moves_by_receiver_match_the_loop lib daily slow
+horizon-client-lib launch::tests::launch_gives_the_game_a_relative_socket_as_an_absolute_path bin:horizon-ctl daily child-process
 horizon-client-lib launch::tests::launch_refuses_a_socket_path_too_long bin:horizon-ctl daily child-process
 horizon-client-lib menu::equip_movement::tests::four_slot_menu_transfer_prepares_once_and_stale_placement_refuses lib daily resources
 horizon-client-lib menu::equip_movement::tests::menus_without_actor_or_equipment_candidates_do_not_prepare lib daily resources
