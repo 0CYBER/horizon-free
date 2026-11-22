@@ -180,6 +180,17 @@ impl Game<'_> {
         if self.spectator() {
             return false;
         }
+        if !self.tnts.is_empty()
+            && let Some((distance, Some(id))) = self.pick_entity_hit_at()
+            && self.tnts.iter().any(|tnt| tnt.id as i32 == id)
+        {
+            if !self.held_range_allows(distance) {
+                return false;
+            }
+            self.attack_primed_tnt(id as u32);
+            self.swing_arm();
+            return true;
+        }
         // A painting nearer than the targeted block and mob breaks instead.
         if let Some((i, d)) = self.painting_hit()
             && self.mob_hit().is_none_or(|m| d < m.1)

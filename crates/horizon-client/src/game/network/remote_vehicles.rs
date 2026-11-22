@@ -61,8 +61,8 @@ impl Game<'_> {
                 .is_some_and(|(_, d, _)| self.before_block(d))
     }
 
-    /// The nearest boat, minecart, item frame, armor stand or painting the
-    /// view hits within reach; also End crystals when attacking, and fence knots when using.
+    /// The nearest pickable non-mob object within reach; also End crystals when attacking,
+    /// and fence knots when using.
     pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
         let (eye, dir) = self.aim()?;
         let at = |d: f64| {
@@ -105,6 +105,10 @@ impl Game<'_> {
         if let Some((i, d)) = self.cart_hit() {
             let p = self.carts[i].position;
             hits.push((self.carts[i].id as i32, d, [p.x, p.y, p.z]));
+        }
+        if let Some((tnt, distance)) = self.primed_tnt_hit(self.entity_reach) {
+            let p = tnt.position;
+            hits.push((tnt.id as i32, distance, [p.x, p.y, p.z]));
         }
         // Interaction.isPickable: an invisible box the server clicks through
         // to its scripts, for both uses and attacks.

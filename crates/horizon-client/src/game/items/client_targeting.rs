@@ -114,6 +114,7 @@ impl Game<'_> {
             | Target::Boat(_)
             | Target::Cart(_)
             | Target::Crystal(_)
+            | Target::Tnt(_)
             | Target::DragonPart(_)
             | Target::Cushion(_) => true,
             Target::Other(id) => self.interactions.contains_key(&(id as i32)),

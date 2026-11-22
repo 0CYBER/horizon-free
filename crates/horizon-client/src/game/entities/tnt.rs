@@ -1,7 +1,7 @@
 //! Primed TNT (`PrimedTnt`): 80-tick fuse, gravity and drag, explosion of
 //! power 4, `TntRenderer` swell and white flash, and `TntBlock.useItemOn`
 //! (flint and steel / fire charge).
-use super::Game;
+use super::{Game, ray_box};
 use horizon_client::lan::playerdata::uuid_ints;
 use horizon_client::{Result, items::ItemStack, mesher::Vertex, mobs::Who, text::Text};
 use horizon_core::{
@@ -14,6 +14,35 @@ use horizon_world::level::flags as level_flags;
 pub(super) use horizon_gameplay::tnt::PrimedTnt;
 
 impl Game<'_> {
+    /// `LocalPlayer.pick`: a live, tracked primed TNT is pickable using its own box.
+    pub(super) fn primed_tnt_hit(&self, reach: f64) -> Option<(&PrimedTnt, f64)> {
+        let (eye, direction) = self.aim()?;
+        let camera = self.remote_camera_id();
+        self.tnts
+            .iter()
+            .filter(|tnt| tnt.id != 0 && Some(tnt.id) != camera && Some(tnt.id) != self.riding)
+            .filter_map(|tnt| {
+                let distance = ray_box(eye, direction, reach, tnt.bounds())?;
+                (distance < reach).then_some((tnt, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// `Player.attack` reaches TNT, but `PrimedTnt.hurtServer` always declines damage.
+    pub(super) fn attack_primed_tnt(&mut self, id: u32) {
+        let ((_, scale, _, _), admitted) =
+            self.melee_damage_with_admission("minecraft:tnt", false, Some(id));
+        // `Player.onAttack` resets the server's charge even on a refused hit.
+        self.attack_ticks = 0;
+        if admitted {
+            if scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting) {
+                self.play_at_feet("minecraft:entity.player.attack.knockback");
+            }
+            self.sweep_decision(scale, false, "minecraft:tnt");
+            self.play_at_feet("minecraft:entity.player.attack.nodamage");
+        }
+    }
+
     /// Asks the mods whether the TNT at `pos` may be primed
     /// (`native_tnt_primed`); the acting guest, if any, is its player.
     pub(super) fn tnt_prime_allowed(&mut self, pos: BlockPos) -> bool {

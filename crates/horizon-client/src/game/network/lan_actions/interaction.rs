@@ -554,27 +554,39 @@ impl Game<'_> {
             .iter()
             .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g))
         {
-            Some(("minecraft:player".to_owned(), g.position))
+            Some(("minecraft:player".to_owned(), g.position, None))
         } else {
             // The mod hooks hear no natural fence knot (#13036).
             self.level_entity(id)
                 .filter(|t| !matches!(t, crate::game::commands::Target::Knot(_)))
                 .map(|t| {
+                    let primed_tnt = match t {
+                        crate::game::commands::Target::Tnt(id) => Some(id),
+                        _ => None,
+                    };
                     (
                         self.target_type(t),
                         self.target_position(t).unwrap_or_default(),
+                        primed_tnt,
                     )
                 })
         };
-        if let Some((kind, at)) = aimed
-            && self.as_guest_at(gi, conn, |g| {
+        if let Some((kind, at, primed_tnt)) = aimed {
+            if self.as_guest_at(gi, conn, |g| {
                 let mut canceled = false;
                 let dimension = g.dim.id();
                 g.native_attack_entity(dimension, id, &kind, at, &mut canceled);
                 canceled || g.native_left_click_entity_event(id, &kind)
             }) == Ok(true)
-        {
-            return Ok(false);
+            {
+                return Ok(false);
+            }
+            if let Some(tnt) = primed_tnt {
+                // The packet names the TNT. Its refused hit must never be
+                // redirected to a mob intersecting the server's recomputed ray.
+                let _ = self.as_guest_at(gi, conn, |g| g.attack_primed_tnt(tnt));
+                return Ok(false);
+            }
         }
         if let Some(victim) = self.pvp_victim(conn, id) {
             if let Ok(Some(strike)) = self.as_guest_at(gi, conn, |g| g.pvp_strike(id as u32))

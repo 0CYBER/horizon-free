@@ -145,7 +145,7 @@ impl Game<'_> {
         }
     }
 
-    /// The box of a boat, minecart, armor stand, item frame or painting, and
+    /// The box of a pickable non-mob object, and
     /// the point an interact packet's location is measured from (the
     /// client's `remote_object_hit` uses the same points).
     pub(super) fn object_target(&self, id: i32) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
@@ -163,6 +163,10 @@ impl Game<'_> {
         if let Some(c) = self.carts.iter().find(|c| c.id == id) {
             let (lo, hi) = corners(c.bounds());
             return Some((lo, hi, at(c.position)));
+        }
+        if let Some(tnt) = self.tnts.iter().find(|tnt| tnt.id == id) {
+            let (lo, hi) = corners(tnt.bounds());
+            return Some((lo, hi, at(tnt.position)));
         }
         if let Some(a) = self.armor_stands.iter().find(|a| a.id == id) {
             let (lo, hi) = corners(a.bounds());

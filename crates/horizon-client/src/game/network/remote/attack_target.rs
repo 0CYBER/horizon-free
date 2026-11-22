@@ -3,6 +3,9 @@ use super::*;
 impl Game<'_> {
     /// Send one selected attack with the same prediction and charge bookkeeping as vanilla.
     pub(in crate::game) fn remote_attack_entity(&mut self, id: i32, distance: f64) -> bool {
+        if self.tnts.iter().any(|tnt| tnt.id as i32 == id) && !self.held_range_allows(distance) {
+            return false;
+        }
         if let Some(index) = self.mobs.iter().position(|mob| mob.id as i32 == id) {
             if !self.held_range_allows(distance) {
                 return false;

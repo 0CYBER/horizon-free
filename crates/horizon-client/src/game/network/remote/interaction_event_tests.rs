@@ -7,6 +7,8 @@ mod item_fallthrough_tests;
 mod item_used_on_block_tests;
 #[path = "predicted_use_tests.rs"]
 mod predicted_use_tests;
+#[path = "primed_tnt_crosshair_tests.rs"]
+mod primed_tnt_crosshair_tests;
 #[path = "use_item_hand_tests.rs"]
 mod use_item_hand_tests;
 #[path = "use_item_result_tests.rs"]

@@ -620,6 +620,10 @@ impl Game<'_> {
             || before(self.interaction_hit().map(|h| h.1))
             || before(self.dragon_hit().map(|h| h.1))
             || before(
+                self.primed_tnt_hit(self.block_reach.max(self.entity_reach))
+                    .map(|(_, d)| d),
+            )
+            || before(
                 self.mob_hit_within(self.block_reach.max(self.entity_reach))
                     .map(|h| h.1),
             )
@@ -779,6 +783,7 @@ impl Game<'_> {
             self.boat_hit().map(|h| h.1),
             self.cart_hit().map(|h| h.1),
             self.dragon_hit().map(|h| h.1),
+            self.primed_tnt_hit(self.entity_reach).map(|(_, d)| d),
         ]);
         let active = self
             .using
@@ -836,6 +841,10 @@ impl Game<'_> {
             self.painting_hit().map(|h| h.1),
             self.frame_hit().map(|h| h.1),
             self.dragon_hit().map(|h| h.1),
+            // A nearer TNT outside the entity reach becomes a miss after
+            // `LocalPlayer.pick` filters it, hiding a block menu behind it too.
+            self.primed_tnt_hit(self.block_reach.max(self.entity_reach))
+                .map(|(_, d)| d),
         ];
         let nearest = cart
             .into_iter()

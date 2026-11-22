@@ -10,8 +10,8 @@ impl Game<'_> {
             r.use_target = None;
         }
         let sneaking = self.remote_shift_down();
-        // A boat, minecart, item frame, armor stand or painting nearer than
-        // any mob: the server uses it (AbstractBoat.interact boards it).
+        // A non-mob object nearer than any mob: the server uses it
+        // (AbstractBoat.interact boards it).
         if let Some(hit) = self.remote_object_hit(false)
             && self.mob_hit().is_none_or(|(_, d, _)| hit.distance < d)
             && self.before_block(hit.distance)
@@ -20,10 +20,18 @@ impl Game<'_> {
             // CONSUME otherwise: both end the click (nothing behind the box
             // is used), but only SUCCESS swings; the packet carries the hand.
             let response = self.interactions.get(&hit.id).map(|i| i.response);
-            // Objects whose interact passes (paintings, empty or fixed item frames,
-            // boats sneaked at or out of control, carts that pass) leave each hand's
-            // turn to its item: a crossbow aimed at it shoots.
+            // Objects whose interact passes (primed TNT, paintings, empty or fixed
+            // item frames, boats sneaked at or out of control, carts that pass)
+            // leave each hand's turn to its item: a crossbow aimed at it shoots.
             let is_painting = self.paintings.iter().any(|p| p.id as i32 == hit.id);
+            let is_tnt = self.tnts.iter().any(|t| t.id as i32 == hit.id);
+            if is_tnt
+                && self
+                    .redirectable_hit()
+                    .is_some_and(|(_, d)| d <= hit.distance)
+            {
+                return false;
+            }
             let held = self.with_hand(hand, |g| g.held().cloned());
             let frame_passes = self
                 .item_frames
@@ -69,8 +77,12 @@ impl Game<'_> {
                         .mobs
                         .iter()
                         .any(|m| m.extra.mount.is_some_and(|r| r as i32 == hit.id)));
-            let passes =
-                is_painting || frame_passes || boat_passes || cart_passes || cushion_passes;
+            let passes = is_painting
+                || is_tnt
+                || frame_passes
+                || boat_passes
+                || cart_passes
+                || cushion_passes;
             // Otherwise the main hand's turn takes it; there is no off hand turn.
             if response.is_none() && hand == Hand::Off && !passes {
                 return false;

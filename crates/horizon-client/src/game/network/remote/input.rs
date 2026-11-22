@@ -84,7 +84,7 @@ impl Game<'_> {
         let crit = living && self.critical_attack(scale);
         self.sweep_decision(scale, crit, target);
     }
-    /// The entity type of the boat, minecart, armor stand or End crystal with
+    /// The entity type of the boat, minecart, armor stand, primed TNT or End crystal with
     /// server id `id` that an attack reaches `Player.attack`'s sweep check on,
     /// and whether it is living. A painting or item frame is not: on this
     /// client `skipAttackInteraction` hurts it and stops the attack there.
@@ -98,6 +98,9 @@ impl Game<'_> {
         }
         if self.armor_stands.iter().any(|a| a.id == id) {
             return Some(("minecraft:armor_stand".to_owned(), true));
+        }
+        if self.tnts.iter().any(|tnt| tnt.id == id) {
+            return Some(("minecraft:tnt".to_owned(), false));
         }
         self.crystals
             .iter()
