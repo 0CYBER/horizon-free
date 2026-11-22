@@ -1253,7 +1253,7 @@ impl Game<'_> {
     }
 
     // tick.rs
-    fn tick_client_load(&mut self) {
+    pub(in crate::game) fn tick_client_load(&mut self) {
         self.tick_client_load_body()
     }
     pub(super) fn tick_remote(&mut self) -> Result<()> {
@@ -1310,6 +1310,14 @@ impl Game<'_> {
     ) {
         self.remote_player_eating_body(item, ticks, at, eye, pitch, yaw)
     }
+    pub(in crate::game) fn send_export_view_position(&mut self) {
+        if !self.replay.playing()
+            && let Some(remote) = &self.remote
+        {
+            self.remote_send_state(remote.last_input);
+        }
+    }
+
     fn remote_send_state(&mut self, input: u8) {
         self.remote_send_state_body(input)
     }

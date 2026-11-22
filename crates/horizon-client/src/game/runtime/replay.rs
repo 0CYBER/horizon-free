@@ -74,6 +74,10 @@ pub(super) struct Replay {
 }
 
 impl Replay {
+    pub(super) fn export_driver(&self) -> Option<&ReplayDriver> {
+        self.driver.as_ref()?.as_any().downcast_ref()
+    }
+
     fn recording_error(
         &mut self,
         status: Option<&horizon_client::net::RecorderStatus>,
@@ -110,8 +114,10 @@ impl Game<'_> {
     /// How far the window's own player model is between two ticks: on the replay's clock while a
     /// replay plays, else the game's.
     pub(super) fn own_player_alpha(&self) -> f64 {
-        self.replay
-            .player_alpha()
+        self.export
+            .as_ref()
+            .and_then(super::export::Session::replay_alpha)
+            .or_else(|| self.replay.player_alpha())
             .unwrap_or_else(|| self.clock.camera_fraction())
     }
 
@@ -450,6 +456,9 @@ impl Game<'_> {
     /// the caller to report.
     fn fail_studio_replay(&mut self, error: std::io::Error) -> std::io::Error {
         log::error!("Studio replay read failed, closing the replay: {error}");
+        if self.export.is_some() {
+            self.abort_export(Some(error.to_string()));
+        }
         self.close_studio_replay();
         error
     }
@@ -563,9 +572,6 @@ impl Game<'_> {
             .driver
             .as_ref()
             .is_some_and(|replay| replay.is_paused());
-        if self.player_model.is_none() {
-            self.tick_player_model();
-        }
         if !paused {
             let speed = self
                 .replay
@@ -576,58 +582,95 @@ impl Game<'_> {
             self.replay.virtual_tick_ms += delta.as_secs_f32() * 1000.0 * speed;
             while self.replay.virtual_tick_ms >= 50.0 {
                 self.replay.virtual_tick_ms -= 50.0;
-                if let Some(player) = &self.player {
-                    let current_pos = player.position;
-                    let (dx, dz) = (
-                        current_pos.x - self.previous_position.x,
-                        current_pos.z - self.previous_position.z,
-                    );
-                    let walked = (dx * dx + dz * dz).sqrt() as f32;
-                    if let Some(m) = self.player_model.as_mut() {
-                        m.previous = self.previous_position;
-                        m.position = current_pos;
-                        m.previous_limb_speed = m.limb_speed;
-                        let target_speed = (walked * 4.0).min(1.0);
-                        m.limb_speed += (target_speed - m.limb_speed) * 0.4;
-                        if m.limb_speed < 0.001 {
-                            m.limb_speed = 0.0;
-                        }
-                        m.limb_position += m.limb_speed;
-                        m.previous_yaw = m.yaw;
-                        m.previous_head_yaw = m.head_yaw;
-                        m.previous_head_pitch = m.head_pitch;
-                        m.previous_body_yaw = m.body_yaw;
-                        m.yaw = self.yaw;
-                        m.head_yaw = self.yaw;
-                        m.head_pitch = self.pitch;
-                        let mut target = m.body_yaw;
-                        if dx * dx + dz * dz > 0.0025 {
-                            let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
-                            let facing =
-                                ((self.yaw - walk + 180.0).rem_euclid(360.0) - 180.0).abs();
-                            target = if 95.0 < facing && facing < 265.0 {
-                                walk - 180.0
-                            } else {
-                                walk
-                            };
-                        }
-                        let diff = (target - m.body_yaw + 180.0).rem_euclid(360.0) - 180.0;
-                        m.body_yaw += diff * 0.3;
-                        let body_diff = (self.yaw - m.body_yaw + 180.0).rem_euclid(360.0) - 180.0;
-                        if body_diff.abs() > 50.0 {
-                            m.body_yaw += body_diff - body_diff.signum() * 50.0;
-                        }
-                        m.age = m.age.wrapping_add(1);
-                    }
-                    self.previous_position = current_pos;
-                }
+                self.tick_replay_player_model();
             }
         } else if let Some(m) = self.player_model.as_mut() {
             m.previous_limb_speed = m.limb_speed;
         }
+        // A replay can draw before its first 20 Hz model tick is due.
+        if self.player_model.is_none() {
+            self.tick_player_model();
+        }
         self.studio_replay_advanced();
         self.announce_replay_advance();
         Ok(())
+    }
+
+    /// Deliver a batch without consulting wall time, pause or looping.
+    pub(super) fn export_replay_to(&mut self, cursor_ms: f64) -> Result<()> {
+        let driver = self
+            .replay
+            .driver
+            .as_mut()
+            .and_then(|driver| driver.as_any_mut().downcast_mut::<ReplayDriver>())
+            .ok_or("the replay closed")?;
+        let packets = match driver.advance_to(cursor_ms) {
+            Ok(packets) => packets,
+            Err(error) => return Err(self.fail_studio_replay(error).into()),
+        };
+        self.dispatch_studio_replay_packets(packets);
+        Ok(())
+    }
+
+    pub(super) fn tick_replay_player_model(&mut self) {
+        if self.player_model.is_none() {
+            // Initialization already updates the pose, walk animation and age.
+            self.tick_player_model();
+            if let Some(player) = &self.player {
+                self.previous_position = player.position;
+            }
+            return;
+        }
+        if let Some(player) = &self.player {
+            let current_pos = player.position;
+            let (dx, dz) = (
+                current_pos.x - self.previous_position.x,
+                current_pos.z - self.previous_position.z,
+            );
+            let walked = (dx * dx + dz * dz).sqrt() as f32;
+            if let Some(m) = self.player_model.as_mut() {
+                m.previous = self.previous_position;
+                m.position = current_pos;
+                m.previous_limb_speed = m.limb_speed;
+                let target_speed = (walked * 4.0).min(1.0);
+                m.limb_speed += (target_speed - m.limb_speed) * 0.4;
+                if m.limb_speed < 0.001 {
+                    m.limb_speed = 0.0;
+                }
+                m.limb_position += m.limb_speed;
+                m.previous_yaw = m.yaw;
+                m.previous_head_yaw = m.head_yaw;
+                m.previous_head_pitch = m.head_pitch;
+                m.previous_body_yaw = m.body_yaw;
+                m.yaw = self.yaw;
+                m.head_yaw = self.yaw;
+                m.head_pitch = self.pitch;
+                let mut target = m.body_yaw;
+                if dx * dx + dz * dz > 0.0025 {
+                    let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+                    let facing = ((self.yaw - walk + 180.0).rem_euclid(360.0) - 180.0).abs();
+                    target = if 95.0 < facing && facing < 265.0 {
+                        walk - 180.0
+                    } else {
+                        walk
+                    };
+                }
+                let diff = (target - m.body_yaw + 180.0).rem_euclid(360.0) - 180.0;
+                m.body_yaw += diff * 0.3;
+                let body_diff = (self.yaw - m.body_yaw + 180.0).rem_euclid(360.0) - 180.0;
+                if body_diff.abs() > 50.0 {
+                    m.body_yaw += body_diff - body_diff.signum() * 50.0;
+                }
+                m.age = m.age.wrapping_add(1);
+            }
+            self.previous_position = current_pos;
+        }
+    }
+
+    pub(super) fn report_export_replay(&mut self, partial: f32) {
+        self.replay.virtual_tick_ms = partial * 50.0;
+        self.studio_replay_advanced();
+        self.announce_replay_advance();
     }
 
     /// Control socket command handler for `studio`.
@@ -983,6 +1026,13 @@ impl Game<'_> {
     /// The replay itself ends: its edits saved, its driver dropped, mods told `replay_closed`.
     /// The session it played on is left as it is. False when no replay was installed.
     pub(super) fn end_studio_replay(&mut self) -> bool {
+        if self
+            .export
+            .as_ref()
+            .is_some_and(|s| s.replay_alpha().is_some())
+        {
+            self.begin_export_drain("stopped");
+        }
         self.studio_replay_closing();
         if self.replay.driver.take().is_none() {
             return false;

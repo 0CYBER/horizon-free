@@ -524,6 +524,23 @@ fn finish_opening(game: &mut crate::game::Game<'_>) {
     }
 }
 
+#[test]
+#[ignore = "daily"]
+fn a_rebuilt_replay_player_model_ages_once_per_tick() {
+    with_heard(|game| {
+        use horizon_client::motion::PlayerMotion;
+        use horizon_core::geometry::Vec3;
+
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.clock.set_frozen(false);
+        assert!(game.player_model.is_none());
+        game.tick_replay_player_model();
+        assert_eq!(game.player_model.as_ref().unwrap().age, 1);
+        game.tick_replay_player_model();
+        assert_eq!(game.player_model.as_ref().unwrap().age, 2);
+    });
+}
+
 /// Pause, resume, speed and the state read act at once; seek and close wait for the frame's end.
 /// The clock's moves are heard once a frame they happen, never on a paused frame; after a seek
 /// the next one is exactly the seek's position, then the clock runs on.

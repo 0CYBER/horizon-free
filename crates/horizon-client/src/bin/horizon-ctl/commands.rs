@@ -615,6 +615,15 @@ pub const COMMANDS: &[Cmd] = &[
           flag("gpu", Ty::Enum(&["passes", "detail"]), "start: also record each render pass's GPU time (detail: its parts and counters too)"),
           flag("no-samples", Ty::Bool, "start: record frame times and health only"), flag("timeline", Ty::Bool, "start: also record every thread's spans, for 60 seconds at most"),
           flag("bench", Ty::Str, "stop: the path of a benchmark report to embed in the capture")], mcp: true, local: false),
+    cmd!("export", Scripting, "export start NAME --size WxH --fps N[/D] [--frames N|--seconds S] [--format png|encoder] [--hud] [--hold] [--no-settle] | export step N | export stop | export status", "capture exact-size offscreen frames on a fixed clock",
+        "Start returns the absolute output folder under the game directory’s exports/. The default format is PNG. With --hold, step N queues N frames and the camera can be moved between steps. The settle gate waits for chunks, lighting and uploads before capturing. A standalone replay seeks back up to one second and pre-rolls without capture. An in-world replay starts at its current position because it cannot seek backwards. Finish, stop and failure emit an export event.",
+        ["horizon-ctl export start take --size 1080x1920 --fps 30000/1001 --frames 90", "horizon-ctl export step 1", "horizon-ctl export status", "horizon-ctl export stop"],
+        &[p("action", Ty::Enum(&["start", "step", "stop", "status"]), "export operation"), opt("name_or_count", Ty::Str, "folder name for start or positive frame count for step"),
+          flag("size", Ty::Str, "start: dimensions in pixels, WxH"), flag("fps", Ty::Str, "start: frames per second as N or N/D"),
+          flag("frames", Ty::Int, "start: frame limit"), flag("seconds", Ty::Num, "start: duration limit in seconds, rounded up to a whole frame"),
+          flag("format", Ty::Enum(&["png", "encoder"]), "start: PNG sequence (default) or external encoder"),
+          flag("hud", Ty::Bool, "start: keep the HUD"), flag("hold", Ty::Bool, "start: wait for explicit steps"),
+          flag("no-settle", Ty::Bool, "start: capture before pending terrain work has finished")], mcp: true, local: false),
     cmd!("screenshot-sequence", Scripting, "screenshot-sequence FRAMES STEP_MS PATH|cancel", "draw a shader pack's first FRAMES frames on a set clock and write the last as a PNG",
         "Needs HORIZON_STILL and a frozen world (docs/agent-control.md). The pack starts over, frame n's clock is n frames and (n - 1) × STEP_MS milliseconds, the PNG is written as screenshot PATH writes it, and the reply comes once it is. Relative paths are taken from horizon-ctl's directory. cancel stops a running sequence.",
         ["horizon-ctl screenshot-sequence 64 50 frame64.png", "horizon-ctl screenshot-sequence 64 16.666667 frame64.png", "horizon-ctl screenshot-sequence cancel"],
@@ -979,6 +988,50 @@ mod tests {
                 !c.summary.is_empty() && !c.examples.is_empty(),
                 "{}",
                 c.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_export_tool_uses_the_same_commands_as_the_cli() {
+        let cmd = find("export").unwrap();
+        assert!(cmd.mcp);
+        assert_eq!(
+            line_for(
+                cmd,
+                &json!({
+                    "action": "start",
+                    "name_or_count": "take",
+                    "size": "1080x1920",
+                    "fps": "30000/1001",
+                    "frames": 90,
+                    "hold": true,
+                    "no-settle": true,
+                })
+            )
+            .unwrap(),
+            [
+                "export",
+                "start",
+                "take",
+                "--size",
+                "1080x1920",
+                "--fps",
+                "30000/1001",
+                "--frames",
+                "90",
+                "--hold",
+                "--no-settle"
+            ],
+        );
+        assert_eq!(
+            line_for(cmd, &json!({"action": "step", "name_or_count": 2})).unwrap(),
+            ["export", "step", "2"],
+        );
+        for action in ["status", "stop"] {
+            assert_eq!(
+                line_for(cmd, &json!({"action": action})).unwrap(),
+                ["export", action]
             );
         }
     }

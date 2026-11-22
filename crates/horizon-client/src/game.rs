@@ -870,6 +870,10 @@ struct ResizeState {
     gui_size: [u32; 2],
 }
 
+fn player_chunk(at: Vec3) -> (i32, i32) {
+    ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4)
+}
+
 impl ResizeState {
     /// Records `self` as the last report and says whether it differs from the previous one.
     fn differs_from(self, last: &mut Option<Self>) -> bool {
@@ -1032,6 +1036,7 @@ struct Game<'a> {
     /// Keys whose first press a mod cancelled (`key_mapping_pre`): their repeats are never held.
     rejected_keys: HashSet<KeyCode>,
     physical_buttons: HashSet<MouseButton>,
+    agent_mouse_holds: [bool; 2],
     drag_button: Option<MouseButton>,
     /// Control + left click as a right click (macOS).
     right_click_emulation: horizon_client_input::mouse::RightClickEmulation,
@@ -1645,6 +1650,8 @@ struct Game<'a> {
     pending_screenshot: Option<pending_screenshot::Pending>,
     /// `screenshot-sequence` while it runs.
     screenshot_sequence: Option<screenshot_sequence::Sequence>,
+    export: Option<export::Session>,
+    visual_offset: i64,
     /// `render-capture DIR`: replied once the renderer wrote the scene.
     pending_render_capture: Option<std::sync::mpsc::Sender<String>>,
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>, bool)>,
@@ -7180,6 +7187,7 @@ impl Game<'_> {
         if !self.renderer.as_ref().is_some_and(Renderer::device_lost) {
             return Ok(());
         }
+        self.abort_export(Some("the graphics device was lost".into()));
         // Split-screen compositors and guests share the device; rebuilding one
         // renderer alone would leave the other windows using invalid resources.
         if self.options.paced_by_split {
@@ -8579,7 +8587,8 @@ impl Game<'_> {
         pack_inputs.frame_timing = self
             .screenshot_sequence
             .as_ref()
-            .map(screenshot_sequence::Sequence::timing);
+            .map(screenshot_sequence::Sequence::timing)
+            .or_else(|| self.export.as_ref().map(export::Session::timing));
         pr.lap("pr_shader_inputs");
         // Fog hooks may clear particles too. They must run before the final clear
         // boundary, not while constructing Frame after geometry has been extracted.
@@ -9047,6 +9056,7 @@ impl Game<'_> {
                     {
                         return;
                     }
+                    self.cancel_export_on_quit();
                     self.pending_save.as_mut().unwrap().quit = true;
                     self.client_quit.set(ClientQuit::ShuttingDown);
                 }
@@ -10100,29 +10110,47 @@ impl Game<'_> {
                     self.sync_ime();
                     let now = Instant::now();
                     horizon_threads::work::tick_start();
-                    let elapsed = now.duration_since(self.previous);
-                    self.frame_ticks = elapsed.as_secs_f32() * 20.0;
+                    let wall = now.duration_since(self.previous);
                     self.previous = now;
-                    self.upload_pace.frame(elapsed);
-                    self.studio_fly(elapsed);
-                    // Arrow-key camera controls belong to gameplay; chat and
-                    // other screens use the same keys for their own navigation.
-                    if self.screen == Screen::Playing
-                        && self.title.is_none()
-                        && self.sign_edit.is_none()
-                        && self.book.is_none()
-                        && !self.dialog_open()
-                    {
-                        let turn = |k| f32::from(u8::from(self.keys.raw(&k)));
-                        let secs = elapsed.as_secs_f32().min(0.1);
-                        let yaw = (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0;
-                        let pitch = (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0;
-                        if yaw != 0.0 || pitch != 0.0 {
-                            // 90 degrees a second, as `Entity.turn` degrees.
-                            self.turn_player(
-                                f64::from(yaw * secs / 0.15),
-                                f64::from(pitch * secs / 0.15),
-                            );
+                    if self.export_held() {
+                        return Ok(());
+                    }
+                    let exporting = self.export.is_some();
+                    let step = match self.export_begin_frame() {
+                        Ok(step) => step,
+                        Err(error) => {
+                            self.abort_export(Some(error.to_string()));
+                            return Ok(());
+                        }
+                    };
+                    let elapsed = self
+                        .export
+                        .as_ref()
+                        .map_or(wall, export::Session::frame_elapsed);
+                    let advance_frame = !exporting || step.is_some();
+                    if advance_frame {
+                        self.frame_ticks = elapsed.as_secs_f32() * 20.0;
+                        self.upload_pace.frame(elapsed);
+                        self.studio_fly(elapsed);
+                        // Arrow-key camera controls belong to gameplay; chat and
+                        // other screens use the same keys for their own navigation.
+                        if self.screen == Screen::Playing
+                            && self.title.is_none()
+                            && self.sign_edit.is_none()
+                            && self.book.is_none()
+                            && !self.dialog_open()
+                        {
+                            let turn = |k| f32::from(u8::from(self.keys.raw(&k)));
+                            let secs = elapsed.as_secs_f32().min(0.1);
+                            let yaw = (turn(KeyCode::ArrowRight) - turn(KeyCode::ArrowLeft)) * 90.0;
+                            let pitch = (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0;
+                            if yaw != 0.0 || pitch != 0.0 {
+                                // 90 degrees a second, as `Entity.turn` degrees.
+                                self.turn_player(
+                                    f64::from(yaw * secs / 0.15),
+                                    f64::from(pitch * secs / 0.15),
+                                );
+                            }
                         }
                     }
                     if self.title.is_none() {
@@ -10134,22 +10162,38 @@ impl Game<'_> {
                     self.heal_hold_latches();
                     horizon_hooks::engine::published(self.is_published());
                     self.report_activity();
-                    let target = self.tick_target_millis();
-                    let steps = self.clock.advance(elapsed, target);
-                    // Once per frame, whatever `steps` is: `tick` never runs on the title, and a frame with
-                    // no client tick would leave a queued `request_world` waiting. The title draws after this.
-                    self.drain_native_world_request()?;
-                    self.client_tick_steps(steps, Some(event_loop))?;
-                    self.extras_frame(elapsed);
-                    self.extras_retry()?;
-                    self.apply_mouse_look();
-                    self.input_look(elapsed.as_secs_f32());
-                    self.advance_flight();
-                    self.tick_world_icon();
+                    // A queued world request also runs on a frame with no ticks.
+                    if !exporting {
+                        let target = self.tick_target_millis();
+                        let steps = self.clock.advance(elapsed, target);
+                        self.drain_native_world_request()?;
+                        self.client_tick_steps(steps, Some(event_loop))?;
+                    } else if let Some(step) = &step
+                        && let Err(error) = self.export_tick_frame(step, event_loop)
+                    {
+                        self.abort_export(Some(error.to_string()));
+                        return Ok(());
+                    }
+                    if !exporting {
+                        self.extras_frame(elapsed);
+                    }
+                    if advance_frame {
+                        self.extras_retry()?;
+                        self.apply_mouse_look();
+                        self.input_look(elapsed.as_secs_f32());
+                        self.advance_flight();
+                        self.tick_world_icon();
+                    }
                     let ticked = Instant::now();
                     self.flush_immediate_meshes();
-                    let rendered = self.render_and_flip(elapsed)?;
-                    self.native_frame_end()?;
+                    let rendered = if exporting {
+                        self.export.is_some() && self.export_draw()
+                    } else {
+                        self.render_and_flip(elapsed)?
+                    };
+                    if !exporting || rendered {
+                        self.native_frame_end()?;
+                    }
                     // The frame's spans, taken every frame they are recorded so they never
                     // pile up: the slow-frame line's.
                     let frame_spans = if horizon_client::spans::recording_here() {
@@ -10175,14 +10219,16 @@ impl Game<'_> {
                             }
                             let settled =
                                 self.screen == Screen::Playing && !self.streaming.terrain_loading();
-                            frame_autotune::observe(
-                                &self.settings.horizon,
-                                settled,
-                                (&mut self.gpu_culling_auto, &mut self.dynamic_resolution),
-                                &mut self.frame_graph,
-                                r,
-                                (ms(cpu), ms(elapsed)),
-                            );
+                            if !exporting {
+                                frame_autotune::observe(
+                                    &self.settings.horizon,
+                                    settled,
+                                    (&mut self.gpu_culling_auto, &mut self.dynamic_resolution),
+                                    &mut self.frame_graph,
+                                    r,
+                                    (ms(cpu), ms(elapsed)),
+                                );
+                            }
                             self.frame_stats.record_cpu(ms(cpu));
                             let render = r.last_encode;
                             self.frame_stats.record_phases([
@@ -10197,7 +10243,9 @@ impl Game<'_> {
                         self.frame_stats.record_gpu(&r.gpu_times);
                         r.gpu_times.clear();
                     }
-                    self.limit_frame();
+                    if !exporting {
+                        self.limit_frame();
+                    }
                     let paused = self.pauses_game();
                     if paused != self.pause {
                         let mut cancel = false;
@@ -10341,6 +10389,9 @@ impl Game<'_> {
         // open, after the key's own effects (`KeyboardHandler.charTyped`).
         self.screen_chars_typed(typed.as_deref());
         if let Err(e) = result {
+            if self.export.is_some() {
+                self.abort_export(Some(e.to_string()));
+            }
             self.error = Some(e);
             self.exit_on_error(event_loop);
         }
@@ -10523,6 +10574,7 @@ impl<'a> Game<'a> {
             physical_keys: HashSet::new(),
             rejected_keys: HashSet::new(),
             physical_buttons: HashSet::new(),
+            agent_mouse_holds: [false; 2],
             drag_button: None,
             right_click_emulation: Default::default(),
             left: false,
@@ -10864,6 +10916,8 @@ impl<'a> Game<'a> {
             perf: Default::default(),
             pending_screenshot: None,
             screenshot_sequence: None,
+            export: None,
+            visual_offset: 0,
             pending_render_capture: None,
             pending_bench: None,
             flight: None,

@@ -53,6 +53,7 @@ impl Game<'_> {
         let busy = self.ui.screenshot_hook.load(Ordering::Relaxed)
             || !self.ui.screenshot_writes.is_empty()
             || self.screenshot_sequence.is_some()
+            || self.export.is_some()
             || self
                 .renderer
                 .as_ref()

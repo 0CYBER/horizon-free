@@ -395,6 +395,41 @@ A recording is one folder, a bundle is that folder plus the logs in one zip:
   `state.jsonl` is the oracle for where the re-run should have ended. A server recording replays
   only `--in-place`, into the same world.
 
+### Fixed-clock offscreen export
+
+Start the game with `--offscreen` and enter a world or open a replay.
+
+```sh
+horizon-ctl export start portrait --size 1080x1920 --fps 30000/1001 --frames 90
+```
+
+The reply gives the absolute folder under the game's `exports/` and returns before frames are written.
+A PNG sequence is the default. To pipe RGB frames to the configured encoder in `horizon-export.txt`, use
+`--format encoder`. `export status` reports queued steps and frames written. `export stop` replies with
+`draining` while accepted frames are written and the output is finalized. `quit` cancels an active export,
+including one that is draining. On failure, `frames_written` is the count observed during abort.
+A PNG already being written may finish in the background. After the last readback, a stalled
+writer or manifest publication fails the export after 60 seconds. The final `export` event reports `finished` or `stopped` once
+`export.json` is published. If cancellation reaches a rename in progress, the failure event reports
+that publication could not be confirmed. Pass the last event sequence from before the start to
+`wait-for event export --since SEQ` if the export may finish before the wait starts.
+
+Use `--hold` to wait for `export step N`. You can issue control commands such as `tp` and `look` between
+steps. While a step is queued or an automatic export is running, only read-only commands, `export`,
+and `quit` are accepted. Captures wait for terrain,
+lighting, and uploads to settle, with a 30-second stall limit. For a live world they also wait for the
+server to send the view's remaining columns, even after the view's loading indicator expires. Use
+`--no-settle` to capture immediately.
+Use `--hud` to keep the HUD visible. During export, uploaded sections and their block entities
+appear fully visible so their fade-in does not depend on worker timing.
+
+The fixed clock drives the client and replay playhead. During live capture it also drives a private
+integrated server. External and published servers keep their own clocks. A standalone replay seeks back up to one second and ticks forward to the original
+position before capturing. An in-world replay starts where it is because it cannot rebuild the live world by
+seeking backwards. With settling enabled, replay exports advance through recorded portal
+loading intervals without writing frames. The output resumes at the next consecutive frame index
+once the destination has settled.
+
 ### Repeatable screenshots
 
 `HORIZON_STILL=1` (a dev switch, off by default) makes a frozen scene draw the same frame in every

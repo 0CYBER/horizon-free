@@ -29,7 +29,10 @@ impl Game<'_> {
     /// focus stays as the run found it (`held_focus`) and its pointer grab stays inside the game
     /// (`internal_grab`).
     pub(super) fn scripted_run(&self) -> bool {
-        self.screenshot_sequence.is_some() || self.tick_script.playing() || self.repro.replaying()
+        self.export.is_some()
+            || self.screenshot_sequence.is_some()
+            || self.tick_script.playing()
+            || self.repro.replaying()
     }
 }
 
@@ -46,6 +49,14 @@ fn is_input(event: &WindowEvent) -> bool {
             | WindowEvent::CursorMoved { .. }
             | WindowEvent::Ime(_)
     )
+}
+
+fn input_release(event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => event.state == ElementState::Released,
+        WindowEvent::MouseInput { state, .. } => *state == ElementState::Released,
+        _ => false,
+    }
 }
 
 /// A person's input during a scripted run is dropped. What the run itself sends (the control
@@ -179,17 +190,21 @@ impl Game<'_> {
         if let Some(modifiers) = held_modifiers(origin, self.unclaimed_window, &event) {
             self.unclaimed_modifiers = Some(modifiers);
         }
-        if locks_out(origin, self.scripted_run(), &event) {
-            return;
-        }
-        if let Some(focused) = held_focus(origin, self.scripted_run(), &event) {
-            self.focus_after_run = Some(focused);
-            return;
-        }
-        match at_unclaimed(origin, self.unclaimed_window, &event) {
-            Unclaimed::Claims => self.claim_window(event_loop),
-            Unclaimed::Dropped => return,
-            Unclaimed::Passes => {}
+        let locked = locks_out(origin, self.scripted_run(), &event);
+        if locked {
+            if !input_release(&event) {
+                return;
+            }
+        } else {
+            if let Some(focused) = held_focus(origin, self.scripted_run(), &event) {
+                self.focus_after_run = Some(focused);
+                return;
+            }
+            match at_unclaimed(origin, self.unclaimed_window, &event) {
+                Unclaimed::Claims => self.claim_window(event_loop),
+                Unclaimed::Dropped => return,
+                Unclaimed::Passes => {}
+            }
         }
         follow_keymap(&mut event);
         // MacosUtil.setCtrlClickEmulatesRightClick: Control + left click is a right click.
@@ -205,16 +220,35 @@ impl Game<'_> {
         }
         // Who caused it, before the event is handled: the trace wants the
         // window's own keys, never the ones the socket made up.
-        self.trace_window_event(origin, &event);
+        if !locked {
+            self.trace_window_event(origin, &event);
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {
             if event.state == ElementState::Pressed {
                 self.physical_keys.insert(key);
                 horizon_client::keybinds::learn_layout(event);
-            } else {
-                self.physical_keys.remove(&key);
+            } else if self.physical_keys.remove(&key)
+                && locked
+                && let Some(export) = &mut self.export
+            {
+                export
+                    .released_mappings
+                    .extend(self.settings.keys.translate_all(key));
             }
+        }
+        if locked {
+            // Only releases reach here. Keep the physical state current without dispatching clicks.
+            if let WindowEvent::MouseInput { button, .. } = &event
+                && self.physical_buttons.remove(button)
+                && let Some(export) = &mut self.export
+            {
+                export
+                    .released_mappings
+                    .extend(self.settings.keys.translate_mouse_all(*button));
+            }
+            return;
         }
         if matches!(
             &event,
@@ -279,6 +313,7 @@ impl Game<'_> {
         if self.error.is_none() && self.safe_start_proof.exit() {
             horizon_client::gfx::safe_start::clear(&Self::options_path());
         }
+        self.cancel_export_on_quit();
         self.end_screenshot_sequence(Err("cancelled: the game is closing".into()));
         self.pad_close_output();
         if let Err(e) = self.save_for_exit() {
@@ -309,6 +344,7 @@ impl Game<'_> {
                 return;
             }
         }
+        self.poll_export();
         if self.pending_save.is_some() {
             match self.poll_closing_save() {
                 Ok(true) => event_loop.exit(),
@@ -363,6 +399,12 @@ impl Game<'_> {
         {
             self.error = Some(format!("run timed out after {} s", limit.as_secs()).into());
             event_loop.exit();
+            return;
+        }
+        if self.export_held() {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
             return;
         }
         if let Some(w) = &self.window {

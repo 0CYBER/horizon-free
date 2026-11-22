@@ -25,7 +25,7 @@ impl Watch {
     fn set(&self, next: Phase) -> bool {
         let mut phase = self.phase.lock().unwrap();
         match *phase {
-            Phase::Done => return false,
+            Phase::Cancelled | Phase::Done => return false,
             // Do not reset a deadline that the supervisor has yet to act on.
             Phase::Writing(deadline)
                 if !matches!(next, Phase::Cancelled) && Instant::now() >= deadline =>
@@ -68,6 +68,13 @@ impl EncoderChild {
             },
             stdin,
         ))
+    }
+
+    pub(super) fn cancel_handle(&self) -> Box<dyn FnOnce() + Send> {
+        let watch = Arc::clone(&self.watch);
+        Box::new(move || {
+            watch.set(Phase::Cancelled);
+        })
     }
 
     pub(super) fn writing(&self) -> bool {

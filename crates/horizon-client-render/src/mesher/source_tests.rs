@@ -187,6 +187,81 @@ fn fixture() -> (Scratch, Assets, RenderAssets, MeshTables, Biomes) {
 }
 
 #[test]
+fn a_dispatched_mesh_keeps_streaming_busy_until_its_result_is_adopted() {
+    use crate::{
+        streaming::{ChunkGenerator, Proto, Streaming, WorkerContext},
+        world::World,
+    };
+    use std::{
+        sync::{Mutex, mpsc},
+        time::Duration,
+    };
+
+    struct HoldFirstJob {
+        entered: mpsc::Sender<()>,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+    impl ChunkGenerator for HoldFirstJob {
+        type Worker = ();
+        fn worker(&self) {
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                self.entered.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+        }
+        fn proto(&self, _: &mut (), _: i32, _: i32) -> Proto {
+            unreachable!("a remote view only meshes received columns")
+        }
+        fn finish(&self, _: Proto) -> Chunk {
+            unreachable!("a remote view only meshes received columns")
+        }
+    }
+
+    let (_scratch, assets, render, tables, biomes) = fixture();
+    let context = Arc::new(WorkerContext {
+        assets: Arc::new(assets),
+        render: Arc::new(render),
+        tables: Arc::new(tables),
+        biomes: Arc::new(biomes),
+        light: Arc::new(crate::light::tests::tables()),
+        hidden_states: Arc::from([]),
+        part_tables: Default::default(),
+    });
+    let (entered, running) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let generator = Arc::new(HoldFirstJob {
+        entered,
+        release: Mutex::new(Some(resume)),
+    });
+    let mut streaming = Streaming::new(generator, context, 1);
+    streaming.remote = true;
+    let mut world = World::new(BlockStateId(0), 0);
+    for z in -1..=1 {
+        for x in -1..=1 {
+            streaming.insert_remote(&mut world, Chunk::empty(x, z));
+        }
+    }
+    world.dirty_sections.clear();
+    let section = (0, 0, 0);
+    world.dirty_sections.insert(section);
+
+    assert!(streaming.update(&mut world).0.is_empty());
+    running.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(streaming.pending(), 0);
+    assert!(world.dirty_sections.is_empty());
+    let busy = streaming.busy();
+    release.send(()).unwrap();
+    assert!(busy);
+
+    streaming.wait(Duration::from_secs(5));
+    let (uploads, _) = streaming.update(&mut world);
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(uploads[0].0, section);
+    assert!(!streaming.busy());
+}
+
+#[test]
 fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
     let (_scratch, assets, render, tables, biomes) = fixture();
     let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());

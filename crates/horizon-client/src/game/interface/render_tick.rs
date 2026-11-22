@@ -960,6 +960,13 @@ impl Game<'_> {
     /// `Util.getMillis` for what the frame shows (the world border's scroll, the hearts' blink,
     /// the glint's under the switch): under `HORIZON_STILL`, the world's ticks in milliseconds.
     pub(super) fn visual_millis(&self) -> i64 {
+        self.export.as_ref().map_or_else(
+            || self.visual_offset + self.base_visual_millis(),
+            super::export::Session::visual_millis,
+        )
+    }
+
+    pub(super) fn base_visual_millis(&self) -> i64 {
         if self.clock.still() {
             self.visual_ticks() as i64 * 50
         } else {

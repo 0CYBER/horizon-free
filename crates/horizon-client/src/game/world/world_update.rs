@@ -119,7 +119,9 @@ impl Game<'_> {
         if let Err(e) = horizon_client::spans::time("poll_remote", || self.poll_remote()) {
             log::warn!("Horizon: {e}");
         }
-        if let Err(e) = self.advance_studio_replay() {
+        if self.export.is_none()
+            && let Err(e) = self.advance_studio_replay()
+        {
             log::warn!("Horizon Studio replay: {e}");
         }
         // The renderer laid translucent quads out again (a shader pack's flat terrain came
@@ -155,10 +157,7 @@ impl Game<'_> {
         self.observe_light_edits();
         self.ask_edited_light_emission();
         if let Some(p) = &self.player {
-            self.streaming.center = (
-                (p.position.x.floor() as i32) >> 4,
-                (p.position.z.floor() as i32) >> 4,
-            );
+            self.streaming.center = super::player_chunk(p.position);
         }
         horizon_client::spans::time("tick_pregen", || self.tick_pregen());
         // A headless game has nothing to draw sections with: like a server's, they aren't
@@ -433,7 +432,10 @@ impl Game<'_> {
         }
     }
     /// Run `f` inside a local player block-edit scope so writes record `World::immediate_sections`.
-    pub(in crate::game) fn with_player_block_edit<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+    pub(in crate::game) fn with_player_block_edit<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         self.world.begin_player_edit();
         let out = f(self);
         self.world.end_player_edit();

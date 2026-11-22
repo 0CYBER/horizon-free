@@ -9,9 +9,9 @@ mod writer;
 
 pub use clock::{ClockError, ExportClock, FrameStep};
 pub use config::{ConfigError, EncoderConfig};
-pub use dir::{DirError, ExportFolder, ExportManifest};
+pub use dir::{DirError, ExportFolder, ExportManifest, ManifestPublication, ManifestState};
 pub use sink::{EncoderPipe, FrameSink, PngSequence};
-pub use writer::Writer;
+pub use writer::{Progress, Writer};
 
 use crate::file_id::valid_export_name;
 use serde::Serialize;

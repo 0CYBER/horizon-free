@@ -167,6 +167,26 @@ impl ReplayDriver {
         self.reader.camera_path = json;
         Ok(())
     }
+
+    /// Exact playhead for fixed-clock playback.
+    pub fn position_ms_f64(&self) -> f64 {
+        self.cursor_ms
+    }
+
+    /// Deliver packets up to an absolute recording time independently of playback speed,
+    /// pause and looping, which the export clock handles.
+    pub fn advance_to(&mut self, cursor_ms: f64) -> io::Result<Vec<TimestampedPacket>> {
+        if !cursor_ms.is_finite() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "non-finite replay time",
+            ));
+        }
+        let cursor_ms = cursor_ms.clamp(self.cursor_ms, f64::from(self.end_ms));
+        let packets = self.seek_forward(cursor_ms as u32)?;
+        self.cursor_ms = cursor_ms;
+        Ok(packets)
+    }
 }
 
 impl PacketSource for ReplayDriver {

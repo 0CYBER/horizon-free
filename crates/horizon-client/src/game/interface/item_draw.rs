@@ -255,14 +255,17 @@ impl ItemEnv for Env<'_, '_> {
         local_time(pattern)
     }
     fn random_float(&self) -> f32 {
-        if self.game.clock.still() {
+        let seed = match &self.game.export {
+            Some(export) => export.elapsed().as_nanos() as u64,
             // The same draw for a frame of the same world tick.
-            let mixed =
-                (self.game.visual_ticks() ^ 0x9e37_79b9).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            return (mixed >> 40) as f32 / (1u64 << 24) as f32;
-        }
-        let nanos = self.game.started.elapsed().subsec_nanos();
-        (nanos % 1_000_000) as f32 / 1_000_000.0
+            None if self.game.clock.still() => self.game.visual_ticks(),
+            None => {
+                let nanos = self.game.started.elapsed().subsec_nanos();
+                return (nanos % 1_000_000) as f32 / 1_000_000.0;
+            }
+        };
+        let mixed = (seed ^ 0x9e37_79b9).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        (mixed >> 40) as f32 / (1u64 << 24) as f32
     }
 }
 /// The fluid a mod's `contained_fluid` answer `key` draws in a stack of `item`: none (the stack
@@ -600,7 +603,9 @@ impl Game<'_> {
     /// frame, not per item (`GameRenderer.extractOptions`).
     pub(super) fn capture_glint_frame(&self) -> item_render::GlintFrame {
         item_render::GlintFrame {
-            millis: if self.clock.still() {
+            millis: if let Some(export) = &self.export {
+                export.elapsed().as_secs_f32() * 1000.0
+            } else if self.clock.still() {
                 self.visual_millis() as f32
             } else {
                 self.started.elapsed().as_secs_f32() * 1000.0

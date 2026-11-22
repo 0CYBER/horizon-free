@@ -293,6 +293,7 @@ impl Game<'_> {
     }
 
     pub(super) fn close_world(&mut self) -> Result<()> {
+        self.begin_export_drain("stopped");
         self.destroying.clear();
         // Pause-menu and death-screen exits use the normal world-close action.
         // A standalone replay owns a synthetic remote session, so it must go

@@ -1,5 +1,6 @@
 use super::{EncoderPipe, ExportFolder, FrameSink, PngSequence};
 use std::io;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -8,16 +9,44 @@ struct Frame {
     index: u32,
     size: [u32; 2],
     rgb: Vec<u8>,
+    recycle: Option<SyncSender<Vec<u8>>>,
 }
 
-type Failure = Mutex<Option<io::Error>>;
+#[derive(Default)]
+pub struct Progress {
+    failure: Mutex<Option<io::Error>>,
+    frames: AtomicU32,
+}
+
+impl Progress {
+    pub fn frames(&self) -> u32 {
+        self.frames.load(Ordering::Acquire)
+    }
+
+    pub fn error(&self) -> Option<io::Error> {
+        self.failure
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|err| io::Error::new(err.kind(), err.to_string()))
+    }
+
+    /// Stop starting queued frames on an aborted export.
+    pub fn cancel(&self) {
+        self.fail(io::ErrorKind::Interrupted.into());
+    }
+
+    fn fail(&self, error: io::Error) {
+        self.failure.lock().unwrap().get_or_insert(error);
+    }
+}
 
 /// A bounded queue of owned RGB frames. The encoder uses one worker to preserve submission
 /// order. PNG file names carry their index, so different workers can encode them in parallel.
 pub struct Writer {
-    sender: SyncSender<Frame>,
+    sender: Option<SyncSender<Frame>>,
     workers: Vec<JoinHandle<u64>>,
-    failure: Arc<Failure>,
+    progress: Arc<Progress>,
 }
 
 impl Writer {
@@ -35,31 +64,64 @@ impl Writer {
     fn start(sinks: impl IntoIterator<Item = Box<dyn FrameSink>>) -> io::Result<Self> {
         let (sender, receiver) = sync_channel(2);
         let receiver = Arc::new(Mutex::new(receiver));
-        let failure = Arc::new(Mutex::new(None));
-        let mut workers = Vec::new();
+        let progress = Arc::new(Progress::default());
+        let mut writer = Self {
+            sender: Some(sender),
+            workers: Vec::new(),
+            progress,
+        };
         for sink in sinks {
             let receiver = Arc::clone(&receiver);
-            let failure = Arc::clone(&failure);
-            workers.push(
+            let progress = writer.progress();
+            writer.workers.push(
                 thread::Builder::new()
                     .name("export-writer".into())
-                    .spawn(move || write_frames(sink, &receiver, &failure))?,
+                    .spawn(move || write_frames(sink, &receiver, &progress))?,
             );
         }
-        Ok(Self {
-            sender,
-            workers,
-            failure,
-        })
+        Ok(writer)
     }
 
     /// Queue a frame, waiting for capacity if both queued slots are occupied.
     pub fn write(&self, index: u32, size: [u32; 2], rgb: Vec<u8>) -> io::Result<()> {
-        if let Some(err) = self.write_error() {
+        self.queue(Frame {
+            index,
+            size,
+            rgb,
+            recycle: None,
+        })
+    }
+
+    pub fn write_recycled(
+        &self,
+        index: u32,
+        size: [u32; 2],
+        rgb: Vec<u8>,
+        recycle: &SyncSender<Vec<u8>>,
+    ) -> io::Result<()> {
+        self.queue(Frame {
+            index,
+            size,
+            rgb,
+            recycle: Some(recycle.clone()),
+        })
+    }
+
+    pub fn progress(&self) -> Arc<Progress> {
+        Arc::clone(&self.progress)
+    }
+
+    fn queue(&self, frame: Frame) -> io::Result<()> {
+        if let Some(err) = self.progress.error() {
             return Err(err);
         }
-        let disconnected = self.sender.send(Frame { index, size, rgb }).is_err();
-        match self.write_error() {
+        let disconnected = self
+            .sender
+            .as_ref()
+            .expect("active export writer")
+            .send(frame)
+            .is_err();
+        match self.progress.error() {
             Some(err) => Err(err),
             None if disconnected => Err(io::Error::other("export writer disconnected")),
             None => Ok(()),
@@ -67,65 +129,66 @@ impl Writer {
     }
 
     /// Drain submitted frames, finalize all sinks and return their total bytes written.
-    pub fn finish(self) -> io::Result<u64> {
-        let Self {
-            sender,
-            workers,
-            failure,
-        } = self;
-        drop(sender);
+    pub fn finish(mut self) -> io::Result<u64> {
+        self.drain()
+    }
+
+    fn drain(&mut self) -> io::Result<u64> {
+        self.sender.take();
         let mut bytes = 0;
-        for worker in workers {
+        for worker in self.workers.drain(..) {
             match worker.join() {
                 Ok(written) => bytes += written,
-                Err(_) => record_failure(&failure, io::Error::other("export writer panicked")),
+                Err(_) => self
+                    .progress
+                    .fail(io::Error::other("export writer panicked")),
             }
         }
-        match failure.lock().unwrap().take() {
+        match self.progress.error() {
             Some(err) => Err(err),
             None => Ok(bytes),
         }
     }
+}
 
-    fn write_error(&self) -> Option<io::Error> {
-        self.failure
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|err| io::Error::new(err.kind(), err.to_string()))
+impl Drop for Writer {
+    fn drop(&mut self) {
+        let _ = self.drain();
     }
 }
 
 fn write_frames(
     mut sink: Box<dyn FrameSink>,
     receiver: &Mutex<Receiver<Frame>>,
-    failure: &Failure,
+    progress: &Progress,
 ) -> u64 {
     let mut bytes = 0;
     loop {
         let frame = receiver.lock().unwrap().recv();
-        if failure.lock().unwrap().is_some() {
+        if progress.error().is_some() {
             break;
         }
         let Ok(frame) = frame else {
             if let Err(err) = sink.finish() {
-                record_failure(failure, err);
+                progress.fail(err);
             }
             break;
         };
         match sink.write(frame.index, frame.size, &frame.rgb) {
-            Ok(written) => bytes += written,
+            Ok(written) => {
+                bytes += written;
+                progress.frames.fetch_add(1, Ordering::Release);
+            }
             Err(err) => {
-                record_failure(failure, err);
+                progress.fail(err);
                 break;
             }
         }
+        if let Some(recycle) = frame.recycle {
+            let _ = recycle.try_send(frame.rgb);
+        }
     }
     bytes
-}
-
-fn record_failure(failure: &Failure, error: io::Error) {
-    failure.lock().unwrap().get_or_insert(error);
 }
 
 #[cfg(test)]

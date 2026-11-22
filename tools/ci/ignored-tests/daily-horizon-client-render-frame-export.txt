@@ -1,0 +1,6 @@
+# Fixed-clock rendering on a real graphics device.
+horizon-client-render gfx::frame_export::tests::a_connected_non_draining_receiver_never_blocks_arming_or_teardown lib daily slow
+horizon-client-render gfx::frame_export::tests::graceful_drain_keeps_every_frame_for_a_slow_receiver lib daily slow
+horizon-client-render gfx::frame_export::tests::graceful_drain_times_out_on_a_connected_non_draining_receiver lib daily slow
+horizon-client-render gfx::frame_export::tests::portrait_readbacks_keep_frame_order_rows_and_rgb_channels lib daily slow
+horizon-client-render gfx::frame_export::tests::settling_iterations_preserve_the_taa_sequence lib daily slow

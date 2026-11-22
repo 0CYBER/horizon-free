@@ -1033,6 +1033,7 @@ impl Game<'_> {
         if self.right {
             let _ = self.agent_mouse(MouseButton::Right, false);
         }
+        self.agent_mouse_holds = [false; 2];
     }
 
     /// Synthesize the pointer moving to GUI pixel (x, y) and a click there.
@@ -1981,9 +1982,9 @@ impl Game<'_> {
             let why = (self.renderer.as_ref().and_then(|r| r.not_drawn()))
                 .map_or("unknown", |n| n.as_str());
             let error = format!("no frame was drawn to turn the view ({why})");
-            let _ = g.reply.send(
-                json!({ "error": error, "yaw": self.yaw, "pitch": self.pitch }).to_string(),
-            );
+            let _ = g
+                .reply
+                .send(json!({ "error": error, "yaw": self.yaw, "pitch": self.pitch }).to_string());
             return;
         }
         self.agent.glide = Some(g);

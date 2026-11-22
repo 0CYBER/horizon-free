@@ -748,6 +748,7 @@ pub struct PackPost {
     pub timing: Option<super::pack_timing::PassTiming>,
     /// `depthtex0` at the screen's centre, read back for `centerDepthSmooth`.
     center_depth: Option<super::pack_center_depth::CenterDepth>,
+    export_depth_since: Option<std::time::Instant>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
     custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
@@ -3451,6 +3452,7 @@ impl PackPost {
             gui_size: world.gui_size,
             timing: None,
             center_depth: None,
+            export_depth_since: None,
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             material_maps: world.material_maps,
@@ -3605,6 +3607,7 @@ impl PackPost {
         self.custom.restart_at(0);
         self.custom.forget_world();
         self.center_depth = None;
+        self.export_depth_since = None;
         self.targets = None;
         self.main = 0;
         self.mips_valid = 0;
@@ -4495,9 +4498,34 @@ impl PackPost {
         }
     }
 
+    pub(super) fn await_export_center_depth(&mut self) {
+        self.export_depth_since = Some(std::time::Instant::now());
+    }
+
+    pub(super) fn poll_export_center_depth(
+        &mut self,
+        device: &wgpu::Device,
+    ) -> Result<bool, String> {
+        let Some(since) = self.export_depth_since else {
+            return Ok(true);
+        };
+        let depth = self
+            .center_depth
+            .as_mut()
+            .ok_or("the shader pack copied no centre depth")?;
+        if depth.poll_completed(device)?.is_some() {
+            self.export_depth_since = None;
+            Ok(true)
+        } else if since.elapsed() >= super::frame_export::FRAME_EXPORT_STALL_TIMEOUT {
+            Err("export stalled waiting for the frame's centre depth".into())
+        } else {
+            Ok(false)
+        }
+    }
+
     /// The centre depth the frame copied: its readback, started by calling it right after the
     /// frame's submission.
-    pub fn submitted(&mut self) -> Option<impl FnOnce() + Send + 'static> {
+    pub fn submitted(&mut self) -> Option<impl FnOnce() + Send + 'static + use<>> {
         self.center_depth.as_mut()?.submitted()
     }
 

@@ -14,12 +14,12 @@ use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The control protocol's version (`docs/api/stability.md`): before 1.0 an
 /// addition makes the next patch and a breaking change the next line.
-const PROTOCOL: &str = "0.1.0";
+const PROTOCOL: &str = "0.1.1";
 
 /// The command groups the game serves, as `help` chains them: what `hello` reports as its features.
 const FEATURES: &[&str] = &[
     "game", "station", "blocks", "lan", "friends", "render", "sculk", "agent", "ui", "options",
-    "events", "saves", "pad", "studio",
+    "events", "saves", "pad", "studio", "export",
 ];
 
 /// `hello`: the protocol the socket speaks, the game's release and the command groups it serves.
@@ -54,6 +54,7 @@ const HELP: &[&str] = &[
     "fill X1 Y1 Z1 X2 Y2 Z2 BLOCK   set a box of loaded blocks",
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
+    "export start|step|stop|status  capture offscreen on a fixed clock (horizon-ctl export --help)",
     "screenshot-sequence FRAMES STEP_MS PATH|cancel  a shader pack's first frames on a set clock (HORIZON_STILL), the last as PNG",
     "chat TEXT                      send a chat line or /command as if typed",
     "type TEXT                      type into the open chat box (key enter tap sends)",
@@ -82,6 +83,8 @@ pub struct Flight {
     to: Vec3,
     pitch: f32,
     started: Instant,
+    /// Includes only fixed-clock frame time during export.
+    elapsed: Duration,
     seconds: f64,
     /// Reply with every frame time too (`fly ... PITCH raw`).
     raw: bool,
@@ -102,8 +105,11 @@ impl Game<'_> {
             return;
         };
         flight.tick_ms.push(tick_ms);
-        let flight = &*flight;
-        let t = (flight.started.elapsed().as_secs_f64() / flight.seconds).min(1.0);
+        flight.elapsed = self.export.as_ref().map_or_else(
+            || flight.started.elapsed(),
+            |session| flight.elapsed + session.frame_elapsed(),
+        );
+        let t = (flight.elapsed.as_secs_f64() / flight.seconds).min(1.0);
         let (a, b) = (flight.from, flight.to);
         let d = [b.x - a.x, b.y - a.y, b.z - a.z];
         let at = Vec3::new(a.x + d[0] * t, a.y + d[1] * t, a.z + d[2] * t);
@@ -118,6 +124,7 @@ impl Game<'_> {
             player.flying = true;
             self.previous_position = at;
         }
+        self.notify_export_view_move(at);
         if t >= 1.0
             && let Some(flight) = self.flight.take()
         {
@@ -132,6 +139,20 @@ impl Game<'_> {
             let _ = flight.reply.send(summary.to_string());
         }
     }
+    fn notify_export_view_move(&mut self, at: Vec3) {
+        // The next simulation tick waits while the live server sends the new view.
+        if self.export.is_some() && super::player_chunk(at) != self.streaming.center {
+            self.send_export_view_position();
+        }
+    }
+
+    pub(super) fn resume_flight_clock(&mut self) {
+        if let Some(flight) = &mut self.flight {
+            let now = Instant::now();
+            flight.started = now.checked_sub(flight.elapsed).unwrap_or(now);
+        }
+    }
+
     /// The game's settings a render capture records beside the renderer's own state.
     fn render_capture_settings(&self) -> horizon_client::gfx::capture::Settings {
         let s = &self.settings;
@@ -215,7 +236,10 @@ impl Game<'_> {
         // A result still to be answered (a rebuilt renderer carries it over) is left to the
         // next frame, which answers it whether or not it is drawn.
         let renderer = self.renderer.as_mut();
-        if renderer.as_ref().is_none_or(|r| r.screenshot_result.is_none()) {
+        if renderer
+            .as_ref()
+            .is_none_or(|r| r.screenshot_result.is_none())
+        {
             let not_drawn = renderer.as_ref().and_then(|r| r.not_drawn());
             super::pending_screenshot::expire(
                 &mut self.pending_screenshot,
@@ -392,9 +416,13 @@ impl Game<'_> {
         event_loop: &dyn EventLoopCtl,
     ) -> Result<Option<Value>> {
         let words: Vec<&str> = line.split_whitespace().collect();
+        self.export_gate(&words)?;
         self.screenshot_sequence_gate(words.first().copied())?;
         if words.first() == Some(&"screenshot-sequence") {
             return self.screenshot_sequence_command(line, reply);
+        }
+        if words.first() == Some(&"export") {
+            return self.frame_export_command(&words[1..]).map(Some);
         }
         if self.pending_save.is_some() && words.first() != Some(&"quit") {
             return Err("a world save is in progress".into());
@@ -891,6 +919,7 @@ impl Game<'_> {
                 }
                 self.left = false;
                 self.right = false;
+                self.agent_mouse_holds = [false; 2];
                 ok()
             }
             "mouse" => {
@@ -961,6 +990,7 @@ impl Game<'_> {
                 player.velocity = Vec3::new(0.0, 0.0, 0.0);
                 player.fall_distance = 0.0;
                 self.previous_position = to;
+                self.notify_export_view_move(to);
                 ok()
             }
             "emote" => match words.get(1).copied() {
@@ -1279,6 +1309,7 @@ impl Game<'_> {
                     to: Vec3::new(n(4)?, n(5)?, n(6)?),
                     pitch,
                     started: Instant::now(),
+                    elapsed: Duration::ZERO,
                     seconds: n(7)?.max(0.1),
                     raw: words.get(9) == Some(&"raw"),
                     reply: reply.clone(),

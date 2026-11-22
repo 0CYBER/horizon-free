@@ -10,6 +10,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 const EXPORTS: &str = "exports";
 
@@ -51,6 +52,71 @@ pub struct ExportManifest<'a> {
     pub frames_written: u32,
     pub build: &'a str,
     pub gpu: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ManifestState {
+    Pending = 0,
+    Publishing,
+    Published,
+    Cancelled,
+    Failed,
+}
+
+impl ManifestState {
+    fn from_byte(value: u8) -> Self {
+        match value {
+            0 => Self::Pending,
+            1 => Self::Publishing,
+            2 => Self::Published,
+            3 => Self::Cancelled,
+            4 => Self::Failed,
+            _ => unreachable!("invalid manifest publication state"),
+        }
+    }
+}
+
+/// Shared by the publisher and the event loop. Neither holds a lock across file I/O.
+#[derive(Default)]
+pub struct ManifestPublication(AtomicU8);
+
+impl ManifestPublication {
+    pub fn state(&self) -> ManifestState {
+        ManifestState::from_byte(self.0.load(Ordering::Acquire))
+    }
+
+    /// Cancel before rename, or report the state already reached by the publisher.
+    pub fn cancel(&self) -> ManifestState {
+        match self.0.compare_exchange(
+            ManifestState::Pending as u8,
+            ManifestState::Cancelled as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => ManifestState::Cancelled,
+            Err(state) => ManifestState::from_byte(state),
+        }
+    }
+
+    fn rename(&self, pending: &mut StagedFile<'_>) -> io::Result<()> {
+        self.0
+            .compare_exchange(
+                ManifestState::Pending as u8,
+                ManifestState::Publishing as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| io::Error::from(io::ErrorKind::Interrupted))?;
+        let result = pending.publish();
+        let state = if result.is_ok() {
+            ManifestState::Published
+        } else {
+            ManifestState::Failed
+        };
+        self.0.store(state as u8, Ordering::Release);
+        result
+    }
 }
 
 impl ExportFolder {
@@ -112,12 +178,21 @@ impl ExportFolder {
 
     /// Record the final result once, including partial output from a stopped or failed export.
     pub fn write_manifest(&self, manifest: &ExportManifest<'_>) -> io::Result<()> {
+        self.write_manifest_tracked(manifest, &ManifestPublication::default())
+    }
+
+    /// Record the rename outcome before dropping the staged file and directory.
+    pub fn write_manifest_tracked(
+        &self,
+        manifest: &ExportManifest<'_>,
+        publication: &ManifestPublication,
+    ) -> io::Result<()> {
         let staging = self.stage()?;
         let mut pending = staging.create_new("export.json")?;
         serde_json::to_writer_pretty(&mut pending.file, manifest)?;
         pending.file.write_all(b"\n")?;
         pending.file.sync_all()?;
-        pending.publish()
+        publication.rename(&mut pending)
     }
 }
 
@@ -478,15 +553,22 @@ mod tests {
             format: Format::PngSequence,
             hud: true,
         };
-        folder
-            .write_manifest(&ExportManifest {
-                spec: &spec,
-                state: "stopped",
-                frames_written: 9,
-                build: "build-id",
-                gpu: "test adapter",
-            })
-            .unwrap();
+        let stopped = ExportManifest {
+            spec: &spec,
+            state: "stopped",
+            frames_written: 9,
+            build: "build-id",
+            gpu: "test adapter",
+        };
+        let publication = ManifestPublication::default();
+        assert_eq!(publication.cancel(), ManifestState::Cancelled);
+        let cancelled = folder
+            .write_manifest_tracked(&stopped, &publication)
+            .unwrap_err();
+        assert_eq!(cancelled.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
+
+        folder.write_manifest(&stopped).unwrap();
         let error = folder
             .write_manifest(&ExportManifest {
                 spec: &spec,

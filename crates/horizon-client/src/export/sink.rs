@@ -1,5 +1,6 @@
 use super::process::EncoderChild;
 use super::{EncoderConfig, ExportFolder};
+use crate::gfx::FRAME_EXPORT_STALL_TIMEOUT;
 use std::io::{self, BufWriter, Write as _};
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::Arc;
@@ -29,6 +30,7 @@ impl FrameSink for PngSequence {
         let mut file = self.folder.create_new(&format!("frame_{index:06}.png"))?;
         let mut encoder = png::Encoder::new(BufWriter::new(&mut file), size[0], size[1]);
         encoder.set_color(png::ColorType::Rgb);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(png::Compression::Fast);
         let mut writer = encoder.write_header()?;
@@ -49,6 +51,10 @@ pub struct EncoderPipe {
 }
 
 impl EncoderPipe {
+    pub fn cancel_handle(&self) -> Option<Box<dyn FnOnce() + Send>> {
+        self.child.as_ref().map(EncoderChild::cancel_handle)
+    }
+
     /// The encoder must support FFmpeg's seekable `fd:` protocol on stdout.
     pub fn spawn(
         folder: &ExportFolder,
@@ -56,7 +62,7 @@ impl EncoderPipe {
         size: [u32; 2],
         fps: (u32, u32),
     ) -> io::Result<Self> {
-        Self::spawn_with_timeout(folder, config, size, fps, Duration::from_secs(60))
+        Self::spawn_with_timeout(folder, config, size, fps, FRAME_EXPORT_STALL_TIMEOUT)
     }
 
     fn spawn_with_timeout(

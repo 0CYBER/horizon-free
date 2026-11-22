@@ -3016,11 +3016,22 @@ impl ViewArrival {
         if self.since.is_none() || view != self.view {
             (self.view, self.since, self.arrived) = (view, Some(now), false);
         }
-        let ((x, z), r) = view;
-        if self.arrived || r < 0 || !self.recent(now) {
+        if self.arrived || view.1 < 0 || !self.recent(now) {
             return false;
         }
-        self.arrived = (-r..=r).all(|d| {
+        let incomplete = self.arrival_incomplete(has);
+        self.arrived = !incomplete;
+        incomplete
+    }
+
+    /// Whether the tracked view still lacks a perimeter column, even after
+    /// the UI stopped waiting or a level change cleared the columns.
+    pub fn arrival_incomplete(&self, has: impl Fn((i32, i32)) -> bool) -> bool {
+        let ((x, z), r) = self.view;
+        if self.since.is_none() || r < 0 {
+            return false;
+        }
+        !(-r..=r).all(|d| {
             // How far row (and column) `d` reaches: `in_view_distance` solved for it.
             let gap = i64::from((d.abs() - 1).max(0));
             let room = i64::from(r).pow(2) - gap * gap;
@@ -3031,8 +3042,7 @@ impl ViewArrival {
                     .into_iter()
                     .all(|e| has((x + d, z + e)) && has((x + e, z + d)))
             }
-        });
-        !self.arrived
+        })
     }
     /// Whether the view `arriving` was last given changed less than `VIEW_WAIT`
     /// ago: until then sections meshed are its terrain coming in, later an edit's.

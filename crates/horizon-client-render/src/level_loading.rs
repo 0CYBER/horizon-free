@@ -144,6 +144,17 @@ impl LevelLoadTracker {
     pub fn is_active(&self) -> bool {
         self.state.is_some()
     }
+    /// Whether a recorded load needs more packets before it can settle locally.
+    pub fn needs_load_packets(&self, has_player_column: bool) -> bool {
+        match self.state {
+            Some(ClientState::WaitingForServer { .. }) => true,
+            Some(ClientState::WaitingForPlayerChunk {
+                player_section_ready,
+                ..
+            }) => !player_section_ready && !has_player_column,
+            _ => false,
+        }
+    }
     /// `loadingPacketsReceived`: `LEVEL_CHUNKS_LOAD_START` came.
     pub fn loading_packets_received(&mut self) {
         if let Some(ClientState::WaitingForServer { timeout_after }) = self.state {
@@ -190,6 +201,20 @@ impl LevelLoadTracker {
             }
         }
     }
+    /// Poll completion independently of the simulation clock. The player's
+    /// compiled section can arrive while the simulation waits for loading.
+    pub fn poll_client_load(&mut self, now: u64, section_ready: bool, player: PlayerCheck) -> bool {
+        if section_ready && self.wants_player_section() {
+            self.player_section_ready();
+        }
+        self.tick_client_load(now, player);
+        if !self.is_level_ready(now) {
+            return false;
+        }
+        self.finish();
+        true
+    }
+
     /// `isLevelReady`.
     pub fn is_level_ready(&self, now: u64) -> bool {
         matches!(self.state, Some(ClientState::Ready { ready_at }) if now >= ready_at + self.close_delay_ms)

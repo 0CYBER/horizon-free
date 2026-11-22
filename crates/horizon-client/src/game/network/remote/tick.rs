@@ -38,14 +38,9 @@ impl Game<'_> {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
-        if section_ready && r.level_load.wants_player_section() {
-            r.level_load.player_section_ready();
-        }
-        r.level_load.tick_client_load(now, check);
-        if !r.level_load.is_level_ready(now) {
+        if !r.level_load.poll_client_load(now, section_ready, check) {
             return;
         }
-        r.level_load.finish();
         if !r.loaded_sent {
             r.loaded_sent = true;
             self.send(S::PlayerLoaded(Empty));

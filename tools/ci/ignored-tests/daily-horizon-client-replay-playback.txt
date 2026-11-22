@@ -20,3 +20,4 @@ horizon-client game::native_replay_tests::a_seek_to_the_clock_reports_it_and_a_s
 horizon-client game::native_replay_tests::a_forward_seek_across_a_relative_teleport_lands_where_a_rebuild_does lib daily resources
 horizon-client game::native_replay_tests::a_failed_read_ends_the_replay_as_a_close_does lib daily resources
 horizon-client game::native_replay_tests::a_close_that_cannot_save_the_camera_path_keeps_it_in_a_draft lib daily resources
+horizon-client game::native_replay_tests::a_rebuilt_replay_player_model_ages_once_per_tick lib daily resources

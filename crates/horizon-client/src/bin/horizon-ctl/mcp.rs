@@ -105,13 +105,17 @@ impl Session {
         let cmd = commands::COMMANDS
             .iter()
             .find(|c| c.mcp && commands::tool_name(c) == name);
-        let pace = self.paced && cmd.is_some_and(|c| !still(c));
+        let pace = self.paced
+            && cmd.is_some_and(|c| !still(c))
+            && !self
+                .game("export status")
+                .is_ok_and(|state| state["active"] == true);
         if pace && std::mem::take(&mut self.held) && self.screen_now().as_deref() == Some("paused")
         {
             let _ = self.run(&["resume".to_owned()]);
         }
         let out = self.call_tool(name, args);
-        if pace && self.screen_now().as_deref() == Some("playing") {
+        if pace && !self.exporting && self.screen_now().as_deref() == Some("playing") {
             self.held = self.run(&["pause".to_owned()]).is_ok();
         }
         out
@@ -257,6 +261,29 @@ mod tests {
         for n in moving {
             assert!(!still(find(n)), "{n} needs the world running");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_paced_session_leaves_a_cli_started_export_playing() {
+        let (path, game) = crate::tests::fake_game_with("paced-export", |line| match line {
+            "export status" => r#"{"ok":true,"active":true,"held":true}"#,
+            "look 42 10" | "tp 1 64 3" => r#"{"ok":true}"#,
+            "screen" => r#"{"screen":"playing"}"#,
+            _ => r#"{"error":"unexpected command"}"#,
+        });
+        let mut session = Session::new(path.clone(), Some(std::time::Duration::from_secs(5)));
+        session.home = std::env::temp_dir().join("horizon-ctl-paced-export-no-home");
+        session.paced = true;
+        assert!(!session.call("look", &json!({"yaw":42,"pitch":10})).1);
+        assert!(!session.call("tp", &json!({"x":1,"y":64,"z":3})).1);
+        assert!(!session.held);
+        drop(session);
+        assert_eq!(
+            game.join().unwrap(),
+            ["export status", "look 42 10", "export status", "tp 1 64 3"]
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

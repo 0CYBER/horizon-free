@@ -1,6 +1,51 @@
 //! Key and mouse mappings in play: toggled sneak and sprint, keys after rebinding, keys held
 //! across screens, the hotbar's wheel and bumper steps, and mouse buttons while playing.
 use super::*;
+use horizon_client::{held::HeldKeys, keymapping::ToggleKeys};
+use winit::keyboard::ModifiersState;
+
+fn release_export_modifiers(
+    modifiers: &mut ModifiersState,
+    physical: &HashSet<KeyCode>,
+    keys: &HeldKeys,
+) {
+    horizon_client_input::modifiers::retain_held(modifiers, |key| {
+        physical.contains(&key) || keys.held_by(&key, Source::Agent)
+    });
+}
+
+fn mouse_hold_index(button: MouseButton) -> Option<usize> {
+    match button {
+        MouseButton::Left => Some(0),
+        MouseButton::Right => Some(1),
+        _ => None,
+    }
+}
+
+fn release_export_mapping(
+    mapping: std::result::Result<KeyCode, MouseButton>,
+    keys: &mut HeldKeys,
+    toggles: &mut ToggleKeys,
+    options: [bool; 4],
+    held_elsewhere: [bool; 4],
+) -> Option<usize> {
+    let slot = match mapping {
+        Ok(key) => {
+            if !keys.held_by(&key, Source::Keyboard) || !keys.release(&key, Source::Keyboard) {
+                return None;
+            }
+            [KeyCode::ShiftLeft, KeyCode::ControlLeft]
+                .iter()
+                .position(|&k| k == key)?
+        }
+        Err(button) => mouse_hold_index(button)? + 2,
+    };
+    if held_elsewhere[slot] {
+        return None;
+    }
+    toggles.0[slot].set_down(false, options[slot]);
+    Some(slot)
+}
 
 fn studio_replay_shortcut(key: KeyCode) -> bool {
     matches!(
@@ -36,6 +81,7 @@ impl Game<'_> {
     /// `KeyMapping.resetToggleKeys`: every toggle mapping up, and the latched sneak and sprint
     /// keys with it.
     pub(super) fn reset_toggle_keys(&mut self) {
+        self.agent_mouse_holds = [false; 2];
         for key in &mut self.toggles.0 {
             key.reset();
         }
@@ -295,6 +341,7 @@ impl Game<'_> {
         if playing {
             self.toggles.screen_closed(options);
         } else {
+            self.agent_mouse_holds = [false; 2];
             self.toggles.screen_opened(options);
         }
         self.sync_toggle(0);
@@ -371,6 +418,14 @@ impl Game<'_> {
         pressed: bool,
         source: Source,
     ) -> Result<()> {
+        if let Some(slot) = mouse_hold_index(button) {
+            if ![self.left, self.right][slot] {
+                self.agent_mouse_holds[slot] = false;
+            }
+            if source == Source::Agent {
+                self.agent_mouse_holds[slot] = pressed && self.sleeping.is_none();
+            }
+        }
         if !pressed && self.mouse_mapping_held_elsewhere(button, source) {
             return Ok(());
         }
@@ -388,18 +443,59 @@ impl Game<'_> {
         };
         match source {
             Source::Keyboard | Source::Agent | Source::Mod => self.input_holds(mapping),
-            Source::Pad => {
-                let keys = &self.settings.keys;
-                self.physical_buttons
-                    .iter()
-                    .any(|held| keys.translate_mouse_all(*held).contains(&Err(button)))
-                    || self
-                        .physical_keys
-                        .iter()
-                        .any(|held| keys.translate_all(*held).contains(&Err(button)))
+            Source::Pad => self.physical_input_holds(Err(button)),
+        }
+    }
+
+    fn physical_input_holds(&self, mapping: std::result::Result<KeyCode, MouseButton>) -> bool {
+        let keys = &self.settings.keys;
+        self.physical_buttons
+            .iter()
+            .any(|held| keys.translate_mouse_all(*held).contains(&mapping))
+            || self
+                .physical_keys
+                .iter()
+                .any(|held| keys.translate_all(*held).contains(&mapping))
+    }
+
+    /// Apply the releases the window withheld during export without replaying UI input.
+    pub(super) fn reconcile_export_releases(
+        &mut self,
+        released: &HashSet<std::result::Result<KeyCode, MouseButton>>,
+    ) {
+        let options = [
+            self.settings.toggle_crouch,
+            self.settings.toggle_sprint,
+            self.settings.toggle_attack,
+            self.settings.toggle_use,
+        ];
+        let held_elsewhere = [
+            self.input_holds("key.sneak"),
+            self.input_holds("key.sprint"),
+            self.agent_mouse_holds[0] || self.input_holds("key.attack"),
+            self.agent_mouse_holds[1] || self.input_holds("key.use"),
+        ];
+        release_export_modifiers(&mut self.modifiers, &self.physical_keys, &self.keys);
+        self.reconcile_export_mouse_buttons([held_elsewhere[2], held_elsewhere[3]]);
+        for &mapping in released {
+            if self.physical_input_holds(mapping) {
+                continue;
+            }
+            match release_export_mapping(
+                mapping,
+                &mut self.keys,
+                &mut self.toggles,
+                options,
+                held_elsewhere,
+            ) {
+                Some(slot @ (0 | 1)) => self.sync_toggle(slot),
+                Some(2) => self.left &= self.toggles.is_down(2),
+                Some(3) => self.right &= self.toggles.is_down(3),
+                _ => {}
             }
         }
     }
+
     /// Two mappings with one default button are separate mappings all the same
     /// (`Minecraft.handleKeybinds`): whether the middle-button action a physical `input` translated
     /// to is one of those it is bound to, for this player now.
@@ -551,8 +647,59 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{studio_freecam_movement_key, studio_replay_shortcut};
-    use winit::keyboard::KeyCode;
+    use super::{
+        HashSet, HeldKeys, KeyCode, ModifiersState, MouseButton, Source, ToggleKeys,
+        release_export_mapping, release_export_modifiers, studio_freecam_movement_key,
+        studio_replay_shortcut,
+    };
+
+    #[test]
+    fn export_releases_clear_physical_movement_and_attack_without_ending_other_holds() {
+        let mut keys = HeldKeys::default();
+        let mut toggles = ToggleKeys::default();
+        let options = [false; 4];
+        for key in [KeyCode::KeyW, KeyCode::Space, KeyCode::KeyA] {
+            keys.press(key, Source::Keyboard);
+        }
+        keys.press(KeyCode::Space, Source::Pad);
+        keys.press(KeyCode::KeyA, Source::Agent);
+        keys.press(KeyCode::ControlLeft, Source::Agent);
+        toggles.0[2].set_down(true, false);
+        toggles.0[3].set_down(true, false);
+        // The window registered the releases in its physical sets while the gameplay
+        // keys, modifier word and raw mouse latch stayed as they were.
+        let mut modifiers = ModifiersState::SHIFT | ModifiersState::CONTROL | ModifiersState::ALT;
+        let mut raw_mouse = [true, true];
+        let physical_keys = HashSet::from([KeyCode::AltRight]);
+        let physical_buttons = HashSet::new();
+        let held_elsewhere = [false, false, false, true];
+        release_export_modifiers(&mut modifiers, &physical_keys, &keys);
+        crate::game::extras::release_raw_mouse_buttons(
+            &mut raw_mouse,
+            &physical_buttons,
+            [held_elsewhere[2], held_elsewhere[3]],
+        );
+        assert_eq!(modifiers, ModifiersState::CONTROL | ModifiersState::ALT);
+        assert_eq!(raw_mouse, [false, true]);
+
+        assert!(keys.raw(&KeyCode::KeyW) && toggles.is_down(2));
+        for mapping in [
+            Ok(KeyCode::KeyW),
+            Ok(KeyCode::Space),
+            Ok(KeyCode::KeyA),
+            Err(MouseButton::Left),
+            Err(MouseButton::Right),
+        ] {
+            release_export_mapping(mapping, &mut keys, &mut toggles, options, held_elsewhere);
+        }
+        assert!(!keys.raw(&KeyCode::KeyW));
+        assert!(!keys.held_by(&KeyCode::Space, Source::Keyboard));
+        assert!(keys.held_by(&KeyCode::Space, Source::Pad));
+        assert!(!keys.held_by(&KeyCode::KeyA, Source::Keyboard));
+        assert!(keys.held_by(&KeyCode::KeyA, Source::Agent));
+        assert!(!toggles.is_down(2));
+        assert!(toggles.is_down(3));
+    }
 
     #[test]
     fn replay_shortcuts_are_distinct_from_freecam_movement() {

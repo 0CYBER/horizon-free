@@ -98,6 +98,7 @@ impl Game<'_> {
         let (yaw, pitch) = (self.yaw, self.pitch);
         let riding = self.riding.is_some();
         let controls_camera = self.controls_camera();
+        let export = self.export.is_some() && !self.replay.playing();
         let (paddles, vehicle): (Vec<S>, Vec<S>) = self
             .remote_vehicle_packets()
             .into_iter()
@@ -137,6 +138,9 @@ impl Game<'_> {
             moved_or_rotated = true;
         } else {
             sprint(r, &mut out);
+            if export && controls_camera {
+                r.position_sender.request_position_for_chunk_change(pos);
+            }
             // LocalPlayer.sendPosition: no move while the view is another
             // entity's (the server keeps the player on it).
             if controls_camera

@@ -41,7 +41,10 @@ impl Game<'_> {
     }
     pub(super) fn begin_closing_save(&mut self, quit: bool) -> Result<()> {
         if quit {
+            self.cancel_export_on_quit();
             self.client_quit.set(ClientQuit::ShuttingDown);
+        } else {
+            self.begin_export_drain("stopped");
         }
         if let Some(save) = &mut self.pending_save {
             save.quit |= quit;
@@ -321,7 +324,7 @@ impl Game<'_> {
     /// the save has one. The Select World list shows it as the world's preview.
     pub(super) fn tick_world_icon(&mut self) {
         // Its grab would take a sequence's frame.
-        if self.screenshot_sequence.is_some() {
+        if self.screenshot_sequence.is_some() || self.export.is_some() {
             return;
         }
         let Some(icon) = self.world_icon.as_ref() else {

@@ -20,6 +20,18 @@ pub struct FrameStep {
     /// Each tick's real timestamp minus the frame's start, with both timestamps
     /// floored to whole nanoseconds.
     pub tick_offsets_ns: SmallVec<[i64; 4]>,
+    first_sim_tick_ns: i128,
+    tick_ns: u64,
+}
+
+impl FrameStep {
+    /// Recording-time offsets. Converting the floored real offsets back through the playback
+    /// speed could leave a tick just short of a packet timestamp.
+    pub fn simulation_tick_offsets_ns(&self) -> impl Iterator<Item = u64> + '_ {
+        (0..self.ticks).map(|n| {
+            (self.first_sim_tick_ns + i128::from(n) * i128::from(self.tick_ns)).max(0) as u64
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,9 +74,24 @@ impl ExportClock {
         })
     }
 
+    /// Start at an existing tick phase, such as the position of a replay after pre-roll.
+    pub fn set_tick_phase(&mut self, elapsed_ns: u64) {
+        self.acc = u128::from(elapsed_ns) * self.numerator * SPEED_SCALE;
+    }
+
     /// Advance one frame. A shorter tick duration can make ticks due at offset zero.
     /// A speed of zero advances only real time and retains the simulation phase.
     pub fn step(&mut self, speed_micro: u32, tick_ns: u64) -> Result<FrameStep, ClockError> {
+        self.step_until(speed_micro, tick_ns, u64::MAX)
+    }
+
+    /// Advance one output frame, clipping simulation to the remaining recording time.
+    pub fn step_until(
+        &mut self,
+        speed_micro: u32,
+        tick_ns: u64,
+        remaining_ns: u64,
+    ) -> Result<FrameStep, ClockError> {
         if tick_ns == 0 {
             return Err(ClockError::ZeroTickDuration);
         }
@@ -74,8 +101,9 @@ impl ExportClock {
         let end = u128::from(next) * self.ns_times_denominator;
         let real_ns = end / self.numerator - start / self.numerator;
         let speed = u128::from(speed_micro);
-        let sim = self.ns_times_denominator * speed;
         let sim_divisor = self.numerator * SPEED_SCALE;
+        let remaining = (u128::from(remaining_ns) * sim_divisor).saturating_sub(self.sim_fraction);
+        let sim = (self.ns_times_denominator * speed).min(remaining);
         let tick = u128::from(tick_ns) * sim_divisor;
         let elapsed = self.acc + sim;
         let ticks = elapsed / tick;
@@ -98,6 +126,8 @@ impl ExportClock {
             tick_offsets_ns.push(offset as i64);
         }
 
+        let first_sim_tick_ns = (self.sim_fraction as i128 + tick as i128 - self.acc as i128)
+            .div_euclid(sim_divisor as i128);
         self.index = next;
         self.acc = elapsed % tick;
         let sim_output = self.sim_fraction + sim;
@@ -111,6 +141,8 @@ impl ExportClock {
             ticks: ticks as u32,
             partial: partial.min(1.0 - f32::EPSILON / 2.0),
             tick_offsets_ns,
+            first_sim_tick_ns,
+            tick_ns,
         })
     }
 }
@@ -158,6 +190,22 @@ mod tests {
                 assert_eq!(sim, expected_sim);
                 assert_eq!(ticks as u128, expected_sim.as_nanos() / 50_000_000);
             }
+        }
+    }
+
+    #[test]
+    fn replay_end_clips_ticks_and_partial_without_shortening_output_frames() {
+        for (end, ticks, partial) in [(49, 0, 0.98), (60, 1, 0.2)] {
+            let mut clock = ExportClock::new((30, 1)).unwrap();
+            let first = clock.step(1_000_000, 50_000_000).unwrap();
+            let remaining_ns = end * 1_000_000 - first.sim.as_nanos() as u64;
+            let last = clock
+                .step_until(1_000_000, 50_000_000, remaining_ns)
+                .unwrap();
+            assert_eq!(last.sim, Duration::from_nanos(remaining_ns));
+            assert_eq!(last.real, Duration::from_nanos(33_333_333));
+            assert_eq!(last.ticks, ticks);
+            assert_eq!(last.partial, partial);
         }
     }
 

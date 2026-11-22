@@ -17,7 +17,7 @@ use horizon_client::{
     minimap::{self, Layer, Minimap, View},
     reconnect::Tracker,
 };
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 use winit::event::MouseButton;
 
 #[derive(Default)]
@@ -37,7 +37,28 @@ pub(super) struct ExtrasState {
 /// CPU time the minimap's tiles may take per frame.
 const MINIMAP_BUDGET: Duration = Duration::from_micros(300);
 
+pub(super) fn release_raw_mouse_buttons(
+    mouse: &mut [bool; 2],
+    physical: &HashSet<MouseButton>,
+    held_elsewhere: [bool; 2],
+) {
+    for (slot, button) in [MouseButton::Left, MouseButton::Right]
+        .into_iter()
+        .enumerate()
+    {
+        mouse[slot] &= held_elsewhere[slot] || physical.contains(&button);
+    }
+}
+
 impl Game<'_> {
+    pub(super) fn reconcile_export_mouse_buttons(&mut self, held_elsewhere: [bool; 2]) {
+        release_raw_mouse_buttons(
+            &mut self.extras.mouse,
+            &self.physical_buttons,
+            held_elsewhere,
+        );
+    }
+
     fn extras_now(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
     }

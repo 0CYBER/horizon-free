@@ -394,6 +394,12 @@ impl Post {
         self.taa_previous = None;
     }
 
+    /// An export starts a new sequence, including its Halton phase and history slot.
+    pub(super) fn reset_temporal_sequence(&mut self) {
+        self.forget_history();
+        self.taa_frame = 0;
+    }
+
     /// Holds TAA's upscaling at 1 (`held`) or lets the Upscaling setting apply again. Set
     /// before a native pack's first frame, so that its world's size, TAA's history and the
     /// culling agree from it on.

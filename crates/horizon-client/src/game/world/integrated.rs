@@ -91,6 +91,7 @@ struct Flags {
     fail_tick: AtomicBool,
     /// `Minecraft.pause`: a single-player pause screen is open.
     paused: AtomicBool,
+    export_clock: AtomicBool,
     stop: AtomicBool,
     finished: AtomicBool,
     failure: Mutex<Option<String>>,
@@ -130,6 +131,20 @@ struct Flags {
 }
 
 impl Flags {
+    fn run_tick(&self, tick: impl FnOnce() -> Result<()>) -> std::result::Result<(), String> {
+        let message = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(tick)) {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => error.to_string(),
+            Err(panic) => format!(
+                "the server thread panicked: {}",
+                super::dedicated::panic_message(panic.as_ref())
+            ),
+        };
+        *self.failure.lock().unwrap() = Some(message.clone());
+        self.stop.store(true, Ordering::Release);
+        Err(message)
+    }
+
     fn emergency_save(&self, server: std::thread::ThreadId, timeout: Duration) -> bool {
         if std::thread::current().id() == server || self.finished.load(Ordering::Acquire) {
             return true;
@@ -318,6 +333,28 @@ impl Integrated {
             Err(RecvTimeoutError::Disconnected) => None,
         }
     }
+    /// Keep transport and chunk work running while the offscreen client owns simulation time.
+    pub(super) fn export_clock(&self, active: bool) {
+        self.flags.export_clock.store(active, Ordering::Release);
+    }
+
+    /// Finish one server tick before the export client consumes this tick's packets.
+    pub(super) fn export_tick(&self) -> Result<()> {
+        let flags = Arc::clone(&self.flags);
+        self.call(move |game| {
+            if !flags.export_clock.load(Ordering::Acquire) {
+                return Err("the server's export clock was released".to_owned());
+            }
+            flags.run_tick(|| {
+                game.server_tick_deadline = Some(Instant::now() + game.clock.tick_duration());
+                game.follow_distances(&flags);
+                game.tick_server_measured(false)
+            })
+        })
+        .ok_or("the server did not answer an export tick")??;
+        Ok(())
+    }
+
     /// `execute`: run `f` on the server thread between two ticks, without
     /// waiting for it. False once the server has stopped.
     pub fn post(&self, f: impl FnOnce(&mut Game<'_>) + Send + 'static) -> bool {
@@ -823,9 +860,11 @@ impl Game<'_> {
     fn integrated_tick_loop(&mut self, flags: &Flags) -> Result<()> {
         let mut next = Instant::now();
         let mut was_paused = false;
-        let mut failure = None;
-        while !flags.stop.load(Ordering::Relaxed) {
-            self.run_tasks();
+        while !flags.stop.load(Ordering::Acquire) {
+            self.run_tasks(flags);
+            if flags.stop.load(Ordering::Acquire) {
+                break;
+            }
             if self.agent.hold_server {
                 // Keep servicing control requests so the fixture can release the barrier.
                 // Unlike /tick freeze, no player's queued packets are applied here.
@@ -833,76 +872,60 @@ impl Game<'_> {
                 continue;
             }
             self.server_tick_deadline = Some(next + self.clock.tick_duration());
-            let paused = flags.paused.load(Ordering::Relaxed);
-            let ticked =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
-                    #[cfg(test)]
-                    if flags.fail_tick.swap(false, Ordering::Relaxed) {
-                        self.level.name = "saved after integrated tick panic".into();
-                        self.experience.total = 37;
-                        panic!("integrated tick fixture");
-                    }
-                    if paused && !was_paused {
-                        // IntegratedServer.tickServer: the tick the game pauses saves
-                        // everything (saveEverything, without flushing), as an
-                        // autosave does.
-                        log::info!("Saving and pausing game...");
-                        self.save_game_with(false)?;
-                    }
-                    was_paused = paused;
-                    if paused {
-                        // Only the connections run.
-                        self.tick_server_measured(true)?;
-                    } else {
-                        self.follow_distances(flags);
-                        let cpu = horizon_client::spans::thread_cpu();
-                        let started = Instant::now();
-                        self.tick_server_measured(false)?;
-                        // MinecraftServer.tickServer's tick times, for /tick query.
-                        self.clock.record(started.elapsed());
-                        // Parallel Tick's Auto decides here, between ticks, how the next one runs.
-                        let on_cpu = horizon_client::spans::thread_cpu().zip(cpu);
-                        horizon_client::parallel::after_tick(
-                            started.elapsed().as_secs_f32() * 1000.0,
-                            on_cpu.map(|(end, start)| (end - start).as_secs_f32() * 1000.0),
-                        );
-                        self.debug_charts.log_tick(started, started.elapsed());
-                        flags.smoothed_tick_ms.store(
-                            self.debug_charts.smoothed_tick_ms.to_bits(),
-                            Ordering::Relaxed,
-                        );
-                        if let (Some(terrain), Ok(mut terrains)) =
-                            (self.end.locator(), flags.terrain.lock())
-                        {
-                            terrains.insert(self.dim.id(), terrain);
-                        }
-                    }
-                    Ok(())
-                }));
-            match ticked {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    failure = Some(error);
-                    break;
+            let export_clock = flags.export_clock.load(Ordering::Acquire);
+            let paused = export_clock || flags.paused.load(Ordering::Relaxed);
+            let ticked = flags.run_tick(|| {
+                #[cfg(test)]
+                if flags.fail_tick.swap(false, Ordering::Relaxed) {
+                    self.level.name = "saved after integrated tick panic".into();
+                    self.experience.total = 37;
+                    panic!("integrated tick fixture");
                 }
-                Err(payload) => {
-                    failure = Some(
-                        format!(
-                            "the server thread panicked: {}",
-                            super::dedicated::panic_message(payload.as_ref())
-                        )
-                        .into(),
+                if paused && !was_paused && !export_clock {
+                    // IntegratedServer.tickServer: the tick the game pauses saves
+                    // everything (saveEverything, without flushing), as an
+                    // autosave does.
+                    log::info!("Saving and pausing game...");
+                    self.save_game_with(false)?;
+                }
+                was_paused = paused;
+                if paused {
+                    // Only the connections run.
+                    self.tick_server_measured(true)?;
+                } else {
+                    self.follow_distances(flags);
+                    let cpu = horizon_client::spans::thread_cpu();
+                    let started = Instant::now();
+                    self.tick_server_measured(false)?;
+                    // MinecraftServer.tickServer's tick times, for /tick query.
+                    self.clock.record(started.elapsed());
+                    // Parallel Tick's Auto decides here, between ticks, how the next one runs.
+                    let on_cpu = horizon_client::spans::thread_cpu().zip(cpu);
+                    horizon_client::parallel::after_tick(
+                        started.elapsed().as_secs_f32() * 1000.0,
+                        on_cpu.map(|(end, start)| (end - start).as_secs_f32() * 1000.0),
                     );
-                    break;
+                    self.debug_charts.log_tick(started, started.elapsed());
+                    flags.smoothed_tick_ms.store(
+                        self.debug_charts.smoothed_tick_ms.to_bits(),
+                        Ordering::Relaxed,
+                    );
+                    if let (Some(terrain), Ok(mut terrains)) =
+                        (self.end.locator(), flags.terrain.lock())
+                    {
+                        terrains.insert(self.dim.id(), terrain);
+                    }
                 }
+                Ok(())
+            });
+            if ticked.is_err() {
+                break;
             }
             self.apply_publish();
             self.publish_load_view();
             self.wait_for_next_server_tick(&mut next, paused);
         }
-        if failure.is_none() {
-            self.finish_server_capture();
-        }
+        let failure = flags.failure.lock().unwrap().clone();
         if let Some(error) = failure {
             let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.finish_server_capture();
@@ -914,7 +937,7 @@ impl Game<'_> {
                 );
             }
             let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.stop_after_crash(&error.to_string())
+                self.stop_after_crash(&error)
             }));
             match stopped {
                 Ok(Ok(())) => {}
@@ -924,8 +947,9 @@ impl Game<'_> {
                     super::dedicated::panic_message(payload.as_ref())
                 ),
             }
-            return Err(error);
+            return Err(error.into());
         }
+        self.finish_server_capture();
         Ok(())
     }
 
@@ -1150,7 +1174,11 @@ impl Game<'_> {
             // the level in place after a failed switch, would report success for the wrong level.
             let owner = self.serving.as_ref().map(|s| s.owner);
             let owner_dim = self.lan.as_ref().and_then(|h| {
-                h.hub.guests.iter().find(|g| Some(g.uuid) == owner).map(|g| g.dimension.clone())
+                h.hub
+                    .guests
+                    .iter()
+                    .find(|g| Some(g.uuid) == owner)
+                    .map(|g| g.dimension.clone())
             });
             let Some(owner_dim) = owner_dim else {
                 return vec!["digest-sync: the owner is not in the world yet".to_owned()];
@@ -1244,13 +1272,16 @@ impl Game<'_> {
     }
 
     /// The window's requests, between two ticks.
-    fn run_tasks(&mut self) {
+    fn run_tasks(&mut self, flags: &Flags) {
         let tasks: Vec<Task> = match &self.serving {
             Some(s) => s.tasks.try_iter().collect(),
             None => return,
         };
         for task in tasks {
             task(self);
+            if flags.stop.load(Ordering::Acquire) {
+                break;
+            }
             self.apply_publish();
         }
     }
@@ -1587,6 +1618,25 @@ impl Game<'_> {
 pub(super) mod tests {
     use super::*;
     use mod_api::prelude::*;
+
+    #[test]
+    fn a_failed_export_tick_stops_the_server_before_the_clock_is_released() {
+        let tick_cases: [(fn() -> Result<()>, &str); 2] = [
+            (|| Err("export tick error".into()), "export tick error"),
+            (
+                || panic!("export tick panic"),
+                "the server thread panicked: export tick panic",
+            ),
+        ];
+        for (tick, expected) in tick_cases {
+            let flags = Flags::default();
+            flags.export_clock.store(true, Ordering::Release);
+            assert_eq!(flags.run_tick(tick).unwrap_err(), expected);
+            flags.export_clock.store(false, Ordering::Release);
+            assert!(flags.stop.load(Ordering::Acquire));
+            assert_eq!(flags.failure.lock().unwrap().as_deref(), Some(expected));
+        }
+    }
 
     #[test]
     #[ignore = "daily"]

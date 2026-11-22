@@ -146,6 +146,7 @@ pub struct Session {
     pub paced: bool,
     /// The pause menu `--paced` opened, which the next action closes.
     pub(crate) held: bool,
+    exporting: bool,
 }
 
 impl Session {
@@ -158,6 +159,7 @@ impl Session {
             client: None,
             paced: false,
             held: false,
+            exporting: false,
         }
     }
     /// A failure while No AI is on: every command refuses (help aside).
@@ -182,6 +184,11 @@ impl Session {
             self.client = None;
         }
         let reply = result?;
+        if line.starts_with("export ")
+            && let Some(active) = reply["active"].as_bool()
+        {
+            self.exporting = active;
+        }
         if reply.get("error").is_some() {
             return Err(Failure {
                 reply,
@@ -1036,6 +1043,14 @@ mod tests {
         name: &str,
         reply: &'static str,
     ) -> (PathBuf, std::thread::JoinHandle<Vec<String>>) {
+        fake_game_with(name, move |_| reply)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn fake_game_with(
+        name: &str,
+        reply: impl Fn(&str) -> &'static str + Send + 'static,
+    ) -> (PathBuf, std::thread::JoinHandle<Vec<String>>) {
         let path = std::env::temp_dir().join(format!("hctl-{name}-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
@@ -1046,9 +1061,10 @@ mod tests {
             let mut out = stream;
             let mut line = String::new();
             while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                lines.push(line.trim_end().to_owned());
+                let command = line.trim_end();
+                writeln!(out, "{}", reply(command)).unwrap();
+                lines.push(command.to_owned());
                 line.clear();
-                writeln!(out, "{reply}").unwrap();
             }
             lines
         });

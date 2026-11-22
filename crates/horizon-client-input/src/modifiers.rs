@@ -23,6 +23,15 @@ const MODIFIERS: [(ModifiersState, [KeyCode; 2]); 4] = [
     ),
 ];
 
+/// Clear stale bits without setting modifiers from presses the window ignored.
+pub fn retain_held(modifiers: &mut ModifiersState, held: impl Fn(KeyCode) -> bool) {
+    for (bit, pair) in MODIFIERS {
+        if !pair.into_iter().any(&held) {
+            modifiers.remove(bit);
+        }
+    }
+}
+
 /// A synthesized key updates the same modifier word as window events.
 /// Releasing one side must preserve the other side's hold.
 pub fn set_key(

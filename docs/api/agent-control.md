@@ -52,6 +52,7 @@ API offers; the other commands the game's socket answers are test hooks and expe
 
 ## Changelog
 
+- 0.1.1 adds the `export` command group for fixed-clock offscreen export and the `export` completion event.
 - 0.1.0: the first numbered line. `hello` answers `protocol`, `release` (the game's version, which MCP `serverInfo`
   carries too) and `features` (the command groups the game serves). Before it the command table and the generated
   reference were the contract.
