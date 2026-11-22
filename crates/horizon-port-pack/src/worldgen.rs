@@ -1532,6 +1532,99 @@ mod tests {
     }
 
     #[test]
+    fn mod_trees_use_vanilla_soil_unless_dirt_is_forced() {
+        let dirt = json!({"Name": "minecraft:dirt"});
+        let dirt_with_empty_properties = json!({"Name": "minecraft:dirt", "Properties": {}});
+        let standard = json!("minecraft:soil_beneath_tree");
+        let always_dirt = json!({"id": "minecraft:dirt"});
+        for (state, force_dirt, explicit_provider, expected) in [
+            (dirt.clone(), None, None, standard.clone()),
+            (dirt.clone(), Some(false), None, standard.clone()),
+            (dirt_with_empty_properties.clone(), None, None, standard),
+            (dirt.clone(), Some(true), None, always_dirt),
+            (
+                json!({"Name": "x:nightfall_dirt"}),
+                Some(true),
+                None,
+                json!({"id": "x:nightfall_dirt"}),
+            ),
+            (
+                dirt_with_empty_properties.clone(),
+                Some(true),
+                None,
+                json!({"id": "minecraft:dirt", "properties": {}}),
+            ),
+            (
+                dirt_with_empty_properties,
+                Some(false),
+                Some("x:custom_soil"),
+                json!("x:custom_soil"),
+            ),
+            (
+                dirt,
+                Some(true),
+                Some("x:custom_soil"),
+                json!("x:custom_soil"),
+            ),
+        ] {
+            let mut legacy = json!({"type": "minecraft:tree", "config": {
+                "dirt_provider": {"type": "minecraft:simple_state_provider", "state": state},
+                "ignore_vines": true
+            }});
+            if let Some(force) = force_dirt {
+                legacy["config"]["force_dirt"] = json!(force);
+            }
+            if let Some(provider) = explicit_provider {
+                legacy["config"]["below_trunk_provider"] = json!(provider);
+            }
+            assert!(upgrade(
+                "configured_feature",
+                &mut legacy,
+                &mut Upgrade::default(),
+                &NO_TAGS,
+            ));
+            assert_eq!(
+                legacy,
+                json!({"type": "minecraft:tree", "ignore_vines": true,
+                    "below_trunk_provider": expected})
+            );
+        }
+    }
+
+    #[test]
+    fn an_inline_mod_tree_samples_its_own_provider_on_replaceable_soil() {
+        let mut placed = json!({"placement": [], "feature": {
+            "type": "minecraft:tree", "config": {
+                "dirt_provider": {"type": "minecraft:weighted_state_provider", "entries": [
+                    {"data": {"Name": "x:nightfall_dirt", "Properties": {"moist": "true"}}, "weight": 2},
+                    {"data": {"Name": "minecraft:rooted_dirt"}, "weight": 1}
+                ]}
+            }
+        }});
+        assert!(upgrade(
+            "placed_feature",
+            &mut placed,
+            &mut Upgrade::default(),
+            &NO_TAGS,
+        ));
+        assert_eq!(
+            placed["feature"],
+            json!({"type": "minecraft:tree", "below_trunk_provider": {
+                "type": "minecraft:rule_based",
+                "rules": [{
+                    "if_true": {"type": "minecraft:not", "predicate": {
+                        "type": "minecraft:matching_block_tag", "tag": "minecraft:cannot_replace_below_tree_trunk"
+                    }},
+                    "then": {"type": "minecraft:weighted", "entries": [
+                        {"data": {"id": "x:nightfall_dirt", "properties": {"moist": "true"}}, "weight": 2},
+                        {"data": {"id": "minecraft:rooted_dirt"}, "weight": 1}
+                    ]}
+                }]
+            }})
+        );
+    }
+
+    #[test]
     fn convention_tags_include_theirs() {
         let conventions = BTreeMap::from([
             (
