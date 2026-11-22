@@ -1714,6 +1714,112 @@ fn run_command_runs_from_the_players_own_place_inside_an_outer_command() {
     });
 }
 
+/// Issue #17416: Multiple players cannot ride the same single-seat mount (horse).
+/// A guest interacting with a mount that the host is riding is refused,
+/// while a camel with 1 rider still allows a second player to board.
+#[test]
+#[ignore = "daily"]
+fn multiple_players_cannot_ride_same_mount() {
+    with_guests(|game| {
+        let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
+        let mut m = Mob::new(42, horse, Vec3::new(3.0, 64.0, 5.0), 0.0);
+        m.extra.tame = true;
+        game.mobs.push(m);
+        let horse_index = game.mobs.iter().position(|m| m.id == 42).unwrap();
+
+        // Host is riding the horse.
+        game.riding = Some(42);
+
+        // Guest 13 attempts to interact with the horse while host is riding:
+        // boarding and feeding are both refused (AbstractHorse isVehicle).
+        game.as_guest(13, |game| {
+            assert!(!game.interact_mount(horse_index, "minecraft:air"), "guest cannot board horse host is riding");
+            assert!(!game.interact_mount(horse_index, "minecraft:golden_apple"), "guest cannot feed horse host is riding");
+        })
+        .unwrap();
+
+        // Guest boarded check also enforces capacity and reverts if over capacity.
+        game.lan
+            .as_mut()
+            .unwrap()
+            .hub
+            .update_guest(13, |guest| guest.vehicle = Some(42))
+            .unwrap();
+        game.guest_boarded(13, None);
+        assert_eq!(
+            game.lan.as_ref().unwrap().hub.guest(13).unwrap().vehicle,
+            None,
+            "guest vehicle reverted because horse is full"
+        );
+
+        // A camel seats two: host + guest can both ride.
+        let camel = game.res.mob_types().get("minecraft:camel").unwrap().clone();
+        let mut c = Mob::new(43, camel, Vec3::new(5.0, 64.0, 5.0), 0.0);
+        c.extra.tame = true;
+        game.mobs.push(c);
+        let camel_index = game.mobs.iter().position(|m| m.id == 43).unwrap();
+
+        // Host rides the camel.
+        game.riding = Some(43);
+
+        // Guest 13 can board the camel as second rider.
+        game.as_guest(13, |game| {
+            assert!(game.interact_mount(camel_index, "minecraft:air"), "guest can board camel as second rider");
+        })
+        .unwrap();
+        assert_eq!(
+            game.lan.as_ref().unwrap().hub.guest(13).unwrap().vehicle,
+            Some(43),
+            "camel accommodates second rider"
+        );
+        game.guest_boarded(13, None);
+        assert_eq!(
+            game.lan.as_ref().unwrap().hub.guest(13).unwrap().vehicle,
+            Some(43),
+            "guest_boarded confirms second rider"
+        );
+
+        // Third rider (guest 12) is refused because camel is full (2 riders).
+        game.as_guest(12, |game| {
+            assert!(!game.interact_mount(camel_index, "minecraft:air"), "third rider cannot board camel");
+        })
+        .unwrap();
+
+        // Nautilus seats 1: host riding refuses guest boarding.
+        let nautilus = game.res.mob_types().get("minecraft:nautilus").unwrap().clone();
+        let mut n = Mob::new(44, nautilus, Vec3::new(3.0, 64.0, 5.0), 0.0);
+        n.extra.tame = true;
+        game.mobs.push(n);
+        let nautilus_index = game.mobs.iter().position(|m| m.id == 44).unwrap();
+        game.riding = Some(44);
+        game.as_guest(13, |game| {
+            assert!(!game.interact_nautilus(nautilus_index, "minecraft:air"), "guest cannot board nautilus host is riding");
+        })
+        .unwrap();
+
+        // Llama seats 1: host riding refuses guest boarding and feeding.
+        let llama = game.res.mob_types().get("minecraft:llama").unwrap().clone();
+        let mut l = Mob::new(45, llama, Vec3::new(3.0, 64.0, 5.0), 0.0);
+        l.extra.tame = true;
+        game.mobs.push(l);
+        let llama_index = game.mobs.iter().position(|m| m.id == 45).unwrap();
+        game.riding = Some(45);
+        game.as_guest(13, |game| {
+            assert!(!game.interact_mount(llama_index, "minecraft:air"), "guest cannot board llama host is riding");
+            assert!(!game.interact_mount(llama_index, "minecraft:wheat"), "guest cannot feed llama host is riding");
+            assert!(!game.interact_llama(llama_index, "minecraft:air"), "guest direct interact_llama cannot board llama host is riding");
+            assert!(!game.interact_llama(llama_index, "minecraft:wheat"), "guest direct interact_llama cannot feed llama host is riding");
+        })
+        .unwrap();
+
+        // Boat capacities: normal boat = 2, chest boat = 1.
+        game.boats.push(crate::game::boats::Boat::new(50, "oak".into(), Vec3::ZERO, 0.0));
+        game.boats.push(crate::game::boats::Boat::new(51, "oak".into(), Vec3::ZERO, 0.0).with_chest());
+        assert_eq!(game.vehicle_capacity(50), 2, "normal boat capacity is 2");
+        assert_eq!(game.vehicle_capacity(51), 1, "chest boat capacity is 1");
+    });
+}
+
 /// A panic that leaves a guest's turn writes the half-done turn back into their record and
 /// restores the outer player, so `lan_acting` no longer names them. Crash teardown still keeps
 /// that player's last saved file (#18117), and only theirs.

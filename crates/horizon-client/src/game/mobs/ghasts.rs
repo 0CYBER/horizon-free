@@ -126,6 +126,10 @@ impl Game<'_> {
             // doPlayerRide: `player.startRiding(this)`, which keeps the
             // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
             let id = self.mobs[index].id;
+            let species = self.mobs[index].species();
+            if self.mount_passenger_count(id) >= Self::mount_capacity(species) {
+                return false;
+            }
             if !self.native_may_board(id) {
                 return true;
             }

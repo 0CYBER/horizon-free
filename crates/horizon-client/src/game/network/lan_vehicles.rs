@@ -196,15 +196,41 @@ impl Game<'_> {
         })
     }
 
+    /// Returns the live vehicle for guest `conn`, checking suspended outer turns in `lan_outer_ridings`.
+    pub(super) fn guest_current_vehicle(&self, conn: u32) -> Option<u32> {
+        if let Some(pos) = self.lan_guest_swaps.iter().position(|&c| c == conn) {
+            if pos + 1 < self.lan_outer_ridings.len() {
+                return self.lan_outer_ridings[pos + 1];
+            } else if Some(conn) == self.lan_acting {
+                return self.riding;
+            }
+        }
+        self.lan.as_ref()?.hub.guest(conn)?.vehicle
+    }
+
+    /// Returns the live vehicle for the host.
+    pub(super) fn host_current_vehicle(&self) -> Option<u32> {
+        if self.lan_acting.is_some() {
+            self.lan_outer_ridings.first().copied().flatten()
+        } else {
+            self.riding
+        }
+    }
+
     /// Whether a server player other than the one acting rides `vehicle`
     /// (`Entity.canAddPassenger`: a boat or minecart seats one player here).
     pub(super) fn ridden_by_guest(&self, vehicle: u32) -> bool {
-        self.lan.as_ref().is_some_and(|h| {
+        let other_guest = self.lan.as_ref().is_some_and(|h| {
             h.hub
                 .guests
                 .iter()
-                .any(|g| Some(g.conn) != self.lan_acting && g.vehicle == Some(vehicle))
-        })
+                .any(|g| {
+                    Some(g.conn) != self.lan_acting
+                        && self.guest_current_vehicle(g.conn) == Some(vehicle)
+                })
+        });
+        let host_rides = self.lan_acting.is_some() && self.host_current_vehicle() == Some(vehicle);
+        other_guest || host_rides
     }
     /// Whether a server player rides `vehicle` (`Entity.isPassenger`: a
     /// passenger does not use a portal on its own, the vehicle carries it
@@ -324,24 +350,46 @@ impl Game<'_> {
         }
     }
 
+    /// The maximum passenger capacity of `vehicle`.
+    pub(super) fn vehicle_capacity(&self, vehicle: u32) -> usize {
+        if let Some(b) = self.boats.iter().find(|b| b.id == vehicle) {
+            if b.chest { 1 } else { 2 }
+        } else if let Some(m) = self.mobs.iter().find(|m| m.id == vehicle) {
+            Self::mount_capacity(m.species())
+        } else {
+            1
+        }
+    }
+
     /// After an interaction: a player that got into a vehicle sits in it,
     /// and its last good vehicle position is where the vehicle is.
     pub(super) fn guest_boarded(&mut self, conn: u32, before: Option<u32>) {
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
-        let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
-            return;
-        };
-        let Some(vehicle) = host.hub.guests[gi].vehicle else {
+        let Some((gi, vehicle)) = self.lan.as_ref().and_then(|host| {
+            let gi = host.hub.guests.iter().position(|g| g.conn == conn)?;
+            let vehicle = host.hub.guests[gi].vehicle?;
+            Some((gi, vehicle))
+        }) else {
             return;
         };
         if before == Some(vehicle) {
             return;
         }
-        // The host in the window rides it already.
-        if self.riding == Some(vehicle) {
-            {
+        let capacity = self.vehicle_capacity(vehicle);
+        let host_riders = usize::from(self.host_current_vehicle() == Some(vehicle));
+        let guest_riders = self.lan.as_ref().map_or(0, |host| {
+            host.hub
+                .guests
+                .iter()
+                .filter(|g| self.guest_current_vehicle(g.conn) == Some(vehicle))
+                .count()
+        });
+        let mob_riders = self
+            .mobs
+            .iter()
+            .filter(|m| m.extra.mount == Some(vehicle) && !m.removed && m.alive())
+            .count();
+        if host_riders + guest_riders + mob_riders > capacity {
+            if let Some(host) = self.lan.as_mut() {
                 let value = before;
                 host.hub.guests.update(gi, |guest| guest.vehicle = value);
             }

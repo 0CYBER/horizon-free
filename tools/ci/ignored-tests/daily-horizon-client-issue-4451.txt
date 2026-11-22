@@ -1388,6 +1388,7 @@ horizon-client game::native_guest_turn_tests::level_event_excludes_its_source_ev
 horizon-client game::native_guest_turn_tests::level_players_exclude_fake_players lib daily resources
 horizon-client game::native_guest_turn_tests::level_players_exclude_guests_in_other_levels lib daily resources
 horizon-client game::native_guest_turn_tests::level_players_name_each_body_once_during_turns lib daily resources
+horizon-client game::native_guest_turn_tests::multiple_players_cannot_ride_same_mount lib daily resources
 horizon-client game::native_guest_turn_tests::nested_guest_turns_restore_each_equipment_store lib daily resources
 horizon-client game::native_guest_turn_tests::player_dimensions_validate_identity_on_both_server_roles lib daily resources
 horizon-client game::native_guest_turn_tests::refused_wire_reload_preserves_hub_and_engine_generation lib daily resources

@@ -308,6 +308,7 @@ impl Game<'_> {
         self.right = play.using.is_some() || self.using.is_some();
         // The guest's vehicle (Entity.vehicle) for its turn.
         let riding = std::mem::replace(&mut self.riding, g.vehicle);
+        self.lan_outer_ridings.push(riding);
         // `Entity.isPassenger()` for that turn, from the same vehicle: the
         // guest's body keeps no swim (`Entity.updateSwimming` needs it false).
         // Taken from `g.vehicle` each turn, so boarding and getting out land.
@@ -772,6 +773,7 @@ impl Game<'_> {
         self.level.spawn = respawn.1;
         // ServerPlayer.displayClientMessage(_, true): the guest's action bar.
         let guest_message = std::mem::replace(&mut self.message, message);
+        self.lan_outer_ridings.pop();
         let guest_vehicle = std::mem::replace(&mut self.riding, riding);
         self.left = left;
         self.right = right;

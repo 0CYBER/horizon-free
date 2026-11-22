@@ -1907,6 +1907,8 @@ struct Game<'a> {
     save_after_guest_turn: bool,
     /// Guests whose records are displaced by nested player swaps, outer first.
     lan_guest_swaps: Vec<u32>,
+    /// Outer vehicle(s) displaced by nested guest turns, outer first.
+    lan_outer_ridings: Vec<Option<u32>>,
     /// Guests whose last turn a panic ended after their state was written back and the outer
     /// player restored (`as_guest_at`, `as_guest_messaged`, `leave_guest`), which hides the turn
     /// from `lan_acting`: crash teardown keeps their last saved file (`keep_interrupted_players`).
@@ -11071,6 +11073,7 @@ impl<'a> Game<'a> {
             lan_building_boxes: Default::default(),
             save_after_guest_turn: false,
             lan_guest_swaps: Vec::new(),
+            lan_outer_ridings: Vec::new(),
             lan_interrupted_turns: Vec::new(),
             keep_owner_files: false,
             player_state: Default::default(),

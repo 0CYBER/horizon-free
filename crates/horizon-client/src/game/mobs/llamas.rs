@@ -90,7 +90,8 @@ impl Game<'_> {
             return false;
         }
         let sneaking = self.keys.held(Action::Sneak);
-        let (baby, tamed, vehicle) = (m.is_baby(), m.extra.tame, m.rider.is_some());
+        let vehicle = m.rider.is_some() || self.mount_passenger_count(m.id) > 0;
+        let (baby, tamed) = (m.is_baby(), m.extra.tame);
         let open_inventory = !baby && tamed && sneaking;
         if !vehicle && !open_inventory && !item.is_empty() {
             if self.mobs[index].kind.food.iter().any(|f| f == item) {
@@ -154,6 +155,10 @@ impl Game<'_> {
         }
         // doPlayerRide; mounting drops a lead.
         let id = self.mobs[index].id;
+        let species = self.mobs[index].species();
+        if self.mount_passenger_count(id) >= Self::mount_capacity(species) {
+            return false;
+        }
         if !self.native_may_board(id) {
             return true;
         }
