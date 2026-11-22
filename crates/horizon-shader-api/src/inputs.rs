@@ -95,11 +95,14 @@ uniform! {
     Frame {
         /// Camera-relative world to view space: yaw and pitch rotation only; excludes view bob and nausea spin.
         view: [[f32; 4]; 4],
-        /// View to clip space (reversed depth, wgpu's clip space: z 0..1), including view bob and nausea spin when active.
+        /// View to clip space (reversed depth, wgpu's clip space: z 0..1), including view bob and nausea spin when
+        /// active. The pose's translation is in it, so the camera-relative point a clip position unprojects to is
+        /// not on the camera's ray (it moves with the bob); a direction takes two depths at one `uv`
+        /// (`normalize(view_position(uv, depth_far) - view_position(uv, depth_near))`, depth reversed).
         projection: [[f32; 4]; 4],
         /// View to camera-relative world space.
         view_inverse: [[f32; 4]; 4],
-        /// Clip to view space.
+        /// Clip to view space, with the pose `projection` carries (view bob and nausea spin, translation included).
         projection_inverse: [[f32; 4]; 4],
         /// The camera's world position, in blocks (about a millimetre of precision 10 000 blocks out).
         camera_position: [f32; 3],
