@@ -838,6 +838,53 @@ mod level_facts_tests {
     }
 
     #[test]
+    fn a_packs_cloud_attributes_reach_level_facts() {
+        use serde_json::json;
+
+        let mut overrides = WorldgenOverrides::default();
+        assert!(overrides.level_facts("minecraft:overworld").is_none());
+        assert_eq!(
+            overrides.add_file("file/p", "data/test/dimension/pocket.json", || {
+                Some(r#"{"type":"test:pocket"}"#.into())
+            }),
+            PackFile::Read
+        );
+
+        for (attributes, expected) in [
+            (
+                json!({
+                    "minecraft:visual/cloud_height": 72.5,
+                    "minecraft:visual/cloud_color": "#00ffffff",
+                }),
+                (72.5, 0.0),
+            ),
+            (json!({"minecraft:visual/cloud_color": -1}), (192.33, 1.0)),
+            (
+                json!({
+                    "minecraft:visual/cloud_height": {"modifier": "add", "argument": 4},
+                    "minecraft:visual/cloud_color": [1.0, 1.0, 1.0, 0.5],
+                }),
+                (192.33_f32 + 4.0, 0.5),
+            ),
+            (json!({"visual/cloud_height": 80}), (80.0, 0.8)),
+        ] {
+            let fixture = json!({"min_y": -64, "height": 384, "attributes": attributes});
+            assert_eq!(
+                overrides.add_file("file/p", "data/test/dimension_type/pocket.json", || {
+                    Some(fixture.to_string())
+                }),
+                PackFile::Read
+            );
+            let facts = overrides.level_facts("test:pocket").unwrap().unwrap();
+            assert_eq!(
+                (facts.cloud_height, facts.cloud_color_alpha),
+                expected,
+                "{fixture}"
+            );
+        }
+    }
+
+    #[test]
     fn a_field_the_game_refuses_is_reported() {
         let mut o = WorldgenOverrides::default();
         o.add_mod_dimension(&ModDimension {

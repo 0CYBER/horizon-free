@@ -25,6 +25,10 @@ level on a vanilla type returns that type's values, a registered dimension retur
 a stale handle. On a client, it reads the displayed level's received dimension type,
 including custom types sent by another server.
 
+For mob gameplay, a data pack's dimension type can set `minecraft:visual/cloud_height` and
+`minecraft:visual/cloud_color` in `attributes`. A color with zero alpha means mobs never count as
+being in clouds. Omitting either attribute keeps that value from the base dimension type.
+
 ## Registering a dimension
 
 `register_dimension` gives every world a level of the mod's own. Call it once, at startup, in

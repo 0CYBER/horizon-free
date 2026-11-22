@@ -6,6 +6,7 @@ use std::sync::{LazyLock, RwLock};
 use horizon_core::level_key::LevelKey;
 use serde_json::Value;
 
+use crate::environment_attributes::{Entry, Value as AttributeValue, attribute};
 use crate::worldgen::overrides::LevelHeight;
 use crate::worldgen::value_provider::IntProvider;
 
@@ -315,6 +316,41 @@ impl DimensionFacts {
         &VANILLA[0]
     }
 
+    /// `EnvironmentAttributeMap.Entry.createCodec`: the dimension layer applies its entries to
+    /// the attribute defaults. An omitted entry leaves Horizon's inherited fact untouched.
+    fn cloud_attributes(attributes: &Value, height: f32, alpha: f32) -> Result<(f32, f32), String> {
+        let parse = |id: &str, inherited: AttributeValue| -> Result<AttributeValue, String> {
+            let entry = attributes
+                .get(id)
+                .or_else(|| attributes.get(id.strip_prefix("minecraft:")?));
+            let Some(entry) = entry.filter(|entry| !entry.is_null()) else {
+                return Ok(inherited);
+            };
+            let attribute = attribute(id).ok_or_else(|| format!("{id} is not registered"))?;
+            let default = attribute
+                .default_value()
+                .expect("cloud attributes have registered defaults");
+            Ok(Entry::parse(attribute, entry)
+                .map_err(|e| format!("{id}: {e}"))?
+                .apply(&default))
+        };
+        let AttributeValue::Float(height) = parse(
+            "minecraft:visual/cloud_height",
+            AttributeValue::Float(height),
+        )?
+        else {
+            unreachable!("cloud height is a float")
+        };
+        let AttributeValue::Argb(color) = parse(
+            "minecraft:visual/cloud_color",
+            AttributeValue::Argb([0.0, 0.0, 0.0, alpha]),
+        )?
+        else {
+            unreachable!("cloud color is ARGB")
+        };
+        Ok((height, color[3]))
+    }
+
     /// Reads a dimension type's JSON; `timeline_tag` expands a timeline tag id to its timelines.
     pub fn from_json(
         id: &str,
@@ -328,23 +364,7 @@ impl DimensionFacts {
         let attributes = &json["attributes"];
         let attribute = |k: &str| &attributes[format!("minecraft:gameplay/{k}")];
         let bool_attr = |k: &str, default: bool| attribute(k).as_bool().unwrap_or(default);
-        // `EnvironmentAttributes.CLOUD_HEIGHT` and `CLOUD_COLOR`, the two visual
-        // attributes `Entity.isInClouds` reads.
-        let visual = |k: &str| &attributes[format!("minecraft:visual/{k}")];
-        let cloud_height = visual("cloud_height").as_f64().unwrap_or(192.33) as f32;
-        let cloud_color_alpha = match visual("cloud_color") {
-            Value::Null => 0.0,
-            v => {
-                let attribute = crate::environment_attributes::attribute("visual/cloud_color")
-                    .ok_or("visual/cloud_color is not registered")?;
-                match crate::environment_attributes::Entry::parse(attribute, v)?
-                    .apply(&crate::environment_attributes::Value::Argb([0.0; 4]))
-                {
-                    crate::environment_attributes::Value::Argb(c) => c[3],
-                    _ => 0.0,
-                }
-            }
-        };
+        let (cloud_height, cloud_color_alpha) = Self::cloud_attributes(attributes, 192.33, 0.0)?;
         let bed = |k: &str, default: BedRule| match attribute(k) {
             Value::Null => Ok(default),
             v => BedRule::from_json(v),
@@ -516,6 +536,8 @@ impl DimensionFacts {
         if let Some(v) = attribute("sky_light_level").as_f64() {
             out.sky_light_level = v as f32;
         }
+        (out.cloud_height, out.cloud_color_alpha) =
+            Self::cloud_attributes(attributes, base.cloud_height, base.cloud_color_alpha)?;
         for (key, rule) in [
             ("bed_rule", &mut out.bed_rule),
             ("straw_bed_rule", &mut out.straw_bed_rule),
