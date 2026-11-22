@@ -13,6 +13,19 @@
 //! - `padding`: [u8; 2]
 
 use super::Sides;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether background meshing workers should pre-build [`MeshletDesc`] descriptors alongside
+/// `SectionMesh::sort_solid` (`HORIZON_MESH_SHADER=1` on a mesh-shader-capable device).
+static PACK_MESHLETS: AtomicBool = AtomicBool::new(false);
+
+pub fn pack_meshlets(on: bool) {
+    PACK_MESHLETS.store(on, Ordering::Relaxed);
+}
+
+pub fn packing_meshlets() -> bool {
+    PACK_MESHLETS.load(Ordering::Relaxed)
+}
 
 /// Maximum number of quads grouped into a single meshlet.
 /// 64 quads = 256 vertices and 128 triangles, optimal for modern hardware mesh workgroups.
@@ -269,15 +282,16 @@ impl SubAabbBuilder {
 
 /// Shared partitioning loop preserving `Sides` bucket boundaries and optional per-quad
 /// cutout splitting (`quad_cutout`), chunking homogeneous runs into <= `MAX_MESHLET_QUADS`.
-fn partition_meshlets(
+fn partition_meshlets_into(
     sides: &Sides,
     quad_cutout: impl Fn(u32, bool) -> bool,
     mut build_range: impl FnMut(u32, u8) -> (u8, [u8; 6]),
-) -> Vec<MeshletDesc> {
-    let mut meshlets = Vec::new();
+    meshlets: &mut Vec<MeshletDesc>,
+) {
+    meshlets.clear();
     let total_quads = sides.quads();
     if total_quads == 0 {
-        return meshlets;
+        return;
     }
 
     let mut prev_end = 0u32;
@@ -323,8 +337,6 @@ fn partition_meshlets(
 
         prev_end = end;
     }
-
-    meshlets
 }
 
 /// Partitions a section's quads into meshlets conforming to `Sides` bucket and part boundaries.
@@ -332,7 +344,8 @@ pub fn build_meshlets(
     sides: &Sides,
     quad_bounds: impl Fn(u32) -> (u8, u8, u8),
 ) -> Vec<MeshletDesc> {
-    partition_meshlets(
+    let mut meshlets = Vec::new();
+    partition_meshlets_into(
         sides,
         |_q, default_cutout| default_cutout,
         |offset, count| {
@@ -343,7 +356,9 @@ pub fn build_meshlets(
             }
             (0, aabb.build())
         },
-    )
+        &mut meshlets,
+    );
+    meshlets
 }
 
 /// Returns the 4 spilled `[u32; 6]` vertex words for quad `q` when `packed[q]` carries `FULL`.
@@ -413,17 +428,18 @@ fn include_section_quad(
 }
 
 /// Extracts sub-section meshlets directly from a section's `Sides`, unpacked `solid` vertices,
-/// and optional compact 24-byte `packed` records (`mesher/packed.rs`).
+/// and optional compact 24-byte `packed` records (`mesher/packed.rs`) into `out`.
 ///
 /// Guarantees every emitted meshlet descriptor is homogeneous in `FLAG_CUTOUT`: even when given an
 /// unsorted mesh (`Sides::unsorted`), contiguous opaque and cutout runs are split into separate
 /// descriptors so `ts_terrain` pass filtering matches per-quad `opaque_quad`.
-pub fn build_section_meshlets(
+pub fn build_section_meshlets_into(
     sides: &Sides,
     solid: &[super::TerrainVertex],
     packed: &[[u32; 6]],
-) -> Vec<MeshletDesc> {
-    partition_meshlets(
+    out: &mut Vec<MeshletDesc>,
+) {
+    partition_meshlets_into(
         sides,
         |q, default_cutout| quad_is_cutout(q, default_cutout, solid, packed),
         |offset, count| {
@@ -437,7 +453,20 @@ pub fn build_section_meshlets(
             }
             (extra_flags, aabb.build())
         },
-    )
+        out,
+    );
+}
+
+/// Extracts sub-section meshlets directly from a section's `Sides`, unpacked `solid` vertices,
+/// and optional compact 24-byte `packed` records (`mesher/packed.rs`).
+pub fn build_section_meshlets(
+    sides: &Sides,
+    solid: &[super::TerrainVertex],
+    packed: &[[u32; 6]],
+) -> Vec<MeshletDesc> {
+    let mut out = Vec::new();
+    build_section_meshlets_into(sides, solid, packed, &mut out);
+    out
 }
 
 /// Quantizes a float plane threshold [0.0..16.0] to a u8 in [0..255].
@@ -715,5 +744,37 @@ mod tests {
         let west_spill_meshlets = build_section_meshlets(&Sides::unsorted(5), &[], &west_packed);
         assert!(west_spill_meshlets[0].is_unbounded());
         assert!(desc_in_frustum(&west_spill_meshlets[0], &west_planes));
+    }
+
+    #[test]
+    fn sort_solid_populates_meshlets_only_when_pack_meshlets_is_enabled() {
+        let prev = packing_meshlets();
+        let make_mesh = || {
+            let v = super::super::TerrainVertex {
+                pos: [1.0, 2.0, 3.0],
+                uv: [0, 0],
+                layer: super::super::OPAQUE_LAYER,
+                light: 0xF0F0,
+                color: 0xFFFF_FFFF,
+            };
+            super::super::SectionMesh {
+                solid: vec![v; 4],
+                ..Default::default()
+            }
+        };
+
+        pack_meshlets(false);
+        let mut off_mesh = make_mesh();
+        off_mesh.sort_solid();
+        assert!(off_mesh.meshlets.is_empty());
+        assert_eq!(off_mesh.meshlets.capacity(), 0);
+
+        pack_meshlets(true);
+        let mut on_mesh = make_mesh();
+        on_mesh.sort_solid();
+        assert_eq!(on_mesh.meshlets.len(), 1);
+        assert_eq!(on_mesh.meshlets[0].quad_count, 1);
+
+        pack_meshlets(prev);
     }
 }

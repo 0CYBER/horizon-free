@@ -1600,6 +1600,8 @@ pub struct Renderer {
     visbuf: Option<visbuffer::Visbuffer>,
     /// Hardware task+mesh solid terrain (`mesh_shader`, `HORIZON_MESH_SHADER=1`).
     mesh_terrain: Option<surface_setup::mesh_shader::MeshTerrain>,
+    /// Reusable per-frame scratch of `(page, solid_base, fading)` for visible Phase 1 mesh sections.
+    mesh_visible_scratch: Vec<(u32, u32, bool)>,
     /// `flat` draws this frame's sections (off: the per-section draws).
     flat_on: bool,
     /// Occlusion culling of solid section draws, where the GPU's instance
@@ -4453,6 +4455,7 @@ impl Renderer {
                 hdr_output.is_some(),
             )
         });
+        crate::mesher::meshlet::pack_meshlets(mesh_terrain.is_some());
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
@@ -4647,6 +4650,7 @@ impl Renderer {
             flat,
             visbuf,
             mesh_terrain,
+            mesh_visible_scratch: Vec::new(),
             sky,
             sky_base,
             sunrise_pipeline,
@@ -6256,6 +6260,7 @@ impl Renderer {
         );
         self.packed_quads = want;
         packed::pack_quads(want);
+        crate::mesher::meshlet::pack_meshlets(self.mesh_terrain.is_some());
         let laid_out = self.sections.values().any(|s| s.packed)
             || self.lods.values().any(|t| t.holds_packed());
         if !want && laid_out {
@@ -8699,6 +8704,19 @@ impl Renderer {
                     && visible.len() >= c.min_sections
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
+        let mesh_frame = self.mesh_terrain.is_some()
+            && self.flat.is_some()
+            && self.visbuf.is_none()
+            && !gpu_frame
+            && !msaa_on
+            && !frame.title
+            && !pack_terrain
+            && !self.terrain_looks
+            && self.external.is_none()
+            && shadow_view.is_none()
+            && self.lods.is_empty()
+            && !self.own_timing.as_ref().is_some_and(|t| t.counters_frame());
+        self.mesh_visible_scratch.clear();
         self.phase2_draws.clear();
         self.phase2_pages.clear();
         self.solid_runs.clear();
@@ -8740,6 +8758,22 @@ impl Renderer {
                 continue;
             }
             let first_phase = cull.as_ref().is_none_or(|c| c.first(v.slot));
+            if mesh_frame && first_phase {
+                if s.solid > 0 {
+                    let fading = fade_code(s, &v.key) != 0;
+                    self.mesh_visible_scratch
+                        .push((s.page, s.solid_base(), fading));
+                    if let Some(c) = &mut cull {
+                        c.drawn(
+                            i,
+                            v.slot,
+                            s.solid * 6,
+                            cull::section_box(self.sections.bounds(v.slot)),
+                        );
+                    }
+                }
+                continue;
+            }
             let (draws, pages) = if first_phase {
                 (&mut self.draws, &mut self.draw_pages)
             } else {
@@ -9842,6 +9876,7 @@ impl Renderer {
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on
+                    && !mesh_frame
                     // They copy the CPU's lists alone (GPU culling is never offered
                     // where vanilla frames draw flat).
                     && !gpu_frame
@@ -9895,19 +9930,6 @@ impl Renderer {
             }
             _ => false,
         };
-        let mesh_frame = self.mesh_terrain.is_some()
-            && self.flat.is_some()
-            && self.visbuf.is_none()
-            && !gpu_frame
-            && !culling
-            && !msaa_on
-            && !frame.title
-            && !pack_terrain
-            && !self.terrain_looks
-            && self.external.is_none()
-            && shadow_view.is_none()
-            && self.lods.is_empty()
-            && !self.own_timing.as_ref().is_some_and(|t| t.counters_frame());
         if mesh_frame
             && !flat_frame
             && let Some(flat) = &mut self.flat
@@ -9978,10 +10000,10 @@ impl Renderer {
         if mesh_frame && let Some(mesh_terrain) = &mut self.mesh_terrain {
             let eye_xyz = eye.map_or([0.0; 3], |e| e.to_array());
             let low_y = mirror_low.unwrap_or(eye_xyz[1]).min(eye_xyz[1]);
-            let mesh_calls = mesh_terrain.prepare_frame(
+            let mesh_calls = mesh_terrain.prepare_visible_frame(
                 &self.device,
                 &self.queue,
-                self.arena.page_buffers().map(|(page, _)| page),
+                &self.mesh_visible_scratch,
                 view.planes.map(|p| p.to_array()),
                 [eye_xyz[0], eye_xyz[1], eye_xyz[2], low_y],
                 eye.is_none(),
@@ -10097,7 +10119,10 @@ impl Renderer {
             );
         }
         let oit = self.oit.as_ref().filter(|_| oit_on);
-        let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
+        let cull = self
+            .cull
+            .as_ref()
+            .filter(|_| culling && (solid_draws > 0 || (mesh_frame && !visible.is_empty())));
         let pack_sky_clear = pack_draws_sky
             .then(|| self.pack_post.as_ref().and_then(|p| p.1.as_ref()))
             .flatten()
@@ -10633,12 +10658,70 @@ impl Renderer {
                 Some(flat) if mesh_frame => {
                     let mesh_terrain = self.mesh_terrain.as_ref().expect("a mesh shader frame");
                     pass.stage(self.own_timing.as_mut(), "solid terrain");
-                    mesh_terrain.draw_solid(
-                        &mut pass,
-                        flat,
-                        self.arena.page_buffers().map(|(page, _)| page),
-                        hdr,
-                    );
+                    mesh_terrain.draw_solid(&mut pass, flat, hdr);
+                    if let Some(cull) = cull {
+                        if surface.is_some() {
+                            drop(pass);
+                            pass = plain_pass(&mut encoder);
+                        }
+                        pass.split(self.own_timing.as_mut(), "occlusion boxes");
+                        pass.stage(self.own_timing.as_mut(), "occlusion boxes");
+                        cull.test(&mut pass);
+                        drop(pass);
+                        cull.test_pass(&mut encoder, self.own_timing.as_mut());
+                        pass = match &surface {
+                            Some(surface) => terrain_pass(&mut encoder, surface, false),
+                            None => world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                keep_depth,
+                                self.own_timing.as_mut(),
+                                "World after culling",
+                                world_pixels,
+                            ),
+                        };
+                        pass.set_bind_group(0, &self.group, &[]);
+                        pack_frame(&mut pass);
+                        if solid_draws > phase1_draws {
+                            pass.set_index_buffer(
+                                self.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_vertex_buffer(1, self.instances.slice(..));
+                            pass.stage(self.own_timing.as_mut(), "solid terrain phase 2");
+                            if split_solid {
+                                pass.set_pipeline(self.solid_opaque.get(hdr));
+                                self.draw_sections_from(
+                                    &mut pass,
+                                    &cull.phase2,
+                                    phase1_draws,
+                                    phase1_draws,
+                                    phase2_cutout - phase1_draws,
+                                    true,
+                                );
+                                pass.set_pipeline(self.solid_cutout.get(hdr));
+                                self.draw_sections_from(
+                                    &mut pass,
+                                    &cull.phase2,
+                                    phase1_draws,
+                                    phase2_cutout,
+                                    solid_draws - phase2_cutout,
+                                    true,
+                                );
+                            } else {
+                                pass.set_pipeline(solid_pipeline);
+                                self.draw_sections_from(
+                                    &mut pass,
+                                    &cull.phase2,
+                                    phase1_draws,
+                                    phase1_draws,
+                                    solid_draws - phase1_draws,
+                                    true,
+                                );
+                            }
+                        }
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }

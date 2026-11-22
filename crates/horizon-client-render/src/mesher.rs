@@ -483,6 +483,9 @@ pub struct SectionMesh {
     /// `solid` in the compact layout (`packed`), when the renderer reads it and it is
     /// smaller; empty otherwise. Made by `sort_solid`.
     pub packed: Vec<[u32; 6]>,
+    /// Pre-built sub-section meshlets (`meshlet`) when hardware mesh shaders are enabled
+    /// (`meshlet::packing_meshlets()`), built on the meshing worker thread in `sort_solid`.
+    pub meshlets: Vec<meshlet::MeshletDesc>,
     /// The tint of each solid quad as the mesher multiplied it (`packed::UNKNOWN_TINT` where
     /// it does not say), for `packed`; dropped once that is made.
     pub(crate) solid_tints: Vec<u32>,
@@ -516,6 +519,7 @@ impl Default for SectionMesh {
             solid_looks: Vec::new(),
             translucent_looks: Vec::new(),
             packed: Vec::new(),
+            meshlets: Vec::new(),
             packed_far: false,
             solid_tints: Vec::new(),
             visibility: ALL_VISIBLE,
@@ -555,6 +559,7 @@ impl SectionMesh {
         self.solid_looks.clear();
         self.translucent_looks.clear();
         self.packed.clear();
+        self.meshlets.clear();
         self.packed_far = false;
         self.solid_tints.clear();
         self.block_entities.clear();
@@ -573,6 +578,7 @@ impl SectionMesh {
             + (self.solid_looks.capacity() + self.translucent_looks.capacity())
                 * std::mem::size_of::<QuadLook>()
             + self.packed.capacity() * std::mem::size_of::<[u32; 6]>()
+            + self.meshlets.capacity() * std::mem::size_of::<meshlet::MeshletDesc>()
             + self.solid_tints.capacity() * std::mem::size_of::<u32>()
             + self.block_entities.capacity() * std::mem::size_of::<([i32; 3], u32)>()
             + self.lights.capacity() * std::mem::size_of::<([i32; 3], u32)>()
@@ -594,11 +600,21 @@ impl SectionMesh {
         );
         self.bounds = self.compute_bounds();
         self.packed.clear();
+        self.meshlets.clear();
         self.packed_far = false;
         if packed::packing() && quads > 0 && self.solid_tints.len() == quads {
             packed::layout_into(&self.solid, &self.solid_tints, &mut self.packed);
         }
         self.solid_tints.clear();
+        self.meshlets.clear();
+        if meshlet::packing_meshlets() && quads > 0 {
+            meshlet::build_section_meshlets_into(
+                &self.sides,
+                &self.solid,
+                &self.packed,
+                &mut self.meshlets,
+            );
+        }
     }
 
     /// Every face emitted since `start` belongs to this block, including multipart,

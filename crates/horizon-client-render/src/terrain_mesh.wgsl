@@ -162,7 +162,7 @@ struct TerrainMeshOutput {
 }
 var<workgroup> terrain_mesh_out: TerrainMeshOutput;
 
-@mesh(terrain_mesh_out) @payload(mesh_payload) @workgroup_size(32)
+@mesh(terrain_mesh_out) @payload(mesh_payload) @workgroup_size(128)
 fn ms_terrain(
     @builtin(local_invocation_index) lane: u32,
     @builtin(workgroup_id) wg: vec3<u32>,
@@ -170,24 +170,23 @@ fn ms_terrain(
     let slice = mesh_payload.slices[wg.x];
     let base_vertex = slice.x;
     let quad_count = slice.y;
+    let vert_count = quad_count * 4u;
+    let prim_count = quad_count * 2u;
     if lane == 0u {
-        terrain_mesh_out.vertex_count = quad_count * 4u;
-        terrain_mesh_out.primitive_count = quad_count * 2u;
+        terrain_mesh_out.vertex_count = vert_count;
+        terrain_mesh_out.primitive_count = prim_count;
     }
-    if lane < quad_count {
-        let q_base = base_vertex + lane * 4u;
-        let v_out = lane * 4u;
-        let p_out = lane * 2u;
-        let s0 = section_corner(q_base);
-        let origin = slot_origins[block_slots[s0.slot >> 6u]];
-        terrain_mesh_out.vertices[v_out] = to_wire(corner_vertex(s0.c, origin));
-        terrain_mesh_out.vertices[v_out + 1u] =
-            to_wire(corner_vertex(section_corner(q_base + 1u).c, origin));
-        terrain_mesh_out.vertices[v_out + 2u] =
-            to_wire(corner_vertex(section_corner(q_base + 2u).c, origin));
-        terrain_mesh_out.vertices[v_out + 3u] =
-            to_wire(corner_vertex(section_corner(q_base + 3u).c, origin));
-        terrain_mesh_out.primitives[p_out].indices = vec3(v_out, v_out + 1u, v_out + 2u);
-        terrain_mesh_out.primitives[p_out + 1u].indices = vec3(v_out, v_out + 2u, v_out + 3u);
+    if lane < vert_count {
+        let s = section_corner(base_vertex + lane);
+        let origin = slot_origins[block_slots[s.slot >> 6u]];
+        terrain_mesh_out.vertices[lane] = to_wire(corner_vertex(s.c, origin));
+    }
+    if lane < prim_count {
+        let v_out = (lane >> 1u) * 4u;
+        terrain_mesh_out.primitives[lane].indices = select(
+            vec3(v_out, v_out + 1u, v_out + 2u),
+            vec3(v_out, v_out + 2u, v_out + 3u),
+            (lane & 1u) != 0u,
+        );
     }
 }

@@ -9,8 +9,12 @@ pub use crate::mesher::meshlet::{GpuMeshlet, MeshletDesc};
 /// The mesh shader feature in wgpu.
 pub(in crate::gfx) const MESH_SHADER: wgpu::Features = wgpu::Features::EXPERIMENTAL_MESH_SHADER;
 
-/// Workgroup size used by both the task shader and the mesh slice shader.
+/// Workgroup size used by the task shader.
 pub const TASK_WORKGROUP_SIZE: u32 = 32;
+
+/// Workgroup size used by the mesh slice shader (one lane per vertex up to 128 vertices).
+#[allow(dead_code)]
+pub const MESH_WORKGROUP_SIZE: u32 = 128;
 
 /// Maximum quads emitted per mesh shader workgroup so `TerrainMeshOutput` fits in 16 KiB LDS.
 pub const MESH_SLICE_QUADS: u32 = 32;
@@ -305,6 +309,8 @@ pub fn task_dispatch_chunks(
 struct PageTable {
     sections: std::collections::BTreeMap<u32, Vec<GpuMeshlet>>,
     staging: Vec<GpuMeshlet>,
+    visible_staging: Vec<GpuMeshlet>,
+    visible_cutout: Vec<GpuMeshlet>,
     dirty: bool,
     revision: u64,
 }
@@ -466,6 +472,7 @@ impl MeshletTable {
 #[derive(Clone, Copy)]
 struct PreparedChunk {
     uniform_offset: u32,
+    indirect_offset: u64,
     meshlet_count: u32,
     workgroups: u32,
 }
@@ -479,9 +486,11 @@ struct PageGpu {
     storage: wgpu::Buffer,
     storage_capacity: usize,
     uniform: wgpu::Buffer,
+    indirect: wgpu::Buffer,
     uniform_slots: u32,
     bind_group: wgpu::BindGroup,
     uploaded_revision: u64,
+    uploaded_full_layout: bool,
     prepared_passes: [Option<PreparedPass>; PASS_SLOTS as usize],
 }
 
@@ -491,6 +500,8 @@ struct PageGpu {
 pub(in crate::gfx) struct MeshPageDraw<'a> {
     pub bind_group: &'a wgpu::BindGroup,
     pub uniform_offset: u32,
+    pub indirect_buffer: &'a wgpu::Buffer,
+    pub indirect_offset: u64,
     pub meshlet_count: u32,
     pub workgroups: u32,
 }
@@ -578,6 +589,106 @@ impl MeshSectionStore {
         &self.bind_group_layout
     }
 
+    fn ensure_page_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        page: u32,
+        needed_meshlets: usize,
+        required_uniform_slots: u32,
+    ) -> bool {
+        let needs_storage_alloc = self
+            .gpu_pages
+            .get(&page)
+            .is_none_or(|pg| needed_meshlets > pg.storage_capacity);
+        let needs_uniform_alloc = self
+            .gpu_pages
+            .get(&page)
+            .is_none_or(|pg| required_uniform_slots > pg.uniform_slots);
+
+        if needs_storage_alloc || needs_uniform_alloc {
+            let cap = self
+                .gpu_pages
+                .get(&page)
+                .map_or(0, |pg| pg.storage_capacity)
+                .max(needed_meshlets.next_power_of_two().max(64));
+            let storage = needs_storage_alloc.then(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Terrain meshlet storage"),
+                    size: (cap * std::mem::size_of::<GpuMeshlet>()) as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            let uniform_slots = self
+                .gpu_pages
+                .get(&page)
+                .map_or(PASS_SLOTS, |pg| pg.uniform_slots)
+                .max(required_uniform_slots)
+                .next_power_of_two()
+                .max(PASS_SLOTS);
+            let (uniform, indirect) = if needs_uniform_alloc {
+                (
+                    Some(device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Terrain meshlet cull uniform"),
+                        size: u64::from(uniform_slots) * u64::from(self.uniform_stride),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    })),
+                    Some(device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Terrain meshlet indirect args"),
+                        size: u64::from(uniform_slots) * 12,
+                        usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    })),
+                )
+            } else {
+                (None, None)
+            };
+            match self.gpu_pages.entry(page) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    let storage = storage.expect("new page must allocate storage");
+                    let uniform = uniform.expect("new page must allocate uniform");
+                    let indirect = indirect.expect("new page must allocate indirect");
+                    let bind_group =
+                        create_page_bind_group(device, &self.bind_group_layout, &storage, &uniform);
+                    slot.insert(PageGpu {
+                        storage,
+                        storage_capacity: cap,
+                        uniform,
+                        indirect,
+                        uniform_slots,
+                        bind_group,
+                        uploaded_revision: 0,
+                        uploaded_full_layout: false,
+                        prepared_passes: [const { None }; PASS_SLOTS as usize],
+                    });
+                }
+                std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    let pg = slot.get_mut();
+                    if let Some(storage) = storage {
+                        pg.storage = storage;
+                        pg.storage_capacity = cap;
+                        pg.uploaded_revision = 0;
+                        pg.uploaded_full_layout = false;
+                    }
+                    if let Some(uniform) = uniform {
+                        pg.uniform = uniform;
+                        pg.indirect = indirect.expect("indirect allocated with uniform");
+                        pg.uniform_slots = uniform_slots;
+                    }
+                    pg.bind_group = create_page_bind_group(
+                        device,
+                        &self.bind_group_layout,
+                        &pg.storage,
+                        &pg.uniform,
+                    );
+                    pg.prepared_passes = [const { None }; PASS_SLOTS as usize];
+                }
+            }
+        }
+        needs_storage_alloc
+    }
+
     /// Uploads staged `GpuMeshlet`s for `page` when dirty and writes culling parameters into the
     /// pass slot `params.counts[1]` without overwriting other passes or pages in the same frame.
     pub fn prepare_page(
@@ -594,8 +705,10 @@ impl MeshSectionStore {
             self.invalidate_page_passes(page);
             return 0;
         };
-        let (rebuilt, staged) = self.table.stage_page(page);
-        let count = staged.len() as u32;
+        let (rebuilt, count) = {
+            let (rebuilt, staged) = self.table.stage_page(page);
+            (rebuilt, staged.len() as u32)
+        };
         if count == 0 {
             self.invalidate_page_passes(page);
             return 0;
@@ -604,90 +717,22 @@ impl MeshSectionStore {
         let total_groups = task_workgroups(count);
         let chunk_count = total_groups.div_ceil(self.max_task_workgroups.max(1));
         let required_uniform_slots = PASS_SLOTS * chunk_count;
-
-        let needs_storage_alloc = self
-            .gpu_pages
-            .get(&page)
-            .is_none_or(|pg| staged.len() > pg.storage_capacity);
-        let needs_uniform_alloc = self
-            .gpu_pages
-            .get(&page)
-            .is_none_or(|pg| required_uniform_slots > pg.uniform_slots);
-
-        if needs_storage_alloc || needs_uniform_alloc {
-            let cap = self
-                .gpu_pages
-                .get(&page)
-                .map_or(0, |pg| pg.storage_capacity)
-                .max(staged.len().next_power_of_two().max(64));
-            let storage = needs_storage_alloc.then(|| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Terrain meshlet storage"),
-                    size: (cap * std::mem::size_of::<GpuMeshlet>()) as u64,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                })
-            });
-            let uniform_slots = self
-                .gpu_pages
-                .get(&page)
-                .map_or(PASS_SLOTS, |pg| pg.uniform_slots)
-                .max(required_uniform_slots)
-                .next_power_of_two()
-                .max(PASS_SLOTS);
-            let uniform = needs_uniform_alloc.then(|| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Terrain meshlet cull uniform"),
-                    size: u64::from(uniform_slots) * u64::from(self.uniform_stride),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                })
-            });
-            match self.gpu_pages.entry(page) {
-                std::collections::btree_map::Entry::Vacant(slot) => {
-                    let storage = storage.expect("new page must allocate storage");
-                    let uniform = uniform.expect("new page must allocate uniform");
-                    let bind_group =
-                        create_page_bind_group(device, &self.bind_group_layout, &storage, &uniform);
-                    slot.insert(PageGpu {
-                        storage,
-                        storage_capacity: cap,
-                        uniform,
-                        uniform_slots,
-                        bind_group,
-                        uploaded_revision: 0,
-                        prepared_passes: [const { None }; PASS_SLOTS as usize],
-                    });
-                }
-                std::collections::btree_map::Entry::Occupied(mut slot) => {
-                    let pg = slot.get_mut();
-                    if let Some(storage) = storage {
-                        pg.storage = storage;
-                        pg.storage_capacity = cap;
-                        pg.uploaded_revision = 0;
-                    }
-                    if let Some(uniform) = uniform {
-                        pg.uniform = uniform;
-                        pg.uniform_slots = uniform_slots;
-                    }
-                    pg.bind_group = create_page_bind_group(
-                        device,
-                        &self.bind_group_layout,
-                        &pg.storage,
-                        &pg.uniform,
-                    );
-                    pg.prepared_passes = [const { None }; PASS_SLOTS as usize];
-                }
-            }
-        }
+        let needs_storage_alloc =
+            self.ensure_page_buffers(device, page, count as usize, required_uniform_slots);
+        let staged = self.table.staged_page(page);
 
         let pg = self
             .gpu_pages
             .get_mut(&page)
             .expect("page GPU storage must exist after allocation");
-        if rebuilt || needs_storage_alloc || pg.uploaded_revision != revision {
+        if rebuilt
+            || needs_storage_alloc
+            || pg.uploaded_revision != revision
+            || !pg.uploaded_full_layout
+        {
             queue.write_buffer(&pg.storage, 0, bytemuck::cast_slice(staged));
             pg.uploaded_revision = revision;
+            pg.uploaded_full_layout = true;
             pg.prepared_passes = [const { None }; PASS_SLOTS as usize];
         }
 
@@ -697,6 +742,7 @@ impl MeshSectionStore {
         {
             let slot = pass_slot + (chunk_idx as u32) * PASS_SLOTS;
             let uniform_offset = slot * self.uniform_stride;
+            let indirect_offset = u64::from(slot) * 12;
             let mut updated = *params;
             updated.counts[0] = count;
             updated.counts[3] = meshlet_offset;
@@ -705,8 +751,14 @@ impl MeshSectionStore {
                 u64::from(uniform_offset),
                 bytemuck::bytes_of(&updated),
             );
+            queue.write_buffer(
+                &pg.indirect,
+                indirect_offset,
+                bytemuck::cast_slice(&[workgroups, 1u32, 1u32]),
+            );
             chunks.push(PreparedChunk {
                 uniform_offset,
+                indirect_offset,
                 meshlet_count: chunk_meshlets,
                 workgroups,
             });
@@ -715,26 +767,143 @@ impl MeshSectionStore {
         count
     }
 
+    /// Gathers only the visible sections in front-to-back order, partitions them into disjoint
+    /// `PASS_OPAQUE` and `PASS_CUTOUT` ranges per page, uploads their descriptors, and populates
+    /// indirect dispatch arguments. Returns total non-empty dispatch chunks prepared.
+    pub fn prepare_visible_pages(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        visible_sections: &[(u32, u32, bool)],
+        planes: [[f32; 4]; 6],
+        eye: [f32; 4],
+        no_eye: bool,
+    ) -> usize {
+        for entry in self.table.pages.values_mut() {
+            entry.visible_staging.clear();
+            entry.visible_cutout.clear();
+        }
+        for &(page, solid_base, fading) in visible_sections {
+            let Some(entry) = self.table.pages.get_mut(&page) else {
+                continue;
+            };
+            let Some(list) = entry.sections.get(&solid_base) else {
+                continue;
+            };
+            if fading {
+                entry.visible_cutout.extend_from_slice(list);
+            } else {
+                for &m in list {
+                    if m.is_cutout() {
+                        entry.visible_cutout.push(m);
+                    } else {
+                        entry.visible_staging.push(m);
+                    }
+                }
+            }
+        }
+
+        let skip_facing = u32::from(no_eye);
+        let max_wg = self.max_task_workgroups.max(1);
+        let mut dispatches = 0usize;
+        let pages: Vec<u32> = self.table.pages.keys().copied().collect();
+        for page in pages {
+            let (revision, opaque_count, cutout_count, total_count) = {
+                let entry = self
+                    .table
+                    .pages
+                    .get_mut(&page)
+                    .expect("page exists in table");
+                let opaque_count = entry.visible_staging.len() as u32;
+                let cutout_count = entry.visible_cutout.len() as u32;
+                entry.visible_staging.append(&mut entry.visible_cutout);
+                let total_count = entry.visible_staging.len() as u32;
+                (entry.revision, opaque_count, cutout_count, total_count)
+            };
+            if total_count == 0 {
+                self.invalidate_page_passes(page);
+                continue;
+            }
+            let max_pass_chunks = task_workgroups(opaque_count.max(cutout_count)).div_ceil(max_wg);
+            let required_uniform_slots = PASS_SLOTS * max_pass_chunks.max(1);
+            self.ensure_page_buffers(device, page, total_count as usize, required_uniform_slots);
+            let pg = self
+                .gpu_pages
+                .get_mut(&page)
+                .expect("page GPU storage must exist after allocation");
+            let staged = &self.table.pages[&page].visible_staging;
+            queue.write_buffer(&pg.storage, 0, bytemuck::cast_slice(staged));
+            pg.uploaded_revision = revision;
+            pg.uploaded_full_layout = false;
+
+            let mut prepare_range = |pass_kind: u32, start: u32, count: u32, limit: u32| {
+                if count == 0 {
+                    pg.prepared_passes[pass_kind as usize] = None;
+                    return;
+                }
+                let mut chunks = Vec::new();
+                for (chunk_idx, (chunk_offset, chunk_meshlets, workgroups)) in
+                    task_dispatch_chunks(count, max_wg).enumerate()
+                {
+                    let slot = pass_kind + (chunk_idx as u32) * PASS_SLOTS;
+                    let uniform_offset = slot * self.uniform_stride;
+                    let indirect_offset = u64::from(slot) * 12;
+                    let params = MeshCullParams {
+                        planes,
+                        eye,
+                        counts: [limit, pass_kind, skip_facing, start + chunk_offset],
+                    };
+                    queue.write_buffer(
+                        &pg.uniform,
+                        u64::from(uniform_offset),
+                        bytemuck::bytes_of(&params),
+                    );
+                    queue.write_buffer(
+                        &pg.indirect,
+                        indirect_offset,
+                        bytemuck::cast_slice(&[workgroups, 1u32, 1u32]),
+                    );
+                    chunks.push(PreparedChunk {
+                        uniform_offset,
+                        indirect_offset,
+                        meshlet_count: chunk_meshlets,
+                        workgroups,
+                    });
+                }
+                dispatches += chunks.len();
+                pg.prepared_passes[pass_kind as usize] = Some(PreparedPass { revision, chunks });
+            };
+
+            prepare_range(PASS_OPAQUE, 0, opaque_count, opaque_count);
+            prepare_range(PASS_CUTOUT, opaque_count, cutout_count, total_count);
+            pg.prepared_passes[PASS_ALL as usize] = None;
+        }
+        dispatches
+    }
+
     /// Yields every prepared dispatch chunk for `(page, pass_kind)` if that pass was prepared
     /// against the current uploaded page revision, or an empty iterator otherwise.
     pub fn page_draws(&self, page: u32, pass_kind: u32) -> impl Iterator<Item = MeshPageDraw<'_>> {
-        let prepared = if pass_kind < PASS_SLOTS {
-            self.table.page_revision(page).and_then(|current_rev| {
-                let pg = self.gpu_pages.get(&page)?;
-                let pass = pg.prepared_passes[pass_kind as usize].as_ref()?;
-                (pass.revision == current_rev && pg.uploaded_revision == current_rev)
-                    .then_some((&pg.bind_group, pass.chunks.as_slice()))
-            })
-        } else {
-            None
-        };
-        let (bind_group, chunks) = match prepared {
-            Some((bg, chunks)) => (Some(bg), chunks),
-            None => (None, &[][..]),
+        let prepared =
+            if pass_kind < PASS_SLOTS {
+                self.table.page_revision(page).and_then(|current_rev| {
+                    let pg = self.gpu_pages.get(&page)?;
+                    let pass = pg.prepared_passes[pass_kind as usize].as_ref()?;
+                    (pass.revision == current_rev && pg.uploaded_revision == current_rev)
+                        .then_some((&pg.bind_group, &pg.indirect, pass.chunks.as_slice()))
+                })
+            } else {
+                None
+            };
+        let (bind_group, indirect_buffer, chunks) = match prepared {
+            Some((bg, indirect, chunks)) => (Some(bg), Some(indirect), chunks),
+            None => (None, None, &[][..]),
         };
         chunks.iter().map(move |chunk| MeshPageDraw {
             bind_group: bind_group.expect("non-empty chunks always have bind_group"),
             uniform_offset: chunk.uniform_offset,
+            indirect_buffer: indirect_buffer.expect("non-empty chunks always have indirect_buffer"),
+            indirect_offset: chunk.indirect_offset,
             meshlet_count: chunk.meshlet_count,
             workgroups: chunk.workgroups,
         })
@@ -862,7 +1031,7 @@ pub(in crate::gfx) fn create_mesh_terrain_pipeline(
     })
 }
 
-/// Dispatches hardware mesh tasks for a prepared `(page, pass_kind)` draw handle.
+/// Dispatches hardware mesh tasks for a prepared `(page, pass_kind)` draw handle via indirect args.
 #[allow(dead_code)]
 pub(in crate::gfx) fn draw_mesh_page<'a>(
     pass: &mut wgpu::RenderPass<'a>,
@@ -874,7 +1043,7 @@ pub(in crate::gfx) fn draw_mesh_page<'a>(
         pass.set_pipeline(pipeline);
         pass.set_bind_group(1, group1, &[]);
         pass.set_bind_group(2, draw.bind_group, &[draw.uniform_offset]);
-        pass.draw_mesh_tasks(draw.workgroups, 1, 1);
+        pass.draw_mesh_tasks_indirect(draw.indirect_buffer, draw.indirect_offset);
     }
 }
 
@@ -984,7 +1153,8 @@ impl MeshTerrain {
         }
     }
 
-    /// Extracts sub-section meshlets for an uploaded section mesh and inserts them into the store.
+    /// Registers pre-built worker meshlets for an uploaded section mesh (falling back to inline
+    /// extraction if the mesh was constructed without worker-side `meshlets` populated).
     pub fn insert_section_mesh(
         &mut self,
         page: u32,
@@ -993,16 +1163,21 @@ impl MeshTerrain {
         sides: &crate::mesher::Sides,
         mesh: &crate::mesher::SectionMesh,
     ) {
-        let meshlets = crate::mesher::meshlet::build_section_meshlets(
-            sides,
-            &mesh.solid,
-            if packed { &mesh.packed } else { &[] },
-        );
-        self.store.insert_section(page, solid_base, &meshlets);
+        if !mesh.meshlets.is_empty() && (packed == !mesh.packed.is_empty()) {
+            self.store.insert_section(page, solid_base, &mesh.meshlets);
+        } else {
+            let meshlets = crate::mesher::meshlet::build_section_meshlets(
+                sides,
+                &mesh.solid,
+                if packed { &mesh.packed } else { &[] },
+            );
+            self.store.insert_section(page, solid_base, &meshlets);
+        }
     }
 
     /// Uploads dirty meshlet staging pages and updates `PASS_OPAQUE` / `PASS_CUTOUT` culling uniforms.
     /// Returns the number of non-empty page-pass dispatches prepared for this frame.
+    #[allow(dead_code)]
     pub fn prepare_frame(
         &mut self,
         device: &wgpu::Device,
@@ -1029,15 +1204,30 @@ impl MeshTerrain {
         dispatches
     }
 
-    /// Records the opaque then cutout hardware mesh passes across all prepared arena pages.
+    /// Gathers only the visible sections in front-to-back order, partitions them into disjoint
+    /// `PASS_OPAQUE` and `PASS_CUTOUT` ranges per page, uploads descriptors, and prepares indirect
+    /// dispatch args. Returns the number of non-empty page-pass dispatches prepared for this frame.
+    pub fn prepare_visible_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        visible_sections: &[(u32, u32, bool)],
+        planes: [[f32; 4]; 6],
+        eye: [f32; 4],
+        no_eye: bool,
+    ) -> usize {
+        self.store
+            .prepare_visible_pages(device, queue, visible_sections, planes, eye, no_eye)
+    }
+
+    /// Records the opaque then cutout hardware mesh passes across all prepared arena pages
+    /// using `draw_mesh_tasks_indirect`, setting the pipeline once per pass.
     pub fn draw_solid<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         flat: &'a crate::gfx::flat::Flat,
-        pages: impl IntoIterator<Item = u32>,
         hdr: bool,
     ) {
-        let page_list: Vec<u32> = pages.into_iter().collect();
         let opaque_pipe = if hdr {
             self.opaque_hdr.as_ref().unwrap_or(&self.opaque_plain)
         } else {
@@ -1049,11 +1239,19 @@ impl MeshTerrain {
             &self.cutout_plain
         };
         for (pass_kind, pipeline) in [(PASS_OPAQUE, opaque_pipe), (PASS_CUTOUT, cutout_pipe)] {
-            for &page in &page_list {
-                if let Some(group1) = flat.page_group(page) {
-                    for draw in self.store.page_draws(page, pass_kind) {
-                        draw_mesh_page(pass, pipeline, group1, draw);
-                    }
+            pass.set_pipeline(pipeline);
+            for &page in self.store.gpu_pages.keys() {
+                let Some(group1) = flat.page_group(page) else {
+                    continue;
+                };
+                let mut draws = self.store.page_draws(page, pass_kind).peekable();
+                if draws.peek().is_none() {
+                    continue;
+                }
+                pass.set_bind_group(1, group1, &[]);
+                for draw in draws {
+                    pass.set_bind_group(2, draw.bind_group, &[draw.uniform_offset]);
+                    pass.draw_mesh_tasks_indirect(draw.indirect_buffer, draw.indirect_offset);
                 }
             }
         }
@@ -2233,5 +2431,50 @@ mod tests {
         store.trim(|page| page != 1);
         assert!(!store.has_gpu_page(1));
         assert_eq!(store.page_count(1), 0);
+    }
+
+    #[test]
+    fn prepare_visible_frame_partitions_opaque_cutout_and_indirect_args() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = mesh_shader_adapter() else {
+            return;
+        };
+        let (device, queue) = open_mesh_device(&adapter, "Mesh visible frame test");
+        let mut store = new_store(&device).expect("mesh shaders are enabled");
+
+        let opaque_m = MeshletDesc::new(0, 8, 2, 0, 0, [0, 0, 0, 4, 4, 4]);
+        let cutout_m = MeshletDesc::new(8, 6, 2, MeshletDesc::FLAG_CUTOUT, 0, [0, 0, 0, 4, 4, 4]);
+        // Section A (visible, non-fading): 1 opaque + 1 cutout
+        store.insert_section(0, 100, &[opaque_m, cutout_m]);
+        // Section B (visible, fading): 1 opaque (must move to PASS_CUTOUT)
+        store.insert_section(0, 200, &[opaque_m]);
+        // Section C (culled / not in visible_sections): must be excluded completely
+        store.insert_section(0, 300, &[opaque_m, opaque_m]);
+
+        let dispatches = store.prepare_visible_pages(
+            &device,
+            &queue,
+            &[(0, 200, true), (0, 100, false)],
+            [[0.0; 4]; 6],
+            [0.0; 4],
+            false,
+        );
+        // 1 opaque chunk (Section A's opaque_m) + 1 cutout chunk (Section B's fading opaque_m + Section A's cutout_m).
+        assert_eq!(dispatches, 2);
+
+        let opaque_draw = store.page_draw(0, PASS_OPAQUE).unwrap();
+        let cutout_draw = store.page_draw(0, PASS_CUTOUT).unwrap();
+        assert_eq!(opaque_draw.meshlet_count, 1);
+        assert_eq!(opaque_draw.workgroups, 1);
+        assert_eq!(cutout_draw.meshlet_count, 2);
+        assert_eq!(cutout_draw.workgroups, 1);
+        assert_ne!(opaque_draw.indirect_offset, cutout_draw.indirect_offset);
+
+        let staged = &store.table.pages[&0].visible_staging;
+        assert_eq!(staged.len(), 3);
+        // Front-to-back order: Section A opaque first, then Section B fading, then Section A cutout.
+        assert_eq!(staged[0], opaque_m.to_gpu(100));
+        assert_eq!(staged[1], opaque_m.to_gpu(200));
+        assert_eq!(staged[2], cutout_m.to_gpu(100));
     }
 }
