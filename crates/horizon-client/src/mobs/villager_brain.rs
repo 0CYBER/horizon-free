@@ -3374,6 +3374,7 @@ fn farmland(w: &MobWorld, p: [i32; 3]) -> bool {
         .has_class("FarmlandBlock")
 }
 /// `HarvestFarmland.validPos`: a ripe CropBlock or air above farmland.
+#[horizon_mod_api_macros::replaceable]
 fn farmland_valid(w: &MobWorld, p: [i32; 3]) -> bool {
     super::villager::ripe_crop(w, p)
         || w.facts.is_air(w.world.block(p[0], p[1], p[2])) && farmland(w, [p[0], p[1] - 1, p[2]])
@@ -3400,6 +3401,7 @@ fn seed_crop(w: &MobWorld, item: &str) -> Option<horizon_world::registry::BlockS
 }
 /// `HarvestFarmland.tick` at the farmland: harvest a ripe crop, sow bare
 /// farmland, and move on from a growing crop.
+#[horizon_mod_api_macros::replaceable]
 fn harvest_tick(
     m: &mut Mob,
     cx: &mut Bx,

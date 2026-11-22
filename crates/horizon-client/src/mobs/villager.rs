@@ -281,6 +281,7 @@ pub fn tick(m: &mut Mob, now: i64) {
 /// A hurt sleeper wakes up (`LivingEntity.hurtServer`; the `checkBedExists`
 /// wake runs earlier in `LivingEntity.tick`, for AI-less mobs too), and lies
 /// the way its bed faces (`getBedOrientation`). The brain does the rest.
+#[horizon_mod_api_macros::replaceable]
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if sleeping(m) {
         let bed = sleeping_pos(m).filter(|p| w.block_name(p[0], p[1], p[2]).ends_with("_bed"));
