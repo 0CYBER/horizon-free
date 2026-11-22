@@ -58,6 +58,9 @@ pub fn sound_source(event: &str) -> usize {
     if e == "block.potent_sulfur.noxious_gas" {
         // PotentSulfurBlock.animateTick, its only caller, plays it as AMBIENT.
         index("ambient")
+    } else if e == "item.llama_carpet.unequip" {
+        // Equippable.shearingSound, played by Mob.playSound on the llama's NEUTRAL.
+        index("neutral")
     } else if e.starts_with("music_disc.") {
         index("record")
     } else if e.starts_with("item.goat_horn.") {
@@ -971,6 +974,18 @@ mod tests {
             horizon_narrator::Status::Off
         );
     }
+    /// `Equippable.shearingSound` for a llama carpet is played by `Mob.playSound`
+    /// on the llama's NEUTRAL source, not on PLAYER like most `item.*` ids.
+    #[test]
+    fn llama_carpet_unequip_keeps_neutral_category() {
+        assert_eq!(
+            super::sound_source("minecraft:item.llama_carpet.unequip"),
+            6
+        );
+        assert_eq!(super::sound_source("item.llama_carpet.unequip"), 6);
+        assert_eq!(super::sound_source("minecraft:item.book.page_turn"), 7);
+    }
+
     /// `Monster.getSoundSource`: the verified families and inherited common sounds.
     #[test]
     fn hostile_families_keep_their_sound_category() {
