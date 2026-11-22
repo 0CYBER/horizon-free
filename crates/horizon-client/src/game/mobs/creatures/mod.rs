@@ -29,6 +29,9 @@ mod section_steps;
 #[path = "../../creatures/spawn_egg_mob_tests.rs"]
 mod spawn_egg_mob_tests;
 #[cfg(test)]
+#[path = "../../creatures/spawn_egg_tests.rs"]
+mod spawn_egg_tests;
+#[cfg(test)]
 #[path = "../../creatures/spectator_view_tests.rs"]
 mod spectator_view_tests;
 mod world_view;
@@ -7529,6 +7532,10 @@ impl Game<'_> {
             variant
         };
         let target = self.mob_entity(&self.mobs[index]);
+        let parent_id = self.mobs[index].id;
+        // `Zombie.onOffspringSpawnedFromEgg` rolls from the parent's random.
+        let mut parent_random = self.mobs[index].random.clone();
+        let special = self.local_difficulty(at).special();
         // SpawnEggItem.spawnOffspringFromSpawnEgg: `type.create(level, SPAWN_ITEM_USE)`
         // creates the baby without finalizeSpawn, and `snapTo(pos, 0, 0)` faces
         // it south without a level-random draw.
@@ -7548,6 +7555,16 @@ impl Game<'_> {
             horizon_client::entity_nbt::apply_item_components(child, &stack);
         }
         self.apply_spawn_egg_entity_data(id, &stack, false);
+        if let Some(child) = self.mobs.iter_mut().find(|m| m.id == id) {
+            horizon_client::mobs::finalize::zombie_egg_pick_up_loot(
+                child,
+                special,
+                &mut parent_random,
+            );
+        }
+        if let Some(parent) = self.mobs.iter_mut().find(|m| m.id == parent_id) {
+            parent.random = parent_random;
+        }
         if species == Species::Piglin {
             self.native_mobs_joined(self.mobs.len() - 1, false);
         }
@@ -7633,7 +7650,8 @@ impl Game<'_> {
         }
         // useOn: a clicked block without a collision shape (vines, grass)
         // takes the mob itself, any other the one on the clicked face.
-        let p = if fluid || self.collision_empty(hit.pos) {
+        let empty = fluid || self.collision_empty(hit.pos);
+        let p = if empty {
             hit.pos
         } else {
             [
@@ -7642,9 +7660,23 @@ impl Game<'_> {
                 hit.pos[2] + hit.face[2],
             ]
         };
+        // `EntityType.create(.., tryMoveDown, movedUp)`: a block use moves the
+        // mob down onto the surface; a fluid use does not.
+        let moved_up = !empty && hit.face == [0, 1, 0];
+        let y_off = if fluid {
+            0.0
+        } else if kind == "minecraft:ender_dragon" {
+            // `getYOffset` uses the created entity's box, and the dragon's 16 by
+            // 8 one has no `mob_types` entry (`spawn_mob_at` says the same).
+            self.drop_offset_from(16.0, 8.0, (p[0], p[1], p[2]), moved_up)
+        } else {
+            self.res.mob_types().get(&kind).map_or(0.0, |t| {
+                self.drop_offset_from(t.width, t.height, (p[0], p[1], p[2]), moved_up)
+            })
+        };
         let at = [
             f64::from(p[0]) + 0.5,
-            f64::from(p[1]),
+            f64::from(p[1]) + y_off,
             f64::from(p[2]) + 0.5,
         ];
         let Some(id) =

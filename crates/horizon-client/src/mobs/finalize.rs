@@ -1164,6 +1164,13 @@ pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color
         sulfur_size(child, 1);
     }
 }
+/// `Zombie.onOffspringSpawnedFromEgg`: a baby from a zombie's own egg rolls
+/// `CanPickUpLoot` from the parent's random against the difficulty at it.
+pub fn zombie_egg_pick_up_loot(child: &mut Mob, special: f32, random: &mut impl RandomSource) {
+    if zombie(child.species()) {
+        child.extra.pick_up_loot = random.next_float() < 0.55 * special;
+    }
+}
 /// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
 pub fn set_baby(m: &mut Mob, baby: bool) {
     let s = m.species();
