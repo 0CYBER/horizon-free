@@ -14,7 +14,7 @@ use crate::{
 };
 use horizon_core::{
     geometry::{Aabb, Direction, Vec3, VoxelShape, border::BorderGeometry},
-    position::BlockPos,
+    position::{BlockPos, SectionPos},
     random::{EntityRandom, RandomSource},
 };
 use horizon_world::{
@@ -22,6 +22,7 @@ use horizon_world::{
     level::portal_travel::{BorderBounds, find_free_position},
     movement_properties::BoundMovementProperties,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Gravity applied each tick when the item is not in a fluid (`ItemEntity.tick`).
 const ITEM_GRAVITY: f64 = 0.04;
@@ -859,6 +860,8 @@ fn lava_cauldron_contacts(
 pub const ORB_QUAD: [[f32; 2]; 4] = [[-0.5, -0.25], [0.5, -0.25], [0.5, 0.75], [-0.5, 0.75]];
 /// `poseStack.scale(0.3F, 0.3F, 0.3F)`.
 pub const ORB_QUAD_SCALE: f32 = 0.3;
+static NEXT_ORB_SECTION_ORDER: AtomicU64 = AtomicU64::new(1);
+
 /// ExperienceOrb: gravity 0.03, homing towards the player within 8 blocks.
 #[derive(Clone, Debug)]
 pub struct ExperienceOrb {
@@ -868,6 +871,8 @@ pub struct ExperienceOrb {
     pub rotation: [f32; 2],
     /// When it joined its list ([`crate::join_seq`]); set by the list, not by the spawn site.
     pub join: crate::join_seq::JoinSeq,
+    /// Order of entry into the current section. Zero before joining the level.
+    pub section_order: u64,
     /// The entity id servers track it by.
     pub id: u32,
     pub position: Vec3,
@@ -915,6 +920,7 @@ impl ExperienceOrb {
             attachment_lifetime: Default::default(),
             rotation: [0.0, 0.0],
             join: Default::default(),
+            section_order: 0,
             id,
             position,
             previous: position,
@@ -932,6 +938,20 @@ impl ExperienceOrb {
             fire_ticks: 0,
         }
     }
+    /// `PersistentEntitySectionManager.Callback.onMove` appends to the new section.
+    pub fn set_position(&mut self, position: Vec3) {
+        if self.join.is_joined()
+            && SectionPos::containing(self.position) != SectionPos::containing(position)
+        {
+            self.enter_section();
+        }
+        self.position = position;
+    }
+
+    fn enter_section(&mut self) {
+        self.section_order = NEXT_ORB_SECTION_ORDER.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// `ExperienceOrb.hurtServer`: the damage comes off the health as an
     /// `int`; an orb at 0 or below is discarded. True when it is gone.
     pub fn hurt(&mut self, damage: f32) -> bool {
@@ -1263,11 +1283,11 @@ impl ExperienceOrb {
         )
         .unwrap_or(Vec3::ZERO);
         let from = self.position;
-        self.position = Vec3::new(
+        self.set_position(Vec3::new(
             self.position.x + moved.x,
             self.position.y + moved.y,
             self.position.z + moved.z,
-        );
+        ));
         self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
         // Entity.move's restituteMovementAfterCollisions, an orb's bounciness
         // 0: each collided axis's velocity is zeroed — x and z by Mth.equal's
@@ -3325,6 +3345,7 @@ mod world_border_tests {
                 fall_distance: 0.0,
                 rotation: [0.0, 0.0],
                 join: Default::default(),
+                section_order: 0,
                 no_gravity: false,
                 id: 2,
                 position: Vec3::new(24.0, 4.0, 20.5),
@@ -4711,6 +4732,7 @@ mod orb_underwater_tests {
                     fall_distance: 0.0,
                     rotation: [0.0, 0.0],
                     join: Default::default(),
+                    section_order: 0,
                     no_gravity: false,
                     id: 1,
                     position: Vec3::ZERO,
@@ -4749,6 +4771,7 @@ mod render_light_tests {
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
+            section_order: 0,
             no_gravity: false,
             id: 1,
             position: Vec3::new(0.5, y, 0.5),
@@ -4919,14 +4942,18 @@ mod dropped_item_light_tests {
         assert_eq!(burning.render_light(light(0, 0)), ((15 * 16) << 8) as u32);
     }
 }
-crate::impl_joined!(
-    ItemEntity,
-    ExperienceOrb,
-    ArmorStand,
-    Painting,
-    Cushion,
-    ItemFrame
-);
+impl crate::join_seq::Joined for ExperienceOrb {
+    fn join_seq(&self) -> crate::join_seq::JoinSeq {
+        self.join
+    }
+
+    fn set_join_seq(&mut self, join: crate::join_seq::JoinSeq) {
+        self.join = join;
+        self.enter_section();
+    }
+}
+
+crate::impl_joined!(ItemEntity, ArmorStand, Painting, Cushion, ItemFrame);
 horizon_mod_runtime::impl_attachment_lifetime!(
     ItemEntity,
     ExperienceOrb,
@@ -4970,6 +4997,7 @@ mod orb_lava_tests {
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
+            section_order: 0,
             no_gravity: false,
             id: 1,
             position: at,

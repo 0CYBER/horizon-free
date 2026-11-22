@@ -48,6 +48,28 @@ pub(super) fn bob_offset(position: Vec3, drawn: f32, still: bool) -> f32 {
     drawn * std::f32::consts::PI * 2.0
 }
 
+/// `Player.aiStep` sees sections in traversal order and each section's orbs
+/// in the order they entered it.
+pub(super) fn touching_orbs(
+    orbs: &horizon_client::join_seq::JoinList<ExperienceOrb>,
+    area: Aabb,
+) -> Vec<usize> {
+    let mut touching: Vec<_> = orbs
+        .iter()
+        .enumerate()
+        .filter(|(_, orb)| orb.bounds().intersects(area))
+        .map(|(index, _)| index)
+        .collect();
+    touching.sort_by_key(|&index| {
+        let orb = &orbs[index];
+        (
+            super::entity_sections::section_order(orb.position),
+            orb.section_order,
+        )
+    });
+    touching
+}
+
 impl Game<'_> {
     pub(super) fn tick_items(&mut self) -> FxHashMap<u32, Vec3> {
         let mut round = self.item_update_round();
@@ -573,6 +595,7 @@ impl Game<'_> {
             fall_distance: 0.0,
             rotation: [0.0, 0.0],
             join: Default::default(),
+            section_order: 0,
             no_gravity: false,
             id: self.next_entity,
             position: p,
@@ -616,54 +639,43 @@ impl Game<'_> {
                     p.position.z + w,
                 ),
             );
-            let area = match self.riding_box() {
+            match self.riding_box() {
                 Some(vehicle) => own.union_bounds(vehicle).inflate(Vec3::new(1.0, 0.0, 1.0)),
                 None => own.inflate(Vec3::new(1.0, 0.5, 1.0)),
-            };
-            (
-                [
-                    area.min_position().x,
-                    area.min_position().y,
-                    area.min_position().z,
-                ],
-                [
-                    area.max_position().x,
-                    area.max_position().y,
-                    area.max_position().z,
-                ],
-            )
+            }
         });
         let mut orbs = self.orbs.lift();
         #[cfg(test)]
         crate::game::entity::taken_pass_tests::after_take(self);
-        let mut gained = 0;
-        let mut taken = Vec::new();
-        if let Some((min, max)) = bounds {
-            orbs.retain_mut(|o| {
-                let touching = o.position.x + 0.25 > min[0]
-                    && o.position.x - 0.25 < max[0]
-                    && o.position.y + 0.5 > min[1]
-                    && o.position.y < max[1]
-                    && o.position.z + 0.25 > min[2]
-                    && o.position.z - 0.25 < max[2];
-                if touching && self.xp_delay == 0 {
-                    // ExperienceOrb.playerTouch: one orb every 2 ticks; a
-                    // merged orb gives its value once per count.
-                    self.xp_delay = 2;
-                    gained += o.points();
-                    taken.push(o.clone());
-                    o.count -= 1;
-                    return o.count > 0;
+        let mut taken = None;
+        if let Some(area) = bounds
+            && let Some(player) = self.player.as_mut()
+        {
+            let touching = touching_orbs(&orbs, area);
+            // Player.aiStep draws before ExperienceOrb.playerTouch checks the cooldown.
+            if !touching.is_empty()
+                && let Ok(pick) = player.random.next_int_bound(touching.len() as i32)
+                && self.xp_delay == 0
+            {
+                let index = touching[pick as usize];
+                self.xp_delay = 2;
+                // The particle uses a detached snapshot so a removed orb's attachments retire now.
+                taken = Some(orbs[index].clone());
+                // A merged orb gives its value once per count.
+                if orbs[index].count <= 1 {
+                    drop(orbs.remove(index));
+                } else {
+                    orbs.update(index, |orb| orb.count -= 1);
                 }
-                true
-            });
+            }
         }
         self.orbs
             .restore(orbs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
-        if gained > 0 {
-            gained = self.mending(gained);
-        }
-        for o in taken {
+        if let Some(o) = taken {
+            let mut gained = o.points();
+            if gained > 0 {
+                gained = self.mending(gained);
+            }
             // ClientPacketListener.handleTakeItemEntity: every orb taken sounds
             // at the orb, whether mending took its points or not.
             let mut r = random_source::create();
@@ -679,9 +691,9 @@ impl Game<'_> {
                 crate::game::pickups::Taken::Orb(Box::new(o)),
                 crate::game::pickups::Collector::Player,
             );
-        }
-        if gained > 0 {
-            self.give_experience_points(gained as i32);
+            if gained > 0 {
+                self.give_experience_points(gained as i32);
+            }
         }
     }
 
@@ -1108,5 +1120,75 @@ mod bob_tests {
             assert_eq!(bob(id, at, false), vanilla);
         }
         assert_ne!(bob(17, at, false), bob(22, at, false));
+    }
+}
+
+#[cfg(test)]
+mod orb_pickup_tests {
+    use crate::game::game_tests::tests::server_game;
+    use crate::motion::PlayerMotion;
+    use horizon_client::entities::ExperienceOrb;
+    use horizon_core::{geometry::Vec3, random::RandomSource};
+    use horizon_mod_runtime::attachments::{
+        AttachmentType, Attachments, Holder, index::AttachmentIndex,
+    };
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_player_picks_a_random_orb_not_the_first() {
+        static VALUE: AttachmentType<i32> = AttachmentType {
+            namespace: "test",
+            name: "orb_pickup",
+            default: || 0,
+            codec: None,
+            copy_on_death: false,
+            sync: false,
+        };
+
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        let at = Vec3::new(16.5, 64.0, 2.5);
+        let mut player = PlayerMotion::new(game.motion, at).unwrap();
+        player.random.set_seed(0);
+        game.player = Some(player);
+        game.tick_experience(); // Empty lists consume no draw.
+        let mut picked =
+            ExperienceOrb::new(12, Vec3::new(15.75, 64.0, 2.5), Vec3::new(0.5, 0.0, 0.0), 7);
+        picked.no_gravity = true;
+        let index = Arc::new(Mutex::new(AttachmentIndex::default()));
+        let mut attachments = Attachments::default();
+        VALUE.set(&mut attachments, Holder::Level, 1).unwrap();
+        picked
+            .attachment_lifetime
+            .bind(&mut attachments, &index, picked.id);
+        let key = ("test".into(), "orb_pickup".into());
+        assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
+        game.orbs.push(picked);
+        let mut waiting = ExperienceOrb::new(11, at, Vec3::ZERO, 1);
+        waiting.no_gravity = true;
+        game.orbs.push(waiting);
+
+        // Orb 12 joined first and now enters the section where orb 11 already waits.
+        game.load_ticking_neighbourhood(1, 0);
+        game.tickets.update(None);
+        game.begin_ordered_ticks();
+        game.run_ordered_ticks(horizon_client::join_seq::JoinSeq::MAX, false)
+            .unwrap();
+        assert!(game.orbs[0].position.x >= 16.0);
+
+        // Seed 0 selects the newly arrived orb at index 1. The cooldown tick
+        // and the last pickup each consume a nextInt(1) draw.
+        for (total, remaining) in [(7, 1), (7, 1), (8, 0)] {
+            game.tick_experience();
+            assert_eq!(game.experience.total, total);
+            assert_eq!(game.orbs.len(), remaining);
+            assert!(index.lock().unwrap().snapshot(&key).is_empty());
+        }
+        assert_eq!(game.pickups.made().get("orb"), Some(&2));
+        assert_eq!(
+            game.player.as_mut().unwrap().random.next_int(),
+            -1_690_734_402
+        );
     }
 }

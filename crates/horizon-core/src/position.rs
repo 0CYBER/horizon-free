@@ -71,6 +71,11 @@ impl SectionPos {
         Self { x, y, z }
     }
 
+    pub fn containing(at: crate::geometry::Vec3) -> Self {
+        let [x, y, z] = at.components().map(crate::geometry::floor_i32);
+        BlockPos::new(x, y, z).section()
+    }
+
     pub const fn pack(self) -> i64 {
         (((self.x as u64 & 0x3f_ffff) << 42)
             | ((self.z as u64 & 0x3f_ffff) << 20)

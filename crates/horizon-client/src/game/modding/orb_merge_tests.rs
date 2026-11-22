@@ -12,6 +12,7 @@ fn orb(id: u32, value: i32, count: u32) -> ExperienceOrb {
         fall_distance: 0.0,
         rotation: [0.0, 0.0],
         join: Default::default(),
+        section_order: 0,
         id,
         position: at,
         previous: at,

@@ -749,7 +749,7 @@ impl Game<'_> {
                     .find(|o| o.id == id)
                     .ok_or_else(stale)?;
                 orb.rotation = new.rotation;
-                orb.position = new.position;
+                orb.set_position(new.position);
                 orb.previous = new.previous;
                 orb.velocity = new.velocity;
                 orb.value = new.value;

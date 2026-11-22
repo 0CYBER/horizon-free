@@ -3,8 +3,8 @@
 //! entities for. A behaviour returns what is left in the slot and the level
 //! event it plays (`DefaultDispenseItemBehavior.dispense` then plays that
 //! event and the smoke animation, event 2000).
-use super::level_sounds::LevelSound;
 use super::{Game, item_abilities::ability};
+use super::{entity_sections::section_order, level_sounds::LevelSound};
 use horizon_client::{
     Result,
     collisions::SceneCollisions,
@@ -84,14 +84,6 @@ fn block_box(p: Pos) -> Aabb {
         Vec3::new(f64::from(p.0), f64::from(p.1), f64::from(p.2)),
         Vec3::new(f64::from(p.0 + 1), f64::from(p.1 + 1), f64::from(p.2 + 1)),
     )
-}
-/// `EntitySectionStorage.forEachAccessibleNonEmptySection`: x ascending, then
-/// the packed key (`SectionPos.asLong`: z as 22 unsigned bits, then y as 20);
-/// within a section the entities go in the order they joined, which ids follow.
-fn section_order(at: Vec3) -> (i32, u32, u32) {
-    let s = |v: f64| (v.floor() as i32) >> 4;
-    let (x, y, z) = (s(at.x), s(at.y), s(at.z));
-    (x, z as u32 & 0x3F_FFFF, y as u32 & 0xF_FFFF)
 }
 fn overlaps(a: Aabb, b: Aabb) -> bool {
     let (a0, a1, b0, b1) = (

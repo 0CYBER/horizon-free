@@ -1914,16 +1914,43 @@ impl Game<'_> {
         // yet given an id is not a lookup member: its join stands in.
         let mut out: HashMap<(i32, i32), Vec<Tag>> =
             keys.iter().map(|k| (*k, Vec::new())).collect();
+        let orb_entries: HashMap<_, _> = self
+            .orbs
+            .iter()
+            .filter(|orb| keys.contains(&chunk_of(orb.position)))
+            .map(|orb| (orb.join, orb.section_order))
+            .collect();
         {
             let admission = self.resident_entities.table.get_mut().admission_order();
-            for (key, mut tags) in roots {
+            for tags in roots.values_mut() {
                 tags.sort_by_cached_key(|(id, join, tag)| {
                     (section_order(tag), admission(*id).unwrap_or(*join))
                 });
-                out.entry(key)
-                    .or_default()
-                    .extend(tags.into_iter().map(|(_, _, tag)| tag));
             }
+        }
+        for (key, mut tags) in roots {
+            if !orb_entries.is_empty() {
+                // Reorder only the root-orb slots so pickups preserve section entry
+                // order across reload. Passenger orbs are written with their vehicles.
+                let mut slots = Vec::new();
+                let mut orbs = Vec::new();
+                for (_, join, tag) in &mut tags {
+                    if let Some(&entry) = orb_entries.get(join)
+                        && self.saved_entity_is_root(tag)
+                    {
+                        let order = (section_order(tag), entry);
+                        orbs.push((order, std::mem::replace(tag, Tag::End)));
+                        slots.push(tag);
+                    }
+                }
+                orbs.sort_by_key(|(order, _)| *order);
+                for (slot, (_, tag)) in slots.into_iter().zip(orbs) {
+                    *slot = tag;
+                }
+            }
+            out.entry(key)
+                .or_default()
+                .extend(tags.into_iter().map(|(_, _, tag)| tag));
         }
         for key in keys {
             let unknown = if remove {

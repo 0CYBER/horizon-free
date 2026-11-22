@@ -5,6 +5,7 @@
 # One line per path: the path as internals.json writes it, then the issue, as `path  #issue`. A line for some of a
 # path's entries names their kind, their cfg or both: `path  kind=field  #issue`, `path  kind=fn  cfg=unix  #issue`
 # (`cfg=` alone: the unconditional ones). Lines starting with # are comments.
+horizon_client::game::dispenser::section_order  #19368
 horizon_mod_package::manifest::inject::Inject  #19576
 horizon_mod_package::manifest::inject::Kind  #19576
 horizon_client::game::points  #19576

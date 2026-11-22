@@ -2124,6 +2124,7 @@ fn orbs_save_and_load_their_fire() {
         attachment_lifetime: Default::default(),
         rotation: [0.0, 0.0],
         join: Default::default(),
+        section_order: 0,
         no_gravity: false,
         id: 0,
         position: Vec3::new(1.0, 2.0, 3.0),

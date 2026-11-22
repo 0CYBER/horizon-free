@@ -1587,7 +1587,7 @@ impl Game<'_> {
             }
             Target::Orb(id) => {
                 if let Some(o) = self.orbs.iter_mut().find(|o| o.id == id) {
-                    o.position = v;
+                    o.set_position(v);
                     o.previous = v;
                     if let Some(r) = rotation {
                         Entity::set_rotation(o, r);

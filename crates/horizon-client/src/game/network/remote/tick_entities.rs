@@ -667,11 +667,11 @@ impl Game<'_> {
                 let old = o.position;
                 if let Some(l) = lerps.get_mut(&(o.id as i32)).filter(|l| l.steps > 0) {
                     let alpha = 1.0 / f64::from(l.steps);
-                    o.position = Vec3::new(
+                    o.set_position(Vec3::new(
                         o.position.x + (l.target[0] - o.position.x) * alpha,
                         o.position.y + (l.target[1] - o.position.y) * alpha,
                         o.position.z + (l.target[2] - o.position.z) * alpha,
-                    );
+                    ));
                     l.steps -= 1;
                 }
                 let before = o.position;

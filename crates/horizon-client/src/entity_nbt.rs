@@ -2956,6 +2956,7 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         fall_distance: float(tag.get("fall_distance")).unwrap_or(0.0),
         rotation: rotation(tag),
         join: Default::default(),
+        section_order: 0,
         no_gravity: flag(tag, "NoGravity"),
         id: 0,
         position,

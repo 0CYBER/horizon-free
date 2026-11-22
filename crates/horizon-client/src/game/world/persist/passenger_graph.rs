@@ -314,7 +314,7 @@ impl Game<'_> {
         for handle in self.entity_handles() {
             with_entity_mut!(self, handle, entity => {
                 if entity.id() == id {
-                    *entity.position_mut() = at;
+                    entity.set_position(at);
                     *entity.velocity_mut() = horizon_core::geometry::Vec3::ZERO;
                 }
             });

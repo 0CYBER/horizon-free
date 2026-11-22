@@ -76,6 +76,9 @@ pub(super) trait Entity: EntityRules {
     fn id(&self) -> u32;
     fn position(&self) -> Vec3;
     fn position_mut(&mut self) -> &mut Vec3;
+    fn set_position(&mut self, position: Vec3) {
+        *self.position_mut() = position;
+    }
     /// Where it stood when the last tick began (`Entity.lastKnownPosition`'s
     /// reading): `position - previous_position` is `computeSpeed`.
     fn previous_position(&self) -> Vec3;
@@ -1799,6 +1802,10 @@ impl Entity for ItemEntity {
 }
 
 impl Entity for ExperienceOrb {
+    fn set_position(&mut self, position: Vec3) {
+        ExperienceOrb::set_position(self, position);
+    }
+
     fn reset_fall_distance(&mut self) {
         // An orb keeps no fall distance here.
     }
@@ -1806,8 +1813,7 @@ impl Entity for ExperienceOrb {
         if gate.skipped() {
             return;
         }
-        let position = self.position_mut();
-        *position = position.add_vector(movement);
+        self.set_position(self.position.add_vector(movement));
     }
 
     fn set_on_ground(&mut self, on_ground: bool) {
@@ -3084,6 +3090,7 @@ mod set_rotation_tests {
             attachment_lifetime: Default::default(),
             fall_distance: 0.0,
             join: Default::default(),
+            section_order: 0,
             no_gravity: false,
             id: 0,
             position: horizon_core::geometry::Vec3::ZERO,
