@@ -44,6 +44,11 @@ fn texel(array: u32, at: vec2<i32>, layer: i32) -> vec4<f32> {
 @fragment fn fs_stats(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let layer = i32(pos.x);
     let array = u32(pos.y);
+    // Only the first eight arrays are bound here: past them the thresholds stay 0 and
+    // every pixel of a light source may shine, as with HDR off.
+    if array >= 8u {
+        return vec4(0.0);
+    }
     // Every array holds sprites of the same size.
     let size = vec2<i32>(textureDimensions(sprites));
     var lo = 1.0;

@@ -187,15 +187,25 @@ pub(crate) fn describe_adapter(adapter: &wgpu::Adapter) {
     );
 }
 /// Whether an adapter's texture arrays hold the block textures Horizon puts
-/// in one array.
-pub(crate) fn check_layers(adapter: &wgpu::Adapter, layers: u32) -> Result<u32> {
+/// in one array: the arrays terrain.wgsl binds for them, and the layers per array.
+pub(crate) fn check_layers(adapter: &wgpu::Adapter, layers: u32) -> Result<(u32, u32)> {
     let info = adapter.get_info();
-    Ok(layer_split(
-        adapter.limits().max_texture_array_layers,
-        info.backend == wgpu::Backend::Gl,
-        adapter_requested_split(&info, requested_split(), layers),
-        layers,
-    )?)
+    let limits = adapter.limits();
+    let max = limits.max_texture_array_layers;
+    let gl = info.backend == wgpu::Backend::Gl;
+    let requested = adapter_requested_split(&info, requested_split(), layers);
+    // A pack past the arrays terrain.wgsl binds takes more, where the GPU samples enough.
+    match super::layer_split(max, gl, requested, layers) {
+        Ok(split) => Ok((super::SPRITE_ARRAYS, split)),
+        Err(_) if super::sprite_arrays_for(&limits) == super::MORE_SPRITE_ARRAYS => {
+            let more = super::MORE_SPRITE_ARRAYS;
+            Ok((
+                more,
+                super::layer_split_in(max, gl, requested, layers, more)?,
+            ))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 /// Whether the swapchain can take a window of `width` x `height`: each side from 1 to the
 /// device's `max_texture_dimension_2d` (`max`), else `Surface::configure` panics. 0 is a

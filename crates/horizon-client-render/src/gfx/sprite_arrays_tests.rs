@@ -57,7 +57,7 @@ fn a_pass_samples_a_sprite_layer_sharp() {
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
     });
-    let views = super::sprite_views(&textures, &unused, Some(1));
+    let views = super::sprite_views(&textures, &unused, Some(1), super::SPRITE_ARRAYS);
     let nearest = device.create_sampler(&super::SPRITE_NEAREST);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,

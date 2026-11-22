@@ -426,6 +426,9 @@ pub(super) fn terrain_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     ];
     entries.extend((5..=11).map(|binding| entry(binding, sprite_array)));
     entries.push(entry(12, texture(wgpu::TextureViewDimension::D2)));
+    // The arrays past the first eight, where a pack needs them (gfx.rs `MORE_SPRITE_ARRAYS`).
+    let more = super::bound_sprite_arrays().saturating_sub(super::SPRITE_ARRAYS);
+    entries.extend((0..more).map(|i| entry(super::MORE_ARRAYS_BINDING + i, sprite_array)));
     entries
 }
 
