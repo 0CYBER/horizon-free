@@ -1,6 +1,6 @@
 //! Players' ratings of published projects, 1 to 5 stars: one per GitHub
 //! account and project, which its rater can change. Stored in one SQLite
-//! file (a Railway volume). Only totals leave it: never who rated what,
+//! file (on the host's disk). Only totals leave it: never who rated what,
 //! except a signed-in account's own rating, to that account.
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{collections::BTreeMap, path::Path};

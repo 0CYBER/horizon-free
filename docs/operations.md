@@ -102,14 +102,14 @@ is out, so label that pull request `release-now` (or ask the council to) once it
 
 ## Kira
 
-Kira runs on Railway and needs nobody's machine.
+Kira runs on Ludovic's home server (ludothinkpad, behind a Cloudflare Tunnel) and needs no contributor's machine.
 
 - **Questions Kira can't answer** ("passed to the team") are listed in #kira-handoffs. Answer the member in their
   thread.
 - **Switches anyone on staff can use:** `/kira-ai off|on` (AI answers), the triage pause.
 - **Polls:** `/vote question:` (council members) starts a 24-hour poll; `/poll start` for the other kinds. The
-  results are in #polls-and-decisions and in `https://kira-production-500e.up.railway.app/decisions.json`.
-- **If Kira is down:** only the account holder can reach Railway today. Post in #council so someone tells him.
+  results are in #polls-and-decisions and in `https://mcp.playhorizon.dev/decisions.json`.
+- **If Kira is down:** only the account holder can reach the host today. Post in #council so someone tells him.
 
 ## The official server
 
@@ -130,5 +130,5 @@ council member tells the panel holders and the host.
 
 - Code and merges: the Horizon Team, in #horizon-team.
 - Decisions: the council, by poll.
-- Accounts (GitHub organisation, Discord ownership, Railway, the server panel, domains): the account holders; the
+- Accounts (GitHub organisation, Discord ownership, the home server, the server panel, domains): the account holders; the
   list is in GOVERNANCE.md section 11.

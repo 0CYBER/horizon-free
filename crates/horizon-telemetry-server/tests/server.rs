@@ -635,7 +635,7 @@ async fn ask(s: &Server, headers: &[(&str, &str)]) -> StatusCode {
 
 #[tokio::test]
 async fn the_client_address_comes_from_the_configured_header_only() {
-    // Railway: X-Real-IP, which its edge overwrites. Three reads each (a burst of 3 at 30 an hour).
+    // A proxy's own header (X-Real-IP here), which its edge overwrites. Three reads each (a burst of 3 at 30 an hour).
     let s = server(Config {
         reads_per_hour: 30.0,
         trust_proxy: true,

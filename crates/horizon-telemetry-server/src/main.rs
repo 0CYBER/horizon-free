@@ -74,9 +74,14 @@ async fn main() {
             }
         }
     });
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
+    // `HOST`: the address to listen on (127.0.0.1 on the host, where only the Cloudflare Tunnel reaches it).
+    let host: std::net::IpAddr = std::env::var("HOST")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+    let listener = tokio::net::TcpListener::bind(SocketAddr::new(host, port))
         .await
-        .unwrap_or_else(|e| panic!("port {port}: {e}"));
+        .unwrap_or_else(|e| panic!("{host}:{port}: {e}"));
     eprintln!("horizon-telemetry-server: listening on {port}, data in {path}");
     axum::serve(
         listener,

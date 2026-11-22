@@ -1,7 +1,7 @@
-"""The images Railway builds for the telemetry server and the mod registry copy only the crates they name.
+"""The builds of the telemetry server and the mod registry (their images, and the host's deploy) read only the crates they name.
 
 Each service is its own workspace with its own Cargo.lock. When one of its crates gains a path dependency on
-another crate of the repository, the image must copy that crate too, and Railway must rebuild when it changes:
+another crate of the repository, the image must copy that crate too, and the host must rebuild when it changes (`deploy.json` watchPatterns):
 otherwise the next deploy fails (`no matching package named ...`) while the old deployment keeps running, and nobody
 sees it (2026-11-09: both services failed after horizon-addresses and horizon-release-sign joined them).
 
@@ -78,8 +78,8 @@ def copied_crates(dockerfile: Path) -> set[str]:
     return set(re.findall(r"^COPY crates/([a-z0-9-]+) crates/\1\s*$", dockerfile.read_text(), re.MULTILINE))
 
 
-def watched_crates(railway: Path) -> set[str]:
-    patterns = json.loads(railway.read_text())["build"]["watchPatterns"]
+def watched_crates(deploy: Path) -> set[str]:
+    patterns = json.loads(deploy.read_text())["watchPatterns"]
     if "/crates/**" in patterns:
         return all_crates()
     return {match.group(1) for pattern in patterns if (match := re.fullmatch(r"/crates/([a-z0-9-]+)/\*\*", pattern))}
@@ -107,7 +107,7 @@ class ServiceImageTests(unittest.TestCase):
 
     def test_an_image_that_runs_the_generator_copies_every_crate(self):
         # The generator also reads the crate each hook target names, known only when it runs: no list of crates is
-        # complete, so the image copies them all and Railway watches them all.
+        # complete, so the image copies them all and the host watches them all.
         named, dynamic = generator_reads()
         self.assertIn("horizon-client", named)
         self.assertTrue(dynamic, "the generator no longer reads crates named at run time: a list of crates may do")
@@ -117,8 +117,8 @@ class ServiceImageTests(unittest.TestCase):
                 continue
             with self.subTest(service=service):
                 self.assertTrue(copies_every_crate(crate / "Dockerfile"), f"{service}/Dockerfile must COPY crates crates")
-                patterns = json.loads((crate / "railway.json").read_text())["build"]["watchPatterns"]
-                self.assertIn("/crates/**", patterns, f"{service}/railway.json must watch /crates/**")
+                patterns = json.loads((crate / "deploy.json").read_text())["watchPatterns"]
+                self.assertIn("/crates/**", patterns, f"{service}/deploy.json must watch /crates/**")
 
     def test_an_image_that_runs_the_generator_copies_and_watches_its_data_files(self):
         # The build script fails when a file the generator reads outside crates/ is missing from the image.
@@ -133,15 +133,15 @@ class ServiceImageTests(unittest.TestCase):
             with self.subTest(service=service):
                 copied = set(re.findall(r"^COPY (tools/\S+) \1\s*$", (crate / "Dockerfile").read_text(), re.MULTILINE))
                 self.assertEqual(sorted(files - copied), [], f"{service}/Dockerfile must COPY these files")
-                patterns = json.loads((crate / "railway.json").read_text())["build"]["watchPatterns"]
-                self.assertEqual(sorted(f for f in files if f"/{f}" not in patterns), [], f"{service}/railway.json")
+                patterns = json.loads((crate / "deploy.json").read_text())["watchPatterns"]
+                self.assertEqual(sorted(f for f in files if f"/{f}" not in patterns), [], f"{service}/deploy.json")
 
-    def test_railway_rebuilds_when_any_of_those_crates_changes(self):
+    def test_the_host_rebuilds_when_any_of_those_crates_changes(self):
         for service in SERVICES:
             crate = ROOT / "crates" / service
             with self.subTest(service=service):
-                missing = sorted(needed_crates(service) - watched_crates(crate / "railway.json"))
-                self.assertEqual(missing, [], f"{service}/railway.json watchPatterns must list these crates")
+                missing = sorted(needed_crates(service) - watched_crates(crate / "deploy.json"))
+                self.assertEqual(missing, [], f"{service}/deploy.json watchPatterns must list these crates")
 
     def test_the_checks_read_real_dockerfile_lines(self):
         # A COPY of a crate is recognised, a COPY of anything else is not, and a lockfile's registry packages

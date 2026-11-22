@@ -1,0 +1,17 @@
+{
+  "$comment": "How the host (ludothinkpad, ludovic111/LifeOS nixos/ludothinkpad/horizon.nix) deploys this service: it rebuilds when main changes a path in watchPatterns, then checks healthcheckPath.",
+  "watchPatterns": [
+    "/crates/horizon-telemetry/**",
+    "/crates/horizon-addresses/**",
+    "/crates/horizon-bench/**",
+    "/crates/horizon-core/**",
+    "/crates/horizon-guest-stack/**",
+    "/crates/horizon-hooks/**",
+    "/crates/horizon-perf-format/**",
+    "/crates/horizon-platform/**",
+    "/crates/horizon-system/**",
+    "/crates/horizon-telemetry-server/**",
+    "/Cargo.toml"
+  ],
+  "healthcheckPath": "/healthz"
+}

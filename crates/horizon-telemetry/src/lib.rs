@@ -40,7 +40,7 @@ pub const SCHEMA: u32 = 1;
 /// (cores, clocks, VRAM, drive, screen, power, form), 2026-10-23.
 pub const CONSENT_VERSION: u32 = 2;
 
-/// The ingest server (`crates/horizon-telemetry-server`, on Railway). `HORIZON_TELEMETRY_URL`
+/// The ingest server (`crates/horizon-telemetry-server`). `HORIZON_TELEMETRY_URL`
 /// overrides it (a local server); `HORIZON_TELEMETRY_URL=off` sends nothing at all, no ping
 /// either (tests and automated runs). What is sent still depends on the player's switches.
 pub const DEFAULT_ENDPOINT: &str = horizon_addresses::TELEMETRY;

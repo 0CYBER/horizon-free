@@ -67,7 +67,7 @@ Never sent: account names or UUIDs, world names, server or LAN addresses, chat, 
 - `telemetry/outbox/` holds one JSON file per item, `<day>-<kind>-<random>.json`. It never holds more than 200 items or 2 MiB, and the oldest go first. `kept.json` counts today's items per kind against the caps above.
 - The launcher sends the outbox when it starts and when it closes. Items go as one JSON batch (`{"schema":1,"install_id":…,"items":[…]}`, up to 64 items and 1 MiB), compressed with zstd: `POST /v1/batch` with `Content-Encoding: zstd`. A day's perf summaries are under 2 KB on the wire.
 - After a failure the launcher waits a minute, doubling up to a day, and sends at most 8 batches a day. A batch the server refuses with a 4xx (not 429) is dropped.
-- The server is `https://telemetry.playhorizon.dev` (`DEFAULT_ENDPOINT`), on Railway in the EU (`europe-west4`, Amsterdam). `HORIZON_TELEMETRY_URL` names another one (a local server); `HORIZON_TELEMETRY_URL=off` sends nothing at all, no ping either. Tests, CI and the benchmark and test harnesses set `off`.
+- The server is `https://telemetry.playhorizon.dev` (`DEFAULT_ENDPOINT`), on Ludovic's home server in Switzerland, behind Cloudflare. `HORIZON_TELEMETRY_URL` names another one (a local server); `HORIZON_TELEMETRY_URL=off` sends nothing at all, no ping either. Tests, CI and the benchmark and test harnesses set `off`.
 - What is sent still depends on the switches: with every switch off nothing but the ping leaves, and the outbox stays empty.
 - `SCHEMA` versions the format. New optional fields keep it. A field that changes meaning or goes bumps it, and the server keeps reading the older ones.
 
@@ -167,4 +167,4 @@ Public output never holds a raw hardware value, only these classes (`src/classes
 
 The driver, OS version, clocks, screen and power are kept raw for the 180 days of retention, to explain a slow group, and never published.
 
-`crates/horizon-telemetry-server` is the server, at `https://telemetry.playhorizon.dev` on Railway (one SQLite file on a volume, region `europe-west4`). Its [README](../crates/horizon-telemetry-server/README.md) covers storage (about 190 bytes per play session), retention (180 days of raw rows, anonymous daily totals kept), rate limits and hosting.
+`crates/horizon-telemetry-server` is the server, at `https://telemetry.playhorizon.dev` on Ludovic's home server (one SQLite file on its disk, in Switzerland). Its [README](../crates/horizon-telemetry-server/README.md) covers storage (about 190 bytes per play session), retention (180 days of raw rows, anonymous daily totals kept), rate limits and hosting.

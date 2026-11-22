@@ -1,0 +1,11 @@
+{
+  "$comment": "How the host (ludothinkpad, ludovic111/LifeOS nixos/ludothinkpad/horizon.nix) deploys this service: it rebuilds when main changes a path in watchPatterns, then checks healthcheckPath.",
+  "watchPatterns": [
+    "/crates/**",
+    "/tools/layering/mod_vocab_state.json",
+    "/tools/mixins/narrow-reference-rule.patch",
+    "/Cargo.toml",
+    "/.dockerignore"
+  ],
+  "healthcheckPath": "/healthz"
+}

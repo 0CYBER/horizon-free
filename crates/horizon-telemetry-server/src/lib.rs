@@ -59,10 +59,10 @@ pub struct Config {
     pub requests_per_hour: f64,
     /// Items one install may send a day.
     pub items_per_day: u32,
-    /// Behind a proxy (Railway, Fly…): the client's address is read from `client_ip_header`.
+    /// Behind a proxy (Cloudflare, Fly…): the client's address is read from `client_ip_header`.
     pub trust_proxy: bool,
     /// The one header the proxy in front sets to the client's address, overwriting whatever the
-    /// client sent (`HORIZON_TELEMETRY_CLIENT_IP_HEADER`, e.g. `x-real-ip` on Railway). Its last
+    /// client sent (`HORIZON_TELEMETRY_CLIENT_IP_HEADER`, e.g. `cf-connecting-ip` behind Cloudflare). Its last
     /// comma-separated entry is used. Read only with `trust_proxy`; without it the TCP peer counts,
     /// which behind a proxy is the proxy, so every client shares one bucket (the server warns at
     /// start).
@@ -247,7 +247,7 @@ impl Config {
     pub fn client_ip_refusal(&self) -> Option<String> {
         (self.trust_proxy && self.client_ip_header.is_none()).then(|| {
             "HORIZON_TELEMETRY_TRUST_PROXY=1 needs HORIZON_TELEMETRY_CLIENT_IP_HEADER, the header your proxy \
-             overwrites with the client's address (x-real-ip on Railway, as the Dockerfile sets): without it \
+             overwrites with the client's address (cf-connecting-ip behind Cloudflare, as the Dockerfile sets): without it \
              every client would count as the proxy and share one rate-limit bucket. Not starting."
                 .into()
         })
@@ -425,7 +425,7 @@ impl App {
     }
 
     /// The address requests are counted under, for the rate limits only: kept in memory, never
-    /// stored or logged. Behind a proxy (Railway) the TCP peer is the proxy, so with `trust_proxy`
+    /// stored or logged. Behind a proxy (Cloudflare's tunnel) the TCP peer is the proxy, so with `trust_proxy`
     /// it is the last entry of the one configured header (`client_ip_header`), which the proxy
     /// overwrites. No other header is read: which one a client can't forge depends on the platform.
     /// An IPv6 client counts by its /64.

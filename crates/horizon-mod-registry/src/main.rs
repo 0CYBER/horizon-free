@@ -1,4 +1,4 @@
-//! `horizon-mod-registry`: serves on `PORT` (default 8080). Configured by the
+//! `horizon-mod-registry`: serves on `HOST`:`PORT` (default 0.0.0.0:8080). Configured by the
 //! environment (see `Config::from_env`); keeps the ratings in `REGISTRY_DB`.
 use std::net::SocketAddr;
 
@@ -12,9 +12,14 @@ async fn main() {
         .unwrap_or(8080);
     let config = Config::from_env().unwrap_or_else(|e| panic!("horizon-mod-registry: {e}"));
     let repo = config.github.repo.clone();
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
+    // `HOST`: the address to listen on (127.0.0.1 on the host, where only the Cloudflare Tunnel reaches it).
+    let host: std::net::IpAddr = std::env::var("HOST")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([0, 0, 0, 0]));
+    let listener = tokio::net::TcpListener::bind(SocketAddr::new(host, port))
         .await
-        .unwrap_or_else(|e| panic!("port {port}: {e}"));
+        .unwrap_or_else(|e| panic!("{host}:{port}: {e}"));
     eprintln!("horizon-mod-registry: listening on {port}, submitting to {repo}");
     let app = App::new(config).unwrap_or_else(|e| panic!("horizon-mod-registry: {e}"));
     axum::serve(listener, router(app))

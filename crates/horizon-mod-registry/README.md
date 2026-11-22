@@ -79,11 +79,18 @@ REGISTRY_PUBLIC_URL=http://localhost:4173 REGISTRY_SESSION_KEY=... GITHUB_CLIENT
 | `REGISTRY_DB` | The ratings' SQLite file: default `/data/registry.sqlite3`, the volume |
 | `PORT` | Default 8080 |
 
-On Railway it is the service `horizon-mod-registry` of the project `horizon-site`, next to the website: built from
-`main` with this `Dockerfile` from the repository root (it copies all of `crates/`, `tools/layering/mod_vocab_state.json` and
-`tools/mixins/narrow-reference-rule.patch`: `horizon-mod-vocab`'s build script reads the game's hook sources and that
-inventory, and `horizon-mod-package` includes that patch; the `mod-registry` workflow builds the image), health check `/healthz`, no public
-domain, and the volume `registry-data` at `/data` for the ratings. The
-website's Caddy sends `/api/mods/*` to it over Railway's private network (`REGISTRY_UPSTREAM` on the website service:
-`http://horizon-mod-registry.railway.internal:8080`). `railway.json` lists the same settings; Railway reads them from
-the service, not from the file.
+| `HOST` | Default `0.0.0.0` |
+
+Production runs on Ludovic's home server **ludothinkpad** (NixOS) since 2026-11-22, next to the website, declared in
+`nixos/ludothinkpad/horizon.nix` of ludovic111/LifeOS: the system service `horizon-registry` (user `horizon`, a
+low-priority slice with capped CPU and memory) on `127.0.0.1:8183`, no public domain; the website sends `/api/mods/*`
+to it locally (`REGISTRY_UPSTREAM=http://127.0.0.1:8183` on the website). The ratings are in
+`/var/lib/horizon/registry/registry.sqlite3`, copied nightly to the Mac mini by `horizon-backup`. **A push to `main`
+goes live** when it changes a path in `deploy.json` (`watchPatterns`): the host's `horizon-deploy` timer builds
+`cargo build --release --locked --manifest-path crates/horizon-mod-registry/Cargo.toml` (the build reads all of
+`crates/`, `tools/layering/mod_vocab_state.json` and `tools/mixins/narrow-reference-rule.patch`: `horizon-mod-vocab`'s
+build script reads the game's hook sources and that inventory, and `horizon-mod-package` includes that patch),
+restarts the service, checks `/healthz` and rolls back if it fails. The `Dockerfile` builds the same thing as an image
+(the `mod-registry` workflow checks it). Secrets are one environment file in 1Password (Agents, `Horizon host env
+registry`), written to the host by `horizon-secrets registry`. The client address for limits is Cloudflare's
+`CF-Connecting-IP`.
