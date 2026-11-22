@@ -11,11 +11,20 @@ pub trait LootTags {
             .iter()
             .any(|member| member == id)
     }
+    /// Every tag name of a registry these reads know, for a member's reverse read
+    /// (`Holder.tags()`): each one `contains` answers for. None when this source can't list
+    /// them, so a reverse read answers "unavailable" rather than a partial list.
+    fn tag_names(&self, _registry: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 impl LootTags for super::LootData {
     fn members(&self, registry: &str, tag: &str) -> Vec<String> {
         self.tag(registry, tag)
+    }
+    fn tag_names(&self, registry: &str) -> Option<Vec<String>> {
+        Some(self.tag_names_of(registry))
     }
 }
 

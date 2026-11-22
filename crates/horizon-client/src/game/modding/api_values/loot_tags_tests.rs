@@ -14,7 +14,16 @@ impl Hooks for TagReader {
             .key(&mod_api::Identifier::parse("test:ingredients").unwrap())
             .unwrap();
         let members = event.tags.items(tag).unwrap();
-        event.stack.count = if event.tags.is_in_tag(event.stack.item, tag) == Some(true) {
+        // The reverse read agrees with `is_in_tag`: the tag is listed exactly when it holds.
+        let in_tag = event.tags.is_in_tag(event.stack.item, tag) == Some(true);
+        assert_eq!(
+            event
+                .tags
+                .item_tags(event.stack.item)
+                .map(|tags| tags.contains(&tag)),
+            Some(in_tag)
+        );
+        event.stack.count = if in_tag {
             assert_eq!(
                 members
                     .iter()

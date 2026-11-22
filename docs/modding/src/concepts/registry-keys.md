@@ -337,6 +337,11 @@ authoritative tags are applied or if the relevant registry mapping is unavailabl
 refused if the runtime cannot allocate a name slot. No lookup stringifies a retained key.
 Block enumeration returns `BlockKey` values, including blocks no mod requested. An unresolved
 member returns `None` for the entire list, not a partial result.
+The other direction, the tags a member is in (`Holder.tags()`), is `tags.item_tags(item_key)`,
+`tags.block_tags(block_key)` and `tags.fluid_tags(fluid_key)`: the tags whose merged members hold
+it, sorted by tag name (`tags.name(tag_key)` gives a key's name back), an empty list for a member of none, and `None` as for the member reads.
+Each call walks that registry's tags, so a mod that asks often (a filter matching `c:ingots/*`)
+caches the answer until the next `tags_updated`.
 The engine `TagRegistry`, `StackData`, `StackView` and `DisplayContext` are not API types.
 
 ## Scoped Parts

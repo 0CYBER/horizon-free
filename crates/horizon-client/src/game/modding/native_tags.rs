@@ -58,6 +58,40 @@ pub(super) fn blocks(items: Option<&Items>, tag: TagKey) -> Option<Vec<BlockKey>
     })
 }
 
+/// The tags of `tags` whose members hold `member`, sorted by tag name: `Holder.tags()` over
+/// the merged sets the membership reads use. None, never a partial list, when a tag name can't
+/// get a key.
+fn tags_holding(
+    tags: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    member: &str,
+) -> Option<Vec<TagKey>> {
+    let mut names: Vec<&str> = tags
+        .iter()
+        .filter(|(_, members)| members.contains(member))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|name| mod_api::__private::tag_key(&mod_api::Identifier::parse(name).ok()?))
+        .collect()
+}
+pub(crate) fn name(tag: TagKey) -> Option<mod_api::Identifier> {
+    mod_api::__private::with_tag_name(tag, |name| mod_api::Identifier::parse(name?).ok())
+}
+pub(super) fn item_tags(items: Option<&Items>, item: ItemKey) -> Option<Vec<TagKey>> {
+    let items = items?;
+    tags_holding(&items.item_tags, mod_api::__private::item_key_id(item)?)
+}
+pub(super) fn block_tags(items: Option<&Items>, block: BlockKey) -> Option<Vec<TagKey>> {
+    let items = items?;
+    tags_holding(&items.block_tags, mod_api::__private::block_key_id(block)?)
+}
+pub(super) fn fluid_tags(items: Option<&Items>, fluid: FluidKey) -> Option<Vec<TagKey>> {
+    let items = items?;
+    tags_holding(&items.fluid_tags, mod_api::__private::fluid_id(fluid)?)
+}
+
 // A restricted host supplies the same authoritative item tables but cannot borrow Game.
 // Only that choice differs; key resolution, ordered reads and membership stay above.
 macro_rules! impl_tags {
@@ -65,6 +99,9 @@ macro_rules! impl_tags {
         impl mod_api::Tags for $ty {
             fn key(&self, id: &mod_api::Identifier) -> Option<mod_api::TagKey> {
                 mod_api::__private::tag_key(id)
+            }
+            fn name(&self, tag: mod_api::TagKey) -> Option<mod_api::Identifier> {
+                $crate::game::native_tags::name(tag)
             }
             fn is_in_tag(&self, item: mod_api::ItemKey, tag: mod_api::TagKey) -> Option<bool> {
                 let $this = self;
@@ -81,6 +118,18 @@ macro_rules! impl_tags {
             fn blocks(&self, tag: mod_api::TagKey) -> Option<Vec<mod_api::BlockKey>> {
                 let $this = self;
                 $crate::game::native_tags::blocks($items, tag)
+            }
+            fn item_tags(&self, item: mod_api::ItemKey) -> Option<Vec<mod_api::TagKey>> {
+                let $this = self;
+                $crate::game::native_tags::item_tags($items, item)
+            }
+            fn block_tags(&self, block: mod_api::BlockKey) -> Option<Vec<mod_api::TagKey>> {
+                let $this = self;
+                $crate::game::native_tags::block_tags($items, block)
+            }
+            fn fluid_tags(&self, fluid: mod_api::FluidKey) -> Option<Vec<mod_api::TagKey>> {
+                let $this = self;
+                $crate::game::native_tags::fluid_tags($items, fluid)
             }
         }
     };
@@ -139,6 +188,85 @@ mod tests {
             None,
             "no partial member list on unresolved block mapping"
         );
+    }
+
+    /// The tags an item or block is in are the tags whose members hold it, sorted by the names
+    /// `name` gives back, so `is_in_tag` is true for exactly those; a member of none gets an
+    /// empty list, and no tables give None.
+    #[test]
+    fn a_members_tags_are_the_tags_holding_it_by_name() {
+        crate::game::api_values::install_parts(&[]).unwrap();
+        mod_api::__private::resolve_items(["minecraft:iron_ingot", "minecraft:stick"]).unwrap();
+        mod_api::__private::resolve_block_keys(["minecraft:air", "minecraft:iron_block"], |_| {
+            let properties = std::collections::BTreeMap::new();
+            horizon_mod_runtime::block_definitions::BlockDefinition::new(&[&properties], 0)
+                .map_err(|error| format!("{error:?}"))
+        })
+        .unwrap();
+        let iron = mod_api::__private::item_key("minecraft:iron_ingot").unwrap();
+        let stick = mod_api::__private::item_key("minecraft:stick").unwrap();
+        let block = mod_api::__private::block_key("minecraft:iron_block").unwrap();
+        let key = |name: &str| {
+            mod_api::__private::tag_key(&mod_api::Identifier::parse(name).unwrap()).unwrap()
+        };
+        let mut table = Items::for_tests(
+            [
+                ("c:ingots/iron", &["minecraft:iron_ingot"][..]),
+                ("c:ingots", &["minecraft:iron_ingot"][..]),
+                (
+                    "minecraft:beacon_payment_items",
+                    &["minecraft:iron_ingot"][..],
+                ),
+                ("c:rods/wooden", &["minecraft:oak_planks"][..]),
+            ]
+            .into_iter()
+            .map(|(tag, members)| {
+                (
+                    tag.to_owned(),
+                    members.iter().map(|m| (*m).to_owned()).collect(),
+                )
+            })
+            .collect(),
+        );
+        table.block_tags.insert(
+            "minecraft:beacon_base_blocks".into(),
+            ["minecraft:iron_block".into()].into(),
+        );
+        let listed = item_tags(Some(&table), iron).unwrap();
+        let names: Vec<String> = listed
+            .iter()
+            .map(|tag| name(*tag).unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "c:ingots",
+                "c:ingots/iron",
+                "minecraft:beacon_payment_items"
+            ]
+        );
+        assert_eq!(
+            listed,
+            [
+                key("c:ingots"),
+                key("c:ingots/iron"),
+                key("minecraft:beacon_payment_items")
+            ]
+        );
+        for tag in &listed {
+            assert_eq!(is_in_tag(Some(&table), iron, *tag), Some(true));
+        }
+        assert_eq!(
+            is_in_tag(Some(&table), iron, key("c:rods/wooden")),
+            Some(false)
+        );
+        assert_eq!(item_tags(Some(&table), stick), Some(vec![]));
+        assert_eq!(
+            block_tags(Some(&table), block),
+            Some(vec![key("minecraft:beacon_base_blocks")])
+        );
+        assert_eq!(item_tags(None, iron), None);
+        assert_eq!(block_tags(None, block), None);
     }
 
     #[test]

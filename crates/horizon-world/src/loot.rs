@@ -1054,6 +1054,17 @@ impl LootData {
     fn tag(&self, registry: &str, name: &str) -> Vec<String> {
         loot_tags::members(&self.tags, registry, name)
     }
+    /// The tag names of `registry` the tag files declare, sorted.
+    fn tag_names_of(&self, registry: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .tags
+            .keys()
+            .filter(|(r, _)| r == registry)
+            .map(|(_, name)| name.clone())
+            .collect();
+        names.sort_unstable();
+        names
+    }
     /// A published HolderSet: "#tag", "id" or resolved IDs. Objects bind at load.
     fn holder_set(&self, registry: &str, v: &Value) -> Vec<String> {
         match v {

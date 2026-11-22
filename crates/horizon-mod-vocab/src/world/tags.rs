@@ -31,6 +31,16 @@ pub trait Tags {
             crate::world::phase::LoadAccess::Metadata,
         )
     }
+    /// The name `tag` was resolved from (`TagKey.location()`), as `key` normalised it
+    /// (`c:ingots/iron`, `minecraft:logs`). None for a key no name gave. Names outlive
+    /// reloads, so this never depends on loaded tags.
+    fn name(&self, _tag: TagKey) -> Option<Identifier> {
+        crate::world::phase::unprovided(
+            "Tags::name",
+            "tags_name",
+            crate::world::phase::LoadAccess::Metadata,
+        )
+    }
     /// Whether `item` is in the current item tag. An unknown tag is false;
     /// unavailable authoritative tags or item mappings answer None.
     fn is_in_tag(&self, _item: ItemKey, _tag: TagKey) -> Option<bool> {
@@ -64,6 +74,34 @@ pub trait Tags {
         crate::world::phase::unprovided(
             "Tags::blocks",
             "tags_blocks",
+            crate::world::phase::LoadAccess::Metadata,
+        )
+    }
+    /// The item tags `item` is in (vanilla's `Holder.tags()`, `ItemStack.getTags()`), by tag
+    /// name, over the same merged tags `is_in_tag` reads: `is_in_tag(item, tag)` is true for
+    /// exactly the tags listed. Empty for an item in no tag. None as for the member reads, and
+    /// never a partial list. Each call walks every item tag, so a mod that asks often (a filter
+    /// matching `c:ingots/*`) caches the answer until the next `tags_updated`.
+    fn item_tags(&self, _item: ItemKey) -> Option<Vec<TagKey>> {
+        crate::world::phase::unprovided(
+            "Tags::item_tags",
+            "tags_item_tags",
+            crate::world::phase::LoadAccess::Metadata,
+        )
+    }
+    /// The block tags `block` is in (`BlockState.getTags()`), by tag name, as `item_tags`.
+    fn block_tags(&self, _block: BlockKey) -> Option<Vec<TagKey>> {
+        crate::world::phase::unprovided(
+            "Tags::block_tags",
+            "tags_block_tags",
+            crate::world::phase::LoadAccess::Metadata,
+        )
+    }
+    /// The fluid tags `fluid` is in (`FluidState.getTags()`), by tag name, as `item_tags`.
+    fn fluid_tags(&self, _fluid: FluidKey) -> Option<Vec<TagKey>> {
+        crate::world::phase::unprovided(
+            "Tags::fluid_tags",
+            "tags_fluid_tags",
             crate::world::phase::LoadAccess::Metadata,
         )
     }

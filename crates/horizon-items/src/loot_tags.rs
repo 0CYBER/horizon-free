@@ -23,6 +23,17 @@ impl horizon_world::loot::LootTags for Items {
         .get(tag)
         .is_some_and(|members| members.contains(id))
     }
+    fn tag_names(&self, registry: &str) -> Option<Vec<String>> {
+        let tags = match registry {
+            "item" => &self.item_tags,
+            "block" => &self.block_tags,
+            "fluid" => &self.fluid_tags,
+            _ => return Some(Vec::new()),
+        };
+        let mut names: Vec<String> = tags.keys().cloned().collect();
+        names.sort_unstable();
+        Some(names)
+    }
 }
 
 #[cfg(test)]
