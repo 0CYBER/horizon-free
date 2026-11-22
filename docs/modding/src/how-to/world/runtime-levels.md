@@ -68,9 +68,12 @@ while a player, or an arrival that has not landed, is in the level, both when it
 when it is applied: move the players out first with `entity.teleport_to_level`. `NotOpen` is the
 answer for a level that is not open (or still waiting to open). The idle close the game gives
 every level without players applies too, as to any other level: a runtime level nobody is in and
-no forced chunk holds is saved and dropped from memory after 300 ticks (`level_unload` fires), but
-it stays open: `is_open` still says true, and the level opens again from its folder, with
-`level_load`, when a player or a mod enters it. Only `unload` or `delete` closes it for good.
+no forced chunk holds is saved after 300 ticks, and once that save is on disk it is dropped from
+memory and `level_unload` fires, but it stays open: `is_open` still says true, and the level opens
+again from its folder, with `level_load`, when a player or a mod enters it. A write to the level
+while that save waits for the disk — from another level's save hook, for example — cancels the
+close: the level is not dropped, and the write goes with its next save. Only `unload` or
+`delete` closes it for good.
 
 ## Deleting
 
