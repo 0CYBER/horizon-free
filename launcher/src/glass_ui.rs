@@ -1278,6 +1278,16 @@ pub fn toggle(
     on_accent: u32,
     t: &Theme,
 ) -> Stateful<Div> {
+    keyboard(toggle_face(id, on, accent, on_accent), t)
+}
+
+/// The switch without a tab stop, for use inside a focusable label.
+pub(super) fn toggle_face(
+    id: impl Into<SharedString>,
+    on: bool,
+    accent: u32,
+    on_accent: u32,
+) -> Stateful<Div> {
     let id = id.into();
     let knob = div()
         .absolute()
@@ -1286,23 +1296,20 @@ pub fn toggle(
         .rounded_full()
         .bg(if on { color(on_accent) } else { white(0.7) });
     let knob = crate::motion::knob(&id, on, knob, 4., 16.);
-    keyboard(
-        div()
-            .id(id)
-            .relative()
-            .flex_none()
-            .w(px(40.))
-            .h(px(24.))
-            .rounded_full()
-            .bg(if on {
-                color(accent)
-            } else {
-                white(fill::BUTTON_HOVER)
-            })
-            .cursor_pointer()
-            .child(knob),
-        t,
-    )
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(px(40.))
+        .h(px(24.))
+        .rounded_full()
+        .bg(if on {
+            color(accent)
+        } else {
+            white(fill::BUTTON_HOVER)
+        })
+        .cursor_pointer()
+        .child(knob)
 }
 
 /// The generic [`button`](crate::button) in the glass look, 36 px: `Primary` is the mockup's

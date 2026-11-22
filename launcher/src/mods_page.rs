@@ -1365,7 +1365,7 @@ impl Launcher {
             .flex()
             .items_center()
             .gap(px(10.))
-            .w(px(320.))
+            .when(!t.glass, |d| d.w(px(320.)))
             .h(px(theme::FIELD + 4.))
             .px(px(12.))
             .overflow_hidden()
@@ -1404,13 +1404,17 @@ impl Launcher {
             }));
         // The glass look's: `rounded-[12px] h-11 bg-white/[0.07] px-3.5`, a 17 px search icon.
         let field = if t.glass {
+            use horizon_theme::glass::{fill, radius};
             field
-                .w_full()
                 .h(px(44.))
                 .px(px(14.))
                 .border_0()
-                .rounded(px(12.))
-                .bg(crate::glass_ui::white(if focused { 0.11 } else { 0.07 }))
+                .rounded(px(radius::ROW))
+                .bg(crate::glass_ui::white(if focused {
+                    fill::FIELD_FOCUS
+                } else {
+                    fill::FIELD
+                }))
                 .font_family(horizon_theme::glass::FONT)
                 .text_size(px(14.))
         } else {
@@ -1484,6 +1488,31 @@ impl Launcher {
                 },
             )
         })
+    }
+
+    fn mods_everything_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let t = self.theme;
+        let label = if t.glass {
+            crate::glass_ui::text(13., FontWeight::NORMAL, 0.7)
+        } else {
+            text(theme::LABEL).text_color(t.ink_soft)
+        };
+        keyboard(div().id("mods-everything"), &t)
+            .flex()
+            .items_center()
+            .gap(px(if t.glass { 10. } else { 8. }))
+            .cursor_pointer()
+            .child(widgets::switch_face(
+                "mods-everything-switch",
+                self.mods.everything,
+                &t,
+            ))
+            .child(label.child(tr("Show everything")))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.mods.toggle_everything();
+                this.mods_search(0);
+                cx.notify();
+            }))
     }
 
     /// Remove, then Remove for good: an installed project leaves the instance on the second
@@ -1571,24 +1600,6 @@ impl Launcher {
                 });
             }
         });
-        let everything = self.mods.everything;
-        let toggle = div()
-            .id("mods-everything")
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .cursor_pointer()
-            .child(switch("mods-everything-switch", everything, &t))
-            .child(
-                text(theme::LABEL)
-                    .text_color(t.ink_soft)
-                    .child(tr("Show everything")),
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.mods.toggle_everything();
-                this.mods_search(0);
-                cx.notify();
-            }));
         // The registry lists only what was made for Horizon: no "everything", and of the filters
         // only its categories.
         let registry = self.mods.source() == SourceId::Horizon;
@@ -1606,7 +1617,9 @@ impl Launcher {
                     .items_center()
                     .gap(px(12.))
                     .child(self.mods_field(cx))
-                    .when(self.mods.can_show_everything(), |d| d.child(toggle)),
+                    .when(self.mods.can_show_everything(), |d| {
+                        d.child(self.mods_everything_toggle(cx))
+                    }),
             )
             .children(
                 self.mods_source_switch(cx)
@@ -2449,45 +2462,92 @@ mod tests {
         });
     }
 
-    #[test]
-    fn pack_tabs_use_their_own_sources() {
-        let java = Target {
-            minecraft: "1.21.1".into(),
-            loader: Some("fabric".into()),
-        };
-        for (kind, default, switch, java_source) in [
-            (PackKind::Mod, SourceId::Horizon, false, SourceId::Modrinth),
-            (
-                PackKind::Modpack,
-                SourceId::Horizon,
-                false,
-                SourceId::Horizon,
-            ),
-            (
-                PackKind::ResourcePack,
-                SourceId::Modrinth,
-                true,
-                SourceId::Modrinth,
-            ),
-            (PackKind::Shader, SourceId::Horizon, true, SourceId::Horizon),
-            (
-                PackKind::DataPack,
-                SourceId::Modrinth,
-                true,
-                SourceId::Horizon,
-            ),
-        ] {
-            assert_eq!(source_for(kind), default);
-            assert_eq!(switches(kind, false), switch);
-            assert!(!switches(kind, true));
-            for picked in [SourceId::Horizon, SourceId::Modrinth] {
-                assert_eq!(
-                    browse_source(kind, picked, None),
-                    if switch { picked } else { default }
-                );
-                assert_eq!(browse_source(kind, picked, Some(&java)), java_source);
+    #[gpui::test]
+    fn pack_tabs_show_source_controls_for_the_right_context(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut mods = Mods::new(cx);
+            let java = Target {
+                minecraft: "1.21.1".into(),
+                loader: Some("fabric".into()),
+            };
+            for (kind, default, switch, everything, java_source) in [
+                (
+                    PackKind::Mod,
+                    SourceId::Horizon,
+                    false,
+                    false,
+                    SourceId::Modrinth,
+                ),
+                (
+                    PackKind::Modpack,
+                    SourceId::Horizon,
+                    false,
+                    false,
+                    SourceId::Horizon,
+                ),
+                (
+                    PackKind::ResourcePack,
+                    SourceId::Modrinth,
+                    true,
+                    true,
+                    SourceId::Modrinth,
+                ),
+                (
+                    PackKind::Shader,
+                    SourceId::Horizon,
+                    true,
+                    false,
+                    SourceId::Horizon,
+                ),
+                (
+                    PackKind::DataPack,
+                    SourceId::Modrinth,
+                    true,
+                    true,
+                    SourceId::Horizon,
+                ),
+            ] {
+                assert_eq!(source_for(kind), default);
+                mods.kind = kind;
+                for picked in [SourceId::Horizon, SourceId::Modrinth] {
+                    mods.source = picked;
+                    mods.java = None;
+                    assert_eq!(mods.source(), if switch { picked } else { default });
+                    assert_eq!(
+                        switches(kind, mods.java.is_some()),
+                        switch,
+                        "{kind:?} {picked:?}"
+                    );
+                    assert_eq!(
+                        mods.can_show_everything(),
+                        everything && picked == SourceId::Modrinth,
+                        "{kind:?} {picked:?}"
+                    );
+
+                    mods.java = Some(java.clone());
+                    assert_eq!(mods.source(), java_source);
+                    assert!(
+                        !switches(kind, mods.java.is_some()),
+                        "Java {kind:?} {picked:?}"
+                    );
+                    assert!(!mods.can_show_everything(), "Java {kind:?} {picked:?}");
+                }
             }
-        }
+        });
+    }
+
+    #[gpui::test]
+    fn resetting_browse_keeps_the_drawer_open_and_clears_filters(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut mods = Mods::new(cx);
+            mods.browse.show_filters = true;
+            mods.browse.filters.categories.push("decoration".into());
+
+            mods.reset_browse_context();
+
+            assert!(mods.browse.show_filters);
+            assert_eq!(mods.browse.filters.picked(), 0);
+        });
     }
 
     #[test]

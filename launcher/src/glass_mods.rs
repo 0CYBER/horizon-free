@@ -121,7 +121,6 @@ impl Launcher {
             );
         }
 
-        let everything = self.mods.everything;
         let source_controls = self.mods_source_switch(cx).map(|switch| {
             div()
                 .flex()
@@ -130,58 +129,50 @@ impl Launcher {
                 .gap(px(16.))
                 .child(switch)
                 .when(self.mods.can_show_everything(), |d| {
-                    d.child(
-                        div()
-                            .id("mods-everything")
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .cursor_pointer()
-                            .child(ui::toggle(
-                                "mods-everything-switch",
-                                everything,
-                                ui::look().accent,
-                                ui::look().on_accent,
-                                &t,
-                            ))
-                            .child(
-                                ui::text(13., FontWeight::NORMAL, 0.7).child(tr("Show everything")),
-                            )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.mods.toggle_everything();
-                                this.mods_search(0);
-                                cx.notify();
-                            })),
-                    )
+                    d.child(self.mods_everything_toggle(cx))
                 })
         });
-        let extras = div()
+        let search = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .flex_1()
+                    .min_w(px(220.))
+                    .child(self.mods_field(cx)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(px(8.))
+                    .child(self.glass_mods_sort(cx))
+                    .child(self.mods_filters_trigger(cx)),
+            );
+        let toolbar = div()
             .flex()
             .flex_col()
             .gap(px(12.))
-            .px(px(8.))
-            .pb(px(8.))
+            .px(px(4.))
+            .pt(px(4.))
+            .pb(px(12.))
+            .child(search)
             .children(source_controls)
-            .child(self.mods_filters(cx))
+            .children(self.mods_filters_body(cx))
             .children(self.mods_target_line(cx))
             .children(self.mods_left_out_note());
-        // The search, and the sort on its right.
-        let search = div()
-            .m(px(4.))
-            .mb(px(8.))
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(div().flex_1().min_w_0().child(self.mods_field(cx)))
-            .child(self.glass_mods_sort(cx));
         let list = crate::glass::plate(radius::PANEL)
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
             .p(px(8.))
-            .child(search)
-            .child(extras)
+            .child(toolbar)
             .child(self.glass_mods_list(cx));
         // The card stays in view as the list scrolls (`lg:sticky lg:top-0`, `sticky.rs`).
         let detail = self.glass_mod_detail(&instance, cx).map(|d| {
@@ -238,41 +229,25 @@ impl Launcher {
             .find(|(value, _)| Some(*value) == shown)
             .map_or("", |(_, label)| *label);
         let open = self.mods.browse.sort_menu;
-        let button = keyboard(
-            div()
-                .id("mods-sort")
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(px(8.))
-                .h(px(44.))
-                .px(px(14.))
-                .rounded(px(12.))
-                .bg(white(if open { 0.11 } else { 0.07 }))
-                .hover(|s| s.bg(white(0.11)))
-                .cursor_pointer()
-                .font_family(horizon_theme::glass::FONT)
-                .text_size(px(14.))
-                .text_color(white(ink::FULL))
-                .child(trf("Sort by: {order}", &[("order", tr(name))]))
-                .child(
-                    ui::icon("arrow-down-01", 16., white(ink::NOTE)).with_transformation(
-                        gpui::Transformation::rotate(gpui::radians(if open {
-                            std::f32::consts::PI
-                        } else {
-                            0.
-                        })),
-                    ),
-                )
-                .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                    if this.closed_by_this_press(event) {
-                        return;
-                    }
-                    this.mods.browse.sort_menu = !this.mods.browse.sort_menu;
-                    cx.notify();
-                })),
-            &t,
-        );
+        let button = self
+            .glass_mods_control("mods-sort", open)
+            .child(trf("Sort by: {order}", &[("order", tr(name))]))
+            .child(
+                ui::icon("arrow-down-01", 16., white(ink::NOTE)).with_transformation(
+                    gpui::Transformation::rotate(gpui::radians(if open {
+                        std::f32::consts::PI
+                    } else {
+                        0.
+                    })),
+                ),
+            )
+            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                if this.closed_by_this_press(event) {
+                    return;
+                }
+                this.mods.browse.sort_menu = !this.mods.browse.sort_menu;
+                cx.notify();
+            }));
         let mut wrap = div().relative().flex_none().child(button);
         if open {
             let mut menu = ui::popover(220.)
@@ -301,8 +276,7 @@ impl Launcher {
                 );
             }
             wrap = wrap.child(
-                gpui::deferred(div().absolute().top(px(52.)).right_0().child(menu))
-                    .with_priority(1),
+                gpui::deferred(div().absolute().top(px(52.)).left_0().child(menu)).with_priority(1),
             );
         }
         wrap
@@ -321,7 +295,6 @@ impl Launcher {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .px(px(4.))
                 .child(ui::icon("information-circle", 14., white(ink::QUIET)))
                 .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).child(trf(
                     "{count} more mods made for Horizon's earlier mod system are hidden until their authors update them.",

@@ -90,6 +90,15 @@ pub struct Filters {
 }
 
 impl Filters {
+    /// The choices shown as removable filter chips.
+    pub fn picked(&self) -> usize {
+        self.categories.len()
+            + self.tags.len()
+            + usize::from(self.loader.is_some())
+            + usize::from(self.game_version.is_some())
+            + usize::from(self.environment.is_some())
+    }
+
     /// The sort a search uses.
     pub fn sort(&self, text: &str) -> Sort {
         self.sort.unwrap_or(if text.is_empty() {
@@ -360,6 +369,26 @@ pub fn default_loaders(kind: Kind) -> Vec<&'static str> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn picked_counts_only_removable_filters() {
+        assert_eq!(Filters::default().picked(), 0);
+        let ordering_and_compatibility = Filters {
+            sort: Some(Sort::Newest),
+            works_on: true,
+            ..Filters::default()
+        };
+        assert_eq!(ordering_and_compatibility.picked(), 0);
+        let picked = Filters {
+            categories: vec!["decoration".into(), "utility".into()],
+            tags: vec!["zoom".into(), "pvp".into()],
+            loader: Some("fabric".into()),
+            game_version: Some("1.21.1".into()),
+            environment: Some(Environment::Client),
+            ..ordering_and_compatibility
+        };
+        assert_eq!(picked.picked(), 7);
+    }
 
     #[test]
     fn a_modrinth_page() {

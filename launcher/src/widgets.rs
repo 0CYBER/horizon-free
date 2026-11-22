@@ -366,14 +366,20 @@ pub(crate) fn sync_system_clipboard(text: String) {
 
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
 pub(crate) fn switch(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
+    keyboard(switch_face(id, on, t), t)
+}
+
+/// The switch inside a control that provides its own keyboard focus.
+pub(crate) fn switch_face(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
     if t.glass {
         let look = glass_ui::look();
-        return glass_ui::toggle(id, on, look.accent, look.on_accent, t);
+        return glass_ui::toggle_face(id, on, look.accent, look.on_accent);
     }
     let t = *t;
     let id: SharedString = id.into();
     let knob = if on { t.on_face } else { t.muted };
-    keyboard(div().id(id.clone()), &t)
+    div()
+        .id(id.clone())
         .relative()
         .flex_none()
         .w(px(44.))
