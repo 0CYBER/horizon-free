@@ -418,7 +418,7 @@ impl LivingAttributes {
         seed: impl FnOnce() -> Vec<Tag>,
     ) -> Option<f64> {
         let map = self.built_or_build(catalog, entity, seed)?;
-        map.value(Some(map.key(name)?), kind).ok()
+        map.value_of(name, kind).ok()
     }
 
     /// `AttributeInstance.getModifiers` of `name`, in the order they were

@@ -94,6 +94,7 @@ struct Data<G> {
     catalog: Arc<Catalog>,
     bases: Arc<[Option<f64>]>,
     keys: Vec<Key>,
+    by_id: Vec<Option<usize>>,
     owner: Arc<()>,
     nodes: Vec<Node>,
     next_identity: G,
@@ -103,6 +104,23 @@ impl<G: FnMut() -> i32> Data<G> {
         Arc::ptr_eq(&self.catalog, &key.catalog)
             .then(|| self.bases[key.id.index()])
             .flatten()
+    }
+    fn supplier_by_id(&self, id: AttributeId, kind: ValueKind) -> Result<f64, Error> {
+        let base = self.bases[id.index()].ok_or(Error::MissingAttribute)?;
+        Ok(match kind {
+            ValueKind::Base => base,
+            ValueKind::Computed => self.catalog.attribute(id).definition.sanitize(base),
+        })
+    }
+    fn read_by_id(&self, id: AttributeId, kind: ValueKind) -> Result<f64, Error> {
+        if let Some(node_idx) = self.by_id[id.index()] {
+            let value = &self.nodes[node_idx].value;
+            return Ok(match kind {
+                ValueKind::Computed => value.value(),
+                ValueKind::Base => value.base_value(),
+            });
+        }
+        self.supplier_by_id(id, kind)
     }
     fn supplier_read(&self, key: Option<&Key>, kind: ValueKind) -> Result<f64, Error> {
         let key = key.ok_or(Error::NullAttribute)?;
@@ -148,9 +166,10 @@ impl<G: FnMut() -> i32> Data<G> {
         // rather than invoking an equality-short-circuiting setter here.
         source.base = base;
         let mut value = Instance::new(definition.definition);
+        let idx = self.nodes.len();
         let handle = Handle {
             owner: self.owner.clone(),
-            index: self.nodes.len(),
+            index: idx,
             hash: (self.next_identity)(),
         };
         let mut observer = Dirty {
@@ -161,11 +180,13 @@ impl<G: FnMut() -> i32> Data<G> {
         value
             .replace_from(&source, &mut observer)
             .map_err(convert_error)?;
+        let id_index = key.id.index();
         self.nodes.push(Node {
             key,
             handle: handle.clone(),
             value,
         });
+        self.by_id[id_index] = Some(idx);
         Ok(Some(handle))
     }
     fn edit<R>(
@@ -321,12 +342,14 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
                 hash: holder_hashes[id.index()],
             })
             .collect();
+        let by_id = vec![None; bases.len()];
         Ok(Self {
             map: AttributeMap::default(),
             data: Data {
                 catalog,
                 bases,
                 keys,
+                by_id,
                 owner: Arc::new(()),
                 nodes: Vec::new(),
                 next_identity,
@@ -359,10 +382,32 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
         self.map.has_modifier(key, id, &mut self.data)
     }
     pub fn value(&self, key: Option<Key>, kind: ValueKind) -> Result<f64, Error> {
+        if let Some(key) = key.as_ref()
+            && Arc::ptr_eq(&self.data.catalog, &key.catalog)
+        {
+            return self.data.read_by_id(key.id, kind);
+        }
         if let Some(handle) = self.map.instances.get(key.as_ref()) {
             return self.data.instance_read(&handle, kind);
         }
         self.data.supplier_read(key.as_ref(), kind)
+    }
+    /// O(1) value lookup by registered attribute name without cloning `Key` or `Handle`.
+    pub fn value_of(&self, name: &str, kind: ValueKind) -> Result<f64, Error> {
+        let id = self.data.catalog.id(name).ok_or(Error::MissingAttribute)?;
+        self.data.read_by_id(id, kind)
+    }
+    fn cached_value_by_id(&self, id: AttributeId) -> Result<f64, Error> {
+        if let Some(node_idx) = self.data.by_id[id.index()] {
+            return Ok(self.data.nodes[node_idx].value.cached_value());
+        }
+        self.data.supplier_by_id(id, ValueKind::Computed)
+    }
+    fn computed_value_by_id(&self, id: AttributeId) -> Result<f64, Error> {
+        if let Some(node_idx) = self.data.by_id[id.index()] {
+            return Ok(self.data.nodes[node_idx].value.compute_value());
+        }
+        self.data.supplier_by_id(id, ValueKind::Computed)
     }
     /// The computed value exactly as the instance's cache holds it, without
     /// recomputing a dirty instance. An absent instance reads its supplier
@@ -371,6 +416,11 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
     /// thing that recomputes and clears the dirty flag, so a reader vanilla
     /// performs on some paths only must take this rather than `value`.
     pub fn cached_value(&self, key: Option<&Key>) -> Result<f64, Error> {
+        if let Some(key) = key
+            && Arc::ptr_eq(&self.data.catalog, &key.catalog)
+        {
+            return self.cached_value_by_id(key.id);
+        }
         if let Some(handle) = self.map.instances.get(key) {
             return Ok(self.data.node(&handle)?.value.cached_value());
         }
@@ -378,11 +428,16 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
     }
     /// `cached_value` of the attribute with this registered name.
     pub fn cached_value_of(&self, name: &str) -> Result<f64, Error> {
-        let key = self.key(name).ok_or(Error::MissingAttribute)?;
-        self.cached_value(Some(&key))
+        let id = self.data.catalog.id(name).ok_or(Error::MissingAttribute)?;
+        self.cached_value_by_id(id)
     }
     /// The computed value of the attribute, calculating current dirty modifiers if needed.
     pub fn computed_value(&self, key: Option<&Key>) -> Result<f64, Error> {
+        if let Some(key) = key
+            && Arc::ptr_eq(&self.data.catalog, &key.catalog)
+        {
+            return self.computed_value_by_id(key.id);
+        }
         if let Some(handle) = self.map.instances.get(key) {
             return Ok(self.data.node(&handle)?.value.compute_value());
         }
@@ -397,8 +452,8 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
     }
     /// `computed_value` of the attribute with this registered name.
     pub fn computed_value_of(&self, name: &str) -> Result<f64, Error> {
-        let key = self.key(name).ok_or(Error::MissingAttribute)?;
-        self.computed_value(Some(&key))
+        let id = self.data.catalog.id(name).ok_or(Error::MissingAttribute)?;
+        self.computed_value_by_id(id)
     }
     pub fn modifier_value(&mut self, key: Option<Key>, id: &str) -> Result<f64, Error> {
         self.map
@@ -457,5 +512,112 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
         definitions: &mut Definitions<Key>,
     ) -> Result<(), effects::Error<Error>> {
         stored::remove(definitions, &mut self.map, &mut self.data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        DATA_VERSION,
+        attributes::{Operation, Tooltip, entity::AddedAttribute},
+    };
+    use serde_json::json;
+
+    fn make_catalog(names: &[&str]) -> Arc<Catalog> {
+        let bits = |n: f64| format!("{:016x}", n.to_bits());
+        let attrs: Vec<_> = names
+            .iter()
+            .map(|name| {
+                json!({
+                    "id": name,
+                    "default": bits(1.0),
+                    "min": bits(0.0),
+                    "max": bits(1024.0),
+                    "syncable": true
+                })
+            })
+            .collect();
+        let mut defs = serde_json::Map::new();
+        for name in names {
+            defs.insert((*name).to_owned(), json!(bits(2.0)));
+        }
+        Arc::new(
+            Catalog::from_json(&json!({
+                "data_version": DATA_VERSION,
+                "attributes": attrs,
+                "entities": { "minecraft:player": defs }
+            }))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn by_id_and_well_known_match_hash_and_btree_lookups() {
+        let names = [
+            "minecraft:max_health",
+            "minecraft:movement_speed",
+            "minecraft:armor",
+            "minecraft:air_drag_modifier",
+        ];
+        let base_catalog = make_catalog(&names);
+        let extended = Arc::new(
+            base_catalog
+                .with_attributes(&[AddedAttribute {
+                    mod_id: "sample".into(),
+                    id: "sample:mana".into(),
+                    definition: super::super::Definition::basic(10.0),
+                    syncable: true,
+                    tooltip: Tooltip::default(),
+                }])
+                .unwrap(),
+        );
+        for name in names.into_iter().chain(["sample:mana"]) {
+            assert!(extended.id(name).is_some(), "missing id for {name}");
+        }
+        assert!(extended.id("minecraft:unknown_attr").is_none());
+
+        let hashes = [1, 2, 3, 4];
+        let mut next = 10;
+        let mut attrs = LiveAttributes::new(base_catalog, "minecraft:player", &hashes, || {
+            next += 1;
+            next
+        })
+        .unwrap();
+        let hp = attrs.key("minecraft:max_health").unwrap();
+        let h = attrs.get_instance(Some(hp.clone())).unwrap().unwrap();
+        attrs
+            .edit(&h, |inst, obs| {
+                inst.add_permanent(
+                    Modifier::new("test:bonus", 4.0, Operation::AddValue).unwrap(),
+                    obs,
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            attrs
+                .value_of("minecraft:max_health", ValueKind::Computed)
+                .unwrap(),
+            6.0
+        );
+        assert_eq!(attrs.cached_value_of("minecraft:max_health").unwrap(), 6.0);
+        assert_eq!(
+            attrs.computed_value_of("minecraft:max_health").unwrap(),
+            6.0
+        );
+        assert_eq!(attrs.value(Some(hp.clone()), ValueKind::Base).unwrap(), 2.0);
+        assert_eq!(attrs.cached_value(Some(&hp)).unwrap(), 6.0);
+        assert_eq!(attrs.computed_value(Some(&hp)).unwrap(), 6.0);
+        assert_eq!(
+            attrs
+                .value_of("minecraft:armor", ValueKind::Computed)
+                .unwrap(),
+            2.0
+        );
+        assert!(
+            attrs
+                .value_of("minecraft:missing", ValueKind::Computed)
+                .is_err()
+        );
     }
 }

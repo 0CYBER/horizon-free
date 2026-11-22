@@ -148,15 +148,22 @@ impl FoodWorld for TickWorld<'_> {
         Ok(self.rules.natural_regeneration)
     }
     fn is_hurt(&mut self, _: &mut FoodData) -> Result<bool> {
-        let mut observer = Updates(self.events);
-        Ok(PlayerAttributeHealth::new(
-            self.attributes,
-            self.data,
-            self.ids,
-            *self.dead,
-            &mut observer,
-        )?
-        .is_hurt()?)
+        let health = self
+            .data
+            .get(self.ids.health)
+            .expect("validated health field");
+        if health <= 0.0 || health.is_nan() {
+            return Ok(false);
+        }
+        let max_health = self
+            .attributes
+            .value_of(
+                "minecraft:max_health",
+                horizon_world::attribute_map::ValueKind::Computed,
+            )
+            .map_err(|e| std::io::Error::other(format!("player health attribute lookup: {e:?}")))?
+            as f32;
+        Ok(health < max_health)
     }
     fn heal(&mut self, _: &mut FoodData, mut amount: f32) -> Result<()> {
         let mut cancel = false;

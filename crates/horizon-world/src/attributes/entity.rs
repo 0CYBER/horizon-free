@@ -78,11 +78,97 @@ impl fmt::Display for WidenBoundsError {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default)]
+struct WellKnown {
+    movement_speed: Option<AttributeId>,
+    gravity: Option<AttributeId>,
+    max_health: Option<AttributeId>,
+    max_absorption: Option<AttributeId>,
+    step_height: Option<AttributeId>,
+    scale: Option<AttributeId>,
+    entity_interaction_range: Option<AttributeId>,
+    block_interaction_range: Option<AttributeId>,
+    safe_fall_distance: Option<AttributeId>,
+    fall_damage_multiplier: Option<AttributeId>,
+    water_movement_efficiency: Option<AttributeId>,
+    movement_efficiency: Option<AttributeId>,
+    sneaking_speed: Option<AttributeId>,
+    jump_strength: Option<AttributeId>,
+    oxygen_bonus: Option<AttributeId>,
+    burning_time: Option<AttributeId>,
+    armor: Option<AttributeId>,
+    armor_toughness: Option<AttributeId>,
+    knockback_resistance: Option<AttributeId>,
+    attack_damage: Option<AttributeId>,
+    attack_speed: Option<AttributeId>,
+    luck: Option<AttributeId>,
+    block_break_speed: Option<AttributeId>,
+    mining_efficiency: Option<AttributeId>,
+    submerged_mining_speed: Option<AttributeId>,
+    sweeping_damage_ratio: Option<AttributeId>,
+    explosion_knockback_resistance: Option<AttributeId>,
+    camera_distance: Option<AttributeId>,
+    waypoint_transmit_range: Option<AttributeId>,
+    waypoint_receive_range: Option<AttributeId>,
+    tempt_range: Option<AttributeId>,
+    follow_range: Option<AttributeId>,
+    flying_speed: Option<AttributeId>,
+    attack_knockback: Option<AttributeId>,
+    spawn_reinforcements: Option<AttributeId>,
+    air_drag_modifier: Option<AttributeId>,
+}
+
+impl WellKnown {
+    fn from_ids(ids: &BTreeMap<String, AttributeId>) -> Self {
+        Self {
+            movement_speed: ids.get("minecraft:movement_speed").copied(),
+            gravity: ids.get("minecraft:gravity").copied(),
+            max_health: ids.get("minecraft:max_health").copied(),
+            max_absorption: ids.get("minecraft:max_absorption").copied(),
+            step_height: ids.get("minecraft:step_height").copied(),
+            scale: ids.get("minecraft:scale").copied(),
+            entity_interaction_range: ids.get("minecraft:entity_interaction_range").copied(),
+            block_interaction_range: ids.get("minecraft:block_interaction_range").copied(),
+            safe_fall_distance: ids.get("minecraft:safe_fall_distance").copied(),
+            fall_damage_multiplier: ids.get("minecraft:fall_damage_multiplier").copied(),
+            water_movement_efficiency: ids.get("minecraft:water_movement_efficiency").copied(),
+            movement_efficiency: ids.get("minecraft:movement_efficiency").copied(),
+            sneaking_speed: ids.get("minecraft:sneaking_speed").copied(),
+            jump_strength: ids.get("minecraft:jump_strength").copied(),
+            oxygen_bonus: ids.get("minecraft:oxygen_bonus").copied(),
+            burning_time: ids.get("minecraft:burning_time").copied(),
+            armor: ids.get("minecraft:armor").copied(),
+            armor_toughness: ids.get("minecraft:armor_toughness").copied(),
+            knockback_resistance: ids.get("minecraft:knockback_resistance").copied(),
+            attack_damage: ids.get("minecraft:attack_damage").copied(),
+            attack_speed: ids.get("minecraft:attack_speed").copied(),
+            luck: ids.get("minecraft:luck").copied(),
+            block_break_speed: ids.get("minecraft:block_break_speed").copied(),
+            mining_efficiency: ids.get("minecraft:mining_efficiency").copied(),
+            submerged_mining_speed: ids.get("minecraft:submerged_mining_speed").copied(),
+            sweeping_damage_ratio: ids.get("minecraft:sweeping_damage_ratio").copied(),
+            explosion_knockback_resistance: ids
+                .get("minecraft:explosion_knockback_resistance")
+                .copied(),
+            camera_distance: ids.get("minecraft:camera_distance").copied(),
+            waypoint_transmit_range: ids.get("minecraft:waypoint_transmit_range").copied(),
+            waypoint_receive_range: ids.get("minecraft:waypoint_receive_range").copied(),
+            tempt_range: ids.get("minecraft:tempt_range").copied(),
+            follow_range: ids.get("minecraft:follow_range").copied(),
+            flying_speed: ids.get("minecraft:flying_speed").copied(),
+            attack_knockback: ids.get("minecraft:attack_knockback").copied(),
+            spawn_reinforcements: ids.get("minecraft:spawn_reinforcements").copied(),
+            air_drag_modifier: ids.get("minecraft:air_drag_modifier").copied(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Catalog {
     attributes: Vec<RegisteredAttribute>,
     ids: BTreeMap<String, AttributeId>,
     defaults: BTreeMap<String, Arc<[Option<f64>]>>,
+    well_known: WellKnown,
 }
 /// A row `Catalog::with_entity_row` or `Catalog::with_entity_additions`
 /// refused: an override names an attribute the catalog does not know, or the
@@ -188,10 +274,12 @@ impl Catalog {
             }
             defaults.insert(entity.clone(), Arc::from(bases));
         }
+        let well_known = WellKnown::from_ids(&ids);
         Ok(Self {
             attributes,
             ids,
             defaults,
+            well_known,
         })
     }
     /// The entity type's supplier base of an attribute, if the type has it.
@@ -303,10 +391,12 @@ impl Catalog {
                 (entity.clone(), Arc::from(grown))
             })
             .collect();
+        let well_known = WellKnown::from_ids(&ids);
         Ok(Catalog {
             attributes,
             ids,
             defaults,
+            well_known,
         })
     }
     /// A copy of the catalog with the bounds mods asked to widen
@@ -337,6 +427,7 @@ impl Catalog {
             attributes,
             ids: self.ids.clone(),
             defaults: self.defaults.clone(),
+            well_known: self.well_known,
         })
     }
     /// A copy of the catalog whose `entity` row is `start` with `overrides`
@@ -364,10 +455,51 @@ impl Catalog {
             attributes: self.attributes.clone(),
             ids: self.ids.clone(),
             defaults,
+            well_known: self.well_known,
         })
     }
     pub fn id(&self, name: &str) -> Option<AttributeId> {
-        self.ids.get(name).copied()
+        match name {
+            "minecraft:movement_speed" => self.well_known.movement_speed,
+            "minecraft:gravity" => self.well_known.gravity,
+            "minecraft:max_health" => self.well_known.max_health,
+            "minecraft:max_absorption" => self.well_known.max_absorption,
+            "minecraft:step_height" => self.well_known.step_height,
+            "minecraft:scale" => self.well_known.scale,
+            "minecraft:entity_interaction_range" => self.well_known.entity_interaction_range,
+            "minecraft:block_interaction_range" => self.well_known.block_interaction_range,
+            "minecraft:safe_fall_distance" => self.well_known.safe_fall_distance,
+            "minecraft:fall_damage_multiplier" => self.well_known.fall_damage_multiplier,
+            "minecraft:water_movement_efficiency" => self.well_known.water_movement_efficiency,
+            "minecraft:movement_efficiency" => self.well_known.movement_efficiency,
+            "minecraft:sneaking_speed" => self.well_known.sneaking_speed,
+            "minecraft:jump_strength" => self.well_known.jump_strength,
+            "minecraft:oxygen_bonus" => self.well_known.oxygen_bonus,
+            "minecraft:burning_time" => self.well_known.burning_time,
+            "minecraft:armor" => self.well_known.armor,
+            "minecraft:armor_toughness" => self.well_known.armor_toughness,
+            "minecraft:knockback_resistance" => self.well_known.knockback_resistance,
+            "minecraft:attack_damage" => self.well_known.attack_damage,
+            "minecraft:attack_speed" => self.well_known.attack_speed,
+            "minecraft:luck" => self.well_known.luck,
+            "minecraft:block_break_speed" => self.well_known.block_break_speed,
+            "minecraft:mining_efficiency" => self.well_known.mining_efficiency,
+            "minecraft:submerged_mining_speed" => self.well_known.submerged_mining_speed,
+            "minecraft:sweeping_damage_ratio" => self.well_known.sweeping_damage_ratio,
+            "minecraft:explosion_knockback_resistance" => {
+                self.well_known.explosion_knockback_resistance
+            }
+            "minecraft:camera_distance" => self.well_known.camera_distance,
+            "minecraft:waypoint_transmit_range" => self.well_known.waypoint_transmit_range,
+            "minecraft:waypoint_receive_range" => self.well_known.waypoint_receive_range,
+            "minecraft:tempt_range" => self.well_known.tempt_range,
+            "minecraft:follow_range" => self.well_known.follow_range,
+            "minecraft:flying_speed" => self.well_known.flying_speed,
+            "minecraft:attack_knockback" => self.well_known.attack_knockback,
+            "minecraft:spawn_reinforcements" => self.well_known.spawn_reinforcements,
+            "minecraft:air_drag_modifier" => self.well_known.air_drag_modifier,
+            _ => self.ids.get(name).copied(),
+        }
     }
     pub fn attribute(&self, id: AttributeId) -> &RegisteredAttribute {
         &self.attributes[id.0]
