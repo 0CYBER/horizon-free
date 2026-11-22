@@ -167,20 +167,17 @@ fn frame(v: &Value) -> Frame {
     }
 }
 impl Tree {
-    /// `PlayerAdvancements.checkForAutomaticTriggers`: the advancements that
-    /// have no criteria at all, so nothing can ever grant them a criterion and
-    /// vanilla hands them over (and grants their rewards) as the player's
-    /// progress loads.
+    /// `PlayerAdvancements.checkForAutomaticTriggers`: the advancements without criteria, which
+    /// nothing can grant: vanilla hands them over (and their rewards) as the progress loads.
     pub fn automatic(&self) -> Vec<usize> {
         (0..self.list.len())
             .filter(|&i| self.list[i].criteria.is_empty())
             .collect()
     }
 
-    /// [`Tree::load`], shared while anyone holds it: a server's advancement
-    /// packets (`ServerAdvancements`) and its game's criteria read the same
-    /// files, and each kept its own copy (7 MB). A world whose data packs bring
-    /// advancements gets its own tree ([`Tree::load_with`]).
+    /// [`Tree::load`], shared while anyone holds it: a server's advancement packets
+    /// (`ServerAdvancements`) and its game's criteria read the same files, and each kept its own
+    /// copy (7 MB). A world whose packs bring advancements gets its own ([`Tree::load_with`]).
     pub fn shared(data: &Path, overlay: &horizon_world::loot::PackOverlay) -> Arc<Tree> {
         if overlay.kind("advancement").next().is_some() {
             return Arc::new(Tree::load_with(data, overlay));
@@ -595,6 +592,8 @@ pub fn date_millis(text: &str) -> Option<i64> {
 #[derive(Default, Clone)]
 pub struct Progress {
     pub criteria: BTreeMap<String, BTreeMap<String, String>>,
+    /// What the game keeps with the player's progress (it travels with the player).
+    pub memo: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
 }
 impl Progress {
     pub fn has(&self, adv: &str, criterion: &str) -> bool {
@@ -635,6 +634,7 @@ impl Progress {
         true
     }
     pub fn revoke(&mut self, adv: &str, criterion: &str) -> bool {
+        self.memo = None;
         self.criteria
             .get_mut(adv)
             .is_some_and(|m| m.remove(criterion).is_some())

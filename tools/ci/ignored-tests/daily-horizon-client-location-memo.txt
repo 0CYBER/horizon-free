@@ -1,0 +1,4 @@
+# The location trigger's memo of the criteria that only ask where the player is: prepared resources; the reload test runs in a child process.
+# PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::advancements::location_memo::tests::a_reload_asks_the_criteria_again lib daily child-process
+horizon-client game::advancements::location_memo::tests::the_location_memo_changes_no_grant lib daily resources
