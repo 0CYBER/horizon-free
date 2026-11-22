@@ -31,6 +31,9 @@ pub use horizon_core::prepared_files;
 pub mod world {
     pub use horizon_core::nbt;
     pub use horizon_core::position::ChunkPos;
+    /// Structure placement on a mod's own terrain: register a provider whose
+    /// terrain answers the biome and height questions structure starts ask.
+    pub use horizon_world::worldgen::structure_terrain;
     pub use horizon_world::{compression, region};
 }
 

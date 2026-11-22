@@ -74,6 +74,7 @@ pub mod spike;
 pub mod spring;
 pub mod state_provider;
 pub mod structure;
+pub mod structure_terrain;
 pub mod tags;
 pub mod terrain;
 pub mod tree;
