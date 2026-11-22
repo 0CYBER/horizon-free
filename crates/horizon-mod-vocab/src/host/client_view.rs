@@ -112,7 +112,7 @@ pub trait ClientViewClientHost {
     /// terrain (the LOD Distance setting) holds it, whether or not the chunk is loaded. It is the finest
     /// far tile sampled there, so a far column is the reduced surface of a cell up to many blocks wide, and
     /// it comes from wherever the far terrain does (this world's generator, the server's offer, the chunks
-    /// kept from earlier visits, a server's BlueMap). None for a column no tile covers yet, and for every
+    /// kept from earlier visits). None for a column no tile covers yet, and for every
     /// column while far terrain is off or not started; the tiles follow the camera, so a column far from it
     /// can go back to None. Inside the loaded chunks read them instead (`client_surface_heights`): a tile can
     /// lag an edit. `Err`, reading nothing, for no client world (the title screen) or more than 65,536

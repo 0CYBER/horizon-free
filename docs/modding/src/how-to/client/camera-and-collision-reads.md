@@ -102,7 +102,7 @@ A map drawing past the loaded chunks reads the far terrain the player already se
 block, the water's top and the biome) from the finest far tile sampled over it, whether or not
 its chunk is loaded. A far tile's cell can be many blocks wide, so a far column is that cell's
 reduced surface, and it comes from wherever the far terrain does: the world's generator, the
-server's offer, chunks kept from earlier visits or a server's BlueMap. It reads nothing new
+server's offer or chunks kept from earlier visits. It reads nothing new
 from the server.
 
 A column no tile covers yet is `None`, and every column is `None` while far terrain is off

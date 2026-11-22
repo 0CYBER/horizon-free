@@ -697,7 +697,6 @@ Horizon's own and third-party addresses (Horizon layer):
 
 These are not addresses:
 
-- `bluemap_detect.rs` lists dynamic-DNS suffixes, to guess a server's own map host;
 - `horizon-server/src/discord.rs` lists the hosts a webhook URL may have;
 - the Windows, Apple and SOAP schema URLs in manifests and requests, and the UPnP multicast group.
 

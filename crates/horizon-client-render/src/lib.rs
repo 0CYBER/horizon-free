@@ -18,8 +18,6 @@ pub mod block_entity_cem;
 pub mod block_entity_render;
 pub mod block_sprites;
 pub mod block_states;
-pub mod bluemap;
-pub mod bluemap_detect;
 pub mod border_render;
 pub mod breaking;
 pub mod brewing;

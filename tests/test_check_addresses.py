@@ -74,7 +74,7 @@ class CheckTests(unittest.TestCase):
     def test_home_vanilla_not_addresses_and_allowed_pass(self):
         found = [("crates/horizon-addresses/src/lib.rs", "cosmetics.playhorizon.dev"),
                  ("crates/horizon-client-render/src/skins.rs", "textures.minecraft.net"),
-                 ("crates/horizon-client-render/src/bluemap_detect.rs", "ddns.net"),
+                 ("crates/horizon-friends/src/portmap.rs", "ddns.net"),
                  ("crates/horizon-telemetry/src/lib.rs", "telemetry.playhorizon.dev")]
         self.assertEqual(self.run_check(found), ([], []))
 

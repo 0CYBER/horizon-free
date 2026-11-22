@@ -72,8 +72,6 @@ pub enum H {
     Preset,
     LodDistance,
     FarDetail,
-    BlueMapAutoDetect,
-    BlueMapRadius,
     CaveCulling,
     GpuCulling,
     EntityCulling,
@@ -204,16 +202,6 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.",
                         ),
                         h(H::FarDetail, Medium, far),
-                        h(
-                            H::BlueMapAutoDetect,
-                            None,
-                            "On servers, finds their BlueMap web map for far terrain. Next join.",
-                        ),
-                        h(
-                            H::BlueMapRadius,
-                            None,
-                            "How far around you BlueMap tiles are downloaded. Next join.",
-                        ),
                         v(
                             Opt::SimulationDistance,
                             Medium,
@@ -671,8 +659,6 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
     pages
 }
 
-/// BlueMap download radii, in chunks.
-const BLUE_MAP_RADII: [u32; 5] = [16, 32, 64, 128, 256];
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 /// What the LOD Distance slider stops at, in chunks: off, fine steps up to 256
 /// for a short ring of far terrain past a small render distance (a phone or an
@@ -888,11 +874,6 @@ impl H {
                 n => labelled("LOD Distance", lang::tr("%s chunks", &[&n])),
             },
             H::FarDetail => labelled("Far Detail", g.far_detail.label()),
-            H::BlueMapAutoDetect => labelled("Find BlueMap", on_off(g.blue_map.auto_detect)),
-            H::BlueMapRadius => labelled(
-                "BlueMap Radius",
-                lang::tr("%s chunks", &[&g.blue_map.radius_chunks()]),
-            ),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             // Greyed out where it isn't offered (`Item::blocked`): Off, as it is there, while
             // the saved value waits.
@@ -1069,10 +1050,6 @@ impl H {
         match self {
             H::FarDetail => {
                 g.far_detail = step(&[FarDetail::Full, FarDetail::Reduced], g.far_detail, back)
-            }
-            H::BlueMapAutoDetect => g.blue_map.auto_detect = !g.blue_map.auto_detect,
-            H::BlueMapRadius => {
-                g.blue_map.radius = step(&BLUE_MAP_RADII, g.blue_map.radius_chunks(), back)
             }
             H::CaveCulling => g.cave_culling = !g.cave_culling,
             H::GpuCulling => g.gpu_culling = step(&GpuCullingMode::ALL, g.gpu_culling, back),
@@ -1274,7 +1251,6 @@ impl Item {
     pub fn switch(self, s: &Settings) -> Option<bool> {
         let g = &s.horizon;
         Some(match self {
-            Item::Horizon(H::BlueMapAutoDetect) => g.blue_map.auto_detect,
             Item::Horizon(H::CaveCulling) => g.cave_culling,
             Item::Horizon(H::OpaqueIce) => g.opaque_ice,
             Item::Horizon(H::CacheShulkerBoxes) => g.cache_shulker_boxes,
@@ -1362,8 +1338,6 @@ impl Item {
             Item::Extra(_)
                 | Item::Horizon(
                     H::Preset
-                        | H::BlueMapAutoDetect
-                        | H::BlueMapRadius
                         | H::Overlay
                         | H::ScreenshotQuality
                         | H::Pacing
@@ -2285,34 +2259,6 @@ mod tests {
         });
         assert_eq!(off, format!("Render Distance: {near} Chunks"));
         assert_eq!(on, format!("Full Detail Distance: {near} Chunks"));
-    }
-
-    #[test]
-    fn blue_map_settings_sit_with_far_terrain() {
-        let mut s = Settings::default();
-        let find = Item::Horizon(H::BlueMapAutoDetect);
-        let radius = Item::Horizon(H::BlueMapRadius);
-        let distance: Vec<Item> = rows()
-            .into_iter()
-            .flat_map(|(_, groups)| groups)
-            .find(|(name, _)| *name == "Distance")
-            .unwrap()
-            .1
-            .iter()
-            .map(|r| r.item)
-            .collect();
-        assert!(distance.contains(&find) && distance.contains(&radius));
-        assert!(distance.contains(&Item::Horizon(H::FarDetail)));
-        assert_eq!(find.switch(&s), Some(false), "off by default");
-        assert_eq!(radius.label(&s, &NONE).plain(), "BlueMap Radius: 64 chunks");
-        find.cycle(&mut s, false, FB, &NONE);
-        assert!(s.horizon.blue_map.auto_detect);
-        radius.cycle(&mut s, false, FB, &NONE);
-        assert_eq!(s.horizon.blue_map.radius, 128);
-        radius.cycle(&mut s, true, FB, &NONE);
-        radius.cycle(&mut s, true, FB, &NONE);
-        assert_eq!(radius.label(&s, &NONE).plain(), "BlueMap Radius: 32 chunks");
-        assert_eq!(s.horizon.preset, Preset::Custom);
     }
 
     #[test]

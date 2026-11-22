@@ -23,15 +23,6 @@
     "www.microsoft.com": "Microsoft account links, as the vanilla launcher"
   },
   "not_addresses": {
-    "aternos.me": "bluemap_detect.rs: a dynamic-DNS suffix, to guess a server's own map host",
-    "ddns.net": "bluemap_detect.rs: a dynamic-DNS suffix",
-    "duckdns.org": "bluemap_detect.rs: a dynamic-DNS suffix",
-    "hopto.org": "bluemap_detect.rs: a dynamic-DNS suffix",
-    "minehut.gg": "bluemap_detect.rs: a hosting suffix",
-    "no-ip.org": "bluemap_detect.rs: a dynamic-DNS suffix",
-    "playit.gg": "bluemap_detect.rs: a tunnel suffix",
-    "serveminecraft.net": "bluemap_detect.rs: a dynamic-DNS suffix",
-    "zapto.org": "bluemap_detect.rs: a dynamic-DNS suffix",
     "discord.com": "horizon-server/src/discord.rs: the hosts a webhook URL the owner gives may have",
     "discordapp.com": "horizon-server/src/discord.rs: webhook URL hosts",
     "ptb.discord.com": "horizon-server/src/discord.rs: webhook URL hosts",

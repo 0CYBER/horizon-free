@@ -12,6 +12,22 @@ horizon_client::game::native_replay::reparse_point  #19310
 horizon_client::game::native_replay::valid_id  #19310
 horizon_mod_package::manifest::inject::Inject  #19576
 horizon_mod_package::manifest::inject::Kind  #19576
+horizon_client::game::Game<'_>::lod_blue_map  kind=field  #19554
+horizon_client_render::bluemap::BlueMap  kind=struct  #19554
+horizon_client_render::bluemap::Candidate  kind=struct  #19554
+horizon_client_render::bluemap::Change  kind=struct  #19554
+horizon_client_render::bluemap::Columns  kind=type  #19554
+horizon_client_render::bluemap::Inner  kind=struct  #19554
+horizon_client_render::bluemap::Key  kind=type  #19554
+horizon_client_render::bluemap::Lowres  kind=struct  #19554
+horizon_client_render::bluemap::MapInfo  kind=struct  #19554
+horizon_client_render::bluemap::Palette  kind=struct  #19554
+horizon_client_render::bluemap::Pixel  kind=struct  #19554
+horizon_client_render::bluemap::Server  kind=struct  #19554
+horizon_client_render::bluemap::Settings  kind=struct  #19554
+horizon_client_render::bluemap::Slot  kind=enum  #19554
+horizon_client_render::bluemap::State  kind=struct  #19554
+horizon_client_render::bluemap::Tile  kind=struct  #19554
 horizon_client::game::points  #19576
 horizon_client::game::points::host_side  #19576
 horizon_client::game::points::mirror_in  #19576

@@ -247,9 +247,10 @@ impl Worker {
                         let (_, sampler) = samplers.get_mut(&job.level).expect("inserted above");
                         sampler.set_approximate(r.approximate);
                         let columns = sampler.grid(r.x, r.z, r.stride, SIDE);
-                        // Not kept when part of it is still on its way.
-                        sampled = !sampler.waited();
-                        encode_tile(Some(&columns), &biome_names)
+                        let tile = encode_tile(Some(&columns), &biome_names);
+                        // Kept only once encoded: an unwind leaves `sampled` false.
+                        sampled = true;
+                        tile
                     }));
                     let tile = tile.unwrap_or_else(|_| {
                         log::warn!("Far terrain: sampling {} failed; tile refused", job.level);

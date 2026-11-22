@@ -27,7 +27,6 @@ horizon-client-render gfx::prepared_model::tests::oversized_prepared_upload_retu
 horizon-client-render gfx::world_text::tests::world_text_blends_culls_and_obeys_world_depth lib daily resources
 horizon-client-render hud_kit::fit::tests::ellipsize_cuts_every_string_as_the_old_fit_did lib daily resources
 horizon-client-render lod::tests::chunks_a_server_dropped_stay_drawn_as_far_terrain lib daily resources
-horizon-client-render lod::tests::coarser_stand_ins_keep_the_ring_past_the_near_chunks_drawn lib daily resources
 horizon-client-render lod::tests::far_cells_sampled_before_their_chunks_were_kept_fill_in lib daily resources
 horizon-client-render lod::tests::real_mesh_clips_near_chunks_and_preserves_water_and_edited_surfaces lib daily resources
 horizon-client-render lod::tests::slab_materials_survive_chunk_summaries_and_draw_far_faces lib daily resources
