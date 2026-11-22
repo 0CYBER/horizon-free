@@ -2294,6 +2294,7 @@ mod vehicle_damage_command_tests {
     use horizon_client::chunk::Chunk;
     use horizon_core::position::ChunkPos;
     use std::sync::Arc;
+    /// A server game with commands allowed and chunk 0 0 force-loaded.
     pub(super) fn with_game(test: impl FnOnce(&mut Game<'_>)) {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2827,3 +2828,7 @@ mod attribute_modifier_command_tests {
 #[cfg(test)]
 #[path = "attribute_equipment_tests.rs"]
 mod attribute_equipment_tests;
+
+#[cfg(test)]
+#[path = "guest_vehicle_relation_tests.rs"]
+mod guest_vehicle_relation_tests;

@@ -1,0 +1,2 @@
+# #13845: the console's execute on vehicle of a connected guest, with the prepared 26.3 data.
+horizon-client game::commands::world_cmds::guest_vehicle_relation_tests::console_guest_vehicle_relation_uses_the_registered_rider lib daily resources
