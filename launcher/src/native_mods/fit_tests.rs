@@ -167,7 +167,10 @@ fn a_changed_or_removed_item_it_uses_is_named() {
         None,
     );
     let target = surface(&[("fn:give", "h1-changed")]);
-    let Verdict::DoesNotFit { made_for, misfits } = judged(&dir, OTHER_BUILD, &target) else {
+    let Verdict::DoesNotFit {
+        made_for, misfits, ..
+    } = judged(&dir, OTHER_BUILD, &target)
+    else {
         panic!("a changed item fits");
     };
     assert_eq!(made_for, pin(&dir));
@@ -189,7 +192,8 @@ fn without_a_list_for_its_pin_a_mod_works_on_its_own_build_only() {
     assert_eq!(
         judged(&none, OTHER_BUILD, &target),
         Verdict::NoList {
-            made_for: pin(&none)
+            made_for: pin(&none),
+            age: Age::Unknown,
         }
     );
     // A list made for another build than the mod's pin says nothing about this one.
@@ -201,7 +205,8 @@ fn without_a_list_for_its_pin_a_mod_works_on_its_own_build_only() {
     assert_eq!(
         judged(&stale, OTHER_BUILD, &target),
         Verdict::NoList {
-            made_for: pin(&stale)
+            made_for: pin(&stale),
+            age: Age::Unknown,
         }
     );
     // A list that does not read is no list: never a panic, never "fits".
@@ -213,7 +218,8 @@ fn without_a_list_for_its_pin_a_mod_works_on_its_own_build_only() {
     assert_eq!(
         judged(&none, OTHER_BUILD, &target),
         Verdict::NoList {
-            made_for: pin(&none)
+            made_for: pin(&none),
+            age: Age::Unknown,
         }
     );
     std::fs::remove_dir_all(none).unwrap();
@@ -233,6 +239,7 @@ fn a_mod_that_changes_game_code_is_exact_whatever_its_list_says() {
         judged(&dir, OTHER_BUILD, &target),
         Verdict::Exact {
             made_for: pin(&dir),
+            age: Age::Unknown,
             why: "[[native.module]]"
         }
     );
@@ -260,8 +267,9 @@ fn at_most_five_changes_are_named_then_how_many_more() {
 #[test]
 fn every_message_names_the_mod_the_builds_and_the_worlds() {
     let made_for = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
-    let misfit = Verdict::DoesNotFit {
+    let misfit = |age| Verdict::DoesNotFit {
         made_for: made_for.clone(),
+        age,
         misfits: vec![
             Misfit {
                 id: "hook:player_logged_in".into(),
@@ -274,13 +282,13 @@ fn every_message_names_the_mod_the_builds_and_the_worlds() {
         ],
     };
     let build = "nightly-2026-11-13 (afe471c)";
-    assert_eq!(
-        refusal("Greeter", &misfit, build),
-        "Greeter doesn't fit this game.\nIt was made for another Horizon version and this instance runs \
+    let expected = "Greeter doesn't fit this game.\nIt was made for another Horizon version and this instance runs \
          nightly-2026-11-13 (afe471c). Since then the game changed 2 things that Greeter uses: the hook \
          player_logged_in (changed); the method ServerHost::give_item (removed).\nThe game will be \
-         built without Greeter, which stays installed. Ask its author for an update made for this game."
-    );
+         built without Greeter, which stays installed. Ask its author for an update made for this game.";
+    for age in [Age::Older, Age::Unknown] {
+        assert_eq!(refusal("Greeter", &misfit(age), build), expected);
+    }
     let fits = Verdict::Fits {
         made_for: made_for.clone(),
     };
@@ -288,7 +296,7 @@ fn every_message_names_the_mod_the_builds_and_the_worlds() {
         line("Greeter", &fits, build),
         "Made for another Horizon version. Fits this game too."
     );
-    assert!(fits.usable() && Verdict::MadeFor.usable() && !misfit.usable());
+    assert!(fits.usable() && Verdict::MadeFor.usable() && !misfit(Age::Unknown).usable());
     assert_eq!(
         worlds_at_stake(
             "Greeter",
@@ -300,6 +308,46 @@ fn every_message_names_the_mod_the_builds_and_the_worlds() {
          for good."
     );
     assert!(worlds_at_stake("Greeter", build, &["Home".into()]).contains("One of your worlds"));
+}
+
+#[test]
+fn mods_made_for_a_newer_build_tell_the_player_to_update_the_instance() {
+    let build = "the Nov 13 update";
+    let made_for = OTHER_BUILD.to_owned();
+    let age = Age::Newer;
+    let directions = "Update this instance to another Horizon version to use it: instance settings, Installation, Game version.";
+    let misfit = Misfit {
+        id: "hook:player_logged_in".into(),
+        change: Change::Changed,
+    };
+    for (count, expected) in [(1, "One thing Greeter uses"), (2, "2 things Greeter uses")] {
+        let verdict = Verdict::DoesNotFit {
+            made_for: made_for.clone(),
+            misfits: vec![misfit.clone(); count],
+            age,
+        };
+        let message = refusal("Greeter", &verdict, build);
+        assert!(
+            message.contains("newer than the Nov 13 update"),
+            "{message}"
+        );
+        assert!(message.contains(expected), "{message}");
+        assert!(message.ends_with(directions), "{message}");
+        assert!(!message.contains("Since then"), "{message}");
+        assert!(!message.contains("Ask its author"), "{message}");
+    }
+    for verdict in [
+        Verdict::Exact {
+            made_for: made_for.clone(),
+            why: "internals",
+            age,
+        },
+        Verdict::NoList { made_for, age },
+    ] {
+        let message = refusal("Greeter", &verdict, build);
+        assert!(message.ends_with(directions), "{message}");
+        assert!(!message.contains("author"), "{message}");
+    }
 }
 
 #[test]
@@ -315,12 +363,17 @@ fn an_update_says_how_many_mods_fit_and_which_will_be_switched_off() {
     );
     let misfit = Verdict::DoesNotFit {
         made_for: OTHER_BUILD.into(),
+        age: Age::Unknown,
         misfits: vec![Misfit {
             id: "hook:player_logged_in".into(),
             change: Change::Changed,
         }],
     };
-    let off = [("Greeter".to_owned(), short(&misfit))];
+    let off = [LeftOut {
+        id: "Greeter".into(),
+        version: "1.0".into(),
+        why: update_why(&misfit),
+    }];
     assert_eq!(
         update_summary(build, 4, &off),
         "Move to nightly-2026-11-20 (9a8b7c6)? 3 of your 4 native mods fit it.\nGreeter does \
@@ -328,9 +381,84 @@ fn an_update_says_how_many_mods_fit_and_which_will_be_switched_off() {
     );
     let exact = Verdict::Exact {
         made_for: OTHER_BUILD.into(),
+        age: Age::Unknown,
         why: "[[native.mixin]]",
     };
     assert_eq!(short(&exact), "it changes the game's own code");
+}
+
+#[test]
+fn an_update_that_is_still_too_old_directs_the_player_to_the_mods_build() {
+    let verdict = Verdict::Exact {
+        made_for: OTHER_BUILD.into(),
+        age: Age::Newer,
+        why: "internals",
+    };
+    let off = [LeftOut {
+        id: "Greeter".into(),
+        version: "1.0".into(),
+        why: update_why(&verdict),
+    }];
+    assert_eq!(
+        update_summary("the Nov 20 update", 1, &off),
+        "Move to the Nov 20 update? 0 of your 1 native mods fit it.\nGreeter does not: it uses the game's internals. It will be switched off. To use it, update this instance to the version it was made for."
+    );
+}
+
+#[test]
+fn update_preview_follows_dependencies_to_the_root_exclusion() {
+    let off = [
+        ("addon", Why::Needs("bridge".into())),
+        ("bridge", Why::Needs("core".into())),
+        ("core", Why::Newer("its API differs".into())),
+        ("old-addon", Why::Needs("old-core".into())),
+        ("old-core", Why::Unfit("its API differs".into())),
+        ("cycle-a", Why::Needs("cycle-b".into())),
+        ("cycle-b", Why::Needs("cycle-a".into())),
+        ("missing-addon", Why::Needs("missing-core".into())),
+    ]
+    .map(|(id, why)| LeftOut {
+        id: id.into(),
+        version: "1.0".into(),
+        why,
+    });
+    let summary = update_summary("the Nov 20 update", off.len(), &off);
+    for (id, reason) in [
+        ("addon", "it needs bridge, which doesn't fit"),
+        ("bridge", "it needs core, which doesn't fit"),
+    ] {
+        let expected = format!(
+            "{id} does not: {reason}. It will be switched off. core was made for a newer game build than this update offers."
+        );
+        assert!(summary.lines().any(|line| line == expected), "{summary}");
+    }
+    for id in ["old-addon", "cycle-a", "cycle-b", "missing-addon"] {
+        assert!(
+            summary.lines().any(|line| line.starts_with(id)
+                && line.ends_with(
+                    "It will be switched off until its author makes a version that fits."
+                )),
+            "{summary}"
+        );
+    }
+}
+
+#[test]
+fn a_world_stop_keeps_the_instance_update_directions_without_forecasting_the_build() {
+    let verdict = Verdict::NoList {
+        made_for: OTHER_BUILD.into(),
+        age: Age::Newer,
+    };
+    let Route::Unfit {
+        pending_actions, ..
+    } = unfit_route("Greeter", &verdict, "the Nov 20 update")
+    else {
+        panic!("a newer exact-build mod should be unfit");
+    };
+    assert_eq!(
+        pending_actions,
+        "The build is stopped until you choose under Native mod build; Greeter stays on until then. Update this instance to another Horizon version to use it: instance settings, Installation, Game version."
+    );
 }
 
 #[test]
@@ -354,7 +482,7 @@ fn the_worlds_buttons_and_the_stopped_mod_say_what_is_so() {
     assert_eq!(back_up_and_update(1), "Back up this world and update");
     assert_eq!(back_up_and_update(2), "Back up these worlds and update");
     assert_eq!(
-        actions_pending("Greeter"),
+        actions_pending("Greeter", None),
         "The build is stopped until you choose under Native mod build; Greeter stays on until then."
     );
     assert!(did_not_build_pending("Greeter").contains("stays on until you choose"));

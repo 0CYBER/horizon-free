@@ -1923,6 +1923,7 @@ fn refused(refusal: sdk_cache::Refusal) -> String {
 fn guard_worlds(
     home: &Path,
     left: &[LeftOut],
+    verdicts: &[(String, fit::Verdict)],
     build: &str,
     back_up: bool,
     progress: &impl Fn(Step),
@@ -1945,6 +1946,18 @@ fn guard_worlds(
                 (!worlds.is_empty()).then(|| match l.why {
                     isolate::Why::DidNotBuild => {
                         fit::worlds_at_stake_unbuilt(&l.id, build, &worlds)
+                    }
+                    isolate::Why::Newer(_) => {
+                        let pinned = verdicts
+                            .iter()
+                            .find(|(id, _)| id == &l.id)
+                            .and_then(|(_, verdict)| verdict.newer_build());
+                        match pinned {
+                            Some(made_for) => {
+                                fit::worlds_at_stake_newer(&l.id, build, &worlds, made_for)
+                            }
+                            None => fit::worlds_at_stake(&l.id, build, &worlds),
+                        }
                     }
                     _ => fit::worlds_at_stake(&l.id, build, &worlds),
                 })
@@ -2210,13 +2223,18 @@ fn pipeline(
                 .iter()
                 .filter_map(|(id, verdict)| {
                     let bundle = mods.iter().find(|b| &b.manifest.id == id)?;
-                    let why = isolate::Why::Unfit(fit::line(id, verdict, &shown));
+                    let line = fit::line(id, verdict, &shown);
+                    let why = if verdict.newer_build().is_some() {
+                        isolate::Why::Newer(line)
+                    } else {
+                        isolate::Why::Unfit(line)
+                    };
                     Some(LeftOut::new(bundle, why))
                 })
                 .collect();
             let left = isolate::with_dependents(&unfit, &pairs);
             if let Some(home) = options.worlds {
-                guard_worlds(home, &left, &shown, options.back_up, progress)?;
+                guard_worlds(home, &left, &unusable, &shown, options.back_up, progress)?;
             }
             return Err(Failed::Mods {
                 left,
@@ -2263,7 +2281,7 @@ fn pipeline(
                 .map(|(b, d)| (b, d.as_slice()))
                 .collect();
             let going = isolate::with_dependents(std::slice::from_ref(&left), &pairs);
-            if let Err(stop) = guard_worlds(home, &going, &shown, back_up, progress) {
+            if let Err(stop) = guard_worlds(home, &going, &[], &shown, back_up, progress) {
                 return stop;
             }
         }
@@ -3289,6 +3307,7 @@ mod tests {
 
     #[test]
     fn a_mod_saved_into_a_world_is_never_switched_off_without_the_players_choice() {
+        use horizon_platform::mod_package::sdk::{INDEX, SCHEMA};
         use horizon_platform::world::nbt::{self, Limits, Tag};
         let _guard = scratch_state();
         let home = dir("guard-worlds");
@@ -3298,7 +3317,7 @@ mod tests {
             ("ModId", Tag::String("greeter".into())),
             ("ModVersion", Tag::String("1.0.0".into())),
         ]);
-        let root = Tag::compound([
+        let level = Tag::compound([
             (
                 "Data",
                 Tag::compound([("LevelName", Tag::String("Home".into()))]),
@@ -3311,7 +3330,7 @@ mod tests {
         let bytes = nbt::write_named(
             &nbt::NamedTag {
                 name: "".into(),
-                tag: root,
+                tag: level,
             },
             Limits::default(),
         )
@@ -3336,7 +3355,7 @@ mod tests {
                 vec![],
             ),
         ] {
-            let stopped = guard_worlds(&home, &[left(why)], build, false, &|_| {});
+            let stopped = guard_worlds(&home, &[left(why)], &[], build, false, &|_| {});
             let Err(Failed::Worlds(stake)) = stopped else {
                 panic!("a world saved with the mod must stop the build");
             };
@@ -3350,6 +3369,55 @@ mod tests {
                 "nothing is backed up unasked"
             );
         }
+        let pin =
+            format!("{:x}", Sha256::digest(home.to_string_lossy().as_bytes()))[..40].to_owned();
+        let sdk = root().join("sdk").join(&pin);
+        fs::create_dir_all(sdk.parent().unwrap()).unwrap();
+        fs::create_dir(&sdk).unwrap();
+        fs::write(
+            sdk.join(INDEX),
+            serde_json::json!({
+                "schema": SCHEMA,
+                "build": {
+                    "commit": pin, "game": "26.3", "date": "2026-11-22",
+                    "nightly": "nightly-2026-11-22"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let verdict = fit::Verdict::NoList {
+            made_for: pin,
+            age: fit::Age::Newer,
+        };
+        let stopped = guard_worlds(
+            &home,
+            &[left(isolate::Why::Newer(fit::line(
+                "greeter", &verdict, build,
+            )))],
+            &[("greeter".into(), verdict)],
+            build,
+            false,
+            &|_| {},
+        );
+        fs::remove_dir_all(sdk).unwrap();
+        let Err(Failed::Worlds(stake)) = stopped else {
+            panic!("a world saved with the newer mod must stop the build");
+        };
+        assert_eq!(stake.worlds, ["Home"]);
+        assert!(
+            stake.text.contains("Opening it without greeter"),
+            "{}",
+            stake.text
+        );
+        assert!(
+            stake.text.ends_with(
+                "Update this instance to the Nov 22 update to use it: instance settings, Installation, Game version."
+            ),
+            "{}",
+            stake.text
+        );
+
         // A mod that failed to compile but is in no world isn't part of the stop.
         let Err(Failed::Worlds(stake)) = guard_worlds(
             &home,
@@ -3358,6 +3426,7 @@ mod tests {
                 other.id = "elsewhere".into();
                 other
             }],
+            &[],
             build,
             false,
             &|_| {},
@@ -3371,6 +3440,7 @@ mod tests {
         guard_worlds(
             &home,
             &[left(isolate::Why::DidNotBuild)],
+            &[],
             build,
             true,
             &|step| said.borrow_mut().push(step),
@@ -3384,7 +3454,7 @@ mod tests {
             version: "1.0.0".into(),
             why: isolate::Why::DidNotBuild,
         };
-        assert!(guard_worlds(&home, &[other], build, false, &|_| {}).is_ok());
+        assert!(guard_worlds(&home, &[other], &[], build, false, &|_| {}).is_ok());
         fs::remove_dir_all(home).unwrap();
     }
 

@@ -16,6 +16,7 @@ pub enum Route {
         headline: String,
         line: String,
         actions: String,
+        pending_actions: String,
     },
     Invalid {
         reason: String,

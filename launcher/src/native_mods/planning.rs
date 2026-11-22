@@ -89,11 +89,7 @@ pub(super) fn classify(folder: &Path, base: Option<&str>) -> Result<Routes, Fail
                     fit::Verdict::Fits { .. } => Route::Fits {
                         line: fit::line(&id, &verdict, &shown),
                     },
-                    _ => Route::Unfit {
-                        headline: fit::headline(&id, &verdict),
-                        line: fit::line(&id, &verdict, &shown),
-                        actions: fit::actions(&id),
-                    },
+                    _ => fit::unfit_route(&id, &verdict, &shown),
                 };
                 said(id.as_str(), route);
             }
@@ -164,10 +160,7 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
         .filter(|(_, verdict)| !verdict.usable())
         .filter_map(|(id, verdict)| {
             let bundle = found.iter().find(|b| &b.manifest.id == id)?;
-            Some(LeftOut::new(
-                bundle,
-                isolate::Why::Unfit(fit::short(verdict)),
-            ))
+            Some(LeftOut::new(bundle, fit::update_why(verdict)))
         })
         .collect();
     let declared: Vec<Vec<dependencies::Dependency>> = found
@@ -185,20 +178,6 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
         .map(|(b, d)| (b, d.as_slice()))
         .collect();
     let left = isolate::with_dependents(&unfit, &pairs);
-    let off: Vec<(String, String)> = left
-        .iter()
-        .map(|l| {
-            let why = match &l.why {
-                isolate::Why::Unfit(why) => why.clone(),
-                isolate::Why::Needs(library) => trf(
-                    "it needs {library}, which doesn't fit",
-                    &[("library", library)],
-                ),
-                _ => String::new(),
-            };
-            (l.id.clone(), why)
-        })
-        .collect();
     let ids: Vec<String> = left.iter().map(|l| l.id.clone()).collect();
     let all = crate::worlds::list(home);
     let worlds = crate::worlds::saved_with(&all, &ids)
@@ -207,7 +186,7 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
         .collect();
     Ok(UpdateCheck {
         to: to.to_owned(),
-        summary: fit::update_summary(&shown, found.len(), &off),
+        summary: fit::update_summary(&shown, found.len(), &left),
         worlds,
     })
 }

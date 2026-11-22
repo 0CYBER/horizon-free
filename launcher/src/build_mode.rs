@@ -873,12 +873,13 @@ impl Launcher {
                     headline,
                     line,
                     actions,
+                    pending_actions,
                 } => (
                     "information-circle",
                     pal.warn,
                     headline.clone().into(),
                     match stop.filter(|stake| stake.mods.iter().any(|id| id == mod_id)) {
-                        Some(_) => format!("{line}\n{}", native_mods::fit::actions_pending(mod_id)),
+                        Some(_) => format!("{line}\n{pending_actions}"),
                         None => format!("{line}\n{actions}"),
                     },
                 ),

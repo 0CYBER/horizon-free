@@ -197,6 +197,30 @@ fn nightly_of(commit: &str) -> Option<String> {
         })
 }
 
+/// How the mod's pinned build compares to the instance's build, using locally known Nightlies.
+pub(super) fn age(made_for: &str, build: &str) -> super::fit::Age {
+    let made_for = nightly_of(made_for);
+    let build = nightly_of(build);
+    nightly_age(made_for.as_deref(), build.as_deref())
+}
+
+fn nightly_age(made_for: Option<&str>, build: Option<&str>) -> super::fit::Age {
+    use super::fit::Age;
+    use std::cmp::Ordering;
+
+    let (Some(made_for), Some(build)) = (made_for, build) else {
+        return Age::Unknown;
+    };
+    if crate::nightly::date_of(made_for).is_none() || crate::nightly::date_of(build).is_none() {
+        return Age::Unknown;
+    }
+    match crate::backend::compare_versions(made_for, build) {
+        Ordering::Greater => Age::Newer,
+        Ordering::Less => Age::Older,
+        Ordering::Equal => Age::Unknown,
+    }
+}
+
 /// Build `commit`'s name as the Versions page gives it, when it is known here (a kept index, or
 /// an installed version). `commit` may come from a mod's manifest: anything but a build id is
 /// never looked up.

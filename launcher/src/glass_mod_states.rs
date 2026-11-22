@@ -6,7 +6,7 @@ use super::*;
 use build_mode::ModKind;
 use horizon_launcher::native_mods::{
     self as nm,
-    fit::{self, Verdict},
+    fit::{self, Age, Verdict},
     sdk_cache::Refusal as Sdk,
     Route, Step,
 };
@@ -52,14 +52,6 @@ fn misfits(count: usize) -> Vec<Misfit> {
             change,
         })
         .collect()
-}
-
-fn unfit(name: &str, verdict: Verdict) -> Route {
-    Route::Unfit {
-        headline: fit::headline(name, &verdict),
-        line: fit::line(name, &verdict, BUILD),
-        actions: fit::actions(name),
-    }
 }
 
 fn row(name: &str, kind: ModKind, error: Option<&str>) -> ModRow {
@@ -291,10 +283,11 @@ impl Launcher {
             }
             ("update", key) => {
                 let to = "nightly-2026-11-13".to_owned();
-                let off = [(
-                    "hitbox-plus".to_owned(),
-                    "it changes the game's own code".to_owned(),
-                )];
+                let off = [nm::LeftOut {
+                    id: "hitbox-plus".into(),
+                    version: "1.2.0".into(),
+                    why: nm::Why::Unfit("it changes the game's own code".into()),
+                }];
                 let (summary, worlds) = match key {
                     "some" => (fit::update_summary(BUILD, 3, &off), Vec::new()),
                     "world" => (
@@ -326,6 +319,7 @@ impl Launcher {
                         "hitbox-plus",
                         Verdict::Exact {
                             made_for: MADE_FOR.into(),
+                            age: Age::Older,
                             why: "native",
                         },
                     ),
@@ -333,6 +327,7 @@ impl Launcher {
                         "deep-tools",
                         Verdict::Exact {
                             made_for: MADE_FOR.into(),
+                            age: Age::Older,
                             why: "internals",
                         },
                     ),
@@ -340,12 +335,14 @@ impl Launcher {
                         "old-greeter",
                         Verdict::NoList {
                             made_for: MADE_FOR.into(),
+                            age: Age::Older,
                         },
                     ),
                     (
                         "night-vision",
                         Verdict::DoesNotFit {
                             made_for: MADE_FOR.into(),
+                            age: Age::Older,
                             misfits: misfits(1),
                         },
                     ),
@@ -353,6 +350,7 @@ impl Launcher {
                         "big-update",
                         Verdict::DoesNotFit {
                             made_for: MADE_FOR.into(),
+                            age: Age::Older,
                             misfits: misfits(7),
                         },
                     ),
@@ -364,7 +362,7 @@ impl Launcher {
                         Verdict::Fits { .. } => Route::Fits {
                             line: fit::line(name, &verdict, BUILD),
                         },
-                        _ => unfit(name, verdict),
+                        _ => fit::unfit_route(name, &verdict, BUILD),
                     };
                     mods.push((name.to_owned(), route));
                     rows.push(row(name, ModKind::Native, None));

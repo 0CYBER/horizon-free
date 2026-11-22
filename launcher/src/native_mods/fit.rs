@@ -8,15 +8,24 @@
 //!
 //! People read "made for" (a mod's pin) and "fits"; builds by their Nightly names; and items as
 //! what they are ("the hook `player_logged_in`"), never surface ids or hashes.
-use super::{api, prebuilt, sdk_cache};
+use super::{api, prebuilt, sdk_cache, LeftOut, Route, Why};
 use crate::i18n::{tr, trf};
 use horizon_platform::mod_package::mod_surface;
 use mod_surface::uses::{self, Change, Fit, ItemKind, Misfit, UsesTable};
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 
 /// At most this many changed items are named in a message; the build log has them all.
 pub const SHOWN_ITEMS: usize = 5;
+
+/// How the mod's build compares to the instance's build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Age {
+    Newer,
+    Older,
+    Unknown,
+}
 
 /// How a mod stands against the build an instance plays.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,14 +36,19 @@ pub enum Verdict {
     Fits { made_for: String },
     /// It changes game code or names the game's internals (`why`: the table that does, or
     /// `internals`): it works on the build it was made for only.
-    Exact { made_for: String, why: &'static str },
+    Exact {
+        made_for: String,
+        why: &'static str,
+        age: Age,
+    },
     /// Its package doesn't say what it uses (made by an older tool, or its list is for another
     /// build than its pin): it works on the build it was made for only.
-    NoList { made_for: String },
+    NoList { made_for: String, age: Age },
     /// Items it uses changed in this build.
     DoesNotFit {
         made_for: String,
         misfits: Vec<Misfit>,
+        age: Age,
     },
 }
 
@@ -42,6 +56,27 @@ impl Verdict {
     /// Whether the mod can be built against this build.
     pub fn usable(&self) -> bool {
         matches!(self, Self::MadeFor | Self::Fits { .. })
+    }
+
+    /// The pinned build when it is known to be newer and the mod cannot run here.
+    pub(super) fn newer_build(&self) -> Option<&str> {
+        match self {
+            Self::Exact {
+                made_for,
+                age: Age::Newer,
+                ..
+            }
+            | Self::NoList {
+                made_for,
+                age: Age::Newer,
+            }
+            | Self::DoesNotFit {
+                made_for,
+                age: Age::Newer,
+                ..
+            } => Some(made_for),
+            _ => None,
+        }
     }
 }
 
@@ -68,14 +103,21 @@ pub(super) fn judge(
         return Ok(Verdict::MadeFor);
     }
     if let Some(why) = prebuilt::changes_game(project) {
-        return Ok(Verdict::Exact { made_for, why });
+        let age = sdk_cache::age(&made_for, build);
+        return Ok(Verdict::Exact { made_for, why, age });
     }
     let Some(table) = table(&project.bundle.dir).filter(|table| table.made_for == made_for) else {
-        return Ok(Verdict::NoList { made_for });
+        let age = sdk_cache::age(&made_for, build);
+        return Ok(Verdict::NoList { made_for, age });
     };
     let target = surface()?;
     if let Fit::DoesNotFit(misfits) = uses::fits(&table.entries, target.as_ref()) {
-        return Ok(Verdict::DoesNotFit { made_for, misfits });
+        let age = sdk_cache::age(&made_for, build);
+        return Ok(Verdict::DoesNotFit {
+            made_for,
+            misfits,
+            age,
+        });
     }
     Ok(Verdict::Fits { made_for })
 }
@@ -189,7 +231,7 @@ pub fn line(name: &str, verdict: &Verdict, build: &str) -> String {
             "Made for {made_for}. Fits this game too.",
             &[("made_for", &made(made_for))],
         ),
-        Verdict::Exact { made_for, why } if *why == "internals" => trf(
+        Verdict::Exact { made_for, why, .. } if *why == "internals" => trf(
             "Made for {made_for} only: it uses the game's internals, so it works on exactly that build.",
             &[("made_for", &made(made_for))],
         ),
@@ -197,33 +239,42 @@ pub fn line(name: &str, verdict: &Verdict, build: &str) -> String {
             "Made for {made_for} only: it changes the game's own code, so it works on exactly that build.",
             &[("made_for", &made(made_for))],
         ),
-        Verdict::NoList { made_for } => trf(
+        Verdict::NoList { made_for, age: Age::Newer } => trf(
+            "{mod}'s package doesn't say what it uses, so it works on {made_for} only.",
+            &[("mod", name), ("made_for", &made(made_for))],
+        ),
+        Verdict::NoList { made_for, .. } => trf(
             "{mod}'s package was made by an older tool and doesn't say what it uses, so it works on {made_for} only. Its author can rebuild it with the current mod tools.",
             &[("mod", name), ("made_for", &made(made_for))],
         ),
-        Verdict::DoesNotFit { made_for, misfits } => {
+        Verdict::DoesNotFit { made_for, misfits, age } => {
+            let made_for = made(made_for);
+            let items = changes(misfits);
             let count = misfits.len().to_string();
-            if misfits.len() == 1 {
-                trf(
+            let args = [
+                ("made_for", made_for.as_str()),
+                ("build", build),
+                ("count", count.as_str()),
+                ("mod", name),
+                ("items", items.as_str()),
+            ];
+            match (age, misfits.len()) {
+                (Age::Newer, 1) => trf(
+                    "It was made for {made_for}, which is newer than {build}, the version this instance runs. One thing {mod} uses is different there: {items}.",
+                    &args,
+                ),
+                (Age::Newer, _) => trf(
+                    "It was made for {made_for}, which is newer than {build}, the version this instance runs. {count} things {mod} uses are different there: {items}.",
+                    &args,
+                ),
+                (_, 1) => trf(
                     "It was made for {made_for} and this instance runs {build}. Since then the game changed one thing that {mod} uses: {items}.",
-                    &[
-                        ("made_for", &made(made_for)),
-                        ("build", build),
-                        ("mod", name),
-                        ("items", &changes(misfits)),
-                    ],
-                )
-            } else {
-                trf(
+                    &args,
+                ),
+                (_, _) => trf(
                     "It was made for {made_for} and this instance runs {build}. Since then the game changed {count} things that {mod} uses: {items}.",
-                    &[
-                        ("made_for", &made(made_for)),
-                        ("build", build),
-                        ("count", &count),
-                        ("mod", name),
-                        ("items", &changes(misfits)),
-                    ],
-                )
+                    &args,
+                ),
             }
         }
     }
@@ -240,9 +291,33 @@ pub fn headline(name: &str, verdict: &Verdict) -> String {
     }
 }
 
-/// What the player can do about a mod the build can't use: only what a button does today (the
-/// mod's menu on the Mods page has Turn off).
-pub fn actions(name: &str) -> String {
+/// The status and guidance for a mod that cannot be built against this game.
+pub fn unfit_route(name: &str, verdict: &Verdict, build: &str) -> Route {
+    let direction = verdict.newer_build().map(update_direction);
+    Route::Unfit {
+        headline: headline(name, verdict),
+        line: line(name, verdict, build),
+        actions: actions(name, direction.as_deref()),
+        pending_actions: actions_pending(name, direction.as_deref()),
+    }
+}
+
+fn update_direction(made_for: &str) -> String {
+    trf(
+        "Update this instance to {made_for} to use it: instance settings, Installation, Game version.",
+        &[("made_for", &sdk_cache::known_name(made_for))],
+    )
+}
+
+/// What the player can do about a mod the build can't use.
+fn actions(name: &str, direction: Option<&str>) -> String {
+    if let Some(direction) = direction {
+        let omitted = trf(
+            "The game will be built without {mod}, which stays installed.",
+            &[("mod", name)],
+        );
+        return format!("{omitted} {direction}");
+    }
     trf(
         "The game will be built without {mod}, which stays installed. Ask its author for an update made for this game.",
         &[("mod", name)],
@@ -251,7 +326,7 @@ pub fn actions(name: &str) -> String {
 
 /// Why a mod the build can't use won't be built, in a few words: what changed, or why it is
 /// tied to its own build.
-pub fn short(verdict: &Verdict) -> String {
+fn short(verdict: &Verdict) -> String {
     match verdict {
         Verdict::MadeFor | Verdict::Fits { .. } => String::new(),
         Verdict::Exact { why, .. } if *why == "internals" => {
@@ -263,9 +338,19 @@ pub fn short(verdict: &Verdict) -> String {
     }
 }
 
+/// Why an offered update would switch a mod off.
+pub(super) fn update_why(verdict: &Verdict) -> Why {
+    let why = short(verdict);
+    if verdict.newer_build().is_some() {
+        Why::Newer(why)
+    } else {
+        Why::Unfit(why)
+    }
+}
+
 /// What updating to `build` does to the instance's `total` native mods, said before anything is
-/// downloaded (design-fit §10.1): how many fit, and each one that will be switched off (id, why).
-pub fn update_summary(build: &str, total: usize, off: &[(String, String)]) -> String {
+/// downloaded (design-fit §10.1): how many fit, and each one that will be switched off.
+pub fn update_summary(build: &str, total: usize, off: &[LeftOut]) -> String {
     if off.is_empty() {
         return if total == 1 {
             trf(
@@ -289,14 +374,50 @@ pub fn update_summary(build: &str, total: usize, off: &[(String, String)]) -> St
     );
     let lines: Vec<String> = off
         .iter()
-        .map(|(name, why)| {
-            trf(
-                "{mod} does not: {why}. It will be switched off until its author makes a version that fits.",
-                &[("mod", name), ("why", why)],
-            )
+        .map(|left| {
+            let name = &left.id;
+            match &left.why {
+                Why::Newer(why) => trf(
+                    "{mod} does not: {why}. It will be switched off. To use it, update this instance to the version it was made for.",
+                    &[("mod", name), ("why", why.trim_end_matches('.'))],
+                ),
+                Why::Unfit(why) => update_off(name, why),
+                Why::Needs(library) => {
+                    let why = trf("it needs {library}, which doesn't fit", &[("library", library)]);
+                    match newer_requirement(library, off) {
+                        Some(root) => trf(
+                            "{mod} does not: {why}. It will be switched off. {library} was made for a newer game build than this update offers.",
+                            &[("mod", name), ("why", &why), ("library", root)],
+                        ),
+                        None => update_off(name, &why),
+                    }
+                }
+                _ => left.label(),
+            }
         })
         .collect();
     format!("{head}\n{}", lines.join("\n"))
+}
+
+/// Find the newer-build exclusion at the end of a dependency chain, if there is one.
+fn newer_requirement<'a>(mut library: &'a str, off: &'a [LeftOut]) -> Option<&'a str> {
+    let mut visited = HashSet::new();
+    while visited.insert(library) {
+        let left = off.iter().find(|left| left.id == library)?;
+        match &left.why {
+            Why::Needs(next) => library = next,
+            Why::Newer(_) => return Some(&left.id),
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn update_off(name: &str, why: &str) -> String {
+    trf(
+        "{mod} does not: {why}. It will be switched off until its author makes a version that fits.",
+        &[("mod", name), ("why", why.trim_end_matches('.'))],
+    )
 }
 
 /// Said under an update's summary when worlds were saved with a mod it switches off.
@@ -326,7 +447,7 @@ pub fn refusal(name: &str, verdict: &Verdict, build: &str) -> String {
         "{}\n{}\n{}",
         headline(name, verdict),
         line(name, verdict, build),
-        actions(name)
+        actions(name, verdict.newer_build().map(update_direction).as_deref())
     )
 }
 
@@ -364,6 +485,20 @@ pub fn worlds_at_stake(name: &str, build: &str, worlds: &[String]) -> String {
         &[("mod", name), ("build", build)],
     );
     format!("{headline}\n{}", worlds_body(name, worlds))
+}
+
+/// [`worlds_at_stake`] for a mod made for a newer build.
+pub(super) fn worlds_at_stake_newer(
+    name: &str,
+    build: &str,
+    worlds: &[String],
+    made_for: &str,
+) -> String {
+    format!(
+        "{}\n{}",
+        worlds_at_stake(name, build, worlds),
+        update_direction(made_for)
+    )
 }
 
 /// [`worlds_at_stake`] for a mod judged to fit `build` whose compile against it failed.
@@ -440,12 +575,16 @@ pub fn did_not_build_last(name: &str) -> String {
     )
 }
 
-/// [`actions`] while the stop for worlds saved with `name` is on screen.
-pub fn actions_pending(name: &str) -> String {
-    trf(
+/// What the mod's status says while a world prevents its omission.
+fn actions_pending(name: &str, direction: Option<&str>) -> String {
+    let pending = trf(
         "The build is stopped until you choose under Native mod build; {mod} stays on until then.",
         &[("mod", name)],
-    )
+    );
+    match direction {
+        Some(direction) => format!("{pending} {direction}"),
+        None => pending,
+    }
 }
 
 #[cfg(test)]
