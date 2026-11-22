@@ -362,7 +362,7 @@ impl<'a> Split<'a> {
         let window = self.host.window.clone().ok_or("no window")?;
         let mut old = self.host.renderer.take().ok_or("no renderer")?;
         old.release_surface();
-        let api = self.host.settings.horizon.api;
+        let api = self.host.settings.horizon.effective_api();
         let batching = self.host.settings.horizon.translucent_batching;
         let shader_pack = super::shader_packs::picked_pack_shape(&self.host.settings);
         let built = build_renderer(
@@ -447,7 +447,7 @@ impl<'a> Split<'a> {
         self.host.window = Some(window.clone());
         let old = self.host.renderer.take().ok_or("no renderer")?;
         old.take_back(main.compositor);
-        let api = self.host.settings.horizon.api;
+        let api = self.host.settings.horizon.effective_api();
         let batching = self.host.settings.horizon.translucent_batching;
         let shader_pack = super::shader_packs::picked_pack_shape(&self.host.settings);
         let built = build_renderer(

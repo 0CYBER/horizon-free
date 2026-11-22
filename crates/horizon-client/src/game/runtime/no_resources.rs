@@ -37,7 +37,7 @@ pub(super) fn show(looked_in: &std::path::Path, settings: &Settings) -> Result<(
         },
         screen: NoResources::new(looked_in, horizon_hooks::engine::get_the_game()),
         pointer: (0.0, 0.0),
-        api: settings.horizon.api,
+        api: settings.horizon.effective_api(),
         settings: settings.clone(),
         error: None,
     };

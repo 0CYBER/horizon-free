@@ -1151,7 +1151,11 @@ impl H {
             H::HdrLook => g.hdr_look = step(&HdrLook::ALL, g.hdr_look, back),
             H::BatteryMode => g.battery = !g.battery,
             H::ShadowCache => g.shadow_cache = !g.shadow_cache,
-            H::GraphicsApi => g.api = step(GraphicsApi::choices(), g.api, back),
+            H::GraphicsApi => {
+                g.api = step(GraphicsApi::choices(), g.api, back);
+                g.watchdog_api = None;
+                g.watchdog_driver = None;
+            }
             H::TranslucentBatching => g.translucent_batching = !g.translucent_batching,
             H::Pacing => {
                 g.pacing = match g.pacing {

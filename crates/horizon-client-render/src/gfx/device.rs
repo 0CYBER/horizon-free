@@ -277,11 +277,17 @@ pub(super) async fn open_device(
     // on it), and a watchdog ends the start instead of leaving the boot screen forever.
     let timeout = device_open_timeout();
     let searched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let effective_api = api.with_env();
+    let active_api = Arc::new(std::sync::Mutex::new(effective_api));
+    let active_for_timeout = active_api.clone();
+    let searched_for_timeout = searched.clone();
     let (disarm, _watchdog) = arm_search_watchdog(
         timeout,
         DEVICE_OPEN_GRACE,
         searched.clone(),
         move || {
+            let hung = active_for_timeout.lock().map_or(effective_api, |g| *g);
+            super::safe_start::mark_watchdog_hang(&searched_for_timeout, hung);
             log::error!("{}", device_search_timed_out(timeout));
             log::logger().flush();
         },
@@ -293,8 +299,19 @@ pub(super) async fn open_device(
             panic!("{message}");
         },
     );
-    let opened = open_device_search(window.clone(), offscreen, wgpu_backend, api, needs).await;
+    let opened = open_device_search(
+        window.clone(),
+        offscreen,
+        wgpu_backend,
+        api,
+        needs,
+        &active_api,
+    )
+    .await;
     searched.store(true, std::sync::atomic::Ordering::Release);
+    if opened.is_ok() {
+        super::safe_start::clear_watchdog_hang();
+    }
     drop(disarm);
     opened
 }
@@ -306,6 +323,7 @@ async fn open_device_search(
     wgpu_backend: bool,
     api: GraphicsApi,
     needs: surface_setup::DeviceNeeds,
+    active_api: &std::sync::Mutex<GraphicsApi>,
 ) -> Result<Opened> {
     let tries = device_search(
         api.with_env(),
@@ -316,7 +334,7 @@ async fn open_device_search(
     );
     let mut first = None;
     for (order, allow_cpu) in tries {
-        match open_device_with(&window, offscreen, &order, needs, allow_cpu).await {
+        match open_device_with(&window, offscreen, &order, needs, allow_cpu, active_api).await {
             Ok(opened) => {
                 if let Some(first) = &first {
                     log::warn!(
@@ -411,6 +429,18 @@ pub(crate) fn device_search(
     tries.push((chosen, true));
     tries
 }
+fn api_for_backends(backends: wgpu::Backends, fallback: GraphicsApi) -> GraphicsApi {
+    if backends == wgpu::Backends::VULKAN {
+        GraphicsApi::Vulkan
+    } else if backends == wgpu::Backends::DX12 {
+        GraphicsApi::Dx12
+    } else if backends == wgpu::Backends::GL {
+        GraphicsApi::OpenGl
+    } else {
+        fallback
+    }
+}
+
 /// `open_device` on `order`'s backends in turn, taking an adapter of the CPU type
 /// (software rendering) only when `allow_cpu`.
 async fn open_device_with(
@@ -419,9 +449,13 @@ async fn open_device_with(
     order: &[wgpu::Backends],
     needs: surface_setup::DeviceNeeds,
     allow_cpu: bool,
+    active_api: &std::sync::Mutex<GraphicsApi>,
 ) -> Result<Opened> {
     let mut failures = Vec::new();
     for (attempt, backends) in order.iter().copied().enumerate() {
+        if let Ok(mut guard) = active_api.lock() {
+            *guard = api_for_backends(backends, *guard);
+        }
         let name = backends_name(backends);
         if attempt > 0 {
             log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));

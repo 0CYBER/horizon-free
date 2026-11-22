@@ -6,11 +6,135 @@
 //! driver until an HDR mode is chosen or the driver changes. A loss with HDR output off only says
 //! so in the log. Offscreen renderers, split-screen guests, dedicated servers and scripted starts
 //! never write the marker or take it.
-use crate::graphics::{FILE, Graphics};
+use crate::graphics::{FILE, Graphics, GraphicsApi};
 use std::time::{Duration, Instant};
 
 /// Written beside [`FILE`] when the window's graphics device is lost.
 pub const MARKER: &str = "horizon-device-lost";
+/// Written beside [`FILE`] when [`super::device::arm_search_watchdog`] times out (#19573).
+pub const WATCHDOG_MARKER: &str = "horizon-gpu-watchdog-hung";
+
+static WATCHDOG_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Records the settings directory for [`mark_watchdog_hang`] / [`clear_watchdog_hang`].
+pub fn arm_watchdog_dir(dir: &std::path::Path) {
+    if let Ok(mut guard) = WATCHDOG_DIR.lock() {
+        *guard = Some(dir.to_path_buf());
+    }
+}
+
+/// Writes [`WATCHDOG_MARKER`] with the hung `api` when a watchdog directory was armed,
+/// `HORIZON_GRAPHICS_API` is not overriding the backend, and the search has not already completed.
+/// Serialized with [`clear_watchdog_hang`] under `WATCHDOG_DIR`.
+pub fn mark_watchdog_hang(searched: &std::sync::atomic::AtomicBool, api: GraphicsApi) {
+    mark_watchdog_hang_with_env(searched, api, GraphicsApi::from_env().is_some());
+}
+
+fn mark_watchdog_hang_with_env(
+    searched: &std::sync::atomic::AtomicBool,
+    api: GraphicsApi,
+    env_override: bool,
+) {
+    if env_override {
+        return;
+    }
+    let Ok(guard) = WATCHDOG_DIR.lock() else {
+        return;
+    };
+    if searched.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    if let Some(dir) = guard.as_ref() {
+        let _ = std::fs::write(dir.join(WATCHDOG_MARKER), format!("api:{}\n", api.name()));
+    }
+}
+
+/// Removes [`WATCHDOG_MARKER`] after a successful GPU device search, serialized with
+/// [`mark_watchdog_hang`] under `WATCHDOG_DIR`.
+pub fn clear_watchdog_hang() {
+    let Ok(guard) = WATCHDOG_DIR.lock() else {
+        return;
+    };
+    if let Some(dir) = guard.as_ref() {
+        let _ = std::fs::remove_file(dir.join(WATCHDOG_MARKER));
+    }
+}
+
+/// Next graphics API to try after `hung` timed out inside the driver on `os`.
+pub fn fallback_api_for_hang(hung: GraphicsApi, os: &str) -> Option<GraphicsApi> {
+    if os == "windows" {
+        match hung {
+            GraphicsApi::Auto | GraphicsApi::Vulkan => Some(GraphicsApi::Dx12),
+            GraphicsApi::Dx12 => Some(GraphicsApi::OpenGl),
+            GraphicsApi::OpenGl => None,
+        }
+    } else {
+        match hung {
+            GraphicsApi::Auto | GraphicsApi::Vulkan => Some(GraphicsApi::OpenGl),
+            GraphicsApi::OpenGl | GraphicsApi::Dx12 => None,
+        }
+    }
+}
+
+/// Consumes [`WATCHDOG_MARKER`] in `dir` and, if `horizon-graphics.txt` still asks for the hung
+/// API (or `auto`) and `HORIZON_GRAPHICS_API` is not set, records a `watchdogApi` hold in
+/// `horizon-graphics.txt` without changing `graphicsApi` (#19573).
+pub fn take_watchdog(dir: &std::path::Path, os: &str) -> Option<GraphicsApi> {
+    take_watchdog_with_env(dir, os, GraphicsApi::from_env().is_some())
+}
+
+fn take_watchdog_with_env(
+    dir: &std::path::Path,
+    os: &str,
+    env_override: bool,
+) -> Option<GraphicsApi> {
+    if env_override {
+        return None;
+    }
+    let marker = dir.join(WATCHDOG_MARKER);
+    let text = std::fs::read_to_string(&marker).ok()?;
+    let hung = text
+        .lines()
+        .find_map(|line| line.strip_prefix("api:"))
+        .and_then(|v| GraphicsApi::from_name(v.trim()));
+    let Some(hung) = hung else {
+        let _ = std::fs::remove_file(&marker);
+        return None;
+    };
+    let Some(next) = fallback_api_for_hang(hung, os) else {
+        let _ = std::fs::remove_file(&marker);
+        return None;
+    };
+    let file = dir.join(FILE);
+    let settings = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            log::warn!(
+                "Horizon renderer: the last start hung while picking a GPU ({}), but {FILE} can't be read ({e}); graphicsApi is unchanged",
+                hung.name()
+            );
+            return None;
+        }
+    };
+    let mut g = Graphics::parse(&settings);
+    let current = g.effective_api();
+    if current != GraphicsApi::Auto && current != hung {
+        let _ = std::fs::remove_file(&marker);
+        return None;
+    }
+    log::warn!(
+        "Horizon renderer: the last start hung while picking a GPU with {}; holding graphics backend at {} for this driver",
+        hung.name(),
+        next.name()
+    );
+    g.watchdog_api = Some(next);
+    g.watchdog_driver = None;
+    if std::fs::write(&file, g.serialize()).is_ok() {
+        let _ = std::fs::remove_file(&marker);
+    }
+    Some(next)
+}
 /// How long a recovered device keeps presenting frames before its loss is forgiven: the same
 /// minute in which `Game::recover_device` gives up on a second loss.
 pub const HEALTHY_AFTER_RECOVERY: Duration = Duration::from_secs(60);
@@ -90,17 +214,34 @@ impl Graphics {
         self.safe_start.as_deref() == Some(driver)
     }
 
-    /// The window's renderer runs on `driver`: a device-loss hold on another driver (an
-    /// update, another GPU) is dropped, so HDR output is tried again. True when it changed.
+    /// The window's renderer runs on `driver`: a device-loss or watchdog-step-down hold on another
+    /// driver (an update, another GPU) is dropped, so HDR output and the configured `graphicsApi`
+    /// are tried again. True when it changed.
     pub(crate) fn settle_safe_start(&mut self, driver: &str) -> bool {
-        let other = self
+        let mut changed = false;
+        if self
             .safe_start
             .as_deref()
-            .is_some_and(|held| held != driver);
-        if other {
+            .is_some_and(|held| held != driver)
+        {
             self.safe_start = None;
+            changed = true;
         }
-        other
+        if self.watchdog_api.is_some() {
+            match self.watchdog_driver.as_deref() {
+                None => {
+                    self.watchdog_driver = Some(driver.to_owned());
+                    changed = true;
+                }
+                Some(held) if held != driver => {
+                    self.watchdog_api = None;
+                    self.watchdog_driver = None;
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        changed
     }
 }
 
@@ -238,5 +379,85 @@ mod tests {
 
         own.lost();
         assert!(own.exit());
+    }
+
+    #[test]
+    fn watchdog_hang_steps_down_graphics_api_and_respects_manual_override() {
+        let dir = scratch("watchdog_step_down");
+        std::fs::write(dir.join(WATCHDOG_MARKER), "api:auto\n").unwrap();
+        assert_eq!(
+            take_watchdog_with_env(&dir, "windows", false),
+            Some(GraphicsApi::Dx12)
+        );
+        assert!(!dir.join(WATCHDOG_MARKER).exists());
+        let mut saved = Graphics::parse(&std::fs::read_to_string(dir.join(FILE)).unwrap());
+        assert_eq!(saved.api, GraphicsApi::Auto);
+        assert_eq!(saved.watchdog_api, Some(GraphicsApi::Dx12));
+        assert_eq!(saved.effective_api(), GraphicsApi::Dx12);
+
+        // Settling on the active driver keeps the hold; changing drivers drops it.
+        assert!(saved.settle_safe_start(NV));
+        assert_eq!(saved.watchdog_driver.as_deref(), Some(NV));
+        assert!(!saved.settle_safe_start(NV));
+        assert_eq!(saved.watchdog_api, Some(GraphicsApi::Dx12));
+        assert!(saved.settle_safe_start(NV_NEW));
+        assert_eq!(saved.watchdog_api, None);
+        assert_eq!(saved.watchdog_driver, None);
+        assert_eq!(saved.effective_api(), GraphicsApi::Auto);
+
+        // Second hang on dx12 steps down to opengl on Windows without mutating graphicsApi.
+        std::fs::write(dir.join(WATCHDOG_MARKER), "api:dx12\n").unwrap();
+        assert_eq!(
+            take_watchdog_with_env(&dir, "windows", false),
+            Some(GraphicsApi::OpenGl)
+        );
+        let saved2 = Graphics::parse(&std::fs::read_to_string(dir.join(FILE)).unwrap());
+        assert_eq!(saved2.api, GraphicsApi::Auto);
+        assert_eq!(saved2.watchdog_api, Some(GraphicsApi::OpenGl));
+
+        // Third hang on opengl has no further fallback.
+        std::fs::write(dir.join(WATCHDOG_MARKER), "api:opengl\n").unwrap();
+        assert_eq!(take_watchdog_with_env(&dir, "windows", false), None);
+
+        // Manual override in horizon-graphics.txt is preserved.
+        let manual = Graphics {
+            api: GraphicsApi::OpenGl,
+            ..Graphics::default()
+        };
+        manual.save(&dir);
+        std::fs::write(dir.join(WATCHDOG_MARKER), "api:vulkan\n").unwrap();
+        assert_eq!(take_watchdog_with_env(&dir, "windows", false), None);
+        let after_manual = Graphics::parse(&std::fs::read_to_string(dir.join(FILE)).unwrap());
+        assert_eq!(after_manual.api, GraphicsApi::OpenGl);
+        assert_eq!(after_manual.watchdog_api, None);
+
+        // Linux steps down from auto/vulkan to opengl without mutating graphicsApi.
+        let linux_g = Graphics::default();
+        linux_g.save(&dir);
+        std::fs::write(dir.join(WATCHDOG_MARKER), "api:auto\n").unwrap();
+        assert_eq!(
+            take_watchdog_with_env(&dir, "linux", false),
+            Some(GraphicsApi::OpenGl)
+        );
+        let after_linux = Graphics::parse(&std::fs::read_to_string(dir.join(FILE)).unwrap());
+        assert_eq!(after_linux.api, GraphicsApi::Auto);
+        assert_eq!(after_linux.watchdog_api, Some(GraphicsApi::OpenGl));
+
+        // HORIZON_GRAPHICS_API override skips both marking and stepping down the file setting.
+        arm_watchdog_dir(&dir);
+        let not_done = std::sync::atomic::AtomicBool::new(false);
+        mark_watchdog_hang_with_env(&not_done, GraphicsApi::Vulkan, true);
+        assert!(!dir.join(WATCHDOG_MARKER).exists());
+        std::fs::write(dir.join(WATCHDOG_MARKER), "api:vulkan\n").unwrap();
+        assert_eq!(take_watchdog_with_env(&dir, "windows", true), None);
+        assert!(dir.join(WATCHDOG_MARKER).exists());
+        let _ = std::fs::remove_file(dir.join(WATCHDOG_MARKER));
+
+        // Delayed timeout callback after search completed must not leave a stale marker.
+        let done = std::sync::atomic::AtomicBool::new(true);
+        mark_watchdog_hang_with_env(&done, GraphicsApi::Vulkan, false);
+        assert!(!dir.join(WATCHDOG_MARKER).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

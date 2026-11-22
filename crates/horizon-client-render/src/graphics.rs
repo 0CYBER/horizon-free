@@ -320,12 +320,15 @@ impl GraphicsApi {
             .into_iter()
             .find(|api| api.name().eq_ignore_ascii_case(s.trim()))
     }
-    /// `HORIZON_GRAPHICS_API` (auto, vulkan, dx12 or opengl) if set, else the setting.
-    pub fn with_env(self) -> Self {
+    /// `HORIZON_GRAPHICS_API` (auto, vulkan, dx12 or opengl) if set, else `None`.
+    pub fn from_env() -> Option<Self> {
         std::env::var("HORIZON_GRAPHICS_API")
             .ok()
             .and_then(|v| Self::from_name(&v))
-            .unwrap_or(self)
+    }
+    /// `HORIZON_GRAPHICS_API` (auto, vulkan, dx12 or opengl) if set, else the setting.
+    pub fn with_env(self) -> Self {
+        Self::from_env().unwrap_or(self)
     }
 }
 
@@ -955,6 +958,12 @@ pub struct Graphics {
     pub shadow_cache: bool,
     /// The graphics API (Windows only; see `GraphicsApi`).
     pub api: GraphicsApi,
+    /// Backend hold after a GPU search watchdog timeout (`gfx::safe_start`): applied in memory
+    /// without overwriting [`Graphics::api`] (`graphicsApi`) in `horizon-graphics.txt`, and
+    /// dropped when the graphics driver changes (`watchdog_driver`) or `api` is changed.
+    pub watchdog_api: Option<GraphicsApi>,
+    /// Graphics driver on which [`Graphics::watchdog_api`] settled (`watchdogDriver`).
+    pub watchdog_driver: Option<String>,
     /// Translucent quads in vertex buffers of their own (`gfx`'s translucent arena), so their
     /// back-to-front draws go out in a few calls, for a little more video memory. On by
     /// default (Translucent Batching, Advanced graphics); read when a renderer is made (start,
@@ -1024,6 +1033,8 @@ impl Default for Graphics {
             battery: false,
             shadow_cache: false,
             api: GraphicsApi::Auto,
+            watchdog_api: None,
+            watchdog_driver: None,
             translucent_batching: true,
             shader_pack: String::new(),
         }
@@ -1081,6 +1092,11 @@ impl Graphics {
         }
         true
     }
+    /// The graphics API to start the renderer with: any active watchdog step-down hold
+    /// ([`Graphics::watchdog_api`]), else the player's configured [`Graphics::api`].
+    pub fn effective_api(&self) -> GraphicsApi {
+        self.watchdog_api.unwrap_or(self.api)
+    }
     /// `before`, as Undo brings it back, but never the hold on a driver HDR output failed to
     /// start on: that stays as it is now, and goes when Undo changes the mode, as any change of
     /// the mode drops it.
@@ -1091,6 +1107,11 @@ impl Graphics {
                 .clone()
                 .filter(|_| self.hdr == before.hdr),
             safe_start: self.safe_start.clone().filter(|_| self.hdr == before.hdr),
+            watchdog_api: self.watchdog_api.filter(|_| self.api == before.api),
+            watchdog_driver: self
+                .watchdog_driver
+                .clone()
+                .filter(|_| self.api == before.api),
             ..before.clone()
         }
     }
@@ -1211,6 +1232,8 @@ impl Graphics {
                 "shadowCache" => g.shadow_cache = flag(g.shadow_cache),
                 "batchTranslucent" => g.translucent_batching = flag(g.translucent_batching),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
+                "watchdogApi" => g.watchdog_api = GraphicsApi::from_name(value),
+                "watchdogDriver" => g.watchdog_driver = Some(value.to_owned()),
                 "pickedShaderPack" => g.shader_pack = value.to_owned(),
                 "overlay" => {
                     g.overlay = match value {
@@ -1309,6 +1332,12 @@ impl Graphics {
         }
         if let Some(driver) = &self.safe_start {
             text += &format!("safeStart:{driver}\n");
+        }
+        if let Some(api) = self.watchdog_api {
+            text += &format!("watchdogApi:{}\n", api.name());
+        }
+        if let Some(driver) = &self.watchdog_driver {
+            text += &format!("watchdogDriver:{driver}\n");
         }
         text += &format!("msaa4x:{}\n", bool_text(self.msaa4x));
         text += &self.blue_map.serialize();
@@ -1702,6 +1731,8 @@ mod tests {
             battery: true,
             shadow_cache: true,
             api: GraphicsApi::Dx12,
+            watchdog_api: Some(GraphicsApi::OpenGl),
+            watchdog_driver: Some("Dx12 10de:25a9 NVIDIA GeForce RTX 2050; ; 32.0.16.2124".into()),
             translucent_batching: false,
             shader_pack: "Golden Hour".into(),
         };

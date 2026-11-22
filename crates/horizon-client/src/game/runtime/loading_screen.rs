@@ -164,7 +164,7 @@ impl Loading {
             Some(&self.boot),
             None,
             None,
-            self.settings.horizon.api,
+            self.settings.horizon.effective_api(),
             shader_packs::picked_pack_shape(&self.settings).ray_tracing,
         ) {
             Ok(r) => self.renderer = Some(r),
@@ -235,7 +235,7 @@ impl Loading {
             Some(&bundle.atlas),
             Some(&bundle.panorama),
             self.renderer.as_ref(),
-            self.settings.horizon.api,
+            self.settings.horizon.effective_api(),
             shader_packs::picked_pack_shape(&self.settings).ray_tracing,
         ) {
             Ok(r) => {
@@ -340,7 +340,7 @@ impl Loading {
                 &gui,
                 previous.as_ref(),
                 loaded.renderer_cpu,
-                self.settings.horizon.api,
+                self.settings.horizon.effective_api(),
                 self.settings.horizon.translucent_batching,
                 self.settings.vsync,
                 &self.settings.horizon,

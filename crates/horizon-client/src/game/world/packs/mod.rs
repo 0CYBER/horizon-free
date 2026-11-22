@@ -503,7 +503,7 @@ impl Game<'_> {
                     &gui,
                     self.renderer.as_ref(),
                     Some(textures),
-                    self.settings.horizon.api,
+                    self.settings.horizon.effective_api(),
                     self.settings.horizon.translucent_batching,
                     self.settings.vsync,
                     &self.settings.horizon,

@@ -7276,7 +7276,7 @@ impl Game<'_> {
             &self.gui,
             None,
             None,
-            self.settings.horizon.api,
+            self.settings.horizon.effective_api(),
             self.settings.horizon.translucent_batching,
             self.settings.vsync,
             &self.settings.horizon,
@@ -11207,13 +11207,26 @@ pub(crate) fn run_with(
     }
     // A window's start takes the last one's graphics device loss into its settings
     // (`gfx::safe_start`); held in memory too, for a hold its settings file didn't keep.
-    let device_loss_hold = Game::options_path()
+    let marker_dir = Game::options_path()
         .parent()
         .filter(|_| owns_device_loss_marker(&options))
+        .map(std::path::Path::to_path_buf);
+    if let Some(dir) = &marker_dir {
+        horizon_client::gfx::safe_start::arm_watchdog_dir(dir);
+    }
+    let device_loss_hold = marker_dir
+        .as_deref()
         .and_then(horizon_client::gfx::safe_start::take);
+    let watchdog_api = marker_dir
+        .as_deref()
+        .and_then(|dir| horizon_client::gfx::safe_start::take_watchdog(dir, std::env::consts::OS));
     let mut early_settings = Settings::load(&Game::options_path());
     if device_loss_hold.is_some() {
         early_settings.horizon.safe_start = device_loss_hold;
+    }
+    if let Some(api) = watchdog_api {
+        early_settings.horizon.watchdog_api = Some(api);
+        early_settings.horizon.watchdog_driver = None;
     }
     options
         .mods

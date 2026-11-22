@@ -1132,6 +1132,8 @@ impl Opt {
                     (at + 1) % count
                 }];
                 s.horizon.api = api;
+                s.horizon.watchdog_api = None;
+                s.horizon.watchdog_driver = None;
                 s.file.set_name(
                     "preferredGraphicsBackend",
                     match api {
