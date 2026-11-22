@@ -13,6 +13,7 @@ A `BlockState` is an API-owned value pairing a `BlockKey` with a block-local can
 | `light_emission(state) -> Option<u8>` | `BlockState.getLightEmission()`: glowstone 15 (a `dynamic_light` block's parts may answer otherwise at a position) |
 | `friction(state) -> Option<f32>` | `Block.getFriction()`: 0.6 for most, ice 0.98 |
 | `is_solid_render(state) -> Option<bool>` | `BlockState.isSolidRender()`: stone yes, glass no |
+| `is_fire(state) -> Option<bool>` | `BlockTags.FIRE`: `minecraft:fire` and `minecraft:soul_fire` yes, air no |
 | `requires_correct_tool(state) -> Option<bool>` | `BlockState.requiresCorrectToolForDrops()`: obsidian yes, dirt no |
 | `is_correct_tool_for_drops(state, stack) -> Option<bool>` | `ItemStack.isCorrectToolForDrops(state)`: a wooden pickaxe for stone, not for obsidian |
 | `states_of(block) -> Option<BlockStateRange>` | `StateDefinition.getPossibleStates`, as owned values in canonical local-ordinal order |

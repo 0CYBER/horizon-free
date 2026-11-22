@@ -23,6 +23,13 @@ impl Game<'_> {
         self.pack.assets.registry.state(state)?;
         Some(self.res.facts().get(state).solid_render)
     }
+    /// `BlockTags.FIRE` (`minecraft:fire`, `minecraft:soul_fire`): the state's block is in the tag.
+    /// None for an unknown state.
+    pub(super) fn block_state_is_fire(&self, state: BlockStateId) -> Option<bool> {
+        self.pack.assets.registry.state(state)?;
+        let name = &self.res.facts().get(state).name;
+        Some(self.items().block_in_tag("minecraft:fire", name))
+    }
     /// `BlockState.requiresCorrectToolForDrops()`. None for an unknown state.
     pub(super) fn block_state_requires_correct_tool(&self, state: BlockStateId) -> Option<bool> {
         self.pack.assets.registry.state(state)?;
@@ -97,6 +104,10 @@ mod tests {
             assert_eq!(facts.friction(stone), Some(0.6));
             assert_eq!(facts.is_solid_render(stone), Some(true));
             assert_eq!(facts.is_solid_render(glass), Some(false));
+            assert_eq!(facts.is_fire(state("minecraft:fire")), Some(true));
+            assert_eq!(facts.is_fire(state("minecraft:soul_fire")), Some(true));
+            assert_eq!(facts.is_fire(stone), Some(false));
+            assert_eq!(facts.is_fire(state("minecraft:air")), Some(false));
             assert_eq!(facts.requires_correct_tool(obsidian), Some(true));
             assert_eq!(facts.requires_correct_tool(dirt), Some(false));
             // A wooden pickaxe mines stone's drops but not obsidian's (it needs diamond).

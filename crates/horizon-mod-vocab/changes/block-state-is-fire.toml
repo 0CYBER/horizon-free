@@ -1,0 +1,2 @@
+ids = ["method:prelude::HostBlockStates::block_state_is_fire"]
+why = "Adds HostBlockStates::block_state_is_fire (the mod handle's is_fire): whether a state's block is in vanilla's BlockTags.FIRE (minecraft:fire and minecraft:soul_fire), read from the game's loaded block tags. Air and every other block answer false; an unknown state answers None. Paper's Material#FIRE and Material#SOUL_FIRE checks have this as their one-call equivalent."

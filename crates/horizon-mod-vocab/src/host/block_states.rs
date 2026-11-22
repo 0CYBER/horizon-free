@@ -218,6 +218,11 @@ pub trait BlockStatesBackend {
     #[access(Metadata)]
     fn block_state_solid_render(&self, state: BlockState) -> Option<bool>;
     /// Side: both.
+    /// `BlockTags.FIRE`: the state's block is `minecraft:fire` or `minecraft:soul_fire`, the two
+    /// fire blocks of vanilla's tag. Air and other blocks answer false. None for an unknown state.
+    #[access(Metadata)]
+    fn block_state_is_fire(&self, state: BlockState) -> Option<bool>;
+    /// Side: both.
     /// `BlockState.requiresCorrectToolForDrops()`: the block drops its loot only when mined
     /// with a correct tool (stone and obsidian yes, dirt no). None for an unknown state.
     #[access(Metadata)]

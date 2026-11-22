@@ -190,6 +190,11 @@ impl BlockStates<'_> {
     pub fn is_solid_render(&self, state: BlockState) -> Option<bool> {
         self.backend?.block_state_solid_render(state)
     }
+    /// `BlockTags.FIRE`: `state`'s block is `minecraft:fire` or `minecraft:soul_fire`. None as for
+    /// `replaceable`.
+    pub fn is_fire(&self, state: BlockState) -> Option<bool> {
+        self.backend?.block_state_is_fire(state)
+    }
     /// `BlockState.requiresCorrectToolForDrops()`: `state` drops its loot only when mined with a
     /// correct tool (obsidian yes, dirt no). None as for `replaceable`.
     pub fn requires_correct_tool(&self, state: BlockState) -> Option<bool> {
@@ -233,6 +238,7 @@ mod tests {
         assert_eq!(facts.light_emission(state), None);
         assert_eq!(facts.friction(state), None);
         assert_eq!(facts.is_solid_render(state), None);
+        assert_eq!(facts.is_fire(state), None);
         assert_eq!(facts.requires_correct_tool(state), None);
         let stack = crate::ItemStack::of(crate::ItemKey(0));
         assert_eq!(facts.is_correct_tool_for_drops(state, &stack), None);
