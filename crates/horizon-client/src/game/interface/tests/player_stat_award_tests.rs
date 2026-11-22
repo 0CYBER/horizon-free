@@ -85,6 +85,30 @@ fn place_bed(game: &mut Game<'_>, x: i32, kind: &str) -> [i32; 3] {
     [x, 64, 2]
 }
 
+/// `ServerPlayer.bedBlocked` uses `Player.freeAt` (isSuffocating), not a
+/// full-collision check: soul sand above a bed is obstructing even though its
+/// shape is short, and glass is not.
+#[test]
+#[ignore = "daily"]
+fn a_suffocating_block_above_the_bed_obstructs_sleep() {
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
+    game.world.day_time = 18000;
+    let head = place_bed(&mut game, 2, "minecraft:red_bed");
+    let registry = game.pack.assets.registry;
+    let soul_sand = registry.default_state("minecraft:soul_sand").unwrap();
+    let glass = registry.default_state("minecraft:glass").unwrap();
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 3.5)).unwrap());
+
+    game.world.set(head[0], head[1] + 1, head[2], soul_sand).unwrap();
+    game.try_sleep(head);
+    assert!(game.sleeping.is_none(), "soul sand above the head blocks sleep");
+
+    game.world.set(head[0], head[1] + 1, head[2], glass).unwrap();
+    game.try_sleep(head);
+    assert_eq!(game.sleeping, Some(head), "glass does not block sleep");
+}
+
 /// `ServerPlayer.startSleepInBed` awards the bed's own statistic: a straw bed
 /// counts as `sleep_in_straw_bed` (`StrawBedBlock.getSleptInBedStatType`), and
 /// an ordinary bed still as `sleep_in_bed`.

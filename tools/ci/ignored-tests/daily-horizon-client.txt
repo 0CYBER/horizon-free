@@ -213,6 +213,7 @@ horizon-client game::server_travel::credits_respawn_tests::the_credits_respawn_w
 horizon-client game::split::players::tests::offline_guests_join_only_local_servers lib daily network
 horizon-client game::stats::phantom_spawn_tests::no_phantoms_under_a_roof_the_sky_light_does_not_reach lib daily game-boot
 horizon-client game::stats::phantom_spawn_tests::phantoms_spawn_under_a_glass_roof lib daily game-boot
+horizon-client game::stats::player_stat_award_tests::a_suffocating_block_above_the_bed_obstructs_sleep lib daily resources
 horizon-client game::tnt::tests::h13201_a_dispensed_potion_is_a_level_entity lib daily game-boot
 horizon-client game::tnt::tests::lit_tnt_ticks_on_the_next_level_tick_and_explodes_on_the_80th lib daily game-boot
 horizon-client game::tnt::tests::loaded_tnt_fuse_uses_numeric_short_and_saves_without_raw lib daily game-boot
