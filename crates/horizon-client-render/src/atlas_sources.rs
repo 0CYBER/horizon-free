@@ -482,17 +482,18 @@ pub fn generate(
                 );
                 return None;
             }
-            // Up to 4 GiB at the largest side: as vanilla's `NativeImage` allocation does, a
-            // refused allocation skips the sprite instead of ending the process.
-            let bytes = (width * height * 4) as usize;
+            // Up to 4 GiB at the largest side, more than a 32-bit `usize` holds: as vanilla's
+            // `NativeImage` allocation does, a size that doesn't fit or a refused allocation skips
+            // the sprite instead of ending the process. Every offset below is under this size.
+            let bytes = usize::try_from(width * height * 4).ok();
             let mut out = Vec::new();
-            if out.try_reserve_exact(bytes).is_err() {
+            let Some(bytes) = bytes.filter(|&bytes| out.try_reserve_exact(bytes).is_ok()) else {
                 log::warn!(
                     "atlas region {} of {texture}: {width}x{height} could not be allocated; skipped",
                     region.sprite
                 );
                 return None;
-            }
+            };
             out.resize(bytes, 0u8);
             for row in 0..height {
                 for col in 0..width {
@@ -711,5 +712,14 @@ mod tests {
         let (w, h, out) = region_of(i64::MAX as f64, -(i64::MAX as f64), 2.0, 2.0).unwrap();
         assert_eq!((w, h), (2, 2));
         assert!(out.iter().all(|&byte| byte == 0));
+    }
+
+    /// On a 32-bit target the largest side's 4 GiB doesn't fit a `usize`: the sprite is skipped
+    /// instead of its size wrapping to a small buffer the copy then indexes past.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn a_region_too_big_for_the_address_space_is_skipped() {
+        let side = MAX_SPRITE_SIDE as f64;
+        assert_eq!(region_of(0.0, 0.0, side, side), None);
     }
 }
