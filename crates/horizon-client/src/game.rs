@@ -2038,6 +2038,9 @@ fn inventory_add(
     max: u32,
     stack: &mut ItemStack,
 ) -> bool {
+    if stack.count == 0 || &*stack.item == "minecraft:air" {
+        return false;
+    }
     let order = std::iter::once(selected)
         .chain(std::iter::once(shield::OFFHAND_SLOT))
         .chain((0..36).filter(|&i| i != selected));
@@ -2073,6 +2076,33 @@ fn inventory_add(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod inventory_add_tests {
+    use super::*;
+
+    #[test]
+    fn inventory_add_leaves_empty_stacks_out_of_slots() {
+        for mut stack in [
+            ItemStack::new("minecraft:air", 1),
+            ItemStack::new("minecraft:stone", 0),
+        ] {
+            let mut inventory = [const { None }; 36];
+            let mut offhand = None;
+            let count = stack.count;
+            assert!(!inventory_add(
+                &mut inventory,
+                &mut offhand,
+                0,
+                64,
+                &mut stack
+            ));
+            assert!(inventory.iter().all(Option::is_none));
+            assert!(offhand.is_none());
+            assert_eq!(stack.count, count);
+        }
+    }
 }
 
 fn facing_offset(facing: &str) -> [i32; 3] {
@@ -2464,10 +2494,11 @@ impl Game<'_> {
         velocity: Option<[f64; 3]>,
         pickup_delay: u32,
         random: Option<spill::ItemRandom>,
-    ) -> [f64; 3] {
-        let velocity = self.push_item_entity(stack, position, velocity, pickup_delay, random);
-        self.join_item_entity(self.next_entity, position);
-        velocity
+    ) -> Option<(u32, [f64; 3])> {
+        let (id, velocity) =
+            self.try_push_item_entity(stack, position, velocity, pickup_delay, random)?;
+        self.join_item_entity(id, position);
+        Some((id, velocity))
     }
     /// The block entity at `pos` saved with its id and position
     /// (`saveWithFullMetadata`), or the saved one Horizon keeps as loaded:
@@ -2619,6 +2650,9 @@ impl Game<'_> {
     }
     /// `Player.drop`: the statistics and a thrown item entity in front of the player.
     pub(super) fn player_drop(&mut self, thrown: ItemStack) -> Option<u32> {
+        if thrown.count == 0 || &*thrown.item == "minecraft:air" {
+            return None;
+        }
         let eye = self.eye_position()?;
         // LivingEntity.drop: every drop swings the main hand, a menu's
         // THROW and a creative tab's drop included.
@@ -2640,7 +2674,7 @@ impl Game<'_> {
         stack: ItemStack,
         thrown_from_hand: bool,
     ) -> Option<u32> {
-        if stack.count == 0 {
+        if stack.count == 0 || &*stack.item == "minecraft:air" {
             return None;
         }
         self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);

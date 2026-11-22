@@ -212,12 +212,13 @@ pub fn deliver<L: AllayLevel + ?Sized>(l: &mut L, i: usize) {
     m.extra.allay.as_mut().unwrap().take(1);
     allay::set_pickup_cooldown(m, Some(60));
     // ItemEntity.setDefaultPickUpDelay.
-    l.spawn_item(stack, from, v, 10);
-    // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
-    let id = l.mobs()[i].id;
-    let allay = l.mob_uuid(id);
-    if let Some(thrown) = l.just_spawned_item() {
-        thrown.thrower = Some(allay);
+    if let Some(thrown_id) = l.spawn_item(stack, from, v, 10) {
+        // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
+        let id = l.mobs()[i].id;
+        let allay = l.mob_uuid(id);
+        if let Some(thrown) = l.item_entity_mut(thrown_id) {
+            thrown.thrower = Some(allay);
+        }
     }
     let world = l.parts().world;
     if world.game_time % 7 == 0 && world.random.next_double() < 0.9 {

@@ -2046,6 +2046,9 @@ impl<R: RandomSource> LootContext<'_, R> {
                 for (mut stack, emitted) in produced {
                     ctx.modifiers(&pool["modifier"], &mut stack, random);
                     ctx.modifiers(&table["modifier"], &mut stack, random);
+                    if &*stack.item == "minecraft:air" {
+                        stack.count = 0;
+                    }
                     if stack.count > 0 || (ctx.keep_empty && emitted) {
                         out.push(stack);
                     }
@@ -2375,10 +2378,13 @@ impl<R: RandomSource> LootContext<'_, R> {
         }
         match e["type"].as_str().unwrap_or("") {
             "minecraft:item" => {
+                let Some(name) = e["name"].as_str().filter(|s| !s.is_empty()) else {
+                    return false;
+                };
                 out.push((
                     e["weight"].as_i64().unwrap_or(1) as i32,
                     ItemStack {
-                        item: Arc::from(e["name"].as_str().unwrap_or("minecraft:air")),
+                        item: Arc::from(name),
                         count: 1,
                         damage: 0,
                         extra: None,
@@ -5202,6 +5208,100 @@ mod tests {
         );
         // 46 is vanilla's count for this seed; an extra level draw gives 28.
         assert_eq!(drops[0].count, 46);
+    }
+
+    #[test]
+    fn loot_evaluation_never_emits_positive_air_stacks() {
+        let items = Items::for_tests(HashMap::new());
+        let empty_with_pool_count = json!({
+            "pools": [{
+                "rolls": 1,
+                "modifier": {"type": "minecraft:set_count", "count": 1},
+                "entries": [{
+                    "type": "minecraft:empty"
+                }]
+            }]
+        });
+        let air_item = json!({
+            "pools": [{
+                "rolls": 1,
+                "entries": [{
+                    "type": "minecraft:item",
+                    "name": "minecraft:air"
+                }]
+            }]
+        });
+        let missing_name = json!({
+            "pools": [{
+                "rolls": 1,
+                "entries": [{
+                    "type": "minecraft:item"
+                }]
+            }]
+        });
+        let empty_name = json!({
+            "pools": [{
+                "rolls": 1,
+                "entries": [{
+                    "type": "minecraft:item",
+                    "name": ""
+                }]
+            }]
+        });
+        for table in [
+            &empty_with_pool_count,
+            &air_item,
+            &missing_name,
+            &empty_name,
+        ] {
+            let drops =
+                items.inline_loot_table_for_command(table, None, &mut LegacyRandom::new(1), false);
+            assert!(drops.is_empty(), "expected no air drops, got {drops:?}");
+        }
+        for table in [&empty_with_pool_count, &missing_name, &empty_name] {
+            let drops =
+                items.inline_loot_table_for_command(table, None, &mut LegacyRandom::new(1), true);
+            assert!(
+                drops.is_empty(),
+                "expected no emitted entries with keep_empty, got {drops:?}"
+            );
+        }
+        // Explicit air entry with keep_empty=true normalises to count 0 so slots stay empty.
+        let air_kept =
+            items.inline_loot_table_for_command(&air_item, None, &mut LegacyRandom::new(1), true);
+        assert_eq!(air_kept.len(), 1);
+        assert_eq!(&*air_kept[0].item, "minecraft:air");
+        assert_eq!(air_kept[0].count, 0);
+
+        // Real item reduced to zero preserves its empty position before a later real item.
+        let zero_then_diamond = json!({
+            "pools": [
+                {
+                    "rolls": 1,
+                    "entries": [{
+                        "type": "minecraft:item",
+                        "name": "minecraft:iron_ingot",
+                        "modifier": {"type": "minecraft:set_count", "count": 0}
+                    }]
+                },
+                {
+                    "rolls": 1,
+                    "entries": [{
+                        "type": "minecraft:item",
+                        "name": "minecraft:diamond"
+                    }]
+                }
+            ]
+        });
+        let kept = items.inline_loot_table_for_command(
+            &zero_then_diamond,
+            None,
+            &mut LegacyRandom::new(1),
+            true,
+        );
+        assert_eq!(kept.len(), 2);
+        assert_eq!((&*kept[0].item, kept[0].count), ("minecraft:iron_ingot", 0));
+        assert_eq!((&*kept[1].item, kept[1].count), ("minecraft:diamond", 1));
     }
 
     /// A content root's remainders reach the mods' items; vanilla's stay its own.

@@ -319,6 +319,7 @@ horizon-client game::commands::terrain_cmds::loot_slot_tests::item_commands_bypa
 horizon-client game::commands::terrain_cmds::loot_slot_tests::item_replace_jukebox_accepts_music_disc_cat lib daily resources
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_empty_replace_jukebox_preserves_music_disc_13 lib daily resources
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_furnace_fuel_refuses_non_fuel lib daily resources
+horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_clears_empty_position_and_writes_following_real_item lib daily resources
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_kill_fills_an_accepting_slot_and_leaves_a_refusing_one lib daily resources
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_mine_fills_an_accepting_slot_and_leaves_a_refusing_one lib daily resources
 horizon-client game::commands::vehicle_kill_tests::kill_spills_explicit_vehicle_contents_after_menu_writeback lib daily resources

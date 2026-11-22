@@ -841,7 +841,10 @@ impl Game<'_> {
                     .map(|(slot, stack)| {
                         (
                             *slot,
-                            stack.as_ref().map(|s| self.item_name(s.item)),
+                            stack
+                                .as_ref()
+                                .filter(|s| s.count > 0)
+                                .map(|s| self.item_name(s.item)),
                             self.to_stack(stack),
                         )
                     })
@@ -864,7 +867,10 @@ impl Game<'_> {
                         m.extra.charged = charged;
                     }
                     for (slot, item, stack) in items {
-                        let stack = stack.or_else(|| item.map(|item| ItemStack::new(&item, 1)));
+                        let stack = stack.or_else(|| {
+                            item.filter(|item| &**item != "minecraft:air")
+                                .map(|item| ItemStack::new(&item, 1))
+                        });
                         m.set_equipment_stack(slot as usize, stack);
                     }
                 }

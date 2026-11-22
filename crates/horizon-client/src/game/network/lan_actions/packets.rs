@@ -1254,9 +1254,8 @@ impl Game<'_> {
         stack: &Option<horizon_protocol::item::Stack>,
     ) -> Option<ItemStack> {
         let s = stack.as_ref()?;
-        let mut out = self.lan.as_ref()?.hub.stack_from_network(s);
-        out.count = out.count.max(1);
-        Some(out)
+        let out = self.lan.as_ref()?.hub.stack_from_network(s);
+        (out.count > 0 && &*out.item != "minecraft:air").then_some(out)
     }
 
     /// `LivingEntity.tickDeath`: 20 ticks after dying the player is removed,

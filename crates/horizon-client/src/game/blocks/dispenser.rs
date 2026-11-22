@@ -2052,7 +2052,7 @@ impl Game<'_> {
         at: Vec3,
         y_offset: f64,
         stack: ItemStack,
-    ) -> [f64; 3] {
+    ) -> Option<(u32, [f64; 3])> {
         self.spawn_item_own(stack, [at.x, at.y + y_offset, at.z], 10)
     }
     /// `MushroomCow.shear`: `player` is who sheared it, none for a dispenser.
@@ -2173,20 +2173,21 @@ impl Game<'_> {
                                 count: 1,
                                 ..stack.clone()
                             };
-                            self.spawn_at_location(at, 1.0, one);
-                            // Sheep.shear nudges each item with the sheep's own random.
-                            let r = &mut self.mobs[i].random;
-                            let push = [
-                                f64::from((r.next_float() - r.next_float()) * 0.1),
-                                f64::from(r.next_float() * 0.05),
-                                f64::from((r.next_float() - r.next_float()) * 0.1),
-                            ];
-                            if let Some(item) = self.just_spawned_item() {
-                                item.velocity = Vec3::new(
-                                    item.velocity.x + push[0],
-                                    item.velocity.y + push[1],
-                                    item.velocity.z + push[2],
-                                );
+                            if let Some((id, _)) = self.spawn_at_location(at, 1.0, one) {
+                                // Sheep.shear nudges each item with the sheep's own random.
+                                let r = &mut self.mobs[i].random;
+                                let push = [
+                                    f64::from((r.next_float() - r.next_float()) * 0.1),
+                                    f64::from(r.next_float() * 0.05),
+                                    f64::from((r.next_float() - r.next_float()) * 0.1),
+                                ];
+                                if let Some(item) = self.dropped_item_mut(id) {
+                                    item.velocity = Vec3::new(
+                                        item.velocity.x + push[0],
+                                        item.velocity.y + push[1],
+                                        item.velocity.z + push[2],
+                                    );
+                                }
                             }
                         }
                     }

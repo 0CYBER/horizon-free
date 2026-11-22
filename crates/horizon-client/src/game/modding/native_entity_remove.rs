@@ -121,8 +121,7 @@ impl Game<'_> {
             _ => at,
         };
         // Found by its id: the hooks the spawn runs may add entities after it.
-        let id = self.next_entity + 1;
-        self.spawn_at_location(Vec3::new(x, y, z), f64::from(y_offset), stack);
+        let (id, _) = self.spawn_at_location(Vec3::new(x, y, z), f64::from(y_offset), stack)?;
         self.dropped
             .iter()
             .rev()

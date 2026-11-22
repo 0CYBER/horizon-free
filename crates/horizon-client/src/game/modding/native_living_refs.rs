@@ -1220,8 +1220,8 @@ impl Game<'_> {
         let v = horizon_client::entities::drop_motion(&mut m.random, m.yaw, m.head_pitch, randomly);
         let at = [m.position.x, m.eye_y() - f64::from(0.3f32), m.position.z];
         let thrower = thrown_from_hand.then(|| self.uuid_for(id));
-        self.spawn_item(stack, at, v, 40);
-        let item = self.just_spawned_item()?;
+        let id = self.spawn_item(stack, at, v, 40)?;
+        let item = self.dropped_item_mut(id)?;
         item.thrower = thrower;
         Some(item.id)
     }

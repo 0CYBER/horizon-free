@@ -59,12 +59,18 @@ pub trait MobLevel {
     /// listens.
     fn grief_hooked(&self) -> bool;
     /// `new ItemEntity(level, x, y, z, stack)` and `addFreshEntity`: the item's
-    /// own random draws its motion, which this returns.
-    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> [f64; 3];
+    /// own random draws its motion, returning its entity id when spawned.
+    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> Option<u32>;
     /// `new ItemEntity(level, x, y, z, stack, dx, dy, dz)` and `addFreshEntity`.
-    fn spawn_item(&mut self, stack: ItemStack, at: [f64; 3], velocity: [f64; 3], pickup_delay: u32);
-    /// The item entity the last spawn added, unless a mod kept it out of the level.
-    fn just_spawned_item(&mut self) -> Option<&mut ItemEntity>;
+    fn spawn_item(
+        &mut self,
+        stack: ItemStack,
+        at: [f64; 3],
+        velocity: [f64; 3],
+        pickup_delay: u32,
+    ) -> Option<u32>;
+    /// The dropped item entity `id`, if it is still in the level.
+    fn item_entity_mut(&mut self, id: u32) -> Option<&mut ItemEntity>;
     /// `Entity.getUUID` of a mob, made up for a new one.
     fn mob_uuid(&mut self, id: u32) -> [i32; 4];
     /// `Level.playSound` at a position, no player excluded.

@@ -83,8 +83,8 @@ impl MobLevel for Game<'_> {
     fn grief_hooked(&self) -> bool {
         Game::grief_hooked(self)
     }
-    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> [f64; 3] {
-        Game::spawn_item_own(self, stack, at, pickup_delay)
+    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> Option<u32> {
+        Game::spawn_item_own(self, stack, at, pickup_delay).map(|(id, _)| id)
     }
     fn spawn_item(
         &mut self,
@@ -92,11 +92,11 @@ impl MobLevel for Game<'_> {
         at: [f64; 3],
         velocity: [f64; 3],
         pickup_delay: u32,
-    ) {
-        Game::spawn_item(self, stack, at, velocity, pickup_delay);
+    ) -> Option<u32> {
+        Game::spawn_item(self, stack, at, velocity, pickup_delay)
     }
-    fn just_spawned_item(&mut self) -> Option<&mut ItemEntity> {
-        Game::just_spawned_item(self)
+    fn item_entity_mut(&mut self, id: u32) -> Option<&mut ItemEntity> {
+        Game::dropped_item_mut(self, id)
     }
     fn mob_uuid(&mut self, id: u32) -> [i32; 4] {
         Game::mob_uuid(self, id)

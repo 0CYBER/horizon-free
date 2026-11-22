@@ -2222,7 +2222,7 @@ pub(crate) fn inventory_add(
     items: &Items,
     stack: &mut ItemStack,
 ) -> bool {
-    if stack.count == 0 {
+    if stack.count == 0 || &*stack.item == "minecraft:air" {
         return false;
     }
     if items.get(&stack.item).is_some_and(|i| i.max_damage > 0) && stack.damage > 0 {
@@ -3183,6 +3183,27 @@ pub(crate) mod tests {
             assert_eq!(menu.player_item(0).unwrap().count, 16);
             assert_eq!(item.count, 7);
         });
+    }
+
+    #[test]
+    fn inventory_add_rejects_air_and_empty_stacks() {
+        let items = Items::for_tests(Default::default());
+        for mut stack in [
+            ItemStack::new("minecraft:air", 1),
+            ItemStack::new("minecraft:stone", 0),
+        ] {
+            let mut inventory = [const { None }; 41];
+            let count = stack.count;
+            assert!(!super::inventory_add(
+                &mut inventory,
+                0,
+                false,
+                &items,
+                &mut stack
+            ));
+            assert!(inventory.iter().all(Option::is_none));
+            assert_eq!(stack.count, count);
+        }
     }
 
     #[test]

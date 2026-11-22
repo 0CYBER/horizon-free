@@ -172,11 +172,12 @@ pub fn fox_pick_up<L: MobLevel + ?Sized>(l: &mut L, fox_index: usize, item_index
         let p = l.parts();
         let look = p.mobs[fox_index].view_vector();
         let from = [at[0] + look[0], at[1] + 1.0, at[2] + look[2]];
-        l.spawn_item_own(held, from, 40);
-        let fox_id = l.parts().mobs[fox_index].id;
-        let id = l.mob_uuid(fox_id);
-        if let Some(thrown) = l.just_spawned_item() {
-            thrown.thrower = Some(id);
+        if let Some(thrown_id) = l.spawn_item_own(held, from, 40) {
+            let fox_id = l.parts().mobs[fox_index].id;
+            let id = l.mob_uuid(fox_id);
+            if let Some(thrown) = l.item_entity_mut(thrown_id) {
+                thrown.thrower = Some(id);
+            }
         }
         l.play_sound("minecraft:entity.fox.spit", at, 1.0, 1.0);
     }

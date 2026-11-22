@@ -18,10 +18,18 @@ pub type ItemConsumable = Consumable<String, ConsumeEffect>;
 
 /// A stack from the wire: its item by the built-in registry's id, its
 /// components by the synced registries' (enchantments, trims).
+/// Unknown ids, air, and non-positive counts normalise to the empty stack.
 pub fn from_network(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> ItemStack {
+    let Some(name) = resolve_item_name(builtin, s.item).filter(|&name| name != "minecraft:air")
+    else {
+        return ItemStack::new("minecraft:air", 0);
+    };
+    if s.count <= 0 {
+        return ItemStack::new("minecraft:air", 0);
+    }
     let mut out = ItemStack {
-        item: item_name(builtin, s.item),
-        count: s.count.max(0) as u32,
+        item: Arc::from(name),
+        count: s.count as u32,
         damage: 0,
         extra: None,
     };
@@ -538,13 +546,8 @@ fn dye_name(id: i32) -> &'static str {
         .map_or("white", |d| d.0)
 }
 
-fn item_name(builtin: &Builtin, id: i32) -> Arc<str> {
-    Arc::from(
-        builtin
-            .get("minecraft:item")
-            .and_then(|i| i.name(id))
-            .unwrap_or("minecraft:air"),
-    )
+fn resolve_item_name(builtin: &Builtin, id: i32) -> Option<&str> {
+    builtin.get("minecraft:item").and_then(|i| i.name(id))
 }
 
 /// The item's patched components as vanilla's `components` compound.
@@ -845,7 +848,7 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
             Component::Stacks(stacks) => Tag::List(
                 stacks
                     .iter()
-                    .map(|t| template_tag(t, builtin, synced))
+                    .filter_map(|t| template_tag(t, builtin, synced))
                     .collect(),
             ),
             Component::CustomModelData {
@@ -933,18 +936,19 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
 }
 
 /// An `ItemStackTemplate` as its NBT codec writes it: id, count and components.
-fn template_tag(t: &Stack, builtin: &Builtin, synced: &Dynamic) -> Tag {
+fn template_tag(t: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag> {
+    let name = resolve_item_name(builtin, t.item).filter(|&name| name != "minecraft:air")?;
+    if t.count <= 0 {
+        return None;
+    }
     let mut entries = vec![
-        (
-            "id",
-            Tag::String(item_name(builtin, t.item).as_ref().into()),
-        ),
+        ("id", Tag::String(name.into())),
         ("count", Tag::Int(t.count)),
     ];
     if let Some(c) = components_tag(t, builtin, synced) {
         entries.push(("components", c));
     }
-    Tag::compound(entries)
+    Some(Tag::compound(entries))
 }
 
 /// `TypedEntityData.streamCodec` of a block entity: its type's registry id,
@@ -1439,10 +1443,12 @@ fn container_tag(bytes: &[u8], builtin: &Builtin, synced: &Dynamic) -> Option<Ta
     for slot in 0..r.count(256).ok()? {
         if r.bool().ok()? {
             let stack = Template::read(&mut r).ok()?;
-            slots.push(Tag::compound([
-                ("slot", Tag::Int(slot as i32)),
-                ("item", template_tag(&stack, builtin, synced)),
-            ]));
+            if let Some(item) = template_tag(&stack, builtin, synced) {
+                slots.push(Tag::compound([
+                    ("slot", Tag::Int(slot as i32)),
+                    ("item", item),
+                ]));
+            }
         }
     }
     Some(Tag::List(slots))
@@ -3508,6 +3514,36 @@ mod tests {
             back.data()
                 .is_some_and(|d| d.other("!minecraft:max_stack_size").is_some())
         );
+    }
+
+    #[test]
+    fn from_network_normalises_unknown_air_and_empty_stacks_to_empty() {
+        let builtin = Builtin {
+            registries: [(
+                "minecraft:item".into(),
+                horizon_protocol::registry::Ids::from_names(vec![
+                    "minecraft:air".into(),
+                    "minecraft:stone".into(),
+                ]),
+            )]
+            .into(),
+        };
+        let dynamic = Dynamic::default();
+        let mut unknown = Stack::new(999, 7);
+        unknown.wire = horizon_protocol::item::WirePatch(Some(Arc::from([0u8, 0])));
+        for wire in [
+            unknown,
+            Stack::new(0, 5),
+            Stack::new(1, 0),
+            Stack::new(1, -2),
+        ] {
+            let decoded = from_network(&wire, &builtin, &dynamic);
+            assert_eq!(decoded, ItemStack::new("minecraft:air", 0));
+            assert!(decoded.extra.is_none());
+        }
+
+        let stone = from_network(&Stack::new(1, 3), &builtin, &dynamic);
+        assert_eq!(stone, ItemStack::new("minecraft:stone", 3));
     }
 
     /// `Equippable.swappable` comes from the stack's component, saved or the

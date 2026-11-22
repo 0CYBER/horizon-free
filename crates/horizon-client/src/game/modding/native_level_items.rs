@@ -28,9 +28,8 @@ impl Game<'_> {
         motion: Option<[f64; 3]>,
         pickup_delay: u32,
     ) -> Option<EntityRef> {
-        // `spawn_item` takes the next id.
-        let id = self.next_entity + 1;
-        self.add_item_entity(stack, at, motion, pickup_delay);
+        // Found by its id: the hooks the spawn runs may add entities after it.
+        let (id, _) = self.add_item_entity(stack, at, motion, pickup_delay)?;
         self.dropped
             .iter()
             .rev()

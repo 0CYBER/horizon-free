@@ -1019,7 +1019,9 @@ impl Game<'_> {
                     g.drop_plain(stack);
                 });
             }
-            After::Spawn(at, stack) => self.spawn_item(stack, at, [0.0; 3], 10),
+            After::Spawn(at, stack) => {
+                let _ = self.spawn_item(stack, at, [0.0; 3], 10);
+            }
             After::Emptied(id) => {
                 let emptied = self
                     .dropped
@@ -2384,8 +2386,10 @@ mod tests {
         // An item entity: emptied in an aborted transaction, it's back whole; one of four
         // exchanged in a committed one is dropped beside it at the commit; emptied in a
         // committed one, it's gone.
-        game.spawn_item(sticks(4), [0.5, 70.0, 6.5], [0.0; 3], 10);
-        let id = game.dropped.last().unwrap().id;
+        let id = game
+            .spawn_item(sticks(4), [0.5, 70.0, 6.5], [0.0; 3], 10)
+            .expect("spawned sticks");
+
         let entity = mod_api::ItemPlace::ItemEntity { id };
         let count = |game: &Game<'_>| game.dropped.len();
         let items = count(&game);

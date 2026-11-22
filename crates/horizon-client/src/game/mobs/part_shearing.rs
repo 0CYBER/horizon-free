@@ -80,7 +80,9 @@ impl Game<'_> {
             let Ok(stack) = drop.try_into_engine(self.items()) else {
                 continue;
             };
-            self.spawn_at_location(at, 1.0, stack);
+            let Some((id, _)) = self.spawn_at_location(at, 1.0, stack) else {
+                continue;
+            };
             let Some(i) = index else { continue };
             let r = &mut self.mobs[i].random;
             let push = [
@@ -88,7 +90,7 @@ impl Game<'_> {
                 f64::from(r.next_float() * 0.05),
                 f64::from((r.next_float() - r.next_float()) * 0.1),
             ];
-            if let Some(item) = self.just_spawned_item() {
+            if let Some(item) = self.dropped_item_mut(id) {
                 let v = item.velocity;
                 item.velocity = Vec3::new(v.x + push[0], v.y + push[1], v.z + push[2]);
             }

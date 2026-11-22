@@ -43,8 +43,9 @@ impl Game<'_> {
             p[1] + self.target_eye_height(Target::Player),
             p[2],
         ]);
-        self.throw_from_eyes(rest, eye, false, false);
-        if let Some(item) = self.just_spawned_item() {
+        if let Some(id) = self.throw_from_eyes(rest, eye, false, false)
+            && let Some(item) = self.dropped_item_mut(id)
+        {
             item.thrower = None;
             item.pickup_delay = 0;
             item.target = owner;

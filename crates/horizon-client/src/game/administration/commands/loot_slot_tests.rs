@@ -107,6 +107,25 @@ fn loot_replace_furnace_fuel_refuses_non_fuel() {
 
 #[test]
 #[ignore = "daily"]
+fn loot_replace_clears_empty_position_and_writes_following_real_item() {
+    with_game(|game| {
+        assert!(game.run_command("setblock 4 200 4 chest"));
+        assert!(game.run_command("item replace block 4 200 4 container.0 with minecraft:stone 5"));
+        assert!(game.run_command("item replace block 4 200 4 container.1 with minecraft:stick 3"));
+        assert!(game.run_command(
+            r#"loot replace block 4 200 4 container.0 2 loot {"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:iron_ingot","modifier":{"type":"minecraft:set_count","count":0}}]},{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"#,
+        ));
+        assert_eq!(game.slot_get(&Slot::Block([4, 200, 4], 0)), None);
+        assert_eq!(
+            game.slot_get(&Slot::Block([4, 200, 4], 1))
+                .map(|s| (s.item.to_string(), s.count)),
+            Some(("minecraft:diamond".into(), 1))
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn item_commands_bypass_block_acceptance() {
     with_game(|game| {
         for slot in [1, 2] {
