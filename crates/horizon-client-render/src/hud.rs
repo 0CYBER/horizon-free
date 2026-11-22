@@ -744,16 +744,18 @@ fn atlas_sprites(root: &ResourceSource, packed: &[PackedImage]) -> (Vec<PackedIm
                 SpriteOrigin::File(texture) => {
                     // Its path under `textures/` in any namespace (a server
                     // pack's `lobby:item/...` as well as vanilla's).
-                    let path = texture.split_once(':').map_or(texture.as_str(), |(_, p)| p);
                     let file = atlas_sources::texture_resource(texture, "textures");
                     decode_resource(root, &file).ok().map(|image| {
                         // Animated strips keep their first frame and animate, like the
                         // packed files, under any folder: vanilla animates every sprite of
                         // these atlases (a server pack's `wynn/...` as well as `item/...`).
+                        // A still texture is the whole image (`SpriteResourceLoader`: the frame
+                        // size is the image's without an animation section), so a 64x32 item
+                        // texture keeps its right half.
                         let mcmeta = root.read_to_string(&format!("{file}.mcmeta")).ok();
                         let animation = animation_of(mcmeta.as_deref());
                         animated = animation.is_some();
-                        if animated || path.starts_with("block/") || path.starts_with("item/") {
+                        if animated {
                             first_frame(image, animation.as_ref())
                         } else {
                             image
@@ -1380,9 +1382,9 @@ impl HudAtlas {
             };
             let mcmeta = source.read_to_string(&format!("{path}.mcmeta")).ok();
             let animation = animation_of(mcmeta.as_deref());
-            // An animated strip keeps its first frame.
-            let frames =
-                animation.is_some() || name.starts_with("block/") || name.starts_with("item/");
+            // An animated strip keeps its first frame; a still texture is the whole image
+            // (`SpriteResourceLoader`), whatever its folder or shape.
+            let frames = animation.is_some();
             let (w, h, pixels) = if frames {
                 first_frame(image, animation.as_ref())
             } else {
@@ -4161,6 +4163,42 @@ mod tests {
         assert_eq!(texel_at(&atlas, rect, 0, 0), [40, 180, 80, 255]);
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// A still item texture is the whole image, as `SpriteResourceLoader` loads one without an
+    /// animation section: a mod's 64x32 texture keeps the right half its model's UVs reach (a
+    /// cut to the top-left square left an item's parts drawing transparent texels).
+    #[test]
+    fn a_still_wide_item_texture_packs_whole() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-atlas-wide-item-{}", std::process::id()));
+        let atlases = root.join("assets/minecraft/atlases");
+        let item = root.join("assets/gear/textures/item");
+        fs::create_dir_all(&atlases).unwrap();
+        fs::create_dir_all(&item).unwrap();
+        fs::write(
+            atlases.join("items.json"),
+            r#"{"sources": [{"type": "directory", "source": "item", "prefix": "item/"}]}"#,
+        )
+        .unwrap();
+        // Top rows green, bottom rows red, no mcmeta.
+        write_strip(
+            &item.join("wide.png"),
+            64,
+            32,
+            &[[0, 255, 0, 255], [255, 0, 0, 255]],
+            None,
+        );
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            root.to_path_buf(),
+        ))
+        .unwrap();
+        let _ = fs::remove_dir_all(&root);
+        let rect = atlas.sprites["gear:item/wide"];
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (64, 32));
+        assert_eq!(texel_at(&atlas, rect, 63, 0), [0, 255, 0, 255]);
+        assert_eq!(texel_at(&atlas, rect, 63, 31), [255, 0, 0, 255]);
+    }
+
     #[test]
     fn another_namespaces_animated_item_texture_packs_its_first_frame_and_animates() {
         let root =
@@ -4662,6 +4700,11 @@ texture=wide",
         write_png(&pack, "block/stone", 32, 32);
         write_png(&pack, "item/compass", 32, 1024);
         write_png(&pack, "gui/sprites/pack_only", 30, 10);
+        // The strip animates in each: a still texture is the whole image, its folder aside.
+        for root in [&defaults, &pack] {
+            let meta = root.join("assets/minecraft/textures/item/compass.png.mcmeta");
+            fs::write(meta, r#"{"animation": {}}"#).unwrap();
+        }
         let atlas = HudAtlas::build_over(
             &horizon_assets::resource_source::ResourceSource::directory(pack.to_path_buf()),
             &horizon_assets::resource_source::ResourceSource::directory(defaults.to_path_buf()),
