@@ -33,3 +33,6 @@ horizon_client::game::points::host_side  #19576
 horizon_client::game::points::mirror_in  #19576
 horizon_client::game::points::mirror_out  #19576
 horizon_client::game::points::unconverted  #19576
+horizon_client_render::ui::NINE_SLICE  #13220
+horizon_client_render::ui::draw_sprite  #13220
+horizon_client_render::ui::nine_slice_metadata  #13220

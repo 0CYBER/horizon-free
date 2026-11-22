@@ -20,8 +20,16 @@ struct NineSlice {
     border: [u32; 4],
     stretch_inner: bool,
 }
-/// Nine-slice scaling from `.png.mcmeta` files.
-static NINE_SLICE: RwLock<Option<HashMap<String, NineSlice>>> = RwLock::new(None);
+/// A GUI sprite's `gui.scaling` metadata.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Scaling {
+    Stretch,
+    NineSlice(NineSlice),
+    Tile { width: u32, height: u32 },
+}
+
+/// GUI sprite scaling from `.png.mcmeta` files.
+static SCALING: RwLock<Option<HashMap<String, Scaling>>> = RwLock::new(None);
 
 /// A `gui.scaling` section of type `nine_slice`.
 fn parse_nine_slice(v: &serde_json::Value) -> Option<NineSlice> {
@@ -51,17 +59,47 @@ fn parse_nine_slice(v: &serde_json::Value) -> Option<NineSlice> {
         stretch_inner: s["stretch_inner"].as_bool().unwrap_or(false),
     })
 }
+/// A `gui.scaling` section of type `tile`.
+fn parse_tile(v: &serde_json::Value) -> Option<Scaling> {
+    let s = &v["gui"]["scaling"];
+    if s["type"] != "tile" {
+        return None;
+    }
+    // `GuiSpriteScaling.Tile` reads both through `ExtraCodecs.POSITIVE_INT`
+    // (1..=i32::MAX): zero or an out-of-range size leaves the sprite without
+    // scaling, so it falls back to a stretch.
+    let dimension = |k: &str| {
+        i32::try_from(s[k].as_i64()?)
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| n as u32)
+    };
+    Some(Scaling::Tile {
+        width: dimension("width")?,
+        height: dimension("height")?,
+    })
+}
+/// Parse a `gui.scaling` section, including the explicit stretch form.
+fn parse_scaling(v: &serde_json::Value) -> Option<Scaling> {
+    let s = &v["gui"]["scaling"];
+    match s["type"].as_str()? {
+        "stretch" => Some(Scaling::Stretch),
+        "nine_slice" => parse_nine_slice(v).map(Scaling::NineSlice),
+        "tile" => parse_tile(v),
+        _ => None,
+    }
+}
 /// Read `gui.scaling` metadata for every GUI sprite under `root`.
 pub fn load_metadata(root: &ResourceSource) {
     set_metadata(read_metadata(root));
 }
-/// The GUI sprites' nine-slice metadata of a resource root, read off the
+/// The GUI sprites' `gui.scaling` metadata of a resource root, read off the
 /// render thread by a pack reload ([`read_metadata`]) and put in use with
 /// [`set_metadata`].
-pub struct UiMetadata(HashMap<String, NineSlice>);
+pub struct UiMetadata(HashMap<String, Scaling>);
 /// Puts read metadata in use ([`load_metadata`] in two halves).
 pub fn set_metadata(metadata: UiMetadata) {
-    *NINE_SLICE.write().unwrap_or_else(|e| e.into_inner()) = Some(metadata.0);
+    *SCALING.write().unwrap_or_else(|e| e.into_inner()) = Some(metadata.0);
 }
 /// Reads the metadata [`load_metadata`] puts in use, without putting it in use. Another
 /// namespace's sprites are named with it (`lobby:gui/sprites/...`), as the GUI atlas packs them.
@@ -80,50 +118,58 @@ pub fn read_metadata(root: &ResourceSource) -> UiMetadata {
             let Ok(text) = root.read_to_string(&name) else {
                 continue;
             };
-            let Some(nine_slice) = crate::packs::first_json(text.as_bytes())
+            let Some(scaling) = crate::packs::first_json::<serde_json::Value>(text.as_bytes())
                 .ok()
                 .as_ref()
-                .and_then(parse_nine_slice)
+                .and_then(parse_scaling)
             else {
                 continue;
             };
             let key = stripped.strip_prefix(base.as_str()).unwrap_or_default();
-            map.insert(format!("{prefix}{key}"), nine_slice);
+            map.insert(format!("{prefix}{key}"), scaling);
         }
     }
     UiMetadata(map)
 }
-/// The sprite's nine-slice metadata, when its `.png.mcmeta` has any.
-fn nine_slice_metadata(sprite: &str) -> Option<NineSlice> {
-    NINE_SLICE
+/// The sprite's scaling metadata, when its `.png.mcmeta` has any.
+fn scaling_metadata(sprite: &str) -> Option<Scaling> {
+    SCALING
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .and_then(|m| m.get(sprite).copied())
 }
-/// The sprite's nine-slice metadata; without any (no resources loaded), its
-/// GUI size and the widgets' usual borders.
-fn scaling(sprite: &str, r: &Rect) -> NineSlice {
-    nine_slice_metadata(sprite).unwrap_or(NineSlice {
+/// The sprite's scaling. A `nine_slice` caller keeps the existing widget
+/// border fallbacks when metadata is absent; `blit_sprite` passes `false` so
+/// an unannotated sprite stretches as vanilla does.
+fn scaling(sprite: &str, r: &Rect, widget_fallback: bool) -> Scaling {
+    if let Some(metadata) = scaling_metadata(sprite) {
+        return metadata;
+    }
+    if !widget_fallback {
+        return Scaling::Stretch;
+    }
+    let border = match sprite {
+        "horizon/jei/button_enabled_v2"
+        | "horizon/jei/button_disabled_v2"
+        | "horizon/jei/button_highlight_v2" => [6; 4],
+        "horizon/jei/search_background_v2" => [6; 4],
+        "horizon/jei/interactive_ingredient_tooltip_background" => [16; 4],
+        "horizon/jei/recipe_preview_background_v2" => [16; 4],
+        "horizon/jei/scrollbar_background_v2" => [6; 4],
+        "horizon/jei/scrollbar_marker_v2" => [2, 2, 2, 1],
+        "gui/sprites/widget/button"
+        | "gui/sprites/widget/button_highlighted"
+        | "gui/sprites/widget/button_disabled" => [3; 4],
+        "gui/sprites/widget/slider_handle" | "gui/sprites/widget/slider_handle_highlighted" => {
+            [2, 2, 2, 3]
+        }
+        _ => [1; 4],
+    };
+    Scaling::NineSlice(NineSlice {
         width: r.w,
         height: r.h,
-        border: match sprite {
-            "horizon/jei/button_enabled_v2"
-            | "horizon/jei/button_disabled_v2"
-            | "horizon/jei/button_highlight_v2" => [6; 4],
-            "horizon/jei/search_background_v2" => [6; 4],
-            "horizon/jei/interactive_ingredient_tooltip_background" => [16; 4],
-            "horizon/jei/recipe_preview_background_v2" => [16; 4],
-            "horizon/jei/scrollbar_background_v2" => [6; 4],
-            "horizon/jei/scrollbar_marker_v2" => [2, 2, 2, 1],
-            "gui/sprites/widget/button"
-            | "gui/sprites/widget/button_highlighted"
-            | "gui/sprites/widget/button_disabled" => [3; 4],
-            "gui/sprites/widget/slider_handle" | "gui/sprites/widget/slider_handle_highlighted" => {
-                [2, 2, 2, 3]
-            }
-            _ => [1; 4],
-        },
+        border,
         stretch_inner: false,
     })
 }
@@ -178,16 +224,16 @@ pub fn nine_slice(
         match crate::hud::sprite_modifiers::draws(atlas, sprite, *r, [x, y, w, h], color) {
             Some(draws) => {
                 for d in draws {
-                    draw_nine_slice(batch, d.rect, scaling(&d.key, &d.rect), d.at, d.color);
+                    draw_scaling(batch, d.rect, scaling(&d.key, &d.rect, true), d.at, d.color);
                 }
             }
-            None => draw_nine_slice(batch, *r, scaling(sprite, r), [x, y, w, h], color),
+            None => draw_scaling(batch, *r, scaling(sprite, r, true), [x, y, w, h], color),
         }
     }
 }
 /// `GuiGraphicsExtractor.blitSprite`: a sprite over `w` × `h` as its
-/// `gui.scaling` says, nine-sliced, or stretched when it has no metadata.
-/// (`tile`, which no vanilla sprite uses, isn't read yet: it stretches.)
+/// `gui.scaling` says: tiled, nine-sliced, or stretched when it has no
+/// metadata.
 pub fn blit_sprite(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -202,10 +248,16 @@ pub fn blit_sprite(
         match crate::hud::sprite_modifiers::draws(atlas, sprite, *r, [x, y, w, h], color) {
             Some(draws) => {
                 for d in draws {
-                    draw_sprite(batch, d.rect, nine_slice_metadata(&d.key), d.at, d.color);
+                    draw_scaling(
+                        batch,
+                        d.rect,
+                        scaling(&d.key, &d.rect, false),
+                        d.at,
+                        d.color,
+                    );
                 }
             }
-            None => draw_sprite(batch, *r, nine_slice_metadata(sprite), [x, y, w, h], color),
+            None => draw_scaling(batch, *r, scaling(sprite, r, false), [x, y, w, h], color),
         }
     }
 }
@@ -228,16 +280,29 @@ pub fn blit_sprite_region(
         batch.rect_uv(x, y, w, h, sub(*r, size, src), color);
     }
 }
-fn draw_sprite(
+fn draw_scaling(
     batch: &mut HudBatch,
     r: Rect,
-    nine_slice: Option<NineSlice>,
+    scaling: Scaling,
     [x, y, w, h]: [f32; 4],
     color: u32,
 ) {
-    match nine_slice {
-        Some(n) => draw_nine_slice(batch, r, n, [x, y, w, h], color),
-        None => batch.rect_uv(x, y, w, h, r, color),
+    match scaling {
+        Scaling::Stretch => batch.rect_uv(x, y, w, h, r, color),
+        Scaling::NineSlice(n) => draw_nine_slice(batch, r, n, [x, y, w, h], color),
+        Scaling::Tile { width, height } => {
+            let size = [width as f32, height as f32];
+            if size[0] > 0.0 && size[1] > 0.0 {
+                tile(
+                    batch,
+                    r,
+                    size,
+                    [0.0, 0.0, size[0], size[1]],
+                    [x, y, w, h],
+                    color,
+                );
+            }
+        }
     }
 }
 fn draw_nine_slice(
@@ -1947,7 +2012,11 @@ mod tests {
         .unwrap();
         let metadata = read_metadata(&ResourceSource::directory(root.clone()));
         std::fs::remove_dir_all(&root).unwrap();
-        let slice = metadata.0["gui/sprites/widget/button_highlighted"];
+        let Some(Scaling::NineSlice(slice)) =
+            metadata.0.get("gui/sprites/widget/button_highlighted")
+        else {
+            panic!("the button keeps its nine-slice metadata");
+        };
         assert_eq!(
             (slice.width, slice.height, slice.border),
             (80, 20, [34, 8, 34, 8])
@@ -2341,10 +2410,10 @@ mod tests {
             r#"{"gui":{"scaling":{"type":"nine_slice","width":100,"height":100,"border":10,"stretch_inner":true}}}"#,
         );
         let mut batch = HudBatch::scratch([640, 480]);
-        draw_sprite(
+        draw_scaling(
             &mut batch,
             sprite(100, 100),
-            Some(n),
+            Scaling::NineSlice(n),
             [10.0, 10.0, 160.0, 26.0],
             u32::MAX,
         );
@@ -2357,16 +2426,136 @@ mod tests {
     #[test]
     fn blit_sprite_stretches_a_sprite_without_metadata() {
         let mut batch = HudBatch::scratch([640, 480]);
-        draw_sprite(
+        draw_scaling(
             &mut batch,
             sprite(9, 9),
-            None,
+            Scaling::Stretch,
             [0.0, 0.0, 27.0, 18.0],
             u32::MAX,
         );
         let q = quads(&batch);
         assert_eq!(q.len(), 1);
         assert_quad(q[0], ([0.0, 0.0, 27.0, 18.0], [0.0, 0.0, 1.0, 1.0]));
+    }
+    #[test]
+    fn tile_scaling_reads_its_gui_size() {
+        let json = serde_json::json!({"gui": {"scaling": {
+            "type": "tile", "width": 16, "height": 8}}});
+        assert_eq!(
+            parse_tile(&json),
+            Some(Scaling::Tile {
+                width: 16,
+                height: 8
+            })
+        );
+        assert_eq!(parse_scaling(&json), parse_tile(&json));
+        // `GuiSpriteScaling.Tile` uses `ExtraCodecs.POSITIVE_INT` for both
+        // sides, so zero and out-of-range sizes are invalid metadata.
+        for (width, height) in [(0, 8), (16, 0), (i32::MAX as u64 + 1, 8)] {
+            let json = serde_json::json!({"gui": {"scaling": {
+                "type": "tile", "width": width, "height": height}}});
+            assert!(parse_tile(&json).is_none(), "{width} x {height}");
+        }
+        // A nine-slice is not a tile.
+        let json = serde_json::json!({"gui": {"scaling": {
+            "type": "nine_slice", "width": 16, "height": 16, "border": 2}}});
+        assert!(parse_tile(&json).is_none());
+    }
+    #[test]
+    fn scaling_dispatch_tiles_the_whole_sprite() {
+        let mut batch = HudBatch::scratch([640, 480]);
+        draw_scaling(
+            &mut batch,
+            sprite(16, 16),
+            Scaling::Tile {
+                width: 16,
+                height: 16,
+            },
+            [0.0, 0.0, 34.0, 18.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 6);
+        assert_quad(q[0], ([0.0, 0.0, 16.0, 16.0], [0.0, 0.0, 1.0, 1.0]));
+        assert_quad(q[1], ([16.0, 0.0, 32.0, 16.0], [0.0, 0.0, 1.0, 1.0]));
+        assert_quad(q[2], ([32.0, 0.0, 34.0, 16.0], [0.0, 0.0, 0.125, 1.0]));
+        assert_quad(q[5], ([32.0, 16.0, 34.0, 18.0], [0.0, 0.0, 0.125, 0.125]));
+    }
+    #[test]
+    fn scaling_dispatch_keeps_widget_fallback_borders() {
+        let rect = sprite(20, 20);
+        assert_eq!(
+            scaling("gui/sprites/widget/button", &rect, true),
+            Scaling::NineSlice(NineSlice {
+                width: 20,
+                height: 20,
+                border: [3; 4],
+                stretch_inner: false,
+            })
+        );
+        assert_eq!(
+            scaling("gui/sprites/widget/button", &rect, false),
+            Scaling::Stretch
+        );
+        assert_eq!(
+            scaling("custom/sprite", &rect, true),
+            Scaling::NineSlice(NineSlice {
+                width: 20,
+                height: 20,
+                border: [1; 4],
+                stretch_inner: false,
+            })
+        );
+        assert_eq!(scaling("custom/sprite", &rect, false), Scaling::Stretch);
+    }
+    #[test]
+    fn gui_scaling_metadata_reads_each_namespace_with_atlas_keys() {
+        use horizon_assets::resource_source::Resource;
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "assets/minecraft/textures/gui/sprites/widget/tile.png.mcmeta".to_owned(),
+                Resource::bytes(
+                    br#"{"gui":{"scaling":{"type":"tile","width":16,"height":8}}}"#.to_vec(),
+                ),
+            ),
+            (
+                "assets/sunfall/textures/gui/sprites/panel/nine.png.mcmeta".to_owned(),
+                Resource::bytes(
+                    br#"{"gui":{"scaling":{"type":"nine_slice","width":20,"height":20,"border":2}}}"#
+                        .to_vec(),
+                ),
+            ),
+            // A sprite whose own path starts with `gui/sprites/` keeps its own
+            // atlas key: it must not overwrite the first sprite's metadata.
+            (
+                "assets/minecraft/textures/gui/sprites/gui/sprites/widget/tile.png.mcmeta"
+                    .to_owned(),
+                Resource::bytes(
+                    br#"{"gui":{"scaling":{"type":"nine_slice","width":20,"height":20,"border":2}}}"#
+                        .to_vec(),
+                ),
+            ),
+        ]));
+        let metadata = read_metadata(&source);
+        let tile = Scaling::Tile {
+            width: 16,
+            height: 8,
+        };
+        let nine = Scaling::NineSlice(NineSlice {
+            width: 20,
+            height: 20,
+            border: [2; 4],
+            stretch_inner: false,
+        });
+        assert_eq!(metadata.0.get("gui/sprites/widget/tile"), Some(&tile));
+        assert_eq!(
+            metadata.0.get("sunfall:gui/sprites/panel/nine"),
+            Some(&nine)
+        );
+        assert_eq!(
+            metadata.0.get("gui/sprites/gui/sprites/widget/tile"),
+            Some(&nine)
+        );
     }
     #[test]
     fn borders_shrink_to_half_the_drawn_size() {
@@ -2700,16 +2889,19 @@ mod tests {
         ]));
         let metadata = read_metadata(&source);
         assert_eq!(metadata.0.len(), 2);
-        let button = metadata.0.get("gui/sprites/widget/button").unwrap();
+        let Some(Scaling::NineSlice(button)) = metadata.0.get("gui/sprites/widget/button") else {
+            panic!("the button's nine-slice metadata");
+        };
         assert_eq!(
             (button.width, button.height, button.border),
             (20, 12, [3; 4])
         );
         // Another namespace's sprite is named with it, as the GUI atlas packs it.
-        let frame = metadata
-            .0
-            .get("lobby:gui/sprites/tooltip/gold_frame")
-            .unwrap();
+        let Some(Scaling::NineSlice(frame)) =
+            metadata.0.get("lobby:gui/sprites/tooltip/gold_frame")
+        else {
+            panic!("the frame's nine-slice metadata");
+        };
         assert_eq!((frame.width, frame.border), (40, [6; 4]));
     }
     /// A tooltip style names its sprites as `TooltipRenderUtil` does, in the GUI atlas's names;
