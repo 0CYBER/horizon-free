@@ -38,6 +38,18 @@ impl Game<'_> {
         self.entity_outline(id, kind, vanilla)
     }
 
+    /// `Display.getTeamColor`: metadata overrides the entity's team color unless it is -1.
+    pub(super) fn display_outline(&self, id: u32, kind: &str, glow_color: i32) -> Option<u32> {
+        let vanilla = self.tracked_entity_glowing(id).then(|| {
+            if glow_color == -1 {
+                team_color(self.mob_team(id))
+            } else {
+                glow_color as u32
+            }
+        });
+        self.entity_outline(id, kind, vanilla)
+    }
+
     /// `Minecraft.shouldEntityAppearGlowing` of a mob or another player, with its outline
     /// colour (`getTeamColor`; another player's team goes by name).
     pub(super) fn mob_outline(&self, m: &Mob) -> Option<u32> {

@@ -30,7 +30,7 @@ CompositeBlockModel.Unbaked.bake	skip:java		builds the composite object; no sepa
 ConditionalBlockModel.update	inline	crates/horizon-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	Christmas chest texture chosen in the chest branch by extended_christmas()
 ConditionalBlockModel.Unbaked.bake	skip:java		builds the conditional object; the chest branch picks the texture when drawing
 SpecialBlockModelWrapper.Unbaked.bake	skip:data		special models come from exported model data in BlockEntityRenderer::load; no baking step
-AbstractEndPortalRenderer.submitSpecial	port	crates/horizon-client-render/src/block_entity_render.rs::portal_cube	gap: minor: no outline pass (outlineColor) for the portal faces
+AbstractEndPortalRenderer.submitSpecial	port	crates/horizon-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_state	six transformed faces for the portal or gateway model and its outline
 AbstractSignRenderer.submit	port	crates/horizon-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	front and back text drawn in the sign branch via sign_text_calls
 AbstractSignRenderer.isOutlineVisible	port	crates/horizon-client-render/src/block_entity_render.rs::sign_text_near	first-person scoping outlines the text at any distance, else the camera within 16 blocks of the sign's centre
 AbstractSignRenderer.extractRenderState	inline	crates/horizon-client-render/src/block_entity_render.rs::BlockEntityRenderer::render_one	gap: minor: the text filtering option is not read; filtered sign lines are not shown

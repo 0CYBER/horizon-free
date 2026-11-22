@@ -83,7 +83,7 @@ Display.getBrightnessOverride	inline	crates/horizon-client/src/game/entities/tex
 Display.calculateInterpolationProgress	port	crates/horizon-client/src/game/entities/text_displays.rs::RemoteTextDisplay::progress
 Display.updateCulling	port	crates/horizon-client/src/text_display.rs::culling_box	noCulling when width or height is 0 (`no_culling`); else the width/height AABB
 Display.shouldRenderAtSqrDistance	inline	crates/horizon-client/src/game/entities/text_displays.rs::Game::display_in_view	view_range * 64 * view scale squared; frustum when width and height are set
-Display.getTeamColor	missing		minor: glow_color_override is read but a glowing display gets no coloured outline
+Display.getTeamColor	port	crates/horizon-client/src/game/entities/glowing.rs::Game::display_outline	glow_color_override, falling back to the team's colour or white
 Display.createFreshRenderState	inline	crates/horizon-client/src/game/entities/text_displays.rs::RemoteTextDisplay::tick	the copy of the synced data when no interpolation runs
 Display.createInterpolatedRenderState	inline	crates/horizon-client/src/game/entities/text_displays.rs::RemoteTextDisplay::tick	the new start state is the old one blended to the last drawn progress (TextDisplayData::blend)
 Display.BlockDisplay	home	crates/horizon-client/src/game/entities/text_displays.rs	a block display submits its block model under the display's transformation, lit and tracked like an entity (Game::block_item_display_geometry)

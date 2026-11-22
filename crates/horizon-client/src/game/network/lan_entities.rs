@@ -705,6 +705,10 @@ impl Game<'_> {
             _ => return None,
         };
         e.meta = display_data(tag, false);
+        // Entity.setGlowingTag: a nonliving display sends its NBT glow on shared flag 6.
+        if horizon_client::entity_nbt::flag(tag, "Glowing") {
+            e.meta.insert(0, (0, serializer::BYTE, Value::Byte(0x40)));
+        }
         e.meta.extend(meta);
         e.defaults = display_data(&empty, true);
         e.defaults.extend(defaults);
@@ -1331,6 +1335,162 @@ mod tests {
                 assert_eq!(game.next_entity, base + 11);
                 game.lan_assign_ids();
                 assert_eq!(game.next_entity, base + 11);
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn glowing_display_metadata_reaches_the_model_silhouettes() {
+        use crate::game::native_entity_refs::tests::with_client_game;
+        use horizon_client::block_entity_render::{END_GATEWAY_LAYER, END_PORTAL_LAYER};
+        use horizon_protocol::{
+            item::Stack,
+            packets::play::{self, Clientbound as C},
+        };
+
+        with_client_game(|game| {
+            let (client, _server) = horizon_protocol::connection::Pipe::pair();
+            game.connect_local(client, "display-glow-test").unwrap();
+            let builtin = game.remote.as_ref().unwrap().builtin.clone();
+            let types = builtin.get("minecraft:entity_type").unwrap();
+            let planks = builtin
+                .get("minecraft:item")
+                .unwrap()
+                .id("minecraft:oak_planks")
+                .unwrap();
+            let uuid = 1;
+            let id = 42;
+            let member = "00000000-0000-0000-0000-000000000001";
+            let camera = glam::DVec3::new(0.0, 70.0, 0.0);
+            let team = "red_team";
+            let override_color = 0xff12_3456_u32 as i32;
+            game.score.board.add_team(team).color = Some("red".into());
+
+            for (kind, contents, end_cube) in [
+                (
+                    "minecraft:item_display",
+                    r#"item:{id:"minecraft:oak_planks",count:1}"#,
+                    None,
+                ),
+                (
+                    "minecraft:block_display",
+                    r#"block_state:{id:"minecraft:oak_planks"}"#,
+                    None,
+                ),
+                (
+                    "minecraft:block_display",
+                    r#"block_state:{id:"minecraft:end_portal"}"#,
+                    Some((END_PORTAL_LAYER, [0.4375, 0.625])),
+                ),
+                (
+                    "minecraft:block_display",
+                    r#"block_state:{id:"minecraft:end_gateway"}"#,
+                    Some((END_GATEWAY_LAYER, [0.25, 0.75])),
+                ),
+                ("minecraft:text_display", r#"text:{text:"Glow"}"#, None),
+            ] {
+                game.handle_packet(C::AddEntity(play::AddEntity {
+                    id,
+                    uuid,
+                    kind: types.id(kind).unwrap(),
+                    position: [0.0, 70.0, -4.0],
+                    velocity: [0.0; 3],
+                    pitch: 0,
+                    yaw: 0,
+                    head_yaw: 0,
+                    data: 0,
+                }))
+                .unwrap();
+                let mut tracked = EntityState {
+                    id,
+                    kind: kind.into(),
+                    ..Default::default()
+                };
+                let transform = if end_cube.is_some() {
+                    ",transformation:{translation:[0.5f,0.25f,0.5f],scale:[2f,0.5f,1f],left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f]}"
+                } else {
+                    ""
+                };
+                let tag = horizon_client::command::snbt::parse_fully(&format!(
+                    "{{Glowing:1b,glow_color_override:{override_color},{contents}{transform}}}"
+                ))
+                .unwrap();
+                let stack = game.lan_display_data_kept(id as u32, &tag, &mut tracked);
+                if let Some(stack) = stack {
+                    let (_, _, value) =
+                        tracked.meta.iter_mut().find(|entry| entry.0 == 23).unwrap();
+                    *value = Value::Item(Some(Stack::new(planks, stack.count as i32)));
+                }
+                let send = |game: &mut Game<'_>, values| {
+                    game.handle_packet(C::SetEntityData(play::SetEntityData { id, values }))
+                        .unwrap();
+                };
+                let draw = |game: &mut Game<'_>, visible: bool, color: Option<u32>| {
+                    game.glowing_vertices.borrow_mut().clear();
+                    let mut model = Vec::new();
+                    game.block_item_display_geometry(camera, 0.0, &mut model);
+                    game.text_display_geometry(camera, 0.0, &mut model, &mut Vec::new());
+                    assert_eq!(model.is_empty(), !visible, "{contents}");
+                    if let Some((layer, y)) = end_cube.filter(|_| visible) {
+                        assert_eq!(model.len(), 24, "{contents} should draw six faces");
+                        assert!(model.iter().all(|v| v.layer == layer));
+                        for (axis, planes) in [[0.5, 2.5], y, [-3.5, -2.5]].into_iter().enumerate()
+                        {
+                            for coordinate in planes {
+                                assert!(
+                                    model
+                                        .as_chunks::<4>()
+                                        .0
+                                        .iter()
+                                        .any(|face| face.iter().all(|v| v.pos[axis] == coordinate)),
+                                    "{contents} is missing its face at axis {axis}, {coordinate}"
+                                );
+                            }
+                        }
+                    }
+                    let outline = game.glowing_vertices.borrow();
+                    if let Some(color) = color.filter(|_| kind != "minecraft:text_display") {
+                        assert_eq!(outline.len(), model.len(), "{kind}");
+                        for (outline, model) in outline.iter().zip(&model) {
+                            assert_eq!(outline.color, color, "{kind}");
+                            assert_eq!(
+                                (outline.pos, outline.uv, outline.layer),
+                                (model.pos, model.uv, model.layer)
+                            );
+                        }
+                    } else {
+                        assert!(outline.is_empty(), "{kind} should draw no silhouette");
+                    }
+                };
+
+                game.score.board.add_to_team(member, team);
+                send(game, tracked.meta);
+                game.tick_text_displays();
+                assert!(game.tracked_entity_glowing(id as u32), "{kind}");
+                draw(game, true, Some(0xff56_3412));
+                // Resetting metadata takes effect before another display tick.
+                send(game, vec![(22, serializer::INT, Value::Int(-1))]);
+                draw(game, true, Some(0xff55_55ff));
+                game.score.board.remove_from_team(member);
+                draw(game, true, Some(0xffff_ffff));
+                send(game, vec![(22, serializer::INT, Value::Int(0))]);
+                draw(game, true, Some(0xff00_0000));
+                send(game, vec![(17, serializer::FLOAT, Value::Float(0.0))]);
+                draw(game, false, None);
+                send(game, vec![(17, serializer::FLOAT, Value::Float(1.0))]);
+                draw(game, true, Some(0xff00_0000));
+                send(
+                    game,
+                    vec![
+                        (22, serializer::INT, Value::Int(override_color)),
+                        (0, serializer::BYTE, Value::Byte(0)),
+                    ],
+                );
+                assert!(!game.tracked_entity_glowing(id as u32), "{kind}");
+                draw(game, true, None);
+                game.handle_packet(C::RemoveEntities(play::RemoveEntities { ids: vec![id] }))
+                    .unwrap();
             }
         });
     }

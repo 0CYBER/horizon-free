@@ -56,7 +56,7 @@ pub(super) struct RemoteTextDisplay {
 }
 
 /// `Display.RENDER_STATE_IDS` and `TextDisplay.TEXT_RENDER_STATE_IDS`: the
-/// data a render state is built from (not the view range, size or glow).
+/// data that updates the interpolated render state. Culling and glow use live metadata.
 fn renders(id: u8) -> bool {
     matches!(id, 11..=16 | 18 | 19 | 23..=27)
 }
@@ -315,7 +315,7 @@ impl Game<'_> {
                 let d = display.shown.blend(&display.from, display.last_progress);
                 let position = display.previous.lerp(display.position, partial);
                 // An item display out of view has nothing of the ray scene's entity layer.
-                let sight = self.display_sight(camera, position, &d, scale);
+                let sight = self.display_sight(camera, position, &display.data, scale);
                 let Some(seen) = sight.filter(|s| s.camera || display.block.is_some()) else {
                     continue;
                 };
@@ -329,8 +329,8 @@ impl Game<'_> {
                     continue;
                 }
                 let light = Self::display_light(&self.world, &d, position);
+                let start = out.len();
                 if let Some(state) = display.block {
-                    let start = out.len();
                     // BlockModelResolver.update: model seed 42.
                     self.block_model_vertices(state, 42, matrix, light, true, out);
                     // CompositeBlockModel.update: the special model of a chest,
@@ -370,11 +370,20 @@ impl Game<'_> {
                     let pose = matrix * glam::Mat4::from_rotation_y(std::f32::consts::PI);
                     self.submit_item_world(&state, pose, light, out);
                 }
+                // The outline color comes from the latest metadata, outside the interpolated pose.
+                if seen.camera
+                    && start != out.len()
+                    && let Some(rgb) =
+                        self.display_outline(*id as u32, kind, display.data.glow_color)
+                {
+                    self.mark_outline(&out[start..], rgb);
+                }
             }
         }
         self.mark_entity(out.len(), "");
         self.text_displays = displays;
     }
+    /// `TextDisplayRenderer.submitInner` uses zero for the text outline color.
     pub(super) fn text_display_geometry(
         &mut self,
         camera: glam::DVec3,
@@ -392,7 +401,7 @@ impl Game<'_> {
             display.last_progress = display.progress(partial as f32);
             let d = display.shown.blend(&display.from, display.last_progress);
             let position = display.previous.lerp(display.position, partial);
-            if d.text.is_empty() || !self.display_in_view(camera, position, &d, scale) {
+            if d.text.is_empty() || !self.display_in_view(camera, position, &display.data, scale) {
                 // Out of view: its glyphs stay cached for when it comes back.
                 continue;
             }
@@ -421,7 +430,7 @@ impl Game<'_> {
             if !matrix.is_finite() {
                 continue;
             }
-            if text_display::no_culling(d.width, d.height) {
+            if text_display::no_culling(display.data.width, display.data.height) {
                 let (lo, hi) = cached.transformed_bounds(matrix);
                 if cached.batch.vertices.is_empty()
                     || self
