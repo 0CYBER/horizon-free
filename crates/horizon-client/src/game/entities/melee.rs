@@ -264,8 +264,6 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
         }
-        // LivingEntity.setLastHurtMob (tamed wolves join in).
-        self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
         let old_health = self.mobs[index].health;
         let source = match from {
             Some(f) => self.attack_source(f),
@@ -276,6 +274,9 @@ impl Game<'_> {
             self.native_kill_event(index);
         }
         if landed {
+            // Player.attack: setLastHurtMob only inside `if (wasHurt)` — a
+            // refused hit must not summon a tamed wolf onto the target.
+            self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
             let victim = self.mob_entity(&self.mobs[index]);
             self.player_hit(
                 &victim,
