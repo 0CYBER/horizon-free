@@ -195,7 +195,16 @@ impl RegionStorageUpgrader {
         base: &Path,
     ) -> Self {
         let region_folder = dimension_path(base, dimension).join(builder.folder);
-        let files = all_chunk_positions(&region_folder);
+        let files = if builder.recreate_region_files
+            && !detach_aliased_recreate_directory(&region_folder)
+        {
+            // The staging folder names the live one and the link would not
+            // go: writing into it is writing the world, so the folder stays
+            // out of the run.
+            Vec::new()
+        } else {
+            all_chunk_positions(&region_folder)
+        };
         progress.add_total_file_fix_operations(files.len() as i32);
         progress.add_total_chunks(files.iter().map(|f| f.chunks.len() as i32).sum());
         Self {
@@ -362,7 +371,22 @@ impl RegionStorageUpgrader {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as u32);
-            let out = ChunkRecord::from_nbt(&root, Compression::Zlib, timestamp, limits)?;
+            // A chunk the old file kept in its own `c.X.Z.mcc` is written back
+            // with the compression its payload already has: the payload is
+            // replaced before the stub is, so a stop in between leaves the old
+            // stub reading a stream of the same kind (`super::files`). Vanilla
+            // writes every chunk zlib, inline ones included. Asked only here:
+            // the stub read it costs is a syscall on every chunk of the world.
+            let external = match open.reader.as_mut() {
+                Some((_, reader)) => reader.is_external(pos)?,
+                None => false,
+            };
+            let compression = if external {
+                record.compression
+            } else {
+                Compression::Zlib
+            };
+            let out = ChunkRecord::from_nbt(&root, compression, timestamp, limits)?;
             let target = if self.builder.recreate_region_files {
                 resolve_recreate_directory(&self.region_folder)
                     .join(file.file_name().unwrap_or_default())
@@ -372,6 +396,28 @@ impl RegionStorageUpgrader {
             if open.writer.as_ref().is_none_or(|(path, _)| *path != target) {
                 if let Some(dir) = target.parent() {
                     fs::create_dir_all(dir)?;
+                }
+                if self.builder.recreate_region_files {
+                    // Every chunk of the file is written again this run, so
+                    // the recreate target is written whole: a header left by
+                    // an interrupted run would publish a stub for a chunk this
+                    // run never wrote. A refusal here stops the file: written
+                    // into, the leftover keeps that header and
+                    // `on_file_finished` publishes it, the hole back. The
+                    // remove is not tried again, so a delete that a handle
+                    // still blocks stops the file instead of passing as a log
+                    // line.
+                    if let Err(e) = fs::remove_file(&target)
+                        && e.kind() != io::ErrorKind::NotFound
+                    {
+                        return Err(io::Error::new(
+                            e.kind(),
+                            format!(
+                                "cannot remove a leftover region file {}: {e}",
+                                target.display()
+                            ),
+                        ));
+                    }
                 }
                 open.writer = Some((target.clone(), RegionFile::open_writable(&target, true)?));
             }
@@ -383,21 +429,34 @@ impl RegionStorageUpgrader {
         Ok(false)
     }
 
-    /// `onFileFinished`: the rewritten file replaces the old one.
+    /// `onFileFinished`: the rewritten file replaces the old one, with the
+    /// `c.X.Z.mcc` files its oversized chunks live in.
     fn on_file_finished(&self, open: &mut OpenFiles, file: &Path) {
         open.writer = None;
         open.reader = None;
-        let new_file = resolve_recreate_directory(file.parent().unwrap_or(Path::new(".")))
-            .join(file.file_name().unwrap_or_default());
-        if new_file.exists() {
-            if let Err(e) = fs::remove_file(file).and_then(|()| fs::rename(&new_file, file)) {
-                eprintln!("Failed to replace an old region file: {e}");
-            }
-        } else {
+        let folder = file.parent().unwrap_or(Path::new("."));
+        let new_file =
+            resolve_recreate_directory(folder).join(file.file_name().unwrap_or_default());
+        if !new_file.exists() {
             eprintln!(
                 "Failed to replace an old region file. New file {} does not exist.",
                 new_file.display()
             );
+            return;
+        }
+        // The payloads of the new file's oversized chunks go before the region
+        // that points to them, as `super::files` does: a stop in between leaves
+        // the old region reading its own payload or the rewritten one (same
+        // compression, `try_process_one_position`), never a stub whose file is
+        // missing. A payload that cannot be moved leaves the old pair alone.
+        if let Err(e) = move_external_payloads(&new_file, folder) {
+            eprintln!("Failed to replace an old region file: {e}");
+            return;
+        }
+        // The rename replaces the target, so a crash cannot leave the folder
+        // without its region file, the `.mcc` files already replaced.
+        if let Err(e) = fs::rename(&new_file, file) {
+            eprintln!("Failed to replace an old region file: {e}");
         }
     }
 
@@ -409,10 +468,72 @@ impl RegionStorageUpgrader {
     }
 }
 
+/// Moves the `c.X.Z.mcc` files of `new_file` into `folder`, over the ones of
+/// the file it replaces, and syncs the folder: the region's own sync does not
+/// cover them (`RegionFile::write`).
+fn move_external_payloads(new_file: &Path, folder: &Path) -> io::Result<()> {
+    let payloads = {
+        let mut region = RegionFile::open(new_file)?;
+        region.external_payloads()?
+    };
+    for payload in payloads {
+        fs::rename(
+            &payload,
+            folder.join(payload.file_name().unwrap_or_default()),
+        )?;
+    }
+    crate::fs_sync::sync_dir(folder)
+}
+
 /// `resolveRecreateDirectory`: `new_` + the folder's name, beside it.
 fn resolve_recreate_directory(folder: &Path) -> PathBuf {
     let name = folder.file_name().unwrap_or_default().to_string_lossy();
     folder.with_file_name(format!("{NEW_DIRECTORY_PREFIX}{name}"))
+}
+
+/// Removes a staging folder that is a link, once per folder, before
+/// anything is removed or opened in it: writing through any link puts the
+/// staging files into someone else's folder, and a `new_entities` linked to
+/// `entities` would have the leftover removal of `try_process_one_position`
+/// delete the live region file before its rewrite starts, so a cancel or a
+/// write failure leaves the world without the region or with a partial
+/// copy. Only the link itself goes — on Windows `remove_dir` takes a
+/// junction or a directory symlink, never its target — and the writer's
+/// `create_dir_all` makes the real folder. Returns whether the staging
+/// folder is safe to write into.
+fn detach_aliased_recreate_directory(region_folder: &Path) -> bool {
+    let staging = resolve_recreate_directory(region_folder);
+    let aliased = match fs::symlink_metadata(&staging) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return true,
+        Err(e) => {
+            eprintln!(
+                "Not writing through staging folder {}: its metadata is unreadable: {e}",
+                staging.display()
+            );
+            return false;
+        }
+        Ok(meta) if meta.file_type().is_symlink() => true,
+        Ok(meta) if meta.is_dir() => matches!(
+            (fs::canonicalize(&staging), fs::canonicalize(region_folder)),
+            (Ok(staging), Ok(live)) if staging == live
+        ),
+        Ok(_) => false,
+    };
+    if !aliased {
+        return true;
+    }
+    // A symlink to a directory fails `remove_dir` on Unix, a directory one
+    // fails `remove_file` on Windows; one of the two takes the link.
+    match fs::remove_dir(&staging).or_else(|_| fs::remove_file(&staging)) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "Not writing through staging folder {}: it names the live folder and will not go: {e}",
+                staging.display()
+            );
+            false
+        }
+    }
 }
 
 /// `r.<x>.<z>.mca`'s coordinates (`REGEX`).

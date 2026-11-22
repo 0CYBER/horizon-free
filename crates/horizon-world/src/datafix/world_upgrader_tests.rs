@@ -27,12 +27,17 @@ fn root(tag: Tag) -> NamedTag {
 }
 
 fn write_chunks(file: &Path, chunks: &[(ChunkPos, Tag)]) {
+    write_compressed(file, chunks, Compression::Zlib);
+}
+
+/// [`write_chunks`] with the chunks' compression, so that a chunk whose
+/// payload reaches 256 sectors is stored in its own `c.X.Z.mcc`.
+fn write_compressed(file: &Path, chunks: &[(ChunkPos, Tag)], compression: Compression) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     let mut region = RegionFile::open_writable(file, true).unwrap();
     for (pos, tag) in chunks {
         let record =
-            ChunkRecord::from_nbt(&root(tag.clone()), Compression::Zlib, 1, Limits::default())
-                .unwrap();
+            ChunkRecord::from_nbt(&root(tag.clone()), compression, 1, Limits::default()).unwrap();
         region.write(*pos, &record).unwrap();
     }
 }
@@ -476,4 +481,241 @@ fn cancel_stops_every_worker_within_a_chunk() {
             assert!(before == after, "a canceled recreate changed the world");
         }
     }
+}
+
+/// Pseudo-random bytes: zlib cannot shrink them, so a chunk carrying them is
+/// 256 sectors or more whatever the compression and lives in its own `.mcc`.
+fn incompressible(len: usize) -> Vec<u8> {
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    (0..len)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as u8
+        })
+        .collect()
+}
+
+/// An entity chunk whose payload is 256 sectors or more: the region keeps it
+/// in `c.X.Z.mcc`, not inline.
+fn oversized_entity_chunk(version: i32, noise: &[u8]) -> Tag {
+    Tag::compound([
+        ("DataVersion", Tag::Int(version)),
+        ("Position", Tag::IntArray(vec![0, 0])),
+        ("Entities", Tag::List(vec![])),
+        ("Noise", Tag::ByteArray(noise.to_vec())),
+    ])
+}
+
+/// A chunk stored in its own `.mcc` keeps its payload through the upgrade,
+/// its compression with it: a stop between the payload and the new stub
+/// leaves the old stub reading a stream it can decode.
+#[test]
+fn an_oversized_chunk_survives_the_upgrade_with_its_compression() {
+    let noise = incompressible(1_100_000);
+    for recreate in [false, true] {
+        let world = TempWorld::new(&format!("mcc-{recreate}"));
+        let folder = world.folder(OVERWORLD, "entities");
+        let file = folder.join("r.0.0.mca");
+        let pos = ChunkPos::new(0, 0);
+        write_compressed(
+            &file,
+            &[(pos, oversized_entity_chunk(4000, &noise))],
+            Compression::None,
+        );
+        assert!(
+            folder.join("c.0.0.mcc").is_file(),
+            "recreate={recreate}: the chunk was not stored outside the region"
+        );
+
+        let progress = run(&world, false, recreate);
+        assert!(progress.is_finished(), "recreate={recreate}");
+
+        let after = read_chunk(&file, pos);
+        let after = after.unwrap_or_else(|| panic!("recreate={recreate}: the chunk was lost"));
+        assert_eq!(
+            as_int(after.get("DataVersion"), -1),
+            CURRENT,
+            "recreate={recreate}"
+        );
+        assert_eq!(
+            after.get("Noise"),
+            Some(&Tag::ByteArray(noise.clone())),
+            "recreate={recreate}: the payload changed"
+        );
+        assert!(!world.folder(OVERWORLD, "new_entities").exists());
+        assert!(
+            folder.join("c.0.0.mcc").is_file(),
+            "recreate={recreate}: the payload is not beside the region file"
+        );
+        let record = RegionFile::open(&file).unwrap().read(pos).unwrap();
+        let record = record.unwrap_or_else(|| panic!("recreate={recreate}: no record"));
+        assert_eq!(
+            record.compression,
+            Compression::None,
+            "recreate={recreate}: the stub names a compression the payload is not in"
+        );
+    }
+}
+
+/// A `new_` file left by a run that stopped before publishing is not the
+/// file this run writes: its header named a chunk the world no longer has.
+#[test]
+fn a_leftover_new_file_publishes_nothing_it_does_not_hold() {
+    let world = TempWorld::new("leftover");
+    let (kept, removed) = (ChunkPos::new(0, 0), ChunkPos::new(1, 0));
+    let file = world.folder(OVERWORLD, "entities").join("r.0.0.mca");
+    write_chunks(&file, &[(kept, entity_chunk(4000, 0, 0))]);
+    let leftover = world.folder(OVERWORLD, "new_entities").join("r.0.0.mca");
+    write_chunks(&leftover, &[(removed, entity_chunk(CURRENT, 1, 0))]);
+
+    let progress = run(&world, false, true);
+
+    assert!(progress.is_finished());
+    assert!(
+        read_chunk(&file, removed).is_none(),
+        "the leftover published a chunk the world does not have"
+    );
+    assert_eq!(version_of(&file, kept), CURRENT);
+}
+
+/// A leftover that will not go stops its file. Windows only: a handle held
+/// without `FILE_SHARE_DELETE` makes the remove fail with a sharing violation
+/// while the write-open still gets in, which is the one way here to fail the
+/// remove and keep the open working. Writing into a leftover it could not
+/// remove keeps the leftover's header, whose chunk the world no longer has.
+#[cfg(windows)]
+#[test]
+fn a_leftover_that_will_not_go_stops_the_file() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let world = TempWorld::new("leftover-held");
+    let (kept, stale) = (ChunkPos::new(0, 0), ChunkPos::new(1, 0));
+    let file = world.folder(OVERWORLD, "entities").join("r.0.0.mca");
+    write_chunks(&file, &[(kept, entity_chunk(4000, 0, 0))]);
+    let leftover = world.folder(OVERWORLD, "new_entities").join("r.0.0.mca");
+    write_chunks(&leftover, &[(stale, entity_chunk(CURRENT, 1, 0))]);
+    // `FILE_SHARE_READ | FILE_SHARE_WRITE`, no `FILE_SHARE_DELETE`.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(&leftover)
+        .unwrap();
+
+    let progress = run(&world, false, true);
+
+    assert!(progress.is_finished());
+    assert!(
+        read_chunk(&leftover, kept).is_none(),
+        "the run went on into a leftover it could not remove"
+    );
+    assert!(
+        read_chunk(&file, stale).is_none(),
+        "the leftover published a chunk the world does not have"
+    );
+    assert_eq!(version_of(&file, kept), 4000);
+    drop(held);
+}
+
+/// Links `link` to the directory `target`: a symlink where the user may make
+/// one, else a junction (Windows), which needs no privilege. Fails when the
+/// machine allows neither; the caller then has no aliased path to test with.
+fn link_dir(link: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link)
+            .or_else(|_| horizon_threads::junction(target, link))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (link, target);
+        Err(io::Error::other("no way to link a directory"))
+    }
+}
+
+/// A staging folder that links to the live one is detached before the run,
+/// so the cancel after the first chunk finds the live region untouched:
+/// written through the link, the leftover removal would have deleted the
+/// live file and the rewrite would have left only the first chunk in it.
+#[test]
+fn an_aliased_staging_folder_keeps_the_live_region() {
+    let world = TempWorld::new("aliased-staging");
+    let live = world.folder(OVERWORLD, "entities");
+    let file = live.join("r.0.0.mca");
+    let positions: Vec<ChunkPos> = (0..3).map(|x| ChunkPos::new(x, 0)).collect();
+    let chunks: Vec<(ChunkPos, Tag)> = positions
+        .iter()
+        .map(|pos| (*pos, entity_chunk(4000, pos.x, pos.z)))
+        .collect();
+    write_chunks(&file, &chunks);
+    let staging = resolve_recreate_directory(&live);
+    if let Err(e) = link_dir(&staging, &live) {
+        eprintln!("an_aliased_staging_folder_keeps_the_live_region: cannot create the link: {e}");
+        return;
+    }
+
+    let progress = Arc::new(UpgradeProgress::new());
+    let mut builder = Builder::new(UpgradeDataFixType::EntityChunk, "entities", true);
+    builder.threads = 1;
+    let canceling = progress.clone();
+    // The first chunk upgraded cancels the run.
+    builder.add_tag_modifier(
+        CURRENT,
+        Box::new(move |_, _| {
+            canceling.set_canceled();
+            false
+        }),
+    );
+    let mut upgrader =
+        RegionStorageUpgrader::init(builder, progress.clone(), 0, OVERWORLD, &world.0);
+    upgrader.upgrade();
+
+    for pos in &positions {
+        assert_eq!(
+            version_of(&file, *pos),
+            4000,
+            "the live region lost chunk {pos:?} through the aliased staging folder"
+        );
+    }
+    assert!(!staging.exists(), "the aliased staging path stayed");
+}
+
+/// A live folder that is itself a link makes its staging folder — a real
+/// one holding the region files — canonicalize to it: it is not a link and
+/// not empty, so neither `remove_dir` nor `remove_file` takes it and the
+/// folder stays out of the run. Closing the run must not remove it either.
+#[test]
+fn a_staging_folder_that_is_the_live_one_is_left_alone() {
+    let world = TempWorld::new("staging-is-live");
+    let live = world.folder(OVERWORLD, "entities");
+    let staging = resolve_recreate_directory(&live);
+    let positions: Vec<ChunkPos> = (0..3).map(|x| ChunkPos::new(x, 0)).collect();
+    let chunks: Vec<(ChunkPos, Tag)> = positions
+        .iter()
+        .map(|pos| (*pos, entity_chunk(4000, pos.x, pos.z)))
+        .collect();
+    write_chunks(&staging.join("r.0.0.mca"), &chunks);
+    if let Err(e) = link_dir(&live, &staging) {
+        eprintln!(
+            "a_staging_folder_that_is_the_live_one_is_left_alone: cannot create the link: {e}"
+        );
+        return;
+    }
+
+    let progress = run(&world, false, true);
+
+    assert!(progress.is_finished());
+    for pos in &positions {
+        assert_eq!(
+            version_of(&live.join("r.0.0.mca"), *pos),
+            4000,
+            "the run rewrote chunk {pos:?} of a folder it had to leave alone"
+        );
+    }
+    assert!(staging.exists(), "closing removed the real staging folder");
 }

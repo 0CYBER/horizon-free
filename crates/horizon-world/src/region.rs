@@ -455,6 +455,22 @@ impl RegionFile {
         Ok(self.file.read(&mut header)? == header.len() && header[4] & 128 != 0)
     }
 
+    /// The `c.X.Z.mcc` files this region's oversized chunks are stored in
+    /// (`createExternalChunkPath`): one per chunk whose stub marks it as
+    /// external ([`is_external`](Self::is_external)), in the folder this
+    /// region was opened from. Empty when none of its chunks is oversized.
+    pub fn external_payloads(&mut self) -> io::Result<Vec<PathBuf>> {
+        let directory = self.path.parent().unwrap_or(Path::new(".")).to_owned();
+        let positions: Vec<ChunkPos> = self.chunks().map(|(pos, _)| pos).collect();
+        let mut out = Vec::new();
+        for pos in positions {
+            if self.is_external(pos)? {
+                out.push(external_path(&directory, pos));
+            }
+        }
+        Ok(out)
+    }
+
     /// Export all chunks, preserving untouched compressed bytes and timestamps.
     /// Overrides are keyed by chunk position; None deletes a chunk in the export.
     pub fn export(
