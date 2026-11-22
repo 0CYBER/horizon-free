@@ -9,8 +9,8 @@
 use super::{
     DamageLevel, Mob, MobEvent, MobWorld, Species, Who,
     goals::{
-        AnimalPanic, Breed, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, RandomLookAround, Stroll,
-        Tempt, goal_clone,
+        AnimalPanic, Breed, Cx, Goal, LOOK, LookAtPlayer, MOVE, RandomLookAround, Stroll, Tempt,
+        goal_clone,
     },
     sync,
 };
@@ -121,7 +121,9 @@ pub fn register(m: &mut Mob) {
         prefers_shallow: true,
     };
     let g = &mut m.ai.goals;
-    g.add(0, Float);
+    // `Frog` registers no goals (its `FrogAi` brain only walks and swims) and
+    // has no `FloatGoal`; `Frog.travelInWater` adds neither lift nor gravity,
+    // so a frog in water keeps its depth instead of rising to the surface.
     // `FrogAi.initCoreActivity`: `AnimalPanic(2.0)` — the panic speed
     // multiplier is 2.0, not the 1.25 its temptation uses.
     g.add(1, AnimalPanic::new(2.0));

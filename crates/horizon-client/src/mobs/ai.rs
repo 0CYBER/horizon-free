@@ -5,6 +5,8 @@ pub(crate) use freezing::in_powder_snow;
 pub use freezing::{can_freeze, wears_gaze_disguise};
 mod feeding;
 mod freezing;
+#[cfg(test)]
+mod sink_tests;
 
 pub use feeding::takes_food;
 

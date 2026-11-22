@@ -6,8 +6,8 @@ use super::{
     anim::{Poses, State},
     brain::{Ttl, living_near, melee_attack, melee_attack_by_age},
     goals::{
-        Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, Prey,
-        RandomLookAround, Stroll, TARGET, TargetState, goal_clone, target_continue,
+        Cx, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, Prey, RandomLookAround,
+        Stroll, TARGET, TargetState, goal_clone, target_continue,
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
@@ -1330,7 +1330,7 @@ pub fn register_piglin(m: &mut Mob) {
     // `AbstractPiglin.<init>`: a piglin's navigation opens doors.
     m.ai.nav.can_open_doors = true;
     let g = &mut m.ai.goals;
-    g.add(0, Float);
+    // `PiglinAi` has no `FloatGoal`: a piglin sinks in water.
     // `PiglinAi.initCoreActivity`: `InteractWithDoor.create()`.
     g.add(0, super::doors::InteractWithDoor::default());
     g.add(1, Admire);
@@ -1463,7 +1463,7 @@ impl Goal for HuntHoglin {
 }
 pub fn register_brute(m: &mut Mob) {
     let g = &mut m.ai.goals;
-    g.add(0, Float);
+    // `PiglinBruteAi` has no `FloatGoal`: a brute sinks in water.
     // `PiglinBruteAi.initFightActivity`: `MeleeAttack.create(20)`.
     g.add(2, melee_attack(20));
     // `PiglinBruteAi.createIdleMovementBehaviors`: `StrollToPoi(HOME, 0.6, 2,
@@ -1541,7 +1541,7 @@ impl Goal for BruteStrollHome {
 }
 pub fn register_hoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
-    g.add(0, Float);
+    // `HoglinAi.initCoreActivity` has only the look and move sinks: no `FloatGoal`.
     // `HoglinAi.initRetreatActivity`: `SetWalkTargetAwayFrom.entity(AVOID_TARGET, 1.3, 15, false)`.
     g.add(1, WalkAway::retreat(1.3, 15.0, false));
     // HoglinAi: MeleeAttack.create(40) for adults, 15 for babies, in the
@@ -1569,7 +1569,7 @@ pub fn register_hoglin(m: &mut Mob) {
 }
 pub fn register_zoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
-    g.add(0, Float);
+    // `Zoglin` registers no `FloatGoal` either: it sinks in water.
     // `Zoglin.initFightActivity`: `create(40)` for adults, 15 for babies.
     g.add(2, melee_attack_by_age(40, 15));
     g.add(5, Stroll::avoiding_water(0.4));
