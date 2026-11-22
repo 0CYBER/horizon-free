@@ -1002,7 +1002,8 @@ mod tests {
     }
 
     /// The golems' target predicates test `instanceof Enemy`: the zombie
-    /// horse and camel husk share the monster category but are not `Enemy`.
+    /// horse, camel husk and sulfur cube share the monster category but are
+    /// not `Enemy`.
     #[test]
     fn mounts_in_the_monster_category_are_not_golem_prey() {
         let prey = |sp| {
@@ -1016,6 +1017,7 @@ mod tests {
         assert!(!prey(Species::Creeper));
         assert!(!prey(Species::ZombieHorse));
         assert!(!prey(Species::CamelHusk));
+        assert!(!prey(Species::SulfurCube));
     }
 
     /// `IronGolem.canAttack` refuses creepers, and `HurtByTargetGoal.canUse`

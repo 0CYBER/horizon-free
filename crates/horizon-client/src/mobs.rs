@@ -3807,13 +3807,17 @@ impl Mob {
         self.kind.category == "monster"
     }
     /// `instanceof Enemy`. The zombie horse, camel husk and zombie nautilus are in
-    /// the monster category but extend `Animal`/`AbstractNautilus`, which do
-    /// not implement `Enemy`.
+    /// the monster category but extend `Animal`/`AbstractNautilus`, and the sulfur
+    /// cube extends `AbstractCubeMob` without `Enemy`, as the slime and magma cube
+    /// add it: none of them implements `Enemy`.
     pub fn is_enemy(&self) -> bool {
         self.hostile()
             && !matches!(
                 self.species(),
-                Species::ZombieHorse | Species::CamelHusk | Species::ZombieNautilus
+                Species::ZombieHorse
+                    | Species::CamelHusk
+                    | Species::ZombieNautilus
+                    | Species::SulfurCube
             )
     }
     #[inline]

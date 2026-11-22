@@ -336,8 +336,8 @@ pub fn can_be_leashed(m: &Mob) -> bool {
         // (`isMobControlled`; `extra.rider` is the mob passenger).
         S::ZombieNautilus => !super::nautilus::aggravated(m) && m.extra.rider.is_none(),
         // SulfurCube.canBeLeashed: `hasBodyItem()`, so only a cube with a
-        // block in its body takes a lead. Its category is a monster's, which
-        // `Mob.canBeLeashed`'s `!(this instanceof Enemy)` rule would refuse.
+        // block in its body takes a lead, in place of `Mob.canBeLeashed`'s
+        // `!(this instanceof Enemy)`.
         S::SulfurCube => super::sulfur_cube::has_body(m),
         // CamelHusk.canBeLeashed and ZombieHorse.canBeLeashed: neither is an
         // `Enemy`, though both are in the monster category, so
