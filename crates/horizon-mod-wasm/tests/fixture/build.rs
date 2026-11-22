@@ -1,5 +1,5 @@
 //! Like wire-loopback's folder_modules: sorted, absolute-path declarations from one flat folder.
-//! The fixture also keeps its root, scanner-only points and nested math data in that folder;
+//! The fixture also keeps its root and nested math data in that folder;
 //! those are not independent guest modules. No source parsing or extra build dependencies.
 use std::{fs, path::Path};
 
@@ -21,9 +21,10 @@ pub fn modules(directory: &Path) -> Result<String, String> {
                 path.display()
             ));
         }
-        if !path.file_name().is_some_and(|name| {
-            name == "lib.rs" || name == "points.rs" || name == "strict_math_vectors.rs"
-        }) {
+        if !path
+            .file_name()
+            .is_some_and(|name| name == "lib.rs" || name == "strict_math_vectors.rs")
+        {
             paths.push(path);
         }
     }

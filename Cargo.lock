@@ -2115,7 +2115,6 @@ dependencies = [
 name = "horizon-engine-slots"
 version = "0.1.0"
 dependencies = [
- "horizon-mod-api-gen",
  "horizon-mod-vocab",
 ]
 
@@ -2412,16 +2411,6 @@ dependencies = [
 [[package]]
 name = "horizon-mod-points"
 version = "0.1.0"
-dependencies = [
- "horizon-engine-slots",
- "horizon-mod-api",
- "horizon-mod-api-gen",
- "horizon-mod-api-macros",
- "horizon-mod-point-shape",
- "quote",
- "serde_json",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "horizon-mod-render"
@@ -2491,14 +2480,12 @@ version = "0.1.0"
 dependencies = [
  "horizon-client-core",
  "horizon-core",
- "horizon-engine-slots",
  "horizon-guest-stack",
  "horizon-java-properties",
  "horizon-mod-api",
  "horizon-mod-api-gen",
  "horizon-mod-api-macros",
  "horizon-mod-package",
- "horizon-mod-points",
  "horizon-mod-runtime",
  "horizon-threads",
  "horizon-world",

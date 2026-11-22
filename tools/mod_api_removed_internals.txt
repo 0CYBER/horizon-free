@@ -7,3 +7,8 @@
 # (`cfg=` alone: the unconditional ones). Lines starting with # are comments.
 horizon_mod_package::manifest::inject::Inject  #19576
 horizon_mod_package::manifest::inject::Kind  #19576
+horizon_client::game::points  #19576
+horizon_client::game::points::host_side  #19576
+horizon_client::game::points::mirror_in  #19576
+horizon_client::game::points::mirror_out  #19576
+horizon_client::game::points::unconverted  #19576

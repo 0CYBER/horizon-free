@@ -4,43 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "The game's injection points for mods that listen at them: typed function records and listener slots"
+description = "Empty since the injection points were removed (#19576); kept for launchers that still link it"
 
 [lib]
 name = "mod_points"
-
-[features]
-# Shared listener integration fixture only; never enabled by gameplay crates.
-listener-fixture = ["horizon-mod-api-gen/listener-fixture", "horizon-engine-slots/listener-fixture"]
-wasm-guest = ["horizon-mod-api/wasm-guest", "horizon-engine-slots/wasm-guest"]
-
-[dependencies]
-horizon-mod-api = { path = "../horizon-mod-api" }
-horizon-engine-slots = { path = "../horizon-engine-slots" }
-
-[build-dependencies]
-horizon-mod-api-gen = { path = "../horizon-mod-api-gen" }
-horizon-mod-point-shape = { path = "../horizon-mod-point-shape" }
-syn = "2"
-quote = "1"
-
-[dev-dependencies]
-horizon-mod-api = { path = "../horizon-mod-api", features = ["testing"] }
-horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
-serde_json = "1"
-
-# These call the places' dispatch themselves, so they need a build whose table has sites.
-[[test]]
-name = "registry"
-required-features = ["listener-fixture"]
-
-[[test]]
-name = "replace"
-required-features = ["listener-fixture"]
-
-[[test]]
-name = "order"
-required-features = ["listener-fixture"]
 
 [lints]
 workspace = true

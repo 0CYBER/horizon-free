@@ -6,10 +6,6 @@ static ENTITY_POST_CALLS: AtomicU32 = AtomicU32::new(0);
 
 // Generated in filename order by build.rs; a new guest registration needs only its own file.
 include!(concat!(env!("OUT_DIR"), "/wasm_fixture_modules.rs"));
-pub use matrix::{mirrors, sum_return};
-pub use replace::own_average;
-pub use shutdown::on_shutdown;
-pub use turn::turn_angle;
 
 #[derive(Default)]
 pub struct Mod;
@@ -334,12 +330,6 @@ impl Hooks for Mod {
             .build();
         registrar.block_entity_part(&reads, CounterReads).unwrap();
     }
-}
-
-// Only the guest ABI exports reach this fixture function; the bench target does not call it.
-#[allow(dead_code)]
-pub fn on_tick(_: mod_api::HostSide<'_>, args: &mut mod_points::TickArgs) {
-    args.cancel = true;
 }
 
 pub struct Counter;

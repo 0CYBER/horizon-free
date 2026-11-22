@@ -323,14 +323,9 @@ fn main() {
     };
     match staging::stage(root, list, internals, mode, &build) {
         Ok(staging::Staged {
-            points: staged,
             replace,
             internals: widened,
         }) => {
-            println!(
-                "staged {} points ({} with a head only; {} functions have no API record) in {} files",
-                staged.points, staged.head_only, staged.refused, staged.files
-            );
             println!(
                 "gave {} functions a replacement slot in {} files of {} crates",
                 replace.functions, replace.files, replace.crates

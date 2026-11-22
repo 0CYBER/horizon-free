@@ -10,6 +10,8 @@ description = "The mod host above the engine: loading, Host implementations, reg
 [dependencies]
 mod-render = { package = "horizon-mod-render", path = "../horizon-mod-render" }
 horizon-engine-slots = { path = "../horizon-engine-slots" }
+# Empty since #19576. Both SDK routes build this crate, so the dependency is what still builds and
+# ships `mod_points`, which launchers released before then link into every native mod.
 mod-points = { package = "horizon-mod-points", path = "../horizon-mod-points" }
 horizon-guest-stack = { path = "../horizon-guest-stack" }
 horizon-client = { path = "../horizon-client", default-features = false }

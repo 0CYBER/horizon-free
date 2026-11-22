@@ -15,7 +15,7 @@ pub fn entries() -> Vec<mod_api::ModEntry> {
 }
 
 #[inline(never)]
-pub fn slots() -> Vec<mod_api::__private::points::SlotListener> {
+pub fn slots() -> Vec<mod_api::__private::native::SlotListener> {
     vec![
 /* MOD_SLOTS */
     ]

@@ -10,12 +10,17 @@ mod registry_installation;
 /// them against the packages beside its executable (`horizon_mod_package::runtime`).
 /// These types live in the shared API closure so every library uses the same Rust ABI.
 pub mod native {
+    /// A point listener a library registered. None exists since the injection points were removed
+    /// (#19576): `NativeMod::slots` returns an empty list of it.
+    pub enum SlotListener {}
+
     /// One dynamically loaded native library, registered before the engine seal.
     pub struct NativeMod {
         /// Hook factories owned by this library.
         pub entries: fn() -> Vec<crate::ModEntry>,
-        /// Compiled API point listeners owned by this library.
-        pub slots: fn() -> Vec<super::points::SlotListener>,
+        /// Always empty since the injection points were removed (#19576). The field stays until
+        /// the next planned break of this registration ABI.
+        pub slots: fn() -> Vec<SlotListener>,
         /// Manifest identities (empty for the patch library).
         pub built: &'static [BuiltMod],
         /// Install patch copies and return their verification rows.
@@ -26,7 +31,7 @@ pub mod native {
         /// The library's registration, as its generated entry module builds it.
         pub fn new(
             entries: fn() -> Vec<crate::ModEntry>,
-            slots: fn() -> Vec<super::points::SlotListener>,
+            slots: fn() -> Vec<SlotListener>,
             built: &'static [BuiltMod],
             installs: fn() -> Vec<(&'static str, &'static [&'static str], bool)>,
         ) -> Self {

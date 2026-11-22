@@ -39,10 +39,6 @@ impl mod_api::BlockEntityPart for Dependent {
     }
 }
 
-pub fn on_tick(_: mod_api::HostSide<'_>, args: &mut mod_points::TickArgs) {
-    args.cancel = true;
-}
-
 #[cfg(test)]
 mod tests {
     #[test]

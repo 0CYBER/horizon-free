@@ -29,13 +29,11 @@ rustix = { version = "1", default-features = false, features = ["std", "process"
 windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }
 
 [dev-dependencies]
-horizon-engine-slots = { path = "../horizon-engine-slots" }
 horizon-world = { path = "../horizon-world" }
 horizon-threads = { path = "../horizon-threads" }
 tempfile = "3.27.0"
 libc = "0.2"
 horizon-mod-api-gen = { path = "../horizon-mod-api-gen" }
-mod_points = { package = "horizon-mod-points", path = "../horizon-mod-points" }
 horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
 horizon-client-core = { path = "../horizon-client-core" }
 mod_api = { package = "horizon-mod-api", path = "../horizon-mod-api", features = ["wasm-guest", "testing"] }
@@ -44,13 +42,12 @@ wat = "1.261"
 [lints]
 workspace = true
 
-# Synthetic points are opt-in for the listener matrix only. Dev-dependencies
-# would unify them into every integration test's game layout.
 [features]
 # Test instrumentation only; does not alter Wire layout.
 test-copy-probe = []
 runtime-fixture = []
-listener-fixture = ["mod_points/listener-fixture", "horizon-mod-api-gen/listener-fixture"]
+# The hand-written guest fixtures' boundary ids, for the game's tests of them.
+listener-fixture = []
 mixed-output-fixture = ["mod_api/mixed-output-fixture", "horizon-mod-api-gen/mixed-output-fixture"]
 
 [[test]]
@@ -59,10 +56,6 @@ required-features = ["mixed-output-fixture"]
 
 [[test]]
 name = "real_member"
-required-features = ["listener-fixture"]
-
-[[test]]
-name = "native_listener"
 required-features = ["listener-fixture"]
 
 [[test]]

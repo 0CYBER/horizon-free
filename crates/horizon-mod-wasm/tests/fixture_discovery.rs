@@ -11,7 +11,6 @@ fn fixture_modules_are_sorted_and_preserve_support_file_layout() {
         "strict_math_checks.rs",
         "apple.rs",
         "lib.rs",
-        "points.rs",
         "strict_math_vectors.rs",
     ] {
         std::fs::write(root.join(name), "").unwrap();

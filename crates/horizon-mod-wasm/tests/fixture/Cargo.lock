@@ -143,14 +143,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-engine-slots"
-version = "0.1.0"
-dependencies = [
- "horizon-mod-api-gen",
- "horizon-mod-vocab",
-]
-
-[[package]]
 name = "horizon-game-discovery"
 version = "0.1.0"
 dependencies = [
@@ -215,18 +207,6 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "horizon-mod-points"
-version = "0.1.0"
-dependencies = [
- "horizon-engine-slots",
- "horizon-mod-api",
- "horizon-mod-api-gen",
- "horizon-mod-point-shape",
- "quote",
  "syn 2.0.119",
 ]
 
@@ -613,7 +593,6 @@ name = "wasm-fixture"
 version = "0.1.0"
 dependencies = [
  "horizon-mod-api",
- "horizon-mod-points",
 ]
 
 [[package]]

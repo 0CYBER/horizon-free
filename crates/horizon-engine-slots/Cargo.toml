@@ -10,10 +10,3 @@ workspace = true
 
 [dependencies]
 mod_vocab = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab" }
-
-[build-dependencies]
-horizon-mod-api-gen = { path = "../horizon-mod-api-gen" }
-
-[features]
-listener-fixture = ["horizon-mod-api-gen/listener-fixture"]
-wasm-guest = ["mod_vocab/wasm-guest"]
