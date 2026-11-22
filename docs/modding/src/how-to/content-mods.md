@@ -170,7 +170,7 @@ with no `side` line is `client`, so a mod meant for both halves must say `side =
 only the server needs: it installs and runs like any mod (in single player and on a LAN host it runs in the integrated
 server), but it is never compared at join, so players joining need not have it. A server mod is refused by name at
 load when it carries what every joining client must know: registry declarations (`data/<id>/horizon/`, or blocks,
-items, block entity types and fluids its code declares), a listener on a client-side hook, a part that listens to one,
+items, block entity types, fluids and vanilla block shapes its code declares), a listener on a client-side hook, a part that listens to one,
 or a required payload the server sends to clients. Assets, lang and data vanilla syncs itself (recipes, loot, tags)
 are allowed. Where a hook runs is still the hook's own side: the manifest says what a client must have, not where a
 hook runs. A vanilla or other
@@ -392,6 +392,41 @@ and overlap checks carry `item`, player movement and placement carry `player`,
 and player selection uses its own outline channel. Callers without a captured
 entity class retain ordinary shapes. These declarations select state/class-only
 geometry, not arbitrary world-dependent block behavior or native callbacks.
+
+### Entity-context shapes for vanilla blocks
+
+A mod gives vanilla blocks an outline or a collision of their own for one entity class, as a mod
+block's `outline_context_shapes` and `collision_context_shapes` do, in
+`data/<id>/horizon/vanilla_block_shapes/<name>.json`. Players stand on fences, walls and closed
+gates cut at one block, while mobs stay penned:
+
+```json
+{
+  "blocks": ["minecraft:oak_fence", "minecraft:cobblestone_wall", "minecraft:oak_fence_gate"],
+  "collision_context_shapes": {
+    "player": { "clip": [0, 0, 0, 1, 1, 1] }
+  }
+}
+```
+
+`blocks` names `minecraft:` blocks, each once. `outline_context_shapes` and
+`collision_context_shapes` take the same `item`, `player`, `living` and `other` keys; an omitted
+class keeps vanilla's shape, and empty and position-only queries always do. Each value is one of:
+
+- `{"clip": [minX,minY,minZ,maxX,maxY,maxZ]}`: every state's own vanilla shape of that channel
+  (its collision, or its outline), intersected with the box. A fence's arms and posts are clipped
+  for each of its connections, without the mod spelling them out. A block whose vanilla collision
+  depends on more than its state (powder snow, scaffolding) cannot be clipped:
+  the content is refused, naming the block.
+- a shape table, as `shapes` takes it, selected by the block's own vanilla state properties.
+
+Code mods, native and wasm, declare the same records through the `vanilla_block_shapes` hook,
+pushing `mod_api::VanillaBlockShapes` with `VanillaShape::Clip` or `VanillaShape::Table` values.
+The tables compile once per resource load into the collision table, beside the cached vanilla
+shapes, and take the same entity-class paths as a mod block's. When two mods declare the same
+block, class and channel, the mod whose id sorts first keeps it; the other's declaration of that
+block, class and channel is left out with a warning naming both. A mod with these declarations is
+needed on both sides: `side = "server"` refuses it, like a mod that declares blocks.
 
 An item copies its template's data components, with `max_stack_size` and
 `rarity` changed, and any other 26.3 component set or removed in

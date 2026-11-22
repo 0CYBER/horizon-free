@@ -292,6 +292,11 @@ struct NativeDeclared {
     items: Vec<horizon_mod_package::content::Item>,
     types: Vec<horizon_mod_package::content::BlockEntityType>,
     fluids: Vec<horizon_mod_package::content::FluidLook>,
+    /// Vanilla block shapes from code, each with the mod that declared it.
+    vanilla_shapes: Vec<(
+        &'static str,
+        horizon_mod_package::content::VanillaBlockShapes,
+    )>,
 }
 
 /// The same native declarations serve startup and every pack reload.
@@ -301,6 +306,8 @@ fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
         let context = RegistrationContext::new();
         Game::native_blocks(&context, &mut blocks);
         Game::native_items(&context, &mut items);
+        let mut shapes = Vec::new();
+        Game::native_vanilla_block_shapes(&context, &mut shapes);
         let mut errors = mod_api::__private::take_declaration_refusals(&context);
         let types = super::api_values::block_entity_declarations();
         use super::api_values::TryIntoEngine;
@@ -330,6 +337,19 @@ fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
                     .ok()
             })
             .collect();
+        let vanilla_shapes = shapes
+            .iter()
+            .filter_map(|answered| {
+                answered
+                    .answer
+                    .try_into_engine(&())
+                    .map(|shapes| (answered.mod_id, shapes))
+                    .map_err(|e| {
+                        errors.push(format!("vanilla block shapes of {}: {e}", answered.mod_id))
+                    })
+                    .ok()
+            })
+            .collect();
         let fluids: Vec<_> = mod_api::__private::declared_world_fluids()
             .iter()
             .map(|draft| draft.try_into_engine(&()).unwrap())
@@ -342,6 +362,7 @@ fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
             items,
             types,
             fluids,
+            vanilla_shapes,
         }
     };
     // Production freezes one loaded mod set for startup and reload. Tests replace
@@ -828,6 +849,7 @@ pub(super) fn content_overlay(
         items,
         types,
         fluids,
+        vanilla_shapes,
     } = &*native_declared();
     if !errors.is_empty() {
         return Err(errors.join("\n").into());
@@ -839,6 +861,15 @@ pub(super) fn content_overlay(
     for m in packages.iter().map(|s| s.manifest) {
         if let Some(e) = m.server_only_declaration(declared_ids.clone()) {
             return Err(e.into());
+        }
+        if m.side == horizon_mod_package::manifest::Side::Server
+            && vanilla_shapes.iter().any(|(id, _)| *id == m.id)
+        {
+            return Err(format!(
+                "{}: a side = \"server\" mod declares vanilla block shapes, which every client                  must have; declare side = \"both\"",
+                m.id
+            )
+            .into());
         }
         if m.side == horizon_mod_package::manifest::Side::Server
             && let Some(requirement) = mod_api::__private::client_requirement(&m.id)
@@ -864,6 +895,12 @@ pub(super) fn content_overlay(
         // alone is left out, not every content mod through the overlay's check.
         for e in mod_content::drop_dangling_remainders(&mut mods) {
             log::warn!("Horizon: {e}");
+        }
+    }
+    if !vanilla_shapes.is_empty() {
+        let errors = mod_content::accept_vanilla_shapes(&mut mods, vanilla_shapes);
+        if !errors.is_empty() {
+            return Err(errors.join("\n").into());
         }
     }
     // Content validation may refuse a package. Revalidate against what really

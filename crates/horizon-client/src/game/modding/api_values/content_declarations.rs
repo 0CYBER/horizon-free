@@ -185,6 +185,32 @@ mod tests {
         assert_eq!(result.interaction_shapes.unwrap().default, boxes);
     }
 
+    /// A code declaration of vanilla block shapes is the declaration its JSON file makes.
+    #[test]
+    fn vanilla_block_shapes_from_code_match_their_file() {
+        let mut draft = mod_api::VanillaBlockShapes::new(["minecraft:oak_fence"]);
+        draft.collision_context_shapes.insert(
+            mod_api::ShapeEntityKind::Player,
+            mod_api::VanillaShape::Clip([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+        );
+        draft.outline_context_shapes.insert(
+            mod_api::ShapeEntityKind::Item,
+            mod_api::VanillaShape::Table(mod_api::BlockShapes {
+                properties: vec!["north".into()],
+                values: BTreeMap::from([("true".into(), vec![[0.0, 0.0, 0.0, 1.0, 0.5, 0.5]])]),
+                default: Some(Vec::new()),
+            }),
+        );
+        let file: engine::VanillaBlockShapes = serde_json::from_str(
+            r#"{"blocks":["minecraft:oak_fence"],
+                "collision_context_shapes":{"player":{"clip":[0,0,0,1,1,1]}},
+                "outline_context_shapes":{"item":{"properties":["north"],
+                  "values":{"true":[[0,0,0,1,0.5,0.5]]},"default":[]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(draft.try_into_engine(&()).unwrap(), file);
+    }
+
     #[test]
     fn declaration_conversion_preserves_admission_outcomes() {
         // Independent old-path records: errors must match byte for byte, not just reject.

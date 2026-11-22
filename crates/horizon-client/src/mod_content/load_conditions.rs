@@ -197,7 +197,7 @@ pub fn build_with_conditions(
     tables(base, &plan, &overlay, &jobs)?;
     // Mod files, and every tag addition gathered per tag file.
     let mut tags: BTreeMap<String, TagMerge> = BTreeMap::new();
-    let mut warnings = Vec::new();
+    let mut warnings = plan.warnings.clone();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
     // Carvers the root leaves out: the worldgen loader drops a biome's
@@ -553,6 +553,7 @@ pub fn resource_root_with_conditions(
             || !m.content.blocks.is_empty()
             || !m.content.items.is_empty()
             || !m.content.block_entity_types.is_empty()
+            || !m.content.vanilla_shapes.is_empty()
     });
     if inventory.is_empty() && !has_content {
         return Ok(base.to_owned());

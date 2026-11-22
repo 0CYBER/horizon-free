@@ -50,7 +50,8 @@ the bar keeps the loading screen open. Live display of synchronous setup work an
 route from `client_setup` remain outside this change.
 ## Registration and setup
 
-Registration runs once: `register`, `component_types`, `blocks`, `items` and `standalone_models`
+Registration runs once: `register`, `component_types`, `blocks`, `items`, `vanilla_block_shapes` and
+`standalone_models`
 receive no `Host` and read startup facts through `RegistrationContext`.
 `register` also receives `&mut dyn Registrar` for writing declarations. The context's `mods()`, `registry(name)` and `setting(mod_id, key)` read
 one view captured before the first of them runs, so every registration step sees the same values

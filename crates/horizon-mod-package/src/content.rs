@@ -357,6 +357,89 @@ impl ShapeEntityKind {
     }
 }
 
+/// A vanilla block's shape for one entity class: each state's own vanilla shape of the
+/// same channel cut to a box, or a table of boxes by the block's vanilla state properties.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VanillaShape {
+    /// `{"clip": [minX,minY,minZ,maxX,maxY,maxZ]}`, in block units.
+    Clip([f64; 6]),
+    /// A shape table, as `shapes` takes it.
+    Table(BlockShapes),
+}
+
+impl<'de> Deserialize<'de> for VanillaShape {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Clip {
+            clip: [f64; 6],
+        }
+        let value = serde_json::Value::deserialize(d)?;
+        if value.get("clip").is_some() {
+            let Clip { clip } = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            Ok(Self::Clip(clip))
+        } else {
+            serde_json::from_value(value)
+                .map(Self::Table)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+/// Entity-context outlines and collisions for vanilla blocks
+/// (`data/<id>/horizon/vanilla_block_shapes/<name>.json`, or `mod_api::VanillaBlockShapes`
+/// from code): a mod block's `outline_context_shapes` and `collision_context_shapes`, for
+/// blocks no mod owns.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VanillaBlockShapes {
+    /// `minecraft:<path>` block ids.
+    pub blocks: Vec<String>,
+    #[serde(default)]
+    pub outline_context_shapes: BTreeMap<ShapeEntityKind, VanillaShape>,
+    #[serde(default)]
+    pub collision_context_shapes: BTreeMap<ShapeEntityKind, VanillaShape>,
+}
+
+impl VanillaBlockShapes {
+    /// What can be checked without the vanilla registry: ids, boxes and tables. Whether each
+    /// block exists, its tables' properties and its shape being static are checked at load.
+    pub fn check(&self) -> Result<(), String> {
+        if self.blocks.is_empty() {
+            return Err("vanilla block shapes name no blocks".into());
+        }
+        let mut seen = BTreeSet::new();
+        for block in &self.blocks {
+            if !vanilla_id(block) {
+                return Err(format!("{block:?} is not a minecraft: block id"));
+            }
+            if !seen.insert(block) {
+                return Err(format!("{block} is named twice"));
+            }
+        }
+        if self.outline_context_shapes.is_empty() && self.collision_context_shapes.is_empty() {
+            return Err("vanilla block shapes declare no outline or collision".into());
+        }
+        for shape in self
+            .outline_context_shapes
+            .values()
+            .chain(self.collision_context_shapes.values())
+        {
+            match shape {
+                VanillaShape::Clip(bounds) => {
+                    if bounds.iter().any(|value| !value.is_finite())
+                        || (0..3).any(|axis| bounds[axis] > bounds[axis + 3])
+                    {
+                        return Err("clip needs a finite box with ordered bounds".into());
+                    }
+                }
+                VanillaShape::Table(table) => table.check()?,
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A state property a block declares on its own, beside its template's.
 /// A block's states become the template's states times these values, so a
 /// pipe can have a connection per side without a template that has one.
@@ -871,6 +954,8 @@ pub struct Content {
     /// Block entity types declared by native code, not content files.
     pub block_entity_types: Vec<BlockEntityType>,
     pub menu_types: Vec<MenuType>,
+    /// Entity-context shapes it gives vanilla blocks, from its files and its code.
+    pub vanilla_shapes: Vec<VanillaBlockShapes>,
     /// The namespaces it owns: the mod id, then the manifest's `namespaces`.
     pub namespaces: Vec<String>,
 }
@@ -1001,6 +1086,7 @@ impl Content {
             entity_types: Vec::new(),
             block_entity_types: Vec::new(),
             menu_types: Vec::new(),
+            vanilla_shapes: Vec::new(),
             namespaces: manifest.owned_namespaces().map(str::to_owned).collect(),
         };
         content.check(manifest, declared)?;
@@ -1021,8 +1107,19 @@ impl Content {
             entity_types: Vec::new(),
             block_entity_types: Vec::new(),
             menu_types: Vec::new(),
+            vanilla_shapes: Vec::new(),
             namespaces: vec![namespace.to_owned()],
         }
+    }
+
+    /// Adds the vanilla block shapes a mod's code declares (`vanilla_block_shapes`), checked
+    /// as declaration files are. All or nothing: on an error nothing is added.
+    pub fn declare_vanilla_shapes(&mut self, shapes: &[VanillaBlockShapes]) -> Result<(), String> {
+        for shape in shapes {
+            shape.check()?;
+        }
+        self.vanilla_shapes.extend_from_slice(shapes);
+        Ok(())
     }
 
     /// Adds blocks and items a native mod declares in code (`native_blocks`,
@@ -1160,6 +1257,7 @@ impl Content {
         let mut fluids = Vec::new();
         let mut types = Vec::new();
         let mut menus = Vec::new();
+        let mut vanilla_shapes = Vec::new();
         for name in &self.files {
             let mut parts = name.splitn(3, '/');
             let (top, namespace, rest) = (
@@ -1202,9 +1300,11 @@ impl Content {
                 types.push((kind, name.clone()));
             } else if let Some(menu) = parse("menu") {
                 menus.push((menu, name.clone()));
+            } else if parse("vanilla_block_shapes").is_some() {
+                vanilla_shapes.push(name.clone());
             } else {
                 return Err(format!(
-                    "{name}: data/{id}/horizon/ holds block/, item/, mob_effect/, creative_tab/, fluid/, entity_type/ and menu/*.json only"
+                    "{name}: data/{id}/horizon/ holds block/, item/, mob_effect/, creative_tab/, fluid/, entity_type/, menu/ and vanilla_block_shapes/*.json only"
                 ));
             }
         }
@@ -1212,6 +1312,12 @@ impl Content {
         // whole index, so a reader per file made loading a big mod quadratic.
         let source = self.source.clone();
         let mut reader = reader_of(&source)?;
+        for name in vanilla_shapes {
+            let file: VanillaBlockShapes =
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
+            file.check().map_err(|e| format!("{name}: {e}"))?;
+            self.vanilla_shapes.push(file);
+        }
         let mut ids = BTreeSet::new();
         for (block, name) in blocks {
             let file: BlockFile =
@@ -1979,6 +2085,62 @@ capabilities = ["registries"]
         let mut nonfinite = oversized;
         nonfinite.default = Some(vec![[f64::NAN; 6]]);
         assert!(nonfinite.check().is_err());
+    }
+
+    #[test]
+    fn vanilla_block_shapes_files_name_minecraft_blocks_and_valid_shapes() {
+        let read = |text: &str| {
+            hmod(
+                "vanilla-shapes",
+                MANIFEST_TEXT,
+                &[(
+                    "data/ruby/horizon/vanilla_block_shapes/fences.json",
+                    text.as_bytes(),
+                )],
+            )
+        };
+        let content = read(
+            r#"{"blocks":["minecraft:oak_fence","minecraft:stone_wall"],
+                "collision_context_shapes":{"player":{"clip":[0,0,0,1,1,1]},
+                  "item":{"default":[[0,0,0,1,0.5,1]]}}}"#,
+        )
+        .unwrap();
+        let [shapes] = content.vanilla_shapes.as_slice() else {
+            panic!("{:?}", content.vanilla_shapes)
+        };
+        assert_eq!(
+            shapes.blocks,
+            ["minecraft:oak_fence", "minecraft:stone_wall"]
+        );
+        assert_eq!(
+            shapes.collision_context_shapes[&ShapeEntityKind::Player],
+            VanillaShape::Clip([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+        );
+        assert!(matches!(
+            shapes.collision_context_shapes[&ShapeEntityKind::Item],
+            VanillaShape::Table(_)
+        ));
+        for (text, refusal) in [
+            (
+                r#"{"blocks":["ruby:post"],"collision_context_shapes":{"player":{"clip":[0,0,0,1,1,1]}}}"#,
+                "is not a minecraft: block id",
+            ),
+            (
+                r#"{"blocks":["minecraft:oak_fence"],"collision_context_shapes":{"player":{"clip":[0,1,0,1,0,1]}}}"#,
+                "ordered bounds",
+            ),
+            (
+                r#"{"blocks":["minecraft:oak_fence"]}"#,
+                "no outline or collision",
+            ),
+            (
+                r#"{"blocks":["minecraft:oak_fence"],"collision_context_shapes":{"player":{"clip":[0,0,0,1,1,1],"default":[]}}}"#,
+                "unknown field",
+            ),
+        ] {
+            let error = read(text).unwrap_err();
+            assert!(error.contains(refusal), "{text}: {error}");
+        }
     }
 
     #[test]

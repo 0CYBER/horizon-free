@@ -6,7 +6,7 @@ use crate::collisions::SceneCollisions;
 use horizon_core::geometry::{Aabb, ShapeOp, Vec3, VoxelShape};
 use horizon_world::{
     block_collision_scan::{BlockCollisionScan, BlockCollisionWorld},
-    collision_context::CollisionContext,
+    collision_context::{CollisionContext, EntityContextKind},
     collision_exclusions::Excluding,
     entity_obstruction::EntityIdentity,
     world_movement::{
@@ -99,8 +99,11 @@ where
     // player.move, then how far from the target it ended (vanilla drops
     // the vertical part: `yDist > -0.5 || yDist < 0.5` always holds).
     // The mover's own sneaking, as CollisionContext.of(player): a sneaking
-    // player descends through scaffolding.
-    let context = CollisionContext::position(g.position[1]).with_descending(g.sneaking);
+    // player descends through scaffolding. Its class picks the shapes declared
+    // for players, as the client's own prediction does.
+    let context = CollisionContext::position(g.position[1])
+        .with_descending(g.sneaking)
+        .with_entity_kind(EntityContextKind::Player);
     let done = resolve_world_movement(
         world,
         MovementRequest {
@@ -138,7 +141,8 @@ where
             world,
             CollisionCheckRequest {
                 entity: EntityIdentity(0),
-                context: CollisionContext::position(old.min_position().y),
+                context: CollisionContext::position(old.min_position().y)
+                    .with_entity_kind(EntityContextKind::Player),
                 bounds: old,
                 candidate_budget: 1_000_000,
             },

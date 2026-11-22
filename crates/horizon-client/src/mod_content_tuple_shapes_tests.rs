@@ -67,6 +67,97 @@ fn tuple_shapes_follow_final_state_order_and_separate_collision() {
     fs::remove_dir_all(base.parent().unwrap()).unwrap();
 }
 
+/// Mods give vanilla states entity-context shapes (`vanilla_block_shapes`): a clip cuts
+/// each state's own vanilla outline, a table selects by the vanilla properties, and the mod
+/// whose id sorts first keeps a block's class in a channel. The shapes reach the collision
+/// table as context rows of the vanilla states.
+#[test]
+fn vanilla_block_shapes_reach_vanilla_states_and_the_first_mod_keeps_a_claim() {
+    let (base, _) = block_base_of(
+        "vanilla-block-shapes",
+        &[],
+        r#"{"states":[
+      ["minecraft:air",false,false,"",{"id":"minecraft:air"}],
+      ["minecraft:test",false,false,"",{"id":"minecraft:test","properties":{"axis":"x"}}],
+      ["minecraft:test",false,false,"",{"id":"minecraft:test","properties":{"axis":"y"}}]],
+      "defaults":{"minecraft:air":0,"minecraft:test":1}}"#,
+    );
+    let post = r#"{"item":"minecraft:test","outline":[[0.25,0,0.25,0.75,1.5,0.75]]}"#;
+    fs::write(
+        base.join("gameplay-facts.json"),
+        format!(r#"{{"states":[{{"item":"minecraft:air","outline":[]}},{post},{post}]}}"#),
+    )
+    .unwrap();
+    let scratch = base.parent().unwrap().to_owned();
+    let declare = |id: &str, json: &str| {
+        let (toml, path) = (
+            manifest(id, ""),
+            format!("data/{id}/horizon/vanilla_block_shapes/posts.json"),
+        );
+        folder_mod(
+            &scratch.join(id),
+            &[("horizon-mod.toml", &toml), (&path, json)],
+        )
+    };
+    let alpha = declare(
+        "alpha",
+        r#"{"blocks":["minecraft:test"],
+        "outline_context_shapes":{"player":{"clip":[0,0,0,1,1,1]}},
+        "collision_context_shapes":{"player":{"properties":["axis"],
+          "values":{"x":[[0,0,0,1,0.5,1]]},"default":[]}}}"#,
+    );
+    let beta = declare(
+        "beta",
+        r#"{"blocks":["minecraft:test"],
+        "collision_context_shapes":{"player":{"default":[[0,0,0,1,1,1]]},"item":{"default":[]}}}"#,
+    );
+    // Given out of order: the ids decide.
+    let mods = [beta, alpha];
+    let plan = Plan::new(&base, &mods).unwrap();
+    assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+    assert!(
+        plan.warnings[0].starts_with("mod beta: the collision of minecraft:test for player")
+            && plan.warnings[0].contains("mod alpha's"),
+        "{:?}",
+        plan.warnings
+    );
+    assert!(!plan.vanilla_contexts.contains_key(&0));
+    let (x, y) = (&plan.vanilla_contexts[&1], &plan.vanilla_contexts[&2]);
+    for row in [x, y] {
+        let outline = row["outline_player"].bounds().unwrap();
+        assert_eq!((outline.min(Axis::X), outline.max(Axis::Y)), (0.25, 1.0));
+        assert!(
+            row["collision_item"].is_empty(),
+            "beta keeps the item class"
+        );
+    }
+    assert_eq!(x["collision_player"].bounds().unwrap().max(Axis::Y), 0.5);
+    assert!(y["collision_player"].is_empty());
+    let mut tag = Tag::Compound(Compound::from([
+        (JavaString::from("shapes"), Tag::List(Vec::new())),
+        (
+            JavaString::from("cached_shapes"),
+            Tag::IntArray(vec![-1, -1, -1]),
+        ),
+    ]));
+    plan.declared_shapes(&mut tag, true).unwrap();
+    let Some(Tag::List(rows)) = tag.get("context_shapes") else {
+        panic!("context rows")
+    };
+    assert_eq!(
+        rows.iter().map(|row| row.get("state")).collect::<Vec<_>>(),
+        [Some(&Tag::Int(1)), Some(&Tag::Int(2))]
+    );
+    let Some(Tag::List(entries)) = tag.get("shapes") else {
+        panic!("shapes")
+    };
+    let Some(Tag::Int(id)) = rows[0].get("collision_player") else {
+        panic!("collision_player")
+    };
+    assert_eq!(entries[*id as usize], encode_shape(&x["collision_player"]));
+    fs::remove_dir_all(scratch).unwrap();
+}
+
 /// Declared outline shapes feed gameplay lighting and both occlusion tables,
 /// independently of the optional collision shape.
 #[test]

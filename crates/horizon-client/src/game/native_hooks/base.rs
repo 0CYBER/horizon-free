@@ -1022,6 +1022,15 @@ impl Game<'_> {
     ) {
         Self::fire_standalone_models(context, models, forms);
     }
+    /// Entity-context outlines and collisions for vanilla blocks, declared in code as a
+    /// `data/<id>/horizon/vanilla_block_shapes/*.json` file declares them. Asked once at
+    /// start, on every side, before any resource loads; dispatch names the declaring mod.
+    pub(in crate::game) fn native_vanilla_block_shapes(
+        context: &mod_api::RegistrationContext,
+        shapes: &mut Vec<mod_api::Answered<mod_api::VanillaBlockShapes>>,
+    ) {
+        Self::fire_vanilla_block_shapes(context, shapes);
+    }
     /// The player changed setting `key` of mod `mod_id` on its page in Options > Mods; the new
     /// value is kept already.
     pub(in crate::game) fn native_setting_changed(&mut self, mod_id: &str, key: &str) {

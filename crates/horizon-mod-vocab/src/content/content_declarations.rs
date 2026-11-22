@@ -128,6 +128,50 @@ pub enum ShapeEntityKind {
     Other,
 }
 
+/// A vanilla block's shape for one entity class in a [`VanillaBlockShapes`] declaration.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: these variants are the closed content declaration vocabulary.
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum VanillaShape {
+    /// Each state's own vanilla shape of the same channel (its collision shape, or its
+    /// outline), intersected with this box in block units: `[minX,minY,minZ,maxX,maxY,maxZ]`.
+    /// `[0,0,0,1,1,1]` cuts off whatever rises above or reaches outside the block's cell.
+    Clip([f64; 6]),
+    /// Boxes by state, the table a mod block's `BlockShapes` takes, selected by the vanilla
+    /// block's own state properties.
+    Table(BlockShapes),
+}
+
+/// Entity-context shapes for vanilla blocks: what `outline_context_shapes` and
+/// `collision_context_shapes` are on a mod's own [`Block`], for blocks the mod does not own.
+/// An unvalidated draft; content admission checks it as it checks a
+/// `data/<id>/horizon/vanilla_block_shapes/<name>.json` file.
+#[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct VanillaBlockShapes {
+    /// Vanilla block identifiers, `minecraft:<path>`, each declared once.
+    pub blocks: Vec<String>,
+    /// Outline overrides for actual entity queries; omitted kinds keep vanilla's outline.
+    pub outline_context_shapes: BTreeMap<ShapeEntityKind, VanillaShape>,
+    /// Collision overrides for actual entity queries; omitted kinds keep vanilla's collision.
+    pub collision_context_shapes: BTreeMap<ShapeEntityKind, VanillaShape>,
+}
+
+impl VanillaBlockShapes {
+    /// Start an unvalidated declaration for these vanilla blocks; content admission checks them.
+    pub fn new<I, S>(blocks: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            blocks: blocks.into_iter().map(Into::into).collect(),
+            ..Self::default()
+        }
+    }
+}
+
 /// BlockStateProperty in a load-time content declaration.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: these variants are the closed content declaration vocabulary.

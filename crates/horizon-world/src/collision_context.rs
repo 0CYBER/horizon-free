@@ -112,6 +112,14 @@ impl<'a> CollisionContext<'a> {
         self
     }
 
+    /// The entity class a position context stands for, so declared context shapes for that class
+    /// (`collision_context_shapes`, a mod's vanilla block shapes) apply. Nothing else changes: the
+    /// context still has no entity for the rules that read one (powder snow, liquids).
+    pub const fn with_entity_kind(mut self, kind: EntityContextKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
     /// Ordinary EntityCollisionContext. The native factory overload taking an
     /// explicit fluid flag also uses this path for experimental minecarts.
     pub fn for_entity(entity: CollisionEntity<'a>, always_fluid: bool) -> Self {
@@ -197,5 +205,25 @@ impl<'a> CollisionContext<'a> {
             entity_can_stand(self.entity.expect("living context has an entity"), second)?
                 && !first.kind().same_family(second.kind()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_position_context_with_a_class_picks_its_shapes_and_keeps_no_entity() {
+        let context = CollisionContext::position(64.0)
+            .with_descending(true)
+            .with_entity_kind(EntityContextKind::Player);
+        assert_eq!(context.entity_kind(), EntityContextKind::Player);
+        assert!(context.is_descending());
+        assert!(context.entity().is_none());
+        assert!(context.living_entity().is_none());
+        assert_eq!(
+            CollisionContext::position(64.0).entity_kind(),
+            EntityContextKind::None
+        );
     }
 }
