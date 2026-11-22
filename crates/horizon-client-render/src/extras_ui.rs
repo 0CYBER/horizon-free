@@ -408,8 +408,8 @@ mod tests {
         crate::widgets::end_frame(1);
         let size = (batch.width, batch.height);
         let cols = Columns::of(size.0, size.1).with_note_lines(NOTE_LINES);
-        // The Mods group's note can't take the focus: the first item can.
-        let first = ExtraRow::Item(Item::OwnNameTag);
+        // The first item can take the focus.
+        let first = ExtraRow::Item(Item::SpyglassPolarLook);
         let at = shell.point_at(&s, size, first);
         let [x, y, w, h] = crate::widgets::linked_step(cols.search(), true).unwrap();
         assert!(ui::hovered(at, x, y, w, h));

@@ -139,6 +139,10 @@ pub struct LookOptions {
     pub scoping: bool,
     pub invert_x: bool,
     pub invert_y: bool,
+    /// How much faster than vanilla's a scoped yaw turn is: 1.0 is vanilla's rate. The engine
+    /// multiplies the yaw by it and divides the yaw it is asked to turn by it, so a turn
+    /// asked for in degrees stays that turn.
+    pub yaw_scale: f64,
 }
 
 /// The input state of `MouseHandler` that drives the camera and the hotbar.
@@ -251,7 +255,7 @@ impl MouseLook {
             self.smooth_turn_x.reset();
             self.smooth_turn_y.reset();
             (
-                self.accumulated_dx * sensitivity_mod,
+                self.accumulated_dx * sensitivity_mod * look.yaw_scale,
                 self.accumulated_dy * sensitivity_mod,
             )
         } else {
@@ -295,7 +299,8 @@ fn sensitivity_scales(sensitivity: f64) -> (f64, f64) {
 
 /// Degrees `Entity.turn` turns per unit of mouse motion: 0.15 x `sens`
 /// (`sensitivityMod` while scoping). With the cinematic camera the same total
-/// is reached, spread over the following frames.
+/// is reached, spread over the following frames. This stays vanilla's rate
+/// whatever [`LookOptions::yaw_scale`] is: the scale multiplies the yaw alone.
 pub fn degrees_per_count(look: LookOptions) -> f64 {
     let (sensitivity_mod, sens) = sensitivity_scales(look.sensitivity);
     let scale = if look.scoping && !look.smooth_camera {
@@ -310,9 +315,17 @@ pub fn degrees_per_count(look: LookOptions) -> f64 {
 /// these options, the inverted axes included.
 pub fn motion_for_turn(dyaw: f64, dpitch: f64, look: LookOptions) -> (f64, f64) {
     let per_count = degrees_per_count(look);
+    // A scoped yaw is `look.yaw_scale` faster in `turn_player`, so the motion that asks
+    // for a turn is that much shorter there and a turn asked for in degrees stays exact;
+    // the pitch keeps vanilla's rate either way.
+    let yaw_per_count = if look.scoping && !look.smooth_camera {
+        per_count * look.yaw_scale
+    } else {
+        per_count
+    };
     let flip = |inverted: bool| if inverted { -1.0 } else { 1.0 };
     (
-        dyaw / per_count * flip(look.invert_x),
+        dyaw / yaw_per_count * flip(look.invert_x),
         dpitch / per_count * flip(look.invert_y),
     )
 }
@@ -374,6 +387,7 @@ mod tests {
         scoping: false,
         invert_x: false,
         invert_y: false,
+        yaw_scale: 1.0,
     };
 
     /// One frame of motion `(dx, dy)` through `onMove`'s grabbed path,
@@ -438,6 +452,34 @@ mod tests {
         assert!((degrees_per_count(PLAIN) / degrees_per_count(scoped) - 8.0).abs() < 1e-12);
     }
 
+    /// A `yaw_scale` of 1.0 is vanilla's scoped turn: `MouseHandler.turnPlayer`'s
+    /// `accumulated * sensitivityMod` and `Entity.turn`'s 0.15 degrees a unit, bit for bit.
+    #[test]
+    fn yaw_scale_of_one_is_vanilla_bit_for_bit() {
+        for sensitivity in [0.0, 0.5, 0.9] {
+            let ss = sensitivity * f64::from(0.6f32) + f64::from(0.2f32);
+            let sensitivity_mod = ss * ss * ss;
+            for (dx, dy) in [(100.0, 0.0), (0.0, 100.0), (37.0, -12.5)] {
+                let o = LookOptions {
+                    sensitivity,
+                    scoping: true,
+                    yaw_scale: 1.0,
+                    ..PLAIN
+                };
+                let mut look = MouseLook::default();
+                let mut rot = rotation();
+                frame(&mut look, &mut rot, 1.0, (dx, dy), o);
+                let yaw = ((dx * sensitivity_mod) as f32) * 0.15;
+                let pitch = (((dy * sensitivity_mod) as f32) * 0.15).clamp(-90.0, 90.0);
+                assert_eq!(
+                    (rot.y_rot, rot.x_rot),
+                    (yaw, pitch),
+                    "s {sensitivity} d {dx},{dy}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn motion_for_turn_round_trips_through_turn_player() {
         for o in [
@@ -450,6 +492,14 @@ mod tests {
             },
             LookOptions {
                 scoping: true,
+                ..PLAIN
+            },
+            // The scale is an extension point that works: a scoped turn asked for in degrees
+            // comes back as that turn at 8×, the reciprocal in `motion_for_turn` undoing the
+            // one in `turn_player`.
+            LookOptions {
+                scoping: true,
+                yaw_scale: 8.0,
                 ..PLAIN
             },
         ] {
@@ -507,6 +557,7 @@ mod tests {
                     scoping: false,
                     invert_x: false,
                     invert_y: false,
+                    yaw_scale: 1.0,
                 },
             )
             .unwrap();

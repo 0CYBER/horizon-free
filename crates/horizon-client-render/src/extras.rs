@@ -74,6 +74,11 @@ pub struct Extras {
     pub zoom_smooth: bool,
     /// Divide mouse turning by the zoom.
     pub zoom_sensitivity: bool,
+    /// Keep a scoped look's sideways screen speed near the poles: the yaw of a spyglass turn
+    /// is scaled by `1/cos(pitch)`, capped at 8× (`spyglass_polar_look::yaw_scale`). Off by
+    /// default: vanilla turns both axes at the same rate, and the maintainer decides whether
+    /// this should ever be the default.
+    pub spyglass_polar_look: bool,
     /// Far terrain a zoom magnifies is planned finer, so a spyglass does not
     /// show the coarse cells it was given for an unzoomed screen
     /// (`lod::Aim`). Costs far tiles while the zoom is held and gives them
@@ -180,6 +185,7 @@ impl Default for Extras {
             zoom_level: 4,
             zoom_smooth: true,
             zoom_sensitivity: true,
+            spyglass_polar_look: false,
             lod_zoom_detail: false,
             fps: false,
             fps_corner: Corner::TopLeft,
@@ -316,6 +322,7 @@ impl Extras {
                 }
                 "zoomSmooth" => e.zoom_smooth = flag(e.zoom_smooth),
                 "zoomSensitivity" => e.zoom_sensitivity = flag(e.zoom_sensitivity),
+                "spyglassPolarLook" => e.spyglass_polar_look = flag(e.spyglass_polar_look),
                 "lodZoomDetail" => e.lod_zoom_detail = flag(e.lod_zoom_detail),
                 "fps" => e.fps = flag(e.fps),
                 "fpsCorner" => e.fps_corner = Corner::parse(value, e.fps_corner),
@@ -393,7 +400,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "packBrowser:{}\npregen:{}\nfullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nlodZoomDetail:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nuiSoundReserve:{}\nownNameTag:{}\nskipModdedSplashesIfVanillaModified:{}\nhideBlockParticles:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\nchatAnimation:{}\nchatIndicator:{}\n{}:{}\nagentControl:{}\nreproKeys:{}\nsplitscreen:{}\nsplitscreenTwo:{}\nsplitscreenThree:{}\nsplitscreenNames:{}\nwheelCyclesListSettings:{}\nmusicOff:{}\nmusicPage:{}\n{}:{}\n",
+            "packBrowser:{}\npregen:{}\nfullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nlodZoomDetail:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nuiSoundReserve:{}\nownNameTag:{}\nskipModdedSplashesIfVanillaModified:{}\nhideBlockParticles:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\nchatAnimation:{}\nchatIndicator:{}\n{}:{}\nagentControl:{}\nreproKeys:{}\nsplitscreen:{}\nsplitscreenTwo:{}\nsplitscreenThree:{}\nsplitscreenNames:{}\nwheelCyclesListSettings:{}\nmusicOff:{}\nmusicPage:{}\n{}:{}\nspyglassPolarLook:{}\n",
             bool_text(self.pack_browser),
             bool_text(self.pregen),
             bool_text(self.fullbright),
@@ -445,6 +452,7 @@ impl Extras {
             bool_text(self.music_page),
             SKIN_LAYERS_KEY,
             bool_text(self.three_d_skin_layers),
+            bool_text(self.spyglass_polar_look),
         );
         text.push_str(&format!("{EMOTE_KEY}:{}\n", self.emote_key));
         self.pvp.serialize(&mut text);
@@ -601,6 +609,9 @@ pub const SPLIT_THREE: [&str; 3] = ["One wide on top", "One tall on the left", "
 /// The settings the Extras page shows, one per row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
+    /// A spyglass look keeps its sideways screen speed near the poles
+    /// (`spyglass_polar_look::yaw_scale`).
+    SpyglassPolarLook,
     Fullbright,
     DynamicLights,
     OwnNameTag,
@@ -639,6 +650,8 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
     // group comes last, from the cosmetics' own section (`pages::Place::Extras`) while they are
     // offered.
     vec![
+        Err("horizon.extras.header.look"),
+        Ok(SpyglassPolarLook),
         Err("horizon.extras.header.third_person"),
         Ok(OwnNameTag),
         Err("horizon.extras.header.inventory"),
@@ -665,6 +678,7 @@ impl Item {
     /// The language key of the caption (`horizon.*`, assets/horizon/lang).
     pub fn caption_key(self) -> &'static str {
         match self {
+            Item::SpyglassPolarLook => "horizon.extras.spyglass_polar_look",
             Item::Fullbright => "horizon.extras.fullbright",
             Item::DynamicLights => "horizon.extras.dynamic_lights",
             Item::OwnNameTag => "horizon.extras.own_name_tag",
@@ -691,6 +705,7 @@ impl Item {
     /// The language key of the description shown as the row's tooltip.
     pub fn description_key(self) -> &'static str {
         match self {
+            Item::SpyglassPolarLook => "horizon.extras.spyglass_polar_look.tooltip",
             Item::Fullbright => "horizon.extras.fullbright.tooltip",
             Item::DynamicLights => "horizon.extras.dynamic_lights.tooltip",
             Item::OwnNameTag => "horizon.extras.own_name_tag.tooltip",
@@ -726,6 +741,7 @@ impl Item {
     /// `horizon.extras.*` in en_us.json.
     pub fn caption(self) -> &'static str {
         match self {
+            Item::SpyglassPolarLook => "Spyglass look at the poles",
             Item::Fullbright => "Fullbright",
             Item::DynamicLights => "Dynamic lights",
             Item::OwnNameTag => "Own name tag",
@@ -760,7 +776,7 @@ impl Item {
             Pvp(o) => return o.parent().map(Pvp),
             Fullbright | DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
             | AutoReconnect | NoAi | AgentControl | ReproKeys | Splitscreen | ChatAnimation
-            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen => {
+            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen | SpyglassPolarLook => {
                 return None;
             }
         })
@@ -768,6 +784,9 @@ impl Item {
     /// The English description: the fallback of [`Item::description_text`].
     pub fn description(self) -> &'static str {
         match self {
+            Item::SpyglassPolarLook => {
+                "Looking up or down with a spyglass, the horizontal look gets slower as cos(pitch): this speeds it up by 1/cos(pitch), up to 8× (from 82.8°), so the picture moves sideways about as far as at the horizon. The turn also rolls the picture faster at those angles. Off, the look is vanilla's."
+            }
             Item::Pregen => {
                 "Enables /pregen in your single-player and LAN worlds. With cheats enabled, use /pregen start to generate an area before exploring it. Does not enable the command on servers you join."
             }
@@ -843,6 +862,7 @@ impl Item {
             | Item::Sort
             | Item::Splitscreen
             | Item::WheelCyclesSettings
+            | Item::SpyglassPolarLook
             | Item::PackBrowser => Some(Cost::None),
             _ => None,
         }
@@ -850,6 +870,7 @@ impl Item {
     /// On/off items and their value.
     pub fn switch(self, e: &Extras) -> Option<bool> {
         Some(match self {
+            Item::SpyglassPolarLook => e.spyglass_polar_look,
             Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag,
@@ -888,6 +909,7 @@ impl Item {
     /// either way). The sort key binds instead.
     pub fn cycle(self, e: &mut Extras, back: bool) {
         match self {
+            Item::SpyglassPolarLook => e.spyglass_polar_look = !e.spyglass_polar_look,
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag = !e.own_name_tag,
@@ -1145,5 +1167,181 @@ mod tests {
         for item in rows().into_iter().flatten() {
             assert!(!item.caption().is_empty() && !item.description().is_empty());
         }
+    }
+
+    /// The measurement behind `spyglassPolarLook`: how far a spyglass turn moves the picture
+    /// sideways at each pitch, off and on, in the camera's own basis at 1920x1080.
+    ///
+    /// A yaw turn of `d` degrees moves the picture sideways by `d·cos(pitch)` and rolls it
+    /// by `d·sin(pitch)`, so vanilla's fixed turn loses the sideways motion near the poles
+    /// while its roll grows. `1/cos(pitch)` puts the sideways motion back and leaves the roll
+    /// as the only axis that grows, which is why the factor is capped.
+    #[test]
+    fn the_polar_spyglass_look_keeps_the_sideways_screen_shift() {
+        use crate::spyglass_polar_look::{MAX, yaw_scale};
+        use horizon_client_input::mouse::{LookOptions, MouseLook, Rotation};
+
+        const W: f64 = 1920.0;
+        const H: f64 = 1080.0;
+        let aspect = W / H;
+        // The spyglass's own field of view: 70 degrees eased toward the 0.1 modifier.
+        let mut easing = crate::camera::Camera::default();
+        for _ in 0..30 {
+            easing.tick(None, 0.1);
+        }
+        let fov = easing.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
+        assert!((fov - 7.0).abs() < 1e-3, "the spyglass's fov is 7: {fov}");
+        // The projection's half-height at one unit out: half the vertical fov.
+        let tan_half = f64::from(fov / 2.0).to_radians().tan();
+
+        struct Shift {
+            rotation: Rotation,
+            lateral_px: f64,
+            vertical_px: f64,
+            roll_deg: f64,
+            forwards: [f32; 3],
+        }
+
+        let look = |pitch: f32, on: bool| LookOptions {
+            sensitivity: 0.5,
+            smooth_camera: false,
+            scoping: true,
+            invert_x: false,
+            invert_y: false,
+            yaw_scale: yaw_scale(pitch, on),
+        };
+        let measure = |pitch: f32, look: LookOptions, d: (f64, f64)| -> Shift {
+            let mut before = crate::camera::Camera::default();
+            before.set_rotation(0.0, pitch);
+            let mut handler = MouseLook::default();
+            let mut rotation = Rotation {
+                x_rot: pitch,
+                y_rot: 0.0,
+                x_rot_o: 0.0,
+                y_rot_o: 0.0,
+            };
+            handler.add_motion(d.0, d.1);
+            let (xo, yo) = handler
+                .handle_accumulated_movement(1.0, true, true, look)
+                .expect("a grabbed, active window turns");
+            rotation.turn(xo, yo);
+            let mut after = crate::camera::Camera::default();
+            after.set_rotation(rotation.y_rot, rotation.x_rot);
+            let dot = |a: [f32; 3], b: [f32; 3]| {
+                f64::from(a[0]) * f64::from(b[0])
+                    + f64::from(a[1]) * f64::from(b[1])
+                    + f64::from(a[2]) * f64::from(b[2])
+            };
+            let (forward_0, up_0, forward_1, up_1) =
+                (before.forwards, before.up, after.forwards, after.up);
+            let right = before.left.map(|c| -c);
+            // The direction the camera looks in, from the basis it had before the turn.
+            let lateral = dot(forward_1, right).atan2(dot(forward_1, forward_0));
+            let vertical = dot(forward_1, up_0).atan2(dot(forward_1, forward_0));
+            let roll = dot(up_1, right).atan2(dot(up_1, up_0));
+            Shift {
+                rotation,
+                // Pixels across a 1920 wide screen at the vertical fov, the aspect widening it.
+                lateral_px: lateral.tan() / (tan_half * aspect) * (W / 2.0),
+                vertical_px: vertical.tan() / tan_half * (H / 2.0),
+                roll_deg: roll.to_degrees(),
+                forwards: forward_1,
+            }
+        };
+
+        let pitches = [0.0f32, 45.0, 60.0, 80.0, 82.82, 89.0, 89.9, 90.0];
+        let mut table = String::from(
+            "pitch | factor | yaw_deg base | yaw_deg on | lateral_px base | lateral_px on | roll_deg base | roll_deg on\n",
+        );
+        let mut forwards_table = String::from("pitch | forwards base | forwards on\n");
+        let mut sideways = Vec::new();
+        for pitch in pitches {
+            let off = measure(pitch, look(pitch, false), (100.0, 0.0));
+            let on = measure(pitch, look(pitch, true), (100.0, 0.0));
+            let factor = yaw_scale(pitch, true);
+            table += &format!(
+                "{pitch} | {factor} | {:.4} | {:.4} | {:.2} | {:.2} | {:.4} | {:.4}\n",
+                off.rotation.y_rot,
+                on.rotation.y_rot,
+                off.lateral_px,
+                on.lateral_px,
+                off.roll_deg,
+                on.roll_deg,
+            );
+            forwards_table += &format!(
+                "{pitch} | {:.4},{:.4},{:.4} | {:.4},{:.4},{:.4}\n",
+                off.forwards[0],
+                off.forwards[1],
+                off.forwards[2],
+                on.forwards[0],
+                on.forwards[1],
+                on.forwards[2],
+            );
+
+            // Off, a look built as it was before this option existed - the scale at vanilla's
+            // 1.0 - turns exactly the same way, bit for bit.
+            let legacy = measure(
+                pitch,
+                LookOptions {
+                    yaw_scale: 1.0,
+                    ..look(pitch, false)
+                },
+                (100.0, 0.0),
+            );
+            assert_eq!(
+                (
+                    off.rotation.y_rot.to_bits(),
+                    off.rotation.x_rot.to_bits(),
+                    off.lateral_px.to_bits(),
+                    off.vertical_px.to_bits(),
+                    off.roll_deg.to_bits(),
+                ),
+                (
+                    legacy.rotation.y_rot.to_bits(),
+                    legacy.rotation.x_rot.to_bits(),
+                    legacy.lateral_px.to_bits(),
+                    legacy.vertical_px.to_bits(),
+                    legacy.roll_deg.to_bits(),
+                ),
+                "pitch {pitch}: off is vanilla's look"
+            );
+
+            // The vertical look keeps vanilla's rate either way: a vertical delta turns no
+            // yaw and the same pitch.
+            let up_off = measure(pitch, look(pitch, false), (0.0, 100.0));
+            let up_on = measure(pitch, look(pitch, true), (0.0, 100.0));
+            assert_eq!(up_on.rotation.y_rot.to_bits(), 0.0f32.to_bits());
+            assert_eq!(
+                up_on.rotation.x_rot.to_bits(),
+                up_off.rotation.x_rot.to_bits(),
+                "pitch {pitch}: the pitch keeps vanilla's rate"
+            );
+
+            if [0.0f32, 45.0, 60.0, 80.0].contains(&pitch) {
+                sideways.push((pitch, factor, on.lateral_px));
+            }
+            if pitch >= 89.9 {
+                assert!(!on.lateral_px.is_nan() && on.lateral_px.is_finite());
+                assert_eq!(factor, MAX, "pitch {pitch}");
+            }
+        }
+        // On, the sideways motion at 0/45/60/80 degrees is where it is at the horizon.
+        let horizon = sideways[0].2;
+        for (pitch, factor, px) in sideways {
+            let factor_want = if factor == MAX {
+                factor
+            } else {
+                1.0 / f64::from(pitch).to_radians().cos()
+            };
+            assert!(
+                (factor - factor_want).abs() < 1e-9,
+                "pitch {pitch}: {factor}"
+            );
+            assert!(
+                (px - horizon).abs() / horizon < 0.01,
+                "pitch {pitch}: {px} px sideways against {horizon} at the horizon"
+            );
+        }
+        println!("{table}{forwards_table}");
     }
 }

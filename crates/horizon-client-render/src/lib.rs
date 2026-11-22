@@ -154,6 +154,7 @@ pub mod split_profiles;
 pub mod split_ui;
 mod sprite_cache;
 pub mod sprites;
+pub mod spyglass_polar_look;
 pub mod streaming;
 pub mod structure_block;
 pub mod studio_ui;
