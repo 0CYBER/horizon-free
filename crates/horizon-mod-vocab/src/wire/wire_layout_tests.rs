@@ -1073,7 +1073,10 @@ fn a_manual_codec_carries_a_nested_types_layout_change() {
 
 /// Decodes `parts` (literal fields) to `value` (built from its raw fields), and encodes `value`
 /// back to `parts`: a codec in a hashed file whose parts come from a helper outside it.
-fn both_ways<T: Wire + Clone + std::fmt::Debug + PartialEq, F: Wire + std::fmt::Debug + PartialEq>(
+fn both_ways<
+    T: Wire + Clone + std::fmt::Debug + PartialEq,
+    F: Wire + std::fmt::Debug + PartialEq,
+>(
     value: T,
     parts: F,
 ) {
@@ -1110,7 +1113,10 @@ fn out_of_scan_projections_keep_their_fields_both_ways() {
     })
     .unwrap();
     assert_eq!((gear.namespace(), gear.path()), ("example", "gear"));
-    both_ways(id("example:gear"), ("example".to_owned(), "gear".to_owned()));
+    both_ways(
+        id("example:gear"),
+        ("example".to_owned(), "gear".to_owned()),
+    );
 
     both_ways(ModelRef(31, 7), (31u64, 7u32));
     both_ways(RenderPipelineRef(41, 5), (41u64, 5u32));
@@ -1123,11 +1129,17 @@ fn out_of_scan_projections_keep_their_fields_both_ways() {
     let mut out = Writer::new();
     out.put(&EntityTypeKey(1));
     assert_eq!(out.bytes(), 1u32.to_le_bytes());
-    assert_eq!(Reader::decode::<EntityTypeKey>(out.bytes()), Ok(EntityTypeKey(1)));
+    assert_eq!(
+        Reader::decode::<EntityTypeKey>(out.bytes()),
+        Ok(EntityTypeKey(1))
+    );
 
     let mut stack = ItemStack::new(ItemKey(1), 7).unwrap();
     stack.set_damage(11);
-    both_ways(stack.clone(), (ItemKey(1), 7u32, Some(11u32), None::<Components>));
+    both_ways(
+        stack.clone(),
+        (ItemKey(1), 7u32, Some(11u32), None::<Components>),
+    );
     let mut out = Writer::new();
     out.put(&(ItemKey(1), 7u32, Some(11u32), None::<Components>));
     let decoded = Reader::decode::<ItemStack>(out.bytes()).unwrap();
@@ -1174,7 +1186,6 @@ fn out_of_scan_projections_keep_their_fields_both_ways() {
     let (identity, generation): (AttachmentHolder, u64) = decode(token);
     assert_eq!((identity, generation), (holder, 71));
 }
-
 
 /// The derive's types as a mod writes them, in a module that keeps the prelude.
 mod plain {
