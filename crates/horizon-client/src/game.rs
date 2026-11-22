@@ -1351,6 +1351,8 @@ struct Game<'a> {
     cooldowns: horizon_client::cooldowns::Cooldowns,
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
+    /// Whether the current mob damage command names a shulker bullet as its projectile source.
+    command_damage_by_shulker_bullet: bool,
     native_command_filter: bool,
     titles: titles::Titles,
     /// `Hud.toolHighlightTimer`: the selected item name.
@@ -10741,6 +10743,7 @@ impl<'a> Game<'a> {
             shield_cooldown: 0,
             cooldowns: Default::default(),
             command_source: None,
+            command_damage_by_shulker_bullet: false,
             native_command_filter: false,
             titles: Default::default(),
             tool_highlight: Default::default(),

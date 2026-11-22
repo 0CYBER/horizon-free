@@ -427,6 +427,7 @@ horizon-client game::creatures::loaded_arrow_shot_tests::a_landing_orb_posts_hit
 horizon-client game::creatures::loaded_arrow_shot_tests::a_rocket_posts_its_shot_once_and_a_silent_one_launches_quietly lib daily resources
 horizon-client game::creatures::loaded_arrow_shot_tests::bow_launch_uses_only_the_first_tick_event lib daily resources
 horizon-client game::creatures::loaded_arrow_shot_tests::crossbow_launch_uses_only_the_first_tick_event lib daily resources
+horizon-client game::creatures::loaded_arrow_shot_tests::damage_by_a_shulker_bullet_teleports_an_open_shulker lib daily resources
 horizon-client game::creatures::loaded_arrow_shot_tests::finish_hit_dispatches_once_and_the_next_tick_does_not_repeat_it lib daily resources
 horizon-client game::creatures::loaded_arrow_shot_tests::finish_hit_uses_registered_guest_context_and_restores_the_host lib daily resources
 horizon-client game::creatures::loaded_arrow_shot_tests::loaded_arrow_first_tick_dispatches_once_with_its_real_owner lib daily resources

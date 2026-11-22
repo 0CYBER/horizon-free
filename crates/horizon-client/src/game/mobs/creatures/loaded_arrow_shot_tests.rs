@@ -91,6 +91,47 @@ fn owner(game: &Game<'_>) -> u32 {
         .unwrap()
         .id
 }
+/// `Shulker.hurtServer`: damage tagged `is_projectile` by a shulker bullet makes an open shulker
+/// teleport (`hitByShulkerBullet`), also from `/damage ... by <bullet>`; a closed one stays.
+#[test]
+#[ignore = "daily"]
+fn damage_by_a_shulker_bullet_teleports_an_open_shulker() {
+    with_game(|game| {
+        assert!(game.run_command(
+            "summon shulker 7.5 200 7.5 {UUID:[I;114,0,0,1],Peek:100b,PersistenceRequired:1b}"
+        ));
+        assert!(game.run_command(
+            "summon shulker 20.5 200 20.5 {UUID:[I;114,0,0,2],Peek:0b,PersistenceRequired:1b}"
+        ));
+        assert!(
+            game.run_command(
+                "summon shulker_bullet 9.5 202 9.5 {UUID:[I;114,0,0,20],NoGravity:1b}"
+            )
+        );
+        // Give both shulkers a teleport candidate on the fixture's stone floor.
+        for n in [1, 2] {
+            let shulker = game
+                .mobs
+                .iter_mut()
+                .find(|mob| game.persist.uuid_of(mob.id) == Some([114, 0, 0, n]))
+                .unwrap();
+            shulker.random.set_seed(13);
+        }
+        let at = |game: &Game<'_>, n: i32| {
+            game.mobs
+                .iter()
+                .find(|m| game.persist.uuid_of(m.id) == Some([114, 0, 0, n]))
+                .unwrap()
+                .position
+        };
+        let (open, closed) = (at(game, 1), at(game, 2));
+        assert!(game.run_command("damage 00000072-0000-0000-0000-000000000001 1 minecraft:mob_projectile by 00000072-0000-0000-0000-000000000014"));
+        assert!(game.run_command("damage 00000072-0000-0000-0000-000000000002 1 minecraft:mob_projectile by 00000072-0000-0000-0000-000000000014"));
+        assert_ne!(at(game, 1), open);
+        assert_eq!(at(game, 2), closed);
+    });
+}
+/// `Projectile.tick`: a rocket loaded without `HasBeenShot` posts
 /// `projectile_shoot` on its first tick, once; one loaded shot posts none.
 /// `FireworkRocketEntity.tick`'s launch sound skips a silent one.
 #[test]

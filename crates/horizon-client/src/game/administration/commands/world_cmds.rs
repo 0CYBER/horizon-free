@@ -306,13 +306,29 @@ impl Game<'_> {
                     from,
                     attacker_species,
                 };
+                // `Shulker.hurtServer`: damage tagged `is_projectile` whose direct entity is a shulker
+                // bullet is a hit by one, whatever sent it.
+                let bullet = matches!(by, Some(Target::Projectile(p)) if self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .any(|q| q.id == p
+                        && matches!(q.kind, horizon_client::projectiles::ProjectileKind::ShulkerBullet { .. })))
+                    && self.health_resources.damage.id(ty).is_some_and(|kind| {
+                        self.health_resources
+                            .damage
+                            .in_tag(kind, "minecraft:is_projectile")
+                    });
                 // DamageSource.getEntity is the causing player, even when
                 // another client issued the command or supplied the direct entity.
                 let guest = match cause.or(by) {
                     Some(Target::Guest(conn)) if self.lan_acting != Some(conn) => Some(conn),
                     _ => None,
                 };
-                if let Some(conn) = guest {
+                // Keep the source in scope across the replaceable mob damage call.
+                let previous_bullet_damage =
+                    std::mem::replace(&mut self.command_damage_by_shulker_bullet, bullet);
+                let hurt = if let Some(conn) = guest {
                     let attack = self.current_attack();
                     let hurt = self
                         .as_guest(conn, |g| {
@@ -325,7 +341,9 @@ impl Game<'_> {
                     hurt
                 } else {
                     self.command_damage_mob(id, amount, damage)
-                }
+                };
+                self.command_damage_by_shulker_bullet = previous_bullet_damage;
+                hurt
             }
             Target::Item(id) => self.hurt_item_entity(id, amount, ty, by, cause.or(by), from),
             Target::Boat(_) | Target::Cart(_) => {
@@ -437,6 +455,7 @@ impl Game<'_> {
     /// Health-changing hits also raise their damage vibration before return.
     fn command_damage_mob(&mut self, id: u32, amount: f32, damage: Damage) -> bool {
         let attack = self.combat.attack();
+        let by_shulker_bullet = self.command_damage_by_shulker_bullet;
         let mut reinforcements = Vec::new();
         let mut health_changed = false;
         let hurt = self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
@@ -448,6 +467,9 @@ impl Game<'_> {
                 damage,
             );
             health_changed = hurt && m.health != old_health;
+            if hurt && by_shulker_bullet {
+                horizon_client::mobs::shulker::hit_by_bullet(m);
+            }
             if hurt {
                 reinforcements = take_new_reinforcements(&mut m.outbox, queued);
             }
