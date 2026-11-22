@@ -2281,7 +2281,9 @@ pub struct SaveDir {
     /// The Overworld's old-world blending cache, read when a save is requested
     /// (installed where `SavedOldWorld` is made for this same folder).
     blending_lookup: OnceLock<BlendingLookup>,
-    /// Lazy canonical section palette cache budget for repeated chunk saves.
+    /// Byte budget of the canonical section palettes its saves leave cached
+    /// on resident sections. Its own until [`Self::share_section_palettes`]
+    /// joins it to another level's folder of the same world.
     section_palettes: Arc<SavedPaletteBudget>,
 }
 fn intern_saved_fluids(root: &NamedTag) {
@@ -2442,6 +2444,11 @@ impl SaveDir {
     /// Mark this as a server-owned world save, not a remote cache.
     pub fn enable_trusted_fluid_load(&mut self) {
         self.trusted_fluid_load = true;
+    }
+    /// Cache section palettes under `other`'s budget, so the levels of one
+    /// world share one cap instead of one each. Set before this folder saves.
+    pub fn share_section_palettes(&mut self, other: &SaveDir) {
+        self.section_palettes = Arc::clone(&other.section_palettes);
     }
     /// Lets saves of this folder take an old chunk's calculated blending data
     /// (`lookup` must not calculate). Set once, before the folder saves.

@@ -759,6 +759,7 @@ impl Game<'_> {
                 .unwrap_or_else(|| self.res.biomes())
                 .clone(),
             generate.as_ref(),
+            Some(&self.save),
         )?;
         save.install_profession_snapshot(self.stations().professions.clone());
         if let Some(terrain) = &locator {

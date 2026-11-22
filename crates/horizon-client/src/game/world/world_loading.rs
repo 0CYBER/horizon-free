@@ -330,6 +330,7 @@ impl WorldRequest {
             &level.enabled_features,
             biomes.clone(),
             None,
+            None,
         )?;
         drop(streaming_step);
         streaming.radius = settings.render_distance;
@@ -1037,12 +1038,17 @@ pub(super) fn make_streaming(
     enabled_features: &[String],
     biomes: Arc<Biomes>,
     runtime: Option<&super::runtime_levels::Generate>,
+    same_world: Option<&SaveDir>,
 ) -> Result<(Streaming, Arc<SaveDir>, Option<Arc<VanillaTerrain>>)> {
     let mut save = SaveDir::new(
         horizon_client::save::dimension_dir(world_root, dim.id()),
         shape,
     );
     save.enable_trusted_fluid_load();
+    // One section palette budget per world, not one per level.
+    if let Some(open) = same_world {
+        save.share_section_palettes(open);
+    }
     let save = Arc::new(save);
     if dim == Dim::End {
         // Migrate before any chunk reader can cache the old block entities. A side file it

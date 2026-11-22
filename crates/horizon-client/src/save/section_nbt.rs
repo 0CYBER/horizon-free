@@ -3,7 +3,8 @@ use super::{Biomes, BlockRegistry, BlockStateId, SaveTables, Section, Tag, strin
 use horizon_core::paletted::SavedPaletteBudget;
 use std::sync::Arc;
 
-/// Default per-`SaveDir` byte cap for retained canonical section palettes.
+/// Default byte cap for retained canonical section palettes: one per world,
+/// shared by its levels' `SaveDir`s ([`SaveDir::share_section_palettes`]).
 pub(super) const DEFAULT_PALETTE_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 pub(super) fn new_budget() -> Arc<SavedPaletteBudget> {
@@ -46,7 +47,7 @@ mod tests {
     use super::DEFAULT_PALETTE_CACHE_BYTES;
     use horizon_core::nbt::Limits;
     use horizon_world::{DATA_VERSION, region::RegionFile};
-    use std::fs;
+    use std::{fs, sync::OnceLock};
 
     fn test_registry(names: &[&str], with_props: bool) -> BlockRegistry {
         let mut states: Vec<Tag> = names.iter().map(|n| Tag::String((*n).into())).collect();
@@ -73,6 +74,25 @@ mod tests {
             ),
         ]))
         .expect("build synthetic registry")
+    }
+
+    /// The registry for saves that queue an `Encoding`, which holds it as
+    /// `&'static`.
+    fn static_registry() -> &'static BlockRegistry {
+        static REGISTRY: OnceLock<BlockRegistry> = OnceLock::new();
+        REGISTRY.get_or_init(|| {
+            test_registry(
+                &[
+                    "minecraft:air",
+                    "minecraft:stone",
+                    "minecraft:dirt",
+                    "minecraft:sand",
+                    "minecraft:gravel",
+                    "minecraft:oak_log",
+                ],
+                true,
+            )
+        })
     }
 
     fn test_biomes(names: &[&str]) -> Arc<Biomes> {
@@ -128,15 +148,7 @@ mod tests {
 
     #[test]
     fn lazy_cache_fills_on_save_not_load_and_releases_on_drop() {
-        let registry: &'static BlockRegistry = Box::leak(Box::new(test_registry(
-            &[
-                "minecraft:air",
-                "minecraft:stone",
-                "minecraft:dirt",
-                "minecraft:oak_log",
-            ],
-            true,
-        )));
+        let registry = static_registry();
         let biomes = test_biomes(&["plains", "forest", "desert"]);
         let dir = tempfile::tempdir().unwrap();
         let save = SaveDir::new(dir.path().to_path_buf(), LevelShape::OVERWORLD);
@@ -166,35 +178,62 @@ mod tests {
             .save_later(&[Arc::clone(&loaded)], registry, &biomes)
             .unwrap();
         reloaded_dir.flush().unwrap();
-        let reloaded_charged = reloaded_dir.section_palettes.used();
+        // `flush` can return while the writer still holds the queued snapshot;
+        // closing the folder joins the writer, so `loaded` is the only owner.
+        let reloaded_budget = Arc::clone(&reloaded_dir.section_palettes);
+        drop(reloaded_dir);
+        let reloaded_charged = reloaded_budget.used();
         assert_eq!(reloaded_charged, charged);
 
         // Mutating one section drops only that section's cached entry.
         Arc::make_mut(&mut Arc::make_mut(&mut loaded).sections[0])
             .blocks
             .set(0, 4);
-        assert!(reloaded_dir.section_palettes.used() < reloaded_charged);
-        assert!(reloaded_dir.section_palettes.used() > 0);
+        assert!(reloaded_budget.used() < reloaded_charged);
+        assert!(reloaded_budget.used() > 0);
 
         drop(loaded);
-        assert_eq!(reloaded_dir.section_palettes.used(), 0);
+        assert_eq!(reloaded_budget.used(), 0);
         drop(chunk);
         assert_eq!(save.section_palettes.used(), 0);
     }
 
     #[test]
+    fn levels_sharing_a_budget_charge_one_cap() {
+        let registry = static_registry();
+        let biomes = test_biomes(&["plains", "forest", "desert"]);
+        let dir = tempfile::tempdir().unwrap();
+        let overworld = SaveDir::new(dir.path().join("overworld"), LevelShape::OVERWORLD);
+        let mut other = SaveDir::new(dir.path().join("other"), LevelShape::OVERWORLD);
+        other.share_section_palettes(&overworld);
+        let apart = SaveDir::new(dir.path().join("apart"), LevelShape::OVERWORLD);
+
+        let first = Arc::new(sample_chunk(0, 0, 5, 3));
+        overworld
+            .save(&[Arc::clone(&first)], registry, &biomes)
+            .unwrap();
+        let one = overworld.section_palettes.used();
+        assert!(one > 0);
+        let second = Arc::new(sample_chunk(1, 0, 5, 3));
+        other
+            .save(&[Arc::clone(&second)], registry, &biomes)
+            .unwrap();
+        // Both folders' saves count against the one budget.
+        assert!(overworld.section_palettes.used() > one);
+        assert_eq!(
+            other.section_palettes.used(),
+            overworld.section_palettes.used()
+        );
+        // A folder that doesn't share keeps its own.
+        assert_eq!(apart.section_palettes.used(), 0);
+
+        drop((first, second));
+        assert_eq!(overworld.section_palettes.used(), 0);
+    }
+
+    #[test]
     fn cached_saves_produce_byte_identical_region_files() {
-        let registry: &'static BlockRegistry = Box::leak(Box::new(test_registry(
-            &[
-                "minecraft:air",
-                "minecraft:stone",
-                "minecraft:dirt",
-                "minecraft:sand",
-                "minecraft:gravel",
-                "minecraft:oak_log",
-            ],
-            true,
-        )));
+        let registry = static_registry();
         let biomes = test_biomes(&["plains", "forest", "desert", "taiga"]);
         let budget = Arc::new(SavedPaletteBudget::new(DEFAULT_PALETTE_CACHE_BYTES));
         let mut chunks: Vec<Arc<Chunk>> = (0..8)
@@ -335,10 +374,10 @@ mod tests {
 
     #[test]
     fn budget_cap_enforced_and_over_cap_chunks_encode_identically() {
-        let registry: &'static BlockRegistry = Box::leak(Box::new(test_registry(
+        let registry = test_registry(
             &["minecraft:air", "minecraft:stone", "minecraft:dirt"],
             false,
-        )));
+        );
         let biomes = test_biomes(&["plains", "forest"]);
         let dir = tempfile::tempdir().unwrap();
         let mut save = SaveDir::new(dir.path().to_path_buf(), LevelShape::OVERWORLD);
@@ -346,20 +385,20 @@ mod tests {
         save.section_palettes = Arc::new(SavedPaletteBudget::new(3000));
 
         let chunks: Vec<Arc<Chunk>> = (0..4).map(|x| Arc::new(sample_chunk(x, 0, 3, 2))).collect();
-        save.save(&chunks, registry, &biomes).unwrap();
+        save.save(&chunks, &registry, &biomes).unwrap();
         assert!(save.section_palettes.used() > 0);
         assert!(save.section_palettes.used() <= save.section_palettes.limit());
 
         for chunk in &chunks {
             let expected = nbt::write_named(
-                &encode_with(chunk, registry, &biomes, None, LevelShape::OVERWORLD),
+                &encode_with(chunk, &registry, &biomes, None, LevelShape::OVERWORLD),
                 Limits::saved(),
             )
             .unwrap();
             let actual = nbt::write_named(
                 &encode_saved(
                     chunk,
-                    registry,
+                    &registry,
                     &biomes,
                     None,
                     LevelShape::OVERWORLD,

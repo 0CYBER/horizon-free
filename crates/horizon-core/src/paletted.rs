@@ -248,8 +248,8 @@ pub struct Packed {
     pub data: Option<Vec<u64>>,
 }
 
-/// Per-save-folder byte budget for cached canonical section palettes held by
-/// resident [`PalettedContainer`]s.
+/// Byte budget for cached canonical section palettes held by resident
+/// [`PalettedContainer`]s, shared by every save folder that holds the `Arc`.
 #[derive(Debug)]
 pub struct SavedPaletteBudget {
     limit: usize,
@@ -986,15 +986,24 @@ impl PalettedContainer {
         }
         (0..entries).any(|i| matching[self.raw(i)])
     }
-    /// Heap bytes held by the palette, the storage, and any cached canonical
-    /// saved palette.
+    /// Heap bytes held by the palette, the storage, and this container's share
+    /// of any cached canonical saved palette: clones share one entry, and each
+    /// counts its charge divided by the number of containers holding it, so
+    /// summing them counts the entry once.
     pub fn heap_bytes(&self) -> usize {
+        self.storage_heap_bytes()
+            + self
+                .saved_nbt
+                .get()
+                .map_or(0, |saved| saved.charge / Arc::strong_count(saved))
+    }
+    /// Heap bytes held by the palette and the storage.
+    fn storage_heap_bytes(&self) -> usize {
         self.words.capacity() * 8
             + match &self.palette {
                 Palette::List(list) => list.capacity() * 4,
                 _ => 0,
             }
-            + self.saved_nbt.get().map_or(0, |saved| saved.charge)
     }
 }
 impl PartialEq for PalettedContainer {
@@ -1072,6 +1081,28 @@ mod tests {
 
         drop(palette);
         assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn heap_bytes_counts_a_shared_cached_palette_once_across_clones() {
+        let mut palette = PalettedContainer::new(BLOCKS, 0);
+        palette.set(1, 1);
+        let base_heap = palette.heap_bytes();
+        let budget = Arc::new(SavedPaletteBudget::new(1 << 20));
+        palette.pack_nbt(Some(&budget), |id| Tag::Int(id as i32));
+        let charge = budget.used();
+        let clones = [palette.clone(), palette.clone(), palette.clone()];
+        let cached: usize = std::iter::once(&palette)
+            .chain(&clones)
+            .map(|holder| holder.heap_bytes() - holder.storage_heap_bytes())
+            .sum();
+        // Four holders: the entry counts once, not four times (less the rounding).
+        assert!(
+            cached <= charge && cached + 4 > charge,
+            "{cached} of {charge}"
+        );
+        drop(clones);
+        assert_eq!(palette.heap_bytes(), base_heap + charge);
     }
 
     #[test]
