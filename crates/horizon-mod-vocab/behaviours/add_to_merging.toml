@@ -8,5 +8,5 @@ to the list of each target the file names, after the target's own entries and ev
 then file order. A target nobody defines is skipped."""
 tests = [
   "crates/horizon-client/src/mod_content_tests.rs::additions_append_by_priority_then_order_and_skip_unknown_targets",
-  "crates/horizon-client/src/mod_content_tests.rs::content_root_carries_a_structure_mod",
+  "crates/horizon-client/src/mod_content_worldgen_tests.rs::content_root_carries_a_structure_mod",
 ]
