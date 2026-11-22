@@ -10,7 +10,7 @@ mod mod_screen;
 use super::{Game, Screen};
 use horizon_client::{
     containers::{BlockEntity, FurnaceKind},
-    hud::{HudBatch, Rect, rgba},
+    hud::{HudAtlas, HudBatch, Rect, rgba},
     items::ItemStack,
     menu::place::{PostPlace, Stacked},
     random_source,
@@ -20,7 +20,7 @@ use horizon_client::{
         Screen as Layout, Search, TabView,
     },
     text::{Style, Text},
-    ui::EditBox,
+    ui::{EditBox, blit_sprite},
 };
 use mod_api::{RecipeTransferCheck, RecipeTransferResult};
 use std::{
@@ -191,6 +191,17 @@ fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
 }
 fn sprite(name: &str) -> String {
     format!("gui/sprites/recipe_book/{name}")
+}
+
+/// `ImageButton.extractContents`: draw the sprite in the 20×18 bounds set by
+/// `AbstractRecipeBookScreen.initButton`, not at its atlas dimensions.
+fn draw_book_button(batch: &mut HudBatch, atlas: &HudAtlas, x: f32, y: f32, hovered: bool) {
+    let sprite = if hovered {
+        "gui/sprites/recipe_book/button_highlighted"
+    } else {
+        "gui/sprites/recipe_book/button"
+    };
+    blit_sprite(batch, atlas, sprite, x, y, 20.0, 18.0, u32::MAX);
 }
 
 impl Game<'_> {
@@ -1892,16 +1903,7 @@ impl Game<'_> {
         let cursor = self.cursor;
         let (bx, by) = self.book_button_pos(book_type, ox, batch);
         let hover = inside(cursor, bx, by, 20.0, 18.0);
-        batch.sprite(
-            &self.gui.atlas,
-            &sprite(if hover {
-                "button_highlighted"
-            } else {
-                "button"
-            }),
-            bx,
-            by,
-        );
+        draw_book_button(batch, &self.gui.atlas, bx, by, hover);
         self.draw_ghost(batch, book_type);
         let tooltip = if self.book_open(book_type) {
             self.refresh_book_view(book_type);
@@ -2357,6 +2359,41 @@ mod request_generation_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recipe_book_toggle_uses_the_widget_bounds_and_the_selected_sprite() {
+        use super::*;
+        use horizon_assets::resource_source::ResourceSource;
+
+        let mut atlas = HudAtlas::fonts(&ResourceSource::default()).unwrap();
+        for (name, u0) in [
+            ("gui/sprites/recipe_book/button", 0.0),
+            ("gui/sprites/recipe_book/button_highlighted", 0.25),
+        ] {
+            atlas.sprites.insert(
+                name.into(),
+                Rect {
+                    u0,
+                    v0: 0.0,
+                    u1: u0 + 0.25,
+                    v1: 0.25,
+                    // An animated override of the vanilla button gets a
+                    // square atlas rect rather than the widget's bounds.
+                    w: 18,
+                    h: 18,
+                },
+            );
+        }
+        for (hovered, u0) in [(false, 0.0), (true, 0.25)] {
+            let mut batch = HudBatch::scratch([320, 240]);
+            draw_book_button(&mut batch, &atlas, 5.0, 7.0, hovered);
+            assert_eq!(batch.vertices.len(), 6);
+            assert_eq!(batch.vertices[0].pos, [5.0, 7.0]);
+            assert_eq!(batch.vertices[0].uv, [u0, 0.0]);
+            assert_eq!(batch.vertices[2].pos, [25.0, 25.0]);
+            assert_eq!(batch.vertices[2].uv, [u0 + 0.25, 0.25]);
+        }
+    }
+
     /// `RecipeBookComponent.keyPressed`: Escape closes a narrow window's open
     /// book (`!isOffsetNextToMainGUI`), not the container; a wide window's
     /// book leaves Escape to the container.

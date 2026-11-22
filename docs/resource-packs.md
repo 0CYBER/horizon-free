@@ -53,7 +53,7 @@ harness named checks that loader against vanilla).
 | Mipmap strategy, alpha cutoff bias | `*.png.mcmeta` `texture` | works | `test_mipmap_parity` |
 | `blur` / `clamp` | `*.png.mcmeta` `texture` | works | `hud.rs` `TextureFlags` reads them from the overlay, and `screen_effects.rs` samples the screen overlays with them |
 | Atlases and sprite sources: `directory`, `single`, `filter`, `unstitch`, `paletted_permutations` | `atlases/` | works | `test_resource_pack_parity` (merged source lists), `atlas_sources.rs` tests |
-| GUI sprites | `textures/gui/sprites/` | works | `test_hud_parity`, `test_screen_layout_parity` |
+| GUI sprites | `textures/gui/sprites/` | works | `test_hud_parity`, `test_screen_layout_parity`; the recipe book toggle uses its 20×18 GUI-pixel bounds even for high-resolution or animated sprites |
 | GUI sprite scaling: `nine_slice` border | `*.png.mcmeta` `gui` | works | `ui.rs` reads the border; vanilla's buttons, sliders and frames use it |
 | GUI sprite scaling: `width`/`height`, `stretch_inner`, `tile`, `stretch` | `*.png.mcmeta` `gui` | partly | `ui.rs` reads a `nine_slice` sprite's size in GUI pixels and its `stretch_inner` (vanilla's tooltip frame); the `tile` and `stretch` scaling types aren't read |
 | Fonts: `bitmap`, `space`, `unihex`, `reference` | `font/*.json`, `textures/font/` | works | `test_resource_pack_parity` (merged provider lists) |
