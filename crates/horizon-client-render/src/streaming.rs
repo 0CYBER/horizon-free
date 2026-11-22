@@ -2863,6 +2863,24 @@ impl Streaming {
         }
         changed
     }
+    /// Hold or release a runtime-only mod ticket ([`TransientTicket`]), as
+    /// [`Self::set_mod_forced`] does a saved one: true when it changed.
+    pub fn set_transient_forced(
+        &mut self,
+        ticket: crate::mod_chunk_tickets::TransientTicket,
+        forced: bool,
+    ) -> bool {
+        let chunk = ticket.chunk;
+        let changed = if forced {
+            self.mod_tickets.insert_transient(ticket)
+        } else {
+            self.mod_tickets.remove_transient(&ticket)
+        };
+        if self.settle(chunk) {
+            self.rank_forced(chunk.0, chunk.1, chunk.0, chunk.1);
+        }
+        changed
+    }
     /// Bring `forced` in line with who holds `chunk`: true when it just
     /// became forced. The one writer of `forced`.
     fn settle(&mut self, chunk: (i32, i32)) -> bool {

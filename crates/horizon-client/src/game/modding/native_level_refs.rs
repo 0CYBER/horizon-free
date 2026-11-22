@@ -497,12 +497,6 @@ impl Game<'_> {
         forced: bool,
         natural_spawning: bool,
     ) -> bool {
-        if !calling_mod_owns(controller) {
-            return false;
-        }
-        if self.native_level_streaming(chunk.level()).is_none() || !chunk_in_world(chunk.pos()) {
-            return false;
-        }
         let [x, z] = chunk.pos();
         let ticket = ModTicket {
             controller: controller.slot(),
@@ -510,16 +504,53 @@ impl Game<'_> {
             chunk: (x, z),
             natural_spawning,
         };
-        let dimension = chunk.level().dimension_id();
-        let streaming = if dimension == self.dim.id() {
-            &mut self.streaming
-        } else if let Some(streaming) = self.levels.parked_streaming_of_mut(dimension) {
-            streaming
-        } else {
-            return false;
-        };
-        streaming.set_mod_forced(ticket, forced)
+        self.mod_ticket_streaming(chunk, controller)
+            .is_some_and(|streaming| streaming.set_mod_forced(ticket, forced))
     }
+    /// A runtime-only ticket of `controller` for `operation` on `chunk`, as
+    /// `chunk_set_mod_forced` holds a saved one, with the same refusals. Kept
+    /// apart from the saved tickets: never written, never validated, never
+    /// listed by `level_mod_forced_chunks`, and gone when its level closes.
+    pub(super) fn chunk_set_transient_forced(
+        &mut self,
+        chunk: ChunkRef,
+        controller: TicketController,
+        operation: u128,
+        forced: bool,
+        natural_spawning: bool,
+    ) -> bool {
+        let [x, z] = chunk.pos();
+        let ticket = horizon_client::mod_chunk_tickets::TransientTicket {
+            controller: controller.slot(),
+            operation,
+            chunk: (x, z),
+            natural_spawning,
+        };
+        self.mod_ticket_streaming(chunk, controller)
+            .is_some_and(|streaming| streaming.set_transient_forced(ticket, forced))
+    }
+    /// The streaming of `chunk`'s level for a ticket of `controller`: None
+    /// outside the calling mod's own controller, for a chunk outside the
+    /// world and for a level the server has not opened.
+    fn mod_ticket_streaming(
+        &mut self,
+        chunk: ChunkRef,
+        controller: TicketController,
+    ) -> Option<&mut Streaming> {
+        if !calling_mod_owns(controller) {
+            return None;
+        }
+        if self.native_level_streaming(chunk.level()).is_none() || !chunk_in_world(chunk.pos()) {
+            return None;
+        }
+        let dimension = chunk.level().dimension_id();
+        if dimension == self.dim.id() {
+            Some(&mut self.streaming)
+        } else {
+            self.levels.parked_streaming_of_mut(dimension)
+        }
+    }
+
     /// The chunk tickets `controller` holds in the level, as (owner, chunk
     /// position, natural_spawning), in order. None for a stale handle, on a
     /// client, outside a mod's hook and for another mod's controller.

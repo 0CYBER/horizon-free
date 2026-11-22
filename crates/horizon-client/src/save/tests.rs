@@ -8,6 +8,40 @@ fn a_bare_file_name_syncs_the_working_directory() {
 }
 
 #[test]
+fn transient_mod_tickets_hold_chunks_without_reopening_them_on_restart() {
+    use super::*;
+    let root = tempfile::tempdir().unwrap();
+    let save = SaveDir::new(root.path().to_path_buf(), LevelShape::OVERWORLD);
+    let mut tickets = ModTickets::default();
+    let block = ModTicket {
+        controller: 0,
+        owner: TicketOwner::Block([1, -2, 3]),
+        chunk: (4, 5),
+        natural_spawning: true,
+    };
+    let entity = ModTicket {
+        owner: TicketOwner::Entity(0x1234_5678_9abc_def0_1122_3344_5566_7788),
+        chunk: (6, 7),
+        natural_spawning: false,
+        ..block.clone()
+    };
+    tickets.insert_transient(crate::mod_chunk_tickets::TransientTicket {
+        controller: 0,
+        operation: 1,
+        chunk: (8, 9),
+        natural_spawning: false,
+    });
+    tickets.insert(block.clone());
+    tickets.insert(entity.clone());
+    assert!(tickets.holds((8, 9)));
+    save.save_mod_tickets(&tickets, |_| Some("test:teleport"))
+        .unwrap();
+    let mut loaded = save.load_mod_tickets(|_| Some(0));
+    loaded.sort();
+    assert_eq!(loaded, [block, entity]);
+}
+
+#[test]
 fn saved_preset_editor_stems_supply_shapes_and_facts_below_pack_stems() {
     use super::*;
     use horizon_world::worldgen::overrides::{DIMENSIONS, WorldgenOverrides};

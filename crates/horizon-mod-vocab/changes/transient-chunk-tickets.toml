@@ -1,0 +1,3 @@
+ids = ["handle:ChunkRef::set_transient_forced"]
+why = "A mod can hold a chunk for one operation, such as finding a random teleport destination, without the ticket being saved and reopened on restart. TicketOwner and its codec are unchanged."
+migrate = "Additive. Transient tickets are not listed by mod_forced_chunks or handed to validate_tickets."

@@ -8,10 +8,24 @@ pub use mod_api::world::mod_chunk_tickets::{
 };
 use std::collections::{BTreeSet, HashMap};
 
+/// A runtime-only ticket (`ChunkRef::set_transient_forced`): `controller`
+/// holds `chunk` for one operation it names, such as finding a teleport
+/// destination. Kept apart from [`ModTicket`], so it is never saved, never
+/// validated and never listed by `mod_forced_chunks`; it ends with its level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TransientTicket {
+    pub controller: u32,
+    pub operation: u128,
+    pub chunk: (i32, i32),
+    pub natural_spawning: bool,
+}
+
 /// The tickets of one level.
 #[derive(Debug, Default)]
 pub struct ModTickets {
     held: BTreeSet<ModTicket>,
+    /// Runtime-only tickets, held alongside `held` but never saved.
+    transient: BTreeSet<TransientTicket>,
     /// Read from the save, not yet validated: they hold nothing until
     /// `take_loaded` hands them out and the survivors are inserted.
     loaded: Vec<ModTicket>,
@@ -34,23 +48,47 @@ impl ModTickets {
         let (chunk, spawning) = (ticket.chunk, ticket.natural_spawning);
         let new = self.held.insert(ticket);
         if new {
-            let counts = self.per_chunk.entry(chunk).or_default();
-            counts.0 += 1;
-            counts.1 += u32::from(spawning);
+            self.count(chunk, spawning);
         }
         new
     }
     /// Release `ticket`: true when it was held.
     pub fn remove(&mut self, ticket: &ModTicket) -> bool {
         let held = self.held.remove(ticket);
-        if held && let Some(counts) = self.per_chunk.get_mut(&ticket.chunk) {
-            counts.0 -= 1;
-            counts.1 -= u32::from(ticket.natural_spawning);
-            if counts.0 == 0 {
-                self.per_chunk.remove(&ticket.chunk);
-            }
+        if held {
+            self.uncount(ticket.chunk, ticket.natural_spawning);
         }
         held
+    }
+    /// Hold a runtime-only `ticket`: true when it was new.
+    pub fn insert_transient(&mut self, ticket: TransientTicket) -> bool {
+        let new = self.transient.insert(ticket);
+        if new {
+            self.count(ticket.chunk, ticket.natural_spawning);
+        }
+        new
+    }
+    /// Release a runtime-only `ticket`: true when it was held.
+    pub fn remove_transient(&mut self, ticket: &TransientTicket) -> bool {
+        let held = self.transient.remove(ticket);
+        if held {
+            self.uncount(ticket.chunk, ticket.natural_spawning);
+        }
+        held
+    }
+    fn count(&mut self, chunk: (i32, i32), spawning: bool) {
+        let counts = self.per_chunk.entry(chunk).or_default();
+        counts.0 += 1;
+        counts.1 += u32::from(spawning);
+    }
+    fn uncount(&mut self, chunk: (i32, i32), spawning: bool) {
+        if let Some(counts) = self.per_chunk.get_mut(&chunk) {
+            counts.0 -= 1;
+            counts.1 -= u32::from(spawning);
+            if counts.0 == 0 {
+                self.per_chunk.remove(&chunk);
+            }
+        }
     }
     /// Whether any mod holds `chunk`.
     pub fn holds(&self, chunk: (i32, i32)) -> bool {
@@ -132,6 +170,32 @@ mod tests {
         assert!(tickets.forces_natural_spawning((2, 2)));
         assert!(tickets.remove(&spawning));
         assert!(tickets.holds((2, 2)) && !tickets.forces_natural_spawning((2, 2)));
+    }
+
+    #[test]
+    fn a_transient_ticket_holds_its_chunk_but_is_not_listed() {
+        let mut tickets = ModTickets::default();
+        let block = ticket(0, TicketOwner::Block([1, 2, 3]), (4, 5));
+        let entity = ticket(0, TicketOwner::Entity(9), (6, 7));
+        let transient = TransientTicket {
+            controller: 0,
+            operation: 1,
+            chunk: (4, 5),
+            natural_spawning: true,
+        };
+        tickets.insert(block.clone());
+        tickets.insert(entity.clone());
+        assert!(tickets.insert_transient(transient));
+        assert!(tickets.forces_natural_spawning((4, 5)));
+        assert_eq!(
+            tickets.of_controller(0).collect::<Vec<_>>(),
+            [&block, &entity]
+        );
+        assert!(tickets.remove(&block));
+        assert!(tickets.holds((4, 5)), "the transient ticket still holds it");
+        assert!(tickets.remove_transient(&transient));
+        assert!(!tickets.holds((4, 5)));
+        assert!(tickets.holds((6, 7)));
     }
 
     #[test]

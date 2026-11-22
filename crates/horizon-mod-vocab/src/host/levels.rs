@@ -930,6 +930,23 @@ pub trait LevelsBackendMut {
         natural_spawning: bool,
     ) -> bool;
     /// Side: server.
+    /// Hold or release a runtime-only ticket of `controller` on this chunk for
+    /// `operation`, an id the mod picks (a teleport search, say): true when the
+    /// controller's tickets changed. It holds the chunk as `chunk_set_mod_forced`
+    /// does, with the same refusals, and is scoped by (controller, operation,
+    /// chunk, natural_spawning). It is never saved, never handed to
+    /// `validate_tickets` and never listed by `mod_forced_chunks`; it ends when
+    /// the level closes.
+    #[access(WorldOnly)]
+    fn chunk_set_transient_forced(
+        &mut self,
+        chunk: ChunkRef,
+        controller: TicketController,
+        operation: u128,
+        forced: bool,
+        natural_spawning: bool,
+    ) -> bool;
+    /// Side: server.
     /// Set a block (`Level.setBlock`). Stale/unavailable levels and invalid states return
     /// typed errors without mutation. Ok(false) means vanilla refused an unchanged,
     /// unloaded or out-of-height write. Notification follows the supplied update flags.
