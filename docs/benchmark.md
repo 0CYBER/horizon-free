@@ -62,12 +62,17 @@ It starts at the title screen, creates the world `horizon-benchmark` (seed 1234,
 | `section-draws` | `flat` | `indirect` |
 
 ```sh
+# In the foreground: the game quits when the run is done.
 horizon-client --benchmark ab:gpu-culling --render-distance 12
-horizon-ctl --socket $PWD/ctl.sock launch --offscreen --benchmark ab:gpu-culling
-horizon-perf summary benchmarks/game-*-ab_gpu-culling.json
+horizon-perf summary "$(ls benchmarks/game-*-ab_gpu-culling.json | tail -n 1)"
+
+# Offscreen through horizon-ctl, which answers as soon as the game listens: wait for the game to exit.
+pid=$(horizon-ctl --socket $PWD/ctl.sock launch --offscreen --benchmark ab:gpu-culling | jq .pid)
+while kill -0 "$pid" 2>/dev/null; do sleep 5; done
+horizon-perf summary "$(ls benchmarks/game-*-ab_gpu-culling.json | tail -n 1)"
 ```
 
-The game quits when it is done, so `launch` without `--wait` is enough; the report is under `benchmarks/` in the game folder.
+The game quits when the run is done. `horizon-ctl launch` replies once the game opens its control socket, minutes before that (`--wait` only waits for the world to load), so the summary waits for the process in its reply's `pid`. The report is under `benchmarks/` in the game folder. Its name starts with the time the run began, so the last one listed is the newest; the game also prints its path (`Horizon: benchmark report PATH`). `horizon-perf summary` reads one report.
 
 The report's scenario is `ab:SWITCH`, its `repeats` the number of blocks (16) and its `warmup_s` 2. The blocks are `frames` entries with phase `ab.a` or `ab.b`, and the report's `ab` field holds the result for the GPU, CPU and frame time of a frame: B minus A, a 95% interval and a verdict (`slower`, `faster`, `negligible`, `within_noise`), computed as described in [the report format](benchmark-report.md). A difference inside the interval around 0 is noise. `ab.first_block_outside_range` is true when the first B block, the only one measured before any switch, lies outside the later B blocks: switching reset part of what the trip built (turning GPU culling on rebuilds its records from the renderer's resident order, which can undo the scrambled ids of the trip), so the comparison may understate the difference. A switch the device does not offer (`gpu-culling on` where it is not) ends the run with the game's reason and no report.
 
