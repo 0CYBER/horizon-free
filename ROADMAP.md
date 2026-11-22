@@ -470,7 +470,7 @@ Install and run a Horizon dedicated server from a terminal with a single command
 
 <details><summary>Technical</summary>
 
-A player's idea (#horizon-ideas). `horizon-server` already runs headless; left: an install script (Linux/macOS shell, Windows PowerShell) that fetches the signed release, checks it, asks for or points at the player's own game files and starts the server, documented in [docs/hosting.md](docs/hosting.md).
+A player's idea (#suggestions). `horizon-server` already runs headless; left: an install script (Linux/macOS shell, Windows PowerShell) that fetches the signed release, checks it, asks for or points at the player's own game files and starts the server, documented in [docs/hosting.md](docs/hosting.md).
 
 </details>
 
@@ -760,7 +760,7 @@ Install Horizon on NixOS through a Nix flake.
 
 <details><summary>Technical</summary>
 
-A player's idea (#horizon-ideas). The launcher's AppImage ships with each launcher release ([packaging/linux/appimage.sh](packaging/linux/appimage.sh)): one file with the libraries GPUI needs, which replaces itself when it updates. A flake.nix packaging the release binaries with their runtime libraries (Vulkan loader, X11/Wayland, ALSA) is still missing, the way horizon-parity's NixOS setup runs them today.
+A player's idea (#suggestions). The launcher's AppImage ships with each launcher release ([packaging/linux/appimage.sh](packaging/linux/appimage.sh)): one file with the libraries GPUI needs, which replaces itself when it updates. A flake.nix packaging the release binaries with their runtime libraries (Vulkan loader, X11/Wayland, ALSA) is still missing, the way horizon-parity's NixOS setup runs them today.
 
 </details>
 
@@ -784,7 +784,7 @@ An optional look for the game's own menus and options that matches the Horizon l
 
 <details><summary>Technical</summary>
 
-A player's idea (#horizon-ideas). A built-in resource pack or a Horizon setting that restyles the title, pause and options screens with the launcher's design tokens (crates/horizon-theme), following [docs/design-system.md](docs/design-system.md); off by default because it changes the vanilla look.
+A player's idea (#suggestions). A built-in resource pack or a Horizon setting that restyles the title, pause and options screens with the launcher's design tokens (crates/horizon-theme), following [docs/design-system.md](docs/design-system.md); off by default because it changes the vanilla look.
 
 </details>
 
