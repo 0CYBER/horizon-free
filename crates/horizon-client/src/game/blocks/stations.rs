@@ -507,7 +507,7 @@ impl Game<'_> {
             return false;
         };
         if self.level.xp_seed == 0 {
-            self.level.xp_seed = self.world.random.next_int();
+            self.level.xp_seed = random_source::entity().next_int();
         }
         self.station = Some(Station::new(kind, pos));
         self.station_changed();
@@ -919,7 +919,7 @@ impl Game<'_> {
             &*name,
             "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil"
         );
-        if !creative && anvil && self.world.random.next_float() < 0.12 {
+        if !creative && anvil && random_source::entity().next_float() < 0.12 {
             match &*name {
                 "minecraft:anvil" => {
                     let _ = self.set_state_named(pos, "minecraft:chipped_anvil", &["facing"]);
@@ -1061,7 +1061,7 @@ impl Game<'_> {
         let pos = s.pos;
         let enchanted_item = enchanted.clone();
         self.enchantment_performed(lapis_needed as i32);
-        self.level.xp_seed = self.world.random.next_int();
+        self.level.xp_seed = random_source::entity().next_int();
         if let Some(s) = self.station.as_mut() {
             s.inputs[0] = Some(enchanted);
             if !self.creative
