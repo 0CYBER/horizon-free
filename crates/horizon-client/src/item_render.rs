@@ -348,8 +348,7 @@ impl ItemRenderState {
                 let q = &baked.quads[run.quad];
                 let Some(r) = sprites
                     .get(sprite_name(&q.material.sprite))
-                    .or_else(|| sprites.get("misc/missingno"))
-                    .or_else(|| sprites.get("horizon/missingno"))
+                    .or_else(|| sprites.get(crate::hud::MISSING_SPRITE))
                 else {
                     continue;
                 };
@@ -469,8 +468,7 @@ fn submit_quads(
             _ => {
                 let rect = sprites
                     .get(sprite_name(&q.material.sprite))
-                    .or_else(|| sprites.get("misc/missingno"))
-                    .or_else(|| sprites.get("horizon/missingno"))
+                    .or_else(|| sprites.get(crate::hud::MISSING_SPRITE))
                     .copied();
                 last_rect = Some((&q.material.sprite, rect));
                 rect

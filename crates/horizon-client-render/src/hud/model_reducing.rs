@@ -193,6 +193,49 @@ impl HudAtlas {
             }
         }
     }
+
+    /// A pack's high-resolution sprites — the ones the default resources name
+    /// at a smaller logical size — halve until the atlas holds them, down to
+    /// that logical size: below it, a sprite draws under one texel per GUI
+    /// pixel. Sprites the default resources do not name (their logical size
+    /// is their own), particles, and the run-time slots (empty pixels) keep
+    /// their pixels.
+    pub(super) fn layout_reducing_hires(
+        images: &mut [PackedImage],
+        gui_sizes: &HashMap<String, (u32, u32)>,
+        max: u32,
+    ) -> Result<(u32, Vec<(u32, u32)>, u32)> {
+        loop {
+            let error = match Self::layout(images, max) {
+                Ok(layout) => return Ok(layout),
+                Err(error) => error,
+            };
+            let mut changed = false;
+            for (name, w, h, pixels) in images.iter_mut() {
+                let Some((gw, gh)) = gui_sizes
+                    .get(name)
+                    .copied()
+                    .filter(|&(gw, gh)| gw > 0 && gh > 0)
+                else {
+                    continue;
+                };
+                if pixels.is_empty() || (*w <= gw && *h <= gh) {
+                    continue;
+                }
+                // One halving step, never past the logical size or the size
+                // the sprite already has.
+                let step = |v: u32, logical: u32| ((v / 2).max(logical)).min(v).max(1);
+                let (nw, nh) = (step(*w, gw), step(*h, gh));
+                *pixels = scaled(pixels, (*w, *h), (nw, nh));
+                (*w, *h) = (nw, nh);
+                changed = true;
+            }
+            if !changed {
+                return Err(error);
+            }
+            images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+        }
+    }
 }
 
 /// `pixels` (`from`, RGBA) at `to`, nearest texel.
