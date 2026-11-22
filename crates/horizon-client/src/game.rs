@@ -10186,16 +10186,27 @@ impl Game<'_> {
                         let steps = self.clock.advance(elapsed, target);
                         self.drain_native_world_request()?;
                         self.client_tick_steps(steps, Some(event_loop))?;
-                    } else if let Some(step) = &step
-                        && let Err(error) = self.export_tick_frame(step, event_loop)
-                    {
-                        self.abort_export(Some(error.to_string()));
-                        return Ok(());
+                    } else {
+                        let result = (|| {
+                            if let Some(step) = &step {
+                                self.export_tick_frame(step, event_loop)?;
+                            }
+                            self.export_progress_frame(event_loop)
+                        })();
+                        match result {
+                            Ok(true) => {}
+                            Ok(false) => return Ok(()),
+                            Err(error) => {
+                                self.abort_export(Some(error.to_string()));
+                                return Ok(());
+                            }
+                        }
                     }
                     if !exporting {
                         self.extras_frame(elapsed);
                     }
-                    if advance_frame {
+                    let completed_live_frame = self.take_live_frame_update();
+                    if advance_frame || completed_live_frame {
                         self.extras_retry()?;
                         self.apply_mouse_look();
                         self.input_look(elapsed.as_secs_f32());

@@ -924,6 +924,9 @@ impl Game<'_> {
             self.profile.memory_due = None;
             return;
         }
+        if self.export_server_calls_blocked() {
+            return;
+        }
         let now = self.profile.perf.now();
         match self.profile.memory_due {
             None => {

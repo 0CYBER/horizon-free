@@ -40,7 +40,7 @@ impl Game<'_> {
         {
             self.clear_lod();
         }
-        if self.lod_source_attempted {
+        if self.lod_source_attempted || self.export_server_calls_blocked() {
             return;
         }
         self.lod_source_attempted = true;
@@ -287,7 +287,7 @@ impl Game<'_> {
             self.view_arrival.arriving(view, now, has)
         };
         self.view_arriving = view_arriving;
-        let arriving = view_arriving || self.remote_backlog() > 0;
+        let arriving = view_arriving || self.remote_backlog_delays_frame();
         // Which far tiles a zoom magnifies (`lod::ZoomAim`), read before
         // `self.renderer.as_mut()` below borrows self mutably for the rest of
         // this function. Cheap: trigonometry on one angle, or None when the

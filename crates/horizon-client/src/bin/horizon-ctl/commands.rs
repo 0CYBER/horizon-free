@@ -615,8 +615,15 @@ pub const COMMANDS: &[Cmd] = &[
           flag("gpu", Ty::Enum(&["passes", "detail"]), "start: also record each render pass's GPU time (detail: its parts and counters too)"),
           flag("no-samples", Ty::Bool, "start: record frame times and health only"), flag("timeline", Ty::Bool, "start: also record every thread's spans, for 60 seconds at most"),
           flag("bench", Ty::Str, "stop: the path of a benchmark report to embed in the capture")], mcp: true, local: false),
-    cmd!("export", Scripting, "export start NAME --size WxH --fps N[/D] [--frames N|--seconds S] [--format png|encoder] [--hud] [--hold] [--no-settle] | export step N | export stop | export status", "capture exact-size offscreen frames on a fixed clock",
-        "Start returns the absolute output folder under the game directory’s exports/. The default format is PNG. With --hold, step N queues N frames and the camera can be moved between steps. The settle gate waits for chunks, lighting and uploads before capturing. A standalone replay seeks back up to one second and pre-rolls without capture. An in-world replay starts at its current position because it cannot seek backwards. Finish, stop and failure emit an export event.",
+    cmd!("export", Scripting, "export start NAME --size WxH --fps N[/D] [--frames N|--seconds S] [--format png|encoder] [--hud] [--hold] [--no-settle] | export step N | export stop | export status", "capture exact-size offscreen frames on a fixed clock in a private single-player world or replay",
+        "Start requires an --offscreen client and returns the absolute output folder under the game directory’s exports/. \
+        The default format is PNG. With --hold, step N queues N frames and the camera can be moved between steps. \
+        The settle gate waits for chunks, lighting and uploads before capturing. Live export requires a private single-player world. \
+        The integrated server advances once per client tick and resumes its normal clock when export stops. \
+        Opening to LAN, starting splitscreen or losing the server interrupts the take. While live startup or a tick is pending, \
+        save, save-all and other commands that wait on the server return a busy error. Retry them once a held export is idle. \
+        Replay export works without an integrated server. A standalone replay seeks back up to one second and pre-rolls without capture. \
+        An in-world replay starts at its current position because it cannot seek backwards. Finish, stop and failure emit an export event.",
         ["horizon-ctl export start take --size 1080x1920 --fps 30000/1001 --frames 90", "horizon-ctl export step 1", "horizon-ctl export status", "horizon-ctl export stop"],
         &[p("action", Ty::Enum(&["start", "step", "stop", "status"]), "export operation"), opt("name_or_count", Ty::Str, "folder name for start or positive frame count for step"),
           flag("size", Ty::Str, "start: dimensions in pixels, WxH"), flag("fps", Ty::Str, "start: frames per second as N or N/D"),

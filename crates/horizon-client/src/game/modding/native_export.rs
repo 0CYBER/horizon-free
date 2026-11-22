@@ -137,7 +137,9 @@ impl Game<'_> {
                 .renderer
                 .as_ref()
                 .is_some_and(|r| r.screenshot_in_flight());
-        check_start_context(occupied, max_texture, world_ready, capture_busy)
+        let max_texture = check_start_context(occupied, max_texture, world_ready, capture_busy)?;
+        self.export_server().map_err(|_| ExportError::Unavailable)?;
+        Ok(max_texture)
     }
 
     pub(super) fn stop_export(&mut self) -> Result<(), ExportError> {

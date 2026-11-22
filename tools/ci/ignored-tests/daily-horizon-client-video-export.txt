@@ -1,0 +1,2 @@
+horizon-client game::export::tests::live_export_steps_a_joined_world_and_interrupts_on_lan_publication lib daily resources
+horizon-client game::export::tests::stalled_export_redraw_keeps_packets_and_disconnect_bounded lib daily resources

@@ -2369,6 +2369,22 @@ impl io_pool::Session for PlayConn {
         if self.payload_transport.closed() {
             return Verdict::Go;
         }
+        if id == crate::net::EXPORT_FENCE
+            && matches!(
+                self.payload_sender.framing,
+                horizon_protocol::connection::Framing::Memory
+            )
+            && self.is_owner()
+            && payload.len() == size_of::<u64>()
+        {
+            // All earlier packets on this connection have entered the server
+            // ingress queue before the client can receive this echo.
+            let mut body = horizon_protocol::buf::Writer::new();
+            body.varint(id);
+            body.bytes(&payload);
+            self.payload_sender.send(body.data);
+            return Verdict::Go;
+        }
         // Only the ids the protocol has: a client sending others (up to 2^31 of them) must not grow the
         // connection's table, so all of those are counted under one id, -1.
         self.packet_counts.add(

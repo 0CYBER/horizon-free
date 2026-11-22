@@ -747,8 +747,11 @@ impl Game<'_> {
                 self.camera_type = horizon_client::camera::CameraType::FirstPerson;
             }
         }
-        if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
-            return self.begin_closing_save(false);
+        if self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
+            return match reason {
+                Some(reason) => self.begin_integrated_disconnect(reason),
+                None => self.begin_closing_save(false),
+            };
         }
         self.client_logging_out();
         self.finish_perf();

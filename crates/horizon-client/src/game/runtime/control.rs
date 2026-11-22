@@ -256,16 +256,7 @@ impl Game<'_> {
         for request in self.ui_wait.ready() {
             self.answer(request, event_loop);
         }
-        while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
-            // Once per line received, not once per handler: a deferred `ui`
-            // comes back through `ui_wait` and must not be traced twice.
-            self.note_socket_line(&request.line);
-            self.agent_command_seen();
-            self.answer(request, event_loop);
-            if self.pending_save.is_some() {
-                break;
-            }
-        }
+        self.poll_control_requests(event_loop);
         // A recording made from the F3 keys or the Settings page has no socket,
         // and still wants its events.
         if self.control.is_some() || self.repro.recording_active() {
@@ -277,6 +268,19 @@ impl Game<'_> {
             self.ui
                 .options
                 .set_agent_status(self.agent_status_lines(), self.repro.recording_active());
+        }
+    }
+
+    pub(super) fn poll_control_requests(&mut self, event_loop: &dyn EventLoopCtl) {
+        while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
+            // Once per line received, not once per handler: a deferred `ui`
+            // comes back through `ui_wait` and must not be traced twice.
+            self.note_socket_line(&request.line);
+            self.agent_command_seen();
+            self.answer(request, event_loop);
+            if self.pending_save.is_some() {
+                break;
+            }
         }
     }
 
@@ -371,7 +375,7 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn control_command(
+    pub(super) fn control_command(
         &mut self,
         line: &str,
         reply: &Sender<String>,
@@ -703,9 +707,20 @@ impl Game<'_> {
                     _ => return Err("server-hold on|off".into()),
                 };
                 if let Some(server) = &self.integrated {
-                    server
-                        .call(move |g| g.agent.hold_server = held)
-                        .ok_or(super::integrated::NO_ANSWER)?;
+                    if self.export_server_calls_blocked()
+                        || self
+                            .export
+                            .as_ref()
+                            .is_some_and(|session| session.server_clock)
+                    {
+                        if !server.post(move |g| g.agent.hold_server = held) {
+                            return Err("the integrated server stopped".into());
+                        }
+                    } else {
+                        server
+                            .call(move |g| g.agent.hold_server = held)
+                            .ok_or(super::integrated::NO_ANSWER)?;
+                    }
                 } else if self.remote.is_some() {
                     return Err("server-hold requires the world's host".into());
                 } else {

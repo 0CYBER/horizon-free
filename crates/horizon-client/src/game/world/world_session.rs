@@ -253,6 +253,9 @@ impl Game<'_> {
         // Native application termination can bypass CloseRequested. Finish any
         // save screen synchronously here, before the process can go away.
         while self.pending_save.is_some() {
+            if self.pending_mod_export() {
+                self.poll_export();
+            }
             self.poll_closing_save()?;
             if self.pending_save.is_some() {
                 std::thread::sleep(Duration::from_millis(1));

@@ -398,6 +398,11 @@ impl ConnReader {
         self.stream.read_exact(&mut out)?;
         Ok(out)
     }
+    /// Whether this reader uses the engine's in-memory transport.
+    pub fn is_memory(&self) -> bool {
+        self.memory
+    }
+
     /// Block until a whole packet arrives: (id, payload).
     pub fn recv(&mut self) -> Result<(i32, Vec<u8>)> {
         if let Some(packet) = self.adapter.as_ref().and_then(|a| a.next_incoming()) {

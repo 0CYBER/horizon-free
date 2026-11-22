@@ -1,9 +1,17 @@
 # Export a video
 
-A client mod running in a world or replay on an `--offscreen` client can
+A client mod running in a private single-player world or replay on an `--offscreen` client can
 capture a PNG sequence or send frames to the player's configured encoder.
 The engine advances the simulation or replay on a fixed clock and writes
 the output under `exports/<name>/` in the game directory.
+
+For a live world, each client tick waits for one integrated-server tick and
+applies that tick's packets. Each frame settles terrain work already queued on
+the client. New terrain streams in on later ticks. Live export returns
+`Unavailable` while the world
+is open to LAN, in splitscreen, or connected to a remote server. If the live
+session becomes shared or its server stops responding during export, the
+capture ends with `Failed`. Replays can export without an integrated server.
 
 Request a capture from a mutable client hook. Set the dimensions and rational
 frame rate independently of the window size. This example requests 300 portrait

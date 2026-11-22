@@ -42,6 +42,10 @@ use std::{
 #[path = "integrated/capture.rs"]
 pub(super) mod capture;
 
+#[path = "integrated/export_clock.rs"]
+mod export_clock;
+pub(super) use export_clock::ExportLockstep;
+
 /// How long the window waits for the server thread to answer a `call`.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// The error of a `call` without an answer: the server stopped, or it was
@@ -91,7 +95,9 @@ struct Flags {
     fail_tick: AtomicBool,
     /// `Minecraft.pause`: a single-player pause screen is open.
     paused: AtomicBool,
+    /// The manual clock exposed as a native internal. Game exports own `export_ticks`.
     export_clock: AtomicBool,
+    export_ticks: export_clock::Slot,
     stop: AtomicBool,
     finished: AtomicBool,
     failure: Mutex<Option<String>>,
@@ -141,7 +147,7 @@ impl Flags {
             ),
         };
         *self.failure.lock().unwrap() = Some(message.clone());
-        self.stop.store(true, Ordering::Release);
+        self.request_stop();
         Err(message)
     }
 
@@ -150,7 +156,7 @@ impl Flags {
             return true;
         }
         log::warn!("Horizon: saving the world before the crash");
-        self.stop.store(true, Ordering::Relaxed);
+        self.request_stop();
         let started = Instant::now();
         while !self.finished.load(Ordering::Acquire) {
             let Some(left) = timeout.checked_sub(started.elapsed()) else {
@@ -171,6 +177,7 @@ struct Finished(Arc<Flags>);
 impl Drop for Finished {
     fn drop(&mut self) {
         self.0.finished.store(true, Ordering::Release);
+        self.0.export_ticks.interrupt();
     }
 }
 
@@ -270,6 +277,7 @@ impl Integrated {
     pub fn join_split(&self, name: &str) -> Option<horizon_protocol::connection::Pipe> {
         let uuid = horizon_protocol::crypto::offline_uuid(name);
         self.flags.split_players.lock().unwrap().push(uuid);
+        self.flags.export_ticks.interrupt();
         let pipe = self
             .call(move |g| {
                 let host = g.lan.as_mut()?;
@@ -299,6 +307,11 @@ impl Integrated {
     pub fn set_legacy_rules(&self, on: bool) {
         self.flags.legacy_rules.store(on, Ordering::Relaxed);
     }
+    #[cfg(test)]
+    pub(super) fn set_test_published(&self, port: u16) {
+        self.flags.published.store(port, Ordering::Relaxed);
+    }
+
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
         Some(self.flags.published.load(Ordering::Relaxed)).filter(|&p| p != 0)
@@ -333,23 +346,27 @@ impl Integrated {
             Err(RecvTimeoutError::Disconnected) => None,
         }
     }
-    /// Keep transport and chunk work running while the offscreen client owns simulation time.
+    /// The original manual export clock remains available to declared native internals.
+    #[allow(dead_code, reason = "native mods can declare this internal")]
     pub(super) fn export_clock(&self, active: bool) {
-        self.flags.export_clock.store(active, Ordering::Release);
+        if !active || self.flags.export_ticks.active().is_none() {
+            self.flags.export_clock.store(active, Ordering::Release);
+        }
     }
 
-    /// Finish one server tick before the export client consumes this tick's packets.
+    /// Run a tick for a caller holding the original manual export clock.
+    #[allow(dead_code, reason = "native mods can declare this internal")]
     pub(super) fn export_tick(&self) -> Result<()> {
         let flags = Arc::clone(&self.flags);
         self.call(move |game| {
-            if !flags.export_clock.load(Ordering::Acquire) {
-                return Err("the server's export clock was released".to_owned());
+            if !flags.export_clock.load(Ordering::Acquire) || flags.export_ticks.active().is_some()
+            {
+                return Err("the manual export clock is unavailable".to_owned());
             }
-            flags.run_tick(|| {
-                game.server_tick_deadline = Some(Instant::now() + game.clock.tick_duration());
-                game.follow_distances(&flags);
-                game.tick_server_measured(false)
-            })
+            if game.agent.hold_server {
+                return Err("the integrated server is held".to_owned());
+            }
+            flags.run_tick(|| game.tick_for_export(&flags))
         })
         .ok_or("the server did not answer an export tick")??;
         Ok(())
@@ -366,7 +383,7 @@ impl Integrated {
     }
     /// Stop on the server thread; the window polls completion while drawing.
     pub fn request_stop(&self) {
-        self.flags.stop.store(true, Ordering::Relaxed);
+        self.flags.request_stop();
     }
     pub fn stopped(&self) -> bool {
         self.thread
@@ -860,10 +877,23 @@ impl Game<'_> {
     fn integrated_tick_loop(&mut self, flags: &Flags) -> Result<()> {
         let mut next = Instant::now();
         let mut was_paused = false;
+        let mut was_lockstep = false;
         while !flags.stop.load(Ordering::Acquire) {
             self.run_tasks(flags);
             if flags.stop.load(Ordering::Acquire) {
                 break;
+            }
+            if let Some(clock) = flags.export_ticks.active() {
+                was_lockstep = true;
+                if !self.run_export_turn(flags, &clock) {
+                    break;
+                }
+                continue;
+            }
+            if std::mem::take(&mut was_lockstep) {
+                // Time wall-clock scheduling from the release of the export clock.
+                next = Instant::now();
+                was_paused = false;
             }
             if self.agent.hold_server {
                 // Keep servicing control requests so the fixture can release the barrier.
@@ -1278,12 +1308,19 @@ impl Game<'_> {
             None => return,
         };
         for task in tasks {
-            task(self);
-            if flags.stop.load(Ordering::Acquire) {
+            if !self.run_task(flags, task) {
                 break;
             }
-            self.apply_publish();
         }
+    }
+
+    fn run_task(&mut self, flags: &Flags, task: Task) -> bool {
+        task(self);
+        if flags.stop.load(Ordering::Acquire) {
+            return false;
+        }
+        self.apply_publish();
+        true
     }
     /// `IntegratedServer.getPort` while published.
     pub(super) fn published_port(&self) -> Option<u16> {
@@ -1309,6 +1346,7 @@ impl Game<'_> {
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         log::info!("Published LAN server on port {port}");
         s.flags.published.store(port, Ordering::Relaxed);
+        s.flags.export_ticks.interrupt();
         s.pending = Some(Publish::Open(listener, LanSettings { port, ..settings }));
         self.apply_publish();
         Ok(port)
@@ -1600,6 +1638,12 @@ impl Game<'_> {
         if self.options.split_guest || !horizon_client::crash::server_crashed() {
             return;
         }
+        if self.pending_mod_export() {
+            self.abort_export(Some("the integrated server crashed during export".into()));
+            if self.pending_mod_export() {
+                return;
+            }
+        }
         // A crash while the world is still loading leaves the server in `integrated_starting`.
         let starting = self
             .integrated_starting
@@ -1615,12 +1659,17 @@ impl Game<'_> {
 }
 
 #[cfg(test)]
+pub(super) fn with_export_clock(test: impl FnOnce(&Integrated)) {
+    export_clock::tests::with_clock(|server, _| test(server));
+}
+
+#[cfg(test)]
 pub(super) mod tests {
     use super::*;
     use mod_api::prelude::*;
 
     #[test]
-    fn a_failed_export_tick_stops_the_server_before_the_clock_is_released() {
+    fn failed_server_ticks_record_the_reason_and_request_shutdown() {
         let tick_cases: [(fn() -> Result<()>, &str); 2] = [
             (|| Err("export tick error".into()), "export tick error"),
             (
@@ -1630,9 +1679,7 @@ pub(super) mod tests {
         ];
         for (tick, expected) in tick_cases {
             let flags = Flags::default();
-            flags.export_clock.store(true, Ordering::Release);
             assert_eq!(flags.run_tick(tick).unwrap_err(), expected);
-            flags.export_clock.store(false, Ordering::Release);
             assert!(flags.stop.load(Ordering::Acquire));
             assert_eq!(flags.failure.lock().unwrap().as_deref(), Some(expected));
         }

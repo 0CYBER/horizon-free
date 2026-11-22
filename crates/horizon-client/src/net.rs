@@ -81,6 +81,11 @@ pub struct RecorderStatus {
 /// The session's recorder, shared with its network thread.
 type RecorderSlot = Arc<Mutex<Option<Box<dyn PacketRecorder>>>>;
 
+/// Private play marker on the integrated owner's memory connection. It orders
+/// export ticks with the ordinary packet queues without entering replays or mod hooks.
+#[doc(hidden)]
+pub const EXPORT_FENCE: i32 = -1;
+
 /// What the network thread reports to the game.
 pub enum Event {
     /// Progress text for the connecting screen.
@@ -412,20 +417,15 @@ impl Session {
             if let Some(w) = thread_writer.lock().unwrap().take() {
                 w.shutdown();
             }
-            // Nothing else tells the game the connection ended: wait for room (#18380).
-            let _ = send.send_waiting(Event::Disconnected {
-                reason: why.text,
-                key: why.key,
-                from_server,
-            });
+            publish_disconnect(&send, why, from_server);
         })
         .inspect_err(|error| {
             // No reader runs to report the end: say it here, or the session waits forever.
-            let _ = payload_events.send(Event::Disconnected {
-                reason: format!("network thread: {error}"),
-                key: None,
-                from_server: false,
-            });
+            publish_disconnect(
+                &payload_events,
+                Reason::plain(format!("network thread: {error}")),
+                false,
+            );
         })
         .ok();
         let debug = std::env::var_os("HORIZON_NET_DEBUG").is_some();
@@ -1201,6 +1201,14 @@ fn receive_play(
         let (id, payload) = reader
             .recv()
             .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
+        if id == EXPORT_FENCE && reader.is_memory() && payload.len() == size_of::<u64>() {
+            deliver(
+                send,
+                lang,
+                Event::Packet(Box::new(play::Clientbound::Unknown(id, payload))),
+            )?;
+            continue;
+        }
         let packet = match play::Clientbound::decode_with_payload_codecs(
             id,
             &payload,
@@ -1343,6 +1351,16 @@ fn receive_play(
 fn deliver(send: &ingress::Producer<Event>, lang: &Language, event: Event) -> Result<(), Reason> {
     send.send_waiting(event)
         .map_err(|refused| refusal(refused, lang))
+}
+
+fn publish_disconnect(send: &ingress::Producer<Event>, why: Reason, from_server: bool) {
+    // The game may be retaining every ordinary receive lease behind an export
+    // fence. Keep the disconnect ordered, but publish it in the control allowance.
+    let _ = send.send_over_budget(Event::Disconnected {
+        reason: why.text,
+        key: why.key,
+        from_server,
+    });
 }
 
 /// Why an event the game must get was refused. One larger than the whole incoming queue
@@ -2786,6 +2804,30 @@ mod tests {
     }
 
     #[test]
+    fn export_disconnect_uses_control_credit_when_gameplay_fills_the_budget() {
+        let packet_charge = horizon_mod_runtime::byte_channel::message_overhead::<Event>() + 1;
+        let (send, events) = ingress::channel(packet_charge, |_: &Event| 1).unwrap();
+        send.send(Event::Packet(Box::new(play::Clientbound::Unknown(
+            1,
+            Vec::new(),
+        ))))
+        .unwrap();
+        let held = events.try_recv_owned().unwrap();
+        assert_eq!(events.stats().reserved_bytes, packet_charge);
+
+        let reader = std::thread::spawn(move || {
+            publish_disconnect(&send, Reason::plain("test close"), true);
+        });
+        let disconnect = events.recv_timeout_owned(Duration::from_secs(1));
+        drop(held);
+        reader.join().unwrap();
+        assert!(matches!(
+            disconnect.unwrap().into_parts().0,
+            Event::Disconnected { reason, from_server: true, .. } if reason == "test close"
+        ));
+    }
+
+    #[test]
     #[ignore = "daily"]
     fn a_server_that_stops_answering_times_out() {
         // The server accepts and then sends nothing, like a frozen server
@@ -3075,6 +3117,87 @@ mod tests {
                 "disconnect took {elapsed:?}"
             );
         }
+    }
+
+    #[test]
+    fn export_fences_order_local_play_traffic_in_both_directions() {
+        use crate::lan::{Lan, NetConfig, NetEvent, data::SyncData};
+        use horizon_protocol::packets::play::{Clientbound as C, Serverbound as S};
+        use std::time::Instant;
+
+        let (root, data) = empty_item_data("export-fence");
+        let lan = Lan::start_with(
+            Arc::new(SyncData::empty()),
+            NetConfig {
+                singleplayer_profile: Some(("Owner".into(), offline_uuid("Owner"))),
+                announce: false,
+                listen: false,
+                ..NetConfig::loopback(0, "Export".into(), 2)
+            },
+        )
+        .unwrap();
+        let session = Session::connect_local(
+            lan.connect_local().unwrap(),
+            "Owner",
+            None,
+            cfg::ClientInformation::new(2),
+            Arc::new(Language::new()),
+            data,
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let joined = loop {
+            if let Some(joined) =
+                lan.poll()
+                    .into_iter()
+                    .find_map(|receipt| match receipt.into_parts().0 {
+                        NetEvent::Joined(joined) => Some(joined),
+                        _ => None,
+                    })
+            {
+                break joined;
+            }
+            assert!(Instant::now() < deadline, "local fixture did not join");
+            std::thread::yield_now();
+        };
+        let receive = || loop {
+            if let Ok(receipt) = session.events.recv_timeout_owned(Duration::from_secs(2)) {
+                match receipt.into_parts().0 {
+                    Event::Packet(packet) => break *packet,
+                    Event::Disconnected { reason, .. } => panic!("{reason}"),
+                    _ => {}
+                }
+            } else {
+                panic!("local play packet did not arrive");
+            }
+        };
+
+        let movement = S::MovePlayerPos(play::MovePlayerPos {
+            x: 4.0,
+            y: 65.0,
+            z: 7.0,
+            flags: 1,
+        });
+        let input_fence = 43_u64.to_be_bytes().to_vec();
+        session.send(movement.clone());
+        session.send(S::Unknown(EXPORT_FENCE, input_fence.clone()));
+        assert_eq!(receive(), C::Unknown(EXPORT_FENCE, input_fence));
+        assert!(lan.poll().into_iter().any(|receipt| matches!(
+            receipt.into_parts().0, NetEvent::Packet(conn, packet, _)
+                if conn == joined.conn && *packet == movement
+        )));
+
+        let time = C::SetTime(play::SetTime {
+            game_time: 121,
+            clocks: Vec::new(),
+        });
+        let output_fence = C::Unknown(EXPORT_FENCE, 44_u64.to_be_bytes().to_vec());
+        joined.sender.send(time.encode());
+        joined.sender.send(output_fence.encode());
+        assert_eq!(receive(), time);
+        assert_eq!(receive(), output_fence);
+
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
