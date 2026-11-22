@@ -103,6 +103,7 @@ horizon-client game::boat_leads::tests::non_guest_holder_branches_keep_their_exi
 horizon-client game::boat_passengers::boat_callback_review_tests::boat_ejection_does_not_snap_a_rider_discarded_by_its_callback lib daily resources
 horizon-client game::boat_passengers::boat_callback_review_tests::boat_ejection_preserves_a_later_passengers_callback_reparenting lib daily resources
 horizon-client game::boat_passengers::off_level_tests::retained_boat_passenger_occupies_a_seat_without_being_positioned lib daily resources
+horizon-client game::boat_passengers::server_passenger_order_tests::a_servers_client_seats_its_boat_players_in_the_servers_order lib daily resources
 horizon-client game::boat_passengers::tests::a_mod_growing_a_mob_during_vehicle_ticks_keeps_it_in_collision_queries lib daily resources
 horizon-client game::boat_passengers::tests::a_vehicle_knows_its_mob_riders_as_soon_as_they_board lib daily resources
 horizon-client game::boat_passengers::tests::a_vehicles_box_query_matches_a_walk_over_every_mob lib daily resources

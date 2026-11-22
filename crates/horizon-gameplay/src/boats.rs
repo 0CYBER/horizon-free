@@ -87,6 +87,9 @@ pub struct Boat {
     pub paddling: [bool; 2],
     /// Whether this boat has a player controlling its paddles.
     pub paddle_controller: bool,
+    /// `getPassengers` in the order a server's last `SetPassengers` listed
+    /// them (a server's client); empty where this game seats them itself.
+    pub listed_passengers: Vec<u32>,
     /// left, right, up, down
     pub input: [bool; 4],
     pub on_ground: bool,
@@ -193,6 +196,7 @@ impl Boat {
             paddles: [0.0; 2],
             paddling: [false; 2],
             paddle_controller: false,
+            listed_passengers: Vec::new(),
             input: [false; 4],
             on_ground: false,
             fall_distance: 0.0,

@@ -174,9 +174,24 @@ impl Game<'_> {
                 .as_ref()
                 .is_some_and(|r| r.level_player(id).is_some())
         });
+        // `handleSetEntityPassengersPacket` seats only the entities this
+        // client has: the window's player and the tracked ones.
+        let listed: Vec<u32> = passengers
+            .iter()
+            .filter(|&&p| {
+                p == me
+                    || self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.tracked(p).is_some())
+            })
+            .map(|&p| p as u32)
+            .collect();
         if let Some(i) = self.boats.iter().position(|b| b.id == vehicle_id) {
             self.boats.update(i, |boat| {
                 boat.paddle_controller = player_controls;
+                // AbstractBoat.positionRider seats each by its place in this list.
+                boat.listed_passengers = listed;
             });
         }
 
