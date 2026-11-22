@@ -666,8 +666,10 @@ impl Launcher {
             ));
         let network = section(5).child(self.proxy_row(n, cx));
         let game = section(4)
-            .child(self.game_architecture_row(n, cx))
-            .child(self.game_args_row(n + 1, cx))
+            .child(self.game_folder_row(n, cx))
+            .child(self.minecraft_folder_row(n + 1, cx))
+            .child(self.game_architecture_row(n + 2, cx))
+            .child(self.game_args_row(n + 3, cx))
             .child(self.mods_auto_update_row(cx));
         let ai = section(8)
             .child(self.no_ai_row(n, cx))
@@ -713,7 +715,8 @@ impl Launcher {
                     Some(b.menu_entry.into_any_element()),
                     &t,
                 ))
-            });
+            })
+            .children(self.dev_options_section(cx));
         vec![
             launcher,
             appearance,
@@ -731,10 +734,11 @@ impl Launcher {
     /// About's version line, with a button that copies it (for a bug report).
     fn version_row(&self, t: &Theme) -> Div {
         let nightly = tr("Nightly").to_string();
+        let launcher = backend::launcher_version_label();
         let line = trf(
             "Launcher {launcher}, game {game}",
             &[
-                ("launcher", env!("CARGO_PKG_VERSION")),
+                ("launcher", &launcher),
                 (
                     "game",
                     self.selected().map_or(nightly.as_str(), String::as_str),

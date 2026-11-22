@@ -49,6 +49,10 @@ impl Launcher {
                 self.client_error = Some(tr(horizon_launcher::developer_offline::NOTICE).into());
             }
             self.accounts = Accounts::load();
+            // Horizon-free: the window plays the name and look the player picked, as the CLI
+            // does; without this the game started under its own made-up name (`Player50696`)
+            // and the default skin whatever the Accounts page showed.
+            apply_offline_look(&mut cmd, &self.accounts);
             // A pack's Play button plays that pack; Play plays the selected instance.
             let pack = self.starting_pack.take();
             let instance = match (&pack, instance_id.as_deref()) {
@@ -110,5 +114,39 @@ impl Launcher {
             let stop = self.pre_launch_stop_for(&launch);
             jar_launch::client(cmd, profile, launch, stop, run, self.tx.clone());
         }
+    }
+}
+
+/// Horizon-free: `cmd` plays an offline name as that name and with its look — `--name` and the
+/// `HORIZON_OFFLINE_SKIN*` skin and cape, what the CLI passes ([`crate::cli`]). A Microsoft
+/// account plays under its own name and skin, so neither is set for it.
+fn apply_offline_look(cmd: &mut std::process::Command, accounts: &Accounts) {
+    if let Some(name) = accounts.name_arg() {
+        cmd.arg("--name").arg(name);
+    }
+    cmd.envs(accounts.look_env());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The window started a picked offline name under the game's made-up one, as only the CLI
+    /// passed `--name`: the Accounts page said "Feryaz", the server saw `Player50696`
+    /// (0CYBER/horizon-free#20).
+    #[test]
+    fn the_window_starts_an_offline_name_as_that_name() {
+        let accounts = Accounts {
+            offline: vec!["Feryaz".into()],
+            offline_selected: Some("Feryaz".into()),
+            ..Accounts::default()
+        };
+        let mut cmd = std::process::Command::new("horizon-client");
+        apply_offline_look(&mut cmd, &accounts);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["--name", "Feryaz"]);
     }
 }
