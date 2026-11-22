@@ -1069,9 +1069,9 @@ def main():
     run = test_rust_parity.run
     run(["javac", "--release", str(lock["minecraft"]["java_major"]), "-proc:none",
          "-cp", os.pathsep.join([str(jars["server"]), dependency_path]), "-d", str(classes), str(source)])
-    run(["cargo", "build", "--release", "--bin", "horizon-density-parity"])
+    run(["cargo", "build", "--profile", "fast", "--bin", "horizon-density-parity"])
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=lab.ROOT, text=True))
-    binary = Path(metadata["target_directory"]) / "release" / ("horizon-density-parity.exe" if os.name == "nt" else "horizon-density-parity")
+    binary = Path(metadata["target_directory"]) / "fast" / ("horizon-density-parity.exe" if os.name == "nt" else "horizon-density-parity")
     candidate = build / "rust.txt"
     with inputs.open("rb") as stdin, candidate.open("wb") as stdout:
         run([str(binary)], stdin=stdin, stdout=stdout)

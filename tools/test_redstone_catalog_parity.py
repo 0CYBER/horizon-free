@@ -256,8 +256,8 @@ def main():
         case['time'] = next((int(n[5:]) for n in notes if n.startswith('time ')), 0)
         case['analog'] = [[*map(int, a.split(' ')[0].split(',')), int(a.split(' ')[1])] for a in vanilla.get(case['code'], ([], [], []))[1]]
     (work / 'rust-cases.jsonl').write_text(''.join(json.dumps(c, separators=(',', ':')) + '\n' for c in cases))
-    run(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'world_probe'], args.full)
-    probe = lab.cargo_target() / 'release/examples' / ('world_probe.exe' if os.name == 'nt' else 'world_probe')
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-world', '--example', 'world_probe'], args.full)
+    probe = lab.cargo_target() / 'fast/examples' / ('world_probe.exe' if os.name == 'nt' else 'world_probe')
     run([str(probe), 'redstone_catalog_fixture', str(resources), str(work / 'rust-cases.jsonl'), str(work / 'rust.txt')], args.full)
     rust = split((work / 'rust.txt').read_text())
     status.update({e['code']: e['status'] for e in entries})

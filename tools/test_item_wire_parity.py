@@ -168,8 +168,8 @@ def main():
     vanilla_path, rust_path = build / 'vanilla.jsonl', build / 'rust.jsonl'
     run(['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars['server']), dependency_path]),
          'dev.horizonlab.parity.VanillaItemWireOracle', fixtures, vanilla_path], 'oracle')
-    run(['cargo', 'build', '--release', '-p', 'horizon-protocol', '--example', 'item_wire_probe'], 'compile-rust')
-    binary = lab.cargo_target() / 'release/examples' / ('item_wire_probe.exe' if os.name == 'nt' else 'item_wire_probe')
+    run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-protocol', '--example', 'item_wire_probe'], 'compile-rust')
+    binary = lab.cargo_target() / 'fast/examples' / ('item_wire_probe.exe' if os.name == 'nt' else 'item_wire_probe')
     run([binary, vanilla_path, rust_path], 'rust')
     read = lambda path: [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
     failures, stacks, covered = compare(read(vanilla_path), read(rust_path))

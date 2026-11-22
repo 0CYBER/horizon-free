@@ -151,9 +151,9 @@ def main():
     classes.mkdir()
     dependency_path = os.pathsep.join(map(str, libraries))
     test_rust_parity.run(["javac", "--release", "25", "-proc:none", "-cp", os.pathsep.join([str(jars["server"]), dependency_path]), "-d", str(classes), str(oracle), str(data_oracle)])
-    test_rust_parity.run(["cargo", "build", "--release", "--bin", "horizon-tick-parity"])
+    test_rust_parity.run(["cargo", "build", "--profile", "fast", "--bin", "horizon-tick-parity"])
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=lab.ROOT, text=True))
-    binary = Path(metadata["target_directory"]) / "release" / ("horizon-tick-parity.exe" if os.name == "nt" else "horizon-tick-parity")
+    binary = Path(metadata["target_directory"]) / "fast" / ("horizon-tick-parity.exe" if os.name == "nt" else "horizon-tick-parity")
     candidate = base / "rust.txt"
     with inputs.open("rb") as stdin, candidate.open("wb") as stdout:
         test_rust_parity.run([str(binary)], stdin=stdin, stdout=stdout)
@@ -163,8 +163,8 @@ def main():
         completed.check_returncode()
         return completed.stdout
     data_java("server", "generate")
-    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "world_probe"])
-    fixture = Path(metadata["target_directory"]) / "release/examples" / ("world_probe.exe" if os.name=="nt" else "world_probe")
+    test_rust_parity.run(["cargo", "build", "--profile", "fast", "-p", "horizon-world", "--example", "world_probe"])
+    fixture = Path(metadata["target_directory"]) / "fast/examples" / ("world_probe.exe" if os.name=="nt" else "world_probe")
     test_rust_parity.run([str(fixture), "tick_fixture", str(base)])
     references = []
     for side, jar in jars.items():

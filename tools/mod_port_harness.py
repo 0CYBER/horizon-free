@@ -247,11 +247,11 @@ def main():
         subprocess.run(command, check=True)
     if not facts.exists():
         sys.exit(f'{facts}: no oracle facts (run with --jars, or tools/neoforge_oracle.py export)')
-    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-client-lib', '--example', 'mod_port_probe'],
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-q', '-p', 'horizon-client-lib', '--example', 'mod_port_probe'],
                    cwd=ROOT, check=True)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=ROOT, text=True))
-    probe = Path(metadata['target_directory']) / 'release/examples/mod_port_probe'
+    probe = Path(metadata['target_directory']) / 'fast/examples/mod_port_probe'
     oracle = json.loads(facts.read_text())
     old_items = set(oracle.get('vanilla_items', []))
     rows = []

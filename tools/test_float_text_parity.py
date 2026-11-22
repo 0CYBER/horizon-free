@@ -74,11 +74,11 @@ def main():
         {'client': jars['server']}, libraries, lock['minecraft']['java_major'])
     h.java_run(build, classes, dependencies, 'VanillaFloatTextOracle', [inputs, build / 'java.txt'], 'java')
     # The release world_probe every other horizon-world harness builds, so CI reuses it.
-    h.run_logged(['cargo', 'build', '--release', '--locked', '-p', 'horizon-world',
+    h.run_logged(['cargo', 'build', '--profile', 'fast', '--locked', '-p', 'horizon-world',
                   '--example', 'world_probe'], build, 'compile-rust')
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    binary = Path(metadata['target_directory']) / 'release/examples' / (
+    binary = Path(metadata['target_directory']) / 'fast/examples' / (
         'world_probe.exe' if os.name == 'nt' else 'world_probe')
     h.run_logged([binary, 'float_text_fixture', inputs, build / 'rust.txt'], build, 'rust')
     expected = (build / 'java.txt').read_text(encoding='utf-8').splitlines()

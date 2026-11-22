@@ -51,9 +51,9 @@ def main():
         with (build/(name+".log")).open("w",encoding="utf-8") as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
     dependency_path=os.pathsep.join(map(str,libraries))
     run(["javac","--release",lock["minecraft"]["java_major"],"-proc:none","-cp",str(jars["server"])+os.pathsep+dependency_path,"-d",classes,oracle],"compile-java")
-    run(["cargo","build","--release","-p","horizon-core","--example","biome_zoom_fixture"],"compile-rust")
+    run(["cargo","build","--profile","fast","-p","horizon-core","--example","biome_zoom_fixture"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("biome_zoom_fixture.exe" if os.name=="nt" else "biome_zoom_fixture")
+    binary=Path(metadata["target_directory"])/"fast/examples"/("biome_zoom_fixture.exe" if os.name=="nt" else "biome_zoom_fixture")
     run([binary,build],"rust")
     import hashlib
     with (build/"rust.txt").open() as output:

@@ -93,7 +93,7 @@ def main():
     subprocess.run(['java', '-Xmx512M', '-cp', str(classes) + os.pathsep + classpath,
                     'dev.horizonlab.parity.VanillaSteppedInterpolationOracle', str(events), str(build / 'vanilla.txt')],
                    check=True)
-    subprocess.run(['cargo', 'run', '--quiet', '--release', '-p', 'horizon-world', '--example',
+    subprocess.run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-world', '--example',
                     'world_probe', '--', 'stepped_interpolation_fixture', str(events), str(build / 'rust.txt')], cwd=lab.ROOT, check=True)
     matched = base.compare(build / 'vanilla.txt', build / 'rust.txt')
     print(f'Stepped interpolation parity passed: {matched} entity positions and rotations match vanilla')

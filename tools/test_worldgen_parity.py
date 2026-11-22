@@ -355,9 +355,9 @@ def main():
     inputs.write_text("\n".join(commands)+"\n",encoding="utf-8")
     fixture_paths = [bundle,inputs,*preset_files.values(),*tag_export_files.values()]
     tested_fixtures = base.source_hashes(fixture_paths)
-    base.run(["cargo","build","--release","--bin","horizon-worldgen-parity"])
+    base.run(["cargo","build","--profile","fast","--bin","horizon-worldgen-parity"])
     metadata = json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary = Path(metadata["target_directory"])/"release"/("horizon-worldgen-parity.exe" if os.name == "nt" else "horizon-worldgen-parity")
+    binary = Path(metadata["target_directory"])/"fast"/("horizon-worldgen-parity.exe" if os.name == "nt" else "horizon-worldgen-parity")
     candidate = build/"rust.txt"
     with inputs.open("rb") as stdin,candidate.open("wb") as stdout: base.run([str(binary)],stdin=stdin,stdout=stdout)
     injected_failures = Counter()

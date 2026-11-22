@@ -287,9 +287,9 @@ def main():
     classes.mkdir()
     dependency_path = os.pathsep.join(map(str, libraries))
     test_rust_parity.run(["javac", "--release", "25", "-proc:none", "-cp", os.pathsep.join([str(jars["server"]), dependency_path]), "-d", str(classes), str(oracle)])
-    test_rust_parity.run(["cargo", "build", "--release", "--bin", "horizon-geometry-parity"])
+    test_rust_parity.run(["cargo", "build", "--profile", "fast", "--bin", "horizon-geometry-parity"])
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=lab.ROOT, text=True))
-    binary = Path(metadata["target_directory"]) / "release" / ("horizon-geometry-parity.exe" if os.name == "nt" else "horizon-geometry-parity")
+    binary = Path(metadata["target_directory"]) / "fast" / ("horizon-geometry-parity.exe" if os.name == "nt" else "horizon-geometry-parity")
     candidate = base / "rust.txt"
     with inputs.open("rb") as stdin, candidate.open("wb") as stdout:
         test_rust_parity.run([str(binary)], stdin=stdin, stdout=stdout)

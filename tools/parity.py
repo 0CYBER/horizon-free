@@ -784,7 +784,8 @@ def prebuild_commands(artifacts, packages=None, tests=()):
     tests: recorded test_selection lists, each built by one `cargo test --no-run` of its own, before the builds. A test
     selection of binaries builds them with its dev-dependencies' features and copies them to the profile folder,
     where the builds after it put the harnesses' own back."""
-    builds = [["cargo", "test", "--locked", "--no-run", *selection] for selection in sorted({*map(tuple, tests)})]
+    builds = [["cargo", "test", "--locked", "--no-run", *selection]
+              for selection in sorted({tuple(fast_test_selection(selection)) for selection in tests})]
     groups = {}
     for kind, name, profile, selection, examples in selected_builds(artifacts, packages):
         targets = groups.setdefault((profile, tuple(selection), examples), [])
@@ -825,6 +826,12 @@ def selected_builds(artifacts, packages=None):
         if len(artifact) < 5:
             continue
         kind, name, profile, selection, examples = artifact
+        if profile == "release":
+            # Every harness builds in the fast profile now (tests/test_parity_harness_sources.py): a release record is
+            # from before, and is built as the harness builds it now, so the harness doesn't compile it in its own time.
+            # Removable once every runner's harnesses have run since the move to fast (one full parity-main per
+            # runner), and no open branch predates it.
+            profile = "fast"
         owner = (packages or {}).get((kind, name))
         selected = [value for flag, value in zip(selection, selection[1:]) if flag == "-p"]
         if not name and kind in ("bins", "examples") and "horizon-client" in selected \
@@ -851,6 +858,22 @@ def selected_builds(artifacts, packages=None):
                     yield "bin", target, profile, shared, False
                 continue
         yield kind, name, profile, selection, examples
+
+
+def fast_test_selection(selection):
+    """A recorded test_selection with the release profile (--release, -r) in the fast one, as selected_builds maps
+    release records. Removable with that mapping."""
+    result, index = [], 0
+    while index < len(selection):
+        if selection[index] in ("--release", "-r"):
+            result += ["--profile", "fast"]
+        elif selection[index] == "--profile" and selection[index + 1:index + 2] == ["release"]:
+            result += ["--profile", "fast"]
+            index += 1
+        else:
+            result.append(selection[index])
+        index += 1
+    return result
 
 
 # parity-main's probe prebuild ends the run past this, after its turn on the Mac (tools/compile_lock.py): a prebuild

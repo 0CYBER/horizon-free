@@ -26,7 +26,7 @@ def corpus():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resources", type=Path, default=lab.RESOURCES)
-    parser.add_argument("--profile", choices=["dev", "release"], default="release")
+    parser.add_argument("--profile", choices=["dev", "fast"], default="fast")
     args = parser.parse_args()
     lock, jars, libraries = base.verify_artifacts()
     build = lab.LOCAL / "rust-brewing-fuel-parity"
@@ -58,7 +58,7 @@ def main():
          sources / "ParityData.java", sources / "VanillaBrewingFuelOracle.java"], "compile-java")
     run(["cargo", "build", "--profile", args.profile, "-p", "horizon-client-render",
          "--example", "brewing_fuel_probe"], "compile-rust")
-    target = lab.cargo_target() / ("debug" if args.profile == "dev" else "release")
+    target = lab.cargo_target() / ("debug" if args.profile == "dev" else "fast")
     binary = target / "examples" / ("brewing_fuel_probe.exe" if os.name == "nt" else "brewing_fuel_probe")
     run([binary, args.resources, inputs, build / "rust.txt"], "rust")
     references = []

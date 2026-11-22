@@ -66,9 +66,9 @@ def main():
     generated = oracle_folders.folder(directory / "oracle-generate", call=(classes, jars["server"], "generate"))
     inputs = generated / "inputs.txt"
     expected = counts(java("server", "generate", generated))
-    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "world_probe"])
+    test_rust_parity.run(["cargo", "build", "--profile", "fast", "-p", "horizon-world", "--example", "world_probe"])
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=lab.ROOT, text=True))
-    binary = Path(metadata["target_directory"]) / "release/examples" / ("world_probe.exe" if os.name=="nt" else "world_probe")
+    binary = Path(metadata["target_directory"]) / "fast/examples" / ("world_probe.exe" if os.name=="nt" else "world_probe")
     oracle_folders.copy(generated, rust, "block-registry.nbt", "cached-collision.nbt", "inputs.txt")
     actual = counts(subprocess.check_output([str(binary), "collision_fixture", str(rust)], cwd=lab.ROOT, text=True))
     (rust / "inputs.txt").unlink()  # 62 MB, and the probe has read it

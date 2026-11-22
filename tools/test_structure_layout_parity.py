@@ -153,7 +153,7 @@ def carry(profile, mods, carried, packs=None):
                          'census': dict.fromkeys(CENSUS, 0)}}
                for key, jar in mods.items()]
     (work / 'inventory.json').write_text(json.dumps(records))
-    subprocess.run(['cargo', 'run', '--release', '-q', '-p', 'horizon-port-pack-cli', '--', 'carry', str(work),
+    subprocess.run(['cargo', 'run', '--profile', 'fast', '-q', '-p', 'horizon-port-pack-cli', '--', 'carry', str(work),
                     '--resources', str(lab.RESOURCES), *carried], check=True, cwd=lab.ROOT, stdout=subprocess.DEVNULL)
     data = [work / 'mods' / key / 'carry' / 'data' for key in carried]
     if not all(d.is_dir() for d in data):
@@ -216,9 +216,9 @@ def overlay(profile, data_dirs):
 
 
 def probe_binary():
-    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-world', '--example', 'world_probe'], check=True, cwd=lab.ROOT)
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-q', '-p', 'horizon-world', '--example', 'world_probe'], check=True, cwd=lab.ROOT)
     name = 'world_probe.exe' if os.name == 'nt' else 'world_probe'
-    return lab.cargo_target() / 'release/examples' / name
+    return lab.cargo_target() / 'fast/examples' / name
 
 
 def horizon_starts(binary, resources, seed, dimension, chunks):
