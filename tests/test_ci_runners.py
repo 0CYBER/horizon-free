@@ -25,6 +25,8 @@ FORK_GUARD = "github.event.pull_request.head.repo.full_name == github.repository
 # verify-scope decides on a small runner which of the launcher and Rust parts start; it goes where they go.
 VERIFY_PARTS = ("verify-scope", "verify-tree", "verify-lint", "verify-server", "verify-launcher", "verify-test",
                 "verify-mod-api")
+WINDOWS_WASM_JOB = "verify-windows-wasm-cache"
+VERIFY_NEEDS = (*VERIFY_PARTS, WINDOWS_WASM_JOB)
 # On Windows the bash on PATH is Git's; a bare "bash" there would be WSL's (tests/test_pr_ready.py).
 BASH = shutil.which("bash")
 # verify's parts: our checks runners only with SELF_HOSTED_CI=all, Blacksmith's otherwise.
@@ -129,7 +131,7 @@ class OwnRunnerTests(unittest.TestCase):
         for part in VERIFY_PARTS:
             with self.subTest(part=part):
                 self.assertRegex(runs_on(ci[part]), ONLY_WITH_ALL)
-        self.assertIn(f"needs: [{', '.join(VERIFY_PARTS)}]", ci["verify"])
+        self.assertIn(f"needs: [{', '.join(VERIFY_NEEDS)}]", ci["verify"])
         # Never skipped: GitHub counts a skipped required check as passed.
         self.assertIn("if: always()", ci["verify"])
 
@@ -531,7 +533,8 @@ class VerifyGateTests(unittest.TestCase):
 
     PASSED = {"SCOPE": "success", "TREE": "success", "LINT": "success", "SERVER": "success", "LAUNCHER": "success",
               "TEST": "success", "MODAPI": "success", "EVENT": "pull_request", "RUST_ANSWER": "true",
-              "LAUNCHER_ANSWER": "true", "MODAPI_ANSWER": "true"}
+              "LAUNCHER_ANSWER": "true", "MODAPI_ANSWER": "true",
+              "WINDOWS_WASM_CACHE": "success", "WINDOWS_WASM_CACHE_ANSWER": "true"}
     # Each part verify-scope can leave out: its result's variable, its job, the answer that decides it, that answer's
     # output, and whether the merge queue leaves the part out too.
     GATED = [("LINT", "verify-lint", "RUST_ANSWER", "rust", True),
@@ -559,17 +562,19 @@ class VerifyGateTests(unittest.TestCase):
         return self.bash(self.gate["run"], {**self.PASSED, **results}).returncode == 0
 
     def test_the_gate_reads_every_part_and_always_runs(self):
-        self.assertEqual(self.jobs["verify"]["needs"], list(VERIFY_PARTS))
+        self.assertEqual(self.jobs["verify"]["needs"], list(VERIFY_NEEDS))
         # Without always() a failed or skipped part would skip verify, which GitHub counts as passed.
         self.assertEqual(self.jobs["verify"]["if"], "always()")
         for name, part in [("SCOPE", "verify-scope"), ("TREE", "verify-tree"), ("LINT", "verify-lint"),
                            ("SERVER", "verify-server"), ("LAUNCHER", "verify-launcher"), ("TEST", "verify-test"),
-                           ("MODAPI", "verify-mod-api")]:
+                           ("MODAPI", "verify-mod-api"), ("WINDOWS_WASM_CACHE", WINDOWS_WASM_JOB)]:
             self.assertEqual(self.gate["env"][name], "${{ needs.%s.result }}" % part)
         self.assertEqual(self.gate["env"]["EVENT"], "${{ github.event_name }}")
         self.assertEqual(self.gate["env"]["RUST_ANSWER"], "${{ needs.verify-scope.outputs.rust }}")
         self.assertEqual(self.gate["env"]["LAUNCHER_ANSWER"], "${{ needs.verify-scope.outputs.launcher }}")
         self.assertEqual(self.gate["env"]["MODAPI_ANSWER"], "${{ needs.verify-scope.outputs.mod_api }}")
+        self.assertEqual(self.gate["env"]["WINDOWS_WASM_CACHE_ANSWER"],
+                         "${{ needs.verify-scope.outputs.windows_wasm_cache }}")
         self.assertTrue(self.passes())
 
     def test_the_parts_wait_for_the_checked_answers(self):
@@ -587,38 +592,69 @@ class VerifyGateTests(unittest.TestCase):
         self.assertNotIn("if", self.answers)
         self.assertEqual(self.jobs["verify-scope"]["outputs"], {
             "rust": "${{ steps.answers.outputs.rust }}", "launcher": "${{ steps.answers.outputs.launcher }}",
-            "mod_api": "${{ steps.answers.outputs.mod_api }}"})
+            "mod_api": "${{ steps.answers.outputs.mod_api }}",
+            "windows_wasm_cache": "${{ steps.answers.outputs.windows_wasm_cache }}"})
         self.assertEqual(self.answers["env"], {"RUST": "${{ steps.rust.outputs.required }}",
                                                "LAUNCHER": "${{ steps.launcher.outputs.required }}",
-                                               "MOD_API": "${{ steps.rust.outputs.mod_api }}"})
+                                               "MOD_API": "${{ steps.rust.outputs.mod_api }}",
+                                               "WINDOWS_WASM_CACHE": "${{ steps.rust.outputs.windows_wasm_cache }}"})
+
+    def test_windows_cache_tests_run_natively_only_on_selected_pull_requests(self):
+        job = self.jobs[WINDOWS_WASM_JOB]
+        self.assertEqual(job["needs"], "verify-scope")
+        self.assertEqual(job["if"],
+                         "github.event_name == 'pull_request' && needs.verify-scope.outputs.windows_wasm_cache != 'false'")
+        self.assertEqual(job["runs-on"], "windows-latest")
+        self.assertEqual(job["permissions"], {"contents": "read"})
+        checkout, version, toolchain, test = job["steps"]
+        self.assertIs(checkout["with"]["persist-credentials"], False)
+        self.assertIn("tools/ci/rust-version", version["run"])
+        self.assertEqual(toolchain["with"]["toolchain"], "${{ steps.rust.outputs.version }}-x86_64-pc-windows-msvc")
+        self.assertEqual(test["run"], "cargo test --locked --target x86_64-pc-windows-msvc -p horizon-mod-wasm --lib module_cache")
+
+    def test_verify_requires_the_windows_cache_result_only_on_selected_pull_requests(self):
+        for event in ("push", "merge_group", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(self.passes(EVENT=event, WINDOWS_WASM_CACHE="skipped"))
+        self.assertTrue(self.passes(WINDOWS_WASM_CACHE="skipped", WINDOWS_WASM_CACHE_ANSWER="false"))
+        for answer in ("true", "", "FALSE"):
+            with self.subTest(answer=answer):
+                self.assertFalse(self.passes(WINDOWS_WASM_CACHE="skipped", WINDOWS_WASM_CACHE_ANSWER=answer))
+        for result in ("failure", "cancelled"):
+            with self.subTest(result=result):
+                self.assertFalse(self.passes(WINDOWS_WASM_CACHE=result))
 
     def test_the_decision_is_the_one_the_parts_made_themselves(self):
         # The selector's default answer, which the server build, Rust tests and mod API parts each asked on a pull
-        # request: `required` is needs_rust, `mod_api` needs_mod_api with its search of the changed files.
+        # request. It also selects the focused Windows cache tests from the same diff.
         (rust,) = [step for step in self.jobs["verify-scope"]["steps"] if step.get("id") == "rust"]
         self.assertEqual(rust["if"], "github.event_name == 'pull_request'")
         self.assertEqual(rust["run"], 'python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"')
         self.assertEqual(rust["env"], {"BASE_SHA": "${{ github.event.pull_request.base.sha }}",
                                        "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"})
 
-    def answer(self, rust, launcher, mod_api):
+    def answer(self, rust, launcher, mod_api, windows_wasm_cache="true"):
         """(exit code, GITHUB_OUTPUT) of verify-scope's answers step."""
         with tempfile.TemporaryDirectory() as scratch:
             output = Path(scratch) / "output"
             output.write_text("")
             result = self.bash(self.answers["run"], {"RUST": rust, "LAUNCHER": launcher, "MOD_API": mod_api,
+                                                     "WINDOWS_WASM_CACHE": windows_wasm_cache,
                                                      "GITHUB_OUTPUT": str(output)})
             return result.returncode, output.read_text()
 
     def test_the_answers_are_exactly_true_or_false(self):
-        self.assertEqual(self.answer("true", "false", "false"), (0, "rust=true\nlauncher=false\nmod_api=false\n"))
-        self.assertEqual(self.answer("false", "true", "true"), (0, "rust=false\nlauncher=true\nmod_api=true\n"))
+        self.assertEqual(self.answer("true", "false", "false", "false"),
+                         (0, "rust=true\nlauncher=false\nmod_api=false\nwindows_wasm_cache=false\n"))
+        self.assertEqual(self.answer("false", "true", "true", "true"),
+                         (0, "rust=false\nlauncher=true\nmod_api=true\nwindows_wasm_cache=true\n"))
         # A step that didn't run (a push, a manual run, no earlier commit): the part runs.
-        self.assertEqual(self.answer("", "", ""), (0, "rust=true\nlauncher=true\nmod_api=true\n"))
+        self.assertEqual(self.answer("", "", "", ""), (0, "rust=true\nlauncher=true\nmod_api=true\nwindows_wasm_cache=true\n"))
         # `if` compares without case: FALSE would skip a part as false does. Refused, as anything else.
         for answers in [("FALSE", "false", "false"), ("false", "False", "false"), ("true", "yes", "true"),
                         ("0", "true", "true"), ("true", "false\nrust=false", "true"), ("true", "true", "FALSE"),
-                        ("true", "true", "false\nrust=false"), ("true", "true", "no")]:
+                        ("true", "true", "false\nrust=false"), ("true", "true", "no"),
+                        ("true", "true", "true", "FALSE")]:
             with self.subTest(answers=answers):
                 self.assertNotEqual(self.answer(*answers)[0], 0)
 
@@ -629,7 +665,8 @@ class VerifyGateTests(unittest.TestCase):
         # All of them at once: a pull request that changes only documentation.
         self.assertTrue(self.passes(LINT="skipped", SERVER="skipped", LAUNCHER="skipped", TEST="skipped",
                                     MODAPI="skipped", RUST_ANSWER="false", LAUNCHER_ANSWER="false",
-                                    MODAPI_ANSWER="false"))
+                                    MODAPI_ANSWER="false", WINDOWS_WASM_CACHE="skipped",
+                                    WINDOWS_WASM_CACHE_ANSWER="false"))
 
     def test_a_skip_passes_only_on_exactly_false(self):
         # The gate compares with case, as the answers step publishes: FALSE or an empty answer is no decision.

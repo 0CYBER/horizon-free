@@ -1,18 +1,20 @@
 use super::*;
+use std::fs::{self, File};
 use wasmtime::{Instance, Store};
 
-fn wasm(answer: i32) -> Vec<u8> {
+pub(super) fn wasm(answer: i32) -> Vec<u8> {
     wat::parse_str(format!(
         "(module (func (export \"answer\") (result i32) i32.const {answer}))"
     ))
     .unwrap()
 }
-fn fixture() -> (tempfile::TempDir, ModuleCache, Engine, Vec<u8>) {
+pub(super) fn fixture() -> (tempfile::TempDir, ModuleCache, Engine, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     let cache = ModuleCache::new(dir.path().join(".horizon-cache/wasm"));
+    assert_eq!(cache.disabled, None);
     (dir, cache, crate::runtime::engine().unwrap(), wasm(42))
 }
-fn entry(cache: &ModuleCache, engine: &Engine, bytes: &[u8]) -> PathBuf {
+pub(super) fn entry(cache: &ModuleCache, engine: &Engine, bytes: &[u8]) -> PathBuf {
     cache
         .root
         .join(format!("{}.cwasm", ModuleCache::key(engine, bytes)))
@@ -36,18 +38,28 @@ fn entries(cache: &ModuleCache) -> Vec<PathBuf> {
         .map(|entry| entry.unwrap().path())
         .collect()
 }
-fn replace_artifact(path: &Path, bytes: &[u8]) {
+#[cfg(not(windows))]
+fn replace_artifact(_: &ModuleCache, path: &Path, bytes: &[u8]) {
     let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
     temporary.write_all(bytes).unwrap();
     temporary.as_file().sync_all().unwrap();
     temporary.persist(path).unwrap();
 }
-fn assert_compiled(cache: &ModuleCache, engine: &Engine, bytes: &[u8]) {
+#[cfg(windows)]
+pub(super) fn replace_artifact(cache: &ModuleCache, path: &Path, bytes: &[u8]) {
+    cache
+        .folder
+        .as_ref()
+        .unwrap()
+        .write(path.file_name().unwrap(), bytes)
+        .unwrap();
+}
+pub(super) fn assert_compiled(cache: &ModuleCache, engine: &Engine, bytes: &[u8]) {
     let (module, source) = cache.load_or_compile(engine, bytes).unwrap();
     assert_eq!(source, Source::Compiled);
     assert_eq!(answer(engine, &module), 42);
 }
-fn assert_cached(cache: &ModuleCache, engine: &Engine, bytes: &[u8]) {
+pub(super) fn assert_cached(cache: &ModuleCache, engine: &Engine, bytes: &[u8]) {
     let (module, source) = cache.load_or_compile(engine, bytes).unwrap();
     assert_eq!(source, Source::Cached);
     assert_eq!(answer(engine, &module), 42);
@@ -135,11 +147,18 @@ fn truncated_entry_is_replaced() {
     assert_eq!(source, Source::Cached);
     let path = entry(&cache, &engine, &bytes);
     let artifact = fs::read(&path).unwrap();
-    replace_artifact(&path, &artifact[..10]);
+    #[cfg(windows)]
+    {
+        assert_eq!(answer(&engine, &mapped), 42);
+        drop(mapped);
+    }
+    replace_artifact(&cache, &path, &artifact[..10]);
+    #[cfg(not(windows))]
     assert_eq!(answer(&engine, &mapped), 42);
     assert_compiled(&cache, &engine, &bytes);
     assert_cached(&cache, &engine, &bytes);
     assert_eq!(entries(&cache).len(), 1);
+    #[cfg(not(windows))]
     assert_eq!(answer(&engine, &mapped), 42);
 }
 
@@ -150,7 +169,7 @@ fn damaged_header_is_replaced() {
     let path = entry(&cache, &engine, &bytes);
     let mut artifact = fs::read(&path).unwrap();
     artifact[0] ^= 0xff;
-    replace_artifact(&path, &artifact);
+    replace_artifact(&cache, &path, &artifact);
     assert_compiled(&cache, &engine, &bytes);
     assert_cached(&cache, &engine, &bytes);
 }
@@ -383,6 +402,7 @@ fn failed_replacement_keeps_compiled_module_and_cleans_temp_files() {
     assert_eq!(entries(&cache), vec![path]);
 }
 
+#[cfg(unix)]
 #[test]
 fn compiler_actor() {
     let Some(input) = std::env::var_os("HORIZON_COMPILER_INPUT") else {
@@ -417,6 +437,7 @@ fn compiler_actor() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 #[ignore = "local child measurement; set HORIZON_CACHE_BENCH_WASM"]
 fn measure_child_compile() {
@@ -449,6 +470,7 @@ fn measure_child_compile() {
     eprintln!("child compile {} bytes: {times:?}", bytes.len());
 }
 
+#[cfg(unix)]
 #[test]
 fn compiler_key_mismatch_writes_nothing() {
     let (_dir, cache, _, bytes) = fixture();
@@ -458,6 +480,7 @@ fn compiler_key_mismatch_writes_nothing() {
     assert!(entries(&cache).is_empty());
 }
 
+#[cfg(unix)]
 fn actor_command(input: &Path, key: &str, mode: &str) -> std::process::Command {
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
@@ -472,28 +495,36 @@ fn actor_command(input: &Path, key: &str, mode: &str) -> std::process::Command {
         .env("HORIZON_COMPILER_MODE", mode);
     command
 }
+#[cfg(unix)]
 fn happy(input: &Path, key: &str) -> std::process::Command {
     actor_command(input, key, "happy")
 }
+#[cfg(unix)]
 fn killed(input: &Path, key: &str) -> std::process::Command {
     actor_command(input, key, "midwrite")
 }
+#[cfg(unix)]
 fn blocked(input: &Path, key: &str) -> std::process::Command {
     actor_command(input, key, "blocked")
 }
+#[cfg(unix)]
 fn wrong(input: &Path, key: &str) -> std::process::Command {
     actor_command(input, key, "wrong")
 }
+#[cfg(unix)]
 fn crash(input: &Path, key: &str) -> std::process::Command {
     actor_command(input, key, "crash")
 }
+#[cfg(unix)]
 fn nonzero(input: &Path, key: &str) -> std::process::Command {
     actor_command(input, key, "nonzero")
 }
+#[cfg(unix)]
 fn missing(_: &Path, _: &str) -> std::process::Command {
     std::process::Command::new("/no-such-horizon-compiler-2878")
 }
 
+#[cfg(unix)]
 #[test]
 #[ignore = "daily"]
 fn child_success_avoids_in_process_compile() {
@@ -512,6 +543,7 @@ fn child_success_avoids_in_process_compile() {
     assert_eq!(entries(&cache).len(), 1);
 }
 
+#[cfg(unix)]
 #[test]
 #[ignore = "daily"]
 fn child_failures_refuse_without_unbounded_compilation() {
@@ -579,6 +611,7 @@ fn internal_compiler_flag_refuses_malformed_arguments() {
     assert_eq!(crate::compile_child([OsString::from("--help")]), None);
 }
 
+#[cfg(unix)]
 #[test]
 fn compiler_refuses_correctly_keyed_input_outside_cache_folder() {
     let dir = tempfile::tempdir().unwrap();
@@ -603,6 +636,7 @@ fn compiler_refuses_correctly_keyed_input_outside_cache_folder() {
     }));
 }
 
+#[cfg(unix)]
 #[test]
 fn compiler_keeps_old_live_input_and_other_writer_temporary() {
     let (_dir, cache, _, bytes) = fixture();
@@ -687,7 +721,7 @@ fn startup_cleanup_preserves_symlink_targets_and_unrelated_files() {
     fs::write(&unrelated, b"notes").unwrap();
     let directory = cache.root.join("directory.cwasm");
     fs::create_dir(&directory).unwrap();
-    drop(ModuleCache::new_with_limit(cache.root.clone(), false, 0));
+    drop(ModuleCache::new_with_limit(cache.root.clone(), 0));
     assert_eq!(fs::read(target).unwrap(), b"target data");
     assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
     assert_eq!(fs::read(unrelated).unwrap(), b"notes");
@@ -712,7 +746,7 @@ fn startup_size_limit_removes_oldest_first() {
             .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
             .unwrap();
     }
-    let next = ModuleCache::new_with_limit(cache.root.clone(), false, 10);
+    let next = ModuleCache::new_with_limit(cache.root.clone(), 10);
     assert!(!paths[0].exists());
     assert_eq!(fs::read(&paths[1]).unwrap(), b"1234");
     assert_eq!(fs::read(&paths[2]).unwrap(), b"1234");

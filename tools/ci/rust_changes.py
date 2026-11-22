@@ -80,6 +80,15 @@ def needs_launcher(paths):
     ) for path in with_embedders(paths))
 
 
+WINDOWS_WASM_CHECK = {".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools/ci/rust-version",
+                      "Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}
+
+
+def needs_windows_wasm_cache(paths):
+    return any(path in WINDOWS_WASM_CHECK or path.startswith(("crates/horizon-mod-wasm/", ".cargo/"))
+               for path in paths)
+
+
 # Stands for "everything changed" when no diff can be computed: a root manifest every check and shard selector
 # treats as touching all of them.
 UNKNOWN_CHANGE = "Cargo.lock"
@@ -251,3 +260,4 @@ if __name__ == "__main__":
             mod_api = needs_mod_api(paths, lambda files: mentions_replaceable(args.base, args.head, files),
                                     declared_internals(args.base, args.head))
             print(f"mod_api={str(mod_api).lower()}")
+            print(f"windows_wasm_cache={str(needs_windows_wasm_cache(paths)).lower()}")

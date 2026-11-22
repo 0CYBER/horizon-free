@@ -251,9 +251,10 @@ refuses the module with an actionable compiler/cache diagnostic: the game never
 retries without the applied budget. A timeout names the exceeded limit (not a
 crash), kills and reaps the child, and removes its private input and unfinished
 writer files. It never records a permanent failure: restarting with a larger
-limit can compile the same module. This child path is Unix-only; Windows continues
-to compile in process with persistent caching disabled. An unavailable or untrusted
-Unix cache refuses compilation until its private writable directory is restored.
+limit can compile the same module. The compiler child is Unix-only. Windows compiles
+cache misses in the game process, saves the result to a trusted cache, and verifies
+each entry before reuse. An unavailable or untrusted Unix cache refuses compilation
+until its private writable directory is restored.
 
 ### Compilation time setting
 
@@ -282,9 +283,13 @@ N threads, and the setting to increase.
 On Unix, the game creates the cache folder with mode 0700 and entries with mode 0600. It checks
 folder ownership and permissions, then checks each opened entry is a regular file owned by the
 current user, not writable by group or others, and has only one hard link. Symlink entries are
-refused. On Windows, persistent caching is disabled until owner, DACL and inheritance trust
-can be verified for the cache folder and opened entries. Modules compile from wasm instead,
-with one warning explaining the fallback. The player's account is the trust boundary.
+refused. On Windows, the cache requires a local volume that enforces Windows ACLs. The game
+checks the owner and discretionary access control list on the opened folder and on every entry.
+It keeps the verified folder open and uses that handle for cache lookups, writes and cleanup.
+Only the current user, SYSTEM and Administrators may have write access. New artifacts have
+protected access lists. The game refuses reparse points and entries with multiple hard links
+or open writers. If the folder check fails on Windows, the game logs a warning and compiles
+modules from Wasm in memory.
 
 At startup, the game removes regular `.cwasm` files from other engine configurations or
 Wasmtime versions, along with malformed and old-format cache names. It never follows symlinks
@@ -296,9 +301,10 @@ measured compiled module (34,039,320 bytes) plus headroom; the 30-module allowan
 maintainer confirmation and does not represent a measured pack.
 
 A failed entry check logs the reason once per launch. Missing, corrupt or incompatible
-entries trigger a budgeted compiler child on Unix, provided the cache directory is
-trusted and writable. Writes replace entries atomically without changing files that
-running modules have mapped. Deleting the cache is always safe: the next launch rebuilds it.
+entries trigger a budgeted compiler child on Unix, provided the cache directory is trusted
+and writable. On Windows, compilation runs in the game process. Cache writes publish by
+atomic rename so live mappings keep their original contents. Deleting the cache is always
+safe: the next launch rebuilds it.
 
 ## Guest stack
 

@@ -54,11 +54,12 @@ per part, side by side, each on a size that fits it:
 | `verify (launcher)` (`verify-launcher`), when `verify-scope` (`rust_changes.py --launcher`) says the change reaches it | 8 vCPU | no |
 | `verify (Rust tests)` (`verify-test`), when `verify-scope` finds a Rust change | 16 vCPU: a cold build folder compiles the workspace | yes |
 | `verify (mod API)` (`verify-mod-api`), when `verify-scope` says the change can reach the mod API: the comparison and the surface report run on pull requests only; elsewhere it builds the generator to warm its disk | 4 vCPU: the generator and the comparison use one core; only its compiles use more (8 vCPU ran at ~13%) | yes |
+| `verify (Windows Wasm cache)` (`verify-windows-wasm-cache`), on pull requests changing `crates/horizon-mod-wasm/`, workspace Cargo configuration, the Rust toolchain pin, the workflow, or the selector | GitHub's `windows-latest`, x64 MSVC | no |
 
-Only `verify`, which waits for them all, is a required check; `tests/test_ci_runners.py` pins that the parts share one
-`runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners. `verify` passes a skipped part only where
-its own `if` left it out: `verify-scope`'s answer for it exactly `false`, or the merge queue for the lint, server build
-and launcher parts. A failed or cancelled `verify-scope` fails `verify`. Each part ends with a `load probe:` line
+Only `verify` is required, and it waits for all the parts. `SELF_HOSTED_CI=all` sends the Linux parts to our checks
+runners. The Windows part runs just the `horizon-mod-wasm` `module_cache` tests on a fresh GitHub runner without a
+build cache. `verify` accepts a skipped part when `verify-scope` answers exactly `false` or the event excludes that
+part. A failed or cancelled `verify-scope` fails `verify`. The Linux build parts end with a `load probe:` line
 (`tools/ci/load_probe.sh`: cores, load, CPU and memory use, seconds) for choosing runner sizes; its `peak` is the job's
 cgroup peak, file cache included, so it reads higher than the memory the processes held.
 
@@ -67,7 +68,7 @@ minute's price (Blacksmith bills by vCPU, 2 vCPU and 8 GB at a time; 4 vCPU has 
 compiles in a part slow down on fewer cores. The sticky disks' keys don't name the size, so a resized part keeps its
 build folder.
 
-Each Rust job keeps its Cargo build folder between runs on a Blacksmith sticky disk, as the VPS keeps its own
+Each Linux Rust job keeps its Cargo build folder between runs on a Blacksmith sticky disk, as the VPS keeps its own
 (`tools/ci/build_folder.sh`): one disk per job, so jobs that ran side by side don't replace each other's build. A
 checkout dates every file now; the script gives each file whose Git object is the one the disk's last job saw that
 job's date back (`tools/ci/source_mtimes.py`), so Cargo rebuilds only what changed, and empties a disk past 50 GB
@@ -109,8 +110,9 @@ git push origin --delete try/<name>                           # when done
   `game-build.yml` builds it, uploaded as the artifact `horizon-windows-x64` (kept 3 days): `horizon-client.exe`,
   `horizon-ctl.exe`, `horizon-prepare.exe`, `horizon-server.exe`, `horizon-wasm-std.wasm` and DXC. No exporters (they
   are compiled from Minecraft's jars on the Mac mini), so point it at resources an installed Horizon already prepared
-  (`--resources`). Then the launcher's tests. It builds from scratch, with no Rust cache read or saved. The repository
-  is public: anyone signed in to GitHub can download the artifact for its 3 days, so a try run is no private channel.
+  (`--resources`). Then the Wasm cache and launcher tests run. It builds from scratch, with no Rust cache read or
+  saved. The repository is public: anyone signed in to GitHub can download the artifact for its 3 days, so a try run
+  is no private channel.
 - `-f arm64=true` adds the Windows ARM64 job (about 90 minutes) and `-f jfr=true` the JFR analysis on the Linux game
   runner; every hand-started run ran both before the inputs existed.
 - No job of a try run holds a secret; verify's parts and the Windows x64 job save no disk or cache
