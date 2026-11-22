@@ -133,7 +133,10 @@ A few hooks do not run on the thread that ticks the world, and their docs say so
 `register_block_tint_sources`) on its worker threads. The worldgen Part methods (`alter_ground`, `rotate`,
 `on_tree_grow`) run on the worldgen worker threads as well as the server thread, and `block_entity_update_tag` runs on
 another thread for a saved chunk sent past the view distance. These get no `Host` that writes, or none at all, so
-keep no mutable state in them that another thread could reach.
+keep no mutable state in them that another thread could reach. The worldgen Part methods' `WorldgenHost` reads the
+server's registries, mod settings, `state_with_property` and `block_in_tag` (`BlockState.is(TagKey)` over the merged
+block tags of its last resource load, the ones `LevelHost::block_in_tag` reads), so a plant's `may_place_on_v2` can
+pick its ground by tag as vanilla's plants do.
 
 `Hooks` contains global hooks. Scoped hooks belong to `BlockPart`, `BlockEntityPart`,
 `ItemPart`, `MenuPart` or `FluidPart` and run for the registered object.

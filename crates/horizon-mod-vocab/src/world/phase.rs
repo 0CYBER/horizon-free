@@ -922,6 +922,15 @@ pub trait WorldgenHost {
         key: &str,
         value: &str,
     ) -> Option<crate::BlockState>;
+
+    /// `BlockState.is(TagKey)` for `block`: whether it is in the server's merged block tag
+    /// `tag` as of its last resource load (start or `/reload`), the tags the live game's
+    /// `LevelHost::block_in_tag` answers from. An unknown tag answers false; None before the
+    /// server published its tags.
+    fn block_in_tag(&self, block: crate::BlockKey, tag: &str) -> Option<bool> {
+        let _ = (block, tag);
+        None
+    }
 }
 
 // no wire: borrowed phase-scoped host readers; authority stays with their owning thread.
@@ -933,12 +942,16 @@ pub struct OwningWorldgen<'a> {
     registry: &'a dyn Fn(&str) -> Option<Arc<[String]>>,
     setting: &'a dyn Fn(&str, &str) -> Option<String>,
     state_with_property: &'a StateWithProperty<'a>,
+    block_in_tag: Option<&'a BlockInTag<'a>>,
     mods: LoadedMods,
 }
 
 /// `BlockState.setValue` as the game answers it for [`OwningWorldgen`].
 type StateWithProperty<'a> =
     dyn Fn(crate::BlockState, &str, &str) -> Option<crate::BlockState> + 'a;
+
+/// `BlockState.is(TagKey)` as the game answers it for [`OwningWorldgen`].
+type BlockInTag<'a> = dyn Fn(crate::BlockKey, &str) -> Option<bool> + 'a;
 
 impl<'a> OwningWorldgen<'a> {
     /// The server's registries, mod settings and block states, read through the game's
@@ -952,8 +965,15 @@ impl<'a> OwningWorldgen<'a> {
             registry,
             setting,
             state_with_property,
+            block_in_tag: None,
             mods: LoadedMods::new(),
         }
+    }
+
+    /// The same context, answering `block_in_tag` through `block_in_tag`.
+    pub fn with_block_in_tag(mut self, block_in_tag: &'a BlockInTag<'a>) -> Self {
+        self.block_in_tag = Some(block_in_tag);
+        self
     }
 }
 
@@ -974,6 +994,9 @@ impl WorldgenHost for OwningWorldgen<'_> {
         value: &str,
     ) -> Option<crate::BlockState> {
         (self.state_with_property)(state, key, value)
+    }
+    fn block_in_tag(&self, block: crate::BlockKey, tag: &str) -> Option<bool> {
+        (self.block_in_tag?)(block, tag)
     }
 }
 

@@ -829,6 +829,7 @@ impl Game<'_> {
                 prepared.parts.as_ref(),
                 &prepared.block_states,
                 self.pack.assets.registry,
+                Arc::new(prepared.tags.clone()),
             );
         }
         api_values::install_block_states(prepared.block_states);

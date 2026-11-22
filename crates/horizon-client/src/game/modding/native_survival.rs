@@ -136,11 +136,12 @@ mod tests {
 
     use native_worldgen_parts::PUBLISHING;
 
-    const FACTS: &str = r#"{"defaults":{"minecraft:air":0,"minecraft:end_stone":1,"minecraft:grass_block":2,"mymod:crystal":3},"states":[["a",true,false,"","minecraft:air"],["s",false,false,"","minecraft:end_stone"],["s",false,false,"","minecraft:grass_block"],["s",false,false,"","mymod:crystal"]]}"#;
+    const FACTS: &str = r#"{"defaults":{"minecraft:air":0,"minecraft:end_stone":1,"minecraft:grass_block":2,"mymod:crystal":3,"mymod:sprout":4},"states":[["a",true,false,"","minecraft:air"],["s",false,false,"","minecraft:end_stone"],["s",false,false,"","minecraft:grass_block"],["s",false,false,"","mymod:crystal"],["s",false,false,"","mymod:sprout"]]}"#;
 
     const END_STONE: EngineState = EngineState(1);
     const GRASS: EngineState = EngineState(2);
     const CRYSTAL: EngineState = EngineState(3);
+    const SPROUT: EngineState = EngineState(4);
 
     /// A mod's plant: it stands on end stone alone, and it places anywhere it is asked.
     struct Crystal(BlockKey);
@@ -155,6 +156,18 @@ mod tests {
             event: &mut MayPlaceOnV2Event,
         ) -> Option<bool> {
             Some(event.ground.block() == self.0)
+        }
+    }
+    /// A mod's plant that stands on the blocks of a tag, as vanilla's plants do.
+    struct Sprout;
+    #[mod_api::horizon_part]
+    impl BlockPart for Sprout {
+        fn may_place_on_v2(
+            &self,
+            context: &dyn WorldgenHost,
+            event: &mut MayPlaceOnV2Event,
+        ) -> Option<bool> {
+            context.block_in_tag(event.ground.block(), "minecraft:dirt")
         }
     }
     /// A mod's soil: it holds a plant standing on it.
@@ -189,6 +202,8 @@ mod tests {
             let end_stone = r.block_key("minecraft:end_stone");
             let grass = r.block_key("minecraft:grass_block");
             r.block_part(crystal, Crystal(end_stone));
+            let sprout = r.block_key("mymod:sprout");
+            r.block_part(sprout, Sprout);
             r.block_part(grass, Soil(grass));
             r.block_part(end_stone, RefusingSoil);
         }
@@ -207,7 +222,17 @@ mod tests {
             },
         )
         .unwrap();
-        native_worldgen_parts::publish(parts.as_ref(), &block_state::current().unwrap(), registry);
+        // The server's merged block tags: grass is dirt here.
+        let block_tags = HashMap::from([(
+            "minecraft:dirt".to_owned(),
+            ["minecraft:grass_block".to_owned()].into(),
+        )]);
+        native_worldgen_parts::publish(
+            parts.as_ref(),
+            &block_state::current().unwrap(),
+            registry,
+            Arc::new(super::super::native_world_read::prepare_block_tags(&block_tags)),
+        );
         let root = std::env::temp_dir().join("horizon-survival-no-settings");
         let load = LoadContext::new(
             DataLoadOrigin::ServerDataLoad,
@@ -263,6 +288,18 @@ mod tests {
             let mut may = None;
             may_place_on_v2(GRASS, END_STONE, [0, 63, 0], &mut may);
             assert_eq!(may, None);
+        });
+    }
+
+    #[test]
+    fn a_plant_reads_the_server_s_block_tags_while_the_world_generates() {
+        with_published(|| {
+            let mut may = None;
+            may_place_on_v2(SPROUT, GRASS, [0, 63, 0], &mut may);
+            assert_eq!(may, Some(true), "grass is in minecraft:dirt");
+            let mut may = None;
+            may_place_on_v2(SPROUT, END_STONE, [0, 63, 0], &mut may);
+            assert_eq!(may, Some(false), "end stone is not");
         });
     }
 
