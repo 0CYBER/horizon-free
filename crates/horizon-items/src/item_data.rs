@@ -1545,11 +1545,24 @@ fn elided_prototype_key(item: &str) -> Option<&'static str> {
         "minecraft:filled_map" => Some("minecraft:map_decorations"),
         "minecraft:enchanted_book" => Some("minecraft:stored_enchantments"),
         "minecraft:beehive" | "minecraft:bee_nest" => Some("minecraft:block_state"),
+        _ if has_empty_banner_patterns_prototype(item) => Some("minecraft:banner_patterns"),
         _ => None,
     }
 }
 
+/// `Items.BANNER` and `Items.SHIELD` both have `BannerPatternLayers.EMPTY`.
+fn has_empty_banner_patterns_prototype(item: &str) -> bool {
+    item == "minecraft:shield"
+        || item
+            .strip_prefix("minecraft:")
+            .and_then(|id| id.strip_suffix("_banner"))
+            .is_some_and(|color| horizon_mod_package::content::DYE_COLORS.contains(&color))
+}
+
 fn is_prototype_patch(key: &str, value: &Tag) -> bool {
+    if key == "minecraft:banner_patterns" {
+        return matches!(value, Tag::List(layers) if layers.is_empty());
+    }
     let Tag::Compound(entries) = value else {
         return false;
     };
@@ -1950,6 +1963,13 @@ impl<'a> Seen<'a> {
 }
 /// Damage and extra components from a stack's `components` compound.
 pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData>>) {
+    decode_component_patch(components, None)
+}
+
+fn decode_component_patch(
+    components: Option<&Tag>,
+    item: Option<&str>,
+) -> (u32, Option<Box<StackData>>) {
     let Some(c) = components else {
         return (0, None);
     };
@@ -2102,6 +2122,14 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
     if let Tag::Compound(map) = c {
         for (k, v) in map {
             let key = k.to_string_lossy();
+            // `PatchedDataComponentMap.applyPatch`: only the positive value
+            // equal to the prototype is redundant, not a `!` removal.
+            if key == "minecraft:banner_patterns"
+                && is_prototype_patch(&key, v)
+                && item.is_some_and(has_empty_banner_patterns_prototype)
+            {
+                continue;
+            }
             if MODELLED.contains(&key.as_str())
                 && key != "minecraft:damage"
                 && !data.sets_component(&key)
@@ -2137,7 +2165,7 @@ pub fn decode_components_for_item(
     item: &str,
     components: Option<&Tag>,
 ) -> (u32, Option<Box<StackData>>) {
-    let (damage, mut extra) = decode_components(components);
+    let (damage, mut extra) = decode_component_patch(components, Some(item));
     if let Some(data) = extra.as_deref_mut() {
         elide_prototype_fireworks(item, data);
         if data.is_empty() {
@@ -3284,6 +3312,31 @@ mod tests {
         let extra = extra.expect("data");
         assert_eq!(extra.base_color.as_deref(), Some("red"));
         assert_eq!(extra.banner_patterns, stack.data().unwrap().banner_patterns);
+    }
+
+    #[test]
+    fn banner_pattern_patch_elides_only_the_prototype_value() {
+        let key = "minecraft:banner_patterns";
+        let empty = Tag::List(Vec::new());
+        let patch = Tag::compound([(key, empty.clone())]);
+        let (_, shield) = decode_components_for_item("minecraft:shield", Some(&patch));
+        assert!(shield.is_none());
+        for id in ["minecraft:stone", "example:white_banner"] {
+            let mut stack = ItemStack::new(id, 1);
+            (stack.damage, stack.extra) = decode_components_for_item(id, Some(&patch));
+            assert_eq!(stack.data().unwrap().other(key), Some(&empty));
+            assert_eq!(encode_components(&stack), Some(patch.clone()));
+        }
+
+        let mut banner = ItemStack::new("minecraft:white_banner", 1);
+        banner.data_mut().set_other(key, Some(empty));
+        assert!(encode_components(&banner).is_none());
+
+        let removed = "!minecraft:banner_patterns";
+        let patch = Tag::compound([(removed, Tag::Compound(Default::default()))]);
+        (banner.damage, banner.extra) = decode_components_for_item(&banner.item, Some(&patch));
+        assert_eq!(banner.data().unwrap().other(removed), patch.get(removed));
+        assert_eq!(encode_components(&banner), Some(patch));
     }
 
     #[test]
