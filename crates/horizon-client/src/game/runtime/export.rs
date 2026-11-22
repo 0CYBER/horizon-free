@@ -1,6 +1,6 @@
-//! The control socket's fixed-clock offscreen export session.
+//! Fixed-clock offscreen export sessions shared by the control socket and client mods.
 
-use super::{EventLoopCtl, Game, KeyCode, MouseButton, Screen, Vec3};
+use super::{EventLoopCtl, Game, KeyCode, MouseButton, Screen, Vec3, native_export};
 use horizon_client::{
     Result,
     export::{
@@ -10,6 +10,7 @@ use horizon_client::{
     gfx::{ExportFrame, FRAME_EXPORT_STALL_TIMEOUT, pack_uniforms::FrameTiming},
     packet_source::PacketSource as _,
 };
+use mod_api::{ExportState, ExportStatus};
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -189,6 +190,8 @@ fn allowed_while_running(words: &[&str]) -> bool {
 
 pub(super) struct Session {
     spec: ExportSpec,
+    mod_request: Option<u32>,
+    stop_requested: bool,
     requests: Requests,
     settle: bool,
     stall_since: Option<Instant>,
@@ -212,6 +215,7 @@ pub(super) struct Session {
 
 struct Drain {
     state: &'static str,
+    interruption: Option<&'static str>,
     writer_progress: Option<(u32, Instant)>,
     manifest: Option<ManifestJob>,
 }
@@ -220,6 +224,7 @@ impl Drain {
     fn new(state: &'static str) -> Self {
         Self {
             state,
+            interruption: None,
             writer_progress: None,
             manifest: None,
         }
@@ -285,15 +290,29 @@ impl ManifestJob {
         event
     }
 
-    fn detach(mut self, error: &str) -> Value {
-        if self.event["ok"] == true {
+    fn detach(self, error: &str) -> Value {
+        self.detach_at_deadline(error, false)
+    }
+
+    fn detach_at_deadline(mut self, error: &str, cancel_failed: bool) -> Value {
+        // An aborted control export can publish its failure manifest after the
+        // control reply. A mod's deadline settles its completion hook.
+        let ok = self.event["ok"] == true;
+        if ok || cancel_failed {
             match self.publication.cancel() {
                 ManifestState::Published => {}
-                ManifestState::Publishing => Self::mark_failed(
-                    &mut self.event,
-                    &format!("{error} (export.json rename started, publication unconfirmed)"),
-                ),
-                _ => Self::mark_failed(&mut self.event, error),
+                ManifestState::Publishing => {
+                    let message =
+                        format!("{error} (export.json rename started, publication unconfirmed)");
+                    let message = if let Some(cause) = self.event["error"].as_str() {
+                        format!("{cause}. {message}")
+                    } else {
+                        message
+                    };
+                    Self::mark_failed(&mut self.event, &message);
+                }
+                _ if ok => Self::mark_failed(&mut self.event, error),
+                _ => {}
             }
         }
         self.event
@@ -315,7 +334,106 @@ struct ReplayTime {
     partial: f32,
 }
 
+enum Output {
+    Control(Option<EncoderConfig>),
+    Mod {
+        request: u32,
+        pipe: Option<EncoderPipe>,
+        stop: bool,
+        ready: bool,
+    },
+}
+
+impl Output {
+    fn mod_request(&self) -> Option<u32> {
+        match self {
+            Self::Control(_) => None,
+            Self::Mod { request, .. } => Some(*request),
+        }
+    }
+
+    fn ready(&self) -> bool {
+        !matches!(self, Self::Mod { ready: false, .. })
+    }
+}
+
 impl Session {
+    pub(super) fn is_mod_export(&self) -> bool {
+        self.mod_request.is_some()
+    }
+
+    pub(super) fn mod_status(&self) -> Option<ExportStatus> {
+        Some(native_export::status(
+            self.mod_request?,
+            &self.spec,
+            ExportState::Running,
+            self.pending.unwrap_or(self.submitted),
+            self.progress.bytes(),
+        ))
+    }
+
+    fn mod_completion(&self, event: &Value) -> Option<ExportStatus> {
+        let request = self.mod_request?;
+        let state = if event["ok"] == true {
+            ExportState::Finished
+        } else {
+            ExportState::Failed
+        };
+        // Both counters are frozen together when the manifest job starts.
+        let frames = event["frames_written"].as_u64().unwrap_or_default() as u32;
+        let bytes = event["bytes_written"].as_u64().unwrap_or_default();
+        Some(native_export::status(
+            request, &self.spec, state, frames, bytes,
+        ))
+    }
+
+    fn note_world_exit(&mut self, reason: &'static str) {
+        if self.is_mod_export()
+            && let Some(drain) = &mut self.draining
+            && drain.manifest.is_none()
+        {
+            drain.interruption.get_or_insert(reason);
+        }
+    }
+
+    fn begin_drain(&mut self, state: &'static str, renderer: Option<&mut super::Renderer>) {
+        if self.draining.is_none() {
+            self.draining = Some(Drain::new(state));
+            self.pending = None;
+            if let Some(renderer) = renderer {
+                renderer.begin_finish_frame_export();
+            }
+        }
+    }
+
+    fn interrupt_for_world_exit(
+        &mut self,
+        reason: &'static str,
+        renderer: Option<&mut super::Renderer>,
+    ) {
+        // The control socket has always drained to "stopped" on world exit.
+        // Mods hear whether the world interrupted their take, after the same drain.
+        self.begin_drain("stopped", renderer);
+        self.note_world_exit(reason);
+    }
+
+    pub(super) fn interrupt_for_replay_close(&mut self, renderer: Option<&mut super::Renderer>) {
+        if self.replay.is_some() {
+            self.interrupt_for_world_exit("export interrupted because the replay closed", renderer);
+        }
+    }
+
+    pub(super) fn request_stop(&mut self) {
+        self.stop_requested = true;
+    }
+
+    fn stop_between_frames(&self) -> bool {
+        self.stop_requested
+            && self.draining.is_none()
+            && self.pending.is_none()
+            && self.submitted > 0
+    }
+
     pub(super) fn elapsed(&self) -> Duration {
         self.real
     }
@@ -336,6 +454,13 @@ impl Session {
         self.frame_elapsed = end - self.real;
         self.real = end;
         self.pending = Some(self.submitted);
+    }
+
+    fn capture_submitted(&mut self) {
+        self.pending = None;
+        self.stall_since = None;
+        self.submitted += 1;
+        self.requests.captured();
     }
 
     pub(super) fn visual_millis(&self) -> i64 {
@@ -383,12 +508,25 @@ impl Session {
                 }
             }
         }
+        let snapshot = self
+            .is_mod_export()
+            .then(|| self.progress.freeze_and_snapshot());
+        if let Some((_, _, true)) = snapshot {
+            error
+                .get_or_insert_with(|| "export output interrupted".into())
+                .push_str(" (frame publication in progress, output unconfirmed)");
+        }
         if error.is_some() {
             state = "failed";
         }
-        // On abort this is a snapshot. A PNG already being written may still finish.
-        let frames_written = self.progress.frames();
         let mut event = self.status(state);
+        let frames_written = if let Some((frames, bytes, _)) = snapshot {
+            event["bytes_written"] = json!(bytes);
+            frames
+        } else {
+            // A control export can still finish an in-flight write after an abort.
+            self.progress.frames()
+        };
         event["frames_written"] = json!(frames_written);
         if let Some(error) = error {
             event["ok"] = json!(false);
@@ -430,8 +568,8 @@ impl Session {
                 .into());
             }
         } else {
-            let state = drain.state;
-            let manifest = self.begin_manifest(state, None);
+            let (state, interruption) = (drain.state, drain.interruption);
+            let manifest = self.begin_manifest(state, interruption.map(str::to_owned));
             self.draining.as_mut().unwrap().manifest = Some(manifest);
         }
         Ok(())
@@ -443,7 +581,11 @@ impl Session {
         if manifest.is_finished() {
             Some(self.take_manifest()?.finish(stalled))
         } else if now.saturating_duration_since(manifest.started) >= budget {
-            Some(self.take_manifest()?.detach(stalled))
+            let cancel_failed = self.is_mod_export();
+            Some(
+                self.take_manifest()?
+                    .detach_at_deadline(stalled, cancel_failed),
+            )
         } else {
             None
         }
@@ -512,6 +654,8 @@ impl Game<'_> {
 
     fn start_export(&mut self, start: Start) -> Result<Value> {
         if self.export.is_some()
+            || self.native_export.pending.is_some()
+            || self.native_export.ending
             || self.screenshot_sequence.is_some()
             || self.pending_screenshot.is_some()
             || self.repro.replaying()
@@ -535,7 +679,6 @@ impl Game<'_> {
         start
             .spec
             .validate(renderer.device.limits().max_texture_dimension_2d)?;
-        let gpu = renderer.export_adapter_name();
         let game_dir = Self::game_dir();
         let encoder = match start.spec.format {
             Format::PngSequence => None,
@@ -543,6 +686,41 @@ impl Game<'_> {
         };
         let clock = ExportClock::new(start.spec.fps)?;
         let folder = Arc::new(ExportFolder::create(&game_dir, &start.spec.name)?);
+        self.start_export_session(start, folder, clock, Output::Control(encoder))
+    }
+
+    fn start_queued_export(&mut self, pending: native_export::PendingExport) {
+        let ready = pending.scope == self.replay_scope()
+            && self.native_lifecycle.epoch() == Some(pending.epoch)
+            && self.check_mod_export_start().is_ok();
+        let start = Start {
+            spec: pending.spec,
+            hold: false,
+            settle: true,
+        };
+        let output = Output::Mod {
+            request: pending.request,
+            pipe: pending.encoder,
+            stop: pending.stop,
+            ready,
+        };
+        if let Err(error) = self.start_export_session(start, pending.folder, pending.clock, output)
+        {
+            log::warn!("could not start mod export {}: {error}", pending.request);
+        }
+    }
+
+    fn start_export_session(
+        &mut self,
+        start: Start,
+        folder: Arc<ExportFolder>,
+        clock: ExportClock,
+        output: Output,
+    ) -> Result<Value> {
+        let gpu = self
+            .renderer
+            .as_ref()
+            .map_or_else(String::new, |r| r.export_adapter_name());
         let replay = self.replay.export_driver().map(|driver| ReplayTime {
             generation: self.replay.generation,
             cursor_ns: (driver.position_ms_f64() * NS_PER_MS as f64).round() as u64,
@@ -550,13 +728,16 @@ impl Game<'_> {
             initial_tick_phase: true,
             partial: (self.replay.virtual_tick_ms / 50.0).clamp(0.0, 1.0),
         });
-        let server_clock = replay.is_none()
+        let server_clock = output.ready()
+            && replay.is_none()
             && self
                 .integrated
                 .as_ref()
                 .is_some_and(|s| s.published().is_none());
         let mut session = Session {
             spec: start.spec,
+            mod_request: output.mod_request(),
+            stop_requested: matches!(&output, Output::Mod { stop: true, .. }),
             requests: Requests {
                 hold: start.hold,
                 remaining: 0,
@@ -581,23 +762,39 @@ impl Game<'_> {
             progress: Arc::default(),
         };
         let setup = (|| -> Result<()> {
+            if !output.ready() {
+                return Err("client changed before the mod export could start".into());
+            }
             let (out, frames) = sync_channel::<ExportFrame>(3);
             let renderer = self.renderer.as_mut().ok_or("no renderer")?;
             renderer.begin_frame_export(session.spec.size, out)?;
             let recycle = renderer
                 .frame_export_recycler()
                 .ok_or("no export recycle queue")?;
-            let writer = if let Some(config) = encoder {
-                let pipe = EncoderPipe::spawn(
-                    &session.folder,
-                    &config,
-                    session.spec.size,
-                    session.spec.fps,
-                )?;
-                session.cancel_encoder = pipe.cancel_handle();
-                Writer::encoder(pipe)?
-            } else {
-                Writer::png(Arc::clone(&session.folder), 2)?
+            let pipe = match output {
+                Output::Mod { pipe, .. } => pipe,
+                Output::Control(config) => config
+                    .map(|config| {
+                        EncoderPipe::spawn(
+                            &session.folder,
+                            &config,
+                            session.spec.size,
+                            session.spec.fps,
+                        )
+                    })
+                    .transpose()?,
+            };
+            let writer = match pipe {
+                Some(pipe) => {
+                    session.cancel_encoder = pipe.cancel_handle();
+                    Writer::encoder(pipe)?
+                }
+                None if session.is_mod_export() => Writer::png_with_budget(
+                    Arc::clone(&session.folder),
+                    2,
+                    &self.native_export.budget,
+                )?,
+                None => Writer::png(Arc::clone(&session.folder), 2)?,
             };
             session.progress = writer.progress();
             session.writer = Some(thread::Builder::new().name("export-output".into()).spawn(
@@ -633,18 +830,19 @@ impl Game<'_> {
     }
 
     pub(super) fn begin_export_drain(&mut self, state: &'static str) {
-        if let Some(session) = &mut self.export
-            && session.draining.is_none()
-        {
-            session.draining = Some(Drain::new(state));
-            session.pending = None;
-            if let Some(renderer) = &mut self.renderer {
-                renderer.begin_finish_frame_export();
-            }
+        if let Some(session) = &mut self.export {
+            session.begin_drain(state, self.renderer.as_mut());
+        }
+    }
+
+    pub(super) fn interrupt_export_for_world_exit(&mut self, reason: &'static str) {
+        if let Some(session) = &mut self.export {
+            session.interrupt_for_world_exit(reason, self.renderer.as_mut());
         }
     }
 
     pub(super) fn cancel_export_on_quit(&mut self) {
+        self.native_export.pending.take();
         if self.export.is_some() {
             self.abort_export(Some("export cancelled because the game is closing".into()));
         }
@@ -654,6 +852,20 @@ impl Game<'_> {
         let Some(session) = &mut self.export else {
             return;
         };
+        if session.is_mod_export()
+            && session
+                .draining
+                .as_ref()
+                .is_some_and(|d| d.manifest.is_some())
+        {
+            if !thread::panicking()
+                && let Some(event) =
+                    session.poll_manifest_finish(Instant::now(), FRAME_EXPORT_STALL_TIMEOUT)
+            {
+                self.finish_export(event);
+            }
+            return;
+        }
         if let Some(manifest) = session.take_manifest() {
             let event = manifest.finish(
                 error
@@ -673,11 +885,19 @@ impl Game<'_> {
             "failed",
             Some(error.unwrap_or_else(|| "export readback stopped".into())),
         );
-        self.finish_export(manifest.finish("export aborted"));
+        if session.is_mod_export() {
+            let mut drain = Drain::new("failed");
+            drain.manifest = Some(manifest);
+            session.pending = None;
+            session.draining = Some(drain);
+        } else {
+            self.finish_export(manifest.finish("export aborted"));
+        }
     }
 
     fn finish_export(&mut self, mut event: Value) {
         let session = self.export.take().expect("active export");
+        self.native_export.ending = session.is_mod_export();
         self.ui.hide_gui = session.previous_hide_gui;
         self.reconcile_export_releases(&session.released_mappings);
         if session.server_clock
@@ -699,8 +919,12 @@ impl Game<'_> {
             }
             self.notify_window_resize();
         }
+        let status = session.mod_completion(&event);
         event["event"] = json!("export");
         self.events.note(self.ticks, event);
+        if let Some(status) = status {
+            self.finish_mod_export(status);
+        }
     }
 
     pub(super) fn export_held(&self) -> bool {
@@ -710,6 +934,16 @@ impl Game<'_> {
     }
 
     pub(super) fn poll_export(&mut self) {
+        if let Some(pending) = self.native_export.pending.take() {
+            self.start_queued_export(pending);
+        }
+        if self
+            .export
+            .as_ref()
+            .is_some_and(Session::stop_between_frames)
+        {
+            self.begin_export_drain("stopped");
+        }
         let Some(session) = &mut self.export else {
             return;
         };
@@ -1007,14 +1241,13 @@ impl Game<'_> {
                 .is_some_and(|renderer| !renderer.disarm_export_frame());
             if drawn && copy_submitted {
                 let session = self.export.as_mut().ok_or("export ended before capture")?;
-                session.pending = None;
-                session.stall_since = None;
-                session.submitted += 1;
-                session.requests.captured();
+                session.capture_submitted();
                 let limit = session.spec.frames != 0 && session.submitted >= session.spec.frames;
                 let replay_ended = session.replay.is_some()
                     && self.replay.driver.as_ref().is_some_and(|r| r.is_finished());
-                if limit || replay_ended {
+                if session.stop_requested {
+                    self.begin_export_drain("stopped");
+                } else if limit || replay_ended {
                     self.begin_export_drain("finished");
                 }
             } else {
@@ -1316,6 +1549,8 @@ mod tests {
             .spec;
         Session {
             clock: ExportClock::new(spec.fps).unwrap(),
+            mod_request: None,
+            stop_requested: false,
             spec,
             requests: Requests::default(),
             settle: true,
@@ -1336,6 +1571,226 @@ mod tests {
             cancel_encoder: None,
             progress: Arc::default(),
         }
+    }
+
+    #[test]
+    fn mod_status_tracks_the_current_capture_until_it_is_submitted() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = test_session(root.path());
+        let mut api = native_export::NativeExport::default();
+        assert!(session.mod_status().is_none());
+        assert_eq!(
+            api.request_stop(None),
+            Err(mod_api::ExportError::NotRunning)
+        );
+        assert_eq!(
+            api.request_stop(Some(&mut session)),
+            Err(mod_api::ExportError::NotRunning)
+        );
+        session.mod_request = Some(31);
+        for frame in 0..3 {
+            session.begin_capture();
+            let status = session.mod_status().unwrap();
+            assert_eq!(
+                (status.request, status.state, status.frame),
+                (31, ExportState::Running, frame)
+            );
+            assert!(!session.can_begin_frame());
+            if frame == 2 {
+                api.request_stop(Some(&mut session)).unwrap();
+                assert!(!session.stop_between_frames());
+            }
+            session.capture_submitted();
+        }
+        assert!(session.stop_between_frames());
+        assert_eq!(session.mod_status().unwrap().frame, 3);
+    }
+
+    #[test]
+    fn mod_completion_follows_drained_output_and_the_manifest_rename() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = test_session(root.path());
+        session.mod_request = Some(8);
+        session.draining = Some(Drain::new("stopped"));
+        let writer = Writer::png(Arc::clone(&session.folder), 1).unwrap();
+        session.progress = writer.progress();
+        for index in 0..2 {
+            writer.write(index, [16, 16], vec![0; 16 * 16 * 3]).unwrap();
+        }
+        session.writer = Some(thread::spawn(move || writer.finish()));
+        let writer = session.writer.take().unwrap();
+        let completed_bytes = writer.join().unwrap().unwrap();
+        let now = Instant::now();
+        session.poll_writer_finish(now, STALL).unwrap();
+        let job = session
+            .draining
+            .as_mut()
+            .unwrap()
+            .manifest
+            .as_mut()
+            .unwrap();
+        let worker = std::mem::replace(
+            &mut job.worker,
+            Err(std::io::Error::other("joined by test")),
+        );
+        worker.unwrap().join().unwrap().unwrap();
+        let event = session.poll_manifest_finish(now, STALL).unwrap();
+        let status = session.mod_completion(&event).unwrap();
+        assert_eq!(
+            (status.request, status.state, status.frame, status.bytes),
+            (8, ExportState::Finished, 2, completed_bytes)
+        );
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(session.folder.path().join("export.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["state"], "stopped");
+        assert_eq!(manifest["frames_written"], 2);
+        assert!(session.folder.path().join("frame_000001.png").is_file());
+        assert!(session.poll_manifest_finish(now, STALL).is_none());
+        session.mod_request = None;
+        assert!(session.mod_completion(&event).is_none());
+    }
+
+    #[test]
+    fn a_failed_mod_export_settles_with_a_failed_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = test_session(root.path());
+        session.mod_request = Some(9);
+        let mut job = session.begin_manifest("failed", Some("test readback failure".into()));
+        let worker = std::mem::replace(
+            &mut job.worker,
+            Err(std::io::Error::other("joined by test")),
+        );
+        worker.unwrap().join().unwrap().unwrap();
+        session.draining = Some(Drain {
+            manifest: Some(job),
+            ..Drain::new("failed")
+        });
+        let event = session.poll_manifest_finish(Instant::now(), STALL).unwrap();
+        let status = session.mod_completion(&event).unwrap();
+        assert_eq!(
+            (status.request, status.state, status.frame),
+            (9, ExportState::Failed, 0)
+        );
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(session.folder.path().join("export.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["state"], "failed");
+    }
+
+    #[test]
+    fn world_exit_and_disconnection_report_failed_mod_completions() {
+        for (request, reason) in [
+            (Some(10), "export interrupted because the world closed"),
+            (
+                Some(11),
+                "export interrupted because the client disconnected",
+            ),
+            (None, "export interrupted because the world closed"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut session = test_session(root.path());
+            session.mod_request = request;
+            let writer = Writer::png(Arc::clone(&session.folder), 1).unwrap();
+            session.progress = writer.progress();
+            writer
+                .write(0, session.spec.size, vec![0; 16 * 16 * 3])
+                .unwrap();
+            writer.finish().unwrap();
+
+            session.draining = Some(Drain::new("stopped"));
+            session.note_world_exit(reason);
+            session.note_world_exit("another close path reached the same session");
+            session.poll_writer_finish(Instant::now(), STALL).unwrap();
+            let mut job = session.take_manifest().unwrap();
+            let worker = std::mem::replace(
+                &mut job.worker,
+                Err(std::io::Error::other("joined by test")),
+            );
+            worker.unwrap().join().unwrap().unwrap();
+            session.draining.as_mut().unwrap().manifest = Some(job);
+            let event = session.poll_manifest_finish(Instant::now(), STALL).unwrap();
+            let manifest: Value = serde_json::from_slice(
+                &std::fs::read(session.folder.path().join("export.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(event["frames_written"], 1);
+            assert_eq!(event["state"], manifest["state"]);
+            if let Some(id) = request {
+                assert_eq!(event["error"], reason);
+                let status = session.mod_completion(&event).unwrap();
+                assert_eq!(
+                    (status.request, status.state, status.frame),
+                    (id, ExportState::Failed, 1)
+                );
+                assert_eq!(status.bytes, event["bytes_written"].as_u64().unwrap());
+            } else {
+                assert_eq!(event["state"], "stopped");
+                assert!(session.mod_completion(&event).is_none());
+            }
+            assert!(
+                session
+                    .poll_manifest_finish(Instant::now(), STALL)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn replacing_a_replay_drains_its_capture_to_a_failed_manifest() {
+        use crate::game::{native_replay_tests::write_recording, replay::Replay};
+        use horizon_client::studio::ReplayDriver;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("outgoing.mcpr");
+        write_recording(&path, 1000, &[]);
+        let mut replay = Replay::default();
+        replay.driver = Some(Box::new(ReplayDriver::open(&path).unwrap()));
+        replay.recording = "outgoing".into();
+        let mut session = test_session(root.path());
+        assert_eq!(
+            replay
+                .take_replaced_recording(Some(&mut session), None)
+                .as_deref(),
+            Some("outgoing")
+        );
+        assert!(
+            session.draining.is_none(),
+            "a live capture is independent of the replay"
+        );
+
+        replay.driver = Some(Box::new(ReplayDriver::open(&path).unwrap()));
+        replay.recording = "outgoing".into();
+        session.mod_request = Some(1);
+        session.replay = Some(ReplayTime {
+            generation: replay.generation,
+            cursor_ns: 0,
+            pre_roll: false,
+            initial_tick_phase: false,
+            partial: 0.0,
+        });
+
+        assert_eq!(
+            replay
+                .take_replaced_recording(Some(&mut session), None)
+                .as_deref(),
+            Some("outgoing")
+        );
+        assert!(replay.driver.is_none());
+        session.poll_writer_finish(Instant::now(), STALL).unwrap();
+        let job = session.take_manifest().unwrap();
+        job.worker.unwrap().join().unwrap().unwrap();
+        let status = session.mod_completion(&job.event).unwrap();
+        assert_eq!((status.request, status.state), (1, ExportState::Failed));
+        assert_eq!(
+            job.event["error"],
+            "export interrupted because the replay closed"
+        );
+        let bytes = std::fs::read(session.folder.path().join("export.json")).unwrap();
+        let manifest: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(manifest["state"], "failed");
     }
 
     #[test]
@@ -1456,6 +1911,90 @@ mod tests {
         );
         assert_eq!(publication.state(), ManifestState::Cancelled);
         assert!(session.take_manifest().is_none());
+    }
+
+    #[test]
+    fn a_mod_finishes_failed_at_the_deadline_even_inside_manifest_rename() {
+        let root = tempfile::tempdir().unwrap();
+        let mut session = test_session(root.path());
+        session.mod_request = Some(13);
+        let (entered, publishing) = sync_channel(0);
+        let (release, stalled) = sync_channel(0);
+        let manifest = ManifestJob::spawn(session.status("finished"), move |publication| {
+            publication.publish(|| {
+                entered.send(()).unwrap();
+                stalled.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(())
+            })
+        });
+        publishing.recv_timeout(Duration::from_secs(2)).unwrap();
+        let start = manifest.started;
+        let publication = Arc::clone(&manifest.publication);
+        session.draining = Some(Drain {
+            manifest: Some(manifest),
+            ..Drain::new("finished")
+        });
+        let budget = Duration::from_millis(50);
+        assert!(
+            session
+                .poll_manifest_finish(start + budget / 2, budget)
+                .is_none()
+        );
+        let event = session.poll_manifest_finish(start + budget, budget);
+        assert_eq!(publication.state(), ManifestState::Publishing);
+        release.send(()).unwrap();
+
+        let event = event.expect("do not hold the export open for a stalled rename");
+        assert_eq!(event["active"], false);
+        assert!(
+            event["error"]
+                .as_str()
+                .unwrap()
+                .contains("publication unconfirmed")
+        );
+        let status = session.mod_completion(&event).unwrap();
+        assert_eq!(
+            (status.request, status.state, status.frame),
+            (13, ExportState::Failed, 0)
+        );
+        assert!(
+            session
+                .poll_manifest_finish(start + budget, budget)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_aborted_control_export_can_publish_its_failure_after_the_reply() {
+        let root = tempfile::tempdir().unwrap();
+        let session = test_session(root.path());
+        let (release, hold) = sync_channel(0);
+        let folder = Arc::clone(&session.folder);
+        let spec = session.spec.clone();
+        let (published, done) = sync_channel(0);
+        let mut event = session.status("failed");
+        ManifestJob::mark_failed(&mut event, "readback failed");
+        let job = ManifestJob::spawn(event, move |publication| {
+            hold.recv_timeout(Duration::from_secs(5)).unwrap();
+            let result = folder.write_manifest_tracked(
+                &ExportManifest {
+                    spec: &spec,
+                    state: "failed",
+                    frames_written: 0,
+                    build: "test",
+                    gpu: "fixture",
+                },
+                publication,
+            );
+            published.send(result).unwrap();
+            Ok(())
+        });
+
+        let event = job.finish("export aborted");
+        release.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        assert_eq!(event["error"], "readback failed");
+        assert!(session.folder.path().join("export.json").is_file());
     }
 
     #[test]

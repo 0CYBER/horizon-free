@@ -1,6 +1,6 @@
-use super::{EncoderPipe, ExportFolder, FrameSink, PngSequence};
+use super::{ByteBudget, EncoderPipe, ExportFolder, FrameSink, PngSequence};
 use std::io;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -16,11 +16,81 @@ struct Frame {
 pub struct Progress {
     failure: Mutex<Option<io::Error>>,
     frames: AtomicU32,
+    bytes: AtomicU64,
+    publication: Mutex<Publication>,
+}
+
+#[derive(Default)]
+struct Publication {
+    fenced: bool,
+    in_flight_publishes: usize,
 }
 
 impl Progress {
     pub fn frames(&self) -> u32 {
         self.frames.load(Ordering::Acquire)
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes.load(Ordering::Acquire)
+    }
+
+    /// Read the counters together.
+    pub fn snapshot(&self) -> (u32, u64) {
+        let _publication = self.publication.lock().unwrap();
+        (self.frames(), self.bytes())
+    }
+
+    /// Freeze the confirmed counters and report whether a rename was still in flight.
+    /// An admitted rename can still complete after this returns.
+    pub fn freeze_and_snapshot(&self) -> (u32, u64, bool) {
+        let mut publication = self.publication.lock().unwrap();
+        publication.fenced = true;
+        (
+            self.frames(),
+            self.bytes(),
+            publication.in_flight_publishes != 0,
+        )
+    }
+
+    /// The gate protects admission and accounting. A worker must release it before
+    /// touching the filesystem so teardown can still take a terminal snapshot.
+    pub(super) fn publish_frame(
+        &self,
+        bytes: u64,
+        publish: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<u64> {
+        {
+            let mut publication = self.publication.lock().unwrap();
+            if let Some(error) = self.error() {
+                return Err(error);
+            }
+            if publication.fenced {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            publication.in_flight_publishes += 1;
+        }
+
+        let result = publish();
+        let mut publication = self.publication.lock().unwrap();
+        publication.in_flight_publishes -= 1;
+        result?;
+        if !publication.fenced {
+            self.add_frame(bytes);
+        }
+        Ok(bytes)
+    }
+
+    pub(super) fn record_frame(&self, bytes: u64) {
+        let publication = self.publication.lock().unwrap();
+        if !publication.fenced {
+            self.add_frame(bytes);
+        }
+    }
+
+    fn add_frame(&self, bytes: u64) {
+        self.bytes.fetch_add(bytes, Ordering::Release);
+        self.frames.fetch_add(1, Ordering::Release);
     }
 
     pub fn error(&self) -> Option<io::Error> {
@@ -31,7 +101,7 @@ impl Progress {
             .map(|err| io::Error::new(err.kind(), err.to_string()))
     }
 
-    /// Stop starting queued frames on an aborted export.
+    /// Refuse new frames and staged publications on an aborted export.
     pub fn cancel(&self) {
         self.fail(io::ErrorKind::Interrupted.into());
     }
@@ -55,6 +125,19 @@ impl Writer {
             (0..workers.clamp(1, 4))
                 .map(|_| Box::new(PngSequence::new(Arc::clone(&folder))) as Box<dyn FrameSink>),
         )
+    }
+
+    pub fn png_with_budget(
+        folder: Arc<ExportFolder>,
+        workers: usize,
+        budget: &Arc<ByteBudget>,
+    ) -> io::Result<Self> {
+        Self::start((0..workers.clamp(1, 4)).map(|_| {
+            Box::new(PngSequence::with_budget(
+                Arc::clone(&folder),
+                Arc::clone(budget),
+            )) as Box<dyn FrameSink>
+        }))
     }
 
     pub fn encoder(pipe: EncoderPipe) -> io::Result<Self> {
@@ -174,11 +257,8 @@ fn write_frames(
             }
             break;
         };
-        match sink.write(frame.index, frame.size, &frame.rgb) {
-            Ok(written) => {
-                bytes += written;
-                progress.frames.fetch_add(1, Ordering::Release);
-            }
+        match sink.write_tracked(frame.index, frame.size, &frame.rgb, progress) {
+            Ok(written) => bytes += written,
             Err(err) => {
                 progress.fail(err);
                 break;
@@ -196,6 +276,164 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::BufReader;
+
+    #[test]
+    fn an_oversized_png_is_not_published_and_control_output_ignores_the_mod_budget() {
+        let game = tempfile::tempdir().unwrap();
+        let mod_folder = Arc::new(ExportFolder::create(game.path(), "limited").unwrap());
+        let ctl_folder = Arc::new(ExportFolder::create(game.path(), "control").unwrap());
+        // A 2x2 RGB frame fits by its raw size but the PNG header alone exceeds it.
+        let budget = Arc::new(ByteBudget::new(12));
+        let mod_writer = Writer::png_with_budget(Arc::clone(&mod_folder), 2, &budget).unwrap();
+        let progress = mod_writer.progress();
+        let _ = mod_writer.write(0, [2, 2], vec![0; 12]);
+        assert!(
+            mod_writer
+                .finish()
+                .unwrap_err()
+                .to_string()
+                .contains("budget")
+        );
+        assert_eq!((progress.frames(), progress.bytes()), (0, 0));
+        assert_eq!(std::fs::read_dir(mod_folder.path()).unwrap().count(), 0);
+
+        let ctl_writer = Writer::png(Arc::clone(&ctl_folder), 1).unwrap();
+        ctl_writer.write(0, [2, 2], vec![0; 12]).unwrap();
+        let bytes = ctl_writer.finish().unwrap();
+        assert_eq!(
+            std::fs::metadata(ctl_folder.path().join("frame_000000.png"))
+                .unwrap()
+                .len(),
+            bytes
+        );
+        assert!(bytes > 12);
+    }
+
+    #[test]
+    fn a_staged_png_cannot_publish_after_the_terminal_snapshot() {
+        use std::io::Write as _;
+
+        let game = tempfile::tempdir().unwrap();
+        let folder = Arc::new(ExportFolder::create(game.path(), "take").unwrap());
+        let budget = Arc::new(ByteBudget::new(1024));
+        let progress = Arc::new(Progress::default());
+        let mut sink = PngSequence::with_budget(Arc::clone(&folder), Arc::clone(&budget));
+        let rgb = [0; 12];
+        let first = sink.write_tracked(0, [2, 2], &rgb, &progress).unwrap();
+        let (ready, staged) = sync_channel(0);
+        let (release, hold) = sync_channel(0);
+        let worker = thread::scope(|scope| {
+            let (folder, progress) = (&folder, &progress);
+            let worker = scope.spawn(move || {
+                let staging = folder.stage().unwrap();
+                let mut pending = staging.create_new("frame_000001.png").unwrap();
+                let file = std::fs::read(folder.path().join("frame_000000.png")).unwrap();
+                pending.file.write_all(&file).unwrap();
+                ready.send(()).unwrap();
+                hold.recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                progress.publish_frame(file.len() as u64, || pending.publish())
+            });
+            staged
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+
+            // Another worker reports a budget error while frame one is staged.
+            progress.fail(io::Error::other("budget exhausted"));
+            progress.cancel();
+            let snapshot = progress.snapshot();
+            release.send(()).unwrap();
+            (snapshot, worker.join().unwrap())
+        });
+        assert_eq!(worker.0, (1, first));
+        assert_eq!(worker.1.unwrap_err().to_string(), "budget exhausted");
+        assert_eq!(progress.snapshot(), worker.0);
+        assert!(!folder.path().join("frame_000001.png").exists());
+    }
+
+    #[test]
+    fn freezing_progress_fences_new_publications_without_cancellation() {
+        let progress = Progress::default();
+        assert_eq!(progress.freeze_and_snapshot(), (0, 0, false));
+        let error = progress
+            .publish_frame(1, || panic!("a rename started after the snapshot"))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn a_stalled_png_rename_does_not_block_the_terminal_snapshot() {
+        use std::io::Write as _;
+        use std::time::Duration;
+
+        let game = tempfile::tempdir().unwrap();
+        let folder = Arc::new(ExportFolder::create(game.path(), "take").unwrap());
+        let budget = Arc::new(ByteBudget::new(1024));
+        let progress = Progress::default();
+        let mut sink = PngSequence::with_budget(Arc::clone(&folder), budget);
+        let first = sink.write_tracked(0, [2, 2], &[0; 12], &progress).unwrap();
+        let (renaming, entered) = sync_channel(0);
+        let (release, resume) = sync_channel(1);
+        let (report, snapshot) = sync_channel(1);
+
+        let (frozen, rejected) = thread::scope(|scope| {
+            let (progress, folder) = (&progress, &folder);
+            let worker = scope.spawn(move || {
+                let staging = folder.stage().unwrap();
+                let mut pending = staging.create_new("frame_000001.png").unwrap();
+                let image = std::fs::read(folder.path().join("frame_000000.png")).unwrap();
+                pending.file.write_all(&image).unwrap();
+                progress.publish_frame(image.len() as u64, || {
+                    renaming.send(()).unwrap();
+                    resume.recv_timeout(Duration::from_secs(5)).unwrap();
+                    pending.publish()
+                })
+            });
+            entered.recv_timeout(Duration::from_secs(2)).unwrap();
+            scope.spawn(move || {
+                progress.cancel();
+                let frozen = progress.freeze_and_snapshot();
+                let rejected = progress
+                    .publish_frame(1, || panic!("a later rename entered the fenced gate"))
+                    .unwrap_err();
+                report.send((frozen, rejected.kind())).unwrap();
+            });
+
+            let result = snapshot.recv_timeout(Duration::from_secs(2));
+            // Unblock the worker even when the regression is present.
+            release.send(()).unwrap();
+            assert_eq!(worker.join().unwrap().unwrap(), first);
+            result.expect("abort and snapshot should finish while the rename remains stalled")
+        });
+
+        assert_eq!(frozen, (1, first, true));
+        assert_eq!(rejected, io::ErrorKind::Interrupted);
+        assert!(folder.path().join("frame_000001.png").is_file());
+        assert_eq!(progress.snapshot(), (1, first));
+    }
+
+    #[test]
+    fn a_png_that_cannot_publish_refunds_its_reservation() {
+        let game = tempfile::tempdir().unwrap();
+        let folder = Arc::new(ExportFolder::create(game.path(), "take").unwrap());
+        let original = folder.create_new("frame_000000.png").unwrap();
+        let budget = Arc::new(ByteBudget::new(1024));
+        let mut sink = PngSequence::with_budget(Arc::clone(&folder), Arc::clone(&budget));
+        let progress = Progress::default();
+
+        let error = sink
+            .write_tracked(0, [2, 2], &[0; 12], &progress)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(original.metadata().unwrap().len(), 0);
+        assert_eq!(progress.snapshot(), (0, 0));
+        assert!(budget.fits(1024));
+
+        let bytes = sink.write_tracked(1, [2, 2], &[0; 12], &progress).unwrap();
+        assert!(bytes > 12);
+        assert!(budget.fits(1024 - bytes));
+        assert!(!budget.fits(1025 - bytes));
+    }
 
     #[test]
     fn parallel_pngs_round_trip_and_report_file_bytes() {

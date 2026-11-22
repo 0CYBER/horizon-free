@@ -2,5 +2,6 @@
 //! mod. `Host`, `ServerHost` and `ClientHost` (and the hidden backends the handles reach) are the
 //! unions of them, generated from the folder, so a new area is a new file and edits no list; a mod
 //! calls through those and the handles and never names an area trait, and `prelude` names every
-//! one for whoever implements them: the game, or a test double.
+//! one for whoever implements them: the game, or a test double. An area method can name a
+//! different inherent engine method with `#[game_method(name)]` to preserve an existing game method.
 include!(concat!(env!("OUT_DIR"), "/mod_api_host_areas.rs"));

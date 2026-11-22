@@ -1,5 +1,6 @@
 //! Deterministic frame timing and output for the offscreen exporter.
 
+mod budget;
 mod clock;
 mod config;
 mod dir;
@@ -7,10 +8,11 @@ mod process;
 mod sink;
 mod writer;
 
+pub use budget::{ByteBudget, Reservation};
 pub use clock::{ClockError, ExportClock, FrameStep};
 pub use config::{ConfigError, EncoderConfig};
 pub use dir::{DirError, ExportFolder, ExportManifest, ManifestPublication, ManifestState};
-pub use sink::{EncoderPipe, FrameSink, PngSequence};
+pub use sink::{EncoderPipe, EncoderStartError, FrameSink, PngSequence};
 pub use writer::{Progress, Writer};
 
 use crate::file_id::valid_export_name;

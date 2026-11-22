@@ -223,6 +223,20 @@ pub mod built {
             ended,
         }
     }
+    /// The mod export's status snapshot, constructed by the game.
+    pub fn export_status(
+        request: u32,
+        name: String,
+        state: crate::ExportState,
+        [frame, frames]: [u32; 2],
+        [width, height]: [u32; 2],
+        (fps_num, fps_den): (u32, u32),
+        bytes: u64,
+    ) -> crate::ExportStatus {
+        crate::ExportStatus {
+            request, name, state, frame, frames, width, height, fps_num, fps_den, bytes,
+        }
+    }
     /// Wrap a slot in the persistent instance group store.
     pub fn instance_group_ref(generation: u64, slot: u32) -> crate::InstanceGroupRef {
         crate::InstanceGroupRef::from_parts(generation, slot).expect("published group generation")

@@ -311,6 +311,7 @@ pub fn host_area(_attribute: TokenStream, input: TokenStream) -> TokenStream {
         method.attrs.retain(|attr| {
             !attr.path().is_ident("static_call")
                 && !attr.path().is_ident("service")
+                && !attr.path().is_ident("game_method")
                 && !attr.path().is_ident("raw_text")
                 && !attr.path().is_ident("default_on_unavailable")
         });

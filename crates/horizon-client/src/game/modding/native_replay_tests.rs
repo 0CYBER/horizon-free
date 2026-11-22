@@ -16,7 +16,7 @@ use std::time::Duration;
 
 /// A recording `/studio record` could have written: the Play login, then a packet at each of
 /// `later` ms; its metadata says it lasts `duration` ms.
-fn write_recording(path: &Path, duration: u32, later: &[u32]) {
+pub(super) fn write_recording(path: &Path, duration: u32, later: &[u32]) {
     write_recording_at(path, 0, duration, later);
 }
 

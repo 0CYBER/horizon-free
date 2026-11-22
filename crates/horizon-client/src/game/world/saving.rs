@@ -44,7 +44,7 @@ impl Game<'_> {
             self.cancel_export_on_quit();
             self.client_quit.set(ClientQuit::ShuttingDown);
         } else {
-            self.begin_export_drain("stopped");
+            self.interrupt_export_for_world_exit("export interrupted because the world closed");
         }
         if let Some(save) = &mut self.pending_save {
             save.quit |= quit;

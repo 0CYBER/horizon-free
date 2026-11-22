@@ -1653,6 +1653,7 @@ struct Game<'a> {
     /// `screenshot-sequence` while it runs.
     screenshot_sequence: Option<screenshot_sequence::Sequence>,
     export: Option<export::Session>,
+    native_export: native_export::NativeExport,
     visual_offset: i64,
     /// `render-capture DIR`: replied once the renderer wrote the scene.
     pending_render_capture: Option<std::sync::mpsc::Sender<String>>,
@@ -10920,6 +10921,7 @@ impl<'a> Game<'a> {
             pending_screenshot: None,
             screenshot_sequence: None,
             export: None,
+            native_export: native_export::NativeExport::default(),
             visual_offset: 0,
             pending_render_capture: None,
             pending_bench: None,

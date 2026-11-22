@@ -82,6 +82,9 @@ WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
 # A guest forwarder's host call: the import's name (with its signature hash) and the generator's position number for it.
 HOST_IMPORT = re.compile(r'host_import!\("([^"]+)", \d+u32')
 
+# The guest implementation of an area trait begins on its own line and each forwarder occupies one line.
+GUEST_HOST_IMPL = re.compile(r"^impl (?:\w+\s*::\s*)*\w+ for Guest \{\n", re.MULTILINE)
+
 
 def read_text(path, root_marks):
     """A file's text with each source folder's path replaced, so two worktrees' outputs compare."""
@@ -134,7 +137,7 @@ def added_catalog_hooks(base_dir, head_dir):
     return after - before if {**head, "hooks": retained} == base else set()
 
 
-def guest_wire_without_hooks(guest, hooks, base):
+def guest_wire_without_hooks(guest, hooks, base, *, added_calls=False):
     """The head's guest wire with the added hooks' names and dispatch arms removed and the generator's private record
     numbers they consumed closed, or None where no such removal turns it into `base`.
 
@@ -162,14 +165,20 @@ def guest_wire_without_hooks(guest, hooks, base):
         return GUEST_HOOK_ARM.match(arm[0]) is not None and call is not None and call[1] in hooks
 
     removed = [index for index, arm in enumerate(arms) if added(arm)]
+    for index in reversed(removed):
+        guest = guest[:arms[index].start()] + guest[arms[index].end():]
+
+    if added_calls:
+        # Added imports can allocate records before the hook dispatch. Comparing retained ranks
+        # covers both additions while preserving the generated uses of every retained record.
+        return records_in_order(guest)
+
     windows = []
     for index in removed:
         low = max((n for j in range(index) if j not in removed for n in references[j]), default=-1)
         high = min((n for j in range(index + 1, len(arms)) if j not in removed for n in references[j] if n > low),
                    default=float("inf"))
         windows.append((low, high))
-    for index in reversed(removed):
-        guest = guest[:arms[index].start()] + guest[arms[index].end():]
 
     head_parts, base_parts = WIRE_RECORD.split(guest), WIRE_RECORD.split(base)
     if len(head_parts) != len(base_parts) or head_parts[::2] != base_parts[::2]:
@@ -234,14 +243,28 @@ def guest_wire_without_calls(guest, base):
     with the game. An added call takes a position, so every later import's number moves by one. A changed or removed
     call loses its base name, and the base's forwarder for it is then missing from the head."""
     known = set(HOST_IMPORT.findall(base))
+    known_impls = set(GUEST_HOST_IMPL.findall(base))
     kept, added = [], set()
+    new_impl, removed_forwarder = None, False
     for line in guest.splitlines(keepends=True):
+        if GUEST_HOST_IMPL.fullmatch(line):
+            new_impl = len(kept) if line not in known_impls else None
+            removed_forwarder = False
         names = HOST_IMPORT.findall(line)
         if any(name not in known for name in names):
             if len(names) != 1:
                 return None, None, set()
             added.add(names[0])
+            if new_impl is not None:
+                removed_forwarder = True
             continue
+        if line == "}\n" and new_impl is not None:
+            # A new area with only added forwarders leaves its empty impl after stripping.
+            omit = removed_forwarder and len(kept) == new_impl + 1
+            new_impl = None
+            if omit:
+                kept.pop()
+                continue
         kept.append(line)
 
     def blank(text):
@@ -291,8 +314,9 @@ def explained_additions(base_dir, head_dir, diffs, base_root, head_root):
         if head is None:
             return nothing
         if hooks:
-            # The hooks' own record windows: an added call that brings in a type as well is not told apart here.
-            explained = guest_wire_without_hooks(head, hooks, base)
+            explained = guest_wire_without_hooks(head, hooks, base, added_calls=bool(calls))
+            if calls:
+                base = records_in_order(base)
         elif calls:
             head, base = records_in_order(head), records_in_order(base)
             explained = head

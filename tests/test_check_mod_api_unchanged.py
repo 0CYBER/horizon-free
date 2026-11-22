@@ -367,6 +367,18 @@ class CompareTests(unittest.TestCase):
         # can't be told from a later hook losing an owned type, so this fails rather than open that.
         self.assertEqual(self.compare_hook_addition((857, 860, 863, 862), self.OWNED_ARM), 1)
 
+    def test_an_added_hook_and_a_new_host_area_with_its_own_records_pass(self):
+        # The three retained records above the new host import shift even before the hook.
+        records = (859, 861, 865, 864)
+        source = ('impl crate::VideoClientHost for Guest {\n'
+                  'fn start(&mut self) -> u32 { let r = host_import!("Video::start#ab", 5u32, w); r.take() }\n'
+                  '}\n')
+        self.assertEqual(self.compare_hook_addition(records, self.OWNED_ARM, lambda text: source + text), 0)
+        unsupported = source.replace('}\n', 'fn unexpected(&self) {}\n}\n', 1)
+        self.assertEqual(self.compare_hook_addition(records, self.OWNED_ARM, lambda text: unsupported + text), 1)
+        self.assertEqual(self.compare_hook_addition((859, 861, 864, 865), self.OWNED_ARM,
+                                                    lambda text: source + text), 1)
+
     def test_a_changed_existing_arm_beside_an_added_hook_fails(self):
         cases = {
             "an existing arm's text": ((857, 859, 863, 862), lambda text: text.replace("out.put(&p1.visible);", "")),

@@ -1,7 +1,11 @@
+use super::budget::{BudgetedWrite, Reservation};
+use super::dir::{ExportDestination, Staging};
 use super::process::EncoderChild;
-use super::{EncoderConfig, ExportFolder};
+use super::{ByteBudget, DirError, EncoderConfig, ExportFolder, ExportSpec, Progress};
 use crate::gfx::FRAME_EXPORT_STALL_TIMEOUT;
+use std::borrow::Borrow;
 use std::io::{self, BufWriter, Write as _};
+use std::path::Path;
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,32 +15,100 @@ const ENCODER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 pub trait FrameSink: Send {
     /// Write one packed RGB8 frame. Returns bytes written to the file or pipe.
     fn write(&mut self, index: u32, size: [u32; 2], rgb: &[u8]) -> io::Result<u64>;
+
+    /// Write a frame and record its completion for the export session.
+    #[doc(hidden)]
+    fn write_tracked(
+        &mut self,
+        index: u32,
+        size: [u32; 2],
+        rgb: &[u8],
+        progress: &Progress,
+    ) -> io::Result<u64> {
+        let bytes = self.write(index, size, rgb)?;
+        progress.record_frame(bytes);
+        Ok(bytes)
+    }
+
     fn finish(self: Box<Self>) -> io::Result<()>;
 }
 
 pub struct PngSequence {
     folder: Arc<ExportFolder>,
+    budget: Option<Arc<ByteBudget>>,
 }
 
 impl PngSequence {
     pub fn new(folder: Arc<ExportFolder>) -> Self {
-        Self { folder }
+        Self {
+            folder,
+            budget: None,
+        }
+    }
+
+    pub(super) fn with_budget(folder: Arc<ExportFolder>, budget: Arc<ByteBudget>) -> Self {
+        Self {
+            folder,
+            budget: Some(budget),
+        }
+    }
+
+    fn write_png(
+        &self,
+        index: u32,
+        size: [u32; 2],
+        rgb: &[u8],
+        progress: Option<&Progress>,
+    ) -> io::Result<u64> {
+        check_frame(size, rgb)?;
+        let name = format!("frame_{index:06}.png");
+        if let Some(budget) = &self.budget {
+            let raw = rgb.len() as u64;
+            let mut reservation = budget.reserve(raw)?;
+            let staging = self.folder.stage()?;
+            let mut pending = staging.create_new(&name)?;
+            encode_png(
+                BudgetedWrite {
+                    file: &mut pending.file,
+                    prepaid: raw,
+                    budget: &mut reservation,
+                },
+                size,
+                rgb,
+            )?;
+            let len = pending.file.metadata()?.len();
+            if let Some(progress) = progress {
+                progress.publish_frame(len, || pending.publish())?;
+            } else {
+                pending.publish()?;
+            }
+            reservation.commit();
+            Ok(len)
+        } else {
+            let mut file = self.folder.create_new(&name)?;
+            encode_png(&mut file, size, rgb)?;
+            let bytes = file.metadata()?.len();
+            if let Some(progress) = progress {
+                progress.record_frame(bytes);
+            }
+            Ok(bytes)
+        }
     }
 }
 
 impl FrameSink for PngSequence {
     fn write(&mut self, index: u32, size: [u32; 2], rgb: &[u8]) -> io::Result<u64> {
-        check_frame(size, rgb)?;
-        let mut file = self.folder.create_new(&format!("frame_{index:06}.png"))?;
-        let mut encoder = png::Encoder::new(BufWriter::new(&mut file), size[0], size[1]);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(rgb)?;
-        writer.finish()?;
-        Ok(file.metadata()?.len())
+        self.write_png(index, size, rgb, None)
+    }
+
+    fn write_tracked(
+        &mut self,
+        index: u32,
+        size: [u32; 2],
+        rgb: &[u8],
+        progress: &Progress,
+    ) -> io::Result<u64> {
+        self.write_png(index, size, rgb, Some(progress))
     }
 
     fn finish(self: Box<Self>) -> io::Result<()> {
@@ -44,10 +116,31 @@ impl FrameSink for PngSequence {
     }
 }
 
+fn encode_png(file: impl io::Write, size: [u32; 2], rgb: &[u8]) -> io::Result<()> {
+    let mut buffered = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(&mut buffered, size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(rgb)?;
+    writer.finish()?;
+    buffered.flush()
+}
+
 pub struct EncoderPipe {
     stdin: Option<ChildStdin>,
     child: Option<EncoderChild>,
     size: [u32; 2],
+    budget: Option<Arc<ByteBudget>>,
+}
+
+#[derive(Debug)]
+pub enum EncoderStartError {
+    Destination(DirError),
+    Folder(io::Error),
+    Encoder(io::Error),
 }
 
 impl EncoderPipe {
@@ -72,9 +165,38 @@ impl EncoderPipe {
         fps: (u32, u32),
         timeout: Duration,
     ) -> io::Result<Self> {
-        config.validate_output_args()?;
-        config.verify_fd_output(ENCODER_PROBE_TIMEOUT)?;
+        Self::check_config(config)?;
         Self::spawn_verified(folder, config, size, fps, timeout)
+    }
+
+    /// Check encoder capabilities before reserving a take directory or budget.
+    pub fn check_config(config: &EncoderConfig) -> io::Result<()> {
+        config.validate_output_args()?;
+        config.verify_fd_output(ENCODER_PROBE_TIMEOUT)
+    }
+
+    /// Start an encoder after `check_config` accepted its configuration.
+    pub fn spawn_for_mod(
+        game: &Path,
+        spec: &ExportSpec,
+        config: &EncoderConfig,
+        budget: Arc<ByteBudget>,
+        charge: Reservation<'_>,
+    ) -> Result<(ExportFolder, Self), EncoderStartError> {
+        let destination_error = EncoderStartError::Destination;
+        let destination = ExportDestination::open(game, &spec.name).map_err(destination_error)?;
+        destination.check_absent().map_err(destination_error)?;
+        let staging = destination.stage().map_err(EncoderStartError::Folder)?;
+        let (folder, mut pipe) = Self::spawn_staged(
+            &staging,
+            config,
+            spec.size,
+            spec.fps,
+            FRAME_EXPORT_STALL_TIMEOUT,
+            || destination.create(Some(charge)).map_err(destination_error),
+        )?;
+        pipe.budget = Some(budget);
+        Ok((folder, pipe))
     }
 
     fn spawn_verified(
@@ -84,12 +206,40 @@ impl EncoderPipe {
         fps: (u32, u32),
         timeout: Duration,
     ) -> io::Result<Self> {
+        Self::spawn_configured(folder, config, size, fps, timeout).map_err(|error| match error {
+            EncoderStartError::Destination(error) => io::Error::other(error),
+            EncoderStartError::Folder(error) | EncoderStartError::Encoder(error) => error,
+        })
+    }
+
+    fn spawn_configured(
+        folder: &ExportFolder,
+        config: &EncoderConfig,
+        size: [u32; 2],
+        fps: (u32, u32),
+        timeout: Duration,
+    ) -> Result<Self, EncoderStartError> {
+        let folder_error = EncoderStartError::Folder;
         let video_name = format!("video.{}", config.container);
-        folder.check_absent("encoder.log")?;
-        folder.check_absent(&video_name)?;
-        let staging = folder.stage()?;
-        let mut log = staging.create_new("encoder.log")?;
-        let mut output = staging.create_new(&video_name)?;
+        folder.check_absent("encoder.log").map_err(folder_error)?;
+        folder.check_absent(&video_name).map_err(folder_error)?;
+        let staging = folder.stage().map_err(folder_error)?;
+        Self::spawn_staged(&staging, config, size, fps, timeout, || Ok(folder))
+            .map(|(_, pipe)| pipe)
+    }
+
+    fn spawn_staged<T: Borrow<ExportFolder>>(
+        staging: &Staging<'_>,
+        config: &EncoderConfig,
+        size: [u32; 2],
+        fps: (u32, u32),
+        timeout: Duration,
+        destination: impl FnOnce() -> Result<T, EncoderStartError>,
+    ) -> Result<(T, Self), EncoderStartError> {
+        let folder_error = EncoderStartError::Folder;
+        let video_name = format!("video.{}", config.container);
+        let mut log = staging.create_new("encoder.log").map_err(folder_error)?;
+        let mut output = staging.create_new(&video_name).map_err(folder_error)?;
         let muxer = match config.container {
             "mkv" => "matroska",
             other => other,
@@ -106,28 +256,35 @@ impl EncoderPipe {
             .args(&config.args)
             .args(["-f", muxer, "fd:"])
             .stdin(Stdio::piped())
-            .stdout(output.file.try_clone()?)
-            .stderr(log.file.try_clone()?);
-        let (child, stdin) = EncoderChild::spawn(command, timeout)?;
-        // Keep failures confined to staging. If publication races an existing
-        // destination, leave any log already published in place.
-        log.publish()?;
-        output.publish()?;
-        Ok(Self {
+            .stdout(output.file.try_clone().map_err(folder_error)?)
+            .stderr(log.file.try_clone().map_err(folder_error)?);
+        let (child, stdin) =
+            EncoderChild::spawn(command, timeout).map_err(EncoderStartError::Encoder)?;
+        let pipe = Self {
             stdin: Some(stdin),
             child: Some(child),
             size,
-        })
+            budget: None,
+        };
+        // The take is claimed only after launch. Publish files individually so
+        // Windows can keep the encoder's handles open without moving their directory.
+        let folder = destination()?;
+        log.publish_to(folder.borrow()).map_err(folder_error)?;
+        output.publish_to(folder.borrow()).map_err(folder_error)?;
+        Ok((folder, pipe))
     }
 
     fn wait_for_exit(&mut self) -> io::Result<ExitStatus> {
         self.stdin.take();
         self.child.take().ok_or_else(closed_stdin)?.finish()
     }
-}
 
-impl FrameSink for EncoderPipe {
-    fn write(&mut self, _index: u32, size: [u32; 2], rgb: &[u8]) -> io::Result<u64> {
+    fn write_frame(
+        &mut self,
+        size: [u32; 2],
+        rgb: &[u8],
+        progress: Option<&Progress>,
+    ) -> io::Result<u64> {
         if size != self.size {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -140,7 +297,12 @@ impl FrameSink for EncoderPipe {
             .as_mut()
             .zip(self.child.as_ref())
             .ok_or_else(closed_stdin)?;
-        let result = write_rgb(stdin, child, rgb);
+        let reservation = self
+            .budget
+            .as_ref()
+            .map(|budget| budget.reserve(rgb.len() as u64))
+            .transpose()?;
+        let result = write_rgb(stdin, rgb, || child.writing(), reservation, progress);
         if child.idle() {
             match result {
                 Ok(()) => return Ok(rgb.len() as u64),
@@ -154,6 +316,22 @@ impl FrameSink for EncoderPipe {
             format!("encoder closed stdin ({status})"),
         ))
     }
+}
+
+impl FrameSink for EncoderPipe {
+    fn write(&mut self, _index: u32, size: [u32; 2], rgb: &[u8]) -> io::Result<u64> {
+        self.write_frame(size, rgb, None)
+    }
+
+    fn write_tracked(
+        &mut self,
+        _index: u32,
+        size: [u32; 2],
+        rgb: &[u8],
+        progress: &Progress,
+    ) -> io::Result<u64> {
+        self.write_frame(size, rgb, Some(progress))
+    }
 
     fn finish(mut self: Box<Self>) -> io::Result<()> {
         let status = self.wait_for_exit()?;
@@ -164,8 +342,32 @@ impl FrameSink for EncoderPipe {
     }
 }
 
-fn write_rgb(stdin: &mut ChildStdin, child: &EncoderChild, mut rgb: &[u8]) -> io::Result<()> {
-    if !child.writing() {
+fn write_rgb(
+    stdin: &mut impl io::Write,
+    mut rgb: &[u8],
+    writing: impl FnMut() -> bool,
+    reservation: Option<Reservation<'_>>,
+    progress: Option<&Progress>,
+) -> io::Result<()> {
+    let size = rgb.len();
+    let result = write_rgb_remaining(stdin, &mut rgb, writing);
+    if let Some(mut reservation) = reservation {
+        reservation.spend((size - rgb.len()) as u64);
+    }
+    if rgb.is_empty()
+        && let Some(progress) = progress
+    {
+        progress.record_frame(size as u64);
+    }
+    result
+}
+
+fn write_rgb_remaining(
+    stdin: &mut impl io::Write,
+    rgb: &mut &[u8],
+    mut writing: impl FnMut() -> bool,
+) -> io::Result<()> {
+    if !writing() {
         return Err(closed_stdin());
     }
     while !rgb.is_empty() {
@@ -174,8 +376,8 @@ fn write_rgb(stdin: &mut ChildStdin, child: &EncoderChild, mut rgb: &[u8]) -> io
         match stdin.write(chunk) {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
             Ok(n) => {
-                rgb = &rgb[n..];
-                if !child.writing() {
+                *rgb = &rgb[n..];
+                if !writing() {
                     return Err(closed_stdin());
                 }
             }
@@ -201,6 +403,73 @@ fn check_frame([width, height]: [u32; 2], rgb: &[u8]) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn a_partial_encoder_write_charges_only_the_bytes_the_pipe_accepted() {
+    struct BrokenPipe(Vec<u8>);
+    impl io::Write for BrokenPipe {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if !self.0.is_empty() {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            self.0.extend_from_slice(&bytes[..3]);
+            Ok(3)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let budget = ByteBudget::new(12);
+    let rgb = [1; 12];
+    let mut pipe = BrokenPipe(Vec::new());
+    let reservation = budget.reserve(12).unwrap();
+    let progress = Progress::default();
+    assert_eq!(
+        write_rgb(&mut pipe, &rgb, || true, Some(reservation), Some(&progress))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(progress.snapshot(), (0, 0));
+    assert_eq!(pipe.0, [1; 3]);
+    let mut another_pipe = Vec::new();
+    let reservation = budget.reserve(9).unwrap();
+    write_rgb(
+        &mut another_pipe,
+        &rgb[..9],
+        || true,
+        Some(reservation),
+        None,
+    )
+    .unwrap();
+    assert_eq!(another_pipe, [1; 9]);
+    assert!(!budget.fits(1));
+}
+
+#[cfg(test)]
+#[test]
+fn a_full_encoder_transfer_is_counted_when_the_pipe_then_closes() {
+    let rgb = [1; 12];
+    let mut pipe = Vec::new();
+    let budget = ByteBudget::new(12);
+    let progress = Progress::default();
+    let mut health = [true, false].into_iter();
+    let error = write_rgb(
+        &mut pipe,
+        &rgb,
+        || health.next().unwrap(),
+        Some(budget.reserve(12).unwrap()),
+        Some(&progress),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(pipe, rgb);
+    assert_eq!(progress.snapshot(), (1, 12));
+    assert!(!budget.fits(1));
 }
 
 #[cfg(test)]
@@ -258,6 +527,124 @@ mod tests {
         )
         .unwrap();
         EncoderConfig::load(game, false).unwrap()
+    }
+
+    #[test]
+    fn mod_encoder_feeds_only_frames_that_fit_the_budget() {
+        let game = tempfile::tempdir().unwrap();
+        let config = encoder_fixture(game.path(), SUPPORTS_FD, "exec cat", "");
+        let spec = ExportSpec {
+            name: "limited".into(),
+            size: [16, 16],
+            fps: (30, 1),
+            frames: 2,
+            format: super::super::Format::Encoder,
+            hud: false,
+        };
+        let pixels = vec![19; 16 * 16 * 3];
+        let budget = Arc::new(ByteBudget::new((1 << 20) + pixels.len() as u64));
+        let charge = budget.reserve(1 << 20).unwrap();
+        EncoderPipe::check_config(&config).unwrap();
+        let (folder, mut output) =
+            EncoderPipe::spawn_for_mod(game.path(), &spec, &config, Arc::clone(&budget), charge)
+                .unwrap();
+        assert_eq!(
+            output.write(0, [16, 16], &pixels).unwrap(),
+            pixels.len() as u64
+        );
+        assert!(
+            output
+                .write(1, [16, 16], &pixels)
+                .unwrap_err()
+                .to_string()
+                .contains("budget")
+        );
+        Box::new(output).finish().unwrap();
+        assert_eq!(fs::read(folder.path().join("video.mp4")).unwrap(), pixels);
+        assert!(folder.path().join("encoder.log").is_file());
+    }
+
+    #[test]
+    fn an_encoder_loses_a_take_name_claimed_after_preflight() {
+        let game = tempfile::tempdir().unwrap();
+        let config = encoder_fixture(game.path(), SUPPORTS_FD, "exec cat", "");
+        let destination = ExportDestination::open(game.path(), "take").unwrap();
+        destination.check_absent().unwrap();
+        let staging = destination.stage().unwrap();
+        let budget = ByteBudget::new(1 << 20);
+        let charge = budget.reserve(1 << 20).unwrap();
+
+        let result = EncoderPipe::spawn_staged(
+            &staging,
+            &config,
+            [16, 16],
+            (30, 1),
+            Duration::from_secs(5),
+            || {
+                let winner = ExportFolder::create(game.path(), "take").unwrap();
+                fs::write(winner.path().join("video.mp4"), b"existing video").unwrap();
+                destination
+                    .create(Some(charge))
+                    .map_err(EncoderStartError::Destination)
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(EncoderStartError::Destination(DirError::Exists))
+        ));
+        assert!(budget.fits(1 << 20));
+        drop(staging);
+
+        let exports = game.path().join("exports");
+        assert_eq!(fs::read_dir(&exports).unwrap().count(), 1);
+        let winner = exports.join("take");
+        assert_eq!(fs::read_dir(&winner).unwrap().count(), 1);
+        assert_eq!(
+            fs::read(winner.join("video.mp4")).unwrap(),
+            b"existing video"
+        );
+    }
+
+    #[test]
+    fn a_claimed_take_stays_charged_when_output_publication_fails() {
+        let game = tempfile::tempdir().unwrap();
+        let config = encoder_fixture(game.path(), SUPPORTS_FD, "exec cat", "");
+        let destination = ExportDestination::open(game.path(), "take").unwrap();
+        let staging = destination.stage().unwrap();
+        let budget = ByteBudget::new(1 << 20);
+        let charge = budget.reserve(1 << 20).unwrap();
+
+        let result = EncoderPipe::spawn_staged(
+            &staging,
+            &config,
+            [16, 16],
+            (30, 1),
+            Duration::from_secs(5),
+            || {
+                let folder = destination
+                    .create(Some(charge))
+                    .map_err(EncoderStartError::Destination)?;
+                folder
+                    .create_new("video.mp4")
+                    .unwrap()
+                    .write_all(b"existing video")
+                    .unwrap();
+                Ok(folder)
+            },
+        );
+        assert!(
+            matches!(result, Err(EncoderStartError::Folder(err)) if err.kind() == io::ErrorKind::AlreadyExists)
+        );
+        drop(staging);
+
+        let exports = game.path().join("exports");
+        assert_eq!(fs::read_dir(&exports).unwrap().count(), 1);
+        assert!(exports.join("take/encoder.log").is_file());
+        assert_eq!(
+            fs::read(exports.join("take/video.mp4")).unwrap(),
+            b"existing video"
+        );
+        assert!(!budget.fits(1));
     }
 
     #[test]

@@ -304,6 +304,13 @@ impl Renderer {
         self.adapter.get_info().name
     }
 
+    pub fn supports_frame_export(&self) -> bool {
+        self.surface.is_none()
+            && self.offscreen.is_some()
+            && rgb_order(self.config.format).is_some()
+            && !self.device_lost()
+    }
+
     pub fn begin_frame_export(
         &mut self,
         size: [u32; 2],
