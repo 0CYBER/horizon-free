@@ -33,6 +33,9 @@ pub trait PiglinLevel: MobLevel {
     fn admire_seen_item(&mut self, index: usize, nearest: Option<f64>, loved: bool);
     fn start_admiring(&mut self, index: usize, stack: ItemStack);
     fn piglin_throw_items(&mut self, i: usize, items: Vec<ItemStack>);
+    /// The bartering loot table rolled on its own `random_sequence`, not the
+    /// level random (`PiglinAi.barter` / `LootContext.getRandom`).
+    fn piglin_barter_items(&mut self) -> Vec<ItemStack>;
     /// Where `PiglinAi.throwItems` throws toward from `at`: one block above the feet of
     /// the nearest player within 16 blocks, the level's own player ahead of the guests,
     /// those alive and not spectators. `None` when no player qualifies.

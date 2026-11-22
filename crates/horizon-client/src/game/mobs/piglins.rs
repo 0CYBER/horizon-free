@@ -329,6 +329,15 @@ impl Game<'_> {
 }
 
 impl PiglinLevel for Game<'_> {
+    fn piglin_barter_items(&mut self) -> Vec<ItemStack> {
+        let items = world_items!(self);
+        let table = "minecraft:gameplay/piglin_bartering";
+        let sequence = items
+            .loot_sequence(table)
+            .unwrap_or_else(|| "minecraft:gameplay/piglin_bartering".to_owned());
+        let random = self.rand_sequences.get(&sequence, self.level.seed);
+        items.loot_table(table, false, None, random)
+    }
     fn res_items(&self) -> &Items {
         self.res.items()
     }

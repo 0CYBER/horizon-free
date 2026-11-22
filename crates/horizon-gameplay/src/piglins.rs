@@ -420,13 +420,7 @@ pub fn finish_admiring<L: PiglinLevel + ?Sized>(l: &mut L, mob: u32) {
     if !barter {
         return;
     }
-    let p = l.parts();
-    let items = p.items.loot_table(
-        "minecraft:gameplay/piglin_bartering",
-        false,
-        None,
-        &mut p.world.random,
-    );
+    let items = l.piglin_barter_items();
     l.piglin_throw_items(i, items);
 }
 /// `PiglinAi.throwItems`: barters and a baby's unwanted main-hand item
