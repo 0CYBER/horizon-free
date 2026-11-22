@@ -1,0 +1,2 @@
+# Prepared-resource daily test: PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::storage::container_open_stat_tests::a_copper_chest_counts_as_a_chest_opened lib daily resources

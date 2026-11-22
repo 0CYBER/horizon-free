@@ -12,6 +12,25 @@ use horizon_core::random::RandomSource;
 pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
 }
+/// The custom statistic a container block's `useWithoutItem` awards when it
+/// opens: `ChestBlock.getOpenChestStat` is `Stats.OPEN_CHEST` for every chest
+/// block (`CopperChestBlock` extends `ChestBlock` and does not override it),
+/// with `TrappedChestBlock`'s `TRIGGER_TRAPPED_CHEST` the only override;
+/// `BarrelBlock` awards `OPEN_BARREL`, `ShulkerBoxBlock` `OPEN_SHULKER_BOX`,
+/// and a hopper, dropper or dispenser `INSPECT_HOPPER`/`_DROPPER`/`_DISPENSER`.
+/// The ender chest's `OPEN_ENDERCHEST` comes from its own path.
+pub(super) fn open_stat(name: &str) -> Option<&'static str> {
+    match name {
+        "minecraft:trapped_chest" => Some("trigger_trapped_chest"),
+        "minecraft:barrel" => Some("open_barrel"),
+        "minecraft:hopper" => Some("inspect_hopper"),
+        "minecraft:dropper" => Some("inspect_dropper"),
+        "minecraft:dispenser" => Some("inspect_dispenser"),
+        n if is_chest_block(n) => Some("open_chest"),
+        n if is_shulker_box(n) => Some("open_shulker_box"),
+        _ => None,
+    }
+}
 impl Game<'_> {
     /// `ServerPlayerGameMode.useItemOn` for a spectator: the block's menu
     /// (`BlockState.getMenuProvider`) opens, and nothing else happens. The
@@ -819,3 +838,7 @@ mod lock_tests {
         assert!(game.titles.overlay.is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "tests/container_open_stat_tests.rs"]
+mod container_open_stat_tests;
