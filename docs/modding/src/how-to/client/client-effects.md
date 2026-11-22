@@ -83,3 +83,23 @@ meshed so far and nothing where a section is not meshed yet.
 A new call replaces the current muffle; `ticks` of 0 ends it immediately. The effect belongs to the sound output, so every splitscreen player hears it. The call refuses an amount or strength outside 0 to 1, more than 64 exempt events, or an exempt event that is not a namespaced sound ID, without changing the output. Server code cannot call this client-only service.
 
 Play the accompanying sound through `ClientHost::play_local_sound` with a `SoundPlay`.
+
+## Showing another time or weather
+
+`sky_environment` lets a client mod show the local player another time of day or weather, for example noon
+while building, a clear sky for a recording, or night on a server where it is day. It is asked whenever the
+frame reads the sky, with the frame's `partial` tick and the values the frame would draw:
+
+| `SkyEnvironmentEvent` field | Meaning |
+| --- | --- |
+| `partial` | Ticks past the last tick, from 0 to 1 |
+| `day_time` | The level's time of day (or PvP & HUD's view time); write it to show another |
+| `rain` | The rain level from 0 to 1; write it to show more or less rain |
+| `thunder` | The thunder level from 0 to 1; write it to show more or less thunder |
+
+Only the picture follows: the sun, moon and stars, the sky's and fog's colour, the sky's light, clouds, and
+falling rain or snow. The level's own clock and weather, gameplay (crops, mobs, beds) and the server keep
+theirs, and nothing is sent. Rain and thunder count only in a dimension with weather. A level that is not finite
+keeps the level's value, and the others are clamped to 0..=1. The hook may run more than once a frame, so
+give the same answer each time. Only a client of a world (single player's included) asks it, never the game
+that ticks the world. NeoForge has no counterpart; Java mods change `ClientLevel` with a mixin.

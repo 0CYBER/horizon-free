@@ -186,9 +186,12 @@ impl Fade {
         })
     }
 
-    /// The brightness at `day_time` (ticks; any day).
+    /// The brightness at `day_time` (ticks; any day, `i64::MIN` and `i64::MAX` included: a client
+    /// mod's `sky_environment` may give any).
     pub fn brightness(&self, day_time: i64) -> f32 {
-        let since = |t: i64| (t - self.start_in).rem_euclid(DAY);
+        // Widened, so a time near either end doesn't overflow; the result is under a day.
+        let since =
+            |t: i64| (i128::from(t) - i128::from(self.start_in)).rem_euclid(DAY.into()) as i64;
         let now = since(day_time);
         let (end_in, start_out) = (since(self.end_in), since(self.start_out));
         // A fade out that ends where the fade in starts ends a whole day later, not at once.
@@ -299,12 +302,13 @@ impl SkyLayer {
     /// How far the layer has turned around its axis, in turns, when the sun stands at
     /// `sun_turns` (vanilla's sun angle over 360°: `0` at noon). A turn a day at speed 1, so the
     /// layer keeps pace with the sun; counted from noon of day 0, so a slower speed carries on
-    /// across days. `0` for a layer that does not rotate.
+    /// across days. `0` for a layer that does not rotate. Any `day_time`, `i64::MIN` included.
     pub fn turns(&self, day_time: i64, sun_turns: f32) -> f32 {
         if !self.rotate {
             return 0.0;
         }
-        let days = (day_time - 6000).div_euclid(DAY);
+        // Widened, so `i64::MIN` doesn't overflow; a whole day count fits an i64 again.
+        let days = (i128::from(day_time) - 6000).div_euclid(DAY.into()) as i64;
         // Whole turns only matter at a speed that is not whole; keep the f32 small.
         let days = (days as f64 * f64::from(self.speed)).rem_euclid(1.0);
         (days + f64::from(sun_turns) * f64::from(self.speed)).rem_euclid(1.0) as f32
@@ -599,6 +603,24 @@ mod tests {
         assert_eq!(l.turns(30000, 0.0), 0.5);
         assert_eq!(l.turns(36000, 0.25), 0.625);
         assert_eq!(l.turns(54000, 0.0), 0.0);
+    }
+
+    /// A client mod may draw any time (`sky_environment`): the ends of an i64 neither overflow
+    /// nor leave the ranges, and a fade reads only the time of day.
+    #[test]
+    fn the_ends_of_the_clock_neither_overflow_nor_leave_the_ranges() {
+        let night = layer("startFadeIn=18:00\nendFadeIn=20:00\nendFadeOut=6:00");
+        for day_time in [i64::MIN, i64::MIN + 1, i64::MAX] {
+            assert_eq!(
+                night.brightness(day_time),
+                night.brightness(day_time.rem_euclid(DAY)),
+                "{day_time}"
+            );
+            for l in [layer(""), layer("speed=0.5"), layer("speed=0.3")] {
+                let turns = l.turns(day_time, 0.25);
+                assert!((0.0..1.0).contains(&turns), "{day_time}: {turns}");
+            }
+        }
     }
 
     #[test]

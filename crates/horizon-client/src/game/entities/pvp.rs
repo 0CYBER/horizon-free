@@ -187,19 +187,38 @@ impl Game<'_> {
     fn own_view(&self) -> bool {
         self.remote.is_some() && self.dim == Dim::Overworld
     }
-    /// The day time the frame draws (sky, sun, moon, the sky's light): PvP & HUD's time of day,
-    /// else the world's. The world's own `day_time` and everything that plays by it stay.
+    /// The day time the frame draws (sky, sun, moon, the sky's light): a client mod's
+    /// (`sky_environment`), else PvP & HUD's time of day, else the world's. The world's own
+    /// `day_time` and everything that plays by it stay.
     pub(in crate::game) fn view_day_time(&self) -> i64 {
-        let fixed = self.settings.extras.pvp.tweaks.time;
-        horizon_client::pvp::view_day_time(self.world.day_time, fixed.filter(|_| self.own_view()))
+        self.view_sky(self.clock.fraction() as f32).0
     }
-    /// The rain and thunder levels the frame draws (rain, the sky's colour and light, fog): PvP &
-    /// HUD's weather, else the world's. Gameplay (riptide, mobs, crops) keeps the world's.
+    /// The rain and thunder levels the frame draws (rain, the sky's colour and light, fog): a
+    /// client mod's (`sky_environment`), else PvP & HUD's weather, else the world's. Gameplay
+    /// (riptide, mobs, crops) keeps the world's.
     pub(in crate::game) fn view_weather(&self, partial: f32) -> (f32, f32) {
-        match self.settings.extras.pvp.tweaks.weather {
+        let (_, rain, thunder) = self.view_sky(partial);
+        (rain, thunder)
+    }
+    /// The day time and the rain and thunder levels the frame draws, `partial` ticks past the last
+    /// tick: PvP & HUD's or the world's, then what a client mod asks for (`sky_environment`).
+    fn view_sky(&self, partial: f32) -> (i64, f32, f32) {
+        let tweaks = self.settings.extras.pvp.tweaks;
+        let day_time = horizon_client::pvp::view_day_time(
+            self.world.day_time,
+            tweaks.time.filter(|_| self.own_view()),
+        );
+        let weather = match tweaks.weather {
             Some(w) if self.own_view() && self.can_have_weather() => w.levels(),
             _ => self.weather_levels(partial),
+        };
+        if self.remote.is_none() {
+            return (day_time, weather.0, weather.1);
         }
+        let (mut asked_time, mut rain, mut thunder) = (day_time, weather.0, weather.1);
+        self.native_sky_environment(partial, &mut asked_time, &mut rain, &mut thunder);
+        let (rain, thunder) = asked_weather(weather, (rain, thunder), self.can_have_weather());
+        (asked_time, rain, thunder)
     }
     // What the engine reads from PvP & HUD. Every engine use goes through these, so each becomes
     // one engine knob or hook (vanilla's value when nothing is registered) when PvP & HUD leaves
@@ -822,5 +841,40 @@ impl Game<'_> {
         if sw != w {
             batch.scale_since(start, x, y, sw / w, sw / w);
         }
+    }
+}
+
+/// The rain and thunder levels a client mod asked for (`sky_environment`), from `before`: none
+/// where the level has no weather, a level that isn't finite keeps the one before, and the rest
+/// clamped to 0..=1.
+fn asked_weather(before: (f32, f32), asked: (f32, f32), has_weather: bool) -> (f32, f32) {
+    if !has_weather {
+        return before;
+    }
+    let level = |asked: f32, before: f32| {
+        if asked.is_finite() {
+            asked.clamp(0.0, 1.0)
+        } else {
+            before
+        }
+    };
+    (level(asked.0, before.0), level(asked.1, before.1))
+}
+
+#[cfg(test)]
+mod sky_environment_tests {
+    use super::asked_weather;
+
+    /// A mod's weather shows where the level has weather, clamped, and a value that isn't finite
+    /// keeps the level's.
+    #[test]
+    fn a_mods_weather_is_clamped_and_kept_to_levels_with_weather() {
+        assert_eq!(asked_weather((0.0, 0.0), (1.0, 0.5), true), (1.0, 0.5));
+        assert_eq!(asked_weather((0.2, 0.0), (3.0, -1.0), true), (1.0, 0.0));
+        assert_eq!(
+            asked_weather((0.2, 0.1), (f32::NAN, f32::INFINITY), true),
+            (0.2, 0.1)
+        );
+        assert_eq!(asked_weather((0.0, 0.0), (1.0, 1.0), false), (0.0, 0.0));
     }
 }
