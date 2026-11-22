@@ -8959,12 +8959,7 @@ impl Game<'_> {
         ) {
             self.last_input = Instant::now();
         }
-        if !self.pad_synthetic_input()
-            && matches!(
-                event,
-                WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
-            )
-        {
+        if !self.pad_synthetic_input() && window_handler::should_reassert_pointer_capture(&event) {
             self.reassert_pointer_capture();
         }
         // The real mouse takes the pointer back from the keyboard's focus.

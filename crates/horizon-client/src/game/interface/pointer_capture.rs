@@ -1,6 +1,8 @@
 //! The mouse in play: the look it turns, the pointer grab (`MouseHandler.grabMouse` /
 //! `releaseMouse`), the cursor icon, and pausing a world whose window loses focus.
 use super::*;
+#[cfg(target_os = "linux")]
+use winit::platform::wayland::WindowExtWayland;
 
 fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> bool {
     replay_active || freecam_active
@@ -355,11 +357,20 @@ impl Game<'_> {
             && !self.internal_grab()
             && let (Some(window), Some(mode)) = (&self.window, self.capture_mode)
         {
+            // The forced release/regrab workaround is specific to X11. Keep
+            // Wayland's pointer constraints on the existing path until that
+            // backend has equivalent validation.
+            if window.xdg_toplevel().is_some() {
+                return;
+            }
             let other = match mode {
                 CursorGrabMode::Locked => CursorGrabMode::Confined,
                 CursorGrabMode::Confined => CursorGrabMode::Locked,
                 CursorGrabMode::None => return,
             };
+            // winit skips an identical grab request on X11. Clear its recorded mode first so a
+            // compositor-released grab is actually requested again.
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
             self.capture_mode = if window.set_cursor_grab(mode).is_ok() {
                 Some(mode)
             } else if window.set_cursor_grab(other).is_ok() {
