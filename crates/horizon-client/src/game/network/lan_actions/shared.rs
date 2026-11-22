@@ -76,7 +76,7 @@ pub(super) struct GuestPlay {
     /// `Stats.LEAVE_GAME` is counted: a guest is saved more than once on the
     /// way out, the statistic is awarded once (`Game::award_leave_game`).
     pub(super) left_game: bool,
-    last_inventory: u64,
+    last_inventory: Option<u64>,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     levitation: Option<([f64; 3], u64)>,
     /// The fall, lava ride, Nether trip and blast the guest's advancements track.
@@ -195,7 +195,7 @@ pub(super) struct GuestSwap {
     message: Option<(String, std::time::Instant)>,
     host_ender: Option<(i32, i32, i32)>,
     adv_loaded: bool,
-    last_inventory: u64,
+    last_inventory: Option<u64>,
     levitation: Option<([f64; 3], u64)>,
     marks: super::advancements::TravelMarks,
     death_cause: Option<String>,

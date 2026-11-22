@@ -140,7 +140,7 @@ pub(super) struct AdvState {
     /// Awards skip the toast (`/advancement grant ... everything`).
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
-    pub(super) last_inventory: u64,
+    pub(super) last_inventory: Option<u64>,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
     /// The fall, lava ride, Nether trip, blast and effects `tick_marks` follows.
@@ -156,6 +156,8 @@ pub(super) struct AdvState {
     pub(super) pending_tree: Option<std::thread::JoinHandle<Arc<Tree>>>,
     /// `inventory_changed`'s criteria by item, built for `tree`.
     inventory_index: Option<(Arc<Tree>, Arc<adv::InventoryIndex>)>,
+    /// Reusable candidate list for `tick_advancements` so matching ticks avoid allocating.
+    tick_candidates: Vec<(usize, usize)>,
 }
 impl AdvState {
     /// Drop the prefetched tree and the index built for the old one (a
@@ -276,6 +278,113 @@ impl adv::World for View<'_, '_> {
                 .is_some_and(|source| self.0.health_resources.damage.in_tag(source, tag)),
             _ => false,
         }
+    }
+}
+/// Predicate world view scoped to a single `trigger_criteria` evaluation: caches
+/// repeated biome and structure queries at the same block position (e.g. the 50+
+/// biome criteria of `minecraft:location` / `adventuring_time`) without allocating.
+struct CachedView<'a, 'g> {
+    game: &'a Game<'g>,
+    biome: std::cell::Cell<Option<([i32; 3], &'a str)>>,
+    structures: std::cell::RefCell<Option<([i32; 3], Vec<String>)>>,
+}
+impl<'a, 'g> CachedView<'a, 'g> {
+    fn new(game: &'a Game<'g>) -> Self {
+        Self {
+            game,
+            biome: std::cell::Cell::new(None),
+            structures: std::cell::RefCell::new(None),
+        }
+    }
+    fn biome_str(&self, p: [i32; 3]) -> &'a str {
+        if let Some((cached_pos, name)) = self.biome.get()
+            && cached_pos == p
+        {
+            return name;
+        }
+        let name = self
+            .game
+            .world
+            .chunks
+            .get(&(p[0] >> 4, p[2] >> 4))
+            .map(|c| {
+                self.game
+                    .res
+                    .biomes()
+                    .get(c.biome(p[0], p[1], p[2]))
+                    .name
+                    .as_str()
+            })
+            .unwrap_or("");
+        self.biome.set(Some((p, name)));
+        name
+    }
+}
+impl adv::World for CachedView<'_, '_> {
+    fn predicate(&self, id: &str) -> Option<&Value> {
+        self.game.fns.store.predicates.get(id)
+    }
+    fn dimension(&self) -> &str {
+        self.game.dim.id()
+    }
+    fn weather(&self) -> (bool, bool) {
+        View(self.game).weather()
+    }
+    fn biome(&self, p: [i32; 3]) -> String {
+        self.biome_str(p).to_owned()
+    }
+    fn check_biome(&self, p: [i32; 3], f: &mut dyn FnMut(&str) -> bool) -> bool {
+        f(self.biome_str(p))
+    }
+    fn structures(&self, p: [i32; 3]) -> Vec<String> {
+        let mut cache = self.structures.borrow_mut();
+        if let Some((cached_pos, list)) = cache.as_ref()
+            && *cached_pos == p
+        {
+            return list.clone();
+        }
+        let list = self.game.structures_at(p);
+        *cache = Some((p, list.clone()));
+        list
+    }
+    fn any_structure(&self, p: [i32; 3], f: &mut dyn FnMut(&str) -> bool) -> bool {
+        let hit = self
+            .structures
+            .borrow()
+            .as_ref()
+            .is_some_and(|(cached_pos, _)| *cached_pos == p);
+        if !hit {
+            *self.structures.borrow_mut() = Some((p, self.game.structures_at(p)));
+        }
+        let cache = self.structures.borrow();
+        let Some((_, list)) = cache.as_ref() else {
+            return false;
+        };
+        list.iter().any(|s| f(s))
+    }
+    fn block(&self, p: [i32; 3]) -> (String, BTreeMap<String, String>) {
+        View(self.game).block(p)
+    }
+    fn block_property_values(&self, block: &str, property: &str) -> Option<Vec<String>> {
+        View(self.game).block_property_values(block, property)
+    }
+    fn fluid(&self, p: [i32; 3]) -> Option<String> {
+        View(self.game).fluid(p)
+    }
+    fn can_see_sky(&self, p: [i32; 3]) -> bool {
+        View(self.game).can_see_sky(p)
+    }
+    fn light(&self, p: [i32; 3]) -> i32 {
+        View(self.game).light(p)
+    }
+    fn smokey(&self, p: [i32; 3]) -> bool {
+        View(self.game).smokey(p)
+    }
+    fn block_entity_nbt(&self, p: [i32; 3]) -> Option<horizon_core::nbt::Tag> {
+        View(self.game).block_entity_nbt(p)
+    }
+    fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
+        View(self.game).in_tag(registry, tag, id)
     }
 }
 type Tags = std::collections::HashMap<String, std::collections::HashSet<String>>;
@@ -872,7 +981,7 @@ impl Game<'_> {
         }
         let mut hits = Vec::new();
         {
-            let view = View(self);
+            let view = CachedView::new(self);
             for &(ai, ci) in list {
                 let a = &tree.list[ai];
                 let c = &a.criteria[ci];
@@ -884,6 +993,9 @@ impl Game<'_> {
                 }
             }
         }
+        self.award_criteria_hits(tree, hits);
+    }
+    fn award_criteria_hits(&mut self, tree: &Tree, hits: Vec<(usize, usize)>) {
         if hits.is_empty() {
             return;
         }
@@ -1195,7 +1307,7 @@ impl Game<'_> {
                 let name = adv_name(a);
                 // PlayerList.broadcastSystemMessage: everyone hears of a
                 // network player's advancement.
-                match self.lan_acting_name.clone() {
+                match self.lan_acting_name.as_ref() {
                     // Player.getDisplayName.
                     Some(_) => {
                         let player = self.target_name(super::commands::Target::Player);
@@ -1262,7 +1374,7 @@ impl Game<'_> {
     /// `InventoryChangeTrigger`, checked when the inventory changes.
     pub(super) fn check_inventory_trigger(&mut self) {
         use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = horizon_core::fast_hash::FxHasher::default();
         for s in self
             .inventory
             .iter()
@@ -1272,10 +1384,10 @@ impl Game<'_> {
             s.as_ref().map(|s| (&s.item, s.count)).hash(&mut h);
         }
         let key = h.finish();
-        if key == self.adv.last_inventory {
+        if self.adv.last_inventory == Some(key) {
             return;
         }
-        self.adv.last_inventory = key;
+        self.adv.last_inventory = Some(key);
         // Native mods hear the change before any criterion is looked at, so
         // they do with no `inventory_changed` advancement in the tree too
         // (`native_player_inventory_changed`, API 579).
@@ -1361,23 +1473,114 @@ impl Game<'_> {
                 )
         });
     }
+    fn has_open_trigger(&mut self, name: &str) -> bool {
+        if self.lan_acting_fake || self.remote.is_some() || self.no_player_here() {
+            return false;
+        }
+        self.load_advancements();
+        let Some(list) = self.adv.tree.by_trigger.get(name) else {
+            return false;
+        };
+        list.iter().any(|&(ai, ci)| {
+            let a = &self.adv.tree.list[ai];
+            !self.adv.progress.has(&a.id, &a.criteria[ci].name) && !self.adv.progress.done(a)
+        })
+    }
+    fn tick_filter_matches(&self, f: &adv::TickFilter) -> bool {
+        let Some(p) = self.player.as_ref() else {
+            return false;
+        };
+        if f.requires_sneaking && p.pose != horizon_client::pose::Pose::Crouching {
+            return false;
+        }
+        if f.requires_sprinting && !p.sprinting {
+            return false;
+        }
+        if f.requires_swimming && p.pose != horizon_client::pose::Pose::Swimming {
+            return false;
+        }
+        if f.requires_on_fire && p.fire_ticks <= 0 {
+            return false;
+        }
+        if f.requires_vehicle && self.riding.is_none() {
+            return false;
+        }
+        if f.requires_effects && self.potions.effects.list.is_empty() {
+            return false;
+        }
+        let eq = f.requires_equipment_mask;
+        if eq != 0 {
+            if eq & 1 != 0 && self.held().is_none() {
+                return false;
+            }
+            if eq & 2 != 0 && self.offhand.is_none() {
+                return false;
+            }
+            for slot in 0..4 {
+                if eq & (1 << (2 + slot)) != 0 && self.armor[slot].is_none() {
+                    return false;
+                }
+            }
+        }
+        if let Some(wanted) = &f.requires_location_block {
+            let pos = [
+                p.position.x.floor() as i32,
+                p.position.y.floor() as i32,
+                p.position.z.floor() as i32,
+            ];
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            let name: &str = &self.res.facts().get(state).name;
+            if name != wanted {
+                return false;
+            }
+        }
+        true
+    }
     /// `PlayerTrigger.LOCATION` every 20 of the player's own ticks (`tickCount % 20`), and the others.
     pub(super) fn tick_advancements(&mut self) {
         if self.player.is_none() || self.remote.is_some() {
             return;
         }
         self.check_inventory_trigger();
-        // ServerPlayer.tick: PlayerTrigger.TICK every tick.
-        let me = self.player_entity_for("minecraft:tick");
-        self.trigger("minecraft:tick", |c, w| {
-            let ctx = adv::Entities {
-                this: Some(&me),
-                origin: me.position,
-                tool: None,
-                block_pos: None,
-            };
-            adv::conditions(&c["player"], &ctx, w)
-        });
+        // ServerPlayer.tick: PlayerTrigger.TICK every tick, pre-filtered against
+        // necessary top-level criteria flags/equipment/blocks before building `EntityView`.
+        if !self.lan_acting_fake && !self.no_player_here() {
+            self.load_advancements();
+            let tree = self.adv.tree.clone();
+            if let Some(list) = tree.by_trigger.get("minecraft:tick") {
+                let filters = tree.tick_filters();
+                let mut candidates = std::mem::take(&mut self.adv.tick_candidates);
+                candidates.clear();
+                for (pos, &(ai, ci)) in list.iter().enumerate() {
+                    let a = &tree.list[ai];
+                    if self.adv.progress.done(a) || self.adv.progress.has(&a.id, &a.criteria[ci].name)
+                    {
+                        continue;
+                    }
+                    if filters
+                        .get(pos)
+                        .is_some_and(|f| !self.tick_filter_matches(f))
+                    {
+                        continue;
+                    }
+                    candidates.push((ai, ci));
+                }
+                if !candidates.is_empty() {
+                    let me = self.player_entity_for("minecraft:tick");
+                    self.trigger_criteria(&tree, &candidates, |c, w| {
+                        let ctx = adv::Entities {
+                            this: Some(&me),
+                            origin: me.position,
+                            tool: None,
+                            block_pos: None,
+                        };
+                        adv::conditions(&c["player"], &ctx, w)
+                    });
+                }
+                candidates.clear();
+                self.adv.tick_candidates = candidates;
+            }
+        }
         // ServerPlayer.onEffectAdded and onEffectsRemoved keep the start of a
         // levitation; tick fires LEVITATION while there is one.
         let levitating = self
@@ -1401,7 +1604,9 @@ impl Game<'_> {
             self.trigger_levitation(start, (self.ticks - since) as i64);
         }
         self.tick_marks();
-        if self.own_tick_count().is_some_and(|n| n % 20 == 0) {
+        if self.own_tick_count().is_some_and(|n| n % 20 == 0)
+            && self.has_open_trigger("minecraft:location")
+        {
             let me = self.player_entity_for("minecraft:location");
             self.trigger("minecraft:location", |c, w| {
                 let ctx = adv::Entities {
