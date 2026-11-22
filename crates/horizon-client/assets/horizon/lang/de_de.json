@@ -1044,5 +1044,8 @@
   "A tick when you break a block, as in Bedrock.": "Wenn du einen Block abbaust, vibriert er, wie in Bedrock.",
   "A short buzz when you split a stack, as in Bedrock.": "Ein kurzes Vibrieren beim Teilen eines Stapels, wie in Bedrock.",
   "An Xbox One controller's triggers buzz with its handles.": "Die Trigger eines Xbox-One-Controllers vibrieren zusammen mit seinen Griffen.",
-  "horizon.developer_offline.single_player": "Offline developer session: single-player only."
+  "horizon.developer_offline.single_player": "Offline developer session: single-player only.",
+  "horizon.get_the_game.button": "Launcher herunterladen",
+  "horizon.options.radial_stick.either": "Oder",
+  "horizon.touch.sprint": "Sprinten"
 }

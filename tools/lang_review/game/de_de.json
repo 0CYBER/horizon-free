@@ -1,3 +1,4 @@
 {
-  "horizon.options.three_d_skin_layers": "3D-Skin-Schichten"
+  "horizon.options.three_d_skin_layers": "3D-Skin-Schichten",
+  "horizon.options.block_vibration": "Haptisches Feedback von Bedrock"
 }
