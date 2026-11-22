@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-"""Check that a change leaves the mod point catalog and the generated mod API as they were (docs/layers.md#mod-points-stay-put).
+"""Check that a change leaves the generated mod API as it was (docs/layers.md#the-mod-api-stays-put).
 
-Every function under `horizon_client::game::` that the point generator admits is a point (the `&self` and `&mut self`
-methods of `Game`, and its free functions and other types' methods), and so is each `#[horizon_mod_api_macros::replaceable]`
-function in a lower crate. A point's name, target and signature are part of the mod API. This tool builds and runs the
-`hook_snapshot` example of `horizon-mod-api-gen` on the base and on the working tree, then compares what it wrote
-(points.json, the generated API, catalog.json, hook-notes.md, loops.json, internals.json). It prints how many points were
-added, removed (accepted and failing) and changed, and fails on:
-- a removed point unless tools/mod_points_removed.txt lists it (`name | #PR | reason`) and it is not a `Game` method or
-  a published loop, and no fixture (tools/ci/fn-replace-check, the wasm host's), doc or mod manifest names it;
-- a changed point (name kept, target or hash different) unless the same file lists it;
-- an added point or catalog hook, unless --allow-added;
-- a difference in loops.json, and a difference in the other generated files that no accepted point change explains (the
-  generated API differs whenever a point does). An additive catalog hook can explain its generated catalog and notes
-  and its own guest dispatch;
-- a removed internals.json entry (one becoming `shape_only` too), and with --allow-added only that: added and changed
-  entries are listed and pass (`cargo horizon-mod update` reports signature-hash changes for declared internals).
-Moving code out of `game/` removes its points: list them in the file. A method of `Game` keeps its name, module path and
-signature, and only its body delegates. A mod that needs a moved function asks for `#[replaceable]` in the lower crate.
+This tool builds and runs the `hook_snapshot` example of `horizon-mod-api-gen` on the base and on the working tree, then
+compares what it wrote: the published loops (loops.json), the game internals a native mod may declare (internals.json),
+the hook catalog (catalog.json, hook-notes.md) and the guest's generated hook dispatch. It fails on:
+- a difference in loops.json;
+- a removed internals.json entry (one becoming `shape_only` too), unless a line of tools/mod_api_removed_internals.txt
+  lists it (`path  #issue`, or `path  kind=<kind>  cfg=<cfg>  #issue` for some of a path's entries), and a line that
+  lists an entry the head still has; with --allow-added, added and changed entries are listed and pass
+  (`cargo horizon-mod update` reports signature-hash changes for declared internals);
+- a path a native mod could declare without a kind that gains a second kind (E_INTERNAL_AMBIGUOUS), always;
+- any other difference in the generated files, except a catalog hook added with --allow-added, which explains its
+  generated catalog, new hook-notes sections (the others unchanged) and its own guest dispatch.
+The injection points' outputs (points.json, points_generated.rs) are never compared: `[[inject]]` and its points are
+removed (#19576), and a base that still writes them compares without them. The mod API's types and calls are the surface report's
+(tools/ci/surface_report.py), which runs beside this check.
 
-    python3 tools/check_mod_points_unchanged.py                      # the working tree against the merge base with origin/main
-    python3 tools/check_mod_points_unchanged.py --base HEAD^1        # against another ref
-    python3 tools/check_mod_points_unchanged.py --allow-added        # new points are fine
-    python3 tools/check_mod_points_unchanged.py --target-dir DIR     # the Cargo build folder of the working tree (default: target)
-    python3 tools/check_mod_points_unchanged.py --compare OLD NEW    # compare two snapshot folders, build nothing
-    python3 tools/check_mod_points_unchanged.py --snapshots DIR      # use DIR's stored snapshot of the base if it has one
-    python3 tools/check_mod_points_unchanged.py --store-snapshot DIR # CI, main's pushes and the merge queue: keep HEAD's
+    python3 tools/check_mod_api_unchanged.py                      # the working tree against the merge base with origin/main
+    python3 tools/check_mod_api_unchanged.py --base HEAD^1        # against another ref
+    python3 tools/check_mod_api_unchanged.py --allow-added        # new hooks and internals are fine
+    python3 tools/check_mod_api_unchanged.py --target-dir DIR     # the Cargo build folder of the working tree (default: target)
+    python3 tools/check_mod_api_unchanged.py --compare OLD NEW    # compare two snapshot folders, build nothing
+    python3 tools/check_mod_api_unchanged.py --snapshots DIR      # use DIR's stored snapshot of the base if it has one
+    python3 tools/check_mod_api_unchanged.py --store-snapshot DIR # CI, main's pushes and the merge queue: keep HEAD's
 
 `--store-snapshot` builds and runs the generator on HEAD and keeps its output in DIR/<commit>, beside a marker that
 records the key (STORE_FORMAT, the commit, the checkout's `rustc -vV`, HORIZON_POINT_NAMES, RUSTC, RUSTUP_TOOLCHAIN),
@@ -37,7 +34,7 @@ With `--snapshots`, a snapshot whose marker matches its digest and the base's ke
 hashes, stands in for the base's build; anything else is a miss and the base is built as below. The commit decides the
 generator's source, its Cargo.lock and the tree it reads; the rest of the key covers what does not come from the commit.
 
-The base is built in a temporary `git worktree`, removed afterwards, into its own build folder (`mod-points-base` inside the
+The base is built in a temporary `git worktree`, removed afterwards, into its own build folder (`mod-api-base` inside the
 working tree's): Cargo hashes a workspace member's path relative to the workspace root, so the base's and the working
 tree's generator would be one unit, and the working tree's older files would make Cargo reuse the base's build. The first
 run builds the generator's crates and their dependencies twice.
@@ -58,12 +55,13 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-DOC = "docs/layers.md#mod-points-stay-put"
-POINTS = "points.json"
+DOC = "docs/layers.md#the-mod-api-stays-put"
+# The injection points' outputs, removed with `[[inject]]` (#19576): never compared.
+POINT_FILES = {"points.json", "points_generated.rs"}
 MAX_DIFF_LINES = 120
 MAX_LISTED = 40
 ROOT_MARK = "<repository>"
-LIST = "tools/mod_points_removed.txt"
+REMOVED = "tools/mod_api_removed_internals.txt"
 # Files the generator writes into the output folder that are not output: phase timings (and incremental-*/ or, from
 # older builds, interfaces-*/, its cache).
 SCRATCH_FILES = {"points-timing.txt"}
@@ -80,35 +78,6 @@ GUEST_ARM = re.compile(r"^\d+ => \{.*?(?=^\d+ => \{|^_ =>)", re.MULTILINE | re.D
 GUEST_HOOK_ARM = re.compile(r"\d+ => \{ let receiver = super::hooks\(\); ")
 GUEST_HOOK_CALL = re.compile(r"\blet answer = receiver\.([a-zA-Z0-9_]+)\(")
 WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
-# Where a mod, a fixture or a doc may name a point.
-REFERENCE_PATHS = ("tools/ci/fn-replace-check", "crates/horizon-mod-wasm/tests/fixture", "docs", "*horizon-mod.toml")
-
-
-def load_points(path):
-    """points.json as a dict from point name to its record. A name listed twice is an error: the diff would lose one."""
-    with open(path, encoding="utf-8") as f:
-        points = json.load(f)
-    by_name = {}
-    for point in points:
-        name = point["name"]
-        if name in by_name:
-            raise ValueError(f"{path}: point '{name}' is listed twice")
-        by_name[name] = point
-    return by_name
-
-
-def diff_points(base, head):
-    """(added, removed, changed) between two name-to-record dicts. `changed` holds (name, {field: (old, new)})."""
-    added = sorted(set(head) - set(base))
-    removed = sorted(set(base) - set(head))
-    changed = []
-    for name in sorted(set(base) & set(head)):
-        fields = {key: (base[name].get(key), head[name].get(key))
-                  for key in sorted(set(base[name]) | set(head[name]))
-                  if base[name].get(key) != head[name].get(key)}
-        if fields:
-            changed.append((name, fields))
-    return added, removed, changed
 
 
 def read_text(path, root_marks):
@@ -128,11 +97,11 @@ def is_scratch(relative):
 
 def snapshot_files(folder):
     found = {path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()}
-    return {name for name in found if not is_scratch(name)} - {POINTS}
+    return {name for name in found if not is_scratch(name)} - POINT_FILES
 
 
 def diff_files(base_dir, head_dir, base_root=None, head_root=None):
-    """(added, removed, diffs) for the generated files other than points.json: file names that exist on one side, and
+    """(added, removed, diffs) for the generated files but the points': file names that exist on one side, and
     for each file on both sides that differs, its unified diff as a list of lines."""
     base_dir, head_dir = Path(base_dir), Path(head_dir)
     base_files, head_files = snapshot_files(base_dir), snapshot_files(head_dir)
@@ -228,11 +197,41 @@ def guest_wire_without_hooks(guest, hooks, base):
     return WIRE_RECORD.sub(renumber, guest)
 
 
+def note_sections(page):
+    """hook-notes.md as its text before the first `## ` heading, then one string per `## ` section (headings inside a
+    code fence don't start one), each without its trailing blank lines: the page puts one before every hook's notes,
+    so the last section gains one when a hook is appended after it."""
+    sections, fenced = [[]], False
+    for line in page.splitlines(keepends=True):
+        if line.startswith("```"):
+            fenced = not fenced
+        if line.startswith("## ") and not fenced:
+            sections.append([])
+        sections[-1].append(line)
+    return ["".join(section).rstrip("\n") for section in sections]
+
+
+def notes_only_add_sections(base, head):
+    """Whether the head's hook notes are the base's with sections added: the text before the first section and every
+    base section stay, unchanged and in order. Which sections are an added hook's is not in the page (a hook's notes
+    may hold several), so an added section is not tied to its hook."""
+    base, head = note_sections(base), note_sections(head)
+    if base[0] != head[0]:
+        return False
+    remaining = iter(head[1:])
+    return all(any(section == other for other in remaining) for section in base[1:])
+
+
 def explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root):
     changed = {name for name, _ in diffs}
     if HOOK_CATALOG not in changed or changed - HOOK_FILES:
         return set()
     hooks = added_catalog_hooks(base_dir, head_dir)
+    # A hook's notes are their own `## ` sections; an added hook adds sections and changes no other.
+    if hooks and "hook-notes.md" in changed and not notes_only_add_sections(
+            read_text(base_dir / "hook-notes.md", [base_root] if base_root else []),
+            read_text(head_dir / "hook-notes.md", [head_root] if head_root else [])):
+        return set()
     if hooks and GUEST_WIRE in changed:
         base = read_text(base_dir / GUEST_WIRE, [base_root] if base_root else [])
         head = read_text(head_dir / GUEST_WIRE, [head_root] if head_root else [])
@@ -281,113 +280,84 @@ def internals_diff(base_text, head_text):
     return added, removed, changed
 
 
+def made_ambiguous(base_text, head_text):
+    """The paths a native mod could declare without a kind in the base (one kind among its entries that are not
+    `shape_only`, one of them unconditional) that have more than one kind in the head: a kind-less declaration of one
+    stops resolving (E_INTERNAL_AMBIGUOUS), as a removal would."""
+    def kinds(text):
+        out = {}
+        for entry in internal_entries(text):
+            if not entry.get("shape_only"):
+                out.setdefault(entry["path"], {}).setdefault(entry["kind"], set()).add(entry.get("cfg") or "")
+        return out
+
+    base, head = kinds(base_text), kinds(head_text)
+    return sorted(path for path, by_kind in base.items()
+                  if len(by_kind) == 1 and "" in next(iter(by_kind.values())) and len(head.get(path, ())) > 1)
+
+
 def short(value):
     text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
     return text if len(text) <= 80 else text[:77] + "..."
 
 
-def load_accepted(path):
-    """tools/mod_points_removed.txt: point name -> (PR, reason). One `name | #PR | reason` line per point; blank lines
-    and lines starting with `#` are comments. A missing file lists nothing."""
-    accepted = {}
+LISTING = re.compile(r"(\S+)(?:\s+kind=(\S+))?(?:\s+cfg=(.*?))?\s+(#\d+)")
+
+
+def load_removed(path):
+    """tools/mod_api_removed_internals.txt: listing -> issue. A `path  #issue` line lists every entry of the path, and
+    is keyed by the path; `path  kind=<kind>  cfg=<cfg>  #issue`, with either part left out, lists only the entries
+    with that kind and cfg (`cfg=` alone: the unconditional ones), keyed by (path, kind, cfg) with None for a part left
+    out. Blank lines and lines starting with `#` are comments. A missing file lists nothing."""
+    removed = {}
     path = Path(path)
     if not path.is_file():
-        return accepted
+        return removed
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        parts = [part.strip() for part in line.split("|", 2)]
-        if len(parts) != 3 or not all(parts):
-            raise ValueError(f"{path}:{number}: write `point name | #PR | reason`")
-        accepted[parts[0]] = (parts[1], parts[2])
-    return accepted
+        match = LISTING.fullmatch(line.strip())
+        # `kind=` after `cfg=` would read as part of the cfg.
+        if not match or match.group(3) and re.search(r"(^|\s)kind=", match.group(3)):
+            raise ValueError(f"{path}:{number}: write `internal path  #issue` or `internal path  kind=<kind>  "
+                             "cfg=<cfg>  #issue`")
+        internal, kind, cfg, issue = match.groups()
+        key = internal if kind is None and cfg is None else (internal, kind, None if cfg is None else cfg.strip())
+        if key in removed:
+            raise ValueError(f"{path}:{number}: {listing_name(key)} is listed twice")
+        removed[key] = issue
+    return removed
 
 
-def normalized(target):
-    return "".join(target.split())
+def listing_pattern(key):
+    """(path, kind, cfg) of a removal listing, None where any matches."""
+    return (key, None, None) if isinstance(key, str) else key
 
 
-def is_game_method(target):
-    """A method of `Game`: the path has `Game` as the type before the method."""
-    target = normalized(target)
-    return "::Game<'_>::" in target or "::Game::" in target
+def listing_name(key):
+    path, kind, cfg = listing_pattern(key)
+    return path + (f" kind={kind}" if kind is not None else "") + (f" cfg={cfg}" if cfg is not None else "")
 
 
-def loop_targets(loops_json):
-    """The entry and generic functions of the published loops in a loops.json, normalized, or None when there is no
-    such file (a base built by an older hook_snapshot): the loops are then unknown, not absent."""
-    if not loops_json.is_file():
-        return None
-    out = set()
-    for entry in json.loads(loops_json.read_text(encoding="utf-8")).get("loops", []):
-        out.add(normalized(entry["entry"]))
-        owner = entry["entry"].rsplit("::", 1)[0]
-        out.add(normalized(f"{owner}::{entry['generic']}"))
-    return out
+def lists(key, internal):
+    """Whether the removal listing `key` covers the internals.json key `internal` (path, kind, cfg)."""
+    return all(want is None or want == have for want, have in zip(listing_pattern(key), internal))
 
 
-def references(point, files):
-    """The first checked-in file that names the point (its name as a word, or its target), or None."""
-    word = re.compile(r"(?<![\w:])" + re.escape(point["name"]) + r"(?!\w)")
-    target = re.compile(r"(?<![\w:])" + re.escape(point["target"]) + r"(?!\w)")
-    for path in sorted(files):
-        text = files[path]
-        if target.search(text) or word.search(text):
-            return path
-    return None
+def removed_internals(internals, listed, head_keys):
+    """(accepted, failing, stale) for internals_diff's removed keys: a removal is accepted when a listing covers it,
+    and a listing that covers an entry the head still has is stale, whatever this change removed."""
+    removed = internals[1] if internals is not None else []
+    accepted = [key for key in removed if any(lists(listing, key) for listing in listed)]
+    failing = [key for key in removed if key not in accepted]
+    stale = sorted(listing_name(listing) for listing in listed if any(lists(listing, key) for key in head_keys))
+    return accepted, failing, stale
 
 
-def repo_texts(root=ROOT):
-    """The checked-in files a mod may name a point in: the fn-replace fixtures, the wasm host's fixture, the docs and
-    every mod manifest, as {path: text}."""
-    listed = subprocess.run(["git", "ls-files", "-z", "--", *REFERENCE_PATHS], cwd=root, capture_output=True, text=True)
-    if listed.returncode != 0:
-        # An empty map would let a removal pass that a fixture names.
-        raise RuntimeError(f"git ls-files failed (exit {listed.returncode}): {listed.stderr.strip()}")
-    files = {}
-    for name in filter(None, listed.stdout.split("\0")):
-        try:
-            files[name] = (Path(root) / name).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-    return files
-
-
-def classify(removed, changed, base_points, accepted, loops, files):
-    """Split the removed and changed points into accepted and failing: {name: reason}. A removal is accepted when it is
-    listed in the removal file and is neither a `Game` method, a loop (`loops` is None when the base's loops are
-    unknown: then no removal passes), nor named by a fixture, doc or mod manifest. A change is accepted when it is
-    listed."""
-    removed_ok, removed_bad, changed_ok, changed_bad = {}, {}, {}, {}
-    for name in removed:
-        point = base_points[name]
-        reasons = []
-        if is_game_method(point["target"]):
-            reasons.append("a `Game` method")
-        if loops is None:
-            reasons.append("the base has no loops.json, so a published loop cannot be ruled out")
-        elif normalized(point["target"]) in loops:
-            reasons.append("a published loop")
-        if (path := references(point, files)) is not None:
-            reasons.append(f"named in {path}")
-        if reasons:
-            removed_bad[name] = ", ".join(reasons)
-        elif name not in accepted:
-            removed_bad[name] = f"not listed in {LIST}"
-        else:
-            removed_ok[name] = accepted[name]
-    for name, _fields in changed:
-        if name in accepted:
-            changed_ok[name] = accepted[name]
-        else:
-            changed_bad[name] = f"not listed in {LIST}"
-    return removed_ok, removed_bad, changed_ok, changed_bad
-
-
-def summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, files_removed, diffs, base_points,
-            head_points, max_lines=MAX_DIFF_LINES, max_listed=MAX_LISTED, internals=None):
+def summary(files_added, files_removed, diffs, max_lines=MAX_DIFF_LINES, max_listed=MAX_LISTED, internals=None,
+            accepted=(), stale=(), ambiguous=()):
     """The report as a list of lines. `internals` is internals_diff's result, or None when internals.json is the
-    same."""
+    same; `accepted` its removals the removal file lists, `stale` the listed paths the head still has."""
     out = []
 
     def listing(title, names, show):
@@ -399,29 +369,19 @@ def summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, fi
         if len(names) > max_listed:
             out.append(f"  ... and {len(names) - max_listed} more")
 
-    def old(n):
-        return f"{n}  target {base_points[n]['target']}  hash {base_points[n]['signature_hash']}"
+    def key(key):
+        return f"{key[0]} ({key[1]}" + (f", cfg {key[2]})" if key[2] else ")")
 
-    listing("Points added", added,
-            lambda n: f"{n}  target {head_points[n]['target']}  hash {head_points[n]['signature_hash']}")
-    listing("Points removed and listed (accepted)", sorted(removed_ok),
-            lambda n: f"{old(n)}  [{removed_ok[n][0]}: {removed_ok[n][1]}]")
-    listing("Points removed and failing", sorted(removed_bad), lambda n: f"{old(n)}  [{removed_bad[n]}]")
-    if changed:
-        out.append(f"Points changed ({len(changed)}):")
-        for name, fields in changed[:max_listed]:
-            out.append(f"  {name}" + (f"  [accepted, {changed_ok[name][0]}: {changed_ok[name][1]}]"
-                                       if name in changed_ok else ""))
-            for key, (before, after) in fields.items():
-                out.append(f"    {key}: {short(before)} -> {short(after)}")
-        if len(changed) > max_listed:
-            out.append(f"  ... and {len(changed) - max_listed} more")
     if internals is not None:
-        for title, keys in zip(("added", "removed", "changed"), internals):
-            listing(f"Internals {title}", keys,
-                    lambda key: f"{key[0]} ({key[1]}" + (f", cfg {key[2]})" if key[2] else ")"))
+        added, removed, changed = internals
+        listing("Internals added", added, key)
+        listing(f"Internals removed and listed in {REMOVED} (accepted)", [k for k in removed if k in accepted], key)
+        listing("Internals removed and failing", [k for k in removed if k not in accepted], key)
+        listing("Internals changed", changed, key)
+        listing("Internals made ambiguous without a kind (failing)", list(ambiguous), str)
         if not any(internals):
             out.append("internals.json differs, with the same entries.")
+    listing(f"Listed in {REMOVED} but still present", list(stale), str)
     listing("Generated files added", files_added, str)
     listing("Generated files removed", files_removed, str)
     if diffs:
@@ -438,16 +398,13 @@ def summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, fi
     return out
 
 
-def verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added=False,
-            internals=None):
-    """0 when the catalog and the API are as they were, or differ only in ways accepted: points added (with
-    allow_added), removals and changes the removal file lists. A failing removal or change always fails. The generated
-    API differs whenever a point does, so those diffs pass when `explained` (a point difference was accepted), except
-    loops.json, which always has to match. `internals` (internals_diff's result, internals.json left out of `diffs`)
-    passes with allow_added when it removes nothing, and never explains another file's diff."""
-    if removed_bad or changed_bad or (added and not allow_added):
+def verdict(files_added, files_removed, diffs, explained, allow_added=False, internals=None, failing=(), stale=()):
+    """0 when the generated API is as it was, or differs only in ways accepted: catalog hooks added (`explained`, with
+    allow_added), internals added or changed (with allow_added) and internals removed that the removal file lists. An
+    unlisted removal or a stale listing always fails, and so does a loops.json difference."""
+    if failing or stale:
         return 1
-    if internals is not None and (internals[1] or not allow_added):
+    if internals is not None and (internals[0] or internals[2]) and not allow_added:
         return 1
     if any(name in STRICT_FILES for name, _ in diffs):
         return 1
@@ -458,13 +415,20 @@ def verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, 
     return 0
 
 
-def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=None, accepted=None, files=None):
-    """Compare two snapshot folders, print the report and return the exit status. `accepted` is the removal file's
-    entries (default: tools/mod_points_removed.txt) and `files` a function giving the checked-in files a point may be
-    named in (default: the repository's)."""
+def head_internal_keys(head_dir, head_root):
+    """The (path, kind, cfg) of every entry of the head's internals.json a native mod can resolve (not
+    `shape_only`)."""
+    path = Path(head_dir) / INTERNALS
+    if not path.is_file():
+        return set()
+    entries = internal_entries(read_text(path, [head_root] if head_root else []))
+    return {(entry["path"], entry["kind"], entry.get("cfg") or "") for entry in entries if not entry.get("shape_only")}
+
+
+def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=None, listed=None):
+    """Compare two snapshot folders, print the report and return the exit status. `listed` is the removal file's
+    entries (default: tools/mod_api_removed_internals.txt)."""
     base_dir, head_dir = Path(base_dir), Path(head_dir)
-    base_points, head_points = load_points(base_dir / POINTS), load_points(head_dir / POINTS)
-    added, removed, changed = diff_points(base_points, head_points)
     files_added, files_removed, diffs = diff_files(base_dir, head_dir, base_root, head_root)
     # A strict file only the head wrote (the base's older hook_snapshot does not write it yet) has nothing to compare.
     # One the base wrote and the head did not always fails (verdict).
@@ -473,58 +437,54 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
     for name in skipped:
         print(f"note: {name} exists on one side only, not compared.")
     internals = None
+    ambiguous = []
     if any(name == INTERNALS for name, _ in diffs):
         # Listed by entry instead of as a diff: the file is one line of several megabytes. One that does not parse as
         # entries stays a strict file difference, in one line.
         try:
-            internals = internals_diff(read_text(base_dir / INTERNALS, [base_root] if base_root else []),
-                                       read_text(head_dir / INTERNALS, [head_root] if head_root else []))
+            base_text = read_text(base_dir / INTERNALS, [base_root] if base_root else [])
+            head_text = read_text(head_dir / INTERNALS, [head_root] if head_root else [])
+            internals = internals_diff(base_text, head_text)
+            ambiguous = made_ambiguous(base_text, head_text)
             unreadable = None
         except (ValueError, KeyError, TypeError) as error:
             unreadable = [f"internals.json differs and does not parse as entries ({type(error).__name__}: {error})"]
         diffs = [(name, unreadable if name == INTERNALS else lines) for name, lines in diffs
                  if name != INTERNALS or unreadable]
-    if removed and files is None:
-        files = repo_texts
-    if accepted is None:
-        accepted = load_accepted(ROOT / LIST)
-    removed_ok, removed_bad, changed_ok, changed_bad = classify(
-        removed, changed, base_points, accepted, loop_targets(base_dir / "loops.json"), files() if removed else {})
-    explained = bool((added and allow_added) or removed_ok or changed_ok)
-    # Function replacement points and named hooks are produced from different inputs. A new
-    # named hook may change its generated files while leaving every replacement point intact.
-    if allow_added and not explained and not files_added and not files_removed:
+    if listed is None:
+        listed = load_removed(ROOT / REMOVED)
+    accepted, failing, stale = removed_internals(internals, listed,
+                                                 head_internal_keys(head_dir, head_root) if listed else set())
+    explained = False
+    # A new named hook changes its generated files; nothing else may.
+    if allow_added and not files_added and not files_removed:
         hook_additions = explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root)
         if hook_additions:
             print("Catalog hooks added (accepted): " + ", ".join(sorted(hook_additions)))
             explained = True
-    status = verdict(added, removed_bad, changed_bad, files_added, files_removed, diffs, explained, allow_added,
-                     internals)
-    lines = summary(added, removed_ok, removed_bad, changed, changed_ok, files_added, files_removed, diffs,
-                    base_points, head_points, internals=internals)
-    counts = (f"Mod points: {len(added)} added, {len(removed)} removed ({len(removed_ok)} accepted, "
-              f"{len(removed_bad)} failing), {len(changed)} changed ({len(changed_ok)} accepted, "
-              f"{len(changed_bad)} failing).")
+    status = verdict(files_added, files_removed, diffs, explained, allow_added, internals, failing + ambiguous, stale)
+    lines = summary(files_added, files_removed, diffs, internals=internals, accepted=accepted, stale=stale,
+                    ambiguous=ambiguous)
     if not lines:
-        print(f"Mod points unchanged: {len(head_points)} points, the generated API is the same.")
-        print(counts)
+        print("Mod API unchanged: the loops, internals, hook catalog and generated dispatch are the same.")
         return 0
     print("\n".join(lines))
-    print("\n" + counts)
     if status:
-        print(f"Mod point check failed: the mod API changed ({DOC}).")
-        if added and not allow_added:
-            print("Added points fail without --allow-added.")
-        if removed_bad or changed_bad:
-            print(f"A removed or changed point passes only when it is listed in {LIST} (name | #PR | reason), is not a "
-                  "`Game` method or a loop, and no fixture, doc or mod manifest names it. A mod that needs one "
-                  "asks for `#[horizon_mod_api_macros::replaceable]` in the lower crate.")
+        print(f"\nMod API check failed: the mod API changed ({DOC}).")
+        if failing:
+            print(f"An internal a native mod may declare is removed only when {REMOVED} lists its path "
+                  "(`path  #issue`).")
+        if ambiguous:
+            print("A path a native mod could declare without a kind now has several kinds (E_INTERNAL_AMBIGUOUS): "
+                  "give the new member another name.")
+        if stale:
+            print(f"{REMOVED} lists an internal the head still has: remove the line, or the internal.")
+        if internals is not None and (internals[0] or internals[2]) and not allow_added:
+            print("internals.json may add or change entries only with --allow-added.")
         if any(name in STRICT_FILES for name, _ in diffs) or any(name in STRICT_FILES for name in files_removed):
             print("loops.json has to match the base exactly, and the head has to write it and internals.json.")
-        if internals is not None and (internals[1] or not allow_added):
-            print("internals.json may add or change entries with --allow-added, never remove one.")
         if (diffs or files_added or files_removed) and not explained:
-            print("The generated API differs from the base with no accepted point change.")
+            print("The generated API differs from the base with no added catalog hook.")
     return status
 
 
@@ -550,7 +510,7 @@ def base_target(target_dir):
     """The base's own Cargo build folder, inside the working tree's. A shared one makes Cargo see the working tree's
     generator, whose files are older than the base's build, as built already, and run the base's generator on the
     working tree's declarations."""
-    return target_dir / "mod-points-base"
+    return target_dir / "mod-api-base"
 
 
 def cargo(root, target_dir, side, verb, *extra):
@@ -702,7 +662,7 @@ def find_snapshot(store, key):
         if stored != key:
             differs = ", ".join(name for name in sorted(set(stored) | set(key)) if stored.get(name) != key.get(name))
             return None, None, f"miss: stored under another key ({differs})"
-        if not isinstance(root, str) or POINTS not in files or file_hashes(folder / "out") != files:
+        if not isinstance(root, str) or INTERNALS not in files or file_hashes(folder / "out") != files:
             return None, None, "miss: incomplete (its files do not match the marker)"
         return folder / "out", root, "hit"
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
@@ -714,7 +674,7 @@ def store_head(store, target):
     it and keep the snapshot. Everything after the build only warns: with no snapshot, pull requests build the base as
     before."""
     if not may_store():
-        print("Mod point check failed: --store-snapshot runs only where the build folder's disk is saved "
+        print("Mod API check failed: --store-snapshot runs only where the build folder's disk is saved "
               "(SAVE_BUILD_DISK=true, not a pull request); nothing stored.")
         return 2
     print(f"Build folder {target}, snapshots {store}")
@@ -722,26 +682,26 @@ def store_head(store, target):
     try:
         compiled = cargo(ROOT, target, "working tree", "build")
     except (RuntimeError, OSError) as error:
-        print(f"Mod point check failed: {error}")
+        print(f"Mod API check failed: {error}")
         return 2
     scratch = None
     try:
         commit = git("rev-parse", "HEAD")
-        # A staged copy's generator compiles the points' sites in (STAGED in points_generated.rs): not what a pull
-        # request's base worktree, which never has the stamp, would give.
+        # A staged copy's generator output is not what a pull request's base worktree, which never has the stamp,
+        # would give.
         if (ROOT / STAGED_STAMP).exists():
             raise RuntimeError(f"{STAGED_STAMP} exists, so this checkout is a staged copy")
         rustc = toolchain(ROOT)
         if rustc is None:
             raise RuntimeError("rustc -vV failed, so the snapshot has no key")
-        scratch = Path(tempfile.mkdtemp(prefix="mod-points-"))
+        scratch = Path(tempfile.mkdtemp(prefix="mod-api-"))
         ran = cargo(ROOT, target, "working tree", "run", "--", str(scratch / "out"), str(ROOT))
         start = time.monotonic()
         store_snapshot(store, scratch / "out", snapshot_key(commit, rustc), ROOT)
-        print(f"Mod points snapshot stored for {commit[:12]}: compile {compiled:.0f} s, generator {ran:.0f} s, "
+        print(f"Mod API snapshot stored for {commit[:12]}: compile {compiled:.0f} s, generator {ran:.0f} s, "
               f"store {time.monotonic() - start:.1f} s.")
     except (RuntimeError, OSError, ValueError) as error:
-        print(f"warning: no mod points snapshot stored (compile {compiled:.0f} s): {error}")
+        print(f"warning: no mod API snapshot stored (compile {compiled:.0f} s): {error}")
     finally:
         if scratch is not None:
             shutil.rmtree(scratch, ignore_errors=True)
@@ -758,9 +718,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="the git ref to compare with (default: the merge base of HEAD and origin/main)")
     parser.add_argument("--allow-added", action="store_true",
-                        help="accept added points and catalog hooks, and added or changed internals")
+                        help="accept added catalog hooks, and added or changed internals")
     parser.add_argument("--target-dir", type=Path,
-                        help="Cargo build folder of the working tree; the base builds in mod-points-base inside it (default: "
+                        help="Cargo build folder of the working tree; the base builds in mod-api-base inside it (default: "
                              "$CARGO_TARGET_DIR, else the repository's target)")
     parser.add_argument("--compare", nargs=2, metavar=("OLD", "NEW"), type=Path,
                         help="compare two snapshot folders instead of building")
@@ -774,12 +734,12 @@ def main(argv=None):
         try:
             return compare(args.compare[0], args.compare[1], args.allow_added)
         except (OSError, ValueError, KeyError, RuntimeError) as error:
-            print(f"Mod point check failed: {error}")
+            print(f"Mod API check failed: {error}")
             return 2
     target = resolve_target(args.target_dir, os.environ.get("CARGO_TARGET_DIR"))
     if args.store_snapshot:
         return store_head(args.store_snapshot.resolve(), target)
-    scratch = Path(tempfile.mkdtemp(prefix="mod-points-"))
+    scratch = Path(tempfile.mkdtemp(prefix="mod-api-"))
     worktree = scratch / "base"
     added_worktree = False
     try:
@@ -808,11 +768,11 @@ def main(argv=None):
         else:
             base_time = "0 s (stored)"
         head_compile, head_run = snapshot(ROOT, scratch / "head-out", target, "working tree")
-        print(f"Mod points base snapshot: {route}; base {base_time}, working tree {head_compile + head_run:.0f} s "
+        print(f"Mod API base snapshot: {route}; base {base_time}, working tree {head_compile + head_run:.0f} s "
               f"(compile {head_compile:.0f} s, generator {head_run:.0f} s).", flush=True)
         return compare(base_dir, scratch / "head-out", args.allow_added, base_root, ROOT)
     except (RuntimeError, OSError, ValueError, KeyError) as error:
-        print(f"Mod point check failed: {error}")
+        print(f"Mod API check failed: {error}")
         return 2
     finally:
         if added_worktree:

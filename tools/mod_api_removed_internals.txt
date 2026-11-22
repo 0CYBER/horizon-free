@@ -1,0 +1,7 @@
+# Game internals a native mod could declare (internals.json) that a pull request removed on purpose, checked by
+# tools/check_mod_api_unchanged.py. A removal passes only when its path is listed here; a listed path the game still
+# has fails, so a line goes when its internal comes back.
+#
+# One line per path: the path as internals.json writes it, then the issue, as `path  #issue`. A line for some of a
+# path's entries names their kind, their cfg or both: `path  kind=field  #issue`, `path  kind=fn  cfg=unix  #issue`
+# (`cfg=` alone: the unconditional ones). Lines starting with # are comments.

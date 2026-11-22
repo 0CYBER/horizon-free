@@ -8,7 +8,7 @@ import unittest
 
 from tests.symlinks import symlink_or_skip
 from tools.ci.rust_changes import (
-    EMBEDDED, needs_rust_alone, UNKNOWN_CHANGE, changed_entries, changed_paths, mentions_replaceable, needs_launcher, needs_mod_points, needs_rust, needs_server_build, needs_tooling,
+    EMBEDDED, needs_rust_alone, UNKNOWN_CHANGE, changed_entries, changed_paths, declared_internals, mentions_replaceable, needs_launcher, needs_mod_api, needs_rust, needs_server_build, needs_tooling,
     selections,
 )
 
@@ -239,28 +239,55 @@ class EmbeddedFileTests(unittest.TestCase):
         self.assertEqual({target: set(sources) for target, sources in EMBEDDED.items()}, skipped)
 
 
-class ModPointSelectionTests(unittest.TestCase):
+class ModApiSelectionTests(unittest.TestCase):
     def test_the_game_the_generator_and_the_check_select_it(self):
         for path in ["crates/horizon-client/src/game/tick.rs", "crates/horizon-client/src/game.rs",
                      "crates/horizon-mod-api-gen/src/points.rs", "crates/horizon-mod-api-macros/src/lib.rs",
-                     "tools/check_mod_points_unchanged.py", "crates/horizon-world/Cargo.toml", "Cargo.lock",
+                     "tools/check_mod_api_unchanged.py", "tools/mod_api_removed_internals.txt",
+                     "crates/horizon-world/Cargo.toml", "Cargo.lock",
                      UNKNOWN_CHANGE, ".github/workflows/ci.yml", "tools/ci/surface_report.py",
                      "tools/ci/surface.toml", "crates/horizon-mod-vocab/changes/a-note.toml",
                      "crates/horizon-core/src/nbt.rs"]:
             with self.subTest(path=path):
-                self.assertTrue(needs_mod_points(["README.md", path]))
+                self.assertTrue(needs_mod_api(["README.md", path]))
 
     def test_documentation_and_unrelated_changes_do_not(self):
         for path in ["docs/layers.md", "crates/horizon-mod-api/README.md", "tools/parity.py", "launcher/src/main.rs",
                      "crates/horizon-world/README.md"]:
             with self.subTest(path=path):
-                self.assertFalse(needs_mod_points([path]))
-        self.assertFalse(needs_mod_points([]))
+                self.assertFalse(needs_mod_api([path]))
+        self.assertFalse(needs_mod_api([]))
 
     def test_a_lower_crate_file_counts_only_when_it_mentions_replaceable(self):
-        self.assertFalse(needs_mod_points(["crates/horizon-world/src/lib.rs"]))
-        self.assertTrue(needs_mod_points(["crates/horizon-world/src/lib.rs"], lambda files: True))
-        self.assertFalse(needs_mod_points(["docs/a.md"], lambda files: True))
+        self.assertFalse(needs_mod_api(["crates/horizon-world/src/lib.rs"]))
+        self.assertTrue(needs_mod_api(["crates/horizon-world/src/lib.rs"], lambda files: True))
+        self.assertFalse(needs_mod_api(["docs/a.md"], lambda files: True))
+
+    def test_the_entry_and_the_toolchain_select_it(self):
+        for path in ["crates/horizon-client/src/entry.rs", "rust-toolchain.toml", "rust-toolchain",
+                     ".cargo/config.toml", "crates/horizon-game-discovery/src/lib.rs"]:
+            with self.subTest(path=path):
+                self.assertTrue(needs_mod_api([path]))
+
+    def test_a_file_that_holds_a_declared_internal_selects_it(self):
+        declared = {"horizon_client_render::world::World::is_air", "horizon_client_lib::vanillagen::shared_data_with",
+                    "horizon_world::worldgen::structure::legacy::PieceRandom"}
+        for path in ["crates/horizon-client-render/src/world.rs", "crates/horizon-client-render/src/world/edit.rs",
+                     "crates/horizon-client-render/src/lib.rs", "crates/horizon-client/src/vanillagen.rs",
+                     "crates/horizon-world/src/worldgen/structure/legacy.rs",
+                     "crates/horizon-world/src/worldgen/structure/legacy/pieces/mod.rs"]:
+            with self.subTest(path=path):
+                self.assertTrue(needs_mod_api([path], declarations=declared))
+        # Neither a module the declarations don't go through, nor a sibling of a module they only pass.
+        for path in ["crates/horizon-client-render/src/chat.rs", "crates/horizon-world/src/worldgen/noise.rs",
+                     "crates/horizon-world/src/worldgen/structure/village.rs", "crates/horizon-items/src/items.rs"]:
+            with self.subTest(path=path):
+                self.assertFalse(needs_mod_api([path], declarations=declared))
+
+    def test_unreadable_declarations_select_any_rust_change(self):
+        self.assertTrue(needs_mod_api(["crates/horizon-items/src/items.rs"], declarations=None))
+        self.assertFalse(needs_mod_api(["docs/a.md"], declarations=None))
+        self.assertIsNone(declared_internals("HEAD", "no-such-revision-19576"))
 
     def test_replaceable_is_looked_for_before_and_after_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

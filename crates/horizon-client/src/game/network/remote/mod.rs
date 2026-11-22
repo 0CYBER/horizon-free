@@ -849,7 +849,7 @@ mod use_prediction;
 mod wire;
 
 // The `Game` methods moved into the files above stay here as the mod points they were, by name, module path and
-// signature (docs/layers.md#mod-points-stay-put); each forwards to its body in its file.
+// signature; each forwards to its body in its file.
 impl Game<'_> {
     // connection.rs
     pub(super) fn remote_sound_name(

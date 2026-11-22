@@ -76,7 +76,7 @@ jobs:
   # Which parts a change reaches, decided on the smallest runner before the Rust parts start: a part that starts only to
   # find nothing to do still bills a whole minute of its runner (433 of the launcher's 577 jobs on 2026-11-19, #18843).
   # Every Rust part waits for it, so each starts 10-16 s later; the decision itself takes under a second. Only the
-  # scripts it runs are checked out: `git grep` of a revision (the mod points' search of file contents) reads the whole
+  # scripts it runs are checked out: `git grep` of a revision (the mod API's search of file contents) reads the whole
   # tree whatever the sparse checkout leaves out, and fetches the blobs it needs.
   verify-scope:
     name: verify (which parts run)
@@ -85,7 +85,7 @@ jobs:
     outputs:
       rust: ${{ steps.answers.outputs.rust }}
       launcher: ${{ steps.answers.outputs.launcher }}
-      mod_points: ${{ steps.answers.outputs.mod_points }}
+      mod_api: ${{ steps.answers.outputs.mod_api }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,8 +93,8 @@ jobs:
           filter: blob:none
           sparse-checkout: tools
           persist-credentials: false
-      # The Rust parts' answers: `required` (needs_rust) for the lint, server build and Rust tests parts, `mod_points`
-      # for the mod points part. Only a pull request asks; on any other event every Rust part runs.
+      # The Rust parts' answers: `required` (needs_rust) for the lint, server build and Rust tests parts, `mod_api`
+      # for the mod API part. Only a pull request asks; on any other event every Rust part runs.
       - name: Does this pull request need Rust checks?
         if: github.event_name == 'pull_request'
         id: rust
@@ -122,9 +122,9 @@ jobs:
         env:
           RUST: ${{ steps.rust.outputs.required }}
           LAUNCHER: ${{ steps.launcher.outputs.required }}
-          MOD_POINTS: ${{ steps.rust.outputs.mod_points }}
+          MOD_API: ${{ steps.rust.outputs.mod_api }}
         run: |
-          for answer in "rust=$RUST" "launcher=$LAUNCHER" "mod_points=$MOD_POINTS"; do
+          for answer in "rust=$RUST" "launcher=$LAUNCHER" "mod_api=$MOD_API"; do
             name=${answer%%=*} value=${answer#*=}
             case "$value" in
               true | false) ;;
@@ -470,27 +470,27 @@ jobs:
         if: always()
         continue-on-error: true
         run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
-  # docs/layers.md#mod-points-stay-put: every eligible `Game` method is a mod injection point, so a change to `Game`'s
-  # source or to the generator must leave the point catalog and the generated API as they were. A point's name,
-  # target and signature are part of the mod API: a removed or changed point or any other change to the generated API
-  # fails, and a new hook adds points and passes (--allow-added). It builds horizon-mod-api-gen's hook_snapshot example
+  # docs/layers.md#the-mod-api-stays-put: a change to the game or to the generator must leave the generated mod API as
+  # it was: the published loops, the game internals a native mod may declare (an internal goes only when
+  # tools/mod_api_removed_internals.txt lists it), the hook catalog and the guest's dispatch. A new hook or internal
+  # passes (--allow-added). It builds horizon-mod-api-gen's hook_snapshot example
   # for the pull request's tree (the merge commit) and for HEAD^1 (main, as in verify-tree): the generator's few
   # crates and their dependencies, not the game. A pull request runs it when tools/ci/rust_changes.py says its change
-  # can reach the points (`mod_points`: the game module, the generator's crates, the check, manifests, or a Rust file
+  # can reach the mod API (`mod_api`: the game module, the generator's crates, the check, manifests, or a Rust file
   # that mentions `replaceable` before or after; verify-scope asks); the rest never start it.
-  # 8 vCPU: the generator and the comparison run on one core (2-10 min of a run), and only the compiles use more (the
-  # wire loopback's 25-77 s, a missing base snapshot's ~55 s more), so 16 cores sat mostly idle. 4 vCPU may do: its
-  # load probe below has no lines yet.
+  # 4 vCPU: the generator and the comparison run on one core (2-10 min of a run), and only the compiles use more (a
+  # missing base snapshot's ~55 s, the surface report's horizon-stage and layouts). 8 vCPU ran at ~13%, and the wire
+  # loopback, its longest many-core compile, left with the injection points (#19576).
   # It is its own job beside verify-test, with a build folder of its own, so it adds no time to the slowest job (as a
   # step of verify-test it came after the tests and added ~2.5 min to every pull request that touches game/). Like
   # verify-test it runs on every event, because only main's pushes and the merge queue save a build folder's disk:
   # there it only warms the folder (below), and pull requests compare. It needs the history for HEAD^1, so the
   # checkout is whole, as the other parts'.
-  verify-mod-points:
-    name: verify (mod points)
+  verify-mod-api:
+    name: verify (mod API)
     needs: verify-scope
-    if: needs.verify-scope.outputs.mod_points != 'false'
-    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-8vcpu-ubuntu-2404' }}
+    if: needs.verify-scope.outputs.mod_api != 'false'
+    runs-on: ${{ vars.SELF_HOSTED_CI == 'all' && fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -506,6 +506,8 @@ jobs:
         run: tools/ci/install_rust.sh libasound2-dev libudev-dev mold
       - name: Our runners as GitHub's (a default Rust toolchain)
         run: rustup default stable
+      # The disk's key and the snapshot folder keep their names from verify-mod-points, so the job keeps its warm
+      # build folder and stored snapshots.
       - name: Mount the build folder
         if: startsWith(runner.name, 'blacksmith-')
         uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
@@ -529,13 +531,13 @@ jobs:
       # but never save it (Blacksmith refuses), so none can leave a snapshot for another; our checks runners keep what
       # a job leaves in the build folder, so there nothing is stored or read. Likewise the compiled layouts the surface
       # report compares (wire-layouts, by commit), which also leaves the API crates built for a pull request's head.
-      - name: Warm the build folder with the generator, and keep this commit's mod points snapshot
+      - name: Warm the build folder with the generator, and keep this commit's mod API snapshot
         if: github.event_name != 'pull_request'
         env:
           STORE: ${{ env.SAVE_BUILD_DISK == 'true' && startsWith(runner.name, 'blacksmith-') }}
         run: |
           if [ "$STORE" = true ]; then
-            python3 tools/check_mod_points_unchanged.py --store-snapshot "$CARGO_TARGET_DIR/mod-points-snapshots"
+            python3 tools/check_mod_api_unchanged.py --store-snapshot "$CARGO_TARGET_DIR/mod-points-snapshots"
             # Only main's pushes store compiled layouts, not the merge queue: a baseline is main's own code.
             if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
               python3 tools/ci/surface_report.py --store-layouts "$CARGO_TARGET_DIR/wire-layouts"
@@ -546,41 +548,38 @@ jobs:
             cargo build --locked -p horizon-mod-api-gen --example hook_snapshot
             cargo build --locked -p horizon-mod-api --example wire_layouts
           fi
-      - name: Mod points and the generated API stay as they were
+      - name: The generated mod API stays as it was
         if: github.event_name == 'pull_request'
         env:
           HOSTED: ${{ startsWith(runner.name, 'blacksmith-') }}
         run: |
           if [ "$HOSTED" = true ]; then
-            python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added --snapshots "$CARGO_TARGET_DIR/mod-points-snapshots"
+            python3 tools/check_mod_api_unchanged.py --base HEAD^1 --allow-added --snapshots "$CARGO_TARGET_DIR/mod-points-snapshots"
           else
-            python3 tools/check_mod_points_unchanged.py --base HEAD^1 --allow-added
+            python3 tools/check_mod_api_unchanged.py --base HEAD^1 --allow-added
           fi
       # The mod API surface of the merge base and of this tree, diffed (tools/ci/surface_report.py). With
       # tools/ci/surface.toml's gate on, a breaking change that no new note in crates/horizon-mod-vocab/changes/ names
       # fails, and so does a change that makes the game refuse wasm mods built before it: a changed wire layout of a
-      # type that crosses, or an argument added to a hook (the point check above compares the generated text, which
+      # type that crosses, or an argument added to a hook (the check above compares the generated text, which
       # shows neither). horizon-stage is built from the package and profile the check built hook_snapshot from. The
       # compiled layouts of HEAD^1 come from the store main's pushes fill, or are built by checking it out here, with its
-      # own wire_layouts example, and then this commit again: this step runs after the point check, and the wire
-      # loopback after it builds this commit. A base without the example is compared by source alone, with a warning.
+      # own wire_layouts example, and then this commit again. A base without the example is compared by source alone,
+      # with a warning.
       - name: The mod API keeps what mods built before it use
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.rust.outputs.mod_points != 'false' }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           EVENT: ${{ github.event_name }}
         run: |
           cargo build --locked --quiet -p horizon-mod-api-gen --bin horizon-stage
           HORIZON_STAGE_TOOL="${CARGO_TARGET_DIR:-$PWD/target}/debug/horizon-stage" \
             WIRE_LAYOUTS_STORE="${CARGO_TARGET_DIR:-$PWD/target}/wire-layouts" python3 tools/ci/surface_report.py
-      # verify-test builds the points' wire loopback empty: it needs a guest build whose table has sites (#18400).
-      - name: The points' wire loopback
-        run: cargo test --locked -p horizon-mod-points --features wasm-guest,listener-fixture --test wire_loopback
       - name: Load probe
         if: always()
         continue-on-error: true
         run: timeout -k 5 10 tools/ci/load_probe.sh || echo "The load probe did not run"
   verify:
-    needs: [verify-scope, verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-points]
+    needs: [verify-scope, verify-tree, verify-lint, verify-server, verify-launcher, verify-test, verify-mod-api]
     if: always()
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
@@ -593,17 +592,17 @@ jobs:
           SERVER: ${{ needs.verify-server.result }}
           LAUNCHER: ${{ needs.verify-launcher.result }}
           TEST: ${{ needs.verify-test.result }}
-          MODPOINTS: ${{ needs.verify-mod-points.result }}
+          MODAPI: ${{ needs.verify-mod-api.result }}
           EVENT: ${{ github.event_name }}
           RUST_ANSWER: ${{ needs.verify-scope.outputs.rust }}
           LAUNCHER_ANSWER: ${{ needs.verify-scope.outputs.launcher }}
-          MODPOINTS_ANSWER: ${{ needs.verify-scope.outputs.mod_points }}
+          MODAPI_ANSWER: ${{ needs.verify-scope.outputs.mod_api }}
         # A skipped part passes only where its own `if` left it out: verify-scope's answer for it exactly `false`
         # (compared with case, as `if` doesn't), or, for the parts the merge queue leaves out (lint, server build,
         # launcher), the merge queue. Anywhere else it was never decided for (verify-scope failed, or the run was
         # cancelled first), which fails.
         run: |
-          echo "which parts run: $SCOPE, tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST, mod points: $MODPOINTS"
+          echo "which parts run: $SCOPE, tree and Python tests: $TREE, format and lint: $LINT, server build: $SERVER, launcher: $LAUNCHER, Rust tests: $TEST, mod API: $MODAPI"
           [ "$SCOPE" = success ] || exit 1
           [ "$TREE" = success ] || [ "$TREE" = skipped ] || exit 1
           left_out() { [ "$EVENT" = merge_group ] || [ "$1" = false ]; }
@@ -611,7 +610,7 @@ jobs:
           [ "$SERVER" = success ] || { [ "$SERVER" = skipped ] && left_out "$RUST_ANSWER"; } || exit 1
           [ "$LAUNCHER" = success ] || { [ "$LAUNCHER" = skipped ] && left_out "$LAUNCHER_ANSWER"; } || exit 1
           [ "$TEST" = success ] || { [ "$TEST" = skipped ] && [ "$RUST_ANSWER" = false ]; } || exit 1
-          [ "$MODPOINTS" = success ] || { [ "$MODPOINTS" = skipped ] && [ "$MODPOINTS_ANSWER" = false ]; } || exit 1
+          [ "$MODAPI" = success ] || { [ "$MODAPI" = skipped ] && [ "$MODAPI_ANSWER" = false ]; } || exit 1
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
   # (`gh workflow run checks --ref <branch> -f arm64=true`): GitHub's runner queue is the bottleneck, and main's runs
   # gate the releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this

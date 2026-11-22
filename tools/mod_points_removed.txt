@@ -1,9 +1,0 @@
-# Mod points that a pull request removed or changed on purpose, checked by tools/check_mod_points_unchanged.py.
-#
-# Every function the point generator admits under horizon_client::game:: is a point, so moving code out of game/ into a
-# lower crate removes its points. A removed point passes the check only when it is listed here, is not a `Game` method
-# or a published loop, and no fixture, doc or mod manifest names it. A changed point (same name, new target or
-# signature hash) passes when it is listed too. A mod that needs a moved function asks for
-# `#[horizon_mod_api_macros::replaceable]` on it in the lower crate (an issue is enough); that keeps its point.
-#
-# One line per point: name | #PR | short reason. Lines starting with # are comments.

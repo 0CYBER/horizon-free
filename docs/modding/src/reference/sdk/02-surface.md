@@ -65,7 +65,7 @@ Each change says what changed in words a mod author can act on, for example
 ``argument `player`: `PlayerRef` → `ServerPlayerRef` ``. `cargo horizon-mod sdk diff <build> <build>` prints the
 same report for two published builds.
 
-When the `verify (mod points)` check runs on a pull request, its summary carries this report, comparing the merge
+When the `verify (mod API)` check runs on a pull request, its summary carries this report, comparing the merge
 base with the head; `--calls` adds the calls and core each build's wasm mods are checked by (`horizon-stage surface
 ROOT OUT --calls CALLS` writes them). `--layouts` adds what both builds compiled: the core layout and every call's
 hash, exactly as the game compares them (`crates/horizon-mod-api/examples/wire_layouts.rs` prints them). Every

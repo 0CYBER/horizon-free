@@ -600,38 +600,39 @@ left.
 `python3 tools/check_addresses.py` (horizon-rust/horizon#12990) checks the built-in addresses
 ([below](#built-in-addresses)); it runs in CI's verify job and in `tools/pr_ready.py` too.
 
-### Mod points stay put
+### The mod API stays put
 
-Every function under `horizon_client::game::` that the point generator admits is a mod injection point: the `&self` and
-`&mut self` methods of `Game`, its free functions and the methods of its other types. So is each function marked
-`#[horizon_mod_api_macros::replaceable]` in a lower crate. A point's name, module path and signature are part of the
-mod API ([agent rules](mod-api/agent-rules.md), rule 7), and a mod's `[[inject]]` row names it by that path and a hash
-of its signature.
+What the game publishes to mods is part of the mod API ([agent rules](mod-api/agent-rules.md), rule 7): the loops a mod
+can join, the game internals a native mod may declare (`internals.json`), the hook catalog and the guest's generated
+hook dispatch. A change keeps them, or only adds to them.
 
-When you move code out of `impl Game` into a lower crate, a `Game` method keeps its name, module path and signature,
-and only its body changes to call the new function. No wrapper is needed for the other functions: moving one out of
-`game/` removes its point, and callers inside the new crate would skip a wrapper anyway, so its hooks would stop firing
-without a sign. List each removed point in `tools/mod_points_removed.txt` (`name | #PR | reason`). A mod that needs a
-moved function asks for `#[replaceable]` on it in the lower crate, which keeps its point.
+`python3 tools/check_mod_api_unchanged.py` checks this. It runs the `hook_snapshot` example of `horizon-mod-api-gen` on
+the base (the merge base with `origin/main`, in a temporary worktree) and on your tree, and compares what it wrote. It
+fails when:
 
-`python3 tools/check_mod_points_unchanged.py` checks this. It runs the `hook_snapshot` example of
-`horizon-mod-api-gen` on the base (the merge base with `origin/main`, in a temporary worktree) and on your tree, and
-prints how many points were added, removed (accepted and failing) and changed. It fails when:
+- `loops.json` differs at all;
+- `internals.json` loses an entry `tools/mod_api_removed_internals.txt` does not list, or that file lists an entry the
+  tree still has. Becoming `shape_only`, or losing a `cfg` variant, counts as a removal;
+- a path a native mod could declare without a kind gains a second kind (a method beside a field of the same name): its
+  kind-less declarations stop resolving (`E_INTERNAL_AMBIGUOUS`), with or without `--allow-added`. Without
+  `--allow-added`, any other difference fails too; with it, added and changed entries are listed and pass:
+  `cargo horizon-mod update` already reports signature-hash changes for declared internals;
+- any other generated file differs. With `--allow-added`, a new catalog hook may add its own guest dispatch and update
+  the catalog and its own hook-notes sections (the other sections stay as they were); existing guest dispatch must match
+  after accounting for the new hook and generated helper numbering.
 
-- a point is removed and is not listed in `tools/mod_points_removed.txt`, is a `Game` method or a published loop, or is
-  named by a fixture (`tools/ci/fn-replace-check`, the wasm host's), a doc or a mod manifest;
-- a point changes (same name, new target or signature hash) and is not listed in that file;
-- the generated API differs without an accepted point change, or `loops.json` differs at all. With `--allow-added`,
-  a new catalog hook may add its own guest dispatch and update the catalog and hook notes. Existing guest dispatch
-  must match after accounting for the new hook and generated helper numbering;
-- `internals.json` loses an entry, or, without `--allow-added`, differs at all. With the flag, added and changed entries
-  are listed and pass: `cargo horizon-mod update` already reports signature-hash changes for declared internals.
-  Becoming `shape_only`, or losing a `cfg` variant, counts as a removal.
+The removal list is the only way an internal may go: one line per path, as `internals.json` writes it, then the issue
+(`horizon_mod_package::manifest::inject::Inject  #19576`). To retire some of a path's entries, name their kind, their
+`cfg` or both: `horizon_x::S::x  kind=field  #1`, `horizon_x::f  cfg=unix  #1` (`cfg=` alone: the unconditional ones).
+Remove the line when the internal comes back. The
+injection points (`[[inject]]`, #19576) are not compared; the mod API's types and calls are the surface report's
+([SDK surface](modding/src/reference/sdk/02-surface.md)), which runs beside this check.
 
-CI runs it, with `--allow-added`, on a pull request that can reach the points: a change to `crates/horizon-client/src/game/`
-or `game.rs`, to the generator's crates (`crates/horizon-mod-*`), to the check itself, to a `Cargo.toml` or `Cargo.lock`,
-or to a Rust file under `crates/` that mentions `replaceable` before or after (`needs_mod_points` in
-`tools/ci/rust_changes.py`). A new hook on purpose adds points and passes with that flag.
+CI runs it, with `--allow-added`, in `verify (mod API)` on a pull request that can reach the mod API: a change to
+`crates/horizon-client/src/game/`, `game.rs` or `entry.rs`, to the generator's crates (`crates/horizon-mod-*`), to the
+check or its removal list, to a `Cargo.toml`, `Cargo.lock` or the toolchain's config, to a Rust file that may hold a
+lower-crate internal `crates/horizon-mod-api-gen/internals.txt` declares, or to a Rust file under `crates/` that mentions
+`replaceable` before or after (`needs_mod_api` in `tools/ci/rust_changes.py`).
 
 ### Today's exceptions
 

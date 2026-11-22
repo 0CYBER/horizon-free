@@ -96,16 +96,28 @@ def needs_tooling(changes):
     )
 
 
-# What the mod point check (tools/check_mod_points_unchanged.py, verify's `mod points` part) reads: the game module and
+# What the mod API check (tools/check_mod_api_unchanged.py, verify's `mod API` part) reads: the game module and
 # the generator's crates, the check itself and the surface report beside it, and what decides the set of crates it walks
 # (manifests and the lockfile; the unknown-change stand-in is Cargo.lock). The generator also reads every `#[replaceable]` function in a lower crate, so a
 # changed Rust file under crates/ that mentions the attribute, before or after, counts too (mentions_replaceable).
-MOD_POINT_PREFIXES = ("crates/horizon-client/src/game/", "crates/horizon-mod-")
+# horizon-game-discovery finds the native hook files the generator reads (hook_targets.rs).
+MOD_API_PREFIXES = ("crates/horizon-client/src/game/", "crates/horizon-mod-", "crates/horizon-game-discovery/")
 # The network NBT's tag ids and limits are in the core hash every wasm mod is checked by; the other core inputs live in
 # crates/horizon-mod-*.
-MOD_POINT_FILES = {"crates/horizon-client/src/game.rs", "tools/check_mod_points_unchanged.py", "Cargo.lock",
-                   ".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools/ci/surface_report.py",
-                   "tools/ci/surface.toml", "crates/horizon-core/src/nbt.rs"}
+MOD_API_FILES = {"crates/horizon-client/src/game.rs", "crates/horizon-client/src/entry.rs",
+                 "tools/check_mod_api_unchanged.py", "tools/mod_api_removed_internals.txt", "Cargo.lock",
+                 ".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools/ci/surface_report.py",
+                 "tools/ci/surface.toml", "crates/horizon-core/src/nbt.rs",
+                 # The toolchain the generator parses with and the layouts are compiled by.
+                 "rust-toolchain", "rust-toolchain.toml", ".cargo/config.toml"}
+# The lower-crate internals a native mod may declare, one path per line (internals.json lists them): a file that
+# holds one changes the API whether or not it mentions `replaceable`.
+DECLARED_INTERNALS = "crates/horizon-mod-api-gen/internals.txt"
+# Crates whose library is built from another crate's sources: horizon-client-lib's manifest points at
+# horizon-client's (its root is src/client_lib.rs there).
+SHARED_SOURCES = {"horizon_client_lib": "horizon_client"}
+
+
 PATHS_PER_GREP = 200
 
 
@@ -122,14 +134,72 @@ def mentions_replaceable(base, head, paths):
     return False
 
 
-def needs_mod_points(paths, mentions=lambda rust_files: False):
-    """Whether a change can alter the mod point catalog or the generated mod API. `mentions` answers for the changed
-    Rust files under crates/ that no listed path already covers."""
-    if any(path.startswith(MOD_POINT_PREFIXES) and not path.endswith(".md") or path in MOD_POINT_FILES
+def declared_internals(*revisions):
+    """The declarations of DECLARED_INTERNALS at each of `revisions`, or None when one can't be read (fail closed)."""
+    declarations = set()
+    for revision in revisions:
+        shown = subprocess.run(["git", "show", f"{revision}:{DECLARED_INTERNALS}"], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, check=False)
+        if shown.returncode != 0:
+            return None
+        for line in shown.stdout.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                declarations.add(line)
+    return declarations
+
+
+def module_of(path):
+    """(crate, module path) of a Rust source file under crates/, or None: src/lib.rs (or another crate root) is the
+    crate's root, an empty module; src/a/b.rs and src/a/b/mod.rs are `a::b`."""
+    parts = path.split("/")
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "src" or not path.endswith(".rs"):
+        return None
+    krate, inside = parts[1].replace("-", "_"), parts[3:]
+    if inside in (["lib.rs"], ["main.rs"], ["client_lib.rs"]):
+        return krate, []
+    if inside[-1] == "mod.rs":
+        inside = inside[:-1]
+    else:
+        inside[-1] = inside[-1][:-len(".rs")]
+    return krate, inside
+
+
+def holds_declared(path, declarations):
+    """Whether `path` may hold one of `declarations` (`crate::module::Item::member`): its crate's root, the module
+    file of a module the declaration goes through, or a file of the declaring module's own folder (an `impl` in a
+    submodule). Generic arguments (`Mesher<'_>`) are dropped first. An item a re-export moved elsewhere is missed."""
+    module = module_of(path)
+    if module is None:
+        return False
+    krate, inside = module
+    for declaration in declarations:
+        segments = [segment.split("<", 1)[0] for segment in declaration.split("::")]
+        if SHARED_SOURCES.get(segments[0], segments[0]) != krate:
+            continue
+        reach = segments[1:-1]
+        if inside == reach[:len(inside)]:
+            return True
+        # A submodule of the declaring module: the path's modules end where a type (capitalised) or the item starts.
+        parent = inside[:-1]
+        if parent and parent == reach[:len(parent)] and (len(parent) == len(reach) or reach[len(parent)][:1].isupper()):
+            return True
+    return False
+
+
+def needs_mod_api(paths, mentions=lambda rust_files: False, declarations=frozenset()):
+    """Whether a change can alter the generated mod API. `mentions` answers for the changed
+    Rust files under crates/ that no listed path already covers; `declarations` are the declared lower-crate
+    internals (declared_internals), None when they could not be read, which selects any Rust change."""
+    if any(path.startswith(MOD_API_PREFIXES) and not path.endswith(".md") or path in MOD_API_FILES
            or path.startswith("crates/") and path.endswith("Cargo.toml") or path == "Cargo.toml" for path in paths):
         return True
     rust_files = [path for path in paths if path.startswith("crates/") and path.endswith(".rs")]
-    return bool(rust_files) and mentions(rust_files)
+    if not rust_files:
+        return False
+    if declarations is None or any(holds_declared(path, declarations) for path in rust_files):
+        return True
+    return mentions(rust_files)
 
 
 def selections(changes):
@@ -178,5 +248,6 @@ if __name__ == "__main__":
         print(f"required={str(needs(paths)).lower()}")
         print(f"server_build={str(needs_server_build(paths)).lower()}")
         if not args.launcher:
-            mod_points = needs_mod_points(paths, lambda files: mentions_replaceable(args.base, args.head, files))
-            print(f"mod_points={str(mod_points).lower()}")
+            mod_api = needs_mod_api(paths, lambda files: mentions_replaceable(args.base, args.head, files),
+                                    declared_internals(args.base, args.head))
+            print(f"mod_api={str(mod_api).lower()}")

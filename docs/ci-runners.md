@@ -53,7 +53,7 @@ per part, side by side, each on a size that fits it:
 | `verify (server build lint)` (`verify-server`), when `verify-scope` finds a Rust change | 4 vCPU: its clippy keeps about two cores busy | no |
 | `verify (launcher)` (`verify-launcher`), when `verify-scope` (`rust_changes.py --launcher`) says the change reaches it | 8 vCPU | no |
 | `verify (Rust tests)` (`verify-test`), when `verify-scope` finds a Rust change | 16 vCPU: a cold build folder compiles the workspace | yes |
-| `verify (mod points)` (`verify-mod-points`), when `verify-scope` says the change can reach the points: the comparison runs on pull requests only; elsewhere it builds the generator to warm its disk | 8 vCPU: the generator and the comparison use one core; only its compiles use more | yes |
+| `verify (mod API)` (`verify-mod-api`), when `verify-scope` says the change can reach the mod API: the comparison and the surface report run on pull requests only; elsewhere it builds the generator to warm its disk | 4 vCPU: the generator and the comparison use one core; only its compiles use more (8 vCPU ran at ~13%) | yes |
 
 Only `verify`, which waits for them all, is a required check; `tests/test_ci_runners.py` pins that the parts share one
 `runs-on` choice. `SELF_HOSTED_CI=all` sends them all to our checks runners. `verify` passes a skipped part only where
@@ -80,9 +80,10 @@ branch than main ("... is not the default branch"), the merge queue's excepted: 
 fork's copy of the workflow cannot write this repository's disks. Forks' pull requests mount main's disks as well:
 until 2026-11-17 they had a set of their own that nothing could save, so each built the whole workspace (7-10 minutes
 per Rust part, against ~2 for a branch here).
-Because no pull request can save a disk, `verify (mod points)` keeps there what pull requests trust: each saved run's
-mod points snapshot of its commit (`mod-points-snapshots`, the newest 30), which a pull request whose `HEAD^1` is stored
-compares with instead of building the base (`tools/check_mod_points_unchanged.py --snapshots`).
+Because no pull request can save a disk, `verify (mod API)` keeps there what pull requests trust: each saved run's
+mod API snapshot of its commit (`mod-points-snapshots`, the newest 30, a name kept from the job's earlier name), which a
+pull request whose `HEAD^1` is stored compares with instead of building the base
+(`tools/check_mod_api_unchanged.py --snapshots`).
 
 ## Try runs
 
@@ -100,7 +101,7 @@ git push origin --delete try/<name>                           # when done
 ```
 
 - **Linux**: verify's parts on Blacksmith, as for a push to main: the whole workspace's tests, clippy, the server build,
-  the launcher, the Python tests and the whole history's tree check. Not the mod points comparison (pull requests only).
+  the launcher, the Python tests and the whole history's tree check. Not the mod API comparison (pull requests only).
   They mount main's disks and never save them, so a branch near main takes about as long as a pull request: 7 minutes
   on 2026-11-19, the tree check of the whole history the slowest part. The Windows job took 48: 28 for the game, 4 for
   the folder, 15 for the launcher's tests.
@@ -115,7 +116,7 @@ git push origin --delete try/<name>                           # when done
 - No job of a try run holds a secret; verify's parts and the Windows x64 job save no disk or cache
   (`tests/test_ci_runners.py`). Runs of one commit share a concurrency group: a second waits for the first.
 - A try run reports `verify` on the branch's commit, as a pull request's run of that commit does. It is no proof for
-  a pull request: it skips the mod points comparison, and the merge queue still needs its own green `verify` on the
+  a pull request: it skips the mod API comparison, and the merge queue still needs its own green `verify` on the
   queue's commit, which a try run cannot give.
 - The run uses the branch's own copy of `ci.yml`: a branch from before 2026-11-19 has no inputs and always starts the
   ARM64 and JFR jobs. Rebase it on main first.
