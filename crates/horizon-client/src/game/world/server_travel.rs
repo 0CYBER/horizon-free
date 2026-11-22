@@ -8,7 +8,7 @@
 //! exit once the destination has loaded around them.
 
 use super::end::GatewayJob;
-use super::nether_portal::{PLAYER_DELAY, Plan};
+use super::nether_portal::{Exit, ExitSearch, PLAYER_DELAY, Plan};
 use super::persist::OffLevel;
 use super::respawn_anchor::RespawnConfig;
 use super::respawn_position::Respawn;
@@ -526,7 +526,7 @@ impl Game<'_> {
         if self.enter_level(plan.dim).is_err() {
             return false;
         }
-        let exists = self.find_exit_portal(plan).is_some();
+        let exists = !matches!(self.search_exit_portal(plan), ExitSearch::NoPortal);
         if let Err(e) = self.enter_level(source) {
             log::error!("could not reopen {}: {e}", source.id());
         }
@@ -1312,14 +1312,18 @@ impl Game<'_> {
                     }
                 }
             } else {
-                let exit = trip
-                    .plan
-                    .as_ref()
-                    .and_then(|plan| self.nether_exit_portal(plan));
-                match (trip.plan, exit) {
-                    (Some(plan), Some(exit)) => {
+                let plan = trip.plan;
+                match plan.map(|plan| (plan, self.resolve_exit_portal(&plan))) {
+                    Some((plan, Exit::Found(exit))) => {
                         let (at, rotation) = self.arrival(&plan, exit);
                         (at, yaw + rotation)
+                    }
+                    Some((_, Exit::Waiting)) => {
+                        // The exit portal's chunk is still loading: its ticket
+                        // is placed; land once it is there.
+                        self.server_trips.insert(k, trip);
+                        k += 1;
+                        continue;
                     }
                     _ => (trip.target, yaw),
                 }

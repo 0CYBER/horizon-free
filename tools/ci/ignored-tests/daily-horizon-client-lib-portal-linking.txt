@@ -1,0 +1,4 @@
+# Prepared-resource nether portal linking and exit search tests.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-client game::nether_portal::exit_search_tests::an_exit_portal_in_an_unloaded_chunk_waits_for_it lib daily resources
+horizon-client game::nether_portal::exit_search_tests::an_exit_portal_spanning_two_chunks_waits_for_both lib daily resources

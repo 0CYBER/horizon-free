@@ -40,7 +40,9 @@ fn depart(game: &mut Game<'_>, id: u32, restart_waiting: bool) -> Vec3 {
                 .insert_remote(&mut game.world, Chunk::empty(x, z));
         }
     }
-    let exit = game.nether_exit_portal(&plan).expect("exit portal built");
+    let Exit::Found(exit) = game.resolve_exit_portal(&plan) else {
+        panic!("exit portal built");
+    };
     game.arrival(&plan, exit).0
 }
 
