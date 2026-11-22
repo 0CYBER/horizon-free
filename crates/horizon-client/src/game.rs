@@ -5685,7 +5685,7 @@ impl Game<'_> {
                     return false;
                 }
                 let name = &*self.res.facts().get(BlockStateId(state)).name;
-                if self.settings.horizon.entity_culling == EntityCullingMode::Off
+                if self.entity_culling_mode() == EntityCullingMode::Off
                     || self.occlusion.shadow_casters.0
                     || name == "minecraft:end_portal"
                     || name == "minecraft:end_gateway"

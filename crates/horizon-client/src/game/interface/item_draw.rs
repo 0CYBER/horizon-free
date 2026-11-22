@@ -889,7 +889,7 @@ impl Game<'_> {
             let culling = entity.then(|| {
                 // The posed envelope walks every model point in every copy;
                 // with culling off the decision is `Bypass` whatever it holds.
-                if self.settings.horizon.entity_culling == EntityCullingMode::Off {
+                if self.entity_culling_mode() == EntityCullingMode::Off {
                     return EntityCullDecision::Bypass;
                 }
                 state

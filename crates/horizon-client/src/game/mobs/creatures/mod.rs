@@ -7934,7 +7934,7 @@ impl Game<'_> {
     ) {
         // The coarse mob bounds pay off only in dense async scenes; otherwise,
         // keep the existing exact mesh-culling path.
-        if self.settings.horizon.entity_culling == EntityCullingMode::Asynchronous
+        if self.entity_culling_mode() == EntityCullingMode::Asynchronous
             && self
                 .occlusion
                 .asynchronous()

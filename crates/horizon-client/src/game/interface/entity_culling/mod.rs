@@ -27,7 +27,24 @@ pub(super) struct Sight {
     pub rays: bool,
 }
 
+/// The entity occlusion culling a frame runs: `setting`, or none while a mod's world view draws
+/// the level this frame. The culler proves an entity hidden from the player's camera only; a world
+/// view looks from elsewhere and would lose entities it sees (a player behind a hill on a map).
+fn culling_with_views(setting: EntityCullingMode, world_views: bool) -> EntityCullingMode {
+    if world_views {
+        EntityCullingMode::Off
+    } else {
+        setting
+    }
+}
+
 impl Game<'_> {
+    /// `settings.horizon.entity_culling` for this frame (`culling_with_views`).
+    pub(super) fn entity_culling_mode(&self) -> EntityCullingMode {
+        let views = self.view_frustum.is_some_and(|f| f.has_views());
+        culling_with_views(self.settings.horizon.entity_culling, views)
+    }
+
     pub(super) fn prepare_entity_culling(&mut self, camera: glam::DVec3) {
         // The ray scene's entity layer reads the stream's vertices: GPU-posed models have none.
         let reach = self.renderer.as_ref().filter(|_| !self.skinning());
@@ -41,7 +58,7 @@ impl Game<'_> {
     }
 
     pub(super) fn cull_entity_vertices(&self, vertices: &mut Vec<Vertex>, start: usize) -> bool {
-        let mode = self.settings.horizon.entity_culling;
+        let mode = self.entity_culling_mode();
         let hidden = self.occlusion_hidden(Some(vertices), start, None);
         if hidden
             && !(self.occlusion.shadow_casters.0 && self.hide_spans_from(start, vertices.len()))
@@ -124,14 +141,14 @@ impl Game<'_> {
     pub(super) fn cull_entity_camera_bounds(&self, lo: glam::Vec3, hi: glam::Vec3) -> bool {
         if self.occlusion_hidden_camera_bounds(lo, hi) {
             self.occlusion
-                .record_vertices_culled(self.settings.horizon.entity_culling, 2);
+                .record_vertices_culled(self.entity_culling_mode(), 2);
             return true;
         }
         false
     }
 
     fn occlusion_hidden_camera_bounds(&self, lo: glam::Vec3, hi: glam::Vec3) -> bool {
-        let mode = self.settings.horizon.entity_culling;
+        let mode = self.entity_culling_mode();
         self.occlusion
             .hidden_camera_bounds(section_scene!(self), self, mode, lo, hi)
     }
@@ -162,7 +179,7 @@ impl Game<'_> {
         entity: &T,
         render_bounds: Aabb,
     ) -> EntityCullDecision {
-        let mode = self.settings.horizon.entity_culling;
+        let mode = self.entity_culling_mode();
         if self.occlusion.bypasses(mode) || entity.render_glowing(self) {
             return EntityCullDecision::Bypass;
         }
@@ -204,7 +221,7 @@ impl Game<'_> {
         start: usize,
         bounds: Option<Aabb>,
     ) -> bool {
-        let mode = self.settings.horizon.entity_culling;
+        let mode = self.entity_culling_mode();
         self.occlusion
             .hidden(section_scene!(self), self, mode, vertices, start, bounds)
     }
@@ -336,7 +353,7 @@ impl Game<'_> {
 
 impl Game<'_> {
     pub(super) fn prepare_occlusion_culling(&mut self, camera: glam::DVec3) {
-        let mode = self.settings.horizon.entity_culling;
+        let mode = self.entity_culling_mode();
         let requested = mode != EntityCullingMode::Off;
         let eligible = requested
             // Packs can replace opaque models, so their terrain is not a safe occluder.
@@ -496,3 +513,17 @@ mod orb_tests {
 #[cfg(test)]
 #[path = "ray_only_tests.rs"]
 mod ray_only_tests;
+
+#[cfg(test)]
+mod view_tests {
+    use super::culling_with_views;
+    use horizon_client::graphics::EntityCullingMode;
+
+    #[test]
+    fn a_world_view_turns_entity_occlusion_off_for_its_frame() {
+        for setting in EntityCullingMode::ALL {
+            assert_eq!(culling_with_views(setting, false), setting);
+            assert_eq!(culling_with_views(setting, true), EntityCullingMode::Off);
+        }
+    }
+}

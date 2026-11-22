@@ -64,6 +64,10 @@ impl JoinedFrusta {
     fn views(&self) -> &[Frustum] {
         &self.views[..self.len]
     }
+    /// Whether a world view joined the camera this frame.
+    pub fn has_views(&self) -> bool {
+        self.len > 0
+    }
     /// `Frustum::intersects` for the camera's frustum or a view's.
     pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
         self.camera.intersects(min, max) || self.views().iter().any(|f| f.intersects(min, max))
