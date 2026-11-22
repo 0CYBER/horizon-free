@@ -57,6 +57,11 @@ pub trait ExternalPipeline: Send + std::any::Any {
     }
     /// It stops with nothing in its place: what it kept from frame to frame goes now.
     fn retire(&mut self, _device: &wgpu::Device) {}
+    /// The tilt in degrees of the sun's and moon's path (`[sky] sun_path_rotation`), which turns
+    /// the sun, moon and stars the engine draws; none under the End sky.
+    fn sun_path_rotation(&self) -> f32 {
+        0.0
+    }
     /// Every section is gone (a new world, a new dimension).
     fn world_cleared(&mut self) {}
     /// Forget what was kept from earlier frames: the next is drawn as a fresh pipeline's first.

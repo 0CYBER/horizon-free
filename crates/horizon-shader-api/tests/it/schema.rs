@@ -482,6 +482,27 @@ fn a_sky_can_keep_or_replace_minecrafts_clouds_sun_moon_and_stars() {
 }
 
 #[test]
+fn a_sky_can_tilt_the_suns_path() {
+    let manifest = |stages: &str| {
+        Manifest::parse(&format!(
+            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n{stages}"
+        ))
+    };
+    let m = manifest("[sky]\nfile = \"s.wgsl\"\nsun_path_rotation = -40.0\n").unwrap();
+    assert_eq!(m.sky.unwrap().sun_path_rotation, Some(-40.0));
+    let m = manifest("[sky]\nfile = \"s.wgsl\"\n").unwrap();
+    assert_eq!(m.sky.unwrap().sun_path_rotation, None);
+    for tilt in ["90.5", "-120.0"] {
+        let e = manifest(&format!(
+            "[sky]\nfile = \"s.wgsl\"\nsun_path_rotation = {tilt}\n"
+        ));
+        assert!(e.unwrap_err().to_string().contains("sun_path_rotation"));
+    }
+    let e = manifest("[material]\nfile = \"m.wgsl\"\nsun_path_rotation = 30.0\n");
+    assert!(e.unwrap_err().to_string().contains("keys of [sky] only"));
+}
+
+#[test]
 fn reads_settings_pages_and_refuses_broken_links() {
     let pages = "[[pages]]\nid = \"main\"\nname = \"Sample\"\nitems = [\"saturation\", \"\", \"page:more\"]\n\
                  [[pages]]\nid = \"more\"\nname = \"More\"\ndescription = \"The rest.\"\ncolumns = 1\n\
@@ -903,7 +924,7 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nclouds = false\n"),
-            "`clouds`, `sun`, `moon` and `stars` are keys of [sky] only",
+            "`clouds`, `sun`, `moon`, `stars` and `sun_path_rotation` are keys of [sky] only",
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.glsl\"\n"),

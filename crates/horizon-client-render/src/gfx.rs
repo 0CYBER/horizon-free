@@ -9760,11 +9760,15 @@ impl Renderer {
             (outline_base, outlined / 4),
             [self.config.width, self.config.height],
         );
+        let pack_tilt = self
+            .external
+            .as_ref()
+            .map_or(0.0, |p| p.sun_path_rotation());
         if let Some((rotation, brightness)) = frame.stars {
             self.stars.prepare(
                 &mut self.uploads,
                 &mut encoder,
-                jittered * rotation,
+                jittered * native_pack::sky_turn(pack_tilt, frame.end_sky) * rotation,
                 brightness,
                 &globals,
             );
@@ -9785,7 +9789,7 @@ impl Renderer {
                 &mut encoder,
                 &self.celestial_buffer,
                 0,
-                bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
+                &native_pack::celestial_bytes(pack_tilt, frame, celestial_vertices),
             );
         }
         let max_quads =

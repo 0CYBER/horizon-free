@@ -449,6 +449,12 @@ pub struct Stage {
     /// false for a pack whose sky draws its own.
     #[serde(default)]
     pub stars: Option<bool>,
+    /// The sky stage only: how far the sun's and moon's path is tilted, in degrees about the
+    /// world's X axis (0 when absent), as `shaders/` packs' `sunPathRotation`: it turns
+    /// `sun_direction`, `moon_direction`, `light_direction`, the shadow camera and the sun, moon
+    /// and stars Minecraft draws over the sky. Within `SUN_PATH_ROTATIONS`.
+    #[serde(default)]
+    pub sun_path_rotation: Option<f32>,
     /// A post pass only: its target's size against the world's, 1, 0.5 or 0.25 (1 when
     /// absent); below 1 the pass writes an `output`.
     #[serde(default)]
@@ -477,6 +483,8 @@ pub struct Stage {
 
 /// The scales a post pass may draw at.
 pub const POST_SCALES: [f32; 3] = [1.0, 0.5, 0.25];
+/// The tilts `[sky] sun_path_rotation` may take, in degrees.
+pub const SUN_PATH_ROTATIONS: std::ops::RangeInclusive<f32> = -90.0..=90.0;
 /// The most `[[post]] output`s a pack may write: bindings 32 to 47, below the scene's.
 pub const MAX_POST_TARGETS: usize = 16;
 /// The memory a pack's post targets may take, in render-size `rgba16float` textures: an
@@ -971,7 +979,11 @@ impl Manifest {
             }
         }
         let sky_only = |s: &Stage| {
-            s.clouds.is_some() || s.sun.is_some() || s.moon.is_some() || s.stars.is_some()
+            s.clouds.is_some()
+                || s.sun.is_some()
+                || s.moon.is_some()
+                || s.stars.is_some()
+                || s.sun_path_rotation.is_some()
         };
         if raw
             .material
@@ -985,8 +997,18 @@ impl Manifest {
             .any(sky_only)
         {
             return Err(err(
-                "`clouds`, `sun`, `moon` and `stars` are keys of [sky] only".into(),
+                "`clouds`, `sun`, `moon`, `stars` and `sun_path_rotation` are keys of [sky] only"
+                    .into(),
             ));
+        }
+        if let Some(tilt) = raw.sky.as_ref().and_then(|s| s.sun_path_rotation)
+            && !SUN_PATH_ROTATIONS.contains(&tilt)
+        {
+            return Err(err(format!(
+                "[sky] sun_path_rotation {tilt} is not in {}..={}",
+                SUN_PATH_ROTATIONS.start(),
+                SUN_PATH_ROTATIONS.end()
+            )));
         }
         if raw.options.len() > MAX_OPTIONS {
             return Err(err(format!(

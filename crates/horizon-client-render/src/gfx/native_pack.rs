@@ -1,8 +1,13 @@
 //! One of Horizon's own shader packs while it runs (docs/shaders.md): the frame its stages
 //! read, its sky, material, entity and post stages, and the timer of their passes.
 
+use std::borrow::Cow;
+
+use glam::Mat4;
 use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
+
+use crate::mesher::Vertex;
 
 use super::displace::Displacement;
 use super::external::{
@@ -29,6 +34,8 @@ pub struct NativePack {
     pub vanilla_sun: bool,
     pub vanilla_moon: bool,
     pub vanilla_stars: bool,
+    /// `[sky] sun_path_rotation`, degrees: also turns the sun, moon and stars Minecraft draws.
+    pub sun_path_rotation: f32,
     pub weather: Option<wgpu::RenderPipeline>,
     /// The draw of the shadow map the stages read, if the pack asks for one.
     pub shadow: Option<NativeShadow>,
@@ -334,6 +341,12 @@ impl NativePack {
             terrain.pbr,
             terrain.linear,
         );
+        let sun_path_rotation = report
+            .sky
+            .as_ref()
+            .and_then(|s| s.sun_path_rotation)
+            .unwrap_or(0.0);
+        frame.set_sun_path_rotation(sun_path_rotation);
         // One buffer of light sources for every stage of a `[ray_tracing] lights = true` pack
         // whose files name them, on a device that traces: the passes' bind groups take it as
         // they are made. Its sources and worker wait for a pass that reads them (below).
@@ -570,6 +583,7 @@ impl NativePack {
             vanilla_sun,
             vanilla_moon,
             vanilla_stars,
+            sun_path_rotation,
             weather,
             shadow,
             displacement,
@@ -748,9 +762,41 @@ impl NativePack {
     }
 }
 
+/// The turn a native pack's `[sky] sun_path_rotation` (`tilt`, degrees) gives the stars, sun and
+/// moon the renderer draws (none under the End sky), as `PackSky::prepare` gives them for
+/// `shaders/` packs.
+pub(super) fn sky_turn(tilt: f32, end_sky: bool) -> Mat4 {
+    super::pack_uniforms::tilt_matrix(if end_sky { 0.0 } else { tilt })
+}
+
+/// The bytes of the frame's first `count` sun and moon vertices, turned by [`sky_turn`].
+pub(super) fn celestial_bytes<'a>(
+    tilt: f32,
+    frame: &super::Frame<'a>,
+    count: usize,
+) -> Cow<'a, [u8]> {
+    turned(sky_turn(tilt, frame.end_sky), &frame.celestial[..count])
+}
+
+fn turned(turn: Mat4, bodies: &[Vertex]) -> Cow<'_, [u8]> {
+    if turn == Mat4::IDENTITY {
+        return Cow::Borrowed(bytemuck::cast_slice(bodies));
+    }
+    let bodies: Vec<Vertex> = bodies
+        .iter()
+        .map(|v| Vertex {
+            pos: turn.transform_vector3(v.pos.into()).into(),
+            ..*v
+        })
+        .collect();
+    Cow::Owned(bytemuck::cast_slice(&bodies).to_vec())
+}
+
 #[cfg(test)]
 pub(in crate::gfx) mod tests {
-    use super::{Capabilities, NativePack, TerrainShape, chosen_shadow, reads_opaque};
+    use super::{
+        Capabilities, NativePack, TerrainShape, chosen_shadow, reads_opaque, sky_turn, turned,
+    };
     use horizon_shader_api::manifest::{OptionKind, PackOption, Shadow};
 
     /// The world before translucent terrain is copied only for a pack whose material, or the
@@ -799,6 +845,27 @@ file = \"material.wgsl\"
             plain,
             "return textureLoad(opaque_depth, vec2<i32>(input.uv), 0);"
         ));
+    }
+
+    /// Without a pack the sky is not turned and the sun and moon go up as they are; a turn
+    /// moves each vertex and keeps the rest of it.
+    #[test]
+    fn the_sun_and_moon_turn_only_with_a_tilt() {
+        use crate::mesher::Vertex;
+        use std::borrow::Cow;
+        assert_eq!(sky_turn(0.0, false), glam::Mat4::IDENTITY);
+        let mut sun = <Vertex as bytemuck::Zeroable>::zeroed();
+        sun.pos = [0.0, 1.0, 0.0];
+        sun.color = 7;
+        let bodies = [sun];
+        assert!(matches!(
+            turned(glam::Mat4::IDENTITY, &bodies),
+            Cow::Borrowed(_)
+        ));
+        let tilted = turned(super::super::pack_uniforms::tilt_matrix(90.0), &bodies);
+        let moved: Vec<Vertex> = bytemuck::pod_collect_to_vec(&tilted);
+        assert!((moved[0].pos[1]).abs() < 1e-6 && (moved[0].pos[2].abs() - 1.0).abs() < 1e-6);
+        assert_eq!(moved[0].color, 7);
     }
 
     /// A device with OpenGL's minimum 16 sampled textures per stage refuses a pack whose

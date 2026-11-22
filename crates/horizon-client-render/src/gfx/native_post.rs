@@ -372,6 +372,8 @@ pub struct NativeFrame {
     /// The shadow map the stages read, and the camera that draws it when the pack asks for one.
     pub shadow_map: super::native_shadow::ShadowMap,
     shadow_camera: Option<horizon_shaders::Shadow>,
+    /// `[sky] sun_path_rotation`, degrees: the tilt of the sun's and moon's path.
+    sun_path_rotation: f32,
     /// Whether the pack's material reads `reflection` (`NativePack::new`): else no mirror
     /// is drawn and `has_reflection` stays 0.
     pub reflects: bool,
@@ -618,6 +620,7 @@ impl NativeFrame {
             reflection_sampler,
             shadow_map,
             shadow_camera: shadow.map(super::native_shadow::camera),
+            sun_path_rotation: 0.0,
             reflects: false,
             reads_opaque: false,
             linear,
@@ -633,6 +636,16 @@ impl NativeFrame {
             start: std::time::Instant::now(),
             frames: 0,
             wetness: (0.0, None),
+        }
+    }
+
+    /// Tilts the sun's and moon's path by `degrees` (`[sky] sun_path_rotation`): the shadow
+    /// camera and light, and `sun_direction` and `moon_direction`, as `shaders/` packs'
+    /// `sunPathRotation` turns them.
+    pub fn set_sun_path_rotation(&mut self, degrees: f32) {
+        self.sun_path_rotation = degrees;
+        if let Some(camera) = &mut self.shadow_camera {
+            camera.sun_path_rotation = degrees;
         }
     }
 
@@ -870,7 +883,8 @@ impl NativeFrame {
         let since = step.unwrap_or_else(|| self.wetness.1.map_or(0.0, |t| (now - t).as_secs_f32()));
         self.wetness = (wetness(self.wetness.0, frame.pack.rain, since), Some(now));
         let shadow = self.shadow_camera.as_ref();
-        let mut inputs = frame_inputs(frame, size, self.lens, seconds, index, shadow);
+        let tilt = self.sun_path_rotation;
+        let mut inputs = frame_inputs(frame, size, self.lens, seconds, index, shadow, tilt);
         inputs.wetness = self.wetness.0;
         inputs.full_lightmap = self.full_lightmap;
         inputs.jitter = self.jitter;
@@ -1612,6 +1626,7 @@ fn wetness(wetness: f32, rain: f32, dt: f32) -> f32 {
 /// for a world of `size` drawn through `lens` (`FrameStart::projection`). The lens is the
 /// renderer's own, not one made again from `size`: the world's size is the window's scaled
 /// and rounded, so its aspect can differ from the window's, which the world is drawn with.
+/// `tilt` is the pack's `[sky] sun_path_rotation` in degrees.
 pub fn frame_inputs(
     frame: &Frame,
     size: [u32; 2],
@@ -1619,14 +1634,16 @@ pub fn frame_inputs(
     seconds: f32,
     index: u32,
     shadow: Option<&horizon_shaders::Shadow>,
+    tilt: f32,
 ) -> FrameInputs {
     let view = crate::camera::view_matrix(frame.yaw, frame.pitch);
     let projection = lens * frame.bob * frame.spin;
     // A celestial body's direction at `angle` degrees (SkyRenderer: Y -90°, then X by the
-    // angle, of straight up): overhead at 0, rising in the east (+x).
+    // angle, of straight up): overhead at 0, rising in the east (+x); then the path's tilt.
+    let turn = super::pack_uniforms::tilt_matrix(tilt);
     let body = |angle: f32| {
         let a = angle.to_radians();
-        Vec3::new(-a.sin(), a.cos(), 0.0)
+        turn.transform_vector3(Vec3::new(-a.sin(), a.cos(), 0.0))
     };
     let fog_color = match &frame.fog {
         Some(f) => [f.color[0], f.color[1], f.color[2]],
@@ -1862,6 +1879,31 @@ mod tests {
         let reads: Vec<_> = p.iter().map(|p| p.reads).collect();
         assert_eq!(reads, [None, None, Some(0), Some(0), Some(1)]);
     }
+    /// `[sky] sun_path_rotation` turns the sun and moon the stages read with the shadow light,
+    /// and without it the path stays overhead, in the X-Y plane.
+    #[test]
+    fn sun_path_rotation_tilts_the_sun_and_moon_with_the_shadow_light() {
+        use glam::Vec3;
+        let hud = crate::hud::HudBatch::scratch([4, 4]);
+        let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        frame.sky.sun_angle = 20.0;
+        frame.sky.moon_angle = 200.0;
+        let flat = super::frame_inputs(&frame, [4, 4], Mat4::IDENTITY, 0.0, 0, None, 0.0);
+        assert!(flat.sun_direction[2].abs() < 1e-6);
+        let shadow = horizon_shaders::Shadow {
+            sun_path_rotation: -40.0,
+            ..horizon_shaders::Shadow::default()
+        };
+        let tilted =
+            super::frame_inputs(&frame, [4, 4], Mat4::IDENTITY, 0.0, 0, Some(&shadow), -40.0);
+        let sun = Vec3::from(tilted.sun_direction);
+        assert!(sun.abs_diff_eq(Vec3::from(tilted.light_direction), 1e-5));
+        assert!(
+            sun.z > 0.5,
+            "a negative tilt leans the path south (+Z): {sun}"
+        );
+        assert!(Vec3::from(tilted.moon_direction).abs_diff_eq(-sun, 1e-5));
+    }
     #[test]
     fn eased_values_start_at_the_target_and_halve_the_distance() {
         use super::eased;
@@ -1884,7 +1926,7 @@ mod tests {
         let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
         let shadow = crate::gfx::native_shadow::camera(&Default::default());
         let light = |frame: &Frame, shadow| {
-            frame_inputs(frame, [4, 4], Mat4::IDENTITY, 0.0, 0, shadow)
+            frame_inputs(frame, [4, 4], Mat4::IDENTITY, 0.0, 0, shadow, 0.0)
                 .light_direction
                 .map(f32::to_bits)
         };
@@ -1894,7 +1936,7 @@ mod tests {
             (200.0, 20.0, false, [0xbeaf_1d43, 0x3f70_8fb3, 0xb280_6bc8]),
         ] {
             (frame.sky.sun_angle, frame.sky.moon_angle) = (sun, moon);
-            let inputs = frame_inputs(&frame, [4, 4], Mat4::IDENTITY, 0.0, 0, None);
+            let inputs = frame_inputs(&frame, [4, 4], Mat4::IDENTITY, 0.0, 0, None, 0.0);
             let body = if by_day {
                 inputs.sun_direction
             } else {
@@ -1925,7 +1967,7 @@ mod tests {
         let redone = drawn[0] as f32 / drawn[1] as f32;
         let at_drawn = crate::gfx::world_projection(frame.fov_degrees, redone, frame.depth_far);
         assert_ne!(at_drawn, renderer.projection, "the sizes' aspects differ");
-        let inputs = frame_inputs(&frame, drawn, renderer.projection, 0.0, 0, None);
+        let inputs = frame_inputs(&frame, drawn, renderer.projection, 0.0, 0, None, 0.0);
         let m = Mat4::from_cols_array_2d;
         let pose = frame.bob * frame.spin;
         let pack = m(&inputs.projection) * m(&inputs.view);
