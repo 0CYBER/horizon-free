@@ -21,9 +21,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 try:
-    from . import lab, test_rust_parity as base, test_model_baking_parity as baking
+    from . import fast_bins, lab, test_rust_parity as base, test_model_baking_parity as baking
     from .integration_env import run_game
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     import test_model_baking_parity as baking
@@ -69,7 +70,7 @@ def compare_outputs(inputs, native, rust):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, help='use an already built debug client')
+    parser.add_argument('--binary', type=Path, help='use an already built client')
     parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     parser.add_argument('--java-only', action='store_true')
     args = parser.parse_args()
@@ -104,8 +105,8 @@ def main():
         return
     binary = args.binary
     if binary is None:
-        run(['cargo', 'build', '-p', 'horizon-game', '--bin', 'horizon-client'], 'compile-rust')
-        binary = lab.cargo_target() / 'debug' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+        run(fast_bins.command('horizon-client'), 'compile-rust')
+        binary = lab.cargo_target() / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     with tempfile.TemporaryDirectory(prefix='hz-boat-rider-') as scratch:
         with (work / 'rust.log').open('w', encoding='utf-8') as log:
             run_game([str(binary.resolve()), '--headless', '--resources', str(args.resources.resolve()),

@@ -7,9 +7,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 try:
-    from . import lab, test_rust_parity as base
+    from . import fast_bins, lab, test_rust_parity as base
     from .integration_env import run_game
 except ImportError:
+    import fast_bins
     import lab
     import test_rust_parity as base
     from integration_env import run_game
@@ -39,7 +40,7 @@ def main():
     parser.add_argument('--binary', type=Path)
     parser.add_argument('--resources', type=Path)
     parser.add_argument('--timeout', type=float, default=600,
-                        help='Game fixture timeout in seconds, including debug resource loading')
+                        help='Game fixture timeout in seconds, including resource loading')
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
@@ -60,8 +61,8 @@ def main():
                     'dev.horizonlab.parity.VanillaPlayerBlockingOracle', str(cases), str(native)], check=True)
     binary = args.binary
     if binary is None:
-        subprocess.run(['cargo', 'build', '-p', 'horizon-game', '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
-        binary = lab.cargo_target() / 'debug' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+        subprocess.run(fast_bins.command('horizon-client'), cwd=lab.ROOT, check=True)
+        binary = lab.cargo_target() / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     resources = args.resources or lab.LOCAL / 'horizon-client' / lock['minecraft']['version']
     rust = work / 'rust.txt'
     rust.unlink(missing_ok=True)
