@@ -534,7 +534,24 @@ fn cost(view: &View, side: Side) -> Vec<Line> {
             thousands(overhead.dropped_messages)
         ));
     }
-    vec![Line::body(format!("cost    {}", parts.join(" · ")))]
+    let mut lines = vec![Line::body(format!("cost    {}", parts.join(" · ")))];
+    if let Some(hz) = overhead
+        .effective_cpu_hz
+        .filter(|hz| hz.is_finite() && *hz > 0.0)
+    {
+        let requested = view
+            .capture
+            .start
+            .iter()
+            .find(|s| s.side() == side)
+            .and_then(|s| s.options.as_ref())
+            .map(|o| o.hz);
+        let request = requested.map_or(String::new(), |hz| format!(" ({hz} Hz requested)"));
+        lines.push(Line::body(format!(
+            "sampling CPU {hz:.0} Hz achieved{request}"
+        )));
+    }
+    lines
 }
 
 fn warnings(view: &View, side: Side) -> Vec<Line> {

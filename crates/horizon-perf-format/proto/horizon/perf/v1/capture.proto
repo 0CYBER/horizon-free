@@ -389,6 +389,9 @@ message Overhead {
   uint64 heap_samples = 10;
   // Time the allocating threads spent recording them.
   uint64 heap_sample_ns = 11;
+  // Delivered CPU signals per CPU second, measured between each thread's first and last signal.
+  // Includes signals whose records were dropped; excludes wall signals. Absent in older captures.
+  optional double effective_cpu_hz = 12;
 }
 
 // Per thread, per block of block_s (default 5 s); span[i] ran under parent[i] (string ids, 0 for a root).

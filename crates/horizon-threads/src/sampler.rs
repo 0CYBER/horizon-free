@@ -297,6 +297,9 @@ struct ThreadState {
     busy: AtomicBool,
     seen: AtomicU32,
     samples: AtomicU64,
+    cpu_signals: AtomicU64,
+    cpu_first_ns: AtomicU64,
+    cpu_last_ns: AtomicU64,
     timed: AtomicU64,
     timed_ns: AtomicU64,
     timer: Mutex<Option<os::Timer>>,
@@ -379,12 +382,24 @@ fn on_sample(regs: Regs, wall: bool) {
     if !state.armed.load(Acquire) {
         return;
     }
+    let timed = state.seen.fetch_add(1, Relaxed) % TIME_EVERY == 0;
+    let started = if timed || !wall {
+        os::thread_cpu_ns()
+    } else {
+        0
+    };
+    if !wall {
+        if state.cpu_signals.load(Relaxed) == 0 {
+            state.cpu_first_ns.store(started, Relaxed);
+        }
+        state.cpu_last_ns.store(started, Relaxed);
+        state.cpu_signals.fetch_add(1, Release);
+    }
+    // Count delivered CPU signals even when their records cannot be kept, not wall signals.
     if state.busy.load(Relaxed) {
         ring.dropped.fetch_add(1, Relaxed);
         return;
     }
-    let timed = state.seen.fetch_add(1, Relaxed) % TIME_EVERY == 0;
-    let started = if timed { os::thread_cpu_ns() } else { 0 };
     // Running means most of the interval went to CPU time; the handlers' own few microseconds don't count.
     let tag = if wall {
         let now = os::thread_cpu_ns();
@@ -488,6 +503,9 @@ impl Default for Config {
 pub struct Stats {
     pub samples: u64,
     pub dropped: u64,
+    /// Achieved CPU signals per CPU second, pooled over each thread's first-to-last signal interval.
+    /// Includes signals whose records were dropped; excludes wall signals. None without a full interval.
+    pub cpu_hz: Option<f64>,
     /// Mean CPU time the handler took per sample, over the 1 in 64 it timed; excludes the kernel's signal delivery.
     pub handler_ns: Option<f64>,
     /// Mean wall time the draining thread spent unwinding one stack copy, module loading excluded.
@@ -540,7 +558,14 @@ pub fn start(config: Config, select: impl Fn(&str) -> bool) -> io::Result<Sessio
     {
         state.ring_of(ring_bytes)?.clear();
         state.seen.store(0, Relaxed);
-        for counter in [&state.samples, &state.timed, &state.timed_ns] {
+        for counter in [
+            &state.samples,
+            &state.cpu_signals,
+            &state.cpu_first_ns,
+            &state.cpu_last_ns,
+            &state.timed,
+            &state.timed_ns,
+        ] {
             counter.store(0, Relaxed);
         }
         state.copy_bytes.store(copy, Relaxed);
@@ -616,9 +641,23 @@ impl Session {
         let sum =
             |field: fn(&ThreadState) -> u64| self.threads.iter().map(|s| field(s)).sum::<u64>();
         let timed = sum(|s| s.timed.load(Relaxed));
+        let (intervals, cpu_ns) = self.threads.iter().fold((0, 0), |(intervals, ns), s| {
+            let signals = s.cpu_signals.load(Acquire);
+            if signals < 2 {
+                return (intervals, ns);
+            }
+            (
+                intervals + signals - 1,
+                ns + s
+                    .cpu_last_ns
+                    .load(Relaxed)
+                    .saturating_sub(s.cpu_first_ns.load(Relaxed)),
+            )
+        });
         Stats {
             samples: sum(|s| s.samples.load(Relaxed)),
             dropped: sum(|s| s.ring().map_or(0, |r| r.dropped.load(Relaxed))),
+            cpu_hz: (cpu_ns > 0).then(|| intervals as f64 * 1e9 / cpu_ns as f64),
             handler_ns: (timed > 0)
                 .then(|| sum(|s| s.timed_ns.load(Relaxed)) as f64 / timed as f64),
             unwind_ns: (self.unwound > 0).then(|| self.unwind_ns as f64 / self.unwound as f64),

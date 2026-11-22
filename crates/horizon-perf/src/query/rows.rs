@@ -470,6 +470,8 @@ pub struct OverheadInfo {
     pub dropped_samples: u64,
     pub dropped_messages: u64,
     pub timeline_stopped_t: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_cpu_hz: Option<f64>,
 }
 
 /// A benchmark report embedded in the capture, read back as the report holds it.

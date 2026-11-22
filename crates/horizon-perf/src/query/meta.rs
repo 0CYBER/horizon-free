@@ -161,6 +161,7 @@ fn overhead_info(o: &Overhead) -> OverheadInfo {
         dropped_samples: o.dropped_samples,
         dropped_messages: o.dropped_messages,
         timeline_stopped_t: opt_num(o.timeline_stopped_t),
+        effective_cpu_hz: opt_num(o.effective_cpu_hz),
     }
 }
 

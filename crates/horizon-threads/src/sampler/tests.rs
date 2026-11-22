@@ -109,6 +109,39 @@ fn cpu(records: &[Record]) -> Vec<&Record> {
     records.iter().filter(|r| r.kind == Kind::Cpu).collect()
 }
 
+#[test]
+fn cpu_rate_uses_cpu_time_and_counts_signals_even_when_the_ring_is_full() {
+    let (ready, wait) = mpsc::channel();
+    let (go, start) = mpsc::channel::<()>();
+    let worker = thread::spawn(move || {
+        assert!(sampled_thread("t-rate"));
+        ready.send(()).unwrap();
+        start.recv().unwrap();
+        on_deep_stack(|| {
+            spin_known(150);
+            thread::sleep(Duration::from_millis(150));
+            spin_known(150);
+        });
+    });
+    wait.recv().unwrap();
+    let session = start_session(
+        Config {
+            hz: 100,
+            ring_samples: 1,
+            wall: true,
+            ..COPY_1K
+        },
+        "t-rate",
+    );
+    go.send(()).unwrap();
+    worker.join().unwrap();
+    let stats = session.stop(|_, _| {});
+    // 100 Hz is below the CPU-timer ceiling of both the 250 Hz and 1 kHz kernels.
+    // Sleeping and wall samples must not dilute or inflate the rate, nor must lost records.
+    assert!((75.0..=125.0).contains(&stats.cpu_hz.unwrap()), "{stats:?}");
+    assert!(stats.dropped > stats.samples, "{stats:?}");
+}
+
 fn busy_function_is_in_its_threads_samples(name: &'static str, config: Config) {
     first_passing_run(|| {
         let (records, stats, ()) = sampled(name, config, || spin_known(200));

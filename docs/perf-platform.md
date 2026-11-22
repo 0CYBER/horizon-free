@@ -387,6 +387,12 @@ Notes on fields:
   only when canonical metadata supplies one.
 - `Stop.overhead`: `spans_ms_per_tick`, `spans_share`, `sampler_share_of_thread`, `writer_core_share`,
   `dropped_samples`, `dropped_messages`, `timeline_stopped_t`, `heap_samples`, `heap_sample_ns`.
+  `effective_cpu_hz` measures delivered CPU signals per CPU second between each sampled thread's first
+  and last CPU signal, pooling their intervals. It includes signals whose records were dropped and
+  excludes wall signals; fewer than two CPU signals on every thread leaves it absent. CPU-time timer
+  delivery can be limited by the kernel's accounting rate even when `Options.hz` requests 1,000 Hz.
+  The summary and `query meta` distinguish achieved resolution from that request; `SampleKind.period`
+  remains the nominal sample weight, and CPU and wall counts remain separate.
 - `Start.settings`, `game_rules` and `horizon_options` are typed allowlists, never a dump of a file or of the
   environment (§4).
 - `Start.build.symbols` tells the summary why inlined frames merged.

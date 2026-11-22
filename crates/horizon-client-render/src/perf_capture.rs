@@ -401,6 +401,7 @@ pub fn overhead(profile: &Profile, heap: Option<&HeapProfile>) -> Overhead {
         dropped_samples: profile.stats.dropped + profile.agg.lost + heap.map_or(0, |h| h.agg.lost),
         heap_samples: heap.map_or(0, |h| h.samples),
         heap_sample_ns: heap.map_or(0, |h| h.sample_ns),
+        effective_cpu_hz: profile.stats.cpu_hz,
         ..Overhead::default()
     }
 }
