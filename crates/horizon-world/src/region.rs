@@ -115,6 +115,21 @@ fn position(region: ChunkPos, index: usize) -> ChunkPos {
 fn external_path(directory: &Path, chunk: ChunkPos) -> PathBuf {
     directory.join(format!("c.{}.{}.mcc", chunk.x, chunk.z))
 }
+
+fn write_region_header(
+    file: &mut File,
+    offsets: &[u32; 1024],
+    timestamps: &[u32; 1024],
+) -> io::Result<()> {
+    let mut header = [0; HEADER];
+    for i in 0..1024 {
+        header[i * 4..i * 4 + 4].copy_from_slice(&offsets[i].to_be_bytes());
+        header[SECTOR + i * 4..SECTOR + i * 4 + 4].copy_from_slice(&timestamps[i].to_be_bytes());
+    }
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&header)
+}
+
 /// The header of a region file, from its start: each chunk's place (sector
 /// and sector count) and timestamp.
 fn read_header(file: &mut File) -> io::Result<([u32; 1024], [u32; 1024])> {
@@ -390,14 +405,7 @@ impl RegionFile {
     /// `RegionFile.writeHeader`: both header sectors from memory, so the
     /// entries dropped as invalid when the file was opened are zero on disk too.
     fn write_header(&mut self) -> io::Result<()> {
-        let mut header = [0; HEADER];
-        for i in 0..1024 {
-            header[i * 4..i * 4 + 4].copy_from_slice(&self.offsets[i].to_be_bytes());
-            header[SECTOR + i * 4..SECTOR + i * 4 + 4]
-                .copy_from_slice(&self.timestamps[i].to_be_bytes());
-        }
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(&header)
+        write_region_header(&mut self.file, &self.offsets, &self.timestamps)
     }
 
     pub fn chunks(&self) -> impl Iterator<Item = (ChunkPos, u32)> + '_ {
@@ -655,9 +663,9 @@ impl RegionWriter {
         } else {
             record.compressed.len() as u32 + 1
         };
-        self.file.write_all(&len.to_be_bytes())?;
-        self.file
-            .write_all(&[record.compression as u8 | if external { 128 } else { 0 }])?;
+        let [a, b, c, d] = len.to_be_bytes();
+        let compression = record.compression as u8 | if external { 128 } else { 0 };
+        self.file.write_all(&[a, b, c, d, compression])?;
         if !external {
             self.file.write_all(&record.compressed)?;
         }
@@ -679,13 +687,7 @@ impl RegionWriter {
         }
         self.file
             .set_len(u64::from(self.next_sector) * SECTOR as u64)?;
-        self.file.seek(SeekFrom::Start(0))?;
-        for value in self.offsets {
-            self.file.write_all(&value.to_be_bytes())?;
-        }
-        for value in self.timestamps {
-            self.file.write_all(&value.to_be_bytes())?;
-        }
+        write_region_header(&mut self.file, &self.offsets, &self.timestamps)?;
         self.file.sync_all()?;
         // Hard-link publication fails atomically if another writer won the name.
         fs::hard_link(&self.temporary, &self.destination)?;
