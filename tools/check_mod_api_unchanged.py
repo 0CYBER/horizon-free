@@ -11,7 +11,8 @@ the hook catalog (catalog.json, hook-notes.md) and the guest's generated hook di
   (`cargo horizon-mod update` reports signature-hash changes for declared internals);
 - a path a native mod could declare without a kind that gains a second kind (E_INTERNAL_AMBIGUOUS), always;
 - any other difference in the generated files, except a catalog hook added with --allow-added, which explains its
-  generated catalog, new hook-notes sections (the others unchanged) and its own guest dispatch.
+  generated catalog, new hook-notes sections (the others unchanged) and its own guest dispatch, and a host call added
+  with --allow-added, which explains its own guest forwarder and the guest's import numbers after it.
 The injection points' outputs (points.json, points_generated.rs) are never compared: `[[inject]]` and its points are
 removed (#19576), and a base that still writes them compares without them. The mod API's types and calls are the surface report's
 (tools/ci/surface_report.py), which runs beside this check.
@@ -78,6 +79,8 @@ GUEST_ARM = re.compile(r"^\d+ => \{.*?(?=^\d+ => \{|^_ =>)", re.MULTILINE | re.D
 GUEST_HOOK_ARM = re.compile(r"\d+ => \{ let receiver = super::hooks\(\); ")
 GUEST_HOOK_CALL = re.compile(r"\blet answer = receiver\.([a-zA-Z0-9_]+)\(")
 WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
+# A guest forwarder's host call: the import's name (with its signature hash) and the generator's position number for it.
+HOST_IMPORT = re.compile(r'host_import!\("([^"]+)", \d+u32')
 
 
 def read_text(path, root_marks):
@@ -222,22 +225,85 @@ def notes_only_add_sections(base, head):
     return all(any(section == other for other in remaining) for section in base[1:])
 
 
-def explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root):
+def guest_wire_without_calls(guest, base):
+    """The head's and the base's guest wire with the head's added host calls' forwarders removed and every import's
+    position number blanked, and the names of those calls; (None, None, set()) when an added call's line holds another.
+
+    A wasm guest links a host call by its name, which carries the call's signature hash (`Area::method#hash`); the
+    number beside it is the generator's position of the call among all imports, used only by a native guest built
+    with the game. An added call takes a position, so every later import's number moves by one. A changed or removed
+    call loses its base name, and the base's forwarder for it is then missing from the head."""
+    known = set(HOST_IMPORT.findall(base))
+    kept, added = [], set()
+    for line in guest.splitlines(keepends=True):
+        names = HOST_IMPORT.findall(line)
+        if any(name not in known for name in names):
+            if len(names) != 1:
+                return None, None, set()
+            added.add(names[0])
+            continue
+        kept.append(line)
+
+    def blank(text):
+        return HOST_IMPORT.sub(lambda match: f'host_import!("{match[1]}", 0u32', text)
+
+    return blank("".join(kept)), blank(base), added
+
+
+def records_in_order(guest):
+    """The guest wire with each record number replaced by its rank among the file's record numbers.
+
+    A record number is a named type's index in the generator's type table, so a type an added host call brings in
+    moves the numbers of the types after it. A head that matches the base this way names the same records in the same
+    places, in the same order; which type a record is, is the surface report's (tools/ci/surface_report.py)."""
+    rank = {number: index for index, number in enumerate(sorted({int(n) for n in WIRE_RECORD.findall(guest)}))}
+    return WIRE_RECORD.sub(lambda match: f"__wire_record_{rank[int(match[1])]}", guest)
+
+
+def first_difference(head, base):
+    """The first line of `head` that differs from `base`, for the report."""
+    for new, old in zip(head.splitlines(), base.splitlines()):
+        if new != old:
+            return new
+    return head.splitlines()[len(base.splitlines())] if len(head.splitlines()) > len(base.splitlines()) else "(end)"
+
+
+def explained_additions(base_dir, head_dir, diffs, base_root, head_root):
+    """The catalog hooks and the host calls the head adds, when they explain every generated difference; two empty
+    sets when they don't."""
+    nothing = set(), set()
     changed = {name for name, _ in diffs}
-    if HOOK_CATALOG not in changed or changed - HOOK_FILES:
-        return set()
-    hooks = added_catalog_hooks(base_dir, head_dir)
+    if not changed or changed - HOOK_FILES:
+        return nothing
+    hooks = added_catalog_hooks(base_dir, head_dir) if HOOK_CATALOG in changed else set()
+    if HOOK_CATALOG in changed and not hooks:
+        return nothing
     # A hook's notes are their own `## ` sections; an added hook adds sections and changes no other.
-    if hooks and "hook-notes.md" in changed and not notes_only_add_sections(
+    if "hook-notes.md" in changed and (not hooks or not notes_only_add_sections(
             read_text(base_dir / "hook-notes.md", [base_root] if base_root else []),
-            read_text(head_dir / "hook-notes.md", [head_root] if head_root else [])):
-        return set()
-    if hooks and GUEST_WIRE in changed:
+            read_text(head_dir / "hook-notes.md", [head_root] if head_root else []))):
+        return nothing
+    calls = set()
+    if GUEST_WIRE in changed:
         base = read_text(base_dir / GUEST_WIRE, [base_root] if base_root else [])
         head = read_text(head_dir / GUEST_WIRE, [head_root] if head_root else [])
-        if guest_wire_without_hooks(head, hooks, base) != base:
-            return set()
-    return hooks
+        head, base, calls = guest_wire_without_calls(head, base)
+        if head is None:
+            return nothing
+        if hooks:
+            # The hooks' own record windows: an added call that brings in a type as well is not told apart here.
+            explained = guest_wire_without_hooks(head, hooks, base)
+        elif calls:
+            head, base = records_in_order(head), records_in_order(base)
+            explained = head
+        else:
+            explained = None
+        if explained != base:
+            if explained is not None:
+                print(f"{GUEST_WIRE} differs after the added hooks and host calls, first at: "
+                      + first_difference(explained, base)[:300])
+            return nothing
+    return hooks, calls
 
 
 def internal_entries(text):
@@ -456,12 +522,14 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
     accepted, failing, stale = removed_internals(internals, listed,
                                                  head_internal_keys(head_dir, head_root) if listed else set())
     explained = False
-    # A new named hook changes its generated files; nothing else may.
+    # A new named hook or host call changes its generated files; nothing else may.
     if allow_added and not files_added and not files_removed:
-        hook_additions = explained_hook_additions(base_dir, head_dir, diffs, base_root, head_root)
+        hook_additions, call_additions = explained_additions(base_dir, head_dir, diffs, base_root, head_root)
         if hook_additions:
             print("Catalog hooks added (accepted): " + ", ".join(sorted(hook_additions)))
-            explained = True
+        if call_additions:
+            print("Host calls added (accepted): " + ", ".join(sorted(call_additions)))
+        explained = bool(hook_additions or call_additions)
     status = verdict(files_added, files_removed, diffs, explained, allow_added, internals, failing + ambiguous, stale)
     lines = summary(files_added, files_removed, diffs, internals=internals, accepted=accepted, stale=stale,
                     ambiguous=ambiguous)
@@ -484,7 +552,7 @@ def compare(base_dir, head_dir, allow_added=False, base_root=None, head_root=Non
         if any(name in STRICT_FILES for name, _ in diffs) or any(name in STRICT_FILES for name in files_removed):
             print("loops.json has to match the base exactly, and the head has to write it and internals.json.")
         if (diffs or files_added or files_removed) and not explained:
-            print("The generated API differs from the base with no added catalog hook.")
+            print("The generated API differs from the base with no added catalog hook or host call to explain it.")
     return status
 
 
