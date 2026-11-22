@@ -67,6 +67,12 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [CI runners](ci-runners.md): which jobs run on GitHub's runners and which on ours (the CI VPS, playhorizon, the Mac mini), the `SELF_HOSTED_CI` switch, and where a fork's pull request may run.
 - Area notes: [block behaviours and ticking](parity/blocks.md), [section meshing](parity/meshing.md), [redstone machines tick by tick](parity/redstone-diff.md), [the same seed in vanilla and Horizon](parity/world-compare.md).
 - [Port ledger](port-ledger.md): `tools/port_ledger.py`, every vanilla method next to the Rust functions that port it, both ways, with the gaps where a port isn't wired like vanilla.
+- [GPU noise parity](gpu-noise-parity.md): the WGSL Perlin probe, the locked per-adapter FMA contract and its coverage limits.
+- [RADV divergence](radv-divergence.md): explicit-FMA tolerance, backend probes and the remaining scope.
+- [Density-program IR design](density-ir-design.md): the density-graph export subset, the CPU/GPU lowering plan and representability limits.
+- [GPU adapter enablement](gpu-adapter-enablement.md): host inventory, WGPU adapter selection and the device-passthrough blocker.
+- [GPU density progress](gpu-noise-parity-progress.md): phases 1–48, measured gates and the resume anchor for the exact-or-off tier.
+- [GPU density handoff](session-handoff.md): the short read-first list, the locked contract and the open next step.
 - [Version ports](version-ports.md): how a new Minecraft release is detected, diffed against the pinned one and ported, and what stays manual.
 - [Reading vanilla](parity-workflow.md#reading-vanilla): the local decompiled sources and bytecode queries the harnesses build on.
 
