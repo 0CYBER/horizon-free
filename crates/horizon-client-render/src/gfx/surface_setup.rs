@@ -66,13 +66,41 @@ pub(super) fn set_up_surface(
             }
         });
     if log_step {
-        startup_step(format_args!(
-            "device ready; configuring the surface ({}x{} {:?}, {:?})",
-            config.width, config.height, config.format, config.present_mode
-        ));
+        log_configured(&config, Some("device ready; "));
     }
     Renderer::configure(device, surface, &config, None, device_lost)?;
     Ok((config, caps))
+}
+/// The swapchain's size, format and present mode as last logged.
+static LOGGED: std::sync::Mutex<Option<(u32, u32, wgpu::TextureFormat, wgpu::PresentMode)>> =
+    std::sync::Mutex::new(None);
+/// Logs the window surface's size, format and present mode: at the start (`start` leads the
+/// line, flushed as a startup step), and once after each configuration that changed one of
+/// them (fullscreen and back, a resize, VSync, HDR output): the start line alone left a
+/// reconfigured swapchain's present mode unknown.
+pub(super) fn log_configured(config: &wgpu::SurfaceConfiguration, start: Option<&str>) {
+    let key = (
+        config.width,
+        config.height,
+        config.format,
+        config.present_mode,
+    );
+    let changed = LOGGED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .replace(key)
+        != Some(key);
+    if start.is_none() && !changed {
+        return;
+    }
+    let line = format!(
+        "configuring the surface ({}x{} {:?}, {:?})",
+        config.width, config.height, config.format, config.present_mode
+    );
+    match start {
+        Some(lead) => startup_step(format_args!("{lead}{line}")),
+        None => log::info!("Horizon renderer: {line}"),
+    }
 }
 /// What `pick_adapter` knows of one of a backend's adapters.
 #[derive(Clone, Copy, Debug)]
