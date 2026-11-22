@@ -13,7 +13,9 @@ In `register`, call `declare_biome_region(path, region)` once per region. This m
 ```
 
 - **`path`** is the region's id in the mod's namespace: `frostlands` becomes `<your mod id>:frostlands`.
-- **`dimension`** is `minecraft:overworld` or `minecraft:nether`.
+- **`dimension`** is the multi-noise biome preset key: `minecraft:overworld` or `minecraft:nether` (not the
+  Nether level ID `minecraft:the_nether`). A data pack that replaces the preset with its own biome source,
+  such as an inline list of climate points, does not use these regions.
 - **`weight`** is 1 to 1000, against vanilla's 10. A weight of 5 makes the region about half as common as vanilla's
   layout; with two mods at 1 and 3 and vanilla at 10, they own about 1/14 and 3/14 of the areas.
 - **`points`** are the region's biomes by climate, the same `BiomePoint`s as a mod dimension's `Points` source
