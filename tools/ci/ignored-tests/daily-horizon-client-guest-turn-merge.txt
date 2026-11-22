@@ -1,0 +1,8 @@
+# The sculk step and the tail of a guest's tick in its body's turn (the gate, its fallbacks, the hooks): prepared resources.
+# PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::lan_actions::tick::guest_turn_merge_tests::a_mod_listening_to_the_guests_hooks_hears_the_same_with_the_merge lib daily resources
+horizon-client game::lan_actions::tick::guest_turn_merge_tests::every_case_the_gate_sends_to_the_old_path_runs_the_same_and_takes_the_path_expected lib daily resources
+horizon-client game::lan_actions::tick::guest_turn_merge_tests::forced_merge_probe lib daily resources
+horizon-client game::lan_actions::tick::guest_turn_merge_tests::report_which_scenario_each_condition_of_the_gate_is_needed_by lib daily resources
+horizon-client game::lan_actions::tick::guest_turn_merge_tests::the_gate_is_needed_where_it_matters lib daily resources
+horizon-client game::lan_actions::tick::guest_turn_merge_tests::the_sculk_step_and_the_tail_in_the_bodys_turn_change_nothing lib daily resources

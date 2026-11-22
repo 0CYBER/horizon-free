@@ -474,6 +474,11 @@ pub fn minecart_pass(entity: i32, state: BlockStateId, position: BlockPos) {
     }
 }
 
+/// Whether any contact is noted and not taken yet.
+pub fn has_pending() -> bool {
+    PENDING.with_borrow(|pending| !pending.is_empty())
+}
+
 /// The contacts noted since the last call, in the order they happened.
 pub fn take_pending() -> Vec<Pending> {
     PENDING.with_borrow_mut(std::mem::take)

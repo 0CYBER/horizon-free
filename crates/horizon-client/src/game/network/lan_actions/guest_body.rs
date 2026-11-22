@@ -54,6 +54,20 @@ pub(super) fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool
     true
 }
 
+/// The rest of a guest's tick, handed to `guest_server_tick` by its caller so that the mod point
+/// stays the one entry of the guest's body: `recorded` is the scoreboard record the tail updates,
+/// `ran` says whether the body's turn ran the tail (the caller runs it in a turn of its own if not).
+#[derive(Default)]
+pub(super) struct MergedTail {
+    pub(super) recorded: crate::game::scoreboard::Recorded,
+    pub(super) ran: bool,
+}
+
+thread_local! {
+    pub(super) static MERGED_TAIL: std::cell::RefCell<Option<MergedTail>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl Game<'_> {
     /// The guest's body on the server each tick: ServerPlayer.tick's damage
     /// clock and Entity.baseTick's fluid phase (burning), then for each move
@@ -143,6 +157,14 @@ impl Game<'_> {
         }
         let in_wall = !sleeping && self.in_wall(conn, at, dimensions);
         let mut soul = None;
+        // What the guest's record says before its turn: a turn that leaves it so, in the blocks'
+        // quiet, needs no turn of its own for what follows it.
+        let quiet = self
+            .lan
+            .as_ref()
+            .and_then(|host| host.hub.guest(conn))
+            .map(QuietTurn::of);
+        let mut merged = false;
         let events = self.as_guest(conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -361,26 +383,79 @@ impl Game<'_> {
             }
             game.record_combat(&events);
             game.wear_armor(&events);
+            // The sculk step and the rest of the guest's tick (`tail`) are turns of their own after
+            // this one; when nothing in this one is told to anyone (no event that is, no damage, no
+            // teleport, no effect, nothing changed in the record), they run in it, in the same order.
+            #[cfg(test)]
+            let allowed = !NO_MERGE.get();
+            #[cfg(not(test))]
+            let allowed = true;
+            if allowed
+                && MERGED_TAIL.with_borrow(Option::is_some)
+                && gate(40, events.iter().all(inert))
+                && gate(41, velocity.is_none())
+                && gate(42, soul.is_none())
+                && quiet.is_some_and(|q| q.holds(game))
+            {
+                #[cfg(test)]
+                let (no_sculk, no_tail) = (SKIP.get() >> 61 & 1 == 1, SKIP.get() >> 62 & 1 == 1);
+                #[cfg(not(test))]
+                let (no_sculk, no_tail) = (false, false);
+                if !no_sculk {
+                    game.sculk_step_on_player();
+                    game.tick_player_sculk_events();
+                }
+                // What the leave of this turn does with the statistics it awarded, before the
+                // next turn awards its own (the scoreboard alone hears them).
+                let stats = std::mem::take(&mut game.stats.events);
+                if !stats.is_empty()
+                    && !game.score.board.objectives.is_empty()
+                    && let Some(name) = game.lan_acting_name.clone()
+                {
+                    game.stat_criteria_changed(&name, stats);
+                }
+                if !no_tail {
+                    let sleeping = game.sleeping.is_some();
+                    // Out of the cell while it runs, as it may reach hooks of the mods.
+                    if let Some(mut tail) = MERGED_TAIL.take() {
+                        game.guest_tick_tail(sleeping, &mut tail.recorded);
+                        MERGED_TAIL.set(Some(tail));
+                    }
+                }
+                merged = true;
+                MERGED_TAIL.with_borrow_mut(|tail| {
+                    if let Some(tail) = tail {
+                        tail.ran = true;
+                    }
+                });
+            }
             (events, velocity)
         });
         let Some((events, marked)) = events else {
             return;
         };
+        #[cfg(test)]
+        TRACE.with_borrow_mut(|trace| trace.push((conn, merged)));
         if let Some((at, velocity)) = soul
             && let Some(host) = self.lan.as_ref()
         {
             crate::game::lan_particles::send_soul_particle(host, at, velocity);
         }
-        self.as_guest(conn, |game| {
-            game.sculk_step_on_player();
-            game.tick_player_sculk_events();
-            // Entity.restituteMovementAfterCollisions: GameEvent.BOUNCE.
-            for event in &events {
-                if matches!(event, MotionEvent::Bounce { .. }) {
-                    game.post_entity_event("minecraft:bounce", horizon_client::mobs::Who::Player);
+        if !merged {
+            self.as_guest(conn, |game| {
+                game.sculk_step_on_player();
+                game.tick_player_sculk_events();
+                // Entity.restituteMovementAfterCollisions: GameEvent.BOUNCE.
+                for event in &events {
+                    if matches!(event, MotionEvent::Bounce { .. }) {
+                        game.post_entity_event(
+                            "minecraft:bounce",
+                            horizon_client::mobs::Who::Player,
+                        );
+                    }
                 }
-            }
-        });
+            });
+        }
         for event in events {
             match event {
                 MotionEvent::Health(horizon_client::health::HealthEvent::DamageBroadcast {
@@ -603,6 +678,177 @@ impl Game<'_> {
             player.position = end;
         }
     }
+}
+
+/// A condition of the gate; in a test, one the test has switched off (`SKIP`, a bit a condition)
+/// counts as met, to see which conditions the tests depend on.
+#[inline(always)]
+fn gate(i: u32, met: bool) -> bool {
+    #[cfg(test)]
+    if SKIP.get() >> i & 1 == 1 {
+        return true;
+    }
+    #[cfg(not(test))]
+    let _ = i;
+    met
+}
+
+// Test only: the gate's conditions to treat as met (bit `i` for the condition of `holds` at place
+// `i`; `OUTER` and after for the ones in `guest_server_tick_inner`).
+#[cfg(test)]
+thread_local! {
+    pub(super) static SKIP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// Test only: the conditions of `holds`, in order.
+#[cfg(test)]
+pub(super) const HOLDS: &[&str] = &[
+    "at == self.position",
+    "game.yaw.to_bits() == self.yaw",
+    "game.pitch.to_bits() == self.pitch",
+    "!game.rotation_forced",
+    "p.ground.on_ground == self.on_ground",
+    "p.sprinting == self.sprinting",
+    "p.fall_flying == self.fall_flying",
+    "game.acting_abilities == Some(self.abilities)",
+    "p.flying == self.abilities.flying",
+    "p.may_fly == self.abilities.may_fly",
+    "p.flying_speed.to_bits() == self.abilities.flying_speed.to_bits()",
+    "p.invulnerable == self.abilities.invulnerable",
+    "!p.health.dead_or_dying()",
+    "p.health.indicated_dir.is_none()",
+    "!p.teleported",
+    "p.events.iter().all(inert)",
+    "p.health.food.food == self.food",
+    "game.riding == self.vehicle",
+    "game.sleeping == self.bed",
+    "game.mode_id() == self.game_mode",
+    "!self.handover",
+    "game.potions.effects.list.is_empty()",
+    "game.container.is_none()",
+    "game.craft_table.is_none()",
+    "game.guest_packets.is_empty()",
+    "game.guest_entity_events.is_empty()",
+    "game.guest_cooldowns.is_empty()",
+    "game.guest_player_sounds.is_empty()",
+    "game.guest_block_sounds.is_empty()",
+    "game.guest_equipment_breaks.is_empty()",
+    "!horizon_client::block_contact::has_pending()",
+];
+/// Test only: where the conditions of `guest_server_tick_inner` start in `SKIP`.
+#[cfg(test)]
+pub(super) const OUTER: u32 = 40;
+
+// Test only: for each turn of a body, the connection and whether the sculk step and the tail ran
+// in it.
+#[cfg(test)]
+thread_local! {
+    pub(super) static TRACE: std::cell::RefCell<Vec<(u32, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a turn's event is one nothing is done for after the turn (the events it is told to
+/// anyone with are not): a landing, a recorded move, a step sound, a swim, a waypoint, or a
+/// health update or statistic that `record_combat` leaves alone.
+fn inert(event: &MotionEvent) -> bool {
+    use horizon_client::health::HealthEvent;
+    match event {
+        MotionEvent::Landing { .. }
+        | MotionEvent::Recorded { .. }
+        | MotionEvent::Emission { .. }
+        | MotionEvent::Chime { .. }
+        | MotionEvent::Swim { .. }
+        | MotionEvent::Waypoint { .. } => true,
+        MotionEvent::Health(HealthEvent::Updated { .. }) => true,
+        MotionEvent::Health(HealthEvent::Statistic { name, .. }) => {
+            !matches!(*name, "resisted" | "absorbed" | "blocked" | "jump")
+        }
+        _ => false,
+    }
+}
+
+/// A guest's record as its turn found it, to tell whether the turn left it so.
+#[derive(Clone, Copy)]
+struct QuietTurn {
+    position: [u64; 3],
+    yaw: u32,
+    pitch: u32,
+    on_ground: bool,
+    sprinting: bool,
+    vehicle: Option<u32>,
+    bed: Option<[i32; 3]>,
+    game_mode: i32,
+    fall_flying: bool,
+    food: i32,
+    handover: bool,
+    abilities: horizon_client::lan::abilities::PlayerAbilities,
+}
+
+impl QuietTurn {
+    fn of(g: &horizon_client::lan::guest::Guest) -> Self {
+        Self {
+            position: g.position.map(f64::to_bits),
+            yaw: g.yaw.to_bits(),
+            pitch: g.pitch.to_bits(),
+            on_ground: g.on_ground,
+            sprinting: g.sprinting,
+            vehicle: g.vehicle,
+            bed: g.bed,
+            game_mode: g.game_mode,
+            fall_flying: g.fall_flying,
+            food: g.food,
+            handover: g.handover.is_some(),
+            abilities: g.abilities,
+        }
+    }
+
+    /// Whether the body in `game` (the guest's, swapped in) is what the record says and nothing
+    /// is waiting to be told: what `leave_guest` would write back and the next turn read again
+    /// are what they are now.
+    fn holds(&self, game: &Game<'_>) -> bool {
+        let Some(p) = game.player.as_ref() else {
+            return false;
+        };
+        let at = [p.position.x, p.position.y, p.position.z].map(f64::to_bits);
+        gate(0, at == self.position)
+            && gate(1, game.yaw.to_bits() == self.yaw)
+            && gate(2, game.pitch.to_bits() == self.pitch)
+            && gate(3, !game.rotation_forced)
+            && gate(4, p.ground.on_ground == self.on_ground)
+            && gate(5, p.sprinting == self.sprinting)
+            && gate(6, p.fall_flying == self.fall_flying)
+            && gate(7, game.acting_abilities == Some(self.abilities))
+            && gate(8, p.flying == self.abilities.flying)
+            && gate(9, p.may_fly == self.abilities.may_fly)
+            && gate(
+                10,
+                p.flying_speed.to_bits() == self.abilities.flying_speed.to_bits(),
+            )
+            && gate(11, p.invulnerable == self.abilities.invulnerable)
+            && gate(12, !p.health.dead_or_dying())
+            && gate(13, p.health.indicated_dir.is_none())
+            && gate(14, !p.teleported)
+            && gate(15, p.events.iter().all(inert))
+            && gate(16, p.health.food.food == self.food)
+            && gate(17, game.riding == self.vehicle)
+            && gate(18, game.sleeping == self.bed)
+            && gate(19, game.mode_id() == self.game_mode)
+            && gate(20, !self.handover)
+            && gate(21, game.potions.effects.list.is_empty())
+            && gate(22, game.container.is_none())
+            && gate(23, game.craft_table.is_none())
+            && gate(24, game.guest_packets.is_empty())
+            && gate(25, game.guest_entity_events.is_empty())
+            && gate(26, game.guest_cooldowns.is_empty())
+            && gate(27, game.guest_player_sounds.is_empty())
+            && gate(28, game.guest_block_sounds.is_empty())
+            && gate(29, game.guest_equipment_breaks.is_empty())
+            && gate(30, !horizon_client::block_contact::has_pending())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test only: no turn runs the sculk step and the tail in the body's, as before.
+    pub(super) static NO_MERGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
