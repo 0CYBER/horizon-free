@@ -539,6 +539,9 @@ pub fn keep_eased_peek(slot: &mut Mob, old: &Mob) {
 /// [`shell_tick`].
 pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.velocity = Vec3::ZERO;
+    // `LivingEntity.travel` still moves it by that zero motion: the move meets
+    // nothing below, so `setOnGroundWithMovement` clears a loaded `OnGround`.
+    m.on_ground = false;
     m.body_yaw = 0.0;
     shell_tick(m, w, events);
 }
