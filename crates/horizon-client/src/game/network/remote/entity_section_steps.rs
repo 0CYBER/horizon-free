@@ -71,7 +71,7 @@ pub(super) fn tick_items(
     let mut items = game.dropped.lift();
     let mut i = 0;
     while i < items.len() {
-        let (_, discarded, _) =
+        let (_, discarded, _, _) =
             game.tick_item_with_block_contacts(&mut items[i], None, &[], true, &mut |splash| {
                 entered.push(splash)
             });

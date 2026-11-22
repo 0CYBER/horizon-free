@@ -959,7 +959,7 @@ impl Game<'_> {
         entity_boxes: &[Aabb],
         client: bool,
         splash: &mut impl FnMut(horizon_client::entities::ItemSplash),
-    ) -> (bool, bool, super::ahead::Landed) {
+    ) -> (bool, bool, super::ahead::Landed, Option<Vec3>) {
         let no_physics = escape_speed.is_some();
         let (step, landed) = self
             .item_tables()
@@ -999,13 +999,13 @@ impl Game<'_> {
                 }
             }
             if discarded || item.stack.count == 0 {
-                return (false, true, landed);
+                return (false, true, landed, step.original_movement());
             }
         }
         let alive = self
             .item_tables()
             .settle_item(item, no_physics, step, splash);
-        (alive, false, landed)
+        (alive, false, landed, step.original_movement())
     }
 }
 

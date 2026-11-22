@@ -4464,9 +4464,12 @@ impl Game<'_> {
                 self.handle_end_gateway_portals();
             });
             self.ordered_before(ordered_tick::Batch::Items)?;
-            horizon_client::spans::time("tick_items", || self.tick_items());
+            let original_item_moves =
+                horizon_client::spans::time("tick_items", || self.tick_items());
             if self.remote.is_none() {
-                span("hoppers_catch_items", || self.hoppers_catch_items());
+                span("hoppers_catch_items", || {
+                    self.hoppers_catch_items(&original_item_moves)
+                });
             }
             // Merged, burnt, despawned or picked up.
             span("mods_leaves_flush", || self.native_leaves_flush());

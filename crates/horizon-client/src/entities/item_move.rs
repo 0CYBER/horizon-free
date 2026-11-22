@@ -194,7 +194,7 @@ impl ItemEntity {
             return ItemStep {
                 old_velocity,
                 vertical_contact,
-                movement: Some(moved),
+                movement: Some(wanted),
                 landed,
                 prior_fall,
                 fall_move: (!no_physics).then_some((from, moved, applied)),

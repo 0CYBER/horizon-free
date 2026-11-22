@@ -417,6 +417,7 @@ impl crate::entity_rules::EntityRules for ArmorStand {
 pub struct ItemStep {
     old_velocity: Vec3,
     landed: Option<(BlockPos, f64)>,
+    /// The displacement requested by `Entity.move`, when the item tried to move.
     movement: Option<Vec3>,
     pub vertical_contact: Option<BlockPos>,
     /// `Entity.move` with physics: where it started, what it moved, and
@@ -429,6 +430,12 @@ impl ItemStep {
     /// The landing position and accumulated fall distance, before block contact.
     pub fn landed(&self) -> Option<(BlockPos, f64)> {
         self.landed
+    }
+
+    /// The attempted displacement before collision clipping, used to order the block sweep.
+    pub fn original_movement(&self) -> Option<Vec3> {
+        self.movement
+            .filter(|_| self.fall_move.is_some_and(|(_, _, applied)| applied))
     }
 }
 #[cfg(test)]

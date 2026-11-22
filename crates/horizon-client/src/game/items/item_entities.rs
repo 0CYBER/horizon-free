@@ -49,12 +49,13 @@ pub(super) fn bob_offset(position: Vec3, drawn: f32, still: bool) -> f32 {
 }
 
 impl Game<'_> {
-    pub(super) fn tick_items(&mut self) {
+    pub(super) fn tick_items(&mut self) -> FxHashMap<u32, Vec3> {
         let mut round = self.item_update_round();
-        self.tick_dropped_items(&mut round);
+        let original_moves = self.tick_dropped_items(&mut round);
         horizon_threads::work::clear_work();
         self.drain_entity_inside();
         self.native_tick_post_batch(round);
+        original_moves
     }
     /// The `entity_damage` of an item's own hits, which name no entity (fire,
     /// lava, a cactus). Only the server hurts items.
@@ -68,8 +69,13 @@ impl Game<'_> {
     pub(super) fn joined_during_entity_pass(&self, id: u32) -> bool {
         id > self.ticked_entities_through || self.contact_drops.contains(&id)
     }
-    pub(super) fn tick_dropped_items(&mut self, round: &mut native_ticks::TickRound) {
+    /// Return the original physics displacements for the hopper pass after the item tick.
+    pub(super) fn tick_dropped_items(
+        &mut self,
+        round: &mut native_ticks::TickRound,
+    ) -> FxHashMap<u32, Vec3> {
         let mut items = self.dropped.lift();
+        let mut original_moves = FxHashMap::default();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
         let mut removed = vec![false; items.len()];
@@ -135,16 +141,16 @@ impl Game<'_> {
                 // `moveTowardsClosestSpace` draws the speed from the item's own random.
                 let escape_speed = no_physics.then(|| item.random.next_float() * 0.2 + 0.1);
                 let mut entered = Vec::new();
-                let (alive, discarded, landed) = self.tick_item_with_block_contacts(
+                let (alive, discarded, landed, original) = self.tick_item_with_block_contacts(
                     item,
                     escape_speed,
                     &nearby,
                     false,
                     &mut |splash| entered.push(splash),
                 );
-                (no_physics, alive, discarded, entered, landed)
+                (no_physics, alive, discarded, entered, landed, original)
             };
-            let (no_physics, alive, discarded, entered, landed) =
+            let (no_physics, alive, discarded, entered, landed, original) =
                 match moves.take(i, item, &mut at_turn) {
                     Some(moved) => moved,
                     None => at_turn(item),
@@ -302,6 +308,9 @@ impl Game<'_> {
                 cells.remove(i, item.position);
                 continue;
             }
+            if merging && let Some(original) = original {
+                original_moves.insert(item.id, original);
+            }
         }
         for pos in bubble_tops {
             self.bubble_column_particles(pos);
@@ -311,12 +320,12 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             self.put_back_dropped(items);
             self.spawn_destroyed_contents(destroyed);
-            return;
+            return original_moves;
         };
         if p.health.dead_or_dying() || self.spectator() {
             self.put_back_dropped(items);
             self.spawn_destroyed_contents(destroyed);
-            return;
+            return original_moves;
         }
         let w = f64::from(p.dimensions.width) / 2.0;
         let (min, max) = (
@@ -336,6 +345,7 @@ impl Game<'_> {
         self.native_player_pickups(&mut items, (min, max), feet, own);
         self.put_back_dropped(items);
         self.spawn_destroyed_contents(destroyed);
+        original_moves
     }
     /// `ItemUtils.onContainerDestroyed`: spilled stacks use their own constructor
     /// motion (0.2 up and ±0.1 sideways), leaving the level random untouched.

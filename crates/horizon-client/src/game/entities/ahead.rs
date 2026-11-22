@@ -133,8 +133,8 @@ pub(super) fn reach(item: &ItemEntity) -> Aabb {
 }
 
 /// An item's move as its turn makes it: without physics (inside a block), alive, discarded, its
-/// splashes, and where it landed.
-pub(super) type Moved = (bool, bool, bool, Vec<ItemSplash>, Landed);
+/// splashes, where it landed, and the original displacement of a physics move.
+pub(super) type Moved = (bool, bool, bool, Vec<ItemSplash>, Landed, Option<Vec3>);
 
 /// `Entity.checkFallDamage`'s landing: the fall, the item's position and box, and how many of the
 /// tick's splashes came before it (`Entity.baseTick`'s; the water entry after the move comes
@@ -169,10 +169,24 @@ fn move_alone(
     let mut splashes = Vec::new();
     let (step, landed) = tables.move_item(item, escape_speed, near, &mut |s| splashes.push(s));
     if step.vertical_contact.is_some() && item.stack.count == 0 {
-        return (no_physics, false, true, splashes, landed);
+        return (
+            no_physics,
+            false,
+            true,
+            splashes,
+            landed,
+            step.original_movement(),
+        );
     }
     let alive = tables.settle_item(item, no_physics, step, &mut |s| splashes.push(s));
-    (no_physics, alive, false, splashes, landed)
+    (
+        no_physics,
+        alive,
+        false,
+        splashes,
+        landed,
+        step.original_movement(),
+    )
 }
 
 #[cfg(test)]

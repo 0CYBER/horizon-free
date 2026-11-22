@@ -164,37 +164,52 @@ pub fn sweep_movements<W: InsideWalk>(
     visited: &mut crate::fast_hash::FxHashSet<i64>,
     effects: &mut mod_api::InsideEffects,
 ) -> Result<(), W::Error> {
-    use horizon_core::geometry::{Axis, Direction};
     for movement in movements {
-        let mut from = movement.from;
-        let delta = movement.to.subtract(movement.from);
-        let mut budget = 16;
-        match movement.original {
-            Some(original) if delta.length_squared() > 0.0 => {
-                for axis in Axis::step_order(original) {
-                    let step = delta.component(axis);
-                    if step != 0.0 {
-                        let to = from.relative(
-                            match axis {
-                                Axis::X => Direction::East,
-                                Axis::Y => Direction::Up,
-                                Axis::Z => Direction::South,
-                            },
-                            step,
-                        );
-                        budget -= sweep_inside_blocks(walk, from, to, visited, effects, budget)?;
-                        from = to;
-                    }
+        sweep_movement_segments(*movement, |from, to, budget| {
+            sweep_inside_blocks(walk, from, to, visited, effects, budget)
+        })?;
+    }
+    Ok(())
+}
+
+/// Split a recorded move in vanilla's axis order, sharing the step budget across segments.
+/// The visitor reports how many steps it used, or stops the walk with an error.
+pub fn sweep_movement_segments<E>(
+    movement: horizon_world::entity_move::MovementRecord,
+    mut sweep: impl FnMut(
+        horizon_core::geometry::Vec3,
+        horizon_core::geometry::Vec3,
+        i32,
+    ) -> Result<i32, E>,
+) -> Result<(), E> {
+    use horizon_core::geometry::{Axis, Direction};
+    let mut from = movement.from;
+    let delta = movement.to.subtract(from);
+    let mut budget = 16;
+    match movement.original {
+        Some(original) if delta.length_squared() > 0.0 => {
+            for axis in Axis::step_order(original) {
+                let step = delta.component(axis);
+                if step != 0.0 {
+                    let to = from.relative(
+                        match axis {
+                            Axis::X => Direction::East,
+                            Axis::Y => Direction::Up,
+                            Axis::Z => Direction::South,
+                        },
+                        step,
+                    );
+                    budget -= sweep(from, to, budget)?;
+                    from = to;
                 }
             }
-            _ => {
-                budget -=
-                    sweep_inside_blocks(walk, movement.from, movement.to, visited, effects, 16)?;
-            }
         }
-        if budget <= 0 {
-            sweep_inside_blocks(walk, movement.to, movement.to, visited, effects, 1)?;
+        _ => {
+            budget -= sweep(movement.from, movement.to, budget)?;
         }
+    }
+    if budget <= 0 {
+        sweep(movement.to, movement.to, 1)?;
     }
     Ok(())
 }
