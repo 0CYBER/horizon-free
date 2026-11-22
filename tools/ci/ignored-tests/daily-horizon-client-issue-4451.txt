@@ -2426,6 +2426,7 @@ horizon-client game::sign_edit::sign_edit_tests::a_dye_is_refused_while_another_
 horizon-client game::sign_edit::sign_edit_tests::a_placed_sign_with_a_translated_line_opens_no_editor lib daily resources
 horizon-client game::sign_edit::sign_edit_tests::a_sign_lets_its_editor_go_when_they_walk_away_or_leave lib daily resources
 horizon-client game::sign_edit::sign_edit_tests::one_sign_belongs_to_one_editor lib daily resources
+horizon-client game::sign_edit::sign_edit_tests::the_control_close_closes_the_sign_editor lib daily resources
 horizon-client game::sign_edit::sign_edit_tests::the_editor_opens_only_on_plain_text lib daily resources
 horizon-client game::slot_rules_tests::a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order lib daily resources
 horizon-client game::slot_rules_tests::a_failing_listener_leaves_the_slots_own_answers_and_the_next_click_works lib daily resources

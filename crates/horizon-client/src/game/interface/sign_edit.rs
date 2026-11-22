@@ -536,7 +536,7 @@ impl Game<'_> {
     /// `AbstractSignEditScreen.removed`: a server's client sends what it
     /// wrote (ServerboundSignUpdatePacket); the window's own world keeps it
     /// and sends it to its guests (`sendBlockUpdated`).
-    pub(super) fn close_sign_editor(&mut self) {
+    pub(in crate::game) fn close_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
             if self.remote.is_some() {
                 self.send(S::SignUpdate(play::SignUpdate {
@@ -1013,7 +1013,23 @@ impl Game<'_> {
             }
             horizon_client::preedit::report_caret(caret_x, ly, line_height);
         }
+        // The four lines are fields (a click picks one, as `sign_edit_click` does) and Done is a
+        // button, so `ui` lists them and `click-button Done` presses it, as on the book screen.
+        let max_width = sign.max_line_width();
+        for i in 0..text.lines.len() {
+            horizon_client::widgets::target_as(
+                [
+                    cx - max_width / 2.0,
+                    y - midpoint + i as f32 * line_height,
+                    max_width,
+                    line_height,
+                ],
+                horizon_client::widgets::Kind::Field,
+            );
+        }
         let (bx, by) = done_button(w, h);
+        horizon_client::widgets::record(&done_label(), [bx, by, 200.0, 20.0], true);
+        horizon_client::widgets::target([bx, by, 200.0, 20.0]);
         horizon_client::widgets::declare_action(
             horizon_client::widgets::Action::Done,
             [bx, by, 200.0, 20.0],

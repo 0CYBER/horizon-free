@@ -76,7 +76,7 @@ impl Game<'_> {
         )))
     }
     /// Commands not known to control.rs; None when unknown here too.
-    pub(super) fn station_command(&mut self, words: &[&str]) -> Result<Option<Value>> {
+    pub(in crate::game) fn station_command(&mut self, words: &[&str]) -> Result<Option<Value>> {
         let arg = |i: usize| {
             words
                 .get(i)
@@ -235,6 +235,11 @@ impl Game<'_> {
                 ok()
             }
             "close" => {
+                // The sign editor is an overlay, not a container: its own close sends the text.
+                if self.sign_edit.is_some() {
+                    self.close_sign_editor();
+                    return ok();
+                }
                 self.close_container();
                 self.set_screen(Screen::Playing);
                 self.capture(true);

@@ -406,3 +406,24 @@ fn a_placed_sign_with_a_translated_line_opens_no_editor() {
     );
     assert!(w.opened(A), "a plain placed sign opened no editor");
 }
+
+/// The control tool's `close` on the sign editor closes the editor, which keeps the typed line,
+/// rather than closing a container and leaving the editor open (#19359).
+#[test]
+#[ignore = "daily"]
+fn the_control_close_closes_the_sign_editor() {
+    let mut w = Edits::new(&[oak_sign()]);
+    let pos = (SIGN[0], SIGN[1], SIGN[2]);
+    w.game.open_sign_editor(pos, true);
+    w.game.sign_input(None, Some("abc"));
+    w.game.station_command(&["close"]).expect("close runs");
+    assert!(
+        w.game.sign_edit.is_none(),
+        "close left the sign editor open"
+    );
+    assert_eq!(
+        w.sign(SIGN).front.lines[0],
+        "abc",
+        "the typed line was lost"
+    );
+}
