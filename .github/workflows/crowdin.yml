@@ -127,15 +127,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B l10n/crowdin
-          git commit -m "translations from Crowdin"
+          git commit -m "tooling: translations from Crowdin"
           git push --force origin l10n/crowdin
           body="Translations from [Crowdin](https://crowdin.com/project/horizon-client), written by
           \`tools/crowdin_import.py\` in \`.github/workflows/crowdin.yml\` from run
           ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. The text comes from
           the project; the reviewed marks are its proofreading (docs/translations.md, \"Crowdin\").
-          Only translations change here, so the pull request takes no label."
+          Only translations change here."
           if gh pr view l10n/crowdin > /dev/null 2>&1; then
-            gh pr edit l10n/crowdin --body "$body"
+            gh pr edit l10n/crowdin --title "tooling: translations from Crowdin" --body "$body"
           else
-            gh pr create --base main --head l10n/crowdin --title "translations from Crowdin" --body "$body"
+            gh pr create --base main --head l10n/crowdin --title "tooling: translations from Crowdin" --body "$body"
           fi

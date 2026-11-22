@@ -32,7 +32,7 @@ file, and `.github/workflows/crowdin.yml` is the whole sync:
 - a push to `main` that changes `en_us.json` uploads the English text, so a translator sees a new string the day it
   lands;
 - the nightly run (and a run by hand, which says which half to do) downloads two exports and opens one pull
-  request, `translations from Crowdin`: every translation into `l10n/game`, and the strings a proofreader approved
+  request, `tooling: translations from Crowdin`: every translation into `l10n/game`, and the strings a proofreader approved
   into `l10n/game-approved`. Neither folder is committed — `tools/crowdin_import.py` reads them, writes the lang
   files and the review record, and the workflow commits the result.
 
