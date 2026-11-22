@@ -41,7 +41,7 @@ xz4rust = { version = "0.2.3", default-features = false, features = ["std", "crc
 
 [target.'cfg(unix)'.dependencies]
 socket2 = { version = "0.6", optional = true }
-rustix = { version = "1.1", features = ["fs", "net"], optional = true }
+rustix = { version = "1.1.6", features = ["fs", "net"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading", "Win32_System_Ioctl"], optional = true }

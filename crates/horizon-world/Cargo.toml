@@ -22,7 +22,7 @@ lz4_flex = { version = "0.14", default-features = false, features = ["std", "saf
 xxhash-rust = { version = "0.8.19", features = ["xxh32"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 cap-std = "3"
