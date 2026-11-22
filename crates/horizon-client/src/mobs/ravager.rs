@@ -190,14 +190,17 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         if m.random.next_int_bound(6).unwrap_or(1) == 0 {
             let yaw = m.body_yaw.to_radians();
             let width = f64::from(m.width());
-            events.push(MobEvent::Particles {
-                kind: "entity_effect",
+            // Ravager.stunEffect: two nextDouble jitters and the dark grey
+            // ENTITY_EFFECT colour, both part of the mob's random stream.
+            let jx = m.random.next_double();
+            let jz = m.random.next_double();
+            events.push(MobEvent::ParticleColored {
                 at: [
-                    m.position.x - width * f64::from(yaw.msin()),
+                    m.position.x - width * f64::from(yaw.msin()) + jx * 0.6 - 0.3,
                     m.position.y + f64::from(m.height()) - 0.3,
-                    m.position.z + width * f64::from(yaw.mcos()),
+                    m.position.z + width * f64::from(yaw.mcos()) + jz * 0.6 - 0.3,
                 ],
-                count: 0,
+                color: [0.49803922, 0.5137255, 0.57254905],
             });
         }
         if m.extra.counter2 == 0 {
