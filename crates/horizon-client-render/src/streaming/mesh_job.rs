@@ -46,6 +46,9 @@ pub(super) fn mesh_section(
         visibility,
     };
     let mut mesh = mesher.mesh_reusing(&borrow(region), sy, recycled, scratch);
+    if settings.shader_pack {
+        mesh.apply_block_layers(&settings.block_layers, &context.tables);
+    }
     mesh.sort_solid();
     *faces = Some((context.tables.clone(), mesher.visibility));
     mesh
@@ -66,6 +69,7 @@ impl Streaming {
             cutout_leaves: self.cutout_leaves,
             opaque_ice: self.opaque_ice,
             translucent_layers: self.translucent_layers.clone(),
+            block_layers: self.block_layers.clone(),
             leaf_culling: self.leaf_culling,
         }
     }

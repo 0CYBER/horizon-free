@@ -7186,7 +7186,7 @@ impl Renderer {
             weather: Some(pack_weather::inputs()),
             lines: Some(pack_lines::inputs()),
             hand: Some(pack_hand::inputs()),
-            ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers)
+            ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers, true)
         }
     }
 

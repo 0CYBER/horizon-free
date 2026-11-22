@@ -304,6 +304,7 @@ mod block_tag_source_tests {
 pub(super) struct PackIds {
     entities: HashMap<String, i32>,
     blocks: BlockIds,
+    layers: std::sync::Arc<horizon_client::mesher::BlockLayerTable>,
     /// `blockEntityId` by block state, filled as states are drawn.
     block_states: RefCell<HashMap<u32, i32>>,
     /// The id of a name the file lacks: 65535, or 0 without the file.
@@ -506,6 +507,28 @@ impl Game<'_> {
                         for note in &ids.notes {
                             log::warn!("shader pack {name}: block.properties: {note}");
                         }
+                        let layer_properties = Properties::parse(
+                            &pack.read_text("block.properties").unwrap_or_default(),
+                            &macros,
+                        );
+                        let layers = horizon_shaders::BlockLayers::parse(&layer_properties);
+                        for note in &layers.notes {
+                            log::warn!("shader pack {name}: block.properties: {note}");
+                        }
+                        let layers = horizon_client::mesher::BlockLayerTable::resolve(
+                            self.pack.assets.registry,
+                            &layers,
+                        )
+                        .with_lava_layers(
+                            ["lava_still", "lava_flow"]
+                                .iter()
+                                .filter_map(|f| {
+                                    let name = format!("minecraft:block/{f}");
+                                    self.pack.render.sprite_layers.get(&name).map(|&l| l as u16)
+                                })
+                                .collect(),
+                        )
+                        .into();
                         let text = pack.read_text("entity.properties");
                         let entities = BlockIds::parse_kind(
                             &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
@@ -519,6 +542,7 @@ impl Game<'_> {
                         let block_items =
                             block_item_ids(self.res.facts(), self.pack.assets.registry, &ids);
                         self.pack_ids = Some(PackIds {
+                            layers,
                             block_items,
                             item_file: text.is_some(),
                             items: items.plain(),
@@ -570,6 +594,7 @@ impl Game<'_> {
                 self.shader_pack_failed(name, dimension, &error);
             }
         }
+        self.sync_block_layers();
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
         let at = camera.floor().as_ivec3();
         let light = self.world.light(at.x, at.y, at.z);
@@ -671,6 +696,23 @@ impl Game<'_> {
             invisible,
             sneaking: p.pose == horizon_client::pose::Pose::Crouching,
             sprinting: p.sprinting,
+        }
+    }
+
+    /// Pack selection, options, load failure and world setup all converge here. A worker
+    /// keeps its immutable table snapshot; changing it invalidates resident/pending meshes.
+    fn sync_block_layers(&mut self) {
+        let layers = self.pack_ids.as_ref().map(|ids| &ids.layers);
+        let changed = match layers {
+            Some(layers) => layers != &self.streaming.block_layers,
+            None => {
+                let empty = horizon_client::mesher::BlockLayerTable::default();
+                *self.streaming.block_layers != empty
+            }
+        };
+        if changed {
+            self.streaming.block_layers = layers.cloned().unwrap_or_default();
+            self.all_sections_changed();
         }
     }
 

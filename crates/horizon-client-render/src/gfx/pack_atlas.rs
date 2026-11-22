@@ -706,18 +706,26 @@ const FACE: &str = "    vec3 hz_p0 = uintBitsToFloat(hz_cp0);\n    \
 /// GLSL: whether a terrain vertex's quad is solid terrain rather than cutout. Solid: the quads
 /// over opaque texels and opaque leaves (`mesher::OPAQUE_LAYER`), as vanilla picks
 /// `ChunkSectionLayer.SOLID` per quad (`FaceBakery.computeMaterialTransparency`,
-/// `SectionCompiler.compile`), and lava's faces (sprite layers `lava`, its still and flowing
-/// sprites), which Iris 1.11.7 drew with `gbuffers_terrain_solid` in our probes, with and
-/// without `separateAo`.
+/// `SectionCompiler.compile`). Default shader-pack lava also carries this flag; an explicit
+/// block-state layer override can replace it without affecting other users of the sprite.
 ///
-/// The test reads only the vertex's sprite layer, which all four vertices of a quad share: a
+/// The layer flag picks regular sections; distant tiles keep the lava sprite default. A
 /// quad lands whole in one part. The colour's alpha can't decide it, as with `separateAo` it
 /// holds each vertex's own ambient occlusion.
-fn solid(lava: &[u16]) -> String {
+fn solid(lava: &[u16], state_layers: bool) -> String {
     let opaque = crate::mesher::OPAQUE_LAYER;
+    // Regular sections encode the default before state overrides. Distant tiles do not carry
+    // state metadata, so they keep the sprite fallback. The instance's UV step tells them
+    // apart, whole or fading: a section's is 1/`UV_STEPS`, a tile's 1/`TILED_UV_STEPS`.
+    // The sign of `hz_origin.w` cannot: a whole section and a whole tile are both positive.
+    let condition = if state_layers {
+        "hz_uv_scale > 0.0009765625"
+    } else {
+        "true"
+    };
     let lava: String = lava
         .iter()
-        .map(|l| format!(" || hz_v_layer == {l}u"))
+        .map(|layer| format!(" || (({condition}) && hz_v_layer == {layer}u)"))
         .collect();
     format!("(hz_v_layer & {opaque}u) != 0u{lava}")
 }
@@ -725,11 +733,14 @@ fn solid(lava: &[u16]) -> String {
 /// The game's `terrain` inputs (`PackAtlas::terrain_inputs`) for a pack: whole; drawing only
 /// solid terrain, then only cutout terrain (`solid`), each leaving the other part's quads outside
 /// the clip volume; and drawing both in one pass, each quad with its part's alpha test.
+/// `state_layers` uses the regular mesher's layer flags and the inputs' `hz_uv_scale` for
+/// distant defaults; custom inputs without that contract keep the legacy sprite fallback.
 pub fn game_terrain(
     terrain: Option<horizon_shaders::GbuffersInputs>,
     lava: &[u16],
+    state_layers: bool,
 ) -> horizon_shaders::GameInputs {
-    let solid = solid(lava);
+    let solid = solid(lava, state_layers);
     let part = |terrain: &horizon_shaders::GbuffersInputs, part: bool| {
         let mut inputs = terrain.clone();
         inputs.after.push_str(&format!(

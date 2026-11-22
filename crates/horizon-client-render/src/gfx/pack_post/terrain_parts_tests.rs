@@ -63,6 +63,14 @@ fn strips_of(
     programs: Vec<(String, String)>,
     alphas: [u8; 4],
 ) -> Option<([Option<[u8; 3]>; 3], Option<Vec<String>>)> {
+    strips_with_origin(programs, alphas, None)
+}
+
+fn strips_with_origin(
+    programs: Vec<(String, String)>,
+    alphas: [u8; 4],
+    origin: Option<f32>,
+) -> Option<([Option<[u8; 3]>; 3], Option<Vec<String>>)> {
     let Some(gpu) = Gpu::new() else {
         eprintln!("TERRAIN_PARTS_NO_ADAPTER");
         return None;
@@ -79,7 +87,7 @@ fn strips_of(
     ];
     files.extend(programs);
     // The game's terrain inputs as far as the parts read them: the sprite layer and the colour.
-    let terrain = horizon_shaders::GbuffersInputs {
+    let mut terrain = horizon_shaders::GbuffersInputs {
         declarations: "layout(location=0)in vec3 fixture_position;\n\
                        layout(location=2)in uint hz_v_layer;\n\
                        layout(location=3)in vec4 hz_v_color;\n"
@@ -89,7 +97,17 @@ fn strips_of(
             .into(),
         ..Default::default()
     };
-    let inputs = super::super::pack_atlas::game_terrain(Some(terrain), &[LAVA, LAVA + 1]);
+    if let Some(origin) = origin {
+        terrain.body.insert_str(
+            0,
+            &format!(
+                "vec4 hz_origin=vec4(0.0,0.0,0.0,{origin:?});\n\
+                 float hz_uv_scale=hz_origin.w>0.0?uintBitsToFloat(floatBitsToUint(hz_origin.w)&0xff800000u):fract(abs(hz_origin.w));\n"
+            ),
+        );
+    }
+    let inputs =
+        super::super::pack_atlas::game_terrain(Some(terrain), &[LAVA, LAVA + 1], origin.is_some());
     const ATTRS: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0=>Float32x3,2=>Uint32,3=>Unorm8x4];
     let layouts = [Some(wgpu::VertexBufferLayout {
@@ -411,4 +429,41 @@ fn the_vertex_stage_reads_its_parts_alpha_test_ref() {
         return;
     };
     assert_eq!(got, [Some(RED), Some([255, 255, 0]), Some(RED)]);
+}
+
+/// With state layers, lava keeps its sprite default only on distant tiles. A regular section's
+/// layer flag decides alone, so an explicit cutout on lava stays cutout, whole or fading in over
+/// far terrain. Origins as `section_instance` and `lod::instance` build them (UV steps 1/32768
+/// and 1/32).
+#[test]
+fn state_layer_lava_routing_keeps_defaults_for_distant_tiles_only() {
+    let section_step = 1.0 / crate::mesher::UV_STEPS;
+    let tile_step = 1.0 / crate::mesher::TILED_UV_STEPS;
+    let cutout = [Some(GREEN), Some(BLUE), Some(BLUE)];
+    let solid = [Some(GREEN), Some(BLUE), Some(GREEN)];
+    for (name, origin, expected) in [
+        ("whole section", section_step, cutout),
+        (
+            "section fading in over far terrain",
+            -(7.0 + section_step),
+            cutout,
+        ),
+        ("whole distant tile", tile_step, solid),
+        ("fading distant tile", -(7.0 + tile_step), solid),
+    ] {
+        let files = [
+            ("gbuffers_terrain", RED, 1.0),
+            ("gbuffers_terrain_solid", GREEN, 1.0),
+            ("gbuffers_terrain_cutout", BLUE, 1.0),
+        ]
+        .iter()
+        .flat_map(|&(name, rgb, alpha)| program(name, rgb, alpha))
+        .collect();
+        let Some((pixels, notes)) = strips_with_origin(files, [255; 4], Some(origin)) else {
+            eprintln!("LAYER_CLASSIFIER_SETUP_SKIP: no adapter");
+            return;
+        };
+        assert!(notes.is_none(), "{notes:?}");
+        assert_eq!(pixels, expected, "{name}: origin.w={origin}");
+    }
 }
