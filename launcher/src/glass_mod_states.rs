@@ -233,8 +233,7 @@ impl Launcher {
         // row before that.
         if matches!(kind, "step" | "error") && key != "no-consent" {
             self.settings.native_mods_allowed_at = Some(1);
-            *self.mods.native_state.borrow_mut() = Some((
-                String::new(),
+            *self.mods.native_state.borrow_mut() = Some(build_mode::NativeStateMemo::preview(
                 native_status::State::Outdated,
                 vec!["fast-ore".into(), "greeter".into()],
             ));
@@ -246,8 +245,10 @@ impl Launcher {
                 self.settings.native_mods_allowed_at = Some(1);
                 self.mod_preview.state = Some(native_status::State::UpToDate);
                 // Built: no mod waits for a build any more.
-                *self.mods.native_state.borrow_mut() =
-                    Some((String::new(), native_status::State::UpToDate, Vec::new()));
+                *self.mods.native_state.borrow_mut() = Some(build_mode::NativeStateMemo::preview(
+                    native_status::State::UpToDate,
+                    Vec::new(),
+                ));
                 self.native_done = step("done").map(|step| step.label());
             }
             ("step", "start") => {
@@ -397,8 +398,10 @@ impl Launcher {
                 // A build counts the mods it left out as tried (`native_status::built`): the
                 // build is up to date, and only Switch off changes anything.
                 self.mod_preview.state = Some(native_status::State::UpToDate);
-                *self.mods.native_state.borrow_mut() =
-                    Some((String::new(), native_status::State::UpToDate, Vec::new()));
+                *self.mods.native_state.borrow_mut() = Some(build_mode::NativeStateMemo::preview(
+                    native_status::State::UpToDate,
+                    Vec::new(),
+                ));
             }
             ("trust", "registry") => {
                 let (reply, _answer) = std::sync::mpsc::channel();

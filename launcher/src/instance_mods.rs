@@ -87,6 +87,9 @@ pub(super) struct InstanceMods {
     home: Option<PathBuf>,
     pub(super) fresh: bool,
     reading: bool,
+    // Dropping the reader on an instance switch cancels delivery from the old scan.
+    reader: Option<gpui::Task<()>>,
+    pending_names: Vec<String>,
     pub(super) list: Vec<ModRow>,
     /// The browser was installing at the last draw: its end changes the list.
     was_busy: bool,
@@ -98,6 +101,21 @@ pub(super) struct InstanceMods {
 }
 
 impl InstanceMods {
+    pub(super) fn pending_list(&self, scroll: &gpui::ScrollHandle) -> Div {
+        self.cull.column(
+            scroll,
+            self.pending_names.len(),
+            0.,
+            |_| false,
+            |i| {
+                div()
+                    .px(px(18.))
+                    .py(px(4.))
+                    .child(self.pending_names[i].clone())
+            },
+        )
+    }
+
     fn invalidate(&mut self) {
         self.fresh = false;
     }
@@ -113,6 +131,8 @@ impl InstanceMods {
     /// Marks a read pending and returns the fingerprint its result must match.
     fn begin_read(&mut self) -> String {
         self.reading = true;
+        self.cull.reset();
+        self.pending_names.clear();
         self.fingerprint.clone()
     }
 
@@ -120,6 +140,8 @@ impl InstanceMods {
     fn complete_read(&mut self, home: &Path, fingerprint: &str, list: Vec<ModRow>) {
         self.reading = false;
         if self.home.as_deref() == Some(home) {
+            self.pending_names.clear();
+            self.cull.reset();
             self.list = list;
             self.fresh = self.fingerprint == fingerprint;
         }
@@ -128,7 +150,7 @@ impl InstanceMods {
 
 /// The mods of the instance at `home`: a Java one's jars in `mods/` (on or off), a Horizon one's
 /// registry mods. Each jar names itself (`fabric.mod.json`, `quilt.mod.json`...), else its file.
-fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
+fn read_reporting(home: &Path, java_instance: bool, mut found: impl FnMut(&str)) -> Vec<ModRow> {
     let entries: Vec<installed::Entry> = installed::Installed::load(home)
         .entries
         .into_iter()
@@ -171,6 +193,7 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                     }
                 })
             })
+            .inspect(|row| found(&row.name))
             .collect()
     } else {
         entries
@@ -207,10 +230,12 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                         .map(|p| (ModKind::of(&p.manifest), p.manifest.id.clone())),
                 }
             })
+            .inspect(|row| found(&row.name))
             .collect()
     };
     if !java_instance {
-        rows.extend(native_status::untracked(home).into_iter().map(|native| {
+        let untracked = native_status::untracked_reporting(home, found);
+        rows.extend(untracked.into_iter().map(|native| {
             let icon = mod_icons::load(native.icon.as_ref().map(|i| i.as_deref()));
             // A hand-copied `.hmod` in `horizon-mods/` is wasm or content: its manifest says which.
             let kind = if native.native() {
@@ -319,10 +344,26 @@ impl Launcher {
             return;
         }
         let read_fingerprint = m.begin_read();
-        let task = cx
-            .background_executor()
-            .spawn(async move { (home.clone(), read(&home, java_instance)) });
-        cx.spawn(async move |this, cx| {
+        let (names, mut pending) = tokio::sync::mpsc::unbounded_channel();
+        let task = cx.background_executor().spawn(async move {
+            let list = read_reporting(&home, java_instance, |name| {
+                let _ = names.send(name.to_owned());
+            });
+            (home, list)
+        });
+        let reader = cx.spawn(async move |this, cx| {
+            let mut batch = Vec::new();
+            while pending.recv_many(&mut batch, 128).await != 0 {
+                if this
+                    .update(cx, |this, cx| {
+                        this.instance_mods.pending_names.append(&mut batch);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
             let (home, list) = task.await;
             let _ = this.update(cx, |this, cx| {
                 let m = &mut this.instance_mods;
@@ -338,8 +379,8 @@ impl Launcher {
                 this.ask_project_icons(ids, cx);
                 cx.notify();
             });
-        })
-        .detach();
+        });
+        self.instance_mods.reader = Some(reader);
     }
 
     /// Asks Modrinth, in one request, for the icons of `ids` it hasn't been asked for.
@@ -561,6 +602,7 @@ impl Launcher {
         };
         let body = if !m.fresh {
             rule(empty("Reading the mods…").into_any_element())
+                .child(m.pending_list(&self.content_scroll.handle))
         } else if m.list.is_empty() {
             rule(empty("No mods yet: Add mods finds some for this instance.").into_any_element())
         } else if rows.is_empty() {
@@ -762,6 +804,10 @@ impl Launcher {
 mod tests {
     use super::*;
 
+    fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
+        read_reporting(home, java_instance, |_| {})
+    }
+
     struct TestHome(PathBuf);
 
     impl TestHome {
@@ -895,6 +941,41 @@ mod tests {
         ));
         // No switch, permission prompt or route menu: each could switch `mod.teem_client-0.1.0`.
         assert!(!rows[0].has_switch());
+    }
+
+    #[test]
+    fn installed_mods_reports_names_before_the_last_package_is_read() {
+        let scratch = TestHome::new();
+        let home = &scratch.0;
+        let dir = home.join(native_mods::INSTALLED);
+        std::fs::create_dir_all(&dir).unwrap();
+        let entries = (0..70)
+            .map(|i| {
+                let id = format!("mod{i:02}");
+                serde_json::from_value(serde_json::json!({
+                    "source": "horizon", "project": id, "slug": id, "title": id,
+                    "kind": "mod", "version": "1", "number": "1", "checksum": "", "page": "",
+                    "file": format!("horizon-native-mods/{id}.hmod")
+                }))
+                .unwrap()
+            })
+            .collect();
+        installed::Installed { entries }.save(home).unwrap();
+
+        let mut names = Vec::new();
+        let rows = read_reporting(home, false, |name| {
+            if names.is_empty() {
+                // This package arrives as soon as the first mod is shown.
+                std::fs::write(dir.join("mod69.hmod"), b"present").unwrap();
+            }
+            names.push(name.to_owned());
+        });
+        assert_eq!(names.len(), 70);
+        assert_eq!(rows.len(), 70);
+        assert!(
+            !rows.iter().find(|r| r.name == "mod69").unwrap().missing,
+            "the first mod was only reported after all 70 packages had been read"
+        );
     }
 
     #[test]

@@ -26,7 +26,9 @@ impl Launcher {
         let mut body = div().flex().flex_col();
         body = body.children(self.mods_busy_plate());
         if !fresh {
-            return body.child(ui::empty().child(tr("Reading the mods…")));
+            return body
+                .child(ui::empty().child(tr("Reading the mods…")))
+                .child(m.pending_list(&self.content_scroll.handle));
         }
         if count == 0 {
             return body.child(
@@ -336,7 +338,7 @@ impl Launcher {
         let mine = self
             .selected_instance()
             .is_some_and(|i| self.native_for.as_deref() == Some(i.id.as_str()));
-        let unbuilt = id.as_deref().is_some_and(|id| self.native_mod_unbuilt(id));
+        let unbuilt = id.as_deref().and_then(|id| self.native_mod_unbuilt(id, cx));
         let left = id
             .as_deref()
             .and_then(|id| left_out.iter().find(|l| l.id == id));
@@ -350,7 +352,7 @@ impl Launcher {
             Some(id) if mine && self.native_failed_mods.iter().any(|f| f == id) => {
                 (tr("Failed"), ui::danger())
             }
-            Some(_) if mine && unbuilt && self.native_step.is_some() => {
+            Some(_) if mine && unbuilt == Some(true) && self.native_step.is_some() => {
                 (tr("Building"), ui::color(self.look.accent))
             }
             // Native mods run as real code: nothing builds until the player allows them.
@@ -364,7 +366,8 @@ impl Launcher {
             {
                 (tr("Does not fit"), ui::warn())
             }
-            Some(_) if unbuilt => (tr("Needs build"), ui::warn()),
+            Some(_) if unbuilt.is_none() => (tr("Reading the mods…"), white(ink::QUIET)),
+            Some(_) if unbuilt == Some(true) => (tr("Needs build"), ui::warn()),
             Some(_) => (tr("Ready"), ui::live()),
         };
         let shown = div()

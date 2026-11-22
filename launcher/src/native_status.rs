@@ -285,6 +285,11 @@ pub fn legacy_note() -> &'static str {
 /// Discover the actual files, not just GitHub sidecars. Registry files already have a row.
 /// Besides native files, an `.hmod` copied by hand into `horizon-mods/` is listed too (#18301).
 pub fn untracked(home: &Path) -> Vec<Installed> {
+    untracked_reporting(home, |_| {})
+}
+
+/// Reports names as packages are read. Switches are settled after all ids are known.
+pub fn untracked_reporting(home: &Path, mut found: impl FnMut(&str)) -> Vec<Installed> {
     let tracked = crate::browser::installed::Installed::load(home);
     let native = listed(home)
         .into_iter()
@@ -347,6 +352,7 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
                 icon: package.map(|p| p.icon.map(Arc::new)),
             })
         })
+        .inspect(|row| found(&row.id))
         .collect();
     let tracked_ids: Vec<&str> = tracked
         .entries

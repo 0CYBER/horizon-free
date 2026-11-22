@@ -173,8 +173,7 @@ pub(super) struct Mods {
     /// The selected instance's native build state, the mods it would build again
     /// (`native_status::unbuilt`), and the `native_status::fingerprint` they were read for: read
     /// again only when that changes.
-    pub(super) native_state:
-        std::cell::RefCell<Option<(String, native_status::State, Vec<String>)>>,
+    pub(super) native_state: std::cell::RefCell<Option<crate::build_mode::NativeStateMemo>>,
     /// Native routes read by a worker for this instance's files, consent and game version.
     pub(super) native_routes: std::cell::RefCell<Option<crate::build_mode::RouteMemo>>,
     /// What updating the native mods to a newer installed game would do, read in the background.
