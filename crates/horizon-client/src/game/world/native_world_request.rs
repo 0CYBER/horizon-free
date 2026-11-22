@@ -83,6 +83,25 @@ fn granted_name(
     (caller == Some(id) && declares && !disabled).then(|| name.to_owned())
 }
 
+/// The manifests of the flat native packages beside `executable` (`horizon-native-mods/<id>/`), as the launcher
+/// builds them. A package that does not read is skipped: another mod's broken package must not refuse this one.
+fn adjacent_manifests(executable: &Path) -> Vec<horizon_mod_package::Manifest> {
+    std::fs::read_dir(executable.with_file_name(mod_list::NATIVE_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            match horizon_mod_package::packages::read_native(&entry.path()) {
+                Ok(package) => Some(package.manifest),
+                Err(why) => {
+                    log::warn!("native package {}: not read: {why}", entry.path().display());
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
 impl Game<'_> {
     fn title_state(&self) -> TitleState {
         if self.screen != Screen::Playing {
@@ -95,33 +114,45 @@ impl Game<'_> {
         }
     }
 
-    /// The name the question shows for the calling mod, when its own bundle grants `world_control`: it asks by its
-    /// manifest name. None when the caller is unidentified, or its bundle does not grant it. Only the manifests of
-    /// the bundles are read (never their code or resources), and only until the caller's is found.
+    /// The name the question shows for the calling mod, when its own manifest grants `world_control`: it asks by its
+    /// manifest name. None when the caller is unidentified, or its manifest does not grant it.
     fn world_control_mod(&self) -> Option<String> {
+        self.native_grant(|native| native.world_control)
+    }
+
+    /// The manifest name of the calling mod when its own manifest turns on the permission `grants` reads, else None
+    /// (also for an unidentified caller, whatever the other bundles declare). Only manifests are read (never code or
+    /// resources), and only until the caller's is found: the `.hmod` bundles in the game folder, then the flat
+    /// packages the launcher builds beside the executable (`horizon-native-mods/<id>/`).
+    pub(in crate::game) fn native_grant(
+        &self,
+        grants: impl Fn(&horizon_mod_package::manifest::Native) -> bool,
+    ) -> Option<String> {
         let caller = mod_api::content::crash::current_native_mod()?;
         let game_dir = Self::game_dir();
-        [mod_list::DIR, mod_list::NATIVE_DIR]
+        let bundles = [mod_list::DIR, mod_list::NATIVE_DIR]
             .iter()
             .filter_map(|dir| std::fs::read_dir(game_dir.join(dir)).ok())
             .flatten()
             .flatten()
             .filter_map(|entry| {
                 horizon_mod_package::index::native::read_manifest(&entry.path()).ok()
-            })
-            .find_map(|manifest| {
-                let declares = manifest
-                    .native
-                    .as_ref()
-                    .is_some_and(|native| native.world_control);
-                granted_name(
-                    Some(caller),
-                    &manifest.id,
-                    &manifest.name,
-                    declares,
-                    self.settings.mods.disabled.contains(&manifest.id),
-                )
-            })
+            });
+        let adjacent = std::env::current_exe()
+            .ok()
+            .map(|exe| adjacent_manifests(&exe))
+            .into_iter()
+            .flatten();
+        bundles.chain(adjacent).find_map(|manifest| {
+            let declares = manifest.native.as_ref().is_some_and(&grants);
+            granted_name(
+                Some(caller),
+                &manifest.id,
+                &manifest.name,
+                declares,
+                self.settings.mods.disabled.contains(&manifest.id),
+            )
+        })
     }
 
     /// For a native mod: queue asking the player to open `saves/<folder>` on the title screen's next frame.

@@ -357,6 +357,15 @@ pub trait RuntimeLevels {
             crate::world::phase::LoadAccess::WorldOnly,
         )
     }
+    /// Side: server.
+    /// Regenerate the Overworld, the Nether and the End with `seed`, once this server tick's levels have ticked: their chunk files, entities, structure references, raids, the dragon fight and the world spawn are replaced by a fresh world's; game rules, the clock, the weather, the scoreboard, the world border settings and the players' files are kept. The request is checked now and again when it is applied. Refused with [`LevelResetError::PlayersInside`] while a player or an arrival not yet landed is in one of the three levels (the mod moves its players out first, for example into a runtime level it opened: `entity_teleport_to_level`), with [`LevelResetError::NoHoldingLevel`] when the mod has no runtime level open, and with [`LevelResetError::NotPermitted`] unless the mod's manifest declares `[native] level_reset`. Maps are kept. `levels_reset` fires once the old terrain is gone and not when a removal failed; the levels open again from the new seed when somebody next enters them.
+    fn reset_vanilla(&mut self, seed: i64) -> Result<(), LevelResetError> {
+        crate::world::phase::unprovided(
+            "RuntimeLevels::reset_vanilla",
+            "reset_vanilla",
+            crate::world::phase::LoadAccess::WorldOnly,
+        )
+    }
 }
 /// The render_assets service, reached through its host.
 pub trait RenderAssets {

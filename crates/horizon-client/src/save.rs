@@ -3395,6 +3395,17 @@ impl Default for WorldGen {
         }
     }
 }
+/// Replaces the seed of an existing world's `world_gen_settings`, keeping its options and dimensions. A world with no
+/// such file gets a default one with `seed`.
+pub fn write_world_seed(dir: &Path, seed: i64) -> Result<()> {
+    match read_saved_data(dir, "world_gen_settings") {
+        Some(Tag::Compound(mut settings)) => {
+            settings.insert("seed".into(), Tag::Long(seed));
+            write_saved_data(dir, "world_gen_settings", Tag::Compound(settings))
+        }
+        _ => write_world_gen_settings(dir, seed, WorldGen::default()),
+    }
+}
 /// Writes a new world's `world_gen_settings` (seed, options and dimensions).
 pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Result<()> {
     write_world_gen_settings_with(dir, seed, options, None, None, None)

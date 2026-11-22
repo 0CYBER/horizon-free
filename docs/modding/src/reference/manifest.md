@@ -86,6 +86,16 @@ refused with `InvalidRequest`, and nothing is created. The call answers a code (
 the calling mod's own declaration grants it, and the question names that mod; a request whose caller is unidentified is
 refused with `NotPermitted`. Creating a world, and level create, unload or delete, are not part of it.
 
+Set `level_reset` in the `[native]` section (default off) to let the mod regenerate the Overworld, the Nether and the End
+with `RuntimeLevels::reset_vanilla`:
+
+```toml
+[native]
+level_reset = true
+```
+
+Without it, `reset_vanilla` is refused with `NotPermitted`, whatever other mods declare.
+
 A wasm mod adds `[wasm]` instead, written by `cargo horizon-mod build --wasm`
 ([Building to `mod.wasm`](../how-to/wasm-mods.md)):
 

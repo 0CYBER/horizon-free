@@ -593,6 +593,7 @@ pub(super) fn changes_game(project: &api::Project<'_>) -> Option<&'static str> {
             state,
             r#loop,
             world_control: _,
+            level_reset: _,
         } = native;
         for (empty, table) in [
             (mixin.is_empty(), "[[native.mixin]]"),

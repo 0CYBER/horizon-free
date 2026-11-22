@@ -119,6 +119,14 @@ A second `delete` of the id finishes the removal, and only then can it be opened
 
 A handle from before the delete reads as stale, as after an `unload`.
 
+## Resetting the vanilla levels
+
+`reset_vanilla(seed)` regenerates the Overworld, the Nether and the End with a new seed, once the server tick's levels
+have ticked. It needs `level_reset` in the manifest's `[native]` section ([manifest](../../reference/manifest.md)), and a
+runtime level the mod has open to hold the server's active level meanwhile; players must be out of the three levels
+first (`PlayersInside`). `levels_reset` fires once the old terrain is gone (not when a removal failed, which is logged); the levels open from
+the new seed when somebody next enters them. Maps, the world border and the players' files are kept.
+
 ## Players and clients
 
 A player goes into a runtime level and out of it as into any level, with

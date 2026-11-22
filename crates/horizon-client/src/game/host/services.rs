@@ -162,6 +162,13 @@ impl RuntimeLevels for Game<'_> {
         mod_api::__private::check_access("is_open", mod_api::__private::LoadAccess::WorldOnly);
         self.runtime_level_is_open(id)
     }
+    fn reset_vanilla(&mut self, seed: i64) -> Result<(), LevelResetError> {
+        mod_api::__private::check_access(
+            "reset_vanilla",
+            mod_api::__private::LoadAccess::WorldOnly,
+        );
+        self.queue_level_reset(seed)
+    }
 }
 impl RenderAssets for Game<'_> {
     fn model(&self, id: &Identifier) -> Result<ModelRef, ModelError> {

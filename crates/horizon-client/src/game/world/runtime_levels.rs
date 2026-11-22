@@ -17,7 +17,7 @@ use horizon_world::{
         overrides::{DIMENSION_TYPES, DIMENSIONS, WorldgenOverrides, mod_dimensions},
     },
 };
-use mod_api::{LevelRef, RuntimeGenerator, RuntimeLevel, RuntimeLevelError};
+use mod_api::{LevelRef, LevelResetError, RuntimeGenerator, RuntimeLevel, RuntimeLevelError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
@@ -47,6 +47,8 @@ enum Request {
     Unload(String),
     /// The mod that asked, which a level with no entry cannot name any other way.
     Delete(&'static str, String),
+    /// Regenerate the vanilla levels from this seed: the mod that asked, and the seed.
+    Reset(&'static str, i64),
 }
 
 /// The runtime levels of one world open: pure bookkeeping, which the game applies.
@@ -153,6 +155,32 @@ impl RuntimeTable {
         }
         self.queue.push(Request::Delete(owner, id.to_owned()));
         Ok(())
+    }
+
+    /// A reset of the vanilla levels, behind the requests already made. One at a time.
+    pub(in crate::game) fn queue_reset(
+        &mut self,
+        owner: &'static str,
+        seed: i64,
+    ) -> Result<(), LevelResetError> {
+        if self
+            .queue
+            .iter()
+            .any(|request| matches!(request, Request::Reset(..)))
+        {
+            return Err(LevelResetError::Busy);
+        }
+        self.queue.push(Request::Reset(owner, seed));
+        Ok(())
+    }
+
+    /// The id of a level `owner` opened that is open now, which can hold the place of the level in use
+    /// while the vanilla levels are rebuilt.
+    pub(in crate::game) fn holding_level_of(&self, owner: &str) -> Option<String> {
+        self.entries
+            .iter()
+            .find(|(_, entry)| entry.owner == owner && entry.state == State::Open)
+            .map(|(id, _)| id.clone())
     }
 
     /// Whether `id` is open: a level waiting to open is not, one waiting to close still is, and so
@@ -465,7 +493,7 @@ fn sharing_references_file(id: &str) -> Vec<String> {
 
 /// Fail if `path`, or a folder above it up to `stop` (included), is a link: a link would be
 /// followed out of the world. What does not exist is no link.
-fn ensure_no_links(path: &Path, stop: &Path, include_path: bool) -> std::io::Result<()> {
+pub(super) fn ensure_no_links(path: &Path, stop: &Path, include_path: bool) -> std::io::Result<()> {
     for folder in path.ancestors().skip(usize::from(!include_path)) {
         // `stop` itself, `dimensions` or `data`, is looked at too: a link there leads out of the
         // world as well.
@@ -522,7 +550,7 @@ pub(in crate::game) fn erase_level_files(
     folder_gone.and(file_gone)
 }
 
-fn ignore_missing(result: std::io::Result<()>) -> std::io::Result<()> {
+pub(super) fn ignore_missing(result: std::io::Result<()>) -> std::io::Result<()> {
     match result {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
@@ -726,7 +754,7 @@ impl Game<'_> {
     }
 
     /// Whether a player, or an arrival on its way, is in the level `dim`.
-    fn level_has_players(&self, dim: Dim) -> bool {
+    pub(super) fn level_has_players(&self, dim: Dim) -> bool {
         let id = dim.id();
         self.lan
             .as_ref()
@@ -777,6 +805,7 @@ impl Game<'_> {
                     }
                 }
                 Request::Delete(owner, id) => self.apply_runtime_delete(owner, &id),
+                Request::Reset(owner, seed) => self.apply_level_reset(owner, seed),
             }
         }
     }

@@ -21,7 +21,8 @@ fn a_built_in_dimension_id_does_not_read_the_extra_table() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(
-            ["overworld", "the_nether", "the_end"].map(|name| super::Dim::from_id(&format!("minecraft:{name}"))),
+            ["overworld", "the_nether", "the_end"]
+                .map(|name| super::Dim::from_id(&format!("minecraft:{name}"))),
         );
     });
     let found = rx.recv_timeout(std::time::Duration::from_secs(10));
@@ -122,6 +123,7 @@ struct Opener {
     loads: Seen<String>,
     load_contexts: Seen<(String, String, bool)>,
     unloads: Seen<String>,
+    resets: Seen<()>,
 }
 
 #[mod_api::__subscriptions]
@@ -154,6 +156,9 @@ impl Hooks for Opener {
             host.level(event.dimension).unwrap().in_place(host),
         ));
     }
+    fn levels_reset(&self, _: &mut dyn mod_api::ServerHost, _: &mut mod_api::LevelsResetEvent) {
+        self.resets.lock().unwrap().push(());
+    }
     fn level_unload(&self, _: &mut dyn mod_api::ServerHost, event: &mut LevelUnloadEvent<'_>) {
         self.unloads
             .lock()
@@ -170,6 +175,7 @@ struct Fixture {
     loads: Seen<String>,
     load_contexts: Seen<(String, String, bool)>,
     unloads: Seen<String>,
+    resets: Seen<()>,
 }
 
 /// A mod named `name` that opens `id` each time a level ticks, in a game, for `test`.
@@ -187,6 +193,7 @@ fn with_opener(
         loads: Seen::default(),
         load_contexts: Seen::default(),
         unloads: Seen::default(),
+        resets: Seen::default(),
     };
     let opener = Opener {
         id,
@@ -198,6 +205,7 @@ fn with_opener(
         loads: fixture.loads.clone(),
         load_contexts: fixture.load_contexts.clone(),
         unloads: fixture.unloads.clone(),
+        resets: fixture.resets.clone(),
     };
     let mods = vec![ModEntry::new(name, Box::new(opener))].into();
     mod_platform::testing::with_mods(mods, || {
@@ -1362,5 +1370,100 @@ fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
             assert!(!game.runtime_level_is_open("cycle:a"));
             assert_eq!(game.levels.runtime.seeds().get("cycle:a").copied(), None);
         }
+    });
+}
+
+/// A mod's reset of the vanilla levels is refused when it has no permission, no level to hold the place of the one in
+/// use, or a player in one of the three levels, and queued once.
+#[test]
+#[ignore = "daily"]
+fn a_reset_of_the_vanilla_levels_is_refused_until_the_mod_can_hold_the_place_and_nobody_is_inside()
+{
+    use mod_api::LevelResetError;
+    with_opener("rst", "rst:hold", flat(), |game, _| {
+        assert_eq!(
+            game.check_level_reset(Some("rst"), 1, false),
+            Err(LevelResetError::NotPermitted)
+        );
+        assert_eq!(
+            game.check_level_reset(None, 1, true),
+            Err(LevelResetError::NotPermitted)
+        );
+        // No level of the mod is open yet.
+        assert_eq!(
+            game.check_level_reset(Some("rst"), 1, true),
+            Err(LevelResetError::NoHoldingLevel)
+        );
+        tick_post(game);
+        game.apply_runtime_levels();
+        // A player in the Overworld.
+        game.player = Some(
+            horizon_client::motion::PlayerMotion::new(
+                game.motion,
+                horizon_core::geometry::Vec3::new(0.5, 80.0, 0.5),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            game.check_level_reset(Some("rst"), 1, true),
+            Err(LevelResetError::PlayersInside)
+        );
+        game.player = None;
+        assert_eq!(game.check_level_reset(Some("rst"), 1, true), Ok(()));
+        assert_eq!(
+            game.check_level_reset(Some("rst"), 2, true),
+            Err(LevelResetError::Busy)
+        );
+    });
+}
+
+/// With nobody in the vanilla levels the reset drops them without a save, removes their terrain files and keeps the
+/// rest, puts the new seed in force and tells the mods.
+#[test]
+#[ignore = "daily"]
+fn a_reset_regenerates_the_vanilla_levels_from_the_new_seed_and_keeps_the_world_border() {
+    with_opener("rst2", "rst2:hold", flat(), |game, seen| {
+        tick_post(game);
+        game.apply_runtime_levels();
+        let hold = super::Dim::extra("rst2:hold").unwrap();
+        game.level.seed = 7;
+        let overworld = game.world_root.join("dimensions/minecraft/overworld");
+        let nether = game.world_root.join("dimensions/minecraft/the_nether");
+        let references = game
+            .world_root
+            .join("data/horizon_structure_references_minecraft_overworld.json");
+        for folder in [&overworld, &nether] {
+            write_file(&folder.join("region/r.0.0.mca"));
+            write_file(&folder.join("data/minecraft/raids.dat"));
+            write_file(&folder.join("data/minecraft/world_border.dat"));
+        }
+        write_file(&references);
+        // The mod's players are in its level.
+        game.enter_level(hold).unwrap();
+        assert_eq!(game.check_level_reset(Some("rst2"), 99, true), Ok(()));
+        game.apply_runtime_levels();
+        assert_eq!(game.level.seed, 99);
+        assert_eq!(game.dim, hold, "the mod's level holds the place");
+        for dim in [super::Dim::Overworld, super::Dim::Nether, super::Dim::End] {
+            assert!(
+                !game.levels.parked.contains_key(&dim),
+                "{dim:?} was dropped"
+            );
+        }
+        for folder in [&overworld, &nether] {
+            assert!(
+                !folder.join("region").exists()
+                    && !folder.join("data/minecraft/raids.dat").exists()
+            );
+            assert!(
+                folder.join("data/minecraft/world_border.dat").is_file(),
+                "the border stays"
+            );
+        }
+        assert!(!references.exists());
+        assert_eq!(seen.resets.lock().unwrap().len(), 1);
+        // The Overworld opens again, fresh.
+        game.enter_level(super::Dim::Overworld).unwrap();
+        assert_eq!(game.dim, super::Dim::Overworld);
     });
 }

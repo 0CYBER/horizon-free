@@ -249,6 +249,9 @@ pub struct Native {
     /// caller is unidentified is refused with `NotPermitted`, whatever other mods declare.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub world_control: bool,
+    /// Whether the mod may regenerate the vanilla levels with `RuntimeLevels::reset_vanilla`; default off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub level_reset: bool,
 }
 
 /// One declared game internal, as listed in the pinned game's `internals.json`.

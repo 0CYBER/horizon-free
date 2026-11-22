@@ -2646,3 +2646,5 @@ horizon-client game::xp_repair_ratio_tests::bad_ratios_never_break_the_repair li
 horizon-client game::xp_repair_ratio_tests::give_experience_points_repairs_through_the_part lib daily resources
 horizon-client game::xp_repair_ratio_tests::the_ratio_a_part_answers_scales_the_repair lib daily resources
 horizon-client game::zombie_villagers::tests::conversions_preserve_body_equipment lib daily resources
+horizon-client game::runtime_levels_tests::a_reset_of_the_vanilla_levels_is_refused_until_the_mod_can_hold_the_place_and_nobody_is_inside lib daily resources
+horizon-client game::runtime_levels_tests::a_reset_regenerates_the_vanilla_levels_from_the_new_seed_and_keeps_the_world_border lib daily resources

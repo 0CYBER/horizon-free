@@ -78,3 +78,21 @@ pub enum RuntimeLevelError {
     /// second `delete` of the id finishes the removal; only then can it be opened.
     Removing,
 }
+
+/// Why `RuntimeLevels::reset_vanilla` refused. The game logs the mod that asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum LevelResetError {
+    /// There is no server world, or the call was made outside a mod's code.
+    Unavailable,
+    /// The calling mod's bundle does not declare `[native] level_reset`, or the caller is unidentified.
+    NotPermitted,
+    /// A player, or an arrival not yet landed, is in the Overworld, the Nether or the End.
+    PlayersInside,
+    /// The mod has no runtime level open to hold the server's active level while the vanilla
+    /// levels are rebuilt.
+    NoHoldingLevel,
+    /// A reset is already queued.
+    Busy,
+}
