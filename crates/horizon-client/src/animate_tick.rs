@@ -1892,15 +1892,17 @@ fn dripstone_drip(
     };
     let above = ctx.facts.get(ctx.state([root[0], root[1] + 1, root[2]]));
     // Mud above the root counts as a water source unless water evaporates here.
-    let fluid = if &*above.name == "minecraft:mud" && !ctx.ultrawarm {
+    let mud_source = &*above.name == "minecraft:mud" && !ctx.ultrawarm;
+    let fluid = if mud_source {
         Fluid::Water
     } else {
         above.fluid
     };
-    // canFillCauldron is `fluid == Fluids.LAVA || fluid == Fluids.WATER`: the
-    // fluid above the root by its type, not by whether it is still a source, so
-    // a flowing fluid drips under the same 2% roll a source does.
-    if roll >= 0.02 && fluid == Fluid::None {
+    // getFluidAboveStalactite takes the exact state: canFillCauldron is false
+    // for a flowing fluid, which drips only with the dimension's 2% roll,
+    // while a source (level 8, not falling) uses the 12% roll.
+    let source = mud_source || (above.fluid_level == 8 && !above.fluid_falling);
+    if roll >= 0.02 && !source {
         return;
     }
     // getDripParticle: no fluid drips what the dimension's default says.
