@@ -15,6 +15,12 @@ pub fn install_parts(
 #[path = "profiler.rs"]
 pub mod profiler;
 
+/// Installs the built-in profiler provider before native mods start.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn install_profile_spans(provider: fn(&'static str) -> Option<Box<dyn std::any::Any>>) {
+    crate::profiling::install(provider);
+}
+
 /// Install platform instrumentation before any mod registration or dispatch.
 /// A first guard entry seals the socket; late initialization is refused without
 /// replacing a backend or disturbing an in-flight call.

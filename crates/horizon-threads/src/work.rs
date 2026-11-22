@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering::*};
 #[cfg(target_os = "linux")]
 mod cx {
     pub use crate::sampler::{
-        set_block, set_chunk, set_dim, set_entity_type, set_span, set_tick, span, tick_end,
+        sampling, set_block, set_chunk, set_dim, set_entity_type, set_span, set_tick, span,
+        tick_end,
     };
 }
 
@@ -23,6 +24,9 @@ mod cx {
         0
     }
     pub fn tick_end(_: u64) {}
+    pub fn sampling() -> bool {
+        false
+    }
 }
 
 const ON: bool = cfg!(target_os = "linux");
@@ -120,6 +124,12 @@ pub fn enter_span(name: &'static str) -> u16 {
 #[inline]
 pub fn leave_span(previous: u16) {
     cx::set_span(previous);
+}
+
+/// Whether a sampling session runs, so a caller can skip setting context nobody reads.
+#[inline]
+pub fn sampling() -> bool {
+    cx::sampling()
 }
 
 /// The id [`set_entity`] stores for an entity or block entity type.

@@ -494,12 +494,23 @@ pub struct Stats {
     pub unwind_ns: Option<f64>,
 }
 
+/// How many sessions run ([`sampling`]).
+static SESSIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether a sampling session runs.
+#[inline]
+pub fn sampling() -> bool {
+    SESSIONS.load(Relaxed) > 0
+}
+
 /// Threads being sampled; dropping it (or `stop`) cancels their timers.
 pub struct Session {
     threads: Vec<Arc<ThreadState>>,
     unwinder: Option<eh::StackUnwinder>,
     unwound: u64,
     unwind_ns: u64,
+    /// Whether it counts in [`SESSIONS`]: only a session `start` returned.
+    counted: bool,
 }
 
 /// Starts sampling every registered thread `select` accepts and that no other session samples.
@@ -521,6 +532,7 @@ pub fn start(config: Config, select: impl Fn(&str) -> bool) -> io::Result<Sessio
         unwinder: None,
         unwound: 0,
         unwind_ns: 0,
+        counted: false,
     };
     for state in registry
         .iter()
@@ -548,6 +560,8 @@ pub fn start(config: Config, select: impl Fn(&str) -> bool) -> io::Result<Sessio
             "no sampled thread matches",
         ));
     }
+    SESSIONS.fetch_add(1, Relaxed);
+    session.counted = true;
     Ok(session)
 }
 
@@ -622,6 +636,9 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.threads.iter().for_each(|s| s.disarm());
+        if self.counted {
+            SESSIONS.fetch_sub(1, Relaxed);
+        }
     }
 }
 

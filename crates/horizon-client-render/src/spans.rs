@@ -54,6 +54,13 @@ pub fn record_here(on: bool) {
 pub fn recording_here() -> bool {
     ENABLED.load(Ordering::Relaxed) || HERE.with(Cell::get) || timeline::on()
 }
+/// Whether a [`guard`] here would be seen by anything: this thread records spans, the
+/// sampler runs, or a heap-census build tags allocations. A caller that boxes its guard
+/// (a mod's profiler scope) skips it when not.
+#[inline]
+pub fn observed() -> bool {
+    recording_here() || horizon_threads::work::sampling() || horizon_threads::HEAP_CENSUS
+}
 /// The thread's CPU time when spans are on for every thread (`HORIZON_SPIKES`): spans recorded
 /// by `record_here` alone keep wall time only.
 #[inline]
@@ -121,11 +128,11 @@ impl Drop for Guard {
 }
 /// How many spans this thread holds.
 fn recorded() -> usize {
-    SPANS.with(|s| s.borrow().len())
+    SPANS.try_with(|s| s.borrow().len()).unwrap_or(0)
 }
 /// Moves the spans recorded since `mark` one level in: they ran inside the lap now ending.
 fn nest_since(mark: usize, depth: u8) {
-    SPANS.with(|s| {
+    let _ = SPANS.try_with(|s| {
         let mut s = s.borrow_mut();
         let start = mark.min(s.len());
         for span in &mut s[start..] {
@@ -135,9 +142,10 @@ fn nest_since(mark: usize, depth: u8) {
         }
     });
 }
-/// Keeps a finished span for the thread's next [`take_raw`].
+/// Keeps a finished span for the thread's next [`take_raw`]. A span that ends while the thread
+/// exits, after its buffer is gone (a guard a mod kept in thread-local storage), is dropped.
 fn push(span: Span) {
-    SPANS.with(|s| {
+    let _ = SPANS.try_with(|s| {
         let mut s = s.borrow_mut();
         if s.len() >= UNTAKEN_MAX {
             s.clear();
@@ -295,15 +303,26 @@ pub mod timeline {
         cell::RefCell,
         sync::{
             Arc, Mutex, PoisonError,
-            atomic::{AtomicBool, AtomicU32, Ordering},
+            atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         },
         time::{Duration, Instant},
     };
 
     /// The most spans a thread holds between two drains; a thread that records more drops them.
     const THREAD_EVENTS_MAX: usize = 1 << 18;
+    /// The most spans all threads hold together between two drains (32 bytes each: 32 MiB),
+    /// however many threads record: past it, spans are dropped whichever thread ends them.
+    #[cfg(not(test))]
+    pub(super) const RUN_EVENTS_MAX: usize = 1 << 20;
+    #[cfg(test)]
+    pub(super) const RUN_EVENTS_MAX: usize = 1 << 16;
+    /// The most thread buffers one timeline makes; a thread past them records nothing in it
+    /// (a buffer of an exited thread of the same name is still taken over).
+    pub(super) const RUN_THREADS_MAX: usize = 256;
 
     static ON: AtomicBool = AtomicBool::new(false);
+    /// The spans the threads hold now, against [`RUN_EVENTS_MAX`].
+    static HELD: AtomicUsize = AtomicUsize::new(0);
     static GENERATION: AtomicU32 = AtomicU32::new(0);
     static RUN: Mutex<Option<Run>> = Mutex::new(None);
 
@@ -318,11 +337,12 @@ pub mod timeline {
         events: Vec<Event>,
     }
 
-    /// This thread's buffer in the timeline it last joined.
+    /// This thread's buffer in the timeline it last joined: None when the timeline had no room
+    /// for another thread.
     struct Mine {
         generation: u32,
         origin: Instant,
-        thread: Arc<Mutex<Thread>>,
+        thread: Option<Arc<Mutex<Thread>>>,
     }
 
     thread_local! {
@@ -364,6 +384,7 @@ pub mod timeline {
             origin,
             threads: Vec::new(),
         });
+        HELD.store(0, Ordering::Relaxed);
         GENERATION.fetch_add(1, Ordering::Relaxed);
         ON.store(true, Ordering::Relaxed);
         true
@@ -387,7 +408,11 @@ pub mod timeline {
             .iter()
             .filter_map(|thread| {
                 let mut thread = thread.lock().unwrap_or_else(PoisonError::into_inner);
-                (!thread.events.is_empty()).then(|| ThreadEvents {
+                let taken = thread.events.len();
+                let _ = HELD.try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                    Some(held.saturating_sub(taken))
+                });
+                (taken > 0).then(|| ThreadEvents {
                     thread: thread.label.clone(),
                     events: std::mem::take(&mut thread.events),
                 })
@@ -410,7 +435,8 @@ pub mod timeline {
             .iter()
             .find(|t| Arc::strong_count(t) == 1 && of_name(t))
         {
-            Some(exited) => Arc::clone(exited),
+            Some(exited) => Some(Arc::clone(exited)),
+            None if run.threads.len() >= RUN_THREADS_MAX => None,
             None => {
                 let same = run.threads.iter().filter(|t| of_name(t)).count();
                 let label = if same == 0 {
@@ -424,7 +450,7 @@ pub mod timeline {
                     events: Vec::new(),
                 }));
                 run.threads.push(Arc::clone(&thread));
-                thread
+                Some(thread)
             }
         };
         Some(Mine {
@@ -445,18 +471,29 @@ pub mod timeline {
             if mine.as_ref().is_none_or(|m| m.generation != generation) {
                 *mine = join();
             }
-            let Some(mine) = mine.as_ref() else {
+            let Some(Mine {
+                origin,
+                thread: Some(thread),
+                ..
+            }) = mine.as_ref()
+            else {
                 return;
             };
+            if HELD.fetch_add(1, Ordering::Relaxed) >= RUN_EVENTS_MAX {
+                HELD.fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
             let event = Event {
                 name,
-                start_us: started.saturating_duration_since(mine.origin).as_micros() as u64,
+                start_us: started.saturating_duration_since(*origin).as_micros() as u64,
                 dur_us: elapsed.as_micros().min(u128::from(u32::MAX)) as u32,
                 depth,
             };
-            let mut thread = mine.thread.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut thread = thread.lock().unwrap_or_else(PoisonError::into_inner);
             if thread.events.len() < THREAD_EVENTS_MAX {
                 thread.events.push(event);
+            } else {
+                HELD.fetch_sub(1, Ordering::Relaxed);
             }
         });
     }
@@ -1011,5 +1048,51 @@ mod tests {
             timeline::drain().is_empty(),
             "a stopped timeline records nothing"
         );
+    }
+
+    /// One budget holds the whole capture, however many threads record: spans past it are
+    /// dropped whichever thread ends them, a drain frees it again, and threads past the cap get
+    /// no buffer.
+    #[test]
+    fn a_timeline_holds_one_budget_of_spans_and_threads_for_the_whole_capture() {
+        use super::timeline;
+        use std::time::Instant;
+        let _switch = spans_switch();
+        assert!(timeline::start(Instant::now()));
+        let record = |name: String, spans: usize| {
+            std::thread::Builder::new()
+                .name(name)
+                .spawn(move || (0..spans).for_each(|_| super::time("budget", || ())))
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        let ours = |threads: &[timeline::ThreadEvents], prefix: &str| -> Vec<usize> {
+            threads
+                .iter()
+                .filter(|t| t.thread.starts_with(prefix))
+                .map(|t| t.events.len())
+                .collect()
+        };
+        for i in 0..4 {
+            record(format!("budget-{i}"), timeline::RUN_EVENTS_MAX / 2);
+        }
+        let held = ours(&timeline::drain(), "budget-");
+        assert!(
+            held.iter().sum::<usize>() <= timeline::RUN_EVENTS_MAX,
+            "{held:?}"
+        );
+        assert!(
+            held.len() < 4,
+            "the last threads found the budget spent: {held:?}"
+        );
+        record("again-0".into(), 1);
+        for i in 0..timeline::RUN_THREADS_MAX {
+            record(format!("lane-{i}"), 1);
+        }
+        let threads = timeline::finish();
+        assert_eq!(ours(&threads, "again-"), [1], "the drain freed the budget");
+        assert!(threads.len() <= timeline::RUN_THREADS_MAX);
+        assert!(ours(&threads, "lane-").len() < timeline::RUN_THREADS_MAX);
     }
 }

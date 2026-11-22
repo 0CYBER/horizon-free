@@ -57,6 +57,9 @@
 extern crate self as mod_api;
 mod equip_reads;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod profiling;
+
 pub use mod_vocab::*;
 /// Shared Wire values and the mod-side transport.
 pub mod wire {
