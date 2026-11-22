@@ -532,6 +532,50 @@ fn command_without_snapshot_reads_resources_from_its_own_words() {
     assert!(argument_paths(&tool).unwrap().is_empty());
 }
 
+/// A Java instance's command with an odd number of words, as `backend::java_game` builds it:
+/// under the engine's grammar `--versionType` takes `release` and the extra JVM argument is left
+/// without a value (#19719).
+fn java_game_with_odd_words(home: &Path, logs: &Path) -> Command {
+    let mut java = Command::new("java");
+    java.args([
+        "-Da=1",
+        "-Xmx4G",
+        "-cp",
+        "client.jar",
+        "net.minecraft.client.main.Main",
+        "--username",
+        "Steve",
+        "--versionType",
+        "release",
+    ])
+    .current_dir(home)
+    .env("HORIZON_HOME", logs);
+    java
+}
+
+#[test]
+fn a_java_instances_recorded_command_is_not_read_as_horizons() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("instance");
+    let logs = root.path().join("logs");
+    fs::create_dir_all(&home).unwrap();
+    let mut java = java_game_with_odd_words(&home, &logs);
+    // A launch records the game's command before wrappers (`snapshot`); a Java instance's words
+    // are not the engine's grammar, so they are not parsed for folders.
+    let words: Vec<_> = std::iter::once(java.get_program().to_owned())
+        .chain(java.get_args().map(std::ffi::OsStr::to_owned))
+        .collect();
+    java.env(super::GAME, serde_json::to_string(&words).unwrap());
+    assert!(argument_paths(&java).unwrap().is_empty());
+    shared(&java).unwrap();
+    // Horizon's own game's words still name its folders as before.
+    let mut game = horizon_game(root.path());
+    snapshot(&mut game);
+    let paths = argument_paths(&game).unwrap();
+    assert!(paths.contains(&root.path().join("resources")));
+    assert!(paths.contains(&std::path::absolute(root.path()).unwrap()));
+}
+
 #[test]
 fn wrapped_game_starts_and_holds_the_wrappers_resources() {
     let root = tempfile::tempdir().unwrap();
