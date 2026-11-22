@@ -5,6 +5,8 @@ use horizon_client::{
     motion::PlayerMotion,
     projectiles::{Projectile, ProjectileKind},
 };
+use crate::game::commands::Target;
+use horizon_core::nbt::Tag;
 use horizon_core::{geometry::Vec3, position::ChunkPos, random::RandomSource};
 use std::sync::Arc;
 fn with_game(test: impl FnOnce(&mut Game<'_>)) {
@@ -780,5 +782,58 @@ fn finish_hit_uses_registered_guest_context_and_restores_the_host() {
             first,
             vec![("minecraft:projectile_shoot", at, Some(Who::Player))]
         );
+    });
+}
+
+/// `Projectile.addAdditionalSaveData` writes the owner reference of any projectile: a bullet a
+/// mob shot (its owner a `Who`, no loaded reference) saves its shooter's UUID.
+#[test]
+#[ignore = "daily"]
+fn a_bullet_a_mob_shot_saves_its_owner() {
+    with_game(|game| {
+        let shooter = owner(game);
+        let mut bullet = Projectile::new(
+            ProjectileKind::ShulkerBullet {
+                target: None,
+                dir: None,
+                steps: 0,
+                delta: [0.0; 3],
+                seed: 1,
+            },
+            Vec3::new(6.5, 201.5, 6.5),
+            Some(Who::Mob(shooter)),
+        );
+        bullet.velocity = Vec3::ZERO;
+        game.creatures.projectiles.push(bullet);
+        let index = game.creatures.projectiles.len() - 1;
+        assert_eq!(game.projectile_owner_uuid(index), Some([114, 0, 0, 99]));
+        let id = game.creatures.projectiles[index].id;
+        let owner_of = |tag: &Tag| tag.get("Owner").cloned();
+        let ints = |u: [i32; 4]| Tag::IntArray(u.to_vec());
+        // `/data get entity` and the chunk save both write the owner's UUID.
+        let command = game.command_target_nbt(Target::Projectile(id)).unwrap();
+        assert_eq!(owner_of(&command), Some(ints([114, 0, 0, 99])));
+        let keys = std::collections::HashSet::from([(0, 0)]);
+        let saved = game.entity_chunks(&keys, false);
+        let tag = saved
+            .iter()
+            .flat_map(|(_, tags)| tags)
+            .find(|t| t.get("id") == Some(&Tag::String("minecraft:shulker_bullet".into())))
+            .unwrap();
+        assert_eq!(owner_of(tag), Some(ints([114, 0, 0, 99])));
+        // A loaded reference wins over the shooter.
+        game.creatures
+            .projectiles
+            .update(index, |p| p.owner_uuid = Some([5, 6, 7, 8]));
+        assert_eq!(game.projectile_owner_uuid(index), Some([5, 6, 7, 8]));
+        let command = game.command_target_nbt(Target::Projectile(id)).unwrap();
+        assert_eq!(owner_of(&command), Some(ints([5, 6, 7, 8])));
+        let saved = game.entity_chunks(&keys, false);
+        let tag = saved
+            .iter()
+            .flat_map(|(_, tags)| tags)
+            .find(|t| t.get("id") == Some(&Tag::String("minecraft:shulker_bullet".into())))
+            .unwrap();
+        assert_eq!(owner_of(tag), Some(ints([5, 6, 7, 8])));
     });
 }

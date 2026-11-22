@@ -243,11 +243,13 @@ impl Game<'_> {
                         _ => None,
                     });
                 let target = who.and_then(|who| self.save_who_uuid(who));
-                let p = self.creatures.projectiles.iter().find(|p| p.id == id)?;
+                let index = self.creatures.projectiles.iter().position(|p| p.id == id)?;
+                let mob_owner = self.projectile_owner_uuid(index);
+                let p = &self.creatures.projectiles[index];
                 let owner = if p.owner == Some(horizon_client::mobs::Who::Player) {
                     player_uuid
                 } else {
-                    None
+                    mob_owner
                 };
                 let in_block = p
                     .arrow

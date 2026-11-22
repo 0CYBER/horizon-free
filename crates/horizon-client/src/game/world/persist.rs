@@ -2212,6 +2212,17 @@ impl Game<'_> {
             (chunk_of(o.position), tag)
         })
     }
+    /// `Projectile.addAdditionalSaveData`'s `Owner`: the reference the projectile was loaded
+    /// with, else the UUID of the mob that shot it (a shulker's bullet), which the mob keeps
+    /// for its own save. A player's is left to the callers that write it.
+    pub(in crate::game) fn projectile_owner_uuid(&mut self, i: usize) -> Option<[i32; 4]> {
+        let p = &self.creatures.projectiles[i];
+        match (p.owner_uuid, p.owner) {
+            (Some(uuid), _) => Some(uuid),
+            (None, Some(Who::Mob(id))) => Some(self.uuid_for(id)),
+            _ => None,
+        }
+    }
     pub(super) fn save_projectile(
         &mut self,
         i: usize,
@@ -2221,6 +2232,8 @@ impl Game<'_> {
         if !keys.contains(&chunk_of(p.position)) || !entity_nbt::saved_with_chunk(p) {
             return None;
         }
+        let owner = self.projectile_owner_uuid(i);
+        let p = &self.creatures.projectiles[i];
         // `ShulkerBullet`'s target, over the UUID bridge: a mob the level has
         // no UUID for writes no `Target` rather than a made-up one.
         let target = match &p.kind {
@@ -2230,7 +2243,6 @@ impl Game<'_> {
             } => self.save_who_uuid(*who),
             _ => None,
         };
-        let owner = p.owner_uuid;
         let raw = anon_raw(&self.persist, p.kind.id(), p.position);
         let uuid = saved_uuid(&self.persist, p.id);
         let in_block = p
