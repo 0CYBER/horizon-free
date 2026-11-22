@@ -183,7 +183,7 @@ it (edited on every push, never repeated): talk to its author in the thread befo
   (`perf(chunks,rendering): ...`), or leave it out (`docs: ...`). Release notes drop the prefix.
 - **Tick its kind** in the template: `parity` (Horizon now does what vanilla does), `bug` (a crash or breakage),
   `perf`, `feature` (new for players), `extra` (Horizon-only, off by default), `tooling` or `docs`. A workflow sets
-  that label from the box, else from the title, and area labels (`launcher`, `mobs`, `worldgen`, `rendering`...)
+  that label from the box, else from the title, and area labels (`launcher`, `mobs`, `worldgen`, `rendering`, `translations`...)
   from the title and the paths you change. A size label (`size: XS` up to 50 lines, `S` 150, `M` 500, `L` 3000,
   `XL` over) counts the lines GitHub shows as added and removed outside Markdown and test files: what counts above,
   but with moved lines and inline tests, which the label can't tell apart.

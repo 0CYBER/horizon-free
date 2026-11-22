@@ -90,6 +90,14 @@ class AreaTests(unittest.TestCase):
             "crates/horizon-client-render/src/options_ui.rs": "ui",
             "docs/api/shaders.md": "website",
             "roadmap/roadmap.toml": "website",
+            "crates/horizon-client/assets/horizon/lang/en_us.json": "translations",
+            "launcher/lang/de.json": "translations",
+            "crowdin.yml": "translations",
+            ".github/crowdin-approved.yml": "translations",
+            ".github/workflows/crowdin.yml": "translations",
+            "tools/crowdin_import.py": "translations",
+            "tools/lang_review/game/check.py": "translations",
+            "docs/translations.md": "translations",
         }
         for path, area in cases.items():
             self.assertEqual(pl.area_of(path), area, path)
@@ -107,6 +115,11 @@ class AreaTests(unittest.TestCase):
         self.assertEqual(pl.areas(files), ["launcher", "mobs", "commands"])
         self.assertEqual(pl.areas([("tools/x.py", 95), ("launcher/src/a.rs", 5)]), [])
         self.assertEqual(pl.areas([]), [])
+
+    def test_a_lang_file_beside_code_adds_translations(self):
+        files = [("crates/horizon-client/src/mobs/a.rs", 40),
+                 ("crates/horizon-client/assets/horizon/lang/en_us.json", 10)]
+        self.assertEqual(pl.areas(files), ["mobs", "translations"])
 
     def test_files_count_on_push_not_on_edit(self):
         files = [("launcher/src/a.rs", 5)]

@@ -44,6 +44,9 @@ _G = r"crates/horizon-client(?:-render|-core|-input)?/src/"  # the client's crat
 _GAME = _G + r"(?:game/(?:[^/]+/)?)?"
 # Area: (label, description, the paths). First match wins for each file.
 AREAS = [
+    ("translations", "Area: translations and the Crowdin setup",
+     r"^(?:crates/horizon-client/assets/horizon/lang/|launcher/lang/|tools/lang_review/|docs/translations\.md$"
+     r"|crowdin\.yml$|\.github/crowdin-approved\.yml$|\.github/workflows/crowdin\.yml$|tools/crowdin_import\.py$)"),
     ("launcher", "Changes the launcher", r"^launcher/"),
     ("mods", "Area: mods, mod SDK, modpack porting",
      r"^crates/(?:horizon-mod|cargo-horizon-mod|horizon-port-pack)|" + _GAME
