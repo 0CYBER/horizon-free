@@ -165,6 +165,7 @@ horizon-client game::native_recipes::tests::a_synced_vanilla_recipe_has_one_book
 horizon-client game::native_recipes::tests::synced_vanilla_recipes_keep_their_book_ids lib daily resources
 horizon-client game::native_server::network_settings_tests::server_settings_follow_the_network_config lib daily slow
 horizon-client game::native_world_columns::tests::terrain_columns_are_the_generators_own_surface_and_load_no_chunk lib daily resources
+horizon-client game::native_world_read::tests::recipe_types_list_each_type_with_recipes_or_a_serializer lib daily resources
 horizon-client game::natural_spawning::tests::spawn_candidates_match_the_uncached_union_while_players_move lib daily slow
 horizon-client game::persist::completion_tests::admitted_families_load_merge_save_and_reload lib daily resources
 horizon-client game::persist::completion_tests::cold_registry_nonmob_uuid_collision_refuses_the_entire_tree lib daily resources

@@ -4813,6 +4813,23 @@ impl Game<'_> {
             .cloned()
             .unwrap_or_default()
     }
+    /// The recipe types `recipes_of_type` answers, sorted: each type with a recipe in force
+    /// and each type a registered serializer produces. Empty outside a world.
+    pub(in crate::game) fn recipe_types(&self) -> Arc<[String]> {
+        if self.outside_world() {
+            return Default::default();
+        }
+        let with_recipes = (self.recipes().by_type.iter())
+            .filter(|(_, recipes)| !recipes.is_empty())
+            .map(|(kind, _)| kind.clone());
+        let registered = mod_api::__private::parts_installation::recipe_serializers()
+            .into_iter()
+            .map(|(_, kind)| kind);
+        let mut types: Vec<String> = with_recipes.chain(registered).collect();
+        types.sort();
+        types.dedup();
+        types.into()
+    }
     /// An ingredient as a recipe's JSON names it: an item, a `#tag`, or a list
     /// of them, a bare id as `minecraft:` (as vanilla reads it); `test` says
     /// whether a stack fits. Items the game doesn't know are left out; None

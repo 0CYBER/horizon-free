@@ -575,6 +575,33 @@ mod tests {
         });
     }
 
+    /// Every type that has recipes is listed once, by type and never by serializer, and so is a
+    /// mod's registered type with no recipe yet.
+    #[test]
+    #[ignore = "daily"]
+    fn recipe_types_list_each_type_with_recipes_or_a_serializer() {
+        mod_platform::testing::with_recipe_types(&["typesprobe:grinding"], || {
+            with_game(|game| {
+                let types = game.recipe_types();
+                for kind in [
+                    "minecraft:blasting",
+                    "minecraft:campfire_cooking",
+                    "minecraft:crafting",
+                    "minecraft:smelting",
+                    "minecraft:smithing",
+                    "minecraft:smoking",
+                    "minecraft:stonecutting",
+                    "typesprobe:grinding",
+                ] {
+                    assert!(types.iter().any(|t| t == kind), "{kind}: {types:?}");
+                }
+                assert!(!types.iter().any(|t| t == "minecraft:crafting_shaped"));
+                assert!(types.is_sorted());
+                assert!(types.windows(2).all(|pair| pair[0] != pair[1]));
+            })
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn tag_and_fluid_reads_follow_vanilla_and_load_nothing() {

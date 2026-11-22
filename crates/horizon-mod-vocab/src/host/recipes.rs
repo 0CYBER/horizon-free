@@ -29,6 +29,16 @@ pub trait RecipesHost {
     fn recipes_of_type(&self, kind: &str) -> Arc<[Recipe]>;
     /// Side: both.
     /// Published asset/data read: available in Setup, Reloading and World.
+    /// The recipe types `recipes_of_type` answers, sorted: each type with a recipe in force and
+    /// each type a registered serializer produces, vanilla's and mods' alike
+    /// (`register_raw_recipe_serializer`). A recipe viewer passes them to `datapack_sync` on
+    /// the server to be sent every mod's recipes, its machines' included. Recipe types, never
+    /// serializer names (`minecraft:crafting`, not `minecraft:crafting_shaped`). Empty outside a
+    /// world.
+    #[access(PublishedResources)]
+    fn recipe_types(&self) -> Arc<[String]>;
+    /// Side: both.
+    /// Published asset/data read: available in Setup, Reloading and World.
     /// An ingredient from recipe-file JSON text: an item, a `#tag`, or a list
     /// of them, a bare id as `minecraft:` (as vanilla reads it); `test` says
     /// whether a stack fits. Items the game doesn't know are left out; None
