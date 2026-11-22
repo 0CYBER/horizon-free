@@ -1,0 +1,2 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities.
+horizon-client-lib mobs::village_index::tests::index_answers_as_the_scan_of_every_villager_did lib daily resources

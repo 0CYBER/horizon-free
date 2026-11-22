@@ -1235,6 +1235,7 @@ pub fn main() -> horizon_client::Result<()> {
                     others_index: None,
                     passenger_objects: &[],
                     others_villagers: None,
+                    village: None,
                     species_slots: None,
                     others_solid: None,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,

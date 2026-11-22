@@ -840,7 +840,7 @@ pub(super) fn others_tickets(
     w: &MobWorld,
 ) -> crate::fast_hash::FxHashMap<[i32; 3], usize> {
     let mut taken = crate::fast_hash::FxHashMap::default();
-    for o in w.others {
+    let mut count = |o: &super::Seen| {
         if o.id != m.id && o.alive && o.species == Species::Villager {
             for q in [o.job, o.bed, o.potential_job, o.meeting]
                 .into_iter()
@@ -849,6 +849,12 @@ pub(super) fn others_tickets(
                 *taken.entry(q).or_insert(0) += 1;
             }
         }
+    };
+    match w.others_villagers {
+        Some(slots) => {
+            slots.iter().for_each(|&i| count(&w.others[i as usize]));
+        }
+        None => w.others.iter().for_each(count),
     }
     taken
 }
@@ -965,14 +971,8 @@ fn manhattan(a: [i32; 3], b: [i32; 3]) -> i32 {
     (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
 }
 /// The village sections: sections holding a taken village POI.
-pub(super) fn village_sections(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
-    let mut out = Vec::new();
-    let mut add = |p: [i32; 3]| {
-        let s = [p[0] >> 4, p[1] >> 4, p[2] >> 4];
-        if !out.contains(&s) {
-            out.push(s);
-        }
-    };
+pub(super) fn village_sections(m: &Mob, w: &MobWorld) -> super::village_index::Villages {
+    let mut own = Vec::new();
     if let Some(mm) = mem_ref(m) {
         for s in [
             &mm.job_site,
@@ -983,42 +983,16 @@ pub(super) fn village_sections(m: &Mob, w: &MobWorld) -> Vec<[i32; 3]> {
             if let Some(&p) = s.get()
                 && poi_at(w, p[0], p[1], p[2]).is_some()
             {
-                add(p);
+                own.push([p[0] >> 4, p[1] >> 4, p[2] >> 4]);
             }
         }
     }
-    let mut villager = |o: &super::Seen| {
-        if o.alive && o.species == Species::Villager {
-            for p in [o.job, o.bed, o.potential_job, o.meeting]
-                .into_iter()
-                .flatten()
-            {
-                if poi_at(w, p[0], p[1], p[2]).is_some() {
-                    add(p);
-                }
-            }
-        }
-    };
-    match w.others_villagers {
-        Some(slots) => slots.iter().for_each(|&i| villager(&w.others[i as usize])),
-        None => w.others.iter().for_each(villager),
-    }
-    out
+    super::village_index::Villages::new(w, &own)
 }
 /// `PoiManager.sectionsToVillage`: the Chebyshev distance in sections to a
 /// village section, at most 7.
-pub(super) fn sections_to_village(villages: &[[i32; 3]], s: [i32; 3]) -> i32 {
-    villages
-        .iter()
-        .map(|v| {
-            (v[0] - s[0])
-                .abs()
-                .max((v[1] - s[1]).abs())
-                .max((v[2] - s[2]).abs())
-        })
-        .min()
-        .unwrap_or(7)
-        .min(7)
+pub(super) fn sections_to_village(villages: &super::village_index::Villages, s: [i32; 3]) -> i32 {
+    villages.distance(s)
 }
 
 /// A memory a gate or behaviour conditions on.
@@ -3771,7 +3745,11 @@ fn happy_particles(m: &Mob, cx: &mut Bx) {
     });
 }
 /// `BehaviorUtils.findSectionClosestToVillage`.
-pub(super) fn closest_section(villages: &[[i32; 3]], center: [i32; 3], radius: i32) -> [i32; 3] {
+pub(super) fn closest_section(
+    villages: &super::village_index::Villages,
+    center: [i32; 3],
+    radius: i32,
+) -> [i32; 3] {
     let here = sections_to_village(villages, center);
     let mut best: Option<([i32; 3], i32)> = None;
     for z in center[2] - radius..=center[2] + radius {

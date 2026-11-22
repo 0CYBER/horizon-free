@@ -42,6 +42,7 @@ pub(super) struct Group<M: MobSlot> {
     /// The first slot of each id, as a scan would find it.
     index: FxHashMap<u32, u32>,
     villager_slots: Vec<u32>,
+    village: horizon_client::mobs::village_index::VillageIndex,
     species_slots: horizon_client::mobs::species_slots::SpeciesSlots,
     solid_slots: Vec<u32>,
     pub pushes: PendingPushes,
@@ -142,6 +143,7 @@ impl<M: MobSlot> Group<M> {
             grid,
             index,
             villager_slots,
+            village: Default::default(),
             species_slots,
             solid_slots,
             pushes: PendingPushes::default(),
@@ -343,6 +345,7 @@ impl<M: MobSlot> Group<M> {
             others_grid: Some(&self.grid),
             others_index: Some(&self.index),
             others_villagers: Some(&self.villager_slots),
+            village: Some(&self.village),
             species_slots: Some(&self.species_slots),
             others_solid: Some(&self.solid_slots),
             difficulty,
@@ -480,6 +483,7 @@ impl<M: MobSlot> Group<M> {
         // after this mob see it as it is now.
         let collisions = self.snapshot[i].collisions;
         let fresh = seen(m, shared.uuid);
+        self.village.mark(i, &self.snapshot[i], &fresh);
         let reclassified = self.snapshot[i].species != fresh.species;
         self.snapshot[i] = fresh;
         if reclassified {
