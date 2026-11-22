@@ -160,13 +160,22 @@ pub fn plan(source: &dyn Source, project: &Project, everything: bool) -> Result<
         ));
     }
     let mut steps = Vec::new();
-    add(source, project.clone(), everything, false, 0, &mut steps)?;
+    add(
+        source,
+        project.clone(),
+        None,
+        everything,
+        false,
+        0,
+        &mut steps,
+    )?;
     Ok(steps)
 }
 
 fn add(
     source: &dyn Source,
     project: Project,
+    reviewed: Option<&Version>,
     everything: bool,
     dependency: bool,
     depth: usize,
@@ -176,17 +185,20 @@ fn add(
         return Ok(());
     }
     if depth > MAX_DEPTH {
-        return Err(format!("{}'s dependencies go too deep.", project.title));
+        return Err(crate::i18n::trf(
+            "{pack}'s dependencies go too deep.",
+            &[("pack", &project.title)],
+        ));
     }
     if let Support::No(why) = project.support() {
         return Err(format!("{} doesn't run in Horizon: {why}", project.title));
     }
-    let versions = source.versions(&project)?;
-    let Some(version) = pick(project.kind, &versions, everything).cloned() else {
-        return Err(match versions.iter().find_map(|v| v.blocked.clone()) {
-            Some(why) => format!("{} can't be installed from here: {why}", project.title),
-            None => format!("{} has no version Horizon runs.", project.title),
-        });
+    let version = match reviewed {
+        Some(version) => version.clone(),
+        None => {
+            let versions = source.versions(&project)?;
+            select_version(&project, &versions, everything)?.clone()
+        }
     };
     for id in &version.required {
         let needed = source.project(id).map_err(|_| {
@@ -196,10 +208,19 @@ fn add(
                 source.id().label()
             )
         })?;
+        if project.source == SourceId::Modrinth
+            && project.kind == Kind::ResourcePack
+            && needed.kind == Kind::Mod
+        {
+            return Err(crate::i18n::tr(
+                "This version requires Java mods that the resource-pack installer cannot install.",
+            )
+            .into());
+        }
         if needed.kind.folder().is_none() {
             return Err(format!("{} needs {}.", project.title, needed.title));
         }
-        add(source, needed, everything, true, depth + 1, steps)?;
+        add(source, needed, None, everything, true, depth + 1, steps)?;
     }
     steps.push(Step {
         project,
@@ -207,6 +228,156 @@ fn add(
         dependency,
     });
     Ok(())
+}
+
+fn select_version<'a>(
+    project: &Project,
+    versions: &'a [Version],
+    everything: bool,
+) -> Result<&'a Version, String> {
+    use crate::i18n::trf;
+    pick(project.kind, versions, everything).ok_or_else(|| {
+        match versions.iter().find_map(|v| v.blocked.as_deref()) {
+            Some(why) => trf(
+                "{pack} can't be installed from here: {why}",
+                &[("pack", &project.title), ("why", why)],
+            ),
+            None => trf(
+                "{pack} has no version Horizon runs.",
+                &[("pack", &project.title)],
+            ),
+        }
+    })
+}
+
+/// The dependency files selected and checked together before any download.
+#[derive(Clone)]
+pub struct PackReview {
+    pub support: Support,
+    optional_java_mods: bool,
+    steps: Vec<Step>,
+}
+
+impl PackReview {
+    pub fn confirm_optional_mods(&self, confirm: impl FnOnce(&Version, &str) -> bool) -> bool {
+        !self.optional_java_mods
+            || confirm(
+                &self
+                    .steps
+                    .last()
+                    .expect("review includes the requested pack")
+                    .version,
+                optional_mod_warning(),
+            )
+    }
+}
+
+pub fn review_resource_pack(
+    source: &dyn Source,
+    project: &Project,
+    versions: &[Version],
+    everything: bool,
+) -> Result<PackReview, String> {
+    debug_assert_eq!(
+        (project.source, project.kind),
+        (SourceId::Modrinth, Kind::ResourcePack)
+    );
+    let version = select_version(project, versions, everything)?;
+    let mut support = project.support_for(&version.game_versions);
+    let mut steps = Vec::new();
+    add(
+        source,
+        project.clone(),
+        Some(version),
+        everything,
+        false,
+        0,
+        &mut steps,
+    )?;
+    let mut optional_java_mods = false;
+    'scan: for step in steps
+        .iter()
+        .filter(|step| step.project.kind == Kind::ResourcePack)
+    {
+        for dependency in &step.version.optional {
+            if dependency.is_java_mod(source)? {
+                optional_java_mods = true;
+                break 'scan;
+            }
+        }
+    }
+    if optional_java_mods {
+        let why = optional_mod_warning();
+        support = Support::Partial(match support.reason() {
+            Some(other) => [other, why].join(" "),
+            None => why.into(),
+        });
+    }
+    Ok(PackReview {
+        support,
+        optional_java_mods,
+        steps,
+    })
+}
+
+fn optional_mod_warning() -> &'static str {
+    crate::i18n::tr("Features that use optional Java mods may be missing in Horizon.")
+}
+
+/// Installs the same files presented by the review, including its dependencies.
+pub fn install_reviewed_resource_pack(
+    source: &dyn Source,
+    review: PackReview,
+    home: &Path,
+    progress: &dyn Fn(&str, f32),
+) -> Result<Vec<Entry>, String> {
+    put(
+        source,
+        review.steps,
+        home,
+        &|kind| kind.folder().expect("plan keeps folder kinds"),
+        progress,
+    )
+}
+
+/// Check the exact update before replacing the installed file. Partly compatible
+/// updates need the player's confirmation; ordinary updates go straight through.
+pub fn update_modrinth_resource_pack(
+    source: &dyn Source,
+    entry: &Entry,
+    home: &Path,
+    confirm: &dyn Fn(&Version, &str) -> bool,
+    progress: &dyn Fn(&str, f32),
+) -> Result<Vec<Entry>, String> {
+    use crate::i18n::tr;
+
+    let project = source.project(&entry.project)?;
+    if project.kind != Kind::ResourcePack || project.source != SourceId::Modrinth {
+        return Err(tr("This project is no longer a Modrinth resource pack.").into());
+    }
+    let versions = source.versions(&project)?;
+    let version = select_version(&project, &versions, true)?;
+    if Installed::load(home)
+        .find(entry.source, &entry.project)
+        .is_some_and(|current| current.version == version.id && !file_missing(home, current))
+    {
+        return Ok(Vec::new());
+    }
+    let review = review_resource_pack(source, &project, &versions, true)?;
+    if !review.confirm_optional_mods(confirm) {
+        return Err(tr("Update canceled.").into());
+    }
+
+    // The UI can wait for an answer while another launcher changes the pack.
+    let _lock = super::lock_home(home).map_err(|e| e.to_string())?;
+    let installed = Installed::load(home);
+    let still_installed = installed
+        .find(entry.source, &entry.project)
+        .is_some_and(|current| current.version == entry.version && !file_missing(home, current));
+    if !still_installed {
+        return Err(tr("The installed pack changed while this update was being checked.").into());
+    }
+    install_reviewed_resource_pack(source, review, home, progress)
 }
 
 /// Installs `project` (and what it needs) into the game folder `home`. A project already

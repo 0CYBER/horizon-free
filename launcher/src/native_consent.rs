@@ -1,7 +1,7 @@
 //! One deferred native-code action. Declining never invokes its installer or builder.
 use horizon_launcher::{
     backend::Settings,
-    browser::{installed::Entry, java, Project, SourceId},
+    browser::{installed::Entry, java},
     github_mods::Resolved,
 };
 use std::path::Path;
@@ -9,7 +9,7 @@ use std::path::Path;
 pub(super) enum PendingConsent {
     Build(Vec<String>),
     Toggle(Entry),
-    Install(SourceId, String, Option<Project>),
+    Install(crate::mods_page::InstallRequest),
     Github(Resolved, Option<String>),
     Local(String),
 }
@@ -19,7 +19,8 @@ impl PendingConsent {
         match self {
             Self::Build(ids) => ids.join(", "),
             Self::Toggle(entry) => entry.title.clone(),
-            Self::Install(_, id, _) | Self::Local(id) => id.clone(),
+            Self::Install(request) => request.item().1.to_owned(),
+            Self::Local(id) => id.clone(),
             Self::Github(found, _) => found.label(),
         }
     }

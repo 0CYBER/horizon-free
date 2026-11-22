@@ -373,7 +373,7 @@ impl Launcher {
                                     this.build_native_on(base, back_up)
                                 }
                                 PendingConsent::Toggle(entry) => this.mods_switch(&entry),
-                                PendingConsent::Install(source, id, known) => this.mods_install(source, id, known),
+                                PendingConsent::Install(request) => this.mods_install(request),
                                 PendingConsent::Github(found, only) => this.github_install(found, only),
                                 PendingConsent::Local(id) => {
                                     this.mods.message = horizon_launcher::browser::java::set_enabled(&this.mods.home(), &id, true).err().map(Err);

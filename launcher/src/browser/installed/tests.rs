@@ -99,6 +99,7 @@ impl Fake {
             loaders: self.projects[id].loaders.clone(),
             files: vec![file],
             required: needs.iter().map(|s| s.to_string()).collect(),
+            optional: Vec::new(),
             blocked: None,
         };
         let mut served = body.to_vec();
@@ -172,6 +173,132 @@ fn installs_with_dependencies_then_updates_and_removes() {
     assert!(remove(&home, "addon").is_err());
     assert_eq!(Installed::load(&home).entries.len(), 1);
     fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn resource_pack_update_reviews_the_version_it_will_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let mut fake = Fake::default();
+    fake.add(project("pack", Kind::ResourcePack));
+    fake.release("pack", "1", &[], b"original", false);
+    let pack = fake.project("pack").unwrap();
+    let original = install(&fake, &pack, false, home, NONE).unwrap().remove(0);
+
+    fake.add(project("dependency", Kind::ResourcePack));
+    let mut java_mod = project("java-mod", Kind::Mod);
+    java_mod.loaders = vec!["fabric".into()];
+    fake.add(java_mod);
+
+    let no_prompt = |_: &Version, _: &str| panic!("this update must not ask");
+
+    fake.release(
+        "dependency",
+        "1",
+        &["java-mod"],
+        b"required dependency",
+        false,
+    );
+    fake.release("pack", "2", &["dependency"], b"required", false);
+    let error =
+        update_modrinth_resource_pack(&fake, &original, home, &no_prompt, NONE).unwrap_err();
+    assert!(error.contains("requires Java mods"), "{error}");
+    assert_eq!(fs::read(home.join(&original.file)).unwrap(), b"original");
+
+    fake.release("dependency", "2", &[], b"reviewed dependency", false);
+    fake.versions.lock().unwrap().get_mut("dependency").unwrap()[0]
+        .optional
+        .push(crate::browser::modrinth::OptionalDependency::Project(
+            "java-mod".into(),
+        ));
+    fake.release("pack", "3", &["dependency"], b"optional", false);
+    let decline = |version: &Version, reason: &str| {
+        assert_eq!(version.number, "3");
+        assert!(reason.contains("optional Java mods"), "{reason}");
+        false
+    };
+    assert!(update_modrinth_resource_pack(&fake, &original, home, &decline, NONE).is_err());
+    assert_eq!(fs::read(home.join(&original.file)).unwrap(), b"original");
+
+    let approve = |version: &Version, _: &str| {
+        assert_eq!(version.number, "3");
+        assert_eq!(fs::read(home.join(&original.file)).unwrap(), b"original");
+        fake.release("pack", "4", &[], b"plain", false);
+        fake.release("dependency", "3", &[], b"unreviewed dependency", false);
+        true
+    };
+    let approved = update_modrinth_resource_pack(&fake, &original, home, &approve, NONE)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        fs::read(home.join("resourcepacks/dependency-2.zip")).unwrap(),
+        b"reviewed dependency"
+    );
+    assert!(!home.join("resourcepacks/dependency-3.zip").exists());
+    assert_eq!(approved.number, "3");
+    assert_eq!(fs::read(home.join(&approved.file)).unwrap(), b"optional");
+    assert!(!home.join(&original.file).exists());
+
+    let latest = update_modrinth_resource_pack(&fake, &approved, home, &no_prompt, NONE)
+        .unwrap()
+        .remove(0);
+    assert_eq!(latest.number, "4");
+    assert_eq!(fs::read(home.join(&latest.file)).unwrap(), b"plain");
+}
+
+#[test]
+fn resource_pack_review_refuses_a_transitive_required_version_pin() {
+    let mut fake = Fake::default();
+    let pack = project("pack", Kind::ResourcePack);
+    fake.add(pack.clone());
+    fake.add(project("dependency", Kind::ResourcePack));
+    fake.add(project("pinned", Kind::ResourcePack));
+    fake.release("pack", "1", &["dependency"], b"pack", false);
+    fake.release("pinned", "2", &[], b"newer release", false);
+    let version = crate::browser::modrinth::parse_version(&serde_json::json!({
+        "id": "dependency-1",
+        "game_versions": [GAME],
+        "loaders": ["minecraft"],
+        "files": [{"url": "https://cdn.modrinth.com/data/dependency/versions/1/dependency.zip", "filename": "dependency.zip"}],
+        "dependencies": [{"project_id": "pinned", "version_id": "pinned-1", "dependency_type": "required"}],
+    }))
+    .unwrap();
+    fake.versions
+        .lock()
+        .unwrap()
+        .insert("dependency".into(), vec![version]);
+    let versions = fake.versions(&pack).unwrap();
+    let error = review_resource_pack(&fake, &pack, &versions, true)
+        .err()
+        .unwrap();
+    assert!(
+        error.contains("required dependency pinned to a specific version"),
+        "{error}"
+    );
+}
+
+#[test]
+fn resource_pack_review_uses_the_selected_release_without_prompting_for_category_warnings() {
+    let mut pack = project("pack", Kind::ResourcePack);
+    pack.loaders.push("core-shaders".into());
+    let mut fake = Fake::default();
+    fake.add(pack.clone());
+    fake.release("pack", "1", &[], b"pack", false);
+    let mut versions = fake.versions(&pack).unwrap();
+    versions[0].loaders = vec!["minecraft".into()];
+    let current = review_resource_pack(&fake, &pack, &versions, false).unwrap();
+    assert!(!current.support.reason().unwrap().contains("Made for"));
+    versions[0].game_versions = vec!["1.21.1".into()];
+    let old = review_resource_pack(&fake, &pack, &versions, true).unwrap();
+    let reason = old.support.reason().unwrap();
+    assert!(reason.contains("Made for 1.21.1") && reason.contains("Core shaders"));
+    assert!(old.confirm_optional_mods(|_, _| panic!("category warning must not prompt")));
+    pack.blocked = Some("explicit block".into());
+    assert!(review_resource_pack(&fake, &pack, &versions, true)
+        .err()
+        .unwrap()
+        .contains("explicit block"));
 }
 
 #[test]

@@ -23,6 +23,7 @@ fn version(id: &str, games: &[&str], loaders: &[&str]) -> Version {
             primary: true,
         }],
         required: Vec::new(),
+        optional: Vec::new(),
         blocked: None,
     }
 }
@@ -48,6 +49,20 @@ fn support_by_kind() {
         "{old:?}"
     );
     assert!(support(Kind::Modpack, &v(&["1.21.1"]), &v(&["neoforge"])).installable());
+    for category in ["core-shaders", "modded"] {
+        assert!(matches!(
+            support(
+                Kind::ResourcePack,
+                &v(&[GAME]),
+                &v(&["minecraft", category])
+            ),
+            Support::Partial(_)
+        ));
+    }
+    assert!(matches!(
+        support(Kind::Shader, &v(&["1.21.1"]), &v(&["iris", "optifine"])),
+        Support::Partial(_)
+    ));
 }
 
 #[test]
@@ -70,6 +85,18 @@ fn picks_the_newest_version_that_runs() {
     let mut empty = version("empty", &[GAME], &["minecraft"]);
     empty.files.clear();
     assert!(pick(Kind::ResourcePack, &[blocked, empty], true).is_none());
+}
+
+#[test]
+fn picks_iris_or_optifine_shaders_without_a_game_version_match() {
+    let versions = [
+        version("other-loader", &[GAME], &["canvas"]),
+        version("shader-pack", &["1.21.1"], &["optifine"]),
+    ];
+    assert_eq!(
+        pick(Kind::Shader, &versions, false).unwrap().id,
+        "shader-pack"
+    );
 }
 
 #[test]
@@ -158,7 +185,7 @@ fn modrinth_search_asks_for_what_runs() {
     assert_eq!(q.text, "faithful");
     assert_eq!(
         modrinth::facets(&q),
-        r#"[["project_type:resourcepack"],["versions:26.3"]]"#
+        r#"[["project_type:resourcepack"],["versions:26.3"],["categories!=modded"]]"#
     );
     let url = modrinth::search_url(&q);
     assert!(url.starts_with("https://api.modrinth.com/v2/search?facets=%5B%5B%22project_type"));
@@ -174,6 +201,18 @@ fn modrinth_search_asks_for_what_runs() {
     assert_eq!(
         modrinth::facets(&everything),
         r#"[["project_type:resourcepack"]]"#
+    );
+    let java = java_instance::Target {
+        minecraft: "1.21.1".into(),
+        loader: Some("fabric".into()),
+    };
+    assert_eq!(
+        modrinth::facets(&java.query("", Kind::ResourcePack)),
+        r#"[["project_type:resourcepack"],["versions:1.21.1"]]"#
+    );
+    assert_eq!(
+        modrinth::facets(&Query::new("", Kind::Shader)),
+        r#"[["project_type:shader"],["categories:iris","categories:optifine"]]"#
     );
     assert_eq!(
         modrinth::facets(&Query::new("", Kind::Modpack)),
@@ -268,11 +307,14 @@ fn modrinth_answers() {
     assert_eq!(sodium.kind, Kind::Mod);
     assert_eq!(sodium.page, "https://modrinth.com/mod/sodium");
     assert!(matches!(sodium.support(), Support::Partial(_)));
-    // Data packs, plugins and shader packs are not.
-    for project_type in ["plugin", "shader"] {
-        let hit = json!({"project_id": "x", "project_type": project_type, "slug": "p"});
-        assert!(modrinth::parse_hit(&hit).is_none(), "{project_type}");
-    }
+    let shader = json!({"project_id": "x", "project_type": "shader", "slug": "p",
+        "versions": ["1.21.1"], "categories": ["iris", "optifine"]});
+    let shader = modrinth::parse_hit(&shader).unwrap();
+    assert_eq!(shader.kind, Kind::Shader);
+    assert_eq!(shader.page, "https://modrinth.com/shader/p");
+    assert!(matches!(shader.support(), Support::Partial(_)));
+    let plugin = json!({"project_id": "x", "project_type": "plugin", "slug": "p"});
+    assert!(modrinth::parse_hit(&plugin).is_none());
 
     let project = json!({
         "id": "HVnmMxH1", "project_type": "resourcepack", "slug": "fresh-animations",
@@ -285,6 +327,12 @@ fn modrinth_answers() {
     assert_eq!(p.license, "LicenseRef-Custom");
     assert_eq!(p.page, "https://modrinth.com/resourcepack/fresh-animations");
     assert!(p.support().installable());
+    let mut project = project;
+    project["additional_categories"] = json!(["core-shaders"]);
+    assert!(matches!(
+        modrinth::parse_project(&project).unwrap().support(),
+        Support::Partial(_)
+    ));
 
     let version = json!({
         "id": "tvGVYMD4", "version_number": "1.11.1", "date_published": "2026-10-20T02:23:13Z",
@@ -292,6 +340,7 @@ fn modrinth_answers() {
         "dependencies": [
             {"project_id": "need", "dependency_type": "required"},
             {"project_id": "maybe", "dependency_type": "optional"},
+            {"version_id": "optional-version", "dependency_type": "optional"},
             {"version_id": "x", "project_id": null, "dependency_type": "required"}
         ],
         "files": [
@@ -303,6 +352,19 @@ fn modrinth_answers() {
     });
     let ver = modrinth::parse_version(&version).unwrap();
     assert_eq!(ver.required, ["need"]);
+    assert!(ver
+        .blocked
+        .as_deref()
+        .unwrap()
+        .contains("required dependency without a project ID"));
+    assert_eq!(
+        ver.optional,
+        [
+            modrinth::OptionalDependency::Project("maybe".into()),
+            modrinth::OptionalDependency::Version("optional-version".into()),
+        ]
+    );
+    assert!(pick(Kind::ResourcePack, std::slice::from_ref(&ver), true).is_none());
     assert_eq!(ver.files[0].sha512.as_deref(), Some("ab12"));
     let file = ver.file().unwrap();
     assert_eq!(file.name, "c.zip");

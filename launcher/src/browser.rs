@@ -32,8 +32,7 @@ pub enum Kind {
     Modpack,
     /// A Java mod: its content is ported ([`java`]).
     Mod,
-    /// One of Horizon's own shader packs (`.hshader`, docs/shaders.md), from Horizon's registry
-    /// only.
+    /// A native Horizon shader pack (`.hshader`) or an Iris/OptiFine shader pack.
     Shader,
     /// A data pack: it goes into one world's `datapacks/` (`crate::datapacks`).
     DataPack,
@@ -156,9 +155,13 @@ pub struct Project {
 
 impl Project {
     pub fn support(&self) -> Support {
+        self.support_for(&self.game_versions)
+    }
+
+    pub(super) fn support_for(&self, game_versions: &[String]) -> Support {
         match &self.blocked {
             Some(why) => Support::No(why.clone()),
-            None => support(self.kind, &self.game_versions, &self.loaders),
+            None => support(self.kind, game_versions, &self.loaders),
         }
     }
 
@@ -213,6 +216,7 @@ pub struct Version {
     pub files: Vec<FileRef>,
     /// Required dependencies, as project ids on the same source.
     pub required: Vec<String>,
+    pub optional: Vec<modrinth::OptionalDependency>,
     /// Why this version can't be downloaded from here (CurseForge authors can forbid it).
     pub blocked: Option<String>,
 }
@@ -287,6 +291,7 @@ pub const CURSEFORGE_SOON: &str = "CurseForge support is coming soon.";
 /// What another source answers for shader packs: Horizon's own are on its registry only.
 pub const SHADERS_ON_HORIZON: &str =
     "Horizon's shader packs are on Horizon's registry: pick Horizon.";
+const SHADER_LOADERS: [&str; 2] = ["iris", "optifine"];
 
 /// The sources this launcher uses: Modrinth and Horizon's registry. CurseForge support is coming
 /// soon: its API needs a paid key, so no search or install goes to it; `curseforge` is kept for
@@ -313,21 +318,33 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
     }
     match kind {
         Kind::ResourcePack => {
-            if game_versions.iter().any(|v| v == GAME) {
+            use crate::i18n::{tr, trf};
+            let mut warnings = Vec::new();
+            if !game_versions.iter().any(|v| v == GAME) {
+                warnings.push(match newest_release(game_versions) {
+                    Some(newest) => trf(
+                        "Made for {newest}: it loads with vanilla's compatibility warning, and \
+                         what changed since may look wrong.",
+                        &[("newest", newest)],
+                    ),
+                    None => tr("Lists no Minecraft version.").into(),
+                });
+            }
+            if loaders.iter().any(|l| matches!(l.as_str(), "modded" | "core-shaders")) {
+                warnings.push(tr("Core shaders or modded features in this pack may not work in Horizon.").into());
+            }
+            if warnings.is_empty() {
                 Support::Works
-            } else if let Some(newest) = newest_release(game_versions) {
-                Support::Partial(format!(
-                    "Made for {newest}: it loads with vanilla's compatibility warning, and \
-                     what changed since may look wrong."
-                ))
             } else {
-                Support::Partial("Lists no Minecraft version.".into())
+                Support::Partial(warnings.join(" "))
             }
         }
         Kind::Modpack => {
             Support::Partial("Horizon runs the mods it can port, from your own downloads.".into())
         }
-        Kind::Shader => Support::No("Not one of Horizon's own shader packs.".into()),
+        Kind::Shader => Support::Partial(
+            crate::i18n::tr("Horizon's shader loader can open Iris and OptiFine packs. Some effects may differ.").into(),
+        ),
         Kind::DataPack => {
             let made_for = match newest_release(game_versions) {
                 _ if game_versions.iter().any(|v| v == GAME) => String::new(),
@@ -422,6 +439,13 @@ pub fn pick(kind: Kind, versions: &[Version], everything: bool) -> Option<&Versi
             .clone()
             .find(made_for)
             .or_else(|| packs.find(|_| everything));
+    }
+    if kind == Kind::Shader {
+        return usable.find(|v| {
+            v.loaders
+                .iter()
+                .any(|l| SHADER_LOADERS.contains(&l.as_str()))
+        });
     }
     let runs = |v: &&Version| match support(kind, &v.game_versions, &v.loaders) {
         Support::Works => true,

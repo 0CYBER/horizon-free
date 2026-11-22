@@ -305,7 +305,26 @@ pub fn modrinth_tags(
             })
         })
         .collect();
-    categories.sort_by(|a, b| (&a.header, &a.name).cmp(&(&b.header, &b.name)));
+    categories.sort_by(|a, b| {
+        a.header.cmp(&b.header).then_with(|| {
+            let resolution = |name: &str| {
+                let (size, suffix) = name.split_once('x')?;
+                if matches!(suffix, "" | "+" | "-") {
+                    size.parse::<u32>().ok()
+                } else {
+                    None
+                }
+            };
+            if a.header == "resolutions" {
+                resolution(&a.name)
+                    .map_or((true, 0), |size| (false, size))
+                    .cmp(&resolution(&b.name).map_or((true, 0), |size| (false, size)))
+                    .then_with(|| a.name.cmp(&b.name))
+            } else {
+                a.name.cmp(&b.name)
+            }
+        })
+    });
     Tags {
         categories,
         tags: Vec::new(),
@@ -320,10 +339,19 @@ pub fn modrinth_tags(
     }
 }
 
-/// The loaders a kind lists by default, when no loader is picked: Java mod loaders for mods.
+pub fn loader_label(slug: &str) -> &str {
+    match slug {
+        "iris" => crate::i18n::tr("Iris"),
+        "optifine" => crate::i18n::tr("OptiFine"),
+        _ => slug,
+    }
+}
+
+/// The loaders a kind lists by default, when no loader is picked.
 pub fn default_loaders(kind: Kind) -> Vec<&'static str> {
     match kind {
         Kind::Mod => super::java::LOADERS.to_vec(),
+        Kind::Shader => super::SHADER_LOADERS.to_vec(),
         _ => Vec::new(),
     }
 }
@@ -389,6 +417,31 @@ mod tests {
         assert_eq!(t.categories[0].name, "decoration");
         assert_eq!(t.loaders, ["fabric"]);
         assert_eq!(t.game_versions, ["26.3"]);
+    }
+
+    #[test]
+    fn modrinth_resolutions_are_sorted_by_size_with_unknowns_last() {
+        let categories = Value::Array(
+            ["128x", "future-z", "16x", "512x+", "8x-", "64x", "256x", "32x", "48x", "future-a"]
+                .into_iter()
+                .map(|name| json!({"name": name, "project_type": "resourcepack", "header": "resolutions"}))
+                .collect(),
+        );
+        let tags = modrinth_tags("resourcepack", &categories, &Value::Null, &Value::Null);
+        assert_eq!(
+            tags.categories
+                .iter()
+                .map(|tag| tag.name.as_str())
+                .collect::<Vec<_>>(),
+            ["8x-", "16x", "32x", "48x", "64x", "128x", "256x", "512x+", "future-a", "future-z"],
+        );
+    }
+
+    #[test]
+    fn shader_loader_slugs_have_display_names() {
+        assert_eq!(loader_label("iris"), "Iris");
+        assert_eq!(loader_label("optifine"), "OptiFine");
+        assert_eq!(loader_label("fabric"), "fabric");
     }
 
     #[test]

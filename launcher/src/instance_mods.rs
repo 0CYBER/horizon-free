@@ -701,7 +701,10 @@ impl Launcher {
             Some(match busy {
                 true => chip.opacity(theme::DISABLED),
                 false => chip.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.mods_install(source, id.clone(), None);
+                    this.mods_install(crate::mods_page::InstallRequest::Installed(
+                        source,
+                        id.clone(),
+                    ));
                     cx.notify();
                 })),
             })

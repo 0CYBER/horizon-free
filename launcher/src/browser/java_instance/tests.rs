@@ -93,6 +93,7 @@ impl Fake {
                 loaders: strings(loaders),
                 files: vec![file],
                 required: strings(needs),
+                optional: Vec::new(),
                 blocked: None,
             },
         );

@@ -502,6 +502,7 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
             primary: true,
         }],
         required: v.requires.iter().map(|r| r.id.clone()).collect(),
+        optional: Vec::new(),
         blocked: index
             .revoked(&p.id, &v.file.sha256)
             .map(|r| format!("taken down: {}", r.reason))

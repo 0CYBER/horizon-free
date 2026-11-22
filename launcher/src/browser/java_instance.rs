@@ -46,6 +46,8 @@ impl Target {
     /// A search of `kind` for what runs here: made for its version and, for mods, its loader.
     pub fn query(&self, text: &str, kind: Kind) -> Query {
         let mut query = Query::new(text, kind);
+        // Java's resource packs can use mod features. The explicit version still applies.
+        query.everything = kind == Kind::ResourcePack;
         query.filters = details::Filters {
             game_version: Some(self.minecraft.clone()),
             loader: match kind {

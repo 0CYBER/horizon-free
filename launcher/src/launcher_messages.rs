@@ -554,7 +554,7 @@ impl Launcher {
         // A start that ended (the game started, or it failed) is on no step.
         self.play_step.settle(self.starting_client.is_some());
         changed |= self.servers_tick();
-        changed |= self.mods_tick();
+        changed |= self.mods_tick(window, cx);
         changed |= self.github_tick();
         changed |= self.native_log_read(cx);
         changed |= self.toast_tick();

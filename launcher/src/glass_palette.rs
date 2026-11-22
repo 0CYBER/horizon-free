@@ -156,8 +156,7 @@ impl Launcher {
                 crate::glass_toast::open(cx, &home);
             }
             Run::Install(p) => {
-                let p = *p;
-                self.mods_install(p.source, p.id.clone(), Some(p));
+                self.mods_install(crate::mods_page::InstallRequest::Palette(p));
             }
             Run::Remove(id) => {
                 let _ = self.mods_remove(&id);
