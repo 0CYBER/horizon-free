@@ -449,12 +449,27 @@ impl Game<'_> {
         for &(x, y, bw, key, id, active) in &layout.buttons {
             let is_focused = self.pause_focus == Some(id);
             let hover = active && (ui::hovered(self.cursor, x, y, bw, 20.0) || is_focused);
+            let key = if self.options.split_guest && key == "menu.disconnect" {
+                "horizon.split.leave"
+            } else {
+                key
+            };
             let label = match (id, &additions) {
                 (14, Some((label, _))) => label.clone(),
-                _ if self.options.split_guest && key == "menu.disconnect" => {
-                    Text::translate("horizon.split.leave", &[])
-                }
                 _ => Text::translate(key, &[]),
+            };
+            let agent_id = match key {
+                "menu.returnToGame" => Some("back-to-game"),
+                "gui.advancements" => Some("advancements"),
+                "gui.stats" => Some("statistics"),
+                "menu.server_links" => Some("server-links"),
+                "menu.options" => Some("options"),
+                "options.worldOptions.button" => Some("world-options"),
+                "menu.disconnect" => Some("disconnect"),
+                "menu.returnToMenu" => Some("save-and-quit-to-title"),
+                "horizon.split.leave" => Some("leave"),
+                SPLIT_SETTINGS => Some("splitscreen-settings"),
+                _ => None,
             };
             let action = match id {
                 0 => Some(horizon_client::widgets::Action::Back),
@@ -462,11 +477,17 @@ impl Game<'_> {
                 2 => Some(horizon_client::widgets::Action::Exit),
                 _ => None,
             };
-            if let Some(action) = action {
-                ui::action_button(batch, atlas, action, x, y, bw, 20.0, &label, active, hover);
-            } else {
-                ui::button(batch, atlas, x, y, bw, 20.0, &label, active, hover);
-            }
+            ui::focused_button(
+                batch,
+                atlas,
+                [x, y, bw, 20.0],
+                &label,
+                active,
+                hover,
+                false,
+                action,
+                agent_id,
+            );
             // PauseScreen's customAdditions button: CUSTOM_OPTIONS_TOOLTIP.
             if (id == 11 || id == 14) && hover {
                 tooltip = Some(Text::translate("menu.custom_options.tooltip", &[]));

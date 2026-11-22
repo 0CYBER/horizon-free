@@ -11,10 +11,10 @@ use crate::{
 const TAB_BAR: f32 = 24.0;
 /// HeaderAndFooterLayout's default footer height.
 const FOOTER: f32 = 33.0;
-const TABS: [&str; 3] = [
-    "createWorld.tab.game.title",
-    "createWorld.tab.world.title",
-    "createWorld.tab.more.title",
+const TABS: [(&str, &str); 3] = [
+    ("createWorld.tab.game.title", "game"),
+    ("createWorld.tab.world.title", "world"),
+    ("createWorld.tab.more.title", "more"),
 ];
 /// Difficulty ids, in the cycle button's order.
 pub const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
@@ -472,6 +472,7 @@ pub(super) fn buttons(
         label,
         enabled,
         id,
+        agent_id: None,
         icon: None,
         trailing: None,
         action: None,
@@ -486,7 +487,8 @@ pub(super) fn buttons(
                 labelled("selectWorld.gameMode", tr(game_mode(creative, o.hardcore))),
                 true,
                 20,
-            ),
+            )
+            .identified("game-mode"),
             b(
                 gx,
                 gy + 69.0,
@@ -500,7 +502,8 @@ pub(super) fn buttons(
                 ),
                 !o.hardcore,
                 23,
-            ),
+            )
+            .identified("difficulty"),
             b(
                 gx,
                 gy + 97.0,
@@ -508,7 +511,8 @@ pub(super) fn buttons(
                 labelled("selectWorld.allowCommands", on_off(o.commands(creative))),
                 !o.hardcore,
                 24,
-            ),
+            )
+            .identified("allow-cheats"),
         ],
         1 => vec![
             b(
@@ -518,7 +522,8 @@ pub(super) fn buttons(
                 labelled("selectWorld.mapType", o.preset_label()),
                 true,
                 25,
-            ),
+            )
+            .identified("world-type"),
             // PresetEditor.EDITORS: flat worlds have CreateFlatWorldScreen, the
             // single-biome preset CreateBuffetWorldScreen; the other presets
             // have no editor, so the button is disabled for them.
@@ -535,9 +540,11 @@ pub(super) fn buttons(
                                 | crate::save::WorldPreset::SingleBiomeSurface
                         )),
                 26,
-            ),
+            )
+            .identified("customize"),
             // SwitchGrid: 44-wide value-only buttons at the grid's right.
-            b(gx + 266.0, gy + 73.0, 44.0, on_off(o.structures), true, 27),
+            b(gx + 266.0, gy + 73.0, 44.0, on_off(o.structures), true, 27)
+                .identified("generate-structures"),
             b(
                 gx + 266.0,
                 gy + 97.0,
@@ -545,30 +552,36 @@ pub(super) fn buttons(
                 on_off(o.bonus_chest()),
                 !o.hardcore,
                 28,
-            ),
+            )
+            .identified("bonus-chest"),
         ],
         // The More tab, as vanilla lays it out: Game Rules, Experiments
         // (the resources' feature packs), Data Packs.
         _ => [
-            "selectWorld.gameRules",
-            "selectWorld.experiments",
-            "selectWorld.dataPacks",
+            ("selectWorld.gameRules", "game-rules"),
+            ("selectWorld.experiments", "experiments"),
+            ("selectWorld.dataPacks", "data-packs"),
         ]
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(i, key)| b(gx, gy + 28.0 * i as f32, 210.0, tr(key), true, 29 + i as u8))
+        .map(|(i, (key, id))| {
+            b(gx, gy + 28.0 * i as f32, 210.0, tr(key), true, 29 + i as u8).identified(id)
+        })
         .collect(),
     };
     // The footer: two 150-wide buttons 8 apart, centred in its 33 pixels.
     let x = ((w - 308.0) * 0.5).trunc();
-    buttons.push(b(
-        x,
-        h - 27.0,
-        150.0,
-        crate::lang::get_or("selectWorld.create", "Create New World"),
-        true,
-        21,
-    ));
+    buttons.push(
+        b(
+            x,
+            h - 27.0,
+            150.0,
+            crate::lang::get_or("selectWorld.create", "Create New World"),
+            true,
+            21,
+        )
+        .identified("create-new-world"),
+    );
     buttons.push(
         b(
             x + 158.0,
@@ -578,6 +591,7 @@ pub(super) fn buttons(
             true,
             22,
         )
+        .identified("cancel")
         .does(crate::widgets::Action::Cancel),
     );
     buttons
@@ -702,7 +716,7 @@ impl Title {
         crate::widgets::narratable(|| {
             use crate::widgets::{ListKind, Narratable, Row};
             let tab = |i: usize| {
-                let mut row = Row::new(i, tr(TABS[i]));
+                let mut row = Row::new(i, tr(TABS[i].0));
                 row.hint = Some(String::new());
                 row
             };
@@ -729,11 +743,17 @@ impl Title {
                 u32::MAX,
             );
         }
-        for (i, key) in TABS.iter().enumerate() {
+        for (i, &(key, id)) in TABS.iter().enumerate() {
             let x = x0 + tw * i as f32;
             let selected = o.tab == i;
             let label = Text::translate(key, &[]);
-            crate::widgets::record(&label.plain(), [x, 0.0, tw, TAB_BAR], true);
+            crate::widgets::record_with_id(
+                Some(id),
+                &label.plain(),
+                [x, 0.0, tw, TAB_BAR],
+                true,
+                crate::widgets::Kind::Button,
+            );
             crate::widgets::target_as([x, 0.0, tw, TAB_BAR], crate::widgets::Kind::Tab(selected));
             let sprite = match (selected, ui::hovered(cursor, x, 0.0, tw, TAB_BAR)) {
                 (true, true) => "gui/sprites/widget/tab_selected_highlighted",

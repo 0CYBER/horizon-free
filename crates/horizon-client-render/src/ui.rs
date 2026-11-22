@@ -638,13 +638,7 @@ pub fn action_button(
     active: bool,
     hover: bool,
 ) {
-    crate::widgets::declare_action(action, [x, y, w, h], active);
-    let room = if active {
-        crate::widgets::action_glyph_room()
-    } else {
-        0.0
-    };
-    button_with_room(
+    focused_button(
         batch,
         atlas,
         [x, y, w, h],
@@ -652,8 +646,8 @@ pub fn action_button(
         active,
         hover,
         false,
-        room,
-        |rect| crate::widgets::Narratable::button(label.plain(), rect, active),
+        Some(action),
+        None,
     );
 }
 /// A [`button`] that vanilla narrates as another widget (a `CycleButton`, a
@@ -681,13 +675,14 @@ pub fn button_as(
         hover,
         false,
         0.0,
+        None,
         narration,
     );
 }
-/// An options button whose focus highlights it without changing the mouse cursor.
+/// A button with optional keyboard focus, controller action and agent-facing id.
 /// `AbstractWidget.handleCursor` tests hover, not `isHoveredOrFocused`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn focused_button(
+pub fn focused_button(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     rect: [f32; 4],
@@ -696,6 +691,7 @@ pub(crate) fn focused_button(
     hover: bool,
     focused: bool,
     action: Option<crate::widgets::Action>,
+    id: Option<&'static str>,
 ) {
     let room = if let Some(action) = action {
         crate::widgets::declare_action(action, rect, active);
@@ -716,6 +712,7 @@ pub(crate) fn focused_button(
         hover,
         focused,
         room,
+        id,
         |rect| crate::widgets::Narratable::button(label.plain(), rect, active),
     );
 }
@@ -730,10 +727,17 @@ fn button_with_room(
     hover: bool,
     focused: bool,
     room: f32,
+    id: Option<&'static str>,
     narration: impl FnOnce([f32; 4]) -> crate::widgets::Narratable,
 ) {
     let plain = label.plain();
-    crate::widgets::record(&plain, [x, y, w, h], active);
+    crate::widgets::record_with_id(
+        id,
+        &plain,
+        [x, y, w, h],
+        active,
+        crate::widgets::Kind::Button,
+    );
     // An icon button has no label to record, and A presses it all the same.
     if active && plain.trim().is_empty() {
         crate::widgets::target([x, y, w, h]);
@@ -782,7 +786,7 @@ pub fn slider(
     dragging: bool,
 ) {
     slider_ext(
-        batch, atlas, x, y, w, label, value, hover, false, false, active, dragging,
+        batch, atlas, x, y, w, label, value, hover, false, false, active, dragging, None,
     );
 }
 
@@ -801,13 +805,14 @@ pub fn slider_ext(
     can_change_value: bool,
     active: bool,
     dragging: bool,
+    id: Option<&'static str>,
 ) {
     let kind = crate::widgets::Kind::Slider {
         value,
         track: [x + 4.0, w - 8.0],
     };
     // The control socket's widget tree (`ui`): its label and value.
-    crate::widgets::record_as(&label.plain(), [x, y, w, 20.0], active, kind);
+    crate::widgets::record_with_id(id, &label.plain(), [x, y, w, 20.0], active, kind);
     crate::widgets::narratable(|| {
         crate::widgets::Narratable::slider(label.plain(), [x, y, w, 20.0], active).hovered(hover)
     });

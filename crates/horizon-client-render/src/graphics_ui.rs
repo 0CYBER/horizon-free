@@ -1421,6 +1421,10 @@ fn row(setting: Setting, s: &Settings, out: &EffectiveOutput) -> Row<Item> {
     let about = lang::get(setting.text);
     let chosen = lang::get(description(item, s, out, setting.text));
     Row {
+        agent_id: match item {
+            Item::Vanilla(opt) => opt.agent_id(),
+            _ => None,
+        },
         chosen: (chosen != about).then_some(chosen),
         ..Row::new(item, name, value)
             .about(about)

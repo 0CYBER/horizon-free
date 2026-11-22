@@ -531,6 +531,7 @@ pub(crate) struct Button {
     label: String,
     enabled: bool,
     id: u8,
+    agent_id: Option<&'static str>,
     icon: Option<(&'static str, f32)>,
     /// `SpriteIconButton.TextAndIcon`: the icon at the right end, the text
     /// centred in the room left of it.
@@ -539,6 +540,11 @@ pub(crate) struct Button {
     action: Option<crate::widgets::Action>,
 }
 impl Button {
+    fn identified(mut self, id: &'static str) -> Self {
+        self.agent_id = Some(id);
+        self
+    }
+
     fn does(mut self, action: crate::widgets::Action) -> Self {
         self.action = Some(action);
         self

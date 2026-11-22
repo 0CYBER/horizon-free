@@ -232,6 +232,15 @@ impl Opt {
         })
     }
 
+    /// Documented agent handles used even when the option caption is translated.
+    pub(crate) fn agent_id(self) -> Option<&'static str> {
+        match self {
+            Opt::Fov => Some("fov"),
+            Opt::RenderDistance => Some("render-distance"),
+            _ => None,
+        }
+    }
+
     pub(crate) fn caption(self) -> &'static str {
         match self {
             Opt::Fov => "options.fov",

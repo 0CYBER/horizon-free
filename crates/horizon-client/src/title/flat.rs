@@ -484,6 +484,7 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
         label: lang::get_or(key, fallback),
         enabled,
         id,
+        agent_id: None,
         icon: None,
         trailing: None,
         action: None,
@@ -500,7 +501,8 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
                     "Remove Layer",
                     state.selected.is_some(),
                     70,
-                ),
+                )
+                .identified("remove-layer"),
                 b(
                     x + 158.0,
                     h - 52.0,
@@ -509,10 +511,13 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
                     "Presets",
                     true,
                     71,
-                ),
+                )
+                .identified("presets"),
                 b(x, h - 28.0, 150.0, "gui.done", "Done", true, 72)
+                    .identified("done")
                     .does(crate::widgets::Action::Done),
                 b(x + 158.0, h - 28.0, 150.0, "gui.cancel", "Cancel", true, 73)
+                    .identified("cancel")
                     .does(crate::widgets::Action::Cancel),
             ]
         }
@@ -525,7 +530,8 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
                 "Select",
                 state.selecting().is_some() || state.share.len() > 1,
                 74,
-            ),
+            )
+            .identified("use-preset"),
             b(
                 w / 2.0 + 5.0,
                 h - 28.0,
@@ -535,6 +541,7 @@ pub(super) fn buttons(w: f32, h: f32, state: &State) -> Vec<Button> {
                 true,
                 75,
             )
+            .identified("cancel")
             .does(crate::widgets::Action::Cancel),
         ],
     }

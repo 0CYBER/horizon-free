@@ -503,7 +503,7 @@ pub const COMMANDS: &[Cmd] = &[
         &[p("slot", Ty::Int, "slot id"), opt("right", Ty::Bool, "right-click"), opt("shift", Ty::Bool, "shift-click")], mcp: true, local: false),
     cmd!("close", Screens, "close", "close the open menu and return to the game", "", ["horizon-ctl close"], &[], mcp: true, local: false),
     cmd!("ui", Screens, "ui", "every widget of the open screen: id, kind, label, bounds, value",
-        "Kinds: button, slider (value 0..1), field, row (worlds, servers, packs, languages), tab (selected), slot (slot-ID, with its stack). Ids come from labels (\"FOV: 70\" is fov, a repeat gets -2) or kind-N without one, and stay put when a value changes. They are slugs of the drawn label, in the client's language: read ui before clicking by id, or pin lang (docs/agent-control.md). Reflects the last drawn frame (frame counts them).",
+        "Kinds: button, slider (value 0..1), field, row (worlds, servers, packs, languages), tab (selected), slot (slot-ID, with its stack). Registered ids such as singleplayer, options, fov and done stay the same in every language; labels remain translated. Other ids fall back to the drawn label (a repeat gets -2) or kind-N without one. Reflects the last drawn frame (frame counts them).",
         ["horizon-ctl ui"], &[], mcp: true, local: false),
     cmd!("click", Screens, "click ID [right|middle] [shift]", "click a widget of ui by its id, as the mouse would",
         "A field takes focus (then type); slot-ID clicks a slot like click-slot. middle presses the middle button (pick block: a creative player clones the stack).",

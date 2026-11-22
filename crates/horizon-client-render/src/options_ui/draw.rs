@@ -2,6 +2,32 @@
 use super::*;
 use crate::screen_draw::Draw;
 
+/// Stable agent handles for the options menu actions, not for their captions.
+fn button_id(page: Page, act: &Act) -> Option<&'static str> {
+    match (page, act) {
+        (_, Act::Done) => Some("done"),
+        (_, Act::Cycle(opt)) => opt.agent_id(),
+        (Page::Horizon, Act::Push(Page::Agent)) => Some("ai-agent"),
+        (Page::Main, Act::Push(page)) => Some(match page {
+            Page::Online => "online",
+            Page::Skin => "skin-customization",
+            Page::Sound => "music-sounds",
+            Page::Graphics => "video-settings",
+            Page::Controls => "controls",
+            Page::Language => "language",
+            Page::Chat => "chat-settings",
+            Page::Packs => "resource-packs",
+            Page::Accessibility => "accessibility-settings",
+            Page::Horizon => "horizon-settings",
+            Page::Mods => "mods",
+            Page::Credits => "credits-attribution",
+            _ => return None,
+        }),
+        (Page::Main, Act::None) if !horizon_extras() => Some("telemetry-data"),
+        _ => None,
+    }
+}
+
 pub(super) enum FrameDraw {
     Error,
     Calibration(crate::hdr_calibration::Layout),
@@ -365,6 +391,7 @@ impl OptionsUi {
                         pointer_over,
                         is_focused,
                         matches!(act, Act::Done).then_some(crate::widgets::Action::Done),
+                        button_id(page, act),
                     );
                     crate::widgets::last_narratable(|n| {
                         narrate_widget(n, s, wd, hover, list_key, framebuffer);
@@ -386,6 +413,7 @@ impl OptionsUi {
                         self.can_change_value && is_focused,
                         true,
                         dragging,
+                        opt.agent_id(),
                     );
                     crate::widgets::last_narratable(|n| {
                         narrate_widget(n, s, wd, hover, list_key, framebuffer);

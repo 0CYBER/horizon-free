@@ -454,6 +454,7 @@ pub(crate) fn slider_step(pos: f32, steps: Option<u32>, width: f32, forward: boo
 
 /// A setting's row as the screen reads it.
 pub(crate) struct RowView<'a> {
+    pub(crate) agent_id: Option<&'static str>,
     /// The whole caption ("Render Distance: 12 chunks"), for the narrator.
     pub(crate) label: &'a str,
     pub(crate) name: &'a str,
@@ -476,6 +477,7 @@ pub(crate) struct RowView<'a> {
 /// A setting's row at `y`, its name on the left and its control on the right.
 pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32, view: &RowView) {
     let &RowView {
+        agent_id,
         label,
         name,
         value,
@@ -516,7 +518,7 @@ pub(crate) fn row(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, y: f32
         },
         None => crate::widgets::Kind::Button,
     };
-    crate::widgets::record_as(label, rect, live, kind);
+    crate::widgets::record_with_id(agent_id, label, rect, live, kind);
     crate::widgets::narratable(|| {
         match (switch, slider) {
             (Some(on), _) => crate::widgets::Narratable::checkbox(name.to_owned(), on, rect, live),
@@ -1225,6 +1227,7 @@ const RESET_INSET: f32 = 2.0;
 #[derive(Clone, Debug)]
 pub(crate) struct Row<R> {
     pub(crate) id: R,
+    pub(crate) agent_id: Option<&'static str>,
     pub(crate) name: String,
     pub(crate) value: Value,
     /// What it does: found by the search, and shown in the strip.
@@ -1249,6 +1252,7 @@ impl<R> Row<R> {
     pub(crate) fn new(id: R, name: String, value: Value) -> Self {
         Self {
             id,
+            agent_id: None,
             name,
             value,
             about: String::new(),
@@ -2272,6 +2276,7 @@ impl<S: Screen> Shell<S> {
             return;
         }
         let view = RowView {
+            agent_id: row.agent_id,
             label: &label,
             name: &row.name,
             value: value.as_deref(),

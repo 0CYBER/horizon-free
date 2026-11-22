@@ -295,21 +295,19 @@ turn the switch off.
    {"id": "done", "kind": "button", "label": "Done", "bounds": [...], "enabled": true}]}
 ```
 
-- **Ids are slugs of the drawn label, so they follow the client's language.** An id is the label
-  up to its `:`, as a slug (`FOV: 70` is `fov`, `AI Agent...` is `ai-agent`), and the label is the
-  translated text the screen drew: the ids in this page and in
-  [native-client.md](native-client.md) are the English ones. On a Russian client the title screen
-  has `одиночная-игра`, not `singleplayer`, and `настройки`, not `options`. A script that clicks a
-  literal id either pins the language first (`options-set lang en_us` on a running game, or
-  `lang:en_us` in the game folder's `options.txt` before launch: `--game-dir`, default the
-  working directory, or `--player-dir` when set) or reads `ui` and uses the ids it returns. A repeated slug gets `-2`, `-3`; unlabelled elements are `<kind>-<n>`. A slider's id
-  doesn't change with its value. Slots are `slot-<ID>` with their stack.
+- **Registered IDs do not change with the client's language.** For example, `singleplayer`,
+  `create-new-world`, `options`, `fov`, `done` and `back-to-game` work in Russian and English;
+  `label` still contains the translated text. Widgets without a registered ID use the drawn
+  label up to its `:` as a slug (for example, `My World` is `my-world`). These fallback IDs can
+  change with the label; read `ui` to find them. Repeated slugs get `-2`, `-3`; unlabelled
+  elements are `<kind>-<n>`. Slots are `slot-<ID>` with their stack.
 - **Kinds:** `button`, `slider` (`value` 0..1), `field`, `row` (a world, server, pack or
   language), `tab` (`selected`), `slot`.
 - **Actions:**
   - `click ID [right|middle] [shift]` clicks where the mouse would.
   - `set ID VALUE` moves a slider.
   - `type` types into the focused field.
+  - `click-button LABEL` takes the displayed label, not a registered ID.
 
   After a click, the next `ui`, `click` or `set` waits for a redrawn frame. Right after
   `launch`, they and `screen` and `click-button` wait for the first one.

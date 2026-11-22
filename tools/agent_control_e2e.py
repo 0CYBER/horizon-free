@@ -4,9 +4,9 @@
 A script creates a world through the title menus, finds a tree it can walk to, breaks a log,
 checks the inventory, crafts planks in the inventory screen, places one and reads it back. It
 runs through the CLI (one horizon-ctl process per command) and through `horizon-ctl mcp` with a
-small JSON-RPC client, and saves a screenshot of each run. The ui scenario drives the menus by
-widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
-the options scenario reads and sets options.txt values by key; the events scenario waits for
+small JSON-RPC client, and saves a screenshot of each run. The ui scenario checks stable widget
+ids across a live language change and drives the title, options and inventory in Russian.
+The options scenario reads and sets options.txt values by key; the events scenario waits for
 states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
 golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport, then
 holds an eye of ender in use and the sprint key with and without blindness; the copper-chest
@@ -22,7 +22,7 @@ horizon-ctl, its MCP server and the game's control socket all refuse.
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
     python3 tools/agent_control_e2e.py --bin-dir target/fast --out /tmp/agent-e2e
-    python3 tools/agent_control_e2e.py --scenario ui   # menus by widget id only (a minute)
+    python3 tools/agent_control_e2e.py --scenario ui   # widget ids in Russian and English
 
 Needs vscreen on Linux (the desktop); on macOS the game renders offscreen, so it also runs in a
 locked session or over SSH. It needs the prepared resources in .local/horizon-client and a build of
@@ -334,6 +334,23 @@ def widgets(d):
 
 
 def ui_scenario(d, out):
+    # The same title screen in the same process: only its labels change.
+    russian = widgets(d)
+    d('options_set', key='lang', value='en_us')
+    english = widgets(d)
+    assert russian.keys() == english.keys(), (russian, english)
+    for id in ('singleplayer', 'multiplayer', 'options', 'quit-game', 'friends'):
+        assert russian[id]['label'] != english[id]['label'], (russian[id], english[id])
+
+    d('click', id='options')
+    english_options = widgets(d)
+    d('set', id='fov', value=1)
+    assert widgets(d)['fov']['value'] > 0.99
+    d('set', id='fov', value=0.5)
+    d('click', id='done')
+    d('options_set', key='lang', value='ru_ru')
+    assert widgets(d)['singleplayer']['label'] == russian['singleplayer']['label']
+
     # 1. Create a world through the title menus, by widget id.
     tree = widgets(d)
     assert tree['singleplayer']['kind'] == 'button', tree
@@ -350,7 +367,10 @@ def ui_scenario(d, out):
     # 2. Options from the pause menu: a slider set by id moves its value and label.
     d('pause')
     d('click', id='options')
-    fov = widgets(d)['fov']
+    russian_options = widgets(d)
+    for widget_id in ('fov', 'done'):
+        assert russian_options[widget_id]['label'] != english_options[widget_id]['label'], widget_id
+    fov = russian_options['fov']
     assert fov['kind'] == 'slider' and abs(fov['value'] - 0.5) < 0.01, fov
     d('set', id='fov', value=1)
     moved = widgets(d)['fov']
@@ -385,6 +405,17 @@ def ui_scenario(d, out):
     shot = d('screenshot', path=str(out / f'{d.name}-ui.png'))
     if '_image' in shot:
         (out / f'{d.name}-ui.png').write_bytes(shot['_image'])
+
+    # Player-named rows still use their label as the id in a localized UI.
+    d('pause')
+    d('click', id='save-and-quit-to-title')
+    d('wait_for', condition='screen', value='title', timeout=60)
+    d('click', id='singleplayer')
+    row = widgets(d)['ui-world']
+    assert row['kind'] == 'row' and row['label'] == 'UI World', row
+    d('click', id='ui-world')
+    menu = d('screen')['menu']
+    assert menu['selected'] is not None and menu['worlds'][menu['selected']]['name'] == 'UI World', menu
     return {'widgets': len(tree)}
 
 
@@ -1025,17 +1056,15 @@ SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenari
 REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
 
 
-def scratch(mode, resources):
+def scratch(mode, resources, *, lang='en_us'):
     """A scratch game home with the prepared resources, and the game's environment for it."""
     work = Path(tempfile.mkdtemp(prefix=f'hzac-{mode}-'))
     (work / '.local').mkdir()
     (work / '.local/horizon-client').mkdir()
     lab.link_dir(resources, work / '.local/horizon-client' / lab.VERSION)
     # A first launch shows the accessibility onboarding before the title (Gui.addInitialScreens): these
-    # scenarios start at the title, as a player does after it. The ui scenario clicks the English ids
-    # docs/agent-control.md shows, and an id is a slug of the drawn (translated) label: pin the
-    # language instead of relying on the default.
-    (work / 'options.txt').write_text('onboardAccessibility:false\nlang:en_us\n')
+    # scenarios start at the title. Keep English for scenarios that deliberately click by label.
+    (work / 'options.txt').write_text(f'onboardAccessibility:false\nlang:{lang}\n')
     # horizon-ctl reads No AI in the game home: this one, not the player's.
     env = game_env(os.environ.get('VSCREEN', 'agent-control'), home=work)
     return work, env
@@ -1156,7 +1185,7 @@ def run(mode, ctl, out, resources, which='survival'):
         return no_ai_check(mode, ctl, resources)
     if which == 'setting':
         return setting_check(mode, ctl, out, resources)
-    work, env = scratch(mode, resources)
+    work, env = scratch(mode, resources, lang='ru_ru' if which == 'ui' else 'en_us')
     socket = work / 'c.sock'
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
     started = time.time()
