@@ -2139,6 +2139,30 @@ impl ArmorStand {
         self.environment_tick_inner(&mut world, facts, registry, |_, _| false)
     }
     /// As `environment_tick`, allowing the caller to decide each actual damage attempt.
+    /// Whether a block clears the stand's freeze this tick through
+    /// `applyEffectsFromBlocks`: a fire block applies `CLEAR_FREEZE` itself
+    /// (`BaseFireBlock.entityInside`), whatever the stand's `Fire`, and lava's
+    /// `LAVA_IGNITE` (`Entity.lavaIgnite`) reaches `igniteForTicks`, which calls
+    /// `clearFreeze`. A marker or `NoGravity` stand has `noPhysics`, so no
+    /// block reaches it.
+    pub fn freeze_cleared_by_blocks(
+        &self,
+        world: &World,
+        facts: &BlockFacts,
+        registry: &horizon_world::registry::BlockRegistry,
+    ) -> bool {
+        if self.no_physics.unwrap_or(self.marker || self.no_gravity) {
+            return false;
+        }
+        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
+        let lava = (lo.x.floor() as i32..=hi.x.floor() as i32).any(|x| {
+            (lo.y.floor() as i32..hi.y.ceil() as i32).any(|y| {
+                (lo.z.floor() as i32..=hi.z.floor() as i32)
+                    .any(|z| facts.get(world.block(x, y, z)).fluid == Fluid::Lava)
+            })
+        });
+        lava || crate::motion::environment::fire_contact(world, registry, self.bounds()) > 0.0
+    }
     pub fn environment_tick_with_hook(
         &mut self,
         mut world: &mut World,
