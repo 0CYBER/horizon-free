@@ -1116,27 +1116,24 @@ fn block_animate_tick(
             }
         }
         Animate::EnchantingTable => {
-            for ox in -2i32..=2 {
-                for oy in 0..=1 {
-                    for oz in -2i32..=2 {
-                        if ox.abs() != 2 && oz.abs() != 2 {
-                            continue;
-                        }
-                        if next_int(engine.random(), 16) != 0 {
-                            continue;
-                        }
-                        let provider = ctx.state([pos[0] + ox, pos[1] + oy, pos[2] + oz]);
-                        let between = ctx.state([pos[0] + ox / 2, pos[1] + oy, pos[2] + oz / 2]);
-                        if ctx.enchant_power.has(provider, 1) && ctx.enchant_power.has(between, 2) {
-                            let r = engine.random();
-                            let v = [
-                                f64::from(ox as f32 + r.next_float() - 0.5),
-                                f64::from(oy as f32 - r.next_float() - 1.0),
-                                f64::from(oz as f32 + r.next_float() - 0.5),
-                            ];
-                            add(engine, T::Enchant, [fx + 0.5, fy + 2.0, fz + 0.5], v);
-                        }
-                    }
+            // EnchantingTableBlock.animateTick walks BOOKSHELF_OFFSETS in
+            // BlockPos.betweenClosed order (x fastest), so each 1-in-16 roll
+            // and its velocity draws belong to the same bookshelf vanilla
+            // attaches them to.
+            for [ox, oy, oz] in crate::stations::bookshelf_offsets() {
+                if next_int(engine.random(), 16) != 0 {
+                    continue;
+                }
+                let provider = ctx.state([pos[0] + ox, pos[1] + oy, pos[2] + oz]);
+                let between = ctx.state([pos[0] + ox / 2, pos[1] + oy, pos[2] + oz / 2]);
+                if ctx.enchant_power.has(provider, 1) && ctx.enchant_power.has(between, 2) {
+                    let r = engine.random();
+                    let v = [
+                        f64::from(ox as f32 + r.next_float() - 0.5),
+                        f64::from(oy as f32 - r.next_float() - 1.0),
+                        f64::from(oz as f32 + r.next_float() - 0.5),
+                    ];
+                    add(engine, T::Enchant, [fx + 0.5, fy + 2.0, fz + 0.5], v);
                 }
             }
         }
