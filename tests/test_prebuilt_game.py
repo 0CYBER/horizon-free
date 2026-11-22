@@ -492,22 +492,26 @@ class SdkAssetTests(unittest.TestCase):
             self.assertFalse((root / "dist").exists())
 
     def test_the_rust_reader_fixture_is_what_pack_writes(self):
-        # crates/horizon-mod-package/src/sdk/fixture.tar.xz is unpacked by the Rust reader's test: the two agree.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "deps").mkdir()
-            (root / "deps/a.rmeta").write_text("metadata")
-            for path in (root / "deps", root / "deps/a.rmeta"):
-                os.utime(path, (0, 0))
-            prebuilt_game.tar_xz(root, prebuilt_game.tree(root), root / "fixture.tar.xz")
-            fixture = prebuilt_game.ROOT / "crates/horizon-mod-package/src/sdk/fixture.tar.xz"
-            written = (root / "fixture.tar.xz").read_bytes()
-            if os.name == "nt":
-                # Windows has no POSIX modes (a folder stats as 0o777, a file as 0o666) and the archive keeps the
-                # folder's own, so there the members are compared without them; the bytes, everywhere else.
-                self.assertEqual(tar_members(written), tar_members(fixture.read_bytes()))
-            else:
-                self.assertEqual(written, fixture.read_bytes())
+        # crates/horizon-mod-package/src/sdk/fixture.tar.xz is unpacked by the Rust reader's test: the two agree,
+        # whatever the umask (0002, 0022 and 0027 give these modes).
+        for folder_mode, file_mode in ((0o775, 0o664), (0o755, 0o644), (0o750, 0o640)):
+            with self.subTest(folder=oct(folder_mode)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "deps").mkdir()
+                (root / "deps/a.rmeta").write_text("metadata")
+                for path, mode in ((root, folder_mode), (root / "deps", folder_mode), (root / "deps/a.rmeta", file_mode)):
+                    os.chmod(path, mode)
+                for path in (root / "deps", root / "deps/a.rmeta"):
+                    os.utime(path, (0, 0))
+                prebuilt_game.tar_xz(root, prebuilt_game.tree(root), root / "fixture.tar.xz")
+                fixture = prebuilt_game.ROOT / "crates/horizon-mod-package/src/sdk/fixture.tar.xz"
+                written = (root / "fixture.tar.xz").read_bytes()
+                if os.name == "nt":
+                    # Windows has no POSIX modes (a folder stats as 0o777, a file as 0o666) and the archive keeps the
+                    # folder's own, so there the members are compared without them; the bytes, everywhere else.
+                    self.assertEqual(tar_members(written), tar_members(fixture.read_bytes()))
+                else:
+                    self.assertEqual(written, fixture.read_bytes())
 
 
 class TrackedBlobsTests(unittest.TestCase):
