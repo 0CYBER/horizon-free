@@ -252,15 +252,29 @@ fn add_offline(dir: &Path, name: &str) -> Result<(), String> {
 }
 
 /// The profile a running server would store for `name`: the offline one, or in online mode the account the
-/// services know by that name.
+/// services know by that name. Asked like vanilla's bulk lookup, three times when the services don't answer
+/// (they rate-limit data-center addresses), since `init` and a stopped server's edits run only once.
 pub fn account(name: &str, online: bool) -> Result<NameAndId, String> {
-    horizon_platform::server_files::profiles::resolve(name, online).ok_or_else(|| {
-        if online {
-            format!("That player does not exist (no Minecraft account is named {name}, or the services didn't answer)")
-        } else {
-            "That player does not exist".to_owned()
-        }
-    })
+    use horizon_platform::server_files::profiles;
+    if !online {
+        return Ok(NameAndId::offline(name));
+    }
+    let nobody = || format!("That player does not exist (no Minecraft account is named {name})");
+    if !profiles::valid_player_name(name) {
+        return Err(nobody());
+    }
+    match profiles::look_up_by_name_patiently(
+        &profiles::discovery_url(),
+        &name.to_ascii_lowercase(),
+        profiles::LOOKUP_RETRY_DELAY,
+    ) {
+        Ok(Some(user)) => Ok(user),
+        Ok(None) => Err(nobody()),
+        Err(why) => Err(format!(
+            "Couldn't look up {name}: Mojang's services {why}, after {} tries; try again in a minute",
+            profiles::LOOKUP_TRIES
+        )),
+    }
 }
 
 /// The entry already on a list under `name` (any case), so removing needs no lookup.
