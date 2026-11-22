@@ -189,6 +189,93 @@ pub fn use_default_folder() -> Result<()> {
     use_default_at(&bootstrap_path()?)
 }
 
+/// If the selected launcher data root is a link, return the existing folder it points to.
+/// Environment overrides are intentionally excluded: their owners selected those roots directly.
+pub fn linked_data_folder_target() -> Option<PathBuf> {
+    if has_override() {
+        return None;
+    }
+    let bootstrap = bootstrap_path().ok()?;
+    let launcher = stored_roots_at(&bootstrap)
+        .ok()?
+        .map(|roots| roots.launcher)
+        .unwrap_or_else(crate::backend::data_dir);
+    let metadata = fs::symlink_metadata(&launcher).ok()?;
+    if !is_link(&metadata) {
+        return None;
+    }
+    fs::canonicalize(&launcher).ok().map(plain_drive)
+}
+
+/// Record a linked launcher data folder's existing target as the configured root. No files are
+/// copied or removed; the next process opens the same data through its real path.
+pub fn use_real_data_folder() -> Result<()> {
+    if has_override() {
+        return Err("Data folders are set by HORIZON_LAUNCHER_HOME or HORIZON_HOME".into());
+    }
+    use_real_at(&bootstrap_path()?)
+}
+
+fn use_real_at(bootstrap: &Path) -> Result<()> {
+    let _lease = MigrationLease::take(bootstrap)?;
+    let mut roots = roots_for_real_folder(bootstrap)?;
+    let metadata =
+        fs::symlink_metadata(&roots.launcher).map_err(|e| problem(&roots.launcher, e))?;
+    if !is_link(&metadata) {
+        return Err(format!(
+            "The launcher data folder is not a link: {}",
+            roots.launcher.display()
+        ));
+    }
+    let linked_launcher = roots.launcher.clone();
+    roots.launcher = fs::canonicalize(&linked_launcher)
+        .map(plain_drive)
+        .map_err(|e| problem(&linked_launcher, e))?;
+    if roots.build == linked_launcher {
+        roots.build = roots.launcher.clone();
+    }
+    roots = validate_roots(&roots)?;
+    tool_safe(&roots.build)?;
+    for root in [&roots.launcher, &roots.game, &roots.build] {
+        if !root.is_dir() {
+            fs::create_dir_all(root).map_err(|e| problem(root, e))?;
+        }
+    }
+    roots = validate_roots(&roots)?;
+    commit(bootstrap, &roots)
+}
+
+fn roots_for_real_folder(bootstrap: &Path) -> Result<Roots> {
+    Ok(stored_roots_at(bootstrap)?.unwrap_or_else(|| Roots {
+        launcher: crate::backend::data_dir(),
+        game: crate::backend::game_home(),
+        build: crate::backend::build_dir(),
+    }))
+}
+
+fn stored_roots_at(bootstrap: &Path) -> Result<Option<Roots>> {
+    let bootstrap = pointer_path(bootstrap)?;
+    let bytes = match fs::read(&bootstrap) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(problem(&bootstrap, error)),
+    };
+    let location: Location = serde_json::from_slice(&bytes).map_err(|e| {
+        format!(
+            "Invalid {}: {e}; restore this file or the previous data folder",
+            bootstrap.display()
+        )
+    })?;
+    if location.version != 1 {
+        return Err(format!(
+            "Unsupported data location version {} in {}",
+            location.version,
+            bootstrap.display()
+        ));
+    }
+    Ok(Some(location.roots))
+}
+
 fn use_default_at(bootstrap: &Path) -> Result<()> {
     if bootstrap.exists() {
         let backup = bootstrap.with_file_name("location.json.old");
@@ -855,6 +942,16 @@ fn contained_link(
 }
 
 pub(crate) fn reject_link(path: &Path, meta: &fs::Metadata) -> Result<()> {
+    if is_link(meta) {
+        return Err(format!(
+            "Symbolic links and reparse points cannot be relocated: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn is_link(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
     let reparse = {
         use std::os::windows::fs::MetadataExt;
@@ -862,13 +959,7 @@ pub(crate) fn reject_link(path: &Path, meta: &fs::Metadata) -> Result<()> {
     };
     #[cfg(not(windows))]
     let reparse = false;
-    if meta.file_type().is_symlink() || reparse {
-        return Err(format!(
-            "Symbolic links and reparse points cannot be relocated: {}",
-            path.display()
-        ));
-    }
-    Ok(())
+    meta.file_type().is_symlink() || reparse
 }
 
 fn tool_safe(path: &Path) -> Result<()> {

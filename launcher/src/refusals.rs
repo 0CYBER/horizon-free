@@ -137,19 +137,20 @@ fn unsupported_text(folder: Option<&Path>, data: &Path, environment: bool) -> St
 /// A refused entry at `path`: a link, or not the kind of entry expected there.
 pub(crate) fn unexpected_entry(path: &Path, data: &Path) -> String {
     let link = std::fs::symlink_metadata(path).is_ok_and(|meta| crate::native_cache::linked(&meta));
-    unexpected_text(path, data, link)
+    unexpected_text(path, data, link, data_from_environment())
 }
 
-fn unexpected_text(path: &Path, data: &Path, link: bool) -> String {
-    match path == data && link {
-        // Settings can't move a linked data folder either: relocation refuses a linked source
-        // (`validate_roots` in `data_location::migrate_locked`), so only the environment can
-        // point past it.
-        true => trf(
+fn unexpected_text(path: &Path, data: &Path, link: bool, environment: bool) -> String {
+    match (path == data && link, environment) {
+        (true, true) => trf(
             "{folder} is a link. Set HORIZON_LAUNCHER_HOME to the real folder.",
             &[("folder", &shown(path))],
         ),
-        false => trf(
+        (true, false) => trf(
+            "{folder} is a link. In Settings > About > Data folder, choose Use real folder. Your files stay in place.",
+            &[("folder", &shown(path))],
+        ),
+        _ => trf(
             "Refusing native cache cleanup at an unexpected file or link: {path}",
             &[("path", &path.display().to_string())],
         ),
@@ -390,15 +391,19 @@ mod tests {
             "A folder Horizon uses is on a file system it doesn't support. Keep the launcher's data and game folders on a local drive."
         );
 
-        // Settings can't move a linked data folder, with or without the override.
+        // Without an environment override, point the player to the in-place Settings action.
         assert_eq!(
-            unexpected_text(data, data, true),
+            unexpected_text(data, data, true, false),
+            "/home/player/.local/share/horizon-launcher is a link. In Settings > About > Data folder, choose Use real folder. Your files stay in place."
+        );
+        assert_eq!(
+            unexpected_text(data, data, true, true),
             "/home/player/.local/share/horizon-launcher is a link. Set HORIZON_LAUNCHER_HOME to the real folder."
         );
         let generic = "Refusing native cache cleanup at an unexpected file or link: /home/player/.local/share/horizon-launcher";
-        assert_eq!(unexpected_text(data, data, false), generic);
+        assert_eq!(unexpected_text(data, data, false, false), generic);
         let inner = data.join("native");
-        assert!(unexpected_text(&inner, data, true).starts_with("Refusing native cache"));
+        assert!(unexpected_text(&inner, data, true, false).starts_with("Refusing native cache"));
 
         let game = Path::new("/home/player/games/survival");
         assert_eq!(

@@ -150,6 +150,17 @@ impl Launcher {
         cx.notify();
     }
 
+    fn use_real_location(&mut self, cx: &mut Context<Self>) {
+        self.location_error = self.location_blocked();
+        if self.location_error.is_none() {
+            match horizon_launcher::data_location::use_real_data_folder() {
+                Ok(()) => self.location_error = Some(backend::restart()),
+                Err(error) => self.location_error = Some(open_error(&error)),
+            }
+        }
+        cx.notify();
+    }
+
     fn location_picker_error(&mut self, error: String) {
         self.location_error = Some(trf(
             "Could not choose data folder: {error}",
@@ -196,6 +207,7 @@ impl Launcher {
     pub(super) fn location_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let blocked = self.location_blocked();
+        let real_target = self.location_real_target.as_ref();
         let move_button = button("move-data", "Move…", Kind::Secondary, &t);
         let move_button = if blocked.is_some() {
             disabled(move_button)
@@ -204,6 +216,20 @@ impl Launcher {
                 this.choose_location(cx);
             }))
         };
+        let real_button = button(
+            "use-real-data-folder",
+            "Use real folder",
+            Kind::Secondary,
+            &t,
+        );
+        let real_button = if blocked.is_some() {
+            disabled(real_button)
+        } else {
+            real_button.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.use_real_location(cx);
+            }))
+        };
+        let real_action = real_target.as_ref().map(|_| real_button.into_any_element());
         let mut body = div()
             .flex()
             .flex_col()
@@ -222,10 +248,20 @@ impl Launcher {
                             ),
                         )
                         .child(move_button)
+                        .children(real_action)
                         .into_any_element(),
                 ),
                 &t,
             ))
+            .children(real_target.as_ref().map(|target| {
+                text(theme::CAPTION)
+                    .px(px(if t.glass { 14. } else { 0. }))
+                    .text_color(t.muted)
+                    .child(trf(
+                        "This data folder links to {path}. Use the real folder to keep files in place; nothing is copied.",
+                        &[("path", &target.display().to_string())],
+                    ))
+            }))
             .child(text(theme::CAPTION).px(px(if t.glass { 14. } else { 0. })).text_color(t.muted).child(tr(
                 "Moves all launcher, game and build data, including settings, worlds, instances and installed versions. Choose an empty folder with enough free space.",
             ).to_string()))

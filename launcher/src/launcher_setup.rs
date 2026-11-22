@@ -184,6 +184,7 @@ impl Launcher {
             restyle: true,
             background_error: None,
             location_target: None,
+            location_real_target: horizon_launcher::data_location::linked_data_folder_target(),
             location_error: location_page::startup_error(),
             location_note: location_page::startup_note(),
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),

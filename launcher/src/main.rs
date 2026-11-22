@@ -438,6 +438,8 @@ struct Launcher {
     background_error: Option<String>,
     /// Settings' data relocation confirmation and the worker's last result.
     location_target: Option<std::path::PathBuf>,
+    /// A linked data target discovered at startup, reused while the Settings page redraws.
+    location_real_target: Option<std::path::PathBuf>,
     location_error: Option<String>,
     location_note: Option<String>,
     settings: Settings,

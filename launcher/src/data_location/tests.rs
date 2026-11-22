@@ -1069,6 +1069,41 @@ fn using_the_default_folder_keeps_the_pointer_beside_it() {
 
 #[cfg(unix)]
 #[test]
+fn use_real_folder_rewrites_shared_linked_launcher_and_build_roots() {
+    let temp = Temp::new();
+    let target = temp.0.join("relocated-data");
+    fs::create_dir_all(target.join("cache")).unwrap();
+    fs::write(target.join("accounts.json"), b"accounts").unwrap();
+    fs::write(target.join("cache/build.bin"), b"build").unwrap();
+    let before = snapshot(&target);
+    let link = temp.0.join("data-link");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let game = temp.0.join("game");
+    fs::create_dir_all(&game).unwrap();
+    let roots = Roots {
+        launcher: link.clone(),
+        game,
+        build: link.clone(),
+    };
+    let bootstrap = temp.0.join("bootstrap/location.json");
+    fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
+    fs::write(
+        &bootstrap,
+        serde_json::to_vec(&Location { version: 1, roots }).unwrap(),
+    )
+    .unwrap();
+
+    use_real_at(&bootstrap).unwrap();
+
+    let committed = stored_roots_at(&bootstrap).unwrap().unwrap();
+    assert_eq!(committed.launcher, target);
+    assert_eq!(committed.build, target);
+    assert_eq!(fs::read_link(&link).unwrap(), committed.launcher);
+    assert_eq!(snapshot(&committed.launcher), before);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_config_folder_behind_a_link_still_opens() {
     // A dotfiles-managed ~/.config is a link: players who never moved their data must start
     // without an error, and a pointer kept there must still resolve and lock.
