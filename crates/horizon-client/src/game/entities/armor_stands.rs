@@ -633,6 +633,9 @@ impl Game<'_> {
         }
         best
     }
+    /// `LivingEntity.getEquipmentSlotForItem` through `ArmorStand.canUseSlot`:
+    /// an equippable slot the stand has disabled is replaced by MAINHAND, so
+    /// e.g. a helmet for a head-locked stand goes in its hand.
     fn equipment_slot(&self, stack: &ItemStack) -> usize {
         stand_slot(self.res.items(), stack)
     }
@@ -692,7 +695,7 @@ impl Game<'_> {
         let a = &self.armor_stands[i];
         let slot = match &held {
             Some(h) => {
-                let slot = self.equipment_slot(h);
+                let slot = usable_equipment_slot(a, self.equipment_slot(h));
                 // ArmorStand.interact: a disabled slot, or a hand without
                 // arms, is FAIL.
                 if a.is_disabled(slot) {
@@ -2402,11 +2405,34 @@ fn broken_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
         .collect();
     (pos, drops)
 }
+/// `LivingEntity.getEquipmentSlotForItem` through `ArmorStand.canUseSlot`:
+/// a disabled equippable slot is replaced by MAINHAND (index 0).
+fn usable_equipment_slot(stand: &ArmorStand, wanted: usize) -> usize {
+    if wanted != 0 && stand.is_disabled(wanted) {
+        0
+    } else {
+        wanted
+    }
+}
+
 #[cfg(test)]
 mod swap_tests {
     use super::*;
     fn stack(item: &str, count: u32) -> ItemStack {
         ItemStack::new(item, count)
+    }
+    /// A head-locked stand held a helmet would refuse it in vanilla too —
+    /// `getEquipmentSlotForItem` falls back to MAINHAND, so the stand holds it.
+    #[test]
+    fn a_disabled_equippable_slot_falls_back_to_the_hand() {
+        let mut a = ArmorStand::new(1, horizon_core::geometry::Vec3::ZERO, 0.0);
+        a.show_arms = true;
+        a.disabled_slots = 1 << 4; // head
+        assert_eq!(usable_equipment_slot(&a, 5), 0);
+        assert_eq!(usable_equipment_slot(&a, 4), 4);
+        assert_eq!(usable_equipment_slot(&a, 0), 0);
+        a.disabled_slots = 1 << 5; // off hand
+        assert_eq!(usable_equipment_slot(&a, 1), 0);
     }
     #[test]
     fn disabled_slots_lock_by_filter_flag() {
