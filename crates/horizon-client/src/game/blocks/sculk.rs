@@ -1302,6 +1302,9 @@ impl Game<'_> {
     /// `SculkSensorBlock.stepOn` and `SculkShriekerBlock.stepOn`: standing on
     /// them is heard (or seen) every tick.
     fn sculk_step_on(&mut self) {
+        if self.sculk.index.set.is_empty() {
+            return;
+        }
         self.sculk_step_on_player();
         let mut standing: Vec<(Who, [f64; 3])> = Vec::new();
         for m in &self.mobs {
@@ -1309,20 +1312,23 @@ impl Game<'_> {
                 standing.push((Who::Mob(m.id), [m.position.x, m.position.y, m.position.z]));
             }
         }
-        self.sculk_stand_on(standing);
+        self.sculk_stand_on(&standing);
     }
     /// `stepOn` for the player in place: the host, or a guest swapped in
     /// (`guest_server_tick`), as a server has no player of its own.
     pub(super) fn sculk_step_on_player(&mut self) {
+        if self.sculk.index.set.is_empty() {
+            return;
+        }
         if let Some(p) = self.player.as_ref()
             && p.ground.on_ground
         {
             let at = [p.position.x, p.position.y, p.position.z];
-            self.sculk_stand_on(vec![(Who::Player, at)]);
+            self.sculk_stand_on(&[(Who::Player, at)]);
         }
     }
-    fn sculk_stand_on(&mut self, standing: Vec<(Who, [f64; 3])>) {
-        for (who, at) in standing {
+    fn sculk_stand_on(&mut self, standing: &[(Who, [f64; 3])]) {
+        for &(who, at) in standing {
             // getOnPosLegacy: 0.2 below the feet.
             let key = (
                 at[0].floor() as i32,
@@ -2755,6 +2761,53 @@ mod tests {
                 .unwrap();
             assert_eq!(info.source, Some(EventSource::Entity(123)));
             assert_eq!(info.owner, Some(Who::Player));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn sculk_step_on_skips_empty_index_and_detects_sensor_steps() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use horizon_client::{chunk::Chunk, mobs::Mob, motion::PlayerMotion};
+        use horizon_core::geometry::Vec3;
+        use std::sync::Arc;
+
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.sculk_prepare();
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let mut player = PlayerMotion::new(game.motion, Vec3::new(1.5, 65.0, 1.5)).unwrap();
+            player.ground.on_ground = true;
+            game.player = Some(player);
+            let pig_kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let mut mob = Mob::new(1, pig_kind, Vec3::new(2.5, 65.0, 2.5), 0.0);
+            mob.on_ground = true;
+            game.mobs.push(mob);
+            assert!(game.sculk.index.set.is_empty());
+            game.sculk_step_on();
+
+            let sensor = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:sculk_sensor")
+                .unwrap();
+            game.world.set(1, 64, 1, sensor).unwrap();
+            game.sculk_sync_index();
+            assert!(!game.sculk.index.set.is_empty());
+
+            game.sculk_step_on_player();
+            let (info, _) = game
+                .sculk_entity((1, 64, 1))
+                .unwrap()
+                .vibration
+                .selector
+                .current
+                .unwrap();
+            assert_eq!(info.event, "minecraft:step");
+            assert_eq!(info.source, Some(Who::Player.into()));
         });
     }
 

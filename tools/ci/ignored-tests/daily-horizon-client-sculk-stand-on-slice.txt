@@ -1,0 +1,2 @@
+# Sculk empty-index step-on test boots Game with prepared resources.
+horizon-client game::sculk::tests::sculk_step_on_skips_empty_index_and_detects_sensor_steps lib daily resources
