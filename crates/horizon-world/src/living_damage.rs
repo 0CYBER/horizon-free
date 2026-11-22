@@ -149,9 +149,9 @@ impl DamageContainer {
     pub fn new_damage(&self) -> f32 {
         self.new_damage
     }
-    /// Change the damage the sequence goes on with (`setNewDamage`). Set in
-    /// `LivingDamageEvent.Pre`, it is what the absorption hearts and the health take: 0 or
-    /// less takes nothing, and a value that is not a number is put back as it was.
+    /// Change the damage the sequence goes on with (`setNewDamage`). A change in
+    /// `LivingDamageEvent.Pre` applies before absorption and health: negative amounts are
+    /// treated as zero, and NaN restores the amount Pre was told.
     pub fn set_new_damage(&mut self, damage: f32) {
         self.new_damage = damage;
     }
@@ -280,13 +280,13 @@ impl DamageContainer {
         self.new_damage = damage;
     }
     /// The damage sequence, after `LivingDamageEvent.Pre`: the damage it left, which the
-    /// sequence goes on with (`captureInflictedDamage`). Below 0 is none; not a number is
-    /// what Pre was told.
+    /// sequence goes on with (`captureInflictedDamage`). Preserve unedited native damage;
+    /// a negative edit is treated as zero and a NaN edit is ignored.
     #[doc(hidden)]
     pub fn capture_inflicted(&mut self) -> f32 {
         if self.new_damage.is_nan() {
             self.new_damage = self.entered_pre;
-        } else if self.new_damage < 0.0 {
+        } else if self.new_damage < 0.0 && self.new_damage != self.entered_pre {
             self.new_damage = 0.0;
         }
         self.inflicted = self.new_damage;
@@ -294,9 +294,14 @@ impl DamageContainer {
     }
     /// What `LivingDamageEvent.Pre` added to the damage (negative: took off). The damage
     /// cooldown remembers the hit with it (`lastHurt`).
+    /// An unchanged amount contributes no delta, even when subtraction would yield NaN.
     #[doc(hidden)]
     pub fn pre_change(&self) -> f32 {
-        self.inflicted - self.entered_pre
+        if self.inflicted.to_bits() == self.entered_pre.to_bits() {
+            0.0
+        } else {
+            self.inflicted - self.entered_pre
+        }
     }
     /// The damage sequence: the health the hit took.
     #[doc(hidden)]
