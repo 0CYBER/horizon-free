@@ -12,4 +12,10 @@ base_path: ".."
 preserve_hierarchy: true
 files:
   - source: /crates/horizon-client/assets/horizon/lang/en_us.json
-    translation: /l10n/game-approved/%locale_with_underscore%.json
+    # The CLI keeps only the archive entries at the path `translation` resolves to, and the archive
+    # is laid out by the pattern crowdin.yml uploaded, so this must stay crowdin.yml's pattern; the
+    # approved copies reach their own folder through `translation_replace`, which renames only the
+    # local file once the entry has matched.
+    translation: /l10n/game/%locale_with_underscore%.json
+    translation_replace:
+      /l10n/game/: /l10n/game-approved/
