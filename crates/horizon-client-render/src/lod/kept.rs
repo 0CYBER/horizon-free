@@ -7,7 +7,7 @@
 //! the finest go first, so the coarse shape of every place nearby stays
 //! longest. Nothing is written to disk: the tiles leave with the `Lod`, that
 //! is with the world.
-use super::{Column, Span, TileKey};
+use super::{TileColumns, TileKey};
 use crate::fast_hash::FxHashMap;
 use std::{
     sync::Arc,
@@ -25,7 +25,7 @@ pub(super) const KEPT_BYTES: usize = 512 << 20;
 const VIEW_512_TILES: usize = 4700;
 
 struct Kept {
-    columns: Arc<Vec<Column>>,
+    columns: Arc<TileColumns>,
     /// Its detail (`Lod::detail_masks`), so refined cells are not asked again.
     mask: Option<[u64; 4]>,
     at: Instant,
@@ -41,6 +41,10 @@ pub(super) struct KeptTiles {
 }
 
 impl KeptTiles {
+    /// Per-entry overhead in `tiles` (key, value, and hash table control byte),
+    /// so empty stand-in tiles still count against the byte budget.
+    const ENTRY_BYTES: usize = std::mem::size_of::<(TileKey, Kept)>() + 1;
+
     pub(super) fn new(time: Duration, budget: usize) -> Self {
         Self {
             tiles: FxHashMap::default(),
@@ -71,14 +75,8 @@ impl KeptTiles {
         self.tiles.contains_key(key)
     }
 
-    pub(super) fn keep(&mut self, key: TileKey, columns: Arc<Vec<Column>>, mask: Option<[u64; 4]>) {
-        // Spans past the inline four live on the heap.
-        let bytes = std::mem::size_of_val(columns.as_slice())
-            + columns
-                .iter()
-                .filter(|column| column.spans.len() > 4)
-                .map(|column| column.spans.len() * std::mem::size_of::<Span>())
-                .sum::<usize>();
+    pub(super) fn keep(&mut self, key: TileKey, columns: Arc<TileColumns>, mask: Option<[u64; 4]>) {
+        let bytes = Self::ENTRY_BYTES + columns.heap_bytes();
         let kept = Kept {
             columns,
             mask,
@@ -91,14 +89,14 @@ impl KeptTiles {
         }
     }
 
-    pub(super) fn take(&mut self, key: &TileKey) -> Option<(Arc<Vec<Column>>, Option<[u64; 4]>)> {
+    pub(super) fn take(&mut self, key: &TileKey) -> Option<(Arc<TileColumns>, Option<[u64; 4]>)> {
         let kept = self.tiles.remove(key)?;
         self.bytes -= kept.bytes;
         Some((kept.columns, kept.mask))
     }
 
     /// Forgets the tiles `stale` picks: their source has more than they hold.
-    pub(super) fn forget(&mut self, mut stale: impl FnMut(&TileKey, &[Column]) -> bool) {
+    pub(super) fn forget(&mut self, mut stale: impl FnMut(&TileKey, &TileColumns) -> bool) {
         let bytes = &mut self.bytes;
         self.tiles.retain(|key, kept| {
             let keep = !stale(key, &kept.columns);
@@ -147,19 +145,16 @@ impl KeptTiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lod::{CELLS, Surface};
+    use crate::lod::{Column, Surface};
     use horizon_world::registry::BlockStateId;
 
-    fn tile(height: i32) -> Arc<Vec<Column>> {
-        Arc::new(vec![
-            Column::from_surface(Some(Surface {
-                height,
-                state: BlockStateId(1),
-                water: None,
-                biome: 0,
-            }));
-            CELLS * CELLS
-        ])
+    fn tile(height: i32) -> Arc<TileColumns> {
+        Arc::new(TileColumns::filled(&Column::from_surface(Some(Surface {
+            height,
+            state: BlockStateId(1),
+            water: None,
+            biome: 0,
+        }))))
     }
 
     fn key(level: u8) -> TileKey {
@@ -171,7 +166,7 @@ mod tests {
         let mut kept = KeptTiles::new(KEPT_FOR, usize::MAX);
         kept.keep(key(0), tile(64), Some([u64::MAX; 4]));
         let (columns, mask) = kept.take(&key(0)).unwrap();
-        assert_eq!(columns[0].surface.unwrap().height, 64);
+        assert_eq!(columns.surface(0).unwrap().height, 64);
         assert_eq!(mask, Some([u64::MAX; 4]));
         assert!(kept.take(&key(0)).is_none());
         assert_eq!(kept.bytes(), 0);
@@ -214,5 +209,21 @@ mod tests {
         assert!(kept.take(&key(2)).is_none());
         assert!(kept.take(&key(3)).is_some());
         assert_eq!(kept.bytes(), 0);
+    }
+
+    #[test]
+    fn empty_tiles_charge_map_entry_overhead_against_the_budget() {
+        let mut kept = KeptTiles::new(KEPT_FOR, usize::MAX);
+        let empty = TileColumns::empty();
+        kept.keep(key(4), Arc::clone(&empty), None);
+        let per_empty = kept.bytes();
+        assert_eq!(per_empty, KeptTiles::ENTRY_BYTES + empty.heap_bytes());
+        assert!(per_empty > empty.heap_bytes());
+        kept.keep(key(0), Arc::clone(&empty), None);
+        kept.keep(key(1), Arc::clone(&empty), None);
+        kept.budget = per_empty * 2;
+        kept.trim();
+        assert!(kept.contains(&key(4)) && kept.contains(&key(1)) && !kept.contains(&key(0)));
+        assert_eq!(kept.bytes(), per_empty * 2);
     }
 }
