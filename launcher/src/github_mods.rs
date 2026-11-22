@@ -232,12 +232,23 @@ fn default_head(api: Api, link: &Link) -> Result<String, String> {
     commit_of(api, link, branch)
 }
 
+/// Whether `url` is a release file of `link`'s own repository. GitHub answers a link whatever its
+/// letter case and spells the owner and the repository its own way (#18167); the rest is exact.
+fn own_release_file(url: &str, link: &Link) -> bool {
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return false;
+    };
+    let mut parts = rest.splitn(3, '/');
+    let (Some(owner), Some(repo), Some(file)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    owner.eq_ignore_ascii_case(&link.owner)
+        && repo.eq_ignore_ascii_case(&link.repo)
+        && file.starts_with("releases/download/")
+}
+
 /// The release's mod package, validated after download.
 fn assets(release: &serde_json::Value, link: &Link) -> Option<Asset> {
-    let prefix = format!(
-        "https://github.com/{}/{}/releases/download/",
-        link.owner, link.repo
-    );
     let list = release["assets"]
         .as_array()
         .map(Vec::as_slice)
@@ -248,7 +259,7 @@ fn assets(release: &serde_json::Value, link: &Link) -> Option<Asset> {
             let url = a["browser_download_url"].as_str()?.to_owned();
             let name = a["name"].as_str()?.to_owned();
             // Only this repository's own release files.
-            url.starts_with(&prefix).then(|| Asset {
+            own_release_file(&url, link).then(|| Asset {
                 name,
                 url,
                 sha256: a["digest"]

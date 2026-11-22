@@ -130,6 +130,30 @@ fn an_asset_from_another_host_is_ignored() {
     );
 }
 
+/// GitHub answers a link whatever its letter case, and spells a release's files its own way
+/// (#18167).
+#[test]
+fn a_link_in_another_letter_case_still_takes_the_releases_hmod() {
+    let other = json!({
+        "name": "other.hmod",
+        "browser_download_url": "https://github.com/acme/zoom-fork/releases/download/v1/other.hmod",
+    });
+    let api = recorded(vec![
+        (
+            "repos/Acme/Zoom/releases/latest",
+            release("v1", json!([other, asset("zoom-1.hmod", None)])),
+        ),
+        ("repos/Acme/Zoom/commits/v1", json!({ "sha": SHA })),
+    ]);
+    let found = resolve(&link("https://github.com/Acme/Zoom"), &api).unwrap();
+    assert_eq!(found.tag.as_deref(), Some("v1"));
+    // Another repository's file is still not this one's.
+    assert_eq!(
+        found.asset.map(|file| file.name).as_deref(),
+        Some("zoom-1.hmod")
+    );
+}
+
 #[test]
 fn no_release_resolves_the_default_branch_to_a_commit() {
     let api = recorded(vec![
