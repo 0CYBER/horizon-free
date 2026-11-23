@@ -17,15 +17,23 @@ use horizon_client::{
 };
 use mod_api::{EntityRef, ExplodeError, ExplosionInteraction, ExplosionSettings};
 
-/// Whether `native_explode` takes this centre and radius. Vanilla bounds
-/// neither: any finite radius goes, one of 0 or below finding no blocks. A
-/// blast's 1352 rays are fixed; its cost is in the blocks they find (their
-/// steps grow with the radius, the distinct positions roughly with its cube).
+/// The largest radius a mod's blast may have. Vanilla bounds none, but only
+/// trusted code sets one off: its biggest are 6 (end crystal, charged creeper)
+/// and 7 (a wither's spawn). A mod's call can't be interrupted, and a ray of a
+/// huge radius walks to the world's edge (1352 rays of 1e8 / 0.225 steps), so
+/// the cap is about nine times the biggest: a ray takes under 400 steps.
+const MAX_BLAST_RADIUS: f32 = 64.0;
+
+/// Whether `native_explode` takes this centre and radius: finite, a radius
+/// within `MAX_BLAST_RADIUS` (one of 0 or below finds no blocks). A blast's
+/// 1352 rays are fixed; its cost is in the blocks they find (their steps grow
+/// with the radius, the distinct positions roughly with its cube).
 fn blast_ok(center: [f64; 3], radius: f32) -> bool {
     center
         .into_iter()
         .all(|v| v.is_finite() && v.abs() <= 30_000_000.0)
         && radius.is_finite()
+        && radius.abs() <= MAX_BLAST_RADIUS
 }
 
 /// A particle type a blast takes by id: one vanilla has that needs no options
@@ -59,7 +67,7 @@ impl Game<'_> {
     /// the exploding entity, already resolved; `settings` the damage type,
     /// calculator, particles and sound. Refused, with nothing done, on a
     /// client's copy of the world, for a chunk that isn't loaded, a centre or
-    /// radius that isn't finite, or settings `native_blast_settings` refuses.
+    /// radius that isn't finite or is over `MAX_BLAST_RADIUS`, or settings `native_blast_settings` refuses.
     /// A blast inside `native_explosion_detonate` starts that hook again.
     pub(super) fn native_explode(
         &mut self,
@@ -402,7 +410,10 @@ mod tests {
         assert!(blast_ok([0.5, 64.0, 0.5], 0.0));
         assert!(blast_ok([0.5, 64.0, 0.5], -1.0));
         assert!(blast_ok([0.5, 64.0, 0.5], 48.0));
-        assert!(blast_ok([0.5, 64.0, 0.5], 1.0e6));
+        assert!(blast_ok([0.5, 64.0, 0.5], MAX_BLAST_RADIUS));
+        assert!(!blast_ok([0.5, 64.0, 0.5], MAX_BLAST_RADIUS + 1.0));
+        assert!(!blast_ok([0.5, 64.0, 0.5], 1.0e8));
+        assert!(!blast_ok([0.5, 64.0, 0.5], -1.0e8));
         assert!(!blast_ok([0.5, 64.0, 0.5], f32::NAN));
         assert!(!blast_ok([0.5, 64.0, 0.5], f32::INFINITY));
         assert!(!blast_ok([f64::INFINITY, 64.0, 0.5], 4.0));

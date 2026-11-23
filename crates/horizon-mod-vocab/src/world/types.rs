@@ -652,7 +652,7 @@ pub enum ExplosionDestroyError {
     TooMany(u64),
     /// A stale level, or one not in place; a stale source or one in another level; a client.
     Unavailable,
-    /// A centre or radius that isn't finite, or a negative radius.
+    /// A centre or radius that isn't finite, a negative radius, or a radius over 64.
     InvalidBlast,
     /// A host without a game.
     NoGame,

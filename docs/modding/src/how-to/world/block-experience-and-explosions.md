@@ -110,7 +110,7 @@ interaction, `None` included. The steps run in vanilla's order:
 what players hear and see. A blast set off inside another blast's hook keeps
 its own source and cause and leaves the other blast's as they were.
 
-There is no radius limit, as in vanilla. A blast casts 1352 rays whatever its
+Vanilla has no radius limit (its biggest blasts are 6 and 7), but a mod's blast takes a radius of at most 64; more is refused with `InvalidBlast`. A blast casts 1352 rays whatever its
 radius; their steps grow with the radius and the distinct positions they find
 roughly with its cube, so a big blast costs what it finds (a ray of a radius-48
 blast takes up to about 280 steps). A radius of 0 or below finds no blocks and
@@ -169,7 +169,7 @@ total, past 2,147,483,647 is refused.
 | `ExplodeError` | When |
 | --- | --- |
 | `Unavailable` | A client, a parked level or a stale handle, a `source` that is stale, names no entity or is a player in another level, a centre in a chunk that isn't loaded |
-| `InvalidBlast` | A centre outside the world or not finite, a radius or knockback multiplier that isn't finite |
+| `InvalidBlast` | A centre outside the world or not finite, a radius over 64 or one that isn't finite, a knockback multiplier that isn't finite |
 | `UnknownDamageType` | A damage type that isn't registered |
 | `UnknownBlockTag` | An `immune_blocks` that names no block tag |
 | `InvalidParticle` | A particle that isn't a particle type taking no options, a block particle with a weight of 0 or a scaling or speed that isn't finite, or a weight or total of weights past 2,147,483,647 |

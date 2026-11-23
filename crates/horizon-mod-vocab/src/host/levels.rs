@@ -1400,9 +1400,10 @@ pub trait LevelsBackendMut {
     /// `entity_mob_griefing`, `Trigger` only works buttons, levers, doors and
     /// the like); `fire` lights some of the air around whatever it is.
     /// `settings` holds the damage calculator, particles and sound, each
-    /// vanilla's default when `None`. There is no radius limit, as in
-    /// vanilla: a big blast costs the blocks its rays find, and one of 0 or
-    /// below finds none. Refused, with nothing exploded and no hook told, as
+    /// vanilla's default when `None`. Vanilla has no radius limit,
+    /// but a mod's blast takes at most 64 (vanilla's biggest are 6 and 7): a
+    /// big blast costs the blocks its rays find, and one of 0 or below finds
+    /// none. Refused, with nothing exploded and no hook told, as
     /// [`ExplodeError`] says.
     #[access(WorldOnly)]
     fn level_explode(
