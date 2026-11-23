@@ -17,7 +17,7 @@ const USAGE: &str = "usage: cargo horizon-mod registry build <checkout> --files 
        cargo horizon-mod registry release <checkout> <id> <file> --tag <tag> --published <YYYY-MM-DD> [--notes <file>] [--signature <file>] [--game <version>]
        cargo horizon-mod registry page <checkout> <id> <horizon-registry.toml>";
 
-fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+fn flag<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
     super::flag(args, name)
 }
 
@@ -49,19 +49,19 @@ pub fn main(args: &[String]) -> Result<(), String> {
             let [checkout] = pos[..] else {
                 return Err(USAGE.into());
             };
-            let (files, out) = (flag(rest, "--files"), flag(rest, "--out"));
+            let (files, out) = (flag(rest, "--files")?, flag(rest, "--out")?);
             let (Some(files), Some(out)) = (files, out) else {
                 return Err(USAGE.into());
             };
-            let generated = flag(rest, "--generated")
+            let generated = flag(rest, "--generated")?
                 .map(str::to_owned)
                 .or_else(|| std::env::var("REGISTRY_GENERATED").ok())
                 .unwrap_or_default();
             let index = registry::build(&Sources {
                 registry: Path::new(checkout),
                 files: Path::new(files),
-                release: flag(rest, "--release").unwrap_or(FILE_HOST),
-                site: flag(rest, "--site").unwrap_or(SITE),
+                release: flag(rest, "--release")?.unwrap_or(FILE_HOST),
+                site: flag(rest, "--site")?.unwrap_or(SITE),
                 generated,
             })
             .map_err(lines)?;
@@ -78,7 +78,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
             let [base, head] = pos[..] else {
                 return Err(USAGE.into());
             };
-            let author = flag(rest, "--author").ok_or(USAGE)?;
+            let author = flag(rest, "--author")?.ok_or(USAGE)?;
             let (base, _) = registry::load(Path::new(base)).map_err(lines)?;
             let (head, revoked) = registry::load(Path::new(head)).map_err(lines)?;
             let review = registry::review_with_revoked(&base, &head, &revoked, author);
@@ -108,7 +108,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
             let [base, head] = pos[..] else {
                 return Err(USAGE.into());
             };
-            let files = Path::new(flag(rest, "--files").ok_or(USAGE)?);
+            let files = Path::new(flag(rest, "--files")?.ok_or(USAGE)?);
             let old: Vec<String> = match registry::load(Path::new(base)) {
                 Ok((entries, _)) => entries
                     .iter()
@@ -163,11 +163,11 @@ pub fn main(args: &[String]) -> Result<(), String> {
                 return Err(USAGE.into());
             };
             let (tag, published) = (
-                flag(rest, "--tag").ok_or(USAGE)?,
-                flag(rest, "--published").ok_or(USAGE)?,
+                flag(rest, "--tag")?.ok_or(USAGE)?,
+                flag(rest, "--published")?.ok_or(USAGE)?,
             );
             let read = |name: &str| {
-                flag(rest, name)
+                flag(rest, name)?
                     .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}")))
                     .transpose()
             };
@@ -189,8 +189,8 @@ pub fn main(args: &[String]) -> Result<(), String> {
                     tag,
                     published,
                     notes: notes.as_deref().unwrap_or(""),
-                    asset: flag(rest, "--name").unwrap_or(name),
-                    game: flag(rest, "--game").unwrap_or("26.3"),
+                    asset: flag(rest, "--name")?.unwrap_or(name),
+                    game: flag(rest, "--game")?.unwrap_or("26.3"),
                     signature: signature.as_deref(),
                 },
                 path,
