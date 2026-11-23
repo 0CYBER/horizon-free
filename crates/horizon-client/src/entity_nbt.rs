@@ -4595,10 +4595,33 @@ pub fn apply_item_components(m: &mut Mob, stack: &crate::items::ItemStack) {
         crate::mobs::Species::Llama | crate::mobs::Species::TraderLlama => {
             (Some("minecraft:llama/variant"), None)
         }
+        // Cat, Wolf, Rabbit and Parrot.applyImplicitComponents: the variant
+        // (and, for cats and wolves, the sound set) on their spawn eggs.
+        crate::mobs::Species::Cat => (
+            Some("minecraft:cat/variant"),
+            Some("minecraft:cat/sound_variant"),
+        ),
+        crate::mobs::Species::Wolf => (
+            Some("minecraft:wolf/variant"),
+            Some("minecraft:wolf/sound_variant"),
+        ),
+        crate::mobs::Species::Rabbit => (Some("minecraft:rabbit/variant"), None),
+        crate::mobs::Species::Parrot => (Some("minecraft:parrot/variant"), None),
         _ => (None, None),
     };
     if let Some(name) = variant.and_then(|id| text(components.other(id))) {
         m.extra.variant = crate::mobs::finalize::variant_index(species, &name);
+    }
+    // Cat and Wolf.applyImplicitComponent also read the collar colour.
+    if matches!(
+        species,
+        crate::mobs::Species::Cat | crate::mobs::Species::Wolf
+    ) && let Some(name) = text(components.other("minecraft:collar_color"))
+        && let Some(id) = crate::mobs::render::DYE_NAMES
+            .iter()
+            .position(|&v| v == name.trim_start_matches("minecraft:"))
+    {
+        m.extra.color = id as u8;
     }
     if let Some(name) = sound.and_then(|id| text(components.other(id)))
         && let Some(i) = crate::mobs::finalize::sound_variants(species)

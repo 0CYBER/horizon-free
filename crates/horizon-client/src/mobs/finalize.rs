@@ -2452,6 +2452,20 @@ pub fn variant_index(s: Species, name: &str) -> u8 {
     let i = match s {
         Species::Cat => super::tame::CAT_VARIANTS.iter().position(|v| *v == name),
         Species::Wolf => super::tame::WOLF_VARIANTS.iter().position(|v| v.0 == name),
+        // Rabbit.Variant and Parrot.Variant, in their registry order.
+        Species::Rabbit => match name {
+            "brown" => Some(0),
+            "white" => Some(1),
+            "black" => Some(2),
+            "white_splotched" => Some(3),
+            "gold" => Some(4),
+            "salt" => Some(5),
+            "evil" => Some(99),
+            _ => None,
+        },
+        Species::Parrot => ["red", "blue", "green", "cyan", "yellow"]
+            .iter()
+            .position(|v| *v == name),
         Species::ZombieNautilus => super::nautilus::VARIANTS.iter().position(|v| *v == name),
         // MushroomCow.Variant: red is the codec's default, brown the other.
         Species::Mooshroom => ["red", "brown"].iter().position(|v| *v == name),
