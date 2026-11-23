@@ -98,13 +98,17 @@ class ChunkReadCodecMatrix(unittest.TestCase):
 
         with self.subTest(codec="unsupported"):
             body, _ = chunk(2, 1, "ignored")
-            folder, _ = self.write("unsupported", {(2, 1): (4, body)})
+            folder, path = self.write("unsupported", {(2, 1): (4, body)})
             with self.assertRaises(ValueError) as raised:
                 world_compare.read_chunks(str(folder))
             message = str(raised.exception)
             self.assertIn("r.0.0.mca", message)
             self.assertIn("2, 1", message)
             self.assertIn("compression type 4", message)
+            # The independent Anvil reader refuses it too, rather than reading the bytes as NBT.
+            with self.assertRaises(ValueError) as raised:
+                anvil_dump.region_chunks(path)
+            self.assertIn("compression type 4", str(raised.exception))
 
         with self.subTest(codec="unsupported beside a supported chunk"):
             gzip_body, _ = chunk(2, 1, "valid")
@@ -115,6 +119,41 @@ class ChunkReadCodecMatrix(unittest.TestCase):
             })
             with self.assertRaises(ValueError):
                 world_compare.read_chunks(str(folder))
+
+    def test_an_external_chunk_is_read_from_its_mcc_file(self):
+        """A chunk of 256 sectors or more is a stub in the region (length 1, compression | 0x80) and its
+        compressed stream in c.X.Z.mcc beside it, named by absolute chunk coordinates."""
+        inline_body, inline = chunk(32, 64, "inline")
+        external_body, external = chunk(33, 64, "external")
+        folder, path = self.write("external", {(0, 0): (2, inline_body), (1, 0): (0x82, b"")}, "r.1.2.mca")
+        mcc = folder / "c.33.64.mcc"
+        mcc.write_bytes(zlib.compress(external_body))
+        with self.subTest(reader="world_compare"):
+            self.assertEqual(world_compare.read_chunks(str(folder)), {(32, 64): inline, (33, 64): external})
+        with self.subTest(reader="anvil_dump"):
+            self.assertEqual(anvil_dump.region_chunks(path), {(0, 0): inline, (1, 0): external})
+
+        mcc.unlink()
+        with self.subTest(reader="world_compare", mcc="missing"):
+            with self.assertRaises(OSError) as raised:
+                world_compare.read_chunks(str(folder))
+            self.assertIn("c.33.64.mcc", str(raised.exception))
+        with self.subTest(reader="anvil_dump", mcc="missing"):
+            with self.assertRaises(OSError) as raised:
+                anvil_dump.region_chunks(path)
+            self.assertIn("c.33.64.mcc", str(raised.exception))
+
+        # An external chunk in a compression neither reader decodes is refused, not read as NBT.
+        folder, path = self.write("external-lz4", {(1, 0): (0x84, b"")}, "r.1.2.mca")
+        (folder / "c.33.64.mcc").write_bytes(external_body)
+        with self.subTest(reader="world_compare", codec="unsupported"):
+            with self.assertRaises(ValueError) as raised:
+                world_compare.read_chunks(str(folder))
+            self.assertIn("compression type 4", str(raised.exception))
+        with self.subTest(reader="anvil_dump", codec="unsupported"):
+            with self.assertRaises(ValueError) as raised:
+                anvil_dump.region_chunks(path)
+            self.assertIn("compression type 4", str(raised.exception))
 
 
 if __name__ == "__main__":

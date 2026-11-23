@@ -150,6 +150,11 @@ def read_chunks(folder):
             length = struct.unpack('>I', data[at:at + 4])[0]
             kind, body = data[at + 4], data[at + 5:at + 4 + length]
             cx, cz = int(rx) * 32 + i % 32, int(rz) * 32 + i // 32
+            if kind & 0x80:
+                # A chunk too large for the region: a stub here, its stream in c.X.Z.mcc beside it.
+                with open(os.path.join(folder, 'c.%d.%d.mcc' % (cx, cz)), 'rb') as stream:
+                    body = stream.read()
+                kind &= 0x7F
             if kind == 1:
                 body = gzip.decompress(body)
             elif kind == 2:
