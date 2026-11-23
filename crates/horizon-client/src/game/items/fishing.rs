@@ -1059,7 +1059,7 @@ impl Game<'_> {
                     entity_hit_margin(h.tick_count),
                     self.mobs
                         .iter()
-                        .filter(|m| m.alive())
+                        .filter(|m| m.alive() && Some(m.id) != own_vehicle)
                         .map(|m| (m.id, m.bounds()))
                         .chain(
                             self.creatures
