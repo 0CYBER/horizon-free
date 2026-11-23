@@ -1,0 +1,1 @@
+horizon-client game::store_entity_invalid_tests::a_number_stored_into_tags_or_custom_name_is_dropped lib daily resources
