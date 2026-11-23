@@ -160,6 +160,16 @@ impl Reader {
             }
         }
     }
+    /// The four hex digits of a `\u` escape.
+    fn hex4(&mut self) -> Result<u32, SyntaxError> {
+        let mut v = 0u32;
+        for _ in 0..4 {
+            let d = self.peek_char().ok_or(SyntaxError)?;
+            self.pos += 1;
+            v = v * 16 + d.to_digit(16).ok_or(SyntaxError)?;
+        }
+        Ok(v)
+    }
     fn quoted(&mut self, quote: char) -> Result<String, SyntaxError> {
         self.pos += 1;
         let mut out = String::new();
@@ -177,14 +187,25 @@ impl Reader {
             self.pos += 1;
             match e {
                 'u' => {
-                    let mut v = 0u32;
-                    for _ in 0..4 {
-                        let d = self.peek_char().ok_or(SyntaxError)?;
-                        self.pos += 1;
-                        v = v * 16 + d.to_digit(16).ok_or(SyntaxError)?;
+                    let mut code = self.hex4()?;
+                    // Gson keeps each escape as one UTF-16 unit, so a high
+                    // surrogate escaped right before a low one is one character.
+                    if (0xD800..0xDC00).contains(&code)
+                        && self.peek_char() == Some('\\')
+                        && self.chars.get(self.pos + 1) == Some(&'u')
+                    {
+                        let next = self.pos;
+                        self.pos += 2;
+                        let low = self.hex4()?;
+                        if (0xDC00..0xE000).contains(&low) {
+                            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        } else {
+                            // Not a pair: that escape is read on its own.
+                            self.pos = next;
+                        }
                     }
-                    // Lone surrogates cannot be represented; keep the replacement.
-                    out.push(char::from_u32(v).unwrap_or('\u{fffd}'));
+                    // A lone surrogate cannot be represented; keep the replacement.
+                    out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
                 }
                 't' => out.push('\t'),
                 'b' => out.push('\u{8}'),
@@ -440,5 +461,33 @@ mod tests {
         assert!(parse_lenient("\"abc").is_err());
         assert_eq!(parse_lenient("  ").unwrap(), Json::Null);
         assert_eq!(gson_string("a=b"), "\"a\\u003db\"");
+    }
+
+    #[test]
+    fn an_escaped_surrogate_pair_is_one_character() {
+        // One JSON unicode escape as ASCII text: char 0x5C (a backslash), 'u'
+        // and four hex digits.
+        let esc = |unit: u32| format!("{}u{unit:04x}", char::from(0x5C_u8));
+        let lenient = |body: &str| parse_lenient(&format!(r#""{body}""#)).unwrap();
+        let text = |s: &str| Json::String(s.to_owned());
+        let pair = esc(0xD83D) + &esc(0xDE00);
+        assert!(
+            pair.is_ascii(),
+            "the input is escape text, not the character"
+        );
+        assert_eq!(lenient(&pair), text("\u{1F600}"));
+        assert_eq!(
+            parse_strict_string_list(&format!(r#"["file/{pair}.zip"]"#)).unwrap(),
+            Some(vec!["file/\u{1F600}.zip".to_owned()])
+        );
+        // Lone halves keep the replacement character.
+        assert_eq!(lenient(&esc(0xD83D)), text("\u{fffd}"));
+        assert_eq!(lenient(&esc(0xDE00)), text("\u{fffd}"));
+        // After a high surrogate, an escape that is not a low one is read on its own.
+        assert_eq!(lenient(&(esc(0xD83D) + &esc(0x41))), text("\u{fffd}A"));
+        assert_eq!(lenient(&(esc(0xD83D) + &pair)), text("\u{fffd}\u{1F600}"));
+        // A malformed escape after a high surrogate is still a syntax error.
+        let malformed = format!(r#""{}{}uzzzz""#, esc(0xD83D), char::from(0x5C_u8));
+        assert!(parse_lenient(&malformed).is_err());
     }
 }
