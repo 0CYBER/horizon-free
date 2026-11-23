@@ -2454,6 +2454,13 @@ impl Game<'_> {
                         self.run_guest_commands();
                     }
                 }
+                // handleClientTickEnd's movement reset, in packet order behind the
+                // MoveVehicle the hub queued for this drain (a rider's move of the tick).
+                HostEvent::TickEnd(conn) => {
+                    if let Some(host) = self.lan.as_mut() {
+                        host.hub.client_tick_end(conn);
+                    }
+                }
                 HostEvent::Jump { conn, from, yaw } => {
                     self.guest_jump(conn, from, yaw);
                 }

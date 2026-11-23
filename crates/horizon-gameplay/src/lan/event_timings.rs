@@ -108,6 +108,7 @@ pub fn event_kind(event: &HostEvent) -> EventKind {
         HostEvent::Joined(c) => ("join", Some(*c), None),
         HostEvent::Left(g) => ("leave", None, Some(g.name.clone())),
         HostEvent::Packet(c, p) => (p.name(), Some(*c), None),
+        HostEvent::TickEnd(c) => ("tick end", Some(*c), None),
         HostEvent::InputCredits(_) => ("input credits", None, None),
         HostEvent::RawPayload(_) => ("raw payload", None, None),
         HostEvent::ClientInformation(c, _, _) => ("client settings", Some(*c), None),

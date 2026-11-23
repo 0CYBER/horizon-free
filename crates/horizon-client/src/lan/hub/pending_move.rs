@@ -246,6 +246,7 @@ impl Hub {
             }
             g.moves.push((moved, on_ground));
             g.known_movement = moved;
+            g.movement_this_tick = true;
             g.yaw = yaw;
             g.pitch = pitch.clamp(-90.0, 90.0);
             g.head_yaw = g.yaw;

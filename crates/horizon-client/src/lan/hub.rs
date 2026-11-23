@@ -179,6 +179,12 @@ pub enum HostEvent {
     /// A guest left (state to save, entities to drop).
     Left(Box<Guest>),
     Packet(u32, Box<S>),
+    /// `handleClientTickEnd`'s movement reset, queued behind the packets that came
+    /// before it: a `MoveVehicle` the game dispatches after the drain sets the rider's
+    /// known movement first, and the reset keeps it for that tick (vanilla runs both
+    /// handlers in packet order on the main thread). The position flag and the
+    /// anticheat's tick end stay in the hub's drain, where no queued move bears on them.
+    TickEnd(u32),
     /// A guest sent new client information: the values before and after, for the mods.
     ClientInformation(
         u32,
@@ -4444,12 +4450,17 @@ impl Hub {
                 }
                 S::ClientTickEnd(_) => {
                     // handleClientTickEnd: no move this tick, no known movement.
+                    // A rider's move came with its vehicle's packet, not its own.
+                    // The movement reset is queued behind the packets already handed
+                    // to the game: a MoveVehicle of this drain sets the movement when
+                    // the game dispatches it, and the reset must keep that move for the
+                    // tick, not zero it before the move runs (vanilla's main thread
+                    // handles the two in packet order). The position flag and the
+                    // anticheat tick end have no queued move to wait for.
                     self.guests.update(i, |g| {
-                        if !g.position_this_tick {
-                            g.known_movement = [0.0; 3];
-                        }
                         g.position_this_tick = false;
                     });
+                    events.push(HostEvent::TickEnd(conn));
                     self.anticheat_tick_end(i, events);
                 }
                 // ServerGamePacketListenerImpl.handleRecipeBookSeenRecipePacket:
@@ -4657,6 +4668,23 @@ impl Hub {
         }
         events.push(HostEvent::InputCredits(credits));
         false
+    }
+
+    /// `handleClientTickEnd`'s movement reset (`ServerGamePacketListenerImpl.java:2256`),
+    /// applied by the game when it reaches the queued [`HostEvent::TickEnd`]: after the
+    /// `MoveVehicle` packets queued before it, so a rider's move of the tick is kept and
+    /// only a tick with no move of either zeroes the known movement. A guest that left
+    /// mid-drain has nothing to reset.
+    pub fn client_tick_end(&mut self, conn: u32) {
+        let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        self.guests.update(i, |g| {
+            if !g.movement_this_tick {
+                g.known_movement = [0.0; 3];
+            }
+            g.movement_this_tick = false;
+        });
     }
 
     /// ServerGamePacketListenerImpl.handleMovePlayer.

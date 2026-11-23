@@ -2317,6 +2317,105 @@ fn a_stab_keeps_the_move_behind_it_in_its_tick() {
     assert_eq!(g.position[0], before.0[0] + 0.3, "the move was not handled");
 }
 
+/// #17206's review: a rider's MoveVehicle and its ClientTickEnd in one drain.
+/// The hub hands the game the move and queues the tick-end reset behind it, so
+/// the game sets the rider's movement before the reset keeps it for the tick
+/// (vanilla runs both handlers in packet order on the main thread,
+/// `ServerGamePacketListenerImpl.handleMoveVehicle` then `handleClientTickEnd`).
+/// The reset used to run inline ahead of the queued move, leaving the flag set
+/// and a stale movement kept into the next tick.
+#[test]
+fn a_vehicle_move_and_its_tick_end_keep_packet_order() {
+    let (mut hub, _rx) = hub_with_a_guest();
+    hub.guests.update(0, |g| {
+        g.load_timeout = 0;
+        g.vehicle = Some(7);
+        // A move from an earlier tick, which the inline reset used to zero
+        // before the queued move of this drain ever ran.
+        g.known_movement = [0.9, 0.0, 0.0];
+        g.movement_this_tick = false;
+        g.inbox.push_back(InboxItem::uncredited(S::MoveVehicle(
+            play::MoveVehicleRequest {
+                position: [0.5, 64.0, 0.5],
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+        )));
+        g.inbox.push_back(InboxItem::uncredited(S::ClientTickEnd(
+            horizon_protocol::packets::Empty,
+        )));
+    });
+    let mut world = World::new(horizon_world::registry::BlockStateId(0), 0);
+    let mut next_entity = 2;
+    let border = crate::worldborder::WorldBorder::default();
+    let mut ctx = TickCtx {
+        sea_level: 63,
+        world: &mut world,
+        entities: &[],
+        next_entity: &mut next_entity,
+        spawn: [0.5, 64.0, 0.5],
+        spawn_angle: [0.0; 2],
+        spawn_dimension: "minecraft:overworld",
+        difficulty: 2,
+        difficulty_locked: false,
+        clock_rate: 1.0,
+        tick_rate: 20.0,
+        tick_frozen: false,
+        tick_steps: Default::default(),
+        collision: None,
+        border: &border,
+        streaming: None,
+    };
+    let events = hub.drain_packets(&mut ctx);
+    // The move goes to the game first; the tick-end reset follows it in order.
+    let kinds: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            HostEvent::Packet(_, p) if matches!(&**p, S::MoveVehicle(_)) => Some("move"),
+            HostEvent::TickEnd(_) => Some("tick-end"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["move", "tick-end"],
+        "the reset follows the move in packet order: {kinds:?}"
+    );
+    // The hub deferred the movement reset (the stale move is still there for
+    // the game's dispatch to overwrite), but the position flag reset inline:
+    // no queued move bears on it.
+    assert_eq!(
+        hub.guests[0].known_movement,
+        [0.9, 0.0, 0.0],
+        "the movement reset waits for the queued move"
+    );
+    assert!(
+        !hub.guests[0].position_this_tick,
+        "the position flag reset inline"
+    );
+    // The game dispatches the move (sets the movement and the flag), then the
+    // queued tick end keeps that move for the tick and clears the flag.
+    let conn = hub.guests[0].conn;
+    hub.guests.update(0, |g| {
+        g.known_movement = [0.4, 0.0, 0.0];
+        g.movement_this_tick = true;
+    });
+    hub.client_tick_end(conn);
+    assert_eq!(
+        hub.guests[0].known_movement,
+        [0.4, 0.0, 0.0],
+        "the move's own tick keeps it"
+    );
+    assert!(!hub.guests[0].movement_this_tick);
+    // The next tick has no move of either: its tick end zeroes the movement.
+    hub.client_tick_end(conn);
+    assert_eq!(
+        hub.guests[0].known_movement, [0.0; 3],
+        "a client tick with no move of either has none"
+    );
+}
+
 /// STOP_SLEEPING goes to the game, which wakes the guest after the mods
 /// hear it (`player_bed_leave`); the move the client sent after it waits
 /// for the next tick, so it never runs while the guest still sleeps.
