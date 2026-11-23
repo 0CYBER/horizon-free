@@ -360,6 +360,10 @@ jobs:
       # This fresh runner has one parity run, which owns the oracle cache alone: tools/parity.py may remove a damaged
       # hash database before the shims start (elsewhere another run in the checkout may have it open).
       PARITY_REPAIR_ORACLE_HASHES: "1"
+      # tools/parity_hosts.json's solo harnesses (game windows) run alone, after the others: their frames are drawn
+      # on the CPU here (lavapipe), and beside 7 other harnesses remote_fireball saw its egg in 1 of 6 samples, twice
+      # (2026-11-23), as on playhorizon. tools/parity.py turns solo off by itself on more than 4 CPUs.
+      PARITY_SOLO: "1"
       DATASET: 26.3-linux-x64
     steps:
       - name: Folders for the data, outside the checkout
@@ -651,6 +655,11 @@ jobs:
           python-version: '3.13'
       - name: Tools from the runner
         run: bash tools/ci/runner-env.sh
+      # The crates Cargo.lock names, before any harness: a fresh runner has none, and the harnesses that run cargo
+      # --offline (mob_discard, nbt_path_reader, snbt_unicode) otherwise fail in a second unless another harness has
+      # fetched them first (mob_discard on 2026-11-23). Fetching runs no build script; ~/.cargo is never sealed.
+      - name: The crates, before the harnesses
+        run: cargo fetch --locked
       # A checkout dates every file now: files whose Git object is the one the restored build saw get that build's
       # dates back (as tools/ci/build_folder.sh does for the sticky disks), so Cargo rebuilds only what changed.
       - name: Source dates of the restored build

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -770,6 +771,27 @@ class HostedParityTests(unittest.TestCase):
                                           ("", "", {"REPO_ID": ""}), ("", "", {"RUN_ID": "1 or 1"})):
                 with self.subTest(markers=markers, ours=ours, **values):
                     self.assertEqual(due(markers, ours, **values)[:2], ("false", "false"))
+
+    def test_solo_harnesses_run_alone_on_the_cpu_drawn_hosted_runners(self):
+        # The runners have 16 CPUs, past tools/parity.py's own solo threshold, but draw game windows on the CPU.
+        self.assertEqual(self.workflow["jobs"]["run"]["env"]["PARITY_SOLO"], "1")
+        sys.path.insert(0, str(ROOT / "tools"))
+        import parity
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": "1"}):
+            self.assertEqual(parity.solo_harnesses({"solo": {"remote_fireball": "two windows"}}), {"remote_fireball"})
+
+    def test_the_crates_are_fetched_before_any_harness_and_after_the_secret_steps(self):
+        # A fresh runner has no crates: a harness running cargo --offline failed in a second when it ran before any
+        # other had fetched them (mob_discard, 2026-11-23). Fetching runs no build script and holds no secret.
+        fetch = self.names.index("The crates, before the harnesses")
+        checkout = next(index for index, name in enumerate(self.names) if name.startswith("actions/checkout@"))
+        self.assertLess(checkout, fetch)
+        self.assertLess(fetch, self.names.index("The shard's harnesses"))
+        for name in self.SECRET_STEPS[:2]:
+            self.assertLess(self.names.index(name), fetch, name)
+        step = self.steps[fetch]
+        self.assertEqual(step["run"], "cargo fetch --locked")
+        self.assertNotIn("env", step)
 
     def test_no_required_check_waits_for_it(self):
         for path in sorted(WORKFLOWS.glob("*.yml")):

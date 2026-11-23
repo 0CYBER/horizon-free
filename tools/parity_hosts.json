@@ -39,6 +39,7 @@
     "sound_event": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
     "subtitle": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
     "pack_screen": "needs the vanilla languages besides en_us, which the hosted runners' data leaves out",
+    "creative": "its oracle loads fr_fr beside en_us (localized tooltip search), which the hosted runners' data leaves out: EmptyTranslationsException on 2026-11-23",
     "entity_model": "reads the decompiled client sources, which the hosted runners' data leaves out",
     "datafix": "upgrades worlds made with the official server jars of 1.18.2 to 26.2, which the hosted runners' data leaves out",
     "redstone_catalog": "downloads its schematics from the network while it runs"

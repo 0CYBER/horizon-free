@@ -42,10 +42,10 @@ def main():
     classes.mkdir(exist_ok=True)
     source = lab.ROOT / 'mods/horizon/src/test/java'
     oracle = source / 'dev/horizonlab/parity'
-    def run(command, name, **kwargs):
+    def run(command, name, timeout=240, **kwargs):
         with (build / (name + '.log')).open('w') as log:
             subprocess.run(list(map(str, command)), stdout=log,
-                           stderr=subprocess.STDOUT, check=True, timeout=240, **kwargs)
+                           stderr=subprocess.STDOUT, check=True, timeout=timeout, **kwargs)
     run(['javac', '--release', major, '-proc:none', '-cp', cp, '-d', classes,
          oracle / 'VanillaCommandExecOracle.java',
          oracle / 'VanillaDragonContactsOracle.java'], 'compile-java')
@@ -60,9 +60,13 @@ def main():
         run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + cp,
              'dev.horizonlab.parity.VanillaCommandExecOracle',
              Path(scratch) / 'universe', script, expected_path, '1'], 'java', env=env)
+    rust_env = dict(os.environ, HORIZON_DRAGON_CONTACT_OUTPUT=str(actual_path))
+    # The test binary is built first with no limit of its own (parity.py's per-harness limit still applies): on a
+    # runner without a warm build its compile alone took over 240 s, so the 240 s now cover only the cases' run.
+    run(['cargo', 'test', '--locked', '-p', 'horizon-client-lib', '--lib', '--no-run'], 'rust-build',
+        timeout=None, env=rust_env)
     run(['cargo', 'test', '--locked', '-p', 'horizon-client-lib', '--lib',
-         'mobs::dragon_contacts::', '--', '--include-ignored'], 'rust',
-        env=dict(os.environ, HORIZON_DRAGON_CONTACT_OUTPUT=str(actual_path)))
+         'mobs::dragon_contacts::', '--', '--include-ignored'], 'rust', env=rust_env)
     expected = json.loads(expected_path.read_text())
     actual = json.loads(actual_path.read_text())
     assert len(actual) == len(expected) == 7
