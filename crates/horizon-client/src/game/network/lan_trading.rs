@@ -360,14 +360,7 @@ impl Game<'_> {
                 }
             });
         }
-        let opaque = gm
-            .merchant
-            .mob
-            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
-            .is_some_and(|m| {
-                m.species() == horizon_client::mobs::Species::Villager
-                    && m.extra.profession.index().is_none()
-            });
+        let opaque = gm.merchant.mob.is_some_and(|id| self.lan_merchant_opaque(id));
         let offers_refreshed = session
             .events
             .iter()
@@ -403,6 +396,19 @@ impl Game<'_> {
             host.play.entry(conn).or_default().merchant = Some(gm);
         }
         true
+    }
+    /// A villager whose profession doesn't resolve in the world's table (a saved
+    /// id no loaded mod provides): its trades aren't applied, as the host's own
+    /// `merchant_apply` path refuses them. A mod-registered profession resolves.
+    pub(super) fn lan_merchant_opaque(&self, id: u32) -> bool {
+        self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
+            m.species() == horizon_client::mobs::Species::Villager
+                && self
+                    .stations()
+                    .professions
+                    .state_index(&m.extra.profession)
+                    .is_none()
+        })
     }
     /// Close an open merchant whose profession became unresolved, returning inputs.
     pub(super) fn close_opaque_merchant(&mut self, id: u32) {
@@ -497,7 +503,9 @@ impl Game<'_> {
         true
     }
     /// `Merchant.stillValid` for a trader: it is alive and the guest is within
-    /// the entity interaction range plus 4 of its box.
+    /// the entity interaction range plus 4 of its box. A villager's profession
+    /// must resolve in the world's table: vanilla's, none, or one a mod
+    /// registered (an unknown saved id closes the screen).
     pub(super) fn lan_merchant_valid(
         &self,
         g: &horizon_client::lan::guest::Guest,
@@ -506,7 +514,11 @@ impl Game<'_> {
         self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
             m.alive()
                 && (m.species() != horizon_client::mobs::Species::Villager
-                    || m.extra.profession.index().is_some())
+                    || self
+                        .stations()
+                        .professions
+                        .state_index(&m.extra.profession)
+                        .is_some())
                 && guest_within_entity_range(g, &m.bounds(), 4.0)
         })
     }

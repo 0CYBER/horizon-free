@@ -2625,6 +2625,7 @@ horizon-client game::villager_professions::tests::villager_load_world_save_dir_p
 horizon-client game::villager_professions::tests::villager_native_slots_ignore_declaring_mod_order lib daily resources
 horizon-client game::villager_professions::tests::villager_no_mods_world_retains_farmer_composter_and_five_levels lib daily resources
 horizon-client game::villager_professions::tests::villager_overlapping_poi_publishes_zero_entries lib daily resources
+horizon-client game::villager_professions::tests::villager_registered_profession_keeps_a_guest_trade_screen_valid lib daily resources
 horizon-client game::villager_professions::tests::villager_reserved_profession_publishes_zero_entries lib daily resources
 horizon-client game::villager_professions::tests::villager_wasm_engineer_declaration_resolves_with_assembler lib daily resources
 horizon-client game::villager_professions::tests::villager_wasm_slots_ignore_declaring_mod_order lib daily resources

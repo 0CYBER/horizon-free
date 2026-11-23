@@ -753,3 +753,56 @@ fn villager_wasm_slots_ignore_declaring_mod_order() {
         }
     });
 }
+#[test]
+#[ignore = "daily"]
+fn villager_registered_profession_keeps_a_guest_trade_screen_valid() {
+    use horizon_client::lan::{Joined, PlayerSender, guest::Guest};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::atomic::{AtomicI32, AtomicUsize};
+    fixture(
+        vec![ModEntry::new(
+            "engineer",
+            Box::new(Engineer {
+                valid: Arc::new(AtomicBool::new(true)),
+                key: "test:engineer",
+            }),
+        )]
+        .into(),
+        |game| {
+            let id = game
+                .load_mob(saved_engineer("minecraft:villager"), None)
+                .unwrap();
+            let (tx, _rx) = std::sync::mpsc::channel();
+            let guest = Guest::new(
+                Joined {
+                    conn: 12,
+                    uuid: 12,
+                    name: "guest12".into(),
+                    properties: Vec::new(),
+                    info: ClientInformation::new(8),
+                    brand: String::new(),
+                    sender: PlayerSender::new(tx, Arc::new(AtomicUsize::new(0))),
+                    latency: Arc::new(AtomicI32::new(0)),
+                    address: "127.0.0.1:1".parse().unwrap(),
+                    expected: false,
+                },
+                12,
+                [1.5, 64.0, 0.5],
+                10,
+            );
+            // `AbstractVillager.stillValid`: alive and in reach; a registered
+            // profession resolves in the world's table, so the screen stays open
+            // and the guest's trades are applied (not opaque).
+            assert!(game.lan_merchant_valid(&guest, id));
+            assert!(!game.lan_merchant_opaque(id));
+            // An id no mod registers doesn't resolve: the screen closes.
+            let index = game.mobs.iter().position(|mob| mob.id == id).unwrap();
+            game.mobs[index].extra.profession =
+                horizon_client::mobs::villager::ProfessionState::Unresolved(
+                    "example:engineer".into(),
+                );
+            assert!(!game.lan_merchant_valid(&guest, id));
+            assert!(game.lan_merchant_opaque(id));
+        },
+    );
+}
