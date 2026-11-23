@@ -98,9 +98,11 @@ pub fn villager_make_bread<L: VillagerLevel + ?Sized>(l: &mut L, i: usize) {
     e.remove_item("minecraft:wheat", loaves * 3);
     let left = e.add_item(ItemStack::new("minecraft:bread", loaves), max_stack);
     if let Some(rest) = left {
-        // spawnAtLocation(level, stack, 0.5F)
+        // spawnAtLocation(level, stack, 0.5F): ItemEntity's constructor
+        // gives the drop a small random horizontal scatter, not a straight
+        // drop at the villager's feet.
         let p = l.mobs()[i].position;
-        l.spawn_item(rest, [p.x, p.y + 0.5, p.z], [0.0, 0.2, 0.0], 10);
+        l.spawn_item_own(rest, [p.x, p.y + 0.5, p.z], 10);
     }
 }
 
