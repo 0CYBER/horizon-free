@@ -1,0 +1,2 @@
+# A guest's menu click needs prepared resources.
+horizon-client game::native_hooks::container_click::container_click_tests::a_canceled_container_click_changes_nothing_and_resends_the_menu lib daily resources

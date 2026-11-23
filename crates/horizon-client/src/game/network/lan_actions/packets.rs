@@ -633,6 +633,8 @@ impl Game<'_> {
                     });
                 }
             }
+            // The mods' `container_click` first: a canceled click changes nothing.
+            S::ContainerClick(p) if self.lan_container_click_vetoed(conn, &p) => {}
             // AbstractContainerMenu.quickMoveStack of a mod container: the mods first.
             S::ContainerClick(p) if self.lan_mod_quick_move(conn, &p) => {}
             S::ContainerClick(p) if self.lan_merchant_click(conn, &p) => {}
