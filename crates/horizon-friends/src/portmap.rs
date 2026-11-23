@@ -588,8 +588,9 @@ pub fn ssdp_discover(timeout: Duration) -> Vec<String> {
     let mut found = Vec::new();
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
-        if let Ok((n, _)) = s.recv_from(&mut buf)
+        if let Ok((n, from)) = s.recv_from(&mut buf)
             && let Some(l) = ssdp_location(&String::from_utf8_lossy(&buf[..n]))
+            && lan_location(&l, from.ip())
             && !found.contains(&l)
             && found.len() < MAX_GATEWAYS
         {
@@ -597,6 +598,31 @@ pub fn ssdp_discover(timeout: Duration) -> Vec<String> {
         }
     }
     found
+}
+/// Whether an SSDP answer's `location` may be fetched: it names, by address, the LAN device
+/// that sent the answer. Anyone on the LAN can answer SSDP, and the location would otherwise
+/// let them aim this machine's requests at any host or at its own loopback services.
+pub fn lan_location(location: &str, from: IpAddr) -> bool {
+    let Some((host, _, _)) = split_url(location) else {
+        return false;
+    };
+    let Ok(host) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    let (host, from) = (host.to_canonical(), from.to_canonical());
+    host == from
+        && match host {
+            IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+            // Unique local (fc00::/7) or link-local (fe80::/10).
+            IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+        }
+}
+/// Whether two URLs name the same host.
+fn same_host(a: &str, b: &str) -> bool {
+    match (split_url(a), split_url(b)) {
+        (Some((a, _, _)), Some((b, _, _))) => a.eq_ignore_ascii_case(&b),
+        _ => false,
+    }
 }
 pub fn ssdp_location(response: &str) -> Option<String> {
     response.lines().find_map(|l| {
@@ -663,6 +689,10 @@ impl Igd {
             } else {
                 format!("{base}/{}", control.trim_start_matches('/'))
             };
+            // Control requests go only to the device that described itself, whatever it says.
+            if !same_host(&control, location) {
+                continue;
+            }
             return Ok(Self {
                 control,
                 service: service.to_owned(),
@@ -1110,6 +1140,70 @@ mod tests {
             map(&Targets::default(), Ipv4Addr::LOCALHOST, 1, LEASE).unwrap_err(),
             "no router answered"
         );
+    }
+
+    /// Answers one request with `body`; returns its URL and what it received.
+    fn one_shot(body: String) -> (u16, std::sync::mpsc::Receiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut s, _)) = l.accept() else { return };
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        (port, rx)
+    }
+
+    /// A description that sends the control requests to another host than the one that answered.
+    fn description(base: &str, control: &str) -> String {
+        format!(
+            "<root>{base}<device><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>{control}</controlURL></service></serviceList></device></root>"
+        )
+    }
+
+    #[test]
+    fn a_description_cannot_send_requests_to_another_host() {
+        // "127.1" is the same machine as "127.0.0.1" under another name.
+        for (base, control) in [
+            ("<URLBase>http://127.1:{victim}</URLBase>", "/ctl"),
+            ("", "http://127.1:{victim}/ctl"),
+        ] {
+            let (victim, seen) = one_shot(String::new());
+            let fill = |t: &str| t.replace("{victim}", &victim.to_string());
+            let (port, _) = one_shot(description(&fill(base), &fill(control)));
+            let igd = Igd::from_location(&format!("http://127.0.0.1:{port}/desc.xml"));
+            assert!(igd.is_err(), "a service on another host was accepted");
+            assert!(
+                seen.recv_timeout(Duration::from_millis(200)).is_err(),
+                "a request reached another host"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_answering_lan_device_is_a_gateway_location() {
+        let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+        let ok = |url: &str, from: &str| lan_location(url, ip(from));
+        assert!(ok("http://192.168.1.1:5000/d.xml", "192.168.1.1"));
+        assert!(ok("http://10.0.0.1/d.xml", "10.0.0.1"));
+        assert!(ok("http://169.254.1.1/d.xml", "169.254.1.1"));
+        assert!(ok("http://[fd00::1]:80/d.xml", "fd00::1"));
+        assert!(ok("http://[fe80::1]/d.xml", "fe80::1"));
+        // Another host than the sender, loopback, public and named hosts.
+        assert!(!ok("http://192.168.1.99/d.xml", "192.168.1.1"));
+        assert!(!ok("http://127.0.0.1:8080/d.xml", "192.168.1.1"));
+        assert!(!ok("http://127.0.0.1:8080/d.xml", "127.0.0.1"));
+        assert!(!ok("http://[::1]/d.xml", "::1"));
+        assert!(!ok("http://203.0.113.5/d.xml", "203.0.113.5"));
+        assert!(!ok("http://router.lan/d.xml", "192.168.1.1"));
+        assert!(!ok("https://192.168.1.1/d.xml", "192.168.1.1"));
     }
 
     #[test]
