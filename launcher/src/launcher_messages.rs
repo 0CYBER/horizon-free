@@ -185,7 +185,7 @@ impl Launcher {
                     self.installing = None;
                     self.bar = (0., 0.);
                     self.installed = backend::installed();
-                    let as_update = self.update_install.take().filter(|t| *t == tag);
+                    let as_update = self.update_install.take_if(|t| *t == tag);
                     let for_instance = self.instance_install.take_if(|t| *t == tag).is_some();
                     let manual_target = self.manual_install_for.take();
                     let stable = self.stable_install.take_if(|r| r.tag == tag);
@@ -278,7 +278,7 @@ impl Launcher {
                             self.install_error = Some((tag, e));
                         }
                     }
-                    self.start_next_instance_install();
+                    self.start_next_install();
                     // After the selection and the queued install: a build waiting for this
                     // install sees both.
                     self.native_look_again(None, None);
@@ -293,7 +293,7 @@ impl Launcher {
                     if let Err(e) = result {
                         self.install_error = Some((tag, e));
                     }
-                    self.start_next_instance_install();
+                    self.start_next_install();
                 }
                 Msg::DiskUse(disk) => self.disk = disk,
                 Msg::Storage(result) => self.storage_arrived(result),
@@ -472,6 +472,7 @@ impl Launcher {
                                 tag.map(|t| backend::prepared_in(&t)),
                                 self.prepare_error.clone(),
                             );
+                            self.start_next_install();
                             self.native_look_again(ended.as_deref(), error.as_deref());
                         }
                         Job::Client => {

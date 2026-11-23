@@ -47,63 +47,78 @@ impl Launcher {
     /// Installs `release` for an instance made or edited to play it, after the install running
     /// now if there is one.
     pub(crate) fn install_for_instance(&mut self, release: Release) {
-        let running = self.installing.as_ref().map(|(tag, _)| tag.as_str());
-        enqueue_instance_install(&mut self.install_queue, running, release);
-        self.start_next_instance_install();
-    }
-
-    pub(super) fn start_next_instance_install(&mut self) {
-        if self.installing.is_some() {
-            return;
-        }
-        while let Some(release) = take_instance_install(&mut self.install_queue, &self.removing) {
-            // Another window or a retried Stable update may have supplied the queued build.
-            if backend::is_installed(&release.tag) {
-                if !self.installed.contains(&release.tag) {
-                    self.installed = backend::installed();
-                }
-                continue;
-            }
-            self.instance_install = Some(release.tag.clone());
-            self.start_install(&release, None);
-            return;
-        }
+        self.queue_install(release, InstallSource::Instance);
     }
 
     pub(crate) fn install(&mut self, release: &Release) {
-        let id = self
-            .selected_instance()
-            .map_or_else(|| instances::DEFAULT.into(), |i| i.id.clone());
-        self.start_install(release, Some(id));
-    }
-
-    pub(super) fn start_install(&mut self, release: &Release, manual_target: Option<String>) {
         if release.asset.is_none()
-            || self.installing.is_some()
+            || (self.installing.is_some()
+                && !self.prepare_tag.as_deref().is_some_and(|tag| {
+                    prepare_overlaps_install(tag, &backend::prepared_in(tag), &release.tag)
+                }))
             || self.removing.contains(&release.tag)
-            || self
-                .install_queue
-                .iter()
-                .any(|queued| queued.tag == release.tag)
         {
             return;
         }
-        let manual_target = match manual_target
-            .map(instances::manual_install_target)
-            .transpose()
-        {
-            Ok(target) => target,
-            Err(e) => {
-                self.install_error = Some((release.tag.clone(), e));
-                return;
+        let id = self
+            .selected_instance()
+            .map_or_else(|| instances::DEFAULT.into(), |i| i.id.clone());
+        match instances::manual_install_target(id) {
+            Ok(target) => self.queue_install(release.clone(), InstallSource::Manual(target)),
+            Err(e) => self.install_error = Some((release.tag.clone(), e)),
+        }
+    }
+
+    pub(super) fn queue_install(&mut self, release: Release, source: InstallSource) {
+        let running = self.installing.as_ref().map(|(tag, _)| tag.as_str());
+        enqueue_install(
+            &mut self.install_queue,
+            running,
+            QueuedInstall { release, source },
+        );
+        self.start_next_install();
+    }
+
+    pub(super) fn start_next_install(&mut self) {
+        if self.installing.is_some() || self.install_queue.is_empty() {
+            return;
+        }
+        let preparing = self
+            .prepare_tag
+            .as_deref()
+            .map(|tag| (tag, backend::prepared_in(tag)));
+        while let Some(QueuedInstall { release, source }) = take_next_install(
+            &mut self.install_queue,
+            &self.removing,
+            preparing.as_ref().map(|(tag, base)| (*tag, base.as_str())),
+        ) {
+            match source {
+                InstallSource::Instance => {
+                    // A different window may already have supplied an instance's queued build.
+                    if backend::is_installed(&release.tag) {
+                        if !self.installed.contains(&release.tag) {
+                            self.installed = backend::installed();
+                        }
+                        self.stable_install
+                            .take_if(|stable| stable.tag == release.tag);
+                        continue;
+                    }
+                    self.instance_install = Some(release.tag.clone());
+                }
+                InstallSource::Update => self.update_install = Some(release.tag.clone()),
+                InstallSource::Manual(target) => self.manual_install_for = Some(target),
             }
-        };
-        let (release, tx) = (release.clone(), self.tx.clone());
+            self.start_install(release);
+            break;
+        }
+    }
+
+    fn start_install(&mut self, release: Release) {
+        let tx = self.tx.clone();
         let tag = release.tag.clone();
         self.installing = Some((tag.clone(), 0.0));
         self.install_started = Some(Instant::now());
         self.bar = (0., 0.);
-        self.manual_install_for = manual_target;
         clear_install_error_for(&mut self.install_error, &tag);
         let stable = self
             .stable_install
@@ -260,9 +275,14 @@ impl Launcher {
     }
 
     /// [`Self::prepare`] for `tag` rather than the selected version. False when it didn't start:
-    /// the version is gone, and `prepare_error` says so.
+    /// another job owns the preparation or its files, or the version is gone.
     pub(crate) fn prepare_version(&mut self, tag: String, from: backend::MinecraftFrom) -> bool {
-        if !self.version_still_installed(&tag) {
+        if self.preparing
+            || self.installing.as_ref().is_some_and(|(install, _)| {
+                prepare_overlaps_install(&tag, &backend::prepared_in(&tag), install)
+            })
+            || !self.version_still_installed(&tag)
+        {
             return false;
         }
         self.prepare_tag = Some(tag.clone());
@@ -440,6 +460,19 @@ impl Launcher {
         else {
             return;
         };
+        // The files Prepare just checked may already be scheduled for replacement.
+        let base = backend::prepared_in(&tag);
+        if self
+            .installing
+            .as_ref()
+            .is_some_and(|(install, _)| prepare_overlaps_install(&tag, &base, install))
+            || self
+                .install_queue
+                .iter()
+                .any(|request| prepare_overlaps_install(&tag, &base, &request.release.tag))
+        {
+            return;
+        }
         if backend::check_prepared(&tag) {
             self.starting_pack = None;
             self.start_client(tag, Some(instance));
@@ -683,27 +716,38 @@ fn clear_install_error_for(error: &mut Option<(String, String)>, tag: &str) {
     error.take_if(|(failed, _)| failed == tag);
 }
 
-fn enqueue_instance_install(
-    queue: &mut VecDeque<Release>,
+fn prepare_overlaps_install(tag: &str, base: &str, install: &str) -> bool {
+    install == tag || install == base
+}
+
+fn enqueue_install(
+    queue: &mut VecDeque<QueuedInstall>,
     running: Option<&str>,
-    release: Release,
+    request: QueuedInstall,
 ) {
-    if release.asset.is_some()
-        && running != Some(release.tag.as_str())
-        && queue.iter().all(|queued| queued.tag != release.tag)
+    let tag = &request.release.tag;
+    if request.release.asset.is_some()
+        && running != Some(tag.as_str())
+        && queue.iter().all(|queued| queued.release.tag != *tag)
     {
-        queue.push_back(release);
+        queue.push_back(request);
     }
 }
 
-fn take_instance_install(queue: &mut VecDeque<Release>, removing: &[String]) -> Option<Release> {
-    if queue
-        .front()
-        .is_some_and(|release| removing.contains(&release.tag))
-    {
+fn take_next_install(
+    queue: &mut VecDeque<QueuedInstall>,
+    removing: &[String],
+    preparing: Option<(&str, &str)>,
+) -> Option<QueuedInstall> {
+    // A different download may run while Prepare still owns its build and its native base.
+    let next = queue.iter().position(|request| {
+        !preparing
+            .is_some_and(|(tag, base)| prepare_overlaps_install(tag, base, &request.release.tag))
+    })?;
+    if removing.contains(&queue[next].release.tag) {
         return None;
     }
-    queue.pop_front()
+    queue.remove(next)
 }
 
 /// Takes the Play that waited for its version to be prepared, unless another start is under
@@ -721,17 +765,16 @@ fn take_queued_play(
 #[cfg(test)]
 mod tests {
     use super::{
-        clear_install_error_for, enqueue_instance_install, take_instance_install, take_queued_play,
-        Release, VecDeque,
+        clear_install_error_for, enqueue_install, take_next_install, take_queued_play,
+        InstallSource, QueuedInstall, Release, VecDeque,
     };
 
     fn queued() -> Option<(String, String)> {
         Some(("nightly-2026-11-19".into(), "instance-1".into()))
     }
 
-    #[test]
-    fn instance_downloads_wait_in_order_and_keep_each_distinct_save() {
-        let release = |tag: &str| Release {
+    fn request(tag: &str, source: InstallSource) -> QueuedInstall {
+        let release = Release {
             tag: tag.into(),
             name: tag.into(),
             body: String::new(),
@@ -741,16 +784,59 @@ mod tests {
             prerelease: false,
             nightly: None,
         };
+        QueuedInstall { release, source }
+    }
+
+    #[test]
+    fn instance_downloads_wait_in_order_and_keep_each_distinct_save() {
         let mut queue = VecDeque::new();
         for tag in ["first", "second", "first", "running", "third"] {
-            enqueue_instance_install(&mut queue, Some("running"), release(tag));
+            enqueue_install(
+                &mut queue,
+                Some("running"),
+                request(tag, InstallSource::Instance),
+            );
         }
 
-        assert!(take_instance_install(&mut queue, &["first".into()]).is_none());
+        assert!(take_next_install(&mut queue, &["first".into()], None).is_none());
         for tag in ["first", "second", "third"] {
-            assert_eq!(take_instance_install(&mut queue, &[]).unwrap().tag, tag);
+            assert_eq!(
+                take_next_install(&mut queue, &[], None)
+                    .unwrap()
+                    .release
+                    .tag,
+                tag
+            );
         }
-        assert!(take_instance_install(&mut queue, &[]).is_none());
+        assert!(take_next_install(&mut queue, &[], None).is_none());
+    }
+
+    #[test]
+    fn native_prepare_defers_the_build_and_its_base_without_losing_the_update() {
+        let mut queue = VecDeque::from([
+            request("base", InstallSource::Update),
+            request("native", InstallSource::Instance),
+            request("other", InstallSource::Instance),
+        ]);
+        let preparing = Some(("native", "base"));
+        assert_eq!(
+            take_next_install(&mut queue, &[], preparing)
+                .unwrap()
+                .release
+                .tag,
+            "other"
+        );
+        assert!(take_next_install(&mut queue, &[], preparing).is_none());
+        let update = take_next_install(&mut queue, &[], None).unwrap();
+        assert_eq!(update.release.tag, "base");
+        assert!(matches!(update.source, InstallSource::Update));
+        assert_eq!(
+            take_next_install(&mut queue, &[], None)
+                .unwrap()
+                .release
+                .tag,
+            "native"
+        );
     }
 
     #[test]
