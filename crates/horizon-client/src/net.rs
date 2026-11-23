@@ -1795,6 +1795,8 @@ fn append_json_text(v: &serde_json::Value, lang: &Language, out: &mut String, de
             if let Some(t) = o.get("text").and_then(serde_json::Value::as_str) {
                 push_capped(out, t);
             } else if let Some(key) = o.get("translate").and_then(serde_json::Value::as_str) {
+                // One budget for all the arguments, as in `horizon_protocol::text::plain`.
+                let mut room = MAX_TEXT;
                 let args: Vec<String> = o
                     .get("with")
                     .and_then(serde_json::Value::as_array)
@@ -1802,7 +1804,10 @@ fn append_json_text(v: &serde_json::Value, lang: &Language, out: &mut String, de
                         a.iter()
                             .map(|e| {
                                 let mut s = String::new();
-                                append_json_text(e, lang, &mut s, depth + 1);
+                                if room > 0 {
+                                    append_json_text(e, lang, &mut s, depth + 1);
+                                    room = room.saturating_sub(s.len());
+                                }
                                 s
                             })
                             .collect()

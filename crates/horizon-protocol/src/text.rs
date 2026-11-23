@@ -72,12 +72,18 @@ fn append(tag: &Tag, lang: &Language, out: &mut String, depth: usize) {
                 // translation's number and string arguments).
                 append(value, lang, out, depth + 1);
             } else if let Some(key) = get(tag, "translate").and_then(string) {
+                // The arguments share one budget: each is capped alone, and thousands of them
+                // of MAX_TEXT bytes each took gigabytes before the pattern was even read.
+                let mut room = MAX_TEXT;
                 let args: Vec<String> = match get(tag, "with") {
                     Some(Tag::List(args)) => args
                         .iter()
                         .map(|a| {
                             let mut s = String::new();
-                            append(a, lang, &mut s, depth + 1);
+                            if room > 0 {
+                                append(a, lang, &mut s, depth + 1);
+                                room = room.saturating_sub(s.len());
+                            }
                             s
                         })
                         .collect(),
@@ -202,6 +208,31 @@ mod tests {
             ("with", Tag::List(vec![literal("A")])),
         ]);
         assert_eq!(plain(&ok, &Language::new()), "A and A");
+    }
+
+    #[test]
+    fn the_arguments_of_one_translation_share_the_cap() {
+        // Each argument grows to MAX_TEXT by itself; the pattern shows only the last one.
+        let big = || {
+            Tag::compound(vec![
+                ("translate", Tag::String(JavaString::from("x.unknown"))),
+                (
+                    "fallback",
+                    Tag::String(JavaString::from("%1$s".repeat(MAX_TEXT).as_str())),
+                ),
+                ("with", Tag::List(vec![literal("A")])),
+            ])
+        };
+        let tag = Tag::compound(vec![
+            ("translate", Tag::String(JavaString::from("x.unknown"))),
+            ("fallback", Tag::String(JavaString::from("[%3$s]"))),
+            ("with", Tag::List(vec![big(), big(), big()])),
+        ]);
+        // The first argument used the budget up: the third is built empty.
+        assert_eq!(plain(&tag, &Language::new()), "[]");
+        // Arguments within the budget are all kept.
+        let small = translatable("%3$s%2$s%1$s", &["a", "b", "c"]);
+        assert_eq!(plain(&small, &Language::new()), "cba");
     }
 
     #[test]
