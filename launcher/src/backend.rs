@@ -7155,7 +7155,7 @@ pub fn {f}("
     fn links_fall_back_to_the_built_in_ones() {
         let defaults = Links::default();
         assert_eq!(defaults.discord, "https://discord.gg/playhorizon");
-        assert_eq!(defaults.sponsor, "https://github.com/sponsors/ludovic111");
+        assert_eq!(defaults.sponsor, "https://opencollective.com/horizonrust");
         assert_eq!(defaults.website, "https://playhorizon.dev");
         assert_eq!(
             Links::parse(r#"{"roadmap":"https://example.org/tasks","docs":" "}"#),

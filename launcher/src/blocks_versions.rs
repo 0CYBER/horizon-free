@@ -257,7 +257,7 @@ impl Launcher {
                         ))),
                 )
                 .child(
-                    button("sponsor", "Sponsor on GitHub", Kind::Secondary, &t)
+                    button("sponsor", "Sponsor", Kind::Secondary, &t)
                         .bg(t.plate)
                         .on_click({
                             let url = self.links.sponsor.clone();
