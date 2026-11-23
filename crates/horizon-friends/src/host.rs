@@ -18,7 +18,7 @@ use crate::{
 use std::{
     collections::HashMap,
     io::{self, BufReader},
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
@@ -44,6 +44,9 @@ pub const MAX_SESSIONS: usize = 8;
 pub const DEFAULT_PORT: u16 = 25580;
 /// Code handshakes in progress at once (scanners can't pile them up).
 const MAX_HANDSHAKES: usize = 8;
+/// Of those, the most one source address may hold: a silent peer can't take
+/// every slot, while two friends behind one router (plus a retry) still fit.
+const MAX_HANDSHAKES_PER_IP: usize = 3;
 /// The most an inbound stream's opening (hello, key exchange, confirmation)
 /// may take, however slowly its bytes come.
 const HANDSHAKE: Duration = Duration::from_secs(10);
@@ -189,7 +192,8 @@ struct Shared {
     /// Inbound direct streams waiting for their relayed session.
     routes: Mutex<HashMap<u64, (Sender<TcpStream>, Instant)>>,
     sessions: AtomicUsize,
-    handshakes: AtomicUsize,
+    /// Handshakes in progress by source address.
+    handshakes: Mutex<HashMap<IpAddr, usize>>,
     wrong: AtomicU32,
     guesses: Mutex<Guesses>,
     reach: Mutex<Option<Reach>>,
@@ -251,7 +255,7 @@ impl Host {
             control: Mutex::new(None),
             routes: Mutex::new(HashMap::new()),
             sessions: AtomicUsize::new(0),
-            handshakes: AtomicUsize::new(0),
+            handshakes: Mutex::new(HashMap::new()),
             wrong: AtomicU32::new(0),
             guesses: Mutex::new(Guesses::default()),
             reach: Mutex::new(None),
@@ -398,14 +402,15 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
     while !shared.stopped() {
         let mut idle = true;
         for l in &listeners {
-            let Ok((mut s, _)) = l.accept() else { continue };
-            idle = false;
-            if shared.handshakes.load(Ordering::Relaxed) >= MAX_HANDSHAKES {
+            let Ok((mut s, peer)) = l.accept() else {
                 continue;
-            }
+            };
+            idle = false;
             // Given back however the handshake ends, a failed spawn included: a slot lost each
             // time would close the direct port after MAX_HANDSHAKES of them.
-            let slot = Handshake::take(&shared);
+            let Some(slot) = Handshake::take(&shared, peer.ip().to_canonical()) else {
+                continue;
+            };
             let shared = shared.clone();
             let _ = std::thread::Builder::new()
                 .name("horizon-friends-inbound".into())
@@ -445,16 +450,29 @@ fn route_inbound(listeners: Vec<TcpListener>, shared: Arc<Shared>) {
 /// the code's secret, then carry the session (`deadline` bounds the
 /// handshake, not the game).
 /// One of the [`MAX_HANDSHAKES`], given back when dropped.
-struct Handshake(Arc<Shared>);
+struct Handshake(Arc<Shared>, IpAddr);
 impl Handshake {
-    fn take(shared: &Arc<Shared>) -> Self {
-        shared.handshakes.fetch_add(1, Ordering::Relaxed);
-        Self(shared.clone())
+    /// None when every slot is taken, or `ip` already holds its share.
+    fn take(shared: &Arc<Shared>, ip: IpAddr) -> Option<Self> {
+        let mut held = shared.handshakes.lock().unwrap_or_else(|e| e.into_inner());
+        if held.values().sum::<usize>() >= MAX_HANDSHAKES
+            || held.get(&ip).is_some_and(|n| *n >= MAX_HANDSHAKES_PER_IP)
+        {
+            return None;
+        }
+        *held.entry(ip).or_default() += 1;
+        Some(Self(shared.clone(), ip))
     }
 }
 impl Drop for Handshake {
     fn drop(&mut self) {
-        self.0.handshakes.fetch_sub(1, Ordering::Relaxed);
+        let mut held = self.0.handshakes.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = held.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                held.remove(&self.1);
+            }
+        }
     }
 }
 
@@ -798,6 +816,83 @@ mod tests {
         assert!(g.reserve());
         // Nothing was wrong: no code retired, no wait.
         assert_eq!(g.next(), Next::Now);
+    }
+
+    /// A host with no network: just what `route_inbound` reads.
+    fn quiet_shared() -> Arc<Shared> {
+        Arc::new(Shared {
+            config: HostConfig {
+                lan: "127.0.0.1:1".parse().unwrap(),
+                protocol: 0,
+                game: String::new(),
+                relay: None,
+                path: PathMode::DirectOnly,
+                port: 0,
+                reach: reach::Options {
+                    map_port: false,
+                    stun: Vec::new(),
+                    loopback: true,
+                },
+            },
+            stop: AtomicBool::new(false),
+            state: Mutex::new(HostState::default()),
+            events: Mutex::new(channel().0),
+            invite: Mutex::new(None),
+            control: Mutex::new(None),
+            routes: Mutex::new(HashMap::new()),
+            sessions: AtomicUsize::new(0),
+            handshakes: Mutex::new(HashMap::new()),
+            wrong: AtomicU32::new(0),
+            guesses: Mutex::new(Guesses::default()),
+            reach: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn one_address_cannot_hold_every_handshake_slot() {
+        let shared = quiet_shared();
+        let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+        let held: Vec<_> = (0..MAX_HANDSHAKES_PER_IP)
+            .map(|_| Handshake::take(&shared, ip("203.0.113.1")).unwrap())
+            .collect();
+        // The same address gets no more, but others still do.
+        assert!(Handshake::take(&shared, ip("203.0.113.1")).is_none());
+        let friend = Handshake::take(&shared, ip("203.0.113.2")).unwrap();
+        // The total still bounds many addresses together.
+        let rest: Vec<_> = (3..)
+            .map_while(|n| Handshake::take(&shared, ip(&format!("203.0.113.{n}"))))
+            .collect();
+        assert_eq!(held.len() + 1 + rest.len(), MAX_HANDSHAKES);
+        // A slot freed by its holder is usable again by that address.
+        drop(rest);
+        drop(held);
+        assert!(Handshake::take(&shared, ip("203.0.113.1")).is_some());
+        drop(friend);
+    }
+
+    #[test]
+    fn silent_peers_cannot_close_the_port_to_others() {
+        let shared = quiet_shared();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let addr = l.local_addr().unwrap();
+        let s = shared.clone();
+        let t = std::thread::spawn(move || route_inbound(vec![l], s));
+        // Everything here comes from one address, so the cap applies to the guest too; what
+        // matters is that the accept loop still serves it once the silent peers are gone.
+        let silent: Vec<_> = (0..MAX_HANDSHAKES_PER_IP + 2)
+            .map(|_| TcpStream::connect(addr).unwrap())
+            .collect();
+        std::thread::sleep(Duration::from_millis(300));
+        let held: usize = shared.handshakes.lock().unwrap().values().sum();
+        drop(silent);
+        std::thread::sleep(Duration::from_millis(300));
+        // read_hello sees EOF and the slots come back.
+        let freed: usize = shared.handshakes.lock().unwrap().values().sum();
+        shared.stop.store(true, Ordering::Relaxed);
+        t.join().unwrap();
+        assert_eq!(held, MAX_HANDSHAKES_PER_IP);
+        assert_eq!(freed, 0);
     }
 
     #[test]
