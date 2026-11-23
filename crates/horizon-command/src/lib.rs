@@ -830,6 +830,21 @@ impl Suggests {
 /// command nesting.
 const MAX_PARSE_DEPTH: usize = 128;
 
+/// The most children one parse examines, over all its branches: each child a node's selection
+/// looks at counts once, and each child it then tries once more. Depth alone does not bound the
+/// work: a server's tree whose every level has two arguments leading to the same next level
+/// doubles the branches per word, so 40 words were 2^41 tries (Brigadier does the same), and a
+/// node with many children reached on many branches is scanned on each. A parse of vanilla's
+/// tree looks at the root's hundred-odd children and a few dozen more per level, so an
+/// `execute` nested almost to [`MAX_PARSE_DEPTH`] stays far below this; past it the whole
+/// command fails to parse.
+const MAX_PARSE_VISITS: usize = 100_000;
+
+/// The most nodes one usage line follows down a chain of single children before it ends in
+/// "...". Vanilla's longest such chain is 8 nodes; a server's tree may chain hundreds of
+/// thousands, which Brigadier follows by recursion and string concatenation per node.
+const MAX_USAGE_CHAIN: usize = 64;
+
 /// The command tree (CommandDispatcher). Node 0 is the root.
 #[derive(Clone, Debug)]
 pub struct Dispatcher {
@@ -999,8 +1014,14 @@ impl Dispatcher {
             .copied()
             .find(|&c| self.nodes[c].name() == name)
     }
-    fn relevant(&self, node: usize, reader: &Reader) -> Vec<usize> {
+    /// The children of `node` worth trying (Brigadier's `getRelevantNodes`). Looking at them is
+    /// charged to `visits` first, and past [`MAX_PARSE_VISITS`] none are.
+    fn relevant(&self, node: usize, reader: &Reader, visits: &mut usize) -> Vec<usize> {
         let children = &self.nodes[node].children;
+        *visits = visits.saturating_add(children.len());
+        if *visits > MAX_PARSE_VISITS {
+            return Vec::new();
+        }
         let literals: Vec<usize> = children
             .iter()
             .copied()
@@ -1068,12 +1089,14 @@ impl Dispatcher {
         reg: &Registries,
         level: u8,
         depth: usize,
+        visits: &mut usize,
     ) -> ParseResults {
-        if depth >= MAX_PARSE_DEPTH {
+        if depth >= MAX_PARSE_DEPTH || *visits > MAX_PARSE_VISITS {
             // A crafted command nested through `execute … run` (which redirects
             // back to the root) recurses here per level; stop before it
             // overflows the parsing thread's stack. The branch yields no result,
-            // so the whole command simply fails to parse.
+            // so the whole command simply fails to parse. Past the visit budget
+            // every branch stops the same way, and `parse_counted` fails the parse.
             return ParseResults {
                 context: so_far.clone(),
                 input: input.to_owned(),
@@ -1087,9 +1110,13 @@ impl Dispatcher {
             string: input,
             cursor,
         };
-        for child in self.relevant(node, &original) {
+        for child in self.relevant(node, &original, visits) {
             if self.nodes[child].permission > level {
                 continue;
+            }
+            *visits += 1;
+            if *visits > MAX_PARSE_VISITS {
+                break;
             }
             let mut context = so_far.clone();
             let mut reader = original.clone();
@@ -1126,6 +1153,7 @@ impl Dispatcher {
                         reg,
                         level,
                         depth + 1,
+                        visits,
                     );
                     context.child = Some(Box::new(parse.context));
                     return ParseResults {
@@ -1143,6 +1171,7 @@ impl Dispatcher {
                     reg,
                     level,
                     depth + 1,
+                    visits,
                 ));
             } else {
                 potentials.push(ParseResults {
@@ -1172,8 +1201,34 @@ impl Dispatcher {
     }
     /// Parse starting at byte `start` (after a leading '/').
     pub fn parse_at(&self, input: &str, start: usize, reg: &Registries) -> ParseResults {
+        self.parse_counted(input, start, reg).0
+    }
+    /// [`Self::parse_at`], and how many children the parse examined. A parse past
+    /// [`MAX_PARSE_VISITS`] fails as a whole, as an unknown command: what it found before the
+    /// budget ran out depends on the order it went in.
+    fn parse_counted(&self, input: &str, start: usize, reg: &Registries) -> (ParseResults, usize) {
         let context = Context::new(0, start);
-        self.parse_nodes(0, input, start, &context, reg, reg.permission, 0)
+        let mut visits = 0;
+        let parse = self.parse_nodes(
+            0,
+            input,
+            start,
+            &context,
+            reg,
+            reg.permission,
+            0,
+            &mut visits,
+        );
+        if visits > MAX_PARSE_VISITS {
+            let failed = ParseResults {
+                context,
+                input: input.to_owned(),
+                cursor: start,
+                errors: Vec::new(),
+            };
+            return (failed, visits);
+        }
+        (parse, visits)
     }
     /// Brigadier's completion suggestions at `cursor`: it
     /// lists every child, whatever its requirement.
@@ -1253,30 +1308,45 @@ impl Dispatcher {
         };
         (range, list, ask)
     }
+    /// Brigadier's `getSmartUsage(node, source, optional, deep)`. Brigadier recurses once per
+    /// node of a chain of single children and prefixes each level's text on the way back; this
+    /// walks the chain in a loop and joins the parts once, and stops after
+    /// [`MAX_USAGE_CHAIN`] nodes with "...".
     fn smart_usage_of(&self, node: usize, optional: bool, deep: bool, level: u8) -> Option<String> {
-        let n = &self.nodes[node];
-        if n.permission > level {
+        if self.nodes[node].permission > level {
             return None;
         }
-        let this = if optional {
-            format!("[{}]", n.usage_text())
-        } else {
-            n.usage_text()
-        };
-        let child_optional = n.command.is_some();
-        let (open, close) = if child_optional {
-            ("[", "]")
-        } else {
-            ("(", ")")
-        };
-        if !deep {
+        let mut parts: Vec<String> = Vec::new();
+        let (mut node, mut optional, mut deep) = (node, optional, deep);
+        loop {
+            if parts.len() >= MAX_USAGE_CHAIN {
+                parts.push("...".to_owned());
+                break;
+            }
+            let n = &self.nodes[node];
+            let this = if optional {
+                format!("[{}]", n.usage_text())
+            } else {
+                n.usage_text()
+            };
+            let child_optional = n.command.is_some();
+            let (open, close) = if child_optional {
+                ("[", "]")
+            } else {
+                ("(", ")")
+            };
+            if deep {
+                parts.push(this);
+                break;
+            }
             if let Some(r) = n.redirect {
                 let target = if r == 0 {
                     "...".to_owned()
                 } else {
                     format!("-> {}", self.nodes[r].usage_text())
                 };
-                return Some(format!("{this} {target}"));
+                parts.push(format!("{this} {target}"));
+                break;
             }
             let children: Vec<usize> = n
                 .children
@@ -1285,12 +1355,13 @@ impl Dispatcher {
                 .filter(|&c| self.nodes[c].permission <= level)
                 .collect();
             if children.len() == 1 {
-                if let Some(usage) =
-                    self.smart_usage_of(children[0], child_optional, child_optional, level)
-                {
-                    return Some(format!("{this} {usage}"));
-                }
-            } else if children.len() > 1 {
+                // The child's permission passed the filter, so its usage exists: follow it.
+                parts.push(this);
+                (node, optional, deep) = (children[0], child_optional, child_optional);
+                continue;
+            }
+            if children.len() > 1 {
+                // Each child's usage here is deep: its own text only, no further recursion.
                 let mut child_usage: Vec<String> = Vec::new();
                 for &c in &children {
                     if let Some(u) = self.smart_usage_of(c, child_optional, true, level)
@@ -1301,7 +1372,7 @@ impl Dispatcher {
                 }
                 if child_usage.len() == 1 {
                     let usage = &child_usage[0];
-                    return Some(format!(
+                    parts.push(format!(
                         "{this} {}",
                         if child_optional {
                             format!("[{usage}]")
@@ -1309,17 +1380,21 @@ impl Dispatcher {
                             usage.clone()
                         }
                     ));
+                    break;
                 }
                 if child_usage.len() > 1 {
                     let alternatives: Vec<String> = children
                         .iter()
                         .map(|&c| self.nodes[c].usage_text())
                         .collect();
-                    return Some(format!("{this} {open}{}{close}", alternatives.join("|")));
+                    parts.push(format!("{this} {open}{}{close}", alternatives.join("|")));
+                    break;
                 }
             }
+            parts.push(this);
+            break;
         }
-        Some(this)
+        Some(parts.join(" "))
     }
     /// Brigadier's smart usage: one line per child of `node`.
     pub fn smart_usage(&self, node: usize, level: u8) -> Vec<(usize, String)> {

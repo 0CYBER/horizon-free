@@ -29,7 +29,7 @@ mod merchant;
 mod player_info;
 mod waypoints;
 pub use advancements::{Advancement, AdvancementDisplay, SeenAdvancements, UpdateAdvancements};
-pub use commands::{ARGUMENT_TYPES, ArgumentProperties, CommandNode, Commands};
+pub use commands::{ARGUMENT_TYPES, ArgumentProperties, CommandNode, Commands, MAX_COMMAND_NODES};
 pub use hud::{
     BossAction, BossEvent, NumberFormat, ResetScore, SetDisplayObjective, SetObjective,
     SetPlayerTeam, SetScore, TeamParameters,

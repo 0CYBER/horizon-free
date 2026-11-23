@@ -36,7 +36,7 @@ ClientboundBossEventPacket.AddOperation.dispatch	port	crates/horizon-client/src/
 ClientboundChunksBiomesPacket.ChunkBiomeData.calculateChunkSize	inline	crates/horizon-protocol/src/packets/play.rs::ChunkBiomeData::from_biomes	the buffer grows as each section's container is written, so no size is computed or prefixed on the wire
 ClientboundChunksBiomesPacket.ChunkBiomeData.extractChunkData	port	crates/horizon-protocol/src/packets/play.rs::ChunkBiomeData::from_biomes	the column's sections' biome containers written one after another into the buffer
 ClientboundCommandSuggestionsPacket.toSuggestions	port	crates/horizon-client/src/game/network/remote/polling.rs::Game::handle_command_suggestions_body	start, length and tooltip become the suggestion range
-ClientboundCommandsPacket.validateEntries	port	crates/horizon-protocol/src/packets/play/commands.rs::Commands::read	a node whose redirect or children never build (a cycle) is refused; the root index is read last
+ClientboundCommandsPacket.validateEntries	port	crates/horizon-protocol/src/packets/play/commands.rs::Commands::read	a node whose redirect or children never build (a cycle) is refused; the root index is read last, and a tree without the node it names is refused too (getRoot throws on it)
 ClientboundCommandsPacket.enumerateNodes	port	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	breadth-first node ids on the LAN host
 ClientboundCommandsPacket.createEntries	port	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	builds the node list for the LAN host's Commands packet
 ClientboundCommandsPacket.createEntry	inline	crates/horizon-client/src/lan/commands.rs::CommandTree::packet_with	flags, redirect and children are set in the final node map

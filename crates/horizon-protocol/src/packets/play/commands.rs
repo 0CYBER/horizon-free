@@ -231,6 +231,12 @@ fn acyclic(nodes: &[CommandNode], edges: impl Fn(&CommandNode) -> &[i32]) -> boo
     true
 }
 
+/// The most nodes a command tree may have. Vanilla reads any number; its own tree has about
+/// 2,500 nodes for an operator (the client's copy of it in `horizon-command`), and modded
+/// servers add their commands to it, so this leaves about a hundredfold. A node costs a few
+/// bytes, so without a bound one packet could hold over a million of them.
+pub const MAX_COMMAND_NODES: usize = 262_144;
+
 /// The command tree: nodes and the index of the root.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Commands {
@@ -239,7 +245,7 @@ pub struct Commands {
 }
 impl Codec<Commands> for Commands {
     fn read(r: &mut Reader) -> Result<Self> {
-        let n = r.count(r.remaining())?;
+        let n = r.count(r.remaining().min(MAX_COMMAND_NODES))?;
         let mut nodes = Vec::with_capacity(n.min(4096));
         for _ in 0..n {
             let flags = r.u8()?;
@@ -278,13 +284,17 @@ impl Codec<Commands> for Commands {
         // ClientboundCommandsPacket.validateEntries: every node's redirect builds
         // first (canBuild), then its children (canResolve). A cycle in either never
         // does, and walking it would recurse without end.
-        if !acyclic(&nodes, |n| n.redirect.as_slice()) || !acyclic(&nodes, |n| &n.children) {
+        // The root must be one of the nodes: getRoot looks `rootIndex` up in the list, which
+        // an empty tree or an index outside it fails, and the client disconnects.
+        let root = r.varint()?;
+        let root_in_tree = usize::try_from(root).is_ok_and(|i| i < nodes.len());
+        if !root_in_tree
+            || !acyclic(&nodes, |n| n.redirect.as_slice())
+            || !acyclic(&nodes, |n| &n.children)
+        {
             return Err(crate::Error::new("Server sent an impossible command tree"));
         }
-        Ok(Self {
-            nodes,
-            root: r.varint()?,
-        })
+        Ok(Self { nodes, root })
     }
     fn write(v: &Self, w: &mut Writer) {
         w.varint(v.nodes.len() as i32);

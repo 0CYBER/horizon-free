@@ -23,6 +23,10 @@ pub const SERVER_COMMAND: &str = "server";
 /// (vanilla's), whose matching nodes lend their types and providers.
 pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
     let count = packet.nodes.len();
+    if count == 0 {
+        // Decoding refuses an empty tree; one built otherwise has no commands.
+        return Dispatcher::new();
+    }
     let root = usize::try_from(packet.root)
         .ok()
         .filter(|&r| r < count)
@@ -99,9 +103,7 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
         });
     }
     let mut d = Dispatcher::new();
-    if count > 0 {
-        d.nodes = nodes.into_iter().flatten().collect();
-    }
+    d.nodes = nodes.into_iter().flatten().collect();
     d
 }
 
@@ -427,6 +429,142 @@ mod tests {
         assert!(!restricted.parse("stop", &reg).is_valid());
         assert!(restricted.parse("list", &reg).is_valid());
         assert!(restricted.parse("say hello", &reg).is_valid());
+    }
+
+    fn root(children: Vec<i32>) -> CommandNode {
+        CommandNode {
+            kind: 0,
+            executable: false,
+            restricted: false,
+            children,
+            redirect: None,
+            name: String::new(),
+            parser: None,
+            suggestions: None,
+        }
+    }
+
+    #[test]
+    fn a_tree_without_its_root_has_no_commands() {
+        let reg = crate::Registries::default();
+        let empty = from_packet(
+            &Commands {
+                nodes: Vec::new(),
+                root: 0,
+            },
+            &Dispatcher::new(),
+        );
+        assert!(matches!(empty.nodes[0].kind, NodeKind::Root));
+        assert!(!empty.parse("list", &reg).is_valid());
+        // A root outside the tree, either way: node 0 stands in for it.
+        for outside in [-1, 2, i32::MAX] {
+            let nodes = vec![root(vec![1]), literal("list", Vec::new(), true)];
+            let d = from_packet(
+                &Commands {
+                    nodes,
+                    root: outside,
+                },
+                &Dispatcher::new(),
+            );
+            assert!(d.parse("list", &reg).is_valid(), "root {outside}");
+        }
+    }
+
+    /// `a a a …`, `len` literals below `chain`, the last one runs.
+    fn chain(len: usize) -> Dispatcher {
+        let mut nodes = vec![root(vec![1]), literal("chain", vec![2], false)];
+        for i in 0..len {
+            let last = i + 1 == len;
+            let next = if last { vec![] } else { vec![(i + 3) as i32] };
+            nodes.push(literal("a", next, last));
+        }
+        from_packet(&Commands { nodes, root: 0 }, &Dispatcher::new())
+    }
+
+    #[test]
+    fn a_usage_line_stops_down_a_long_chain() {
+        let usage = |d: &Dispatcher| d.smart_usage(0, 0).remove(0).1;
+        assert_eq!(usage(&chain(3)), "chain a a a");
+        // Brigadier recursed once per node: 300,000 of them overflowed a stack of this size,
+        // and joined each level's text to the rest, quadratic in the length.
+        let long = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || usage(&chain(300_000)))
+            .unwrap()
+            .join()
+            .unwrap();
+        let expected = format!("chain{} ...", " a".repeat(crate::MAX_USAGE_CHAIN - 1));
+        assert_eq!(long, expected);
+    }
+
+    /// `levels` levels of two word arguments, each leading to both of the next level.
+    fn shared_levels(levels: usize) -> Dispatcher {
+        let mut nodes = vec![root(vec![1]), literal("p", vec![2, 3], false)];
+        for level in 0..levels {
+            let last = level + 1 == levels;
+            let next = if last {
+                vec![]
+            } else {
+                let first = (2 * level + 4) as i32;
+                vec![first, first + 1]
+            };
+            for name in ["x", "y"] {
+                let mut node = argument(name, "brigadier:string", vec![0], last);
+                node.children = next.clone();
+                nodes.push(node);
+            }
+        }
+        from_packet(&Commands { nodes, root: 0 }, &Dispatcher::new())
+    }
+
+    #[test]
+    fn a_parse_stops_after_a_bounded_number_of_tries() {
+        let reg = crate::Registries::default();
+        let parse = |levels: usize| {
+            let input = format!("p{}", " w".repeat(levels));
+            let (parse, visits) = shared_levels(levels).parse_counted(&input, 0, &reg);
+            (parse.is_valid(), visits)
+        };
+        // Every branch is tried: `p` and 2 + 4 + … + 2^levels arguments, each looked at once
+        // by its parent's selection and once tried.
+        assert_eq!(parse(10), (true, 2 * ((1 << 11) - 1)));
+        assert_eq!(parse(14), (true, 2 * ((1 << 15) - 1)));
+        // 2^41 tries without the budget; past it the command does not parse.
+        let (valid, visits) = parse(40);
+        assert!(!valid);
+        assert!(visits <= crate::MAX_PARSE_VISITS + 64, "{visits}");
+    }
+
+    #[test]
+    fn looking_at_children_counts_against_the_parse_budget() {
+        // `p` has `wide` word arguments that all lead to one shared argument with `wide`
+        // literal children. `p a b missing` reaches the shared argument once per branch, and
+        // each time looks at all of its literals to find none that matches, so the tries alone
+        // stay near 2 * `wide` while the looking is `wide` squared.
+        let wide = 1_000;
+        let shared = wide + 2;
+        let mut nodes = vec![
+            root(vec![1]),
+            literal("p", (2..shared as i32).collect(), false),
+        ];
+        for i in 0..wide {
+            let mut node = argument(&format!("w{i}"), "brigadier:string", vec![0], false);
+            node.children = vec![shared as i32];
+            nodes.push(node);
+        }
+        let first_literal = shared as i32 + 1;
+        let mut middle = argument("s", "brigadier:string", vec![0], false);
+        middle.children = (first_literal..first_literal + wide as i32).collect();
+        nodes.push(middle);
+        for i in 0..wide {
+            nodes.push(literal(&format!("l{i}"), vec![], true));
+        }
+        let tree = from_packet(&Commands { nodes, root: 0 }, &Dispatcher::new());
+        let reg = crate::Registries::default();
+        let (parse, visits) = tree.parse_counted("p a b missing", 0, &reg);
+        assert!(!parse.is_valid());
+        assert!(visits > crate::MAX_PARSE_VISITS, "{visits}");
+        assert!(visits <= crate::MAX_PARSE_VISITS + wide, "{visits}");
     }
 
     #[test]

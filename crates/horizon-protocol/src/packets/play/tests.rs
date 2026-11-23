@@ -55,6 +55,47 @@ fn a_command_tree_with_a_cycle_is_refused() {
 }
 
 #[test]
+fn a_command_tree_without_its_root_is_refused() {
+    let root = || CommandNode {
+        kind: 0,
+        executable: false,
+        restricted: false,
+        children: Vec::new(),
+        redirect: None,
+        name: String::new(),
+        parser: None,
+        suggestions: None,
+    };
+    let read = |nodes: Vec<CommandNode>, root: i32| {
+        let mut w = Writer::new();
+        Commands::write(&Commands { nodes, root }, &mut w);
+        Commands::read(&mut Reader::new(&w.data))
+    };
+    assert!(read(vec![root()], 0).is_ok());
+    assert!(read(Vec::new(), 0).is_err());
+    for outside in [-1, 1, i32::MAX] {
+        assert!(read(vec![root()], outside).is_err(), "root {outside}");
+    }
+}
+
+#[test]
+fn a_command_tree_has_at_most_max_command_nodes() {
+    let read = |count: usize| {
+        let mut w = Writer::new();
+        w.varint(count as i32);
+        for _ in 0..count {
+            // A root node without children: flags, no children.
+            w.u8(0);
+            w.varint(0);
+        }
+        w.varint(0);
+        Commands::read(&mut Reader::new(&w.data))
+    };
+    assert!(read(MAX_COMMAND_NODES).is_ok());
+    assert!(read(MAX_COMMAND_NODES + 1).is_err());
+}
+
+#[test]
 fn vec_delta_quantizes_the_base_like_math_round() {
     // Math.round(-2.5) is -2, so a delta of 1 lands on -1/4096, not -2/4096.
     let out = VecDelta::apply([-2.5 / 4096.0, 0.0, 0.0], [1, 0, 0]);
