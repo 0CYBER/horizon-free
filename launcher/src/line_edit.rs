@@ -377,10 +377,14 @@ impl LineEdit {
             }
             "v" if command => Key::Paste,
             _ if command => Key::Pass,
-            // Not every platform gives Space a character.
+            // Not every platform gives Space a character, and a layout may give another space
+            // (a no-break space on AltGr+Space).
             "space" => {
+                let ch = key_char
+                    .filter(|c| !c.is_empty() && !c.chars().any(char::is_control))
+                    .unwrap_or(" ");
                 let run = if lo == hi { Run::Typing } else { Run::Other };
-                self.edit(run, false, |e| e.put(" "));
+                self.edit(run, false, |e| e.put(ch));
                 Key::Edited
             }
             _ => match key_char {
@@ -634,6 +638,17 @@ mod tests {
         e.key("home", None, false, false);
         e.key("delete", None, false, false);
         assert_eq!(e.text(), "-name teve");
+    }
+
+    /// A layout may put another space on Space (a no-break space on AltGr+Space): it is typed as
+    /// given. Without a character, Space types a plain space.
+    #[test]
+    fn space_types_the_character_the_layout_gives() {
+        let mut e = edit("a");
+        e.key("space", Some("\u{a0}"), false, false);
+        e.key("space", None, false, false);
+        e.key("space", Some(" "), false, false);
+        assert_eq!(e.text(), "a\u{a0}  ");
     }
 
     #[test]
