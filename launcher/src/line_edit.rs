@@ -365,6 +365,8 @@ impl LineEdit {
                 self.redo();
                 Key::Edited
             }
+            // Nothing selected: the clipboard keeps what it holds.
+            "c" | "x" if command && lo == hi => Key::Moved,
             "c" if command => Key::Copy(self.selected()),
             "x" if command => {
                 let cut = self.selected();
@@ -687,6 +689,18 @@ mod tests {
         assert_eq!(e.text(), "y");
         e.insert("a\nb c");
         assert_eq!(e.text(), "yab c");
+    }
+
+    /// With nothing selected, Copy and Cut have nothing to put on the clipboard: they leave it as
+    /// it is instead of emptying it, and the text stays.
+    #[test]
+    fn copy_and_cut_with_nothing_selected_keep_the_clipboard() {
+        let mut e = edit("--name Steve");
+        assert_eq!(e.key("c", None, true, false), Key::Moved);
+        assert_eq!(e.key("x", None, true, false), Key::Moved);
+        assert_eq!(e.text(), "--name Steve");
+        e.key("left", None, false, true);
+        assert_eq!(e.key("c", None, true, false), Key::Copy("e".into()));
     }
 
     #[test]
