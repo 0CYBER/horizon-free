@@ -334,6 +334,10 @@ impl Game<'_> {
             if let Some(play) = self.lan.as_mut().and_then(|host| host.play.get_mut(&conn)) {
                 play.hook.discard();
             }
+            // ServerPlayer.die: shoulder parrots are dropped at the death
+            // spot before the loot and the death message. `host`'s borrow
+            // ends with the condition, so as_guest may take `&mut self`.
+            self.as_guest(conn, |game| game.remove_entities_on_shoulder());
         }
         let Some(host) = self.lan.as_mut() else {
             return;

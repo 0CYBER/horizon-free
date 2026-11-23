@@ -155,7 +155,7 @@ impl Game<'_> {
     /// `ServerPlayer.removeEntitiesOnShoulder` (not within a second of the
     /// landing) and `respawnEntityOnShoulder`: the parrots come back at the
     /// player, still owned by them.
-    fn remove_entities_on_shoulder(&mut self) {
+    pub(in crate::game) fn remove_entities_on_shoulder(&mut self) {
         let (uuid, now) = (self.acting_uuid(), self.world.game_time);
         if self
             .creatures
