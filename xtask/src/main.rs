@@ -144,7 +144,7 @@ fn perf_wasm() -> Result<(), String> {
     let status = Command::new(&cargo)
         .current_dir(repo)
         .args([
-            "build",
+            "rustc",
             "--release",
             "--lib",
             "-p",
@@ -153,9 +153,11 @@ fn perf_wasm() -> Result<(), String> {
             "wasm",
             "--target",
             "wasm32-unknown-unknown",
+            "--crate-type",
+            "cdylib",
         ])
         .status()
-        .map_err(|e| format!("{cargo} build: {e}"))?;
+        .map_err(|e| format!("{cargo} rustc: {e}"))?;
     if !status.success() {
         return Err(
             "the wasm build failed; `rustup target add wasm32-unknown-unknown` installs the target"

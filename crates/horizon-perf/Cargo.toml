@@ -20,8 +20,9 @@ horizon-bench = { path = "../horizon-bench" }
 horizon-perf-share = { path = "../horizon-perf-share" }
 
 [lib]
-# `cdylib` is what `cargo xtask perf-wasm` builds for the browser; the rlib is everything else.
-crate-type = ["cdylib", "rlib"]
+# Only `rlib` by default so native builds do not overwrite an unhashed cdylib across feature sets;
+# `cargo xtask perf-wasm` requests `cdylib` explicitly via `cargo rustc --crate-type cdylib`.
+crate-type = ["rlib"]
 
 [features]
 # The C ABI of `wasm` and its JS wrapper (docs/perf-platform.md §7.1). Inert natively.
