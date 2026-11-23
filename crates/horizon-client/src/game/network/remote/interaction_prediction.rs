@@ -33,9 +33,7 @@ impl Game<'_> {
                 .item_frames
                 .iter()
                 .find(|f| f.id as i32 == hit.id)
-                .is_some_and(|f| {
-                    item_frame_interact_passes(f.fixed, f.item.is_some(), held.is_some())
-                });
+                .map(|f| item_frame_interact_passes(f.fixed, f.item.is_some(), held.is_some()));
             let boat_passes = self
                 .boats
                 .iter()
@@ -75,12 +73,12 @@ impl Game<'_> {
                         .any(|m| m.extra.mount.is_some_and(|r| r as i32 == hit.id)));
             let passes = is_painting
                 || is_tnt
-                || frame_passes
+                || frame_passes.unwrap_or(false)
                 || boat_passes
                 || cart_passes
                 || cushion_passes;
-            // Otherwise the main hand's turn takes it; there is no off hand turn.
-            if response.is_none() && hand == Hand::Off && !passes {
+            // An empty frame can pass on the main hand and accept the off-hand item.
+            if response.is_none() && frame_passes.is_none() && hand == Hand::Off && !passes {
                 return false;
             }
             self.send_interact(&pick, hand_id(hand), sneaking);
