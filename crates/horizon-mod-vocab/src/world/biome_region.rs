@@ -60,7 +60,8 @@ impl BiomeRegion {
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub enum BiomeRegionError {
-    /// The region's id is malformed or in a namespace the declaring mod does not own.
+    /// The region's id is malformed or outside the declaring mod's own namespace: the mod's id,
+    /// not another namespace its manifest lists.
     InvalidId,
     /// A region with the id was already declared.
     Duplicate,

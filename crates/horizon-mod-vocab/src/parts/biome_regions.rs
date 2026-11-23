@@ -39,7 +39,7 @@ pub trait BiomeRegionsRegistrar {
     /// region only when its owner opts in. Regions are ordered by declaring mod id, then
     /// region id.
     ///
-    /// An id outside the mod's namespaces, a malformed or repeated id, a dimension other than
+    /// An id outside the mod's own namespace, a malformed or repeated id, a dimension other than
     /// `minecraft:overworld` or `minecraft:nether`, a weight of 0 or above 1000, no points, or
     /// a point with no biome, an interval outside -2 to 2 or inverted, or an offset outside 0 to
     /// 1 refuses the mods, naming the mod. Biome existence and ownership are not checked

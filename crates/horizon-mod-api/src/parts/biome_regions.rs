@@ -11,6 +11,14 @@ impl BiomeRegionsRegistrar for PartRegistrar {
             let id = self
                 .owned_declaration_id(path)
                 .map_err(|_| crate::BiomeRegionError::InvalidId)?;
+            // A world's saved record needs a region's id in its mod's own namespace, so an id in
+            // another namespace the manifest lists is refused here, not when a world is created.
+            if id
+                .split_once(':')
+                .is_none_or(|(namespace, _)| namespace != self.mod_id)
+            {
+                return Err(crate::BiomeRegionError::InvalidId);
+            }
             if self.biome_regions.iter().any(|d| d.id == id) {
                 return Err(crate::BiomeRegionError::Duplicate);
             }
@@ -90,6 +98,44 @@ pub mod tests {
                 .iter()
                 .all(|refusal| refusal.contains("mod ruby"))
         );
+    }
+
+    /// A region in another namespace the mod's manifest lists is refused: a world's saved record
+    /// would refuse it, and no new world could be created.
+    #[test]
+    pub(crate) fn a_region_in_another_namespace_the_mod_owns_is_refused() {
+        let porter = PackageInfo::new(
+            "porter".into(),
+            "1".into(),
+            PackageKind::Code,
+            Side::Both,
+            vec!["porter".into(), "legacy".into()],
+            vec![],
+        );
+        crate::load_state::with_test_package_inventory(vec![porter], || {
+            let mut registrar = super::PartRegistrar::new("porter");
+            // The mod owns `legacy`: the id is well formed and in an owned namespace.
+            assert_eq!(
+                registrar.owned_declaration_id("legacy:highlands").unwrap(),
+                "legacy:highlands"
+            );
+            assert_eq!(
+                registrar.declare_biome_region("legacy:highlands", region(5)),
+                Err(BiomeRegionError::InvalidId)
+            );
+            registrar
+                .declare_biome_region("porter:highlands", region(5))
+                .unwrap();
+            assert_eq!(registrar.biome_regions.len(), 1);
+            assert_eq!(registrar.biome_regions[0].id, "porter:highlands");
+            assert_eq!(registrar.refused.len(), 1);
+            assert!(
+                registrar.refused[0].contains("mod porter")
+                    && registrar.refused[0].contains("legacy:highlands"),
+                "{:?}",
+                registrar.refused
+            );
+        });
     }
 
     /// Mods in either dispatch order install the same list, sorted by mod id, then region id.
