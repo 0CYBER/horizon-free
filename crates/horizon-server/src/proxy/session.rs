@@ -37,8 +37,27 @@ const RETRY: Duration = if cfg!(test) {
 } else {
     Duration::from_millis(500)
 };
-/// How long a client may take to answer StartConfiguration.
+/// How long a client may take to answanswer StartConfiguration.
 const ACK_WAIT: Duration = Duration::from_secs(10);
+/// How long one packet may take to reach the client. The socket's write timeout is per `write`, so a client
+/// that drains a few bytes at a time would otherwise keep a send (and the writer lock) going for minutes.
+const SEND_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The client's writer, which notes when a send began: the keep-alive thread can then cut a send that
+/// takes too long without waiting for the writer's lock.
+struct ClientWriter {
+    inner: ConnWriter,
+    since: Arc<Mutex<Option<Instant>>>,
+}
+
+impl ClientWriter {
+    fn send(&mut self, body: &[u8]) -> Result<(), super::wire::Error> {
+        *self.since.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        let sent = self.inner.send(body);
+        *self.since.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        sent
+    }
+}
 
 pub struct Session {
     inner: Arc<Inner>,
@@ -50,9 +69,13 @@ pub struct Session {
     client_closer: Closer,
     /// Every write to the client goes through this lock, and a packet from a game is written only while
     /// its generation is the current one: nothing from the old game follows StartConfiguration.
-    client: Mutex<ConnWriter>,
+    client: Mutex<ClientWriter>,
+    /// When the send in progress began, if any: see [`Session::cut_slow_send`].
+    sending: Arc<Mutex<Option<Instant>>>,
     state: Mutex<State>,
     wake: Condvar,
+    /// A write to the client is under way on a thread of its own ([`Session::off_the_loop`]).
+    working: std::sync::atomic::AtomicBool,
 }
 
 struct State {
@@ -127,13 +150,18 @@ pub(super) fn run(
     let Ok(client_closer) = client_reader.closer() else {
         return;
     };
+    let sending: Arc<Mutex<Option<Instant>>> = Arc::default();
     let session = Arc::new(Session {
         inner: inner.clone(),
         name: who.name.clone(),
         identity: (peer, who.uuid, who.properties.clone()),
         intent,
         client_closer,
-        client: Mutex::new(client_writer),
+        client: Mutex::new(ClientWriter {
+            inner: client_writer,
+            since: sending.clone(),
+        }),
+        sending,
         state: Mutex::new(State {
             held: true,
             phase: Phase::Config,
@@ -152,6 +180,7 @@ pub(super) fn run(
             ended: false,
         }),
         wake: Condvar::new(),
+        working: std::sync::atomic::AtomicBool::new(false),
     });
     inner
         .sessions
@@ -224,7 +253,7 @@ impl Session {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn client(&self) -> std::sync::MutexGuard<'_, ConnWriter> {
+    fn client(&self) -> std::sync::MutexGuard<'_, ClientWriter> {
         self.client.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -405,8 +434,8 @@ impl Session {
     /// The client's packets: noted for a later replay, then to the game, or swallowed while held.
     fn read_client(self: &Arc<Self>, mut reader: ConnReader) {
         while let Ok((id, payload)) = reader.recv() {
-            let game = {
-                let mut client = self.client();
+            let (game, start) = {
+                let client = self.client();
                 let mut st = self.lock();
                 if st.ended {
                     return;
@@ -423,6 +452,9 @@ impl Session {
                     st.keep_alive = None;
                     continue;
                 }
+                // StartConfiguration for a held client, sent below with the state released and the
+                // writer still held: `pending_ack` is set first, as the client may answer at once.
+                let mut start = false;
                 if before == Phase::Config
                     && id == ids::configuration::serverbound::FINISH_CONFIGURATION
                 {
@@ -430,10 +462,9 @@ impl Session {
                         continue;
                     }
                     st.finish_sent = false;
-                    if st.held && Self::start_configuration(&mut st, &mut client).is_err() {
-                        drop(st);
-                        drop(client);
-                        return self.end();
+                    if st.held && !st.pending_ack {
+                        st.pending_ack = true;
+                        start = true;
                     }
                     self.wake.notify_all();
                 }
@@ -445,11 +476,17 @@ impl Session {
                     st.pending_ack = false;
                     self.wake.notify_all();
                 }
-                if st.held {
-                    continue;
-                }
-                st.game.clone()
+                let game = if st.held { None } else { st.game.clone() };
+                (game, start.then_some(client))
             };
+            if let Some(mut client) = start
+                && client
+                    .send(&body(ids::play::clientbound::START_CONFIGURATION, &[]))
+                    .is_err()
+            {
+                drop(client);
+                return self.end();
+            }
             if let Some(game) = game {
                 // A failure is the game going away; its reader hears of it.
                 let _ = game
@@ -465,7 +502,14 @@ impl Session {
         self.hold_if(|st| st.engine_generation == Some(engine));
     }
 
-    fn hold_if(self: &Arc<Self>, current: impl FnOnce(&State) -> bool) {
+    fn hold_if(self: &Arc<Self>, current: impl Fn(&State) -> bool) {
+        // Nothing to hold (or send) for a session already held or gone: do not wait for its writer.
+        {
+            let st = self.lock();
+            if st.held || st.ended || !current(&st) {
+                return;
+            }
+        }
         let old = {
             let mut client = self.client();
             let mut st = self.lock();
@@ -478,13 +522,33 @@ impl Session {
             st.engine_generation = None;
             st.replay_play = false;
             st.last_keep_alive = Instant::now();
-            if st.phase == Phase::Play && Self::start_configuration(&mut st, &mut client).is_err() {
-                drop(st);
+            // The old backend leaves in the same transition that holds the session, and its socket
+            // is closed after the state is released: a backend attached meanwhile is never the one
+            // closed.
+            let old = {
+                st.game = None;
+                st.game_closer.take()
+            };
+            // The send happens without the state: a client that stalls on it must not block the
+            // keep-alive thread, which takes the state of every session. `pending_ack` is set first, as
+            // the client may answer as soon as the packet is out.
+            let send = st.phase == Phase::Play && !st.pending_ack;
+            if send {
+                st.pending_ack = true;
+            }
+            drop(st);
+            if send
+                && client
+                    .send(&body(ids::play::clientbound::START_CONFIGURATION, &[]))
+                    .is_err()
+            {
                 drop(client);
+                if let Some(game) = old {
+                    game.close();
+                }
                 return self.end();
             }
-            st.game = None;
-            st.game_closer.take()
+            old
         };
         if let Some(game) = old {
             game.close();
@@ -493,17 +557,6 @@ impl Session {
             "INFO",
             &format!("Holding {} while the game restarts", self.name),
         );
-    }
-
-    fn start_configuration(
-        st: &mut State,
-        client: &mut ConnWriter,
-    ) -> Result<(), super::wire::Error> {
-        if !st.pending_ack {
-            client.send(&body(ids::play::clientbound::START_CONFIGURATION, &[]))?;
-            st.pending_ack = true;
-        }
-        Ok(())
     }
 
     fn same_hold(st: &State, hold: u64) -> bool {
@@ -613,53 +666,121 @@ impl Session {
         Ok(())
     }
 
-    /// Keeps a held client alive and gives up on one held too long. Every second.
+    /// Keeps a held client alive and gives up on one held too long. Every second. The writes to the
+    /// client are made on a thread of their own, never here: this is the one thread that looks after
+    /// every session, and a client that stops reading must not stall the others.
     pub fn tick(self: &Arc<Self>, now: Instant, hold: Duration) {
-        let expired = {
-            let mut client = self.client();
-            let mut st = self.lock();
+        // Cuts a send that has run past its deadline: it only closes the socket, and waits for nothing.
+        self.cut_slow_send(now, SEND_DEADLINE);
+        let (expired, keep_alive_due) = {
+            let st = self.lock();
             if !st.held || st.ended {
                 return;
             }
             let expired = st
                 .held_since
                 .is_some_and(|since| now.duration_since(since) > hold);
-            if !expired
-                && st.phase == Phase::Config
-                && !st.pending_ack
-                && !st.finish_sent
-                && now.duration_since(st.last_keep_alive) >= KEEP_ALIVE
-            {
-                st.last_keep_alive = now;
-                let id = NEXT_KEEP_ALIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                st.keep_alive = Some((id, now));
-                let mut w = Writer::new();
-                w.i64(id);
-                if client
-                    .send(&body(ids::configuration::clientbound::KEEP_ALIVE, &w.data))
-                    .is_err()
-                {
-                    drop(st);
-                    drop(client);
-                    return self.end();
-                }
-            }
-            expired.then_some(st.generation)
+            let due = !expired && Self::keep_alive_due(&st, now);
+            (expired.then_some(st.generation), due)
         };
         if let Some(generation) = expired {
-            let reason = translated(
-                "horizon.proxy.restart_timed_out",
-                "The server did not come back in time",
-            );
-            if self.disconnect_if(&reason, None, |st| Self::same_hold(st, generation)) {
-                self.inner.note(
-                    "WARN",
-                    &format!("The game did not come back for {}", self.name),
+            self.off_the_loop(move |session| {
+                let reason = translated(
+                    "horizon.proxy.restart_timed_out",
+                    "The server did not come back in time",
                 );
+                if session.disconnect_if(&reason, None, |st| Self::same_hold(st, generation)) {
+                    session.inner.note(
+                        "WARN",
+                        &format!("The game did not come back for {}", session.name),
+                    );
+                }
+            });
+            return;
+        }
+        if keep_alive_due {
+            self.off_the_loop(move |session| session.send_keep_alive(now));
+        }
+        // Also retries if a resume thread could not be started on the previous tick.
+        self.resume();
+    }
+
+    fn keep_alive_due(st: &State, now: Instant) -> bool {
+        st.held
+            && !st.ended
+            && st.phase == Phase::Config
+            && !st.pending_ack
+            && !st.finish_sent
+            && now.duration_since(st.last_keep_alive) >= KEEP_ALIVE
+    }
+
+    /// The held client's keep-alive, if it is still due once the writer is this thread's. Waits for the
+    /// writer, as it runs off the keep-alive thread; the state is not held while it writes.
+    fn send_keep_alive(&self, now: Instant) {
+        let mut client = self.client();
+        let id = {
+            let mut st = self.lock();
+            if !Self::keep_alive_due(&st, now) {
+                return;
             }
-        } else {
-            // Also retries if a resume thread could not be started on the previous tick.
-            self.resume();
+            st.last_keep_alive = now;
+            let id = NEXT_KEEP_ALIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            st.keep_alive = Some((id, now));
+            id
+        };
+        let mut w = Writer::new();
+        w.i64(id);
+        if client
+            .send(&body(ids::configuration::clientbound::KEEP_ALIVE, &w.data))
+            .is_err()
+        {
+            drop(client);
+            self.end();
+        }
+    }
+
+    /// Runs `work` on a thread of its own, one at a time per session: a tick that finds the last one
+    /// still running does nothing, and the next tick asks again. A stalled write ends at its deadline
+    /// ([`Self::cut_slow_send`]), which lets the thread go.
+    fn off_the_loop(self: &Arc<Self>, work: impl FnOnce(&Arc<Self>) + Send + 'static) {
+        use std::sync::atomic::Ordering;
+        if self.working.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // Clears the flag however the work ends, a panic included.
+        struct Done(Arc<Session>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                self.0.working.store(false, Ordering::Release);
+            }
+        }
+        let done = Done(self.clone());
+        let session = self.clone();
+        let _ = std::thread::Builder::new()
+            .name("proxy-client-send".into())
+            .spawn(move || {
+                let _done = done;
+                work(&session);
+            });
+        // A thread that could not be started drops `done` with the closure, which clears the flag.
+    }
+
+    /// Ends the session if a send to the client has been under way for longer than `limit`: a client that
+    /// takes a packet a few bytes at a time is not worth the writer lock the others wait for.
+    #[cfg(test)]
+    fn sending_longer_than(&self, limit: Duration) -> bool {
+        let since = *self.sending.lock().unwrap_or_else(|e| e.into_inner());
+        since.is_some_and(|since| since.elapsed() > limit)
+    }
+
+    fn cut_slow_send(&self, now: Instant, limit: Duration) {
+        let since = *self.sending.lock().unwrap_or_else(|e| e.into_inner());
+        if since.is_some_and(|since| now.duration_since(since) > limit) {
+            // Close the socket first and on its own: the session may already be marked ended (a
+            // disconnect in progress), and `end` then returns before it closes anything. Closing
+            // frees the stalled write, and with it the locks the send holds.
+            self.client_closer.close();
+            self.end();
         }
     }
 
@@ -798,6 +919,172 @@ mod tests {
             ids::play::clientbound::DISCONNECT,
             &literal.data
         ));
+    }
+
+    fn session_named(proxy: &super::super::Proxy, name: &str) -> Arc<Session> {
+        proxy
+            .inner
+            .snapshot()
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_busy_writer_does_not_stop_the_keep_alives_of_the_other_sessions() {
+        use super::super::join_tests::{FakeGame, join, proxy_for, temp_dir};
+        let dir = temp_dir("busy-writer");
+        let secret = super::super::secret(&dir).unwrap();
+        let game = FakeGame::start(&secret);
+        let (proxy, port) = proxy_for(&game, &dir);
+        proxy.game_up();
+        let mut first = join(port, "Slow", &[]);
+        let mut second = join(port, "Other", &[]);
+        let (slow, other) = (
+            session_named(&proxy, "Slow"),
+            session_named(&proxy, "Other"),
+        );
+        proxy.game_stopping();
+        for s in [&slow, &other] {
+            while !s.lock().held {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        // Both players answer StartConfiguration, so that they are kept alive.
+        for (client, session) in [(&mut first, &slow), (&mut second, &other)] {
+            client
+                .reader
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            while client.recv().unwrap().0 != ids::play::clientbound::START_CONFIGURATION {}
+            client
+                .send(&body(
+                    ids::play::serverbound::CONFIGURATION_ACKNOWLEDGED,
+                    &[],
+                ))
+                .unwrap();
+            while session.lock().pending_ack {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        // A send to the first player is under way.
+        let busy = slow.client();
+        let (done, finished) = std::sync::mpsc::channel();
+        let (ticking, other_ticking) = (slow.clone(), other.clone());
+        thread::spawn(move || {
+            let later = Instant::now() + Duration::from_secs(60);
+            ticking.tick(later, Duration::from_secs(3600));
+            other_ticking.tick(later, Duration::from_secs(3600));
+            let _ = done.send(());
+        });
+        let ticked = finished.recv_timeout(Duration::from_secs(2));
+        assert!(ticked.is_ok(), "tick waited for a writer that is busy");
+        // The other player still hears the keep-alive, though the first one's writer is held.
+        loop {
+            let (id, _) = second.recv().unwrap();
+            if id == ids::configuration::clientbound::KEEP_ALIVE {
+                break;
+            }
+        }
+        // The first player's keep-alive waits on its own thread and goes out once the writer is free.
+        drop(busy);
+        loop {
+            let (id, _) = first.recv().unwrap();
+            if id == ids::configuration::clientbound::KEEP_ALIVE {
+                break;
+            }
+        }
+    }
+
+    /// Sends packets to `session` from another thread until one fails. A client that reads nothing
+    /// fills the socket's buffers, and the send under way then stalls. The packets stay well under the
+    /// frame limit, and are random bytes: the connection compresses, and a repetitive payload would
+    /// shrink to nothing.
+    fn send_until_stalled(
+        session: &Arc<Session>,
+    ) -> thread::JoinHandle<Result<(), super::super::wire::Error>> {
+        use super::super::join_tests::ECHOED;
+        let mut x = 1u32;
+        let payload: Vec<u8> = (0..256 * 1024)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (x >> 24) as u8
+            })
+            .collect();
+        let sender = session.clone();
+        thread::spawn(move || {
+            for _ in 0..2_000 {
+                sender.client().send(&body(ECHOED, &payload))?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Cuts the stalled send of `sent` and returns how long it took to fail, given what the socket's own
+    /// write timeout (2 s) would take.
+    fn cut_and_time(
+        session: &Arc<Session>,
+        sent: thread::JoinHandle<Result<(), super::super::wire::Error>>,
+    ) -> Duration {
+        let started = Instant::now();
+        // The deadline is well under the socket's write timeout, so the cut comes first.
+        while !session.sending_longer_than(Duration::from_millis(200)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the send never stalled"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let cut = Instant::now();
+        session.cut_slow_send(Instant::now(), Duration::from_millis(200));
+        while !sent.is_finished() {
+            assert!(
+                cut.elapsed() < Duration::from_secs(10),
+                "the send was not cut"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let took = cut.elapsed();
+        assert!(sent.join().unwrap().is_err());
+        took
+    }
+
+    #[test]
+    fn a_send_the_client_does_not_take_is_cut_at_the_deadline() {
+        use super::super::join_tests::{FakeGame, join, proxy_for, temp_dir};
+        let dir = temp_dir("slow-reader");
+        let secret = super::super::secret(&dir).unwrap();
+        let game = FakeGame::start(&secret);
+        let (proxy, port) = proxy_for(&game, &dir);
+        proxy.game_up();
+        // Kept open and never read: the socket's buffers fill and the send stalls. A reader that
+        // drips keeps each write under the socket's own timeout the same way; only the deadline
+        // on the whole send ends either.
+        let client = join(port, "Drip", &[]);
+        let session = session_named(&proxy, "Drip");
+        let sent = send_until_stalled(&session);
+        let took = cut_and_time(&session, sent);
+        assert!(took < Duration::from_millis(1500), "cut after {took:?}");
+        assert!(session.lock().ended);
+        drop(client);
+    }
+
+    #[test]
+    fn a_stalled_disconnect_is_cut_though_the_session_is_already_marked_ended() {
+        use super::super::join_tests::{FakeGame, join, proxy_for, temp_dir};
+        let dir = temp_dir("slow-disconnect");
+        let secret = super::super::secret(&dir).unwrap();
+        let game = FakeGame::start(&secret);
+        let (proxy, port) = proxy_for(&game, &dir);
+        proxy.game_up();
+        let client = join(port, "Stall", &[]);
+        let session = session_named(&proxy, "Stall");
+        // `disconnect_if` marks the session ended before it sends the kick.
+        Session::mark_ended(&mut session.lock());
+        let sent = send_until_stalled(&session);
+        let took = cut_and_time(&session, sent);
+        assert!(took < Duration::from_millis(1500), "cut after {took:?}");
+        drop(client);
     }
 
     fn translated_payload(key: &str) -> Vec<u8> {
