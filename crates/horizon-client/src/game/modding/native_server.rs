@@ -142,9 +142,10 @@ fn usage_nodes(
         if kind == "vec3_uncentered" {
             node[UNCENTERED] = true.into();
         }
-        // A registered type goes out as a Brigadier string an unmodded client can read; it and
-        // the free `id`, which has no list of its own, ask the server (the mods' `tab_complete`).
-        if custom.is_some() || kind == "id" {
+        // A registered type goes out as a Brigadier string an unmodded client can read; it, the
+        // free `id`, which has no list of its own, and `player_name`, which completes names but no
+        // selectors, ask the server (the mods' `tab_complete`).
+        if custom.is_some() || kind == "id" || kind == "player_name" {
             if let Some(id) = custom {
                 node["custom_argument"] = id.into();
             }
@@ -2195,6 +2196,10 @@ impl Game<'_> {
             let ty = parsed_type(&self.ui.dispatcher.0, &context.nodes, argument.range);
             let value = match argument.value {
                 Arg::Str(text) if matches!(ty, Some(ArgType::Nbt)) => nbt_value(&text)?,
+                // A `player_name` argument takes a name, never a selector.
+                Arg::Entity(_) if matches!(ty, Some(ArgType::GameProfile)) => {
+                    return Err(err("argument.entity.notfound.player", &[]));
+                }
                 Arg::Str(value) => Value::String(value),
                 Arg::Int(value) => Value::Integer(value),
                 Arg::Double(value) => Value::Number(value),
@@ -3322,6 +3327,48 @@ mod tests {
                 .map(|s| s.text.as_str())
                 .collect::<Vec<_>>(),
             ["press"]
+        );
+    }
+
+    #[test]
+    fn the_player_name_kind_completes_names_only_and_refuses_a_selector() {
+        let (tree, _, problems) = tree(&[mod_api::Command::new("seen <who:player_name>")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let who = &tree["children"]["seen"]["children"]["who"];
+        assert_eq!(who["parser"], "minecraft:game_profile");
+        assert_eq!(who["suggestions"], "minecraft:ask_server");
+
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(
+            &mut dispatcher,
+            &tree,
+            "native_mod_command",
+            &command_arguments(),
+        );
+        let registries = horizon_client::command::Registries {
+            players: vec!["Alex".into(), "Steve".into()],
+            ..Default::default()
+        };
+        let typed = "seen ";
+        let parse = dispatcher.parse(typed, &registries);
+        let (_, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        let texts: Vec<_> = suggestions.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["Alex", "Steve"], "no selector is offered");
+        let parsed = dispatcher.parse("seen Alex", &registries);
+        let (context, _) = parsed.executable().unwrap();
+        assert_eq!(
+            context.get("who"),
+            Some(&Arg::Custom {
+                kind: argument_kinds::MOD_ID.into(),
+                value: "Alex".into(),
+            })
+        );
+        assert!(
+            dispatcher
+                .parse("seen @p", &registries)
+                .executable()
+                .is_err(),
+            "a selector is not a name"
         );
     }
 

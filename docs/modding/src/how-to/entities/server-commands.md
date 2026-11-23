@@ -59,6 +59,7 @@ as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla 
 | `rotation` | `minecraft:rotation` | `Rotation([f32; 2])`, yaw then pitch |
 | `dimension` | `minecraft:dimension` | `Dimension(LevelRef)` |
 | `nbt` | `minecraft:nbt_compound_tag` | `Nbt(Compound)` |
+| `player_name` | `minecraft:game_profile`, completed from the online players | `String` (the typed name, online or not; a selector is refused) |
 
 `~` and `^` resolve against the command source's position and rotation, as `block_pos` does. A
 `dimension` the world has not loaded is refused with `argument.dimension.invalid` before a
