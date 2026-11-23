@@ -27,6 +27,11 @@ const IDLE_REGULAR_FINISHES: u64 = 240;
 const IDLE_WALL_TIME: Duration = Duration::from_secs(5);
 /// Maximum chunks released in one `finish` call so post-burst reclamation stays smooth.
 const MAX_TRIM_PER_FINISH: usize = 2;
+/// D3D12 needs `D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT` (512) for the start of a
+/// buffer-to-texture copy when the driver cannot take an unrestricted row pitch.
+/// The row pitch stays at `COPY_BYTES_PER_ROW_ALIGNMENT` (256); an offset below
+/// 512 makes wgpu-hal stage the copy through an intermediate buffer (#20012).
+const TEXTURE_COPY_OFFSET_ALIGNMENT: u64 = 512;
 
 struct Chunk {
     buffer: wgpu::Buffer,
@@ -233,8 +238,7 @@ impl Uploads {
         let Some(size) = NonZeroU64::new((padded * height as usize) as u64) else {
             return;
         };
-        let alignment = NonZeroU64::new(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT))
-            .expect("non-zero alignment");
+        let alignment = NonZeroU64::new(TEXTURE_COPY_OFFSET_ALIGNMENT).expect("non-zero alignment");
         let slice = self.allocate(size, alignment);
         {
             let mut view = slice

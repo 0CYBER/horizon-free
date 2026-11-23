@@ -440,7 +440,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
         Ok(super::CommandBuffer { raw })
     }
     unsafe fn reset_all<I: Iterator<Item = super::CommandBuffer>>(&mut self, command_buffers: I) {
-        self.intermediate_copy_bufs.clear();
+        // These buffers back the copies in `command_buffers`; resetting means those copies
+        // are done, so give their allocations back instead of leaking them with the resource.
+        let intermediate = core::mem::take(&mut self.intermediate_copy_bufs);
+        {
+            let context = super::suballocation::DeviceAllocationContext::from(&*self);
+            for buffer in intermediate {
+                context.free_resource(buffer.resource, buffer.allocation);
+            }
+        }
         for cmd_buf in command_buffers {
             self.free_lists.push(cmd_buf.raw);
         }
