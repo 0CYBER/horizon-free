@@ -123,7 +123,11 @@ fn parse(source: &str) -> Vec<Block> {
                 });
                 item = Some((depth, number));
             }
-            Event::End(TagEnd::Item) => flush(&mut blocks, &mut text, &mut spans, &mut item, None),
+            Event::End(TagEnd::Item) => {
+                flush(&mut blocks, &mut text, &mut spans, &mut item, None);
+                // An item with no text of its own (empty, or only a code block) ends here too.
+                item = None;
+            }
             Event::Start(Tag::CodeBlock(_)) => {
                 // A tight list's item has no paragraph to end its text before the block.
                 flush(&mut blocks, &mut text, &mut spans, &mut item, None);
@@ -350,6 +354,20 @@ mod tests {
         assert_eq!(
             shown(&parse(around)),
             ["item 0 None before", "code code", "paragraph after"]
+        );
+    }
+
+    /// An item with no text of its own (empty, or only a code block) ends with the item: the
+    /// paragraph after the list is not drawn as one more item.
+    #[test]
+    fn a_paragraph_after_an_item_without_text_is_not_an_item() {
+        assert_eq!(
+            shown(&parse("- a\n-\n\nAfter.\n")),
+            ["item 0 None a", "paragraph After."]
+        );
+        assert_eq!(
+            shown(&parse("- ```\n  x\n  ```\n\nAfter.\n")),
+            ["code x", "paragraph After."]
         );
     }
 }
