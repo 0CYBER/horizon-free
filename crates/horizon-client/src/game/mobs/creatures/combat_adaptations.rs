@@ -31,6 +31,10 @@ impl Game<'_> {
                 horizon_client::health::BlockOutcome {
                     blocked,
                     fully_blocked: blocked >= damage,
+                    // RamTarget calls applyItemBlocking a second time just
+                    // for the push factor: it wears the shield and awards
+                    // ITEM_USED again (the sound stays with the first call).
+                    blocking_item_used: true,
                     ..Default::default()
                 },
                 (attacker, false),
