@@ -780,6 +780,8 @@ pub struct StationRecipes {
     /// addition).
     smithing_additions: [HashSet<String>; 3],
     item_limits: std::collections::HashMap<Arc<str>, (u32, u32)>,
+    /// `Items::component_defaults`, which an assembled result's patch leaves out.
+    prototypes: Arc<std::collections::HashMap<String, horizon_core::nbt::Compound>>,
 }
 impl StationRecipes {
     pub fn load(
@@ -849,6 +851,7 @@ impl StationRecipes {
                 .iter()
                 .map(|(id, info)| (id.clone(), (info.max_stack, info.max_damage)))
                 .collect(),
+            prototypes: items.component_defaults.clone(),
             smithing_additions: [
                 added("smithing_template"),
                 added("smithing_base"),
@@ -951,7 +954,11 @@ impl StationRecipes {
                         && b.test_in(context, base)
                         && optional_matches(a, addition)
                     {
-                        let output = result.over(base, 0);
+                        // `applyComponents` keeps no value equal to the prototype.
+                        let mut output = result.over(base, 0);
+                        if let Some(prototype) = self.prototypes.get(&*output.item) {
+                            item_data::drop_prototype_values(&mut output, prototype);
+                        }
                         let (mut max_stack, mut max_damage) = self
                             .item_limits
                             .get(&output.item)

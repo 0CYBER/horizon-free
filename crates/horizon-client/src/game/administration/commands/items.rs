@@ -885,12 +885,16 @@ impl Game<'_> {
             Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
             None => (0, None),
         };
-        let stack = ItemStack {
+        let mut stack = ItemStack {
             item: id.as_str().into(),
             count,
             damage,
             extra,
         };
+        // The same applyPatch rule for the decoded values: `damage=-0.5f` is the prototype's 0.
+        if let Some(prototype) = self.items().component_defaults.get(id) {
+            horizon_client::item_data::drop_prototype_values(&mut stack, prototype);
+        }
         // ItemInput.createItemStack: a count above the stack's max (its
         // max_stack_size component, else the item's) is refused.
         let max_stack = self.stack_max_size(&stack);

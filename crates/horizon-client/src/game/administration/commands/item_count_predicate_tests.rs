@@ -96,3 +96,68 @@ fn count_equality_uses_live_stack_bounds_and_command_flow() {
         "actual count predicate mismatches: {failed:?}"
     );
 }
+
+/// A component value equal to the prototype leaves the built stack's patch
+/// (`ItemInput.createItemStack`), yet `[id=value]` still matches it: the
+/// predicate reads the effective value, and a removal takes precedence.
+#[test]
+#[ignore = "daily"]
+fn component_equality_reads_the_effective_value() {
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
+    game.build_registries();
+    let input = |id: &str, components: &str| ItemInput {
+        id: id.into(),
+        tag: false,
+        any: false,
+        components: Some(components.into()),
+    };
+    let built = game
+        .command_item_stack(
+            &input("minecraft:iron_pickaxe", "[max_damage=250,damage=0]"),
+            1,
+        )
+        .unwrap_or_else(|_| panic!("built"));
+    assert_eq!(horizon_client::item_data::encode_components(&built), None);
+    // /give builds through the same ItemInput: the prototype's 1561 leaves the
+    // patch, another maximum stays.
+    game.player = Some(
+        horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(8.5, 70.0, 8.5)).unwrap(),
+    );
+    game.world.chunks.insert(
+        (0, 0),
+        std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+    );
+    game.set_allow_commands(true);
+    for (components, patch) in [
+        ("[max_damage=1561]", None),
+        ("[max_damage=100]", Some(r#"{"minecraft:max_damage":100}"#)),
+    ] {
+        game.inventory.iter_mut().for_each(|slot| *slot = None);
+        assert!(game.run_command(&format!("give @s minecraft:diamond_pickaxe{components}")));
+        let given = game.inventory.iter().flatten().next().expect("given");
+        assert_eq!(&*given.item, "minecraft:diamond_pickaxe");
+        assert_eq!(
+            horizon_client::item_data::encode_components(given),
+            patch.map(|p| horizon_core::nbt::parse_snbt(p).unwrap().0),
+            "{components}"
+        );
+    }
+    let removed = game
+        .command_item_stack(&input("minecraft:iron_pickaxe", "[!damage]"), 1)
+        .unwrap_or_else(|_| panic!("built"));
+    for (stack, term, expected) in [
+        (&built, "[max_damage=250]", true),
+        (&built, "[damage=0]", true),
+        (&built, "[max_damage=100]", false),
+        (&built, "[max_damage]", true),
+        (&removed, "[damage=0]", false),
+        (&removed, "[!damage]", true),
+    ] {
+        assert_eq!(
+            game.stack_matches(&input("minecraft:iron_pickaxe", term), stack),
+            expected,
+            "{term}"
+        );
+    }
+}

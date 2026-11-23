@@ -614,6 +614,8 @@ struct Facts {
     dye: Option<usize>,
     info: crate::items::ItemInfo,
     max_stack: u32,
+    /// The item's loaded default components (`Items::component_defaults`).
+    prototype: horizon_core::nbt::Compound,
 }
 /// The tables recipes consult.
 pub struct Context<'a> {
@@ -1161,6 +1163,10 @@ impl Special {
             Self::RepairItem => repair_item::assemble(ctx, &stacks)?,
         };
         let mut made = made;
+        // The result is built with `set`, which keeps no value equal to the prototype.
+        if let Some(facts) = ctx.facts(&made) {
+            crate::item_data::drop_prototype_values(&mut made, &facts.prototype);
+        }
         made.tidy();
         // ItemStackTemplate.validate: oversized stacks become empty.
         (made.count > 0 && made.count <= ctx.max_stack(&made.item)).then_some(made)
@@ -1925,6 +1931,11 @@ impl Recipes {
                         }),
                         info: info.clone(),
                         max_stack: info.max_stack,
+                        prototype: items
+                            .component_defaults
+                            .get(&**id)
+                            .cloned()
+                            .unwrap_or_default(),
                     },
                 )
             })

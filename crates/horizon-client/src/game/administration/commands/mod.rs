@@ -1281,17 +1281,12 @@ impl Game<'_> {
             .with_component_fields(vec![("hover_event".into(), shown)])
     }
     fn cmd_give(&mut self, ctx: &Context) -> R<i32> {
-        let Some(Arg::Item(ItemInput { id, components, .. })) = ctx.get("item").cloned() else {
+        let Some(Arg::Item(input)) = ctx.get("item").cloned() else {
             return Ok(0);
         };
-        let (damage, extra) = match components
-            .as_deref()
-            .map(horizon_client::item_data::command_components)
-        {
-            Some(Ok(tag)) => horizon_client::item_data::decode_components_for_item(&id, Some(&tag)),
-            Some(Err(e)) => return Err(CommandError::new(Text::literal(e))),
-            None => (0, None),
-        };
+        // GiveCommand: `item.createItemStack(1, false)`, then copies of it.
+        let ItemStack { damage, extra, .. } = self.command_item_stack(&input, 1)?;
+        let id = input.id;
         let count = Self::int(ctx, "count").unwrap_or(1);
         let targets = self.entities(ctx, "targets", true)?;
         let max_stack = self.items().get(&id).map_or(64, |i| i.max_stack) as i32;
@@ -3431,10 +3426,12 @@ impl Game<'_> {
             .strip_prefix('[')
             .and_then(|t| t.strip_suffix(']'))
             .unwrap_or("");
-        let components = match horizon_client::item_data::encode_components(stack) {
-            Some(horizon_core::nbt::Tag::Compound(c)) => c,
-            _ => Default::default(),
-        };
+        // `stack.get(type)`: the effective value, so a value equal to the
+        // prototype (left out of the patch) still matches.
+        let components = horizon_client::item_data::effective_components(
+            stack,
+            self.items().component_defaults.get(&*stack.item),
+        );
         let test = |term: &str| -> bool {
             let term = term.trim();
             let (negated, term) = match term.strip_prefix('!') {
@@ -3462,8 +3459,10 @@ impl Game<'_> {
                         .map(|(t, _)| t);
                     match (present, value) {
                         (Some(have), Some(want)) => {
-                            horizon_client::nbt_path::compare_nbt(&want, Some(have))
-                                && horizon_client::nbt_path::compare_nbt(have, Some(&want))
+                            (horizon_client::nbt_path::compare_nbt(&want, Some(have))
+                                && horizon_client::nbt_path::compare_nbt(have, Some(&want)))
+                                // A prototype value keeps its loaded number widths.
+                                || horizon_client::item_data::same_component_value(&id, have, &want)
                         }
                         _ => false,
                     }

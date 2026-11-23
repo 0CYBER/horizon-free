@@ -258,6 +258,7 @@ horizon-client game::commands::fill_note_instrument_tests::strict_explicit_and_f
 horizon-client game::commands::forced_respawn_tests::overworld_spawnpoint_is_validated_at_both_player_blocks lib daily resources
 horizon-client game::commands::forced_respawn_tests::setworldspawn_reports_normalized_rotation lib daily resources
 horizon-client game::commands::global_selector_order_tests::actual_registered_global_selector_keeps_interleaved_insertion_and_limits lib daily resources
+horizon-client game::commands::item_count_predicate_tests::component_equality_reads_the_effective_value lib daily resources
 horizon-client game::commands::item_count_predicate_tests::count_equality_uses_live_stack_bounds_and_command_flow lib daily resources
 horizon-client game::commands::item_damage_range_tests::actual_chest_damage_range_uses_live_damage_and_effective_presence lib daily resources
 horizon-client game::commands::items::builtin_component_delivery_tests::h283_actual_command_inventory_bridge_encodes_four_builtin_components lib daily resources

@@ -132,6 +132,17 @@ pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
         extra,
     })
 }
+/// `item_from_nbt` against the loaded item prototype (`PatchedDataComponentMap.applyPatch`).
+pub fn item_from_nbt_with_items(
+    tag: &Tag,
+    items: &crate::items::Items,
+) -> Option<crate::items::ItemStack> {
+    let mut stack = item_from_nbt(tag)?;
+    if let Some(prototype) = items.component_defaults.get(&*stack.item) {
+        crate::item_data::drop_prototype_values(&mut stack, prototype);
+    }
+    Some(stack)
+}
 pub fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
     Tag::List(
         slots

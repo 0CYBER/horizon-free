@@ -88,7 +88,11 @@ fn repair_plain_pickaxes() {
         false,
     )
     .unwrap();
-    assert_eq!(out.max_damage(None), 1561);
+    // The prototype's 1561 is no part of the result's patch (`set` leaves it out).
+    assert!(
+        out.data()
+            .is_none_or(|d| d.other("minecraft:max_damage").is_none())
+    );
     assert_eq!(out.damage, 561);
 }
 
