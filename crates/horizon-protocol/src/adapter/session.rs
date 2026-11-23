@@ -125,18 +125,25 @@ impl Session {
         *self.legacy_secure_chat_enforcement.lock().unwrap() = value;
     }
 
+    pub(super) fn legacy_registry_context(&self) -> Option<super::ids::LegacyRegistryGuard> {
+        self.version
+            .at_most(ServerVersion::V1_20_3)
+            .then(|| super::ids::legacy_registries(self.legacy_registries.lock().unwrap().clone()))
+    }
+
+    /// The old item codec both resolves names and remembers original NBT for this connection.
+    pub(super) fn legacy_item_context(
+        &self,
+    ) -> Option<(super::ids::LegacyRegistryGuard, super::ids::LegacyItemGuard)> {
+        let registries = self.legacy_registry_context()?;
+        let items = super::ids::legacy_items(self.legacy_items.clone());
+        Some((registries, items))
+    }
+
     /// A packet the server sent, as the pinned version numbers and lays it out. `None` drops it: Horizon
     /// knows no such packet.
     pub fn clientbound(&self, id: i32, payload: Vec<u8>) -> Result<Option<(i32, Vec<u8>)>> {
         let state = self.reading();
-        let _legacy = self
-            .version
-            .at_most(ServerVersion::V1_20_3)
-            .then(|| super::ids::legacy_registries(self.legacy_registries.lock().unwrap().clone()));
-        let _items = self
-            .version
-            .at_most(ServerVersion::V1_20_3)
-            .then(|| super::ids::legacy_items(self.legacy_items.clone()));
         let recipe_book = if self.version.at_most(ServerVersion::V1_20_3) {
             63
         } else {
@@ -204,14 +211,6 @@ impl Session {
     /// the server has no such packet, so nothing is sent.
     pub fn serverbound(&self, body: &[u8]) -> Result<Option<Vec<u8>>> {
         let state = self.writing();
-        let _legacy = self
-            .version
-            .at_most(ServerVersion::V1_20_3)
-            .then(|| super::ids::legacy_registries(self.legacy_registries.lock().unwrap().clone()));
-        let _items = self
-            .version
-            .at_most(ServerVersion::V1_20_3)
-            .then(|| super::ids::legacy_items(self.legacy_items.clone()));
         let mut r = Reader::new(body);
         let id = r.varint()?;
         let payload = r.rest();
@@ -287,6 +286,58 @@ mod tests {
         (0..256)
             .find(|&id| version.clientbound_id(State::Play, id) == Some(pinned))
             .unwrap()
+    }
+
+    #[test]
+    fn legacy_creative_return_preserves_the_connection_original_item_tag() {
+        use crate::packets::play;
+        use horizon_core::nbt::Tag;
+
+        let version = ServerVersion::V1_20_3;
+        let session = Session::new(version);
+        session.set_reading(State::Play);
+        session.set_writing(State::Play);
+
+        // An explicitly empty compound and no NBT give the same current item. The old
+        // peer should still receive the exact compound it sent for that item.
+        let tag = Tag::Compound(Default::default());
+        let mut old_slot = Writer::new();
+        old_slot.i8(0);
+        old_slot.varint(0);
+        old_slot.i16(36);
+        old_slot.bool(true);
+        old_slot.varint(1);
+        old_slot.i8(1);
+        old_slot.nbt(&tag);
+        let (id, body) = session
+            .clientbound(
+                old_play_id(version, ids::play::clientbound::CONTAINER_SET_SLOT),
+                old_slot.data,
+            )
+            .unwrap()
+            .unwrap();
+        let play::Clientbound::ContainerSetSlot(slot) =
+            play::Clientbound::decode(id, &body).unwrap()
+        else {
+            panic!("container slot");
+        };
+        let input = play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+            slot: 36,
+            item: slot.item,
+        })
+        .encode();
+        let output = session.serverbound(&input).unwrap().unwrap();
+        let mut output = Reader::new(&output);
+        let wire_id = version
+            .serverbound_id(State::Play, ids::play::serverbound::SET_CREATIVE_MODE_SLOT)
+            .unwrap();
+        assert_eq!(output.varint().unwrap(), wire_id);
+        assert_eq!(output.i16().unwrap(), 36);
+        assert!(output.bool().unwrap());
+        assert_eq!(output.varint().unwrap(), 1);
+        assert_eq!(output.i8().unwrap(), 1);
+        assert_eq!(output.nbt().unwrap(), tag);
+        assert_eq!(output.remaining(), 0);
     }
 
     fn old_login(version: ServerVersion) -> Vec<u8> {

@@ -223,6 +223,8 @@ reconstruction. Modified entity/block-entity data has no general reverse datafix
 and newer components without an old field cannot be represented. Incoming block-entity
 updates and chunk entries use forward datafixes for banner patterns, skull profiles,
 text and nested inventory stacks, retaining opaque fields and the original tag identity.
+The legacy registry and item context is acquired only for translations that read it,
+not for movement, keepalives or other packets that do not use that data.
 Independent vanilla fixtures cover these conversions; they do not establish full rendered parity. Static banners,
 enchantments, paintings, instruments and the original wolf coat use vanilla names.
 Old recipes, trades, horse equipment, attribute/effect metadata and particles are

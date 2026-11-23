@@ -178,6 +178,13 @@ pub fn clientbound(
             Some(first),
         )));
     }
+    // The 26.1 login step and final spawn-info read both consume the old
+    // dimension name. Keep the same connection snapshot across the two reads.
+    let _legacy_dimensions = if matches!((state, id), (State::Play, cb::LOGIN | cb::RESPAWN)) {
+        session.legacy_registry_context()
+    } else {
+        None
+    };
     // A release at a time: an older server's packets are brought to 26.2's layout first, oldest step first.
     let mut before: Option<Vec<u8>> = None;
     type Step = fn(&Session, State, i32, &[u8]) -> Result<Option<Vec<u8>>>;
@@ -248,8 +255,14 @@ pub fn clientbound(
         }
         (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => chunk(session, ids, payload)?,
         (State::Play, cb::LIGHT_UPDATE) => light_update(payload)?,
-        (State::Play, cb::UPDATE_ADVANCEMENTS) => advancements(ids, payload)?,
-        (State::Play, cb::LEVEL_PARTICLES) => particles(ids, payload)?,
+        (State::Play, cb::UPDATE_ADVANCEMENTS) => {
+            let _legacy = session.legacy_item_context();
+            advancements(ids, payload)?
+        }
+        (State::Play, cb::LEVEL_PARTICLES) => {
+            let _legacy = session.legacy_item_context();
+            particles(ids, payload)?
+        }
         (State::Play, cb::EXPLODE) => {
             // 26.3 adds whether the blast's sound plays, last; 26.2 always played it.
             let mut body = payload.to_vec();
@@ -330,7 +343,10 @@ pub fn clientbound(
             strip_id(p.encode())
         }
         (State::Play, cb::SET_ENTITY_DATA) if session.version.at_most(ServerVersion::V1_21_11) => {
-            let mut p = decode_play(ids, id, payload)?;
+            let mut p = {
+                let _legacy = session.legacy_item_context();
+                decode_play(ids, id, payload)?
+            };
             if let play::Clientbound::SetEntityData(d) = &mut p {
                 if session.version.at_most(ServerVersion::V1_20_3) {
                     v1_20_3::entity_data(session, d);
@@ -356,11 +372,17 @@ pub fn clientbound(
         }
         (
             State::Play,
-            cb::SET_ENTITY_DATA
-            | cb::CONTAINER_SET_CONTENT
+            cb::CONTAINER_SET_CONTENT
             | cb::CONTAINER_SET_SLOT
             | cb::SET_CURSOR_ITEM
-            | cb::SET_PLAYER_INVENTORY
+            | cb::SET_PLAYER_INVENTORY,
+        ) => {
+            let _legacy = session.legacy_item_context();
+            redecode(ids, id, payload)?
+        }
+        (
+            State::Play,
+            cb::SET_ENTITY_DATA
             | cb::SET_EQUIPMENT
             | cb::MERCHANT_OFFERS
             | cb::SOUND
@@ -547,6 +569,7 @@ pub fn serverbound(
         (State::Play, sb::SET_CREATIVE_MODE_SLOT | sb::CONTAINER_CLICK) => {
             let p = play::Serverbound::decode(id, payload)?;
             let payload = {
+                let _legacy = session.legacy_item_context();
                 let _down = ids::renumbering(ids, Way::Down);
                 strip_id(p.encode())
             };

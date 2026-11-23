@@ -391,6 +391,7 @@ pub(crate) fn clientbound(session: &Session, id: i32, payload: &[u8]) -> Result<
         let mut state = session.legacy_recipes.lock().unwrap().clone();
         state.recipes.clear();
         {
+            let _legacy = session.legacy_item_context();
             let _up = ids::renumbering(session.version.ids().unwrap(), Way::Up);
             let n = r.count(MAX_RECIPES)?;
             for _ in 0..n {

@@ -197,6 +197,7 @@ fn finish(r: &Reader) -> Result<()> {
 
 /// Normalize the direct sound event, then use the shared explosion conversion exactly once.
 pub(super) fn explosion(session: &Session, payload: &[u8]) -> Result<Vec<u8>> {
+    let _legacy = session.legacy_item_context();
     let mut r = Reader::new(payload);
     crate::buf::Vec3d::read(&mut r)?;
     r.f32()?;
@@ -242,6 +243,7 @@ pub(super) fn merchant_offers(session: &Session, payload: &[u8]) -> Result<Vec<u
     let count = r.count(65536)?;
     let mut offers = Vec::with_capacity(count.min(256));
     {
+        let _legacy = session.legacy_item_context();
         let _up = ids::renumbering(session.version.ids().unwrap(), Way::Up);
         for _ in 0..count {
             let cost_a = crate::item::Slot::read(&mut r)?
@@ -282,6 +284,7 @@ pub(super) fn merchant_offers(session: &Session, payload: &[u8]) -> Result<Vec<u
 pub(super) fn equipment(session: &Session, payload: &[u8]) -> Result<Vec<u8>> {
     let mut r = Reader::new(payload);
     let mut packet = {
+        let _legacy = session.legacy_item_context();
         let _up = ids::renumbering(session.version.ids().unwrap(), Way::Up);
         play::SetEquipment::read(&mut r)?
     };
@@ -1033,9 +1036,6 @@ mod tests {
     #[test]
     fn vanilla_trade_and_horse_armor_stacks_are_canonicalized_once() {
         let session = Session::new(ServerVersion::V1_20_3);
-        // These helpers normally run inside Session::clientbound's connection-local NBT context.
-        let _registries = ids::legacy_registries(session.legacy_registries.lock().unwrap().clone());
-        let _items = ids::legacy_items(session.legacy_items.clone());
         let wire = bytes(
             "070101a206050001a10601000000000000000000000800000002000000003d4ccccd0000000003630101",
         );

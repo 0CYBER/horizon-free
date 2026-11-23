@@ -179,6 +179,7 @@ pub(super) fn container_slot(session: &Session, payload: &[u8]) -> Result<Option
     r.varint()?; // state id: cursor/direct inventory updates carry no menu state in the pinned packet.
     let slot = r.i16()?;
     let item = {
+        let _legacy = session.legacy_item_context();
         let _up = ids::renumbering(session.version.ids().unwrap(), Way::Up);
         crate::item::Slot::read(&mut r)?
     };
