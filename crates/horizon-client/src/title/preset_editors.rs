@@ -1,4 +1,5 @@
 //! Data-pack preset selection and the custom editor's working copy.
+use super::create_world::RestoredPreset;
 use super::*;
 use crate::save::valid_world_gen_dimensions as valid_dimensions;
 use horizon_core::nbt::Tag;
@@ -199,8 +200,9 @@ impl WorldOptions {
                 all_presets
             }
         };
-        // Re-Create retains Debug even when the normal tag hides it.
-        if self.preset_id() != crate::save::WorldPreset::Debug.id()
+        // The cycle tag controls choices, not which saved settings can be kept.
+        if self.restored_preset.is_none()
+            && self.preset_id() != crate::save::WorldPreset::Debug.id()
             && !self.preset_order.iter().any(|id| id == self.preset_id())
         {
             self.custom_preset = self.preset_order.first().cloned();
@@ -220,6 +222,7 @@ impl WorldOptions {
             self.world_type = self.world_type.step(step, true);
             self.custom_preset = None;
             self.preset_dimensions = None;
+            self.restored_preset = None;
             return;
         }
         if self.preset_order.is_empty() {
@@ -233,6 +236,7 @@ impl WorldOptions {
             Some(id)
         };
         self.preset_dimensions = None;
+        self.restored_preset = None;
     }
     pub(super) fn cycled_preset(&self, step: i32) -> &str {
         if self.preset_order.is_empty() {
@@ -265,15 +269,61 @@ impl WorldOptions {
             .cloned()
         })
     }
+    /// Apply a built-in editor to the existing stems without replacing other dimensions.
+    pub(super) fn apply_builtin_overworld_edit(&mut self) {
+        let field = match self.world_type {
+            crate::save::WorldPreset::Flat => "settings",
+            crate::save::WorldPreset::SingleBiomeSurface => "biome_source",
+            _ => return,
+        };
+        let Some(mut dimensions) = self.dimensions() else {
+            return;
+        };
+        let Some(generator) = dimensions
+            .get_mut("minecraft:overworld")
+            .and_then(|stem| stem.get_mut("generator"))
+        else {
+            return;
+        };
+        let vanilla = crate::save::new_world_gen_settings(
+            0,
+            self.world_gen(),
+            self.flat_settings(),
+            self.single_biome(),
+        );
+        let replacement = vanilla
+            .get("dimensions")
+            .unwrap()
+            .get("minecraft:overworld")
+            .unwrap()
+            .get("generator")
+            .unwrap();
+        let kind = |generator: &Tag| {
+            crate::save::text(generator.get("type"))
+                .and_then(|id| horizon_core::identifier::Identifier::parse(&id).ok())
+        };
+        if kind(generator) == kind(replacement)
+            && let Tag::Compound(generator) = generator
+        {
+            generator.insert(field.into(), replacement.get(field).unwrap().clone());
+        } else {
+            *generator = replacement.clone();
+        }
+        self.preset_dimensions = Some(dimensions);
+    }
     /// Write creation settings, including the custom editor's dimension stems.
     pub fn write_world_gen(&self, dir: &Path, seed: i64) -> crate::Result<()> {
-        crate::save::write_world_gen_settings_with(
+        let selected = (self.restored_preset != Some(RestoredPreset::Unnamed)
+            && (self.custom_preset.is_some() || self.preset_dimensions.is_some()))
+        .then(|| self.preset_id());
+        crate::save::write_world_gen_settings_for_preset(
             dir,
             seed,
             self.world_gen(),
             self.flat_settings(),
             self.single_biome(),
             self.dimensions(),
+            selected,
         )
     }
 }

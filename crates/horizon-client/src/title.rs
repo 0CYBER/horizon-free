@@ -1109,6 +1109,7 @@ impl Title {
             if apply {
                 options.world_type = crate::save::WorldPreset::SingleBiomeSurface;
                 options.single_biome = buffet.biome.clone();
+                options.apply_builtin_overworld_edit();
             }
             self.set_mode(Mode::Create {
                 name,
@@ -1135,6 +1136,7 @@ impl Title {
             if apply {
                 options.world_type = crate::save::WorldPreset::Flat;
                 options.flat_settings = Some(flat.settings);
+                options.apply_builtin_overworld_edit();
             }
             self.set_mode(Mode::Create {
                 name,

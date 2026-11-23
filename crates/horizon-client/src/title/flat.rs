@@ -40,7 +40,8 @@ pub struct FlatSettings {
     pub features: bool,
     pub lakes: bool,
     pub layers: Vec<FlatLayer>,
-    pub structure_overrides: Vec<String>,
+    /// None uses every structure set; an empty list disables all of them.
+    pub structure_overrides: Option<Vec<String>>,
 }
 impl Default for FlatSettings {
     fn default() -> Self {
@@ -63,7 +64,10 @@ impl Default for FlatSettings {
                     height: 1,
                 },
             ],
-            structure_overrides: vec!["minecraft:strongholds".into(), "minecraft:villages".into()],
+            structure_overrides: Some(vec![
+                "minecraft:strongholds".into(),
+                "minecraft:villages".into(),
+            ]),
         }
     }
 }
@@ -102,14 +106,14 @@ impl FlatSettings {
         let flag = |key: &str, default: bool| {
             crate::save::number(tag.get(key)).map_or(default, |value| value != 0)
         };
-        let structure_overrides = match tag.get("structure_overrides") {
-            Some(Tag::String(text)) => vec![text.to_string_lossy()],
-            Some(Tag::List(list)) => list
+        let structure_overrides = tag.get("structure_overrides").map(|value| match value {
+            Tag::String(text) => vec![text.to_string_lossy()],
+            Tag::List(list) => list
                 .iter()
                 .filter_map(|value| crate::save::text(Some(value)))
                 .collect(),
             _ => Vec::new(),
-        };
+        });
         Some(Self {
             biome: crate::save::text(tag.get("biome")).unwrap_or_else(|| "minecraft:plains".into()),
             features: flag("features", false),
@@ -121,7 +125,7 @@ impl FlatSettings {
     /// FlatLevelGeneratorSettings.CODEC, as world_gen_settings stores it.
     pub fn to_tag(&self) -> Tag {
         let string = |text: &str| Tag::String(text.into());
-        Tag::compound([
+        let fields = [
             ("biome", string(&self.biome)),
             ("features", Tag::Byte(i8::from(self.features))),
             ("lakes", Tag::Byte(i8::from(self.lakes))),
@@ -139,16 +143,17 @@ impl FlatSettings {
                         .collect(),
                 ),
             ),
-            (
-                "structure_overrides",
-                Tag::List(
-                    self.structure_overrides
-                        .iter()
-                        .map(|id| string(id))
-                        .collect(),
-                ),
-            ),
-        ])
+        ];
+        Tag::compound(
+            fields
+                .into_iter()
+                .chain(self.structure_overrides.as_ref().map(|ids| {
+                    (
+                        "structure_overrides",
+                        Tag::List(ids.iter().map(|id| string(id)).collect()),
+                    )
+                })),
+        )
     }
     /// `CreateFlatWorldScreen.save`: the text the preset screen shows.
     pub fn to_share(&self) -> String {
@@ -406,15 +411,17 @@ fn preset_settings(value: &Value) -> Option<FlatSettings> {
     if layers.is_empty() {
         return None;
     }
-    let structure_overrides = match settings.get("structure_overrides") {
-        Some(Value::String(id)) => vec![id.clone()],
-        Some(Value::Array(ids)) => ids
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
-        _ => Vec::new(),
-    };
+    let structure_overrides = settings
+        .get("structure_overrides")
+        .map(|value| match value {
+            Value::String(id) => vec![id.clone()],
+            Value::Array(ids) => ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        });
     Some(FlatSettings {
         biome: settings
             .get("biome")

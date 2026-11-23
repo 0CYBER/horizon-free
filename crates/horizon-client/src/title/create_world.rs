@@ -19,6 +19,13 @@ const TABS: [(&str, &str); 3] = [
 /// Difficulty ids, in the cycle button's order.
 pub const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
 
+/// Whether a restored dimension snapshot also records its original preset id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoredPreset {
+    Named,
+    Unnamed,
+}
+
 /// WorldCreationUiState beyond the name and seed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorldOptions {
@@ -26,6 +33,8 @@ pub struct WorldOptions {
     pub custom_preset: Option<String>,
     /// Committed editor output, saved as the world's dimension stems.
     pub preset_dimensions: Option<horizon_core::nbt::Tag>,
+    /// A saved choice persists through pack refresh until World Type is changed.
+    pub restored_preset: Option<RestoredPreset>,
     /// Available enabled data-pack presets, refreshed when the pack selection changes.
     pub presets: std::collections::BTreeMap<String, horizon_core::nbt::Tag>,
     /// The enabled `minecraft:normal` world-preset tag's selection order.
@@ -98,6 +107,7 @@ impl Default for WorldOptions {
         Self {
             custom_preset: None,
             preset_dimensions: None,
+            restored_preset: None,
             presets: Default::default(),
             preset_order: crate::save::WorldPreset::ALL
                 .iter()
@@ -166,6 +176,19 @@ impl WorldOptions {
         registry: std::sync::Arc<crate::gamerules::RuleRegistry>,
     ) -> Self {
         let generation = crate::save::WorldGen::read(dir).unwrap_or_default();
+        let (preset, preset_dimensions, restored_preset) = match crate::save::read_saved_preset(dir)
+        {
+            Some((preset, dimensions)) => {
+                let restored = if preset.is_some() {
+                    RestoredPreset::Named
+                } else {
+                    RestoredPreset::Unnamed
+                };
+                (preset, Some(dimensions), Some(restored))
+            }
+            None => (None, None, None),
+        };
+        let vanilla_preset = preset.as_deref().and_then(crate::save::WorldPreset::of_id);
         let (pack_dir, data_packs) = crate::datapack::for_recreate(dir);
         Self {
             hardcore: level.hardcore,
@@ -174,7 +197,10 @@ impl WorldOptions {
                 .position(|d| *d == level.difficulty)
                 .unwrap_or(2),
             commands: Some(commands),
-            world_type: generation.preset,
+            custom_preset: preset.filter(|_| vanilla_preset.is_none()),
+            preset_dimensions,
+            restored_preset,
+            world_type: vanilla_preset.unwrap_or(generation.preset),
             single_biome: fixed_biome(dir).unwrap_or_else(|| "minecraft:plains".into()),
             flat_settings: (generation.preset == crate::save::WorldPreset::Flat)
                 .then(|| super::flat::FlatSettings::from_world(dir))

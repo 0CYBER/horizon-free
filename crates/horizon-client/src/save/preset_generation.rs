@@ -58,6 +58,26 @@ pub fn write_world_gen_settings_with(
     single_biome: Option<&str>,
     dimensions: Option<Tag>,
 ) -> Result<()> {
+    write_world_gen_settings_for_preset(
+        dir,
+        seed,
+        options,
+        flat_settings,
+        single_biome,
+        dimensions,
+        None,
+    )
+}
+
+pub(crate) fn write_world_gen_settings_for_preset(
+    dir: &Path,
+    seed: i64,
+    options: WorldGen,
+    flat_settings: Option<Tag>,
+    single_biome: Option<&str>,
+    dimensions: Option<Tag>,
+    preset: Option<&str>,
+) -> Result<()> {
     let mut settings = new_world_gen_settings(seed, options, flat_settings, single_biome);
     if let Some(dimensions) = dimensions {
         if !valid_world_gen_dimensions(&dimensions) {
@@ -67,9 +87,20 @@ pub fn write_world_gen_settings_with(
             unreachable!()
         };
         settings.insert("dimensions".into(), dimensions);
+        if let Some(preset) = preset {
+            settings.insert("horizon:world_preset".into(), string(preset));
+        }
     }
     fs::create_dir_all(dir)?;
     write_saved_data(dir, "world_gen_settings", settings)
+}
+
+pub(crate) fn read_saved_preset(dir: &Path) -> Option<(Option<String>, Tag)> {
+    let settings = world_gen_settings(dir)?;
+    let preset = text(settings.get("horizon:world_preset"))
+        .filter(|id| horizon_core::level_id::valid_level_id(id));
+    let dimensions = settings.get("dimensions")?;
+    valid_world_gen_dimensions(dimensions).then(|| (preset, dimensions.clone()))
 }
 /// Build the vanilla preset's creation settings without touching disk.
 pub(crate) fn new_world_gen_settings(
