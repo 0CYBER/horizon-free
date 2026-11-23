@@ -270,8 +270,18 @@ fn fill(
     limit: u64,
 ) -> Result<(), String> {
     let count = zip.len();
+    // Modrinth's layers: `client-overrides/` is copied over `overrides/`, whatever order the
+    // archive keeps them in (a zip tool that sorts its entries puts `client-overrides/` first).
+    let mut order: Vec<usize> = (0..count).collect();
+    if index.is_some() {
+        order.sort_by_key(|&i| {
+            zip.name_for_index(i)
+                .and_then(Result::ok)
+                .is_some_and(|name| name.starts_with(OVERRIDES[1]))
+        });
+    }
     let mut total = 0u64;
-    for i in 0..count {
+    for (done, i) in order.into_iter().enumerate() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().map_err(|e| e.to_string())?.into_owned();
         let relative = match index {
@@ -299,7 +309,7 @@ fn fill(
         }
         progress(
             &format!("Copying {relative}"),
-            (i + 1) as f32 / count as f32,
+            (done + 1) as f32 / count as f32,
         );
     }
     let files = index

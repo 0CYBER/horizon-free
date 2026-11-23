@@ -315,6 +315,36 @@ fn an_export_comes_back_as_an_instance_and_nothing_escapes_its_folder() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Modrinth's layers: `client-overrides/` wins over `overrides/`, in whichever order the archive
+/// keeps them. A zip tool that sorts its entries puts `client-overrides/` first.
+#[test]
+fn client_overrides_win_over_overrides_in_any_archive_order() {
+    let dir = scratch("client-overrides");
+    let made = dir.join("instances");
+    let client: (&str, &[u8]) = ("client-overrides/options.txt", b"client");
+    let shared: (&str, &[u8]) = ("overrides/options.txt", b"shared");
+    for (name, first, second) in [
+        ("Client first", client, shared),
+        ("Shared first", shared, client),
+    ] {
+        let index = format!(
+            r#"{{"formatVersion":1,"name":"{name}","files":[],"dependencies":{{"minecraft":"26.3"}}}}"#
+        );
+        let pack = dir.join(format!("{name}.mrpack"));
+        zip_file(
+            &pack,
+            &[("modrinth.index.json", index.as_bytes()), first, second],
+        );
+        let i = import_into(&pack, NONE, &maker(&made)).unwrap();
+        assert_eq!(
+            fs::read(i.home.join("options.txt")).unwrap(),
+            b"client",
+            "{name}"
+        );
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn a_java_pack_cannot_plant_the_browsers_list() {
     let dir = scratch("planted-list");
