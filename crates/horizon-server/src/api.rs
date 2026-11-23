@@ -467,7 +467,13 @@ impl Shared {
         if let Some(tag) = tag {
             // A plain release name, as `update::unpack` requires: ".." is a folder without a slash, and
             // would point `current` at the install's root.
-            let plain = !tag.is_empty() && !tag.starts_with('.') && !tag.contains(['/', '\\']);
+            // On Windows `releases\C:` joins to the drive-relative path `C:`, so a tag with a colon
+            // is refused too, and it must be exactly one normal path component.
+            let mut parts = std::path::Path::new(&tag).components();
+            let plain = !tag.starts_with('.')
+                && !tag.contains(['/', '\\', ':'])
+                && matches!(parts.next(), Some(std::path::Component::Normal(_)))
+                && parts.next().is_none();
             if !plain || !install.release(&tag).is_dir() {
                 self.update.lock().unwrap().busy = None;
                 return Err(format!(
@@ -1070,7 +1076,7 @@ mod tests {
         let dir = root.join("server");
         std::fs::create_dir_all(&dir).unwrap();
         let shared = Shared::with_install(&dir, Some(Install { root: root.clone() }));
-        for tag in ["..", ".", "", ".hidden", "v2/../v2", "..\\x"] {
+        for tag in ["..", ".", "", ".hidden", "v2/../v2", "..\\x", "C:", "C:x"] {
             let err = shared
                 .start_update(Some(tag.into()), Duration::from_secs(1))
                 .unwrap_err();

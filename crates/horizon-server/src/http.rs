@@ -275,9 +275,22 @@ pub fn write_head(mut out: impl Write, response: &Response) -> std::io::Result<(
     out.flush()
 }
 
+/// How long one write to a client may block ([`serve`]). It limits each write, not a whole
+/// download: a slow reader that takes its bytes keeps going, one that stops reading is dropped.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serves `handle` on `listener` until the process ends, a thread per connection.
 pub fn serve(
     listener: TcpListener,
+    handle: impl Fn(&Request) -> Response + Send + Sync + 'static,
+) -> std::io::Result<()> {
+    serve_with_write_timeout(listener, WRITE_TIMEOUT, handle)
+}
+
+/// [`serve`] with its own per-write timeout.
+fn serve_with_write_timeout(
+    listener: TcpListener,
+    write_timeout: Duration,
     handle: impl Fn(&Request) -> Response + Send + Sync + 'static,
 ) -> std::io::Result<()> {
     let handle = std::sync::Arc::new(handle);
@@ -295,6 +308,8 @@ pub fn serve(
                     .spawn(move || {
                         let _slot = slot;
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                        // Without it a client that never reads holds this slot in a write for good.
+                        let _ = stream.set_write_timeout(Some(write_timeout));
                         let response = match read_request(&stream) {
                             Ok(request) => handle(&request),
                             Err(response) => response,
@@ -379,6 +394,36 @@ mod tests {
         assert_eq!(taken.len(), 2);
         drop(taken);
         assert!(Slot::take(&open, 2).is_some());
+    }
+
+    #[test]
+    fn a_client_that_never_reads_its_body_gives_the_connection_up() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let done = std::sync::Mutex::new(done);
+        serve_with_write_timeout(listener, Duration::from_millis(300), move |_| {
+            let done = done.lock().unwrap().clone();
+            let mut response = Response::text(200, "application/octet-stream", "");
+            response.stream = Some(Box::new(move |mut stream: &TcpStream| {
+                // Far more than the loopback buffers of both ends hold.
+                let chunk = vec![0u8; 1 << 20];
+                let ended = (0..256).try_for_each(|_| stream.write_all(&chunk));
+                let _ = done.send(ended.is_err());
+            }));
+            response
+        })
+        .unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        client
+            .write_all(b"GET /font HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        // The client keeps the socket open and reads nothing.
+        let gave_up = finished
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the handler is still blocked in a write");
+        assert!(gave_up, "the whole body went into a client that never read");
+        drop(client);
     }
 
     #[test]
