@@ -68,6 +68,17 @@ pub fn upgrade_block_entity(data_version: i32, tag: Compound) -> Result<Compound
     }
 }
 
+/// One block state's NBT (`Name`, `Properties`) saved at `data_version`, upgraded as the datafixers upgrade a block
+/// state of a chunk of that version: every fix registered for block states from that version up to [`CURRENT`], so a
+/// state from before the flattening ([`super::FLATTENING`]) takes its 1.13 name and properties from `BlockStateData` and
+/// then the later fixes apply (`grass_path` to `dirt_path`, and 26.1's `Name`/`Properties` to `id`/`properties`). A state the fixes don't change, or can't read, comes
+/// back as it was saved. Data of the current version comes back as it is. Refused as [`upgrade_block_entity`]
+/// refuses a version or a depth, and a result that deep.
+pub fn upgrade_block_state(data_version: i32, tag: Compound) -> Result<Compound, UpgradeError> {
+    let tag = checked(data_version, tag)?;
+    upgraded(Ty::BlockState, tag, data_version)
+}
+
 /// One entity's NBT saved at `data_version`, upgraded as the entity chunk loader upgrades the entities of a chunk of
 /// that version: each entity type's fixes, its passengers' included, up to [`CURRENT`]. Data of the current version
 /// comes back as it is; a tag the fixes can't read comes back as it was saved. Refused as
@@ -174,5 +185,54 @@ fn dismantle(tag: Tag) {
             Tag::Compound(entries) => pending.extend(entries.into_values()),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod block_state_guard_tests {
+    //! `upgrade_block_state` with literal values: the refusals and a post-flattening rename. The mapping of a pre-1.13
+    //! state needs the fixers' resources and is not covered here.
+    use super::{UpgradeError, upgrade_block_state};
+    use horizon_core::nbt::{Compound, JavaString, Tag, parse_snbt};
+
+    fn state() -> Compound {
+        match parse_snbt("{Name: \"minecraft:stone\"}").unwrap().0 {
+            Tag::Compound(c) => c,
+            other => panic!("expected a compound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_negative_version_is_refused_by_name() {
+        assert_eq!(
+            upgrade_block_state(-1, state()),
+            Err(UpgradeError::NegativeVersion(-1))
+        );
+    }
+
+    #[test]
+    fn a_future_version_is_refused_by_name() {
+        assert_eq!(
+            upgrade_block_state(5024, state()),
+            Err(UpgradeError::FutureVersion(5024))
+        );
+    }
+
+    #[test]
+    fn the_current_version_comes_back_unchanged() {
+        assert_eq!(upgrade_block_state(5023, state()), Ok(state()));
+    }
+
+    #[test]
+    fn a_flattened_state_gets_the_later_fixes() {
+        let path = match parse_snbt("{Name: \"minecraft:grass_path\"}").unwrap().0 {
+            Tag::Compound(c) => c,
+            other => panic!("expected a compound, got {other:?}"),
+        };
+        let upgraded = upgrade_block_state(2586, path).unwrap();
+        assert_eq!(
+            upgraded.get(&JavaString::from("id")),
+            Some(&Tag::String("minecraft:dirt_path".into()))
+        );
     }
 }

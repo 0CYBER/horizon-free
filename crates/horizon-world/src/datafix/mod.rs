@@ -35,7 +35,9 @@ pub mod world_upgrader;
 use dynamic::{as_str, string};
 use horizon_core::nbt::Tag;
 use schema::{Key, Ty, key, walk};
-pub use single::{MAX_DEPTH, UpgradeError, upgrade_block_entity, upgrade_entity};
+pub use single::{
+    MAX_DEPTH, UpgradeError, upgrade_block_entity, upgrade_block_state, upgrade_entity,
+};
 pub use tables::{available as tables_available, set_resources};
 
 /// The DataVersion of the game.

@@ -131,6 +131,38 @@ pub enum NbtUpgradeError {
     /// included, could take it back. Nothing is returned.
     UpgradedTooDeep,
 }
+/// The saved data kinds `data_fix` upgrades: the same three the upgrade methods take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum DataKind {
+    /// A block state, `{Name, Properties}`, as `upgrade_block_state_nbt` takes it.
+    BlockState,
+    /// A block entity, as `upgrade_block_entity_nbt` takes it.
+    BlockEntity,
+    /// An entity, its passengers included, as `upgrade_entity_nbt` takes it.
+    Entity,
+}
+/// Why `data_fix` gave no upgraded value: the target version, or the refusal the upgrade gave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum DataFixError {
+    /// The target version is not the game's DataVersion. This build upgrades only up to it. Refused
+    /// before any fix runs.
+    TargetNotCurrent(i32),
+    /// The upgrade itself was refused, by name.
+    Upgrade(NbtUpgradeError),
+}
+impl std::fmt::Display for DataFixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TargetNotCurrent(v) => write!(f, "target data version {v} is not the game's"),
+            Self::Upgrade(e) => e.fmt(f),
+        }
+    }
+}
+impl std::error::Error for DataFixError {}
 impl std::fmt::Display for NbtUpgradeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

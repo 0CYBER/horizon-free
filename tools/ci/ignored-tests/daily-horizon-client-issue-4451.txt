@@ -1181,6 +1181,7 @@ horizon-client game::native_damage_tests::unsubscribed_damage_does_not_convert l
 horizon-client game::native_data_bound::tests::a_remote_login_announces_the_client_cause_before_the_tags lib daily resources
 horizon-client game::native_data_bound::tests::defaults_are_announced_bound_before_the_tags lib daily resources
 horizon-client game::native_data_bound::tests::the_first_open_announces_bound_defaults_readable lib daily resources
+horizon-client game::native_datafix::tests::data_fix_names_its_refusals_and_keeps_current_data lib daily resources
 horizon-client game::native_datapack_refs::tests::level_registry_reads_check_world_session_and_generation lib daily resources
 horizon-client game::native_display_refs::tests::display_kinds_keep_their_own_state_and_refuse_the_others lib daily resources
 horizon-client game::native_display_refs::tests::display_writes_reach_entity_data_and_the_saved_entity lib daily resources
