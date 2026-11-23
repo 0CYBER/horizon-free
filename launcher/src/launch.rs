@@ -306,14 +306,18 @@ pub fn parse_env(text: &str) -> Result<BTreeMap<String, String>, String> {
 /// The variables as [`parse_env`] reads them back.
 pub fn env_line(env: &BTreeMap<String, String>) -> String {
     env.iter()
-        .map(
-            |(k, v)| match v.is_empty() || v.contains([' ', '"', '\'', '\\']) {
-                true => format!("{k}=\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")),
-                false => format!("{k}={v}"),
-            },
-        )
+        .map(|(k, v)| match v.is_empty() || v.contains(needs_quotes) {
+            true => format!("{k}=\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")),
+            false => format!("{k}={v}"),
+        })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// A character [`split_args`] does not keep as it is outside quotes: it ends a word at any
+/// whitespace (a tab, a no-break space, a line break), not only at a space.
+fn needs_quotes(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | '\\')
 }
 
 /// The instance's variables for the game and the commands around it, named as Prism Launcher
