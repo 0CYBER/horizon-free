@@ -8,7 +8,7 @@ requires the decoded pixels to be identical. The oracle is the base build, not v
 the picture on purpose, so no automatic selection runs it (named_only in tools/parity_hosts.json): a pull request that
 must leave the picture alone carries the frame-identity label (docs/release-flow.md).
 
-Sessions, each a fresh game and world (seed 7) per build:
+Sessions, each a fresh game and world (seed 7) with its own log directory per build:
 
 - vanilla: HDR off and no shader pack: day over water, night with light sources, stained glass, the Nether,
   entities (a hurt cow, a spider, an armour stand in enchanted armour, an arrow, an End crystal, a chest, a bell,
@@ -273,7 +273,9 @@ class Game:
         self.ctl_path = bin_dir / f'horizon-ctl{EXE}'
         self.client = bin_dir / f'horizon-client{EXE}'
         self.folder = folder
-        self.env = env
+        # 🤖 Agent: The parity runner supplies one HORIZON_HOME for the harness, but quit can return before a game's
+        # process releases its log lock. A new game sharing that home would log to stderr while ctl reads the old log.
+        self.env = dict(env, HORIZON_HOME=str(folder / 'home'))
         # 🤖 Agent: Sockets need short paths.
         self.socket = Path(tempfile.mkdtemp(prefix='hzfi')) / 'control.sock'
         self.args = args
