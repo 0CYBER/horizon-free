@@ -1,4 +1,4 @@
-use super::{ShapeError, VoxelShape, volume};
+use super::{ShapeError, VoxelShape, not_less, volume};
 use crate::geometry::{Axis, COLLISION_EPSILON};
 
 /// A four-bit truth table, indexed as (first << 1) | second.
@@ -110,6 +110,12 @@ impl VoxelShape {
         if self.same_identity(other) {
             return Ok(operation.apply(true, true));
         }
+        if operation == ShapeOp::AND
+            && let (Some((ca, ac)), Some((cb, bc))) =
+                (self.single_box_coords(), other.single_box_coords())
+        {
+            return Ok(single_boxes_and_non_empty(ca, cb, ac, bc));
+        }
         let only_first = operation.apply(true, false);
         let only_second = operation.apply(false, true);
         for axis in Axis::ALL {
@@ -150,21 +156,23 @@ impl VoxelShape {
         only_first: bool,
         only_second: bool,
     ) -> Result<[Merger; 3], ShapeError> {
+        let a_cubes = self.cube_coordinate_axes();
+        let b_cubes = other.cube_coordinate_axes();
         let x = merge(
             1,
-            &self.coords[0],
-            &other.coords[0],
-            self.coordinate_cubes[0],
-            other.coordinate_cubes[0],
+            self.coordinates(Axis::X),
+            other.coordinates(Axis::X),
+            a_cubes[0],
+            b_cubes[0],
             only_first,
             only_second,
         )?;
         let y = merge(
             x.coords.len() - 1,
-            &self.coords[1],
-            &other.coords[1],
-            self.coordinate_cubes[1],
-            other.coordinate_cubes[1],
+            self.coordinates(Axis::Y),
+            other.coordinates(Axis::Y),
+            a_cubes[1],
+            b_cubes[1],
             only_first,
             only_second,
         )?;
@@ -173,15 +181,61 @@ impl VoxelShape {
             .ok_or(ShapeError::TooLarge)?;
         let z = merge(
             multiplier,
-            &self.coords[2],
-            &other.coords[2],
-            self.coordinate_cubes[2],
-            other.coordinate_cubes[2],
+            self.coordinates(Axis::Z),
+            other.coordinates(Axis::Z),
+            a_cubes[2],
+            b_cubes[2],
             only_first,
             only_second,
         )?;
         Ok([x, y, z])
     }
+}
+
+/// Exact zero-allocation evaluation of `join_is_not_empty(..., ShapeOp::AND)` between
+/// two `1×1×1` occupied boxes, matching `merge` on all `COLLISION_EPSILON`, signed-zero,
+/// infinite, collapsed, and `NaN` boundaries.
+#[inline]
+fn single_boxes_and_non_empty(
+    a: [[f64; 2]; 3],
+    b: [[f64; 2]; 3],
+    a_cubes: [bool; 3],
+    b_cubes: [bool; 3],
+) -> bool {
+    for k in 0..3 {
+        if !single_axis_and_overlaps(a[k], b[k], a_cubes[k], b_cubes[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+#[inline]
+fn single_axis_and_overlaps(a: [f64; 2], b: [f64; 2], a_cube: bool, b_cube: bool) -> bool {
+    let [a0, a1] = a;
+    let [b0, b1] = b;
+    if a1 < b0 - COLLISION_EPSILON || b1 < a0 - COLLISION_EPSILON {
+        return false;
+    }
+    if (a_cube && b_cube) || (a0 == b0 && a1 == b1) {
+        return true;
+    }
+    let v0 = if a0 < b0 + COLLISION_EPSILON {
+        if a1 < b0 + COLLISION_EPSILON {
+            return false;
+        }
+        b0
+    } else {
+        if not_less(a0, b1 + COLLISION_EPSILON) {
+            return false;
+        }
+        a0
+    };
+    let v1 = if a1 < b1 + COLLISION_EPSILON { a1 } else { b1 };
+    !matches!(
+        v0.partial_cmp(&(v1 - COLLISION_EPSILON)),
+        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+    )
 }
 
 #[allow(clippy::too_many_arguments)] // Mirrors the coordinate-merger selection inputs.
@@ -317,7 +371,7 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Vec3;
+    use crate::geometry::{Aabb, Vec3};
     #[test]
     fn signed_zero_list_equality_preserves_first_coordinates() {
         let a = VoxelShape::from_grid([vec![0.0, 1.0], vec![0.0, 1.0], vec![0.0, 1.0]], &[true])
@@ -357,5 +411,70 @@ mod tests {
             a.join_unoptimized(&b, ShapeOp::from_truth_table(1))
                 .is_err()
         );
+    }
+    #[test]
+    fn single_box_and_fast_path_matches_general_merger() {
+        let shapes = [
+            VoxelShape::block(),
+            VoxelShape::block().moved(Vec3::ZERO),
+            VoxelShape::block().moved(Vec3::new(1.0, 0.0, 0.0)),
+            VoxelShape::block().moved(Vec3::new(1.0 - 0.5 * COLLISION_EPSILON, 0.0, 0.0)),
+            VoxelShape::block().moved(Vec3::new(1.0 - COLLISION_EPSILON, 0.0, 0.0)),
+            VoxelShape::block().moved(Vec3::new(1.0 - 2.0 * COLLISION_EPSILON, 0.0, 0.0)),
+            VoxelShape::block().moved(Vec3::new(1.0 + COLLISION_EPSILON, 0.0, 0.0)),
+            VoxelShape::block().moved(Vec3::new(-1.0 + 0.5 * COLLISION_EPSILON, 0.0, 0.0)),
+            VoxelShape::block().moved(Vec3::new(-1.0 + 2.0 * COLLISION_EPSILON, 0.0, 0.0)),
+            VoxelShape::from_grid([vec![-0.0, 1.0], vec![0.0, 1.0], vec![0.0, 1.0]], &[true])
+                .unwrap(),
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(0.25, -0.5, 0.1),
+                Vec3::new(0.75, 1.5, 0.9),
+            ))
+            .unwrap(),
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(f64::NEG_INFINITY, -10.0, f64::NEG_INFINITY),
+                Vec3::new(f64::INFINITY, 10.0, f64::INFINITY),
+            ))
+            .unwrap(),
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(10.0, 64.0, -5.0),
+                Vec3::new(10.6, 65.8, -4.4),
+            ))
+            .unwrap(),
+            VoxelShape::block().moved(Vec3::new(1.0e20, 0.0, 0.0)),
+        ];
+
+        for (i, a) in shapes.iter().enumerate() {
+            for (j, b) in shapes.iter().enumerate() {
+                let fast = a.join_is_not_empty(b, ShapeOp::AND).unwrap();
+                // General merger reference via `mergers()` directly.
+                let expected = if a.same_identity(b) {
+                    true
+                } else {
+                    let mergers = a.mergers(b, false, false).unwrap();
+                    let sizes: [usize; 3] = std::array::from_fn(|k| mergers[k].coords.len() - 1);
+                    let mut found = false;
+                    for x in 0..sizes[0] {
+                        for y in 0..sizes[1] {
+                            for z in 0..sizes[2] {
+                                if a.is_full(
+                                    mergers[0].first[x],
+                                    mergers[1].first[y],
+                                    mergers[2].first[z],
+                                ) && b.is_full(
+                                    mergers[0].second[x],
+                                    mergers[1].second[y],
+                                    mergers[2].second[z],
+                                ) {
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                    found
+                };
+                assert_eq!(fast, expected, "pair ({i}, {j})");
+            }
+        }
     }
 }

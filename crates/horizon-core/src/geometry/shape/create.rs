@@ -15,10 +15,20 @@ impl VoxelShape {
         }
         let bits = Axis::ALL.map(|axis| find_bits(aabb.min(axis), aabb.max(axis)));
         if bits.iter().any(Option::is_none) {
-            return Self::from_grid(
-                Axis::ALL.map(|axis| vec![aabb.min(axis), aabb.max(axis)]),
-                &[true],
-            );
+            if Axis::ALL
+                .into_iter()
+                .any(|axis| aabb.min(axis) >= aabb.max(axis))
+            {
+                return Err(ShapeError::InvalidCoordinates);
+            }
+            return Ok(Self::single_box_or_complex(
+                aabb,
+                [
+                    [aabb.min(Axis::X), aabb.max(Axis::X)],
+                    [aabb.min(Axis::Y), aabb.max(Axis::Y)],
+                    [aabb.min(Axis::Z), aabb.max(Axis::Z)],
+                ],
+            ));
         }
         let bits = bits.map(Option::unwrap);
         if bits == [0, 0, 0] {
@@ -52,7 +62,7 @@ impl VoxelShape {
     /// VoxelShape.optimize, reconstructing greedy boxes in vanilla order.
     pub fn optimized(&self) -> Result<Self, ShapeError> {
         let mut result = Self::empty();
-        for aabb in self.boxes.iter() {
+        for aabb in self.boxes() {
             let part = Self::from_box(*aabb)?;
             result = result.join_unoptimized(&part, ShapeOp::OR)?;
         }
@@ -142,6 +152,54 @@ mod tests {
                 .optimized()
                 .unwrap()
                 .same_identity(&VoxelShape::empty())
+        );
+    }
+    #[test]
+    fn from_box_world_and_infinite_edge_cases() {
+        let world = VoxelShape::from_box(Aabb::new(
+            Vec3::new(100.2, 64.0, -50.8),
+            Vec3::new(100.8, 65.8, -50.2),
+        ))
+        .unwrap();
+        assert!(!world.is_empty());
+        assert!(!world.is_cube());
+        assert_eq!(world.sizes(), [1, 1, 1]);
+        assert_eq!(world.boxes().len(), 1);
+        assert_eq!(world.coordinates(Axis::X), &[100.2, 100.8]);
+        assert_eq!(world.coordinates(Axis::Y), &[64.0, 65.8]);
+        assert_eq!(world.coordinates(Axis::Z), &[-50.8, -50.2]);
+
+        let infinite = VoxelShape::from_box(Aabb::new(
+            Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+            Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+        ))
+        .unwrap();
+        assert_eq!(infinite.min(Axis::X), f64::NEG_INFINITY);
+        assert_eq!(infinite.max(Axis::X), f64::INFINITY);
+
+        assert_eq!(
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(f64::INFINITY, 0.0, 0.0),
+                Vec3::new(f64::INFINITY, 1.0, 1.0),
+            ))
+            .unwrap_err(),
+            ShapeError::InvalidCoordinates
+        );
+        assert_eq!(
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(f64::NEG_INFINITY, 0.0, 0.0),
+                Vec3::new(f64::NEG_INFINITY, 1.0, 1.0),
+            ))
+            .unwrap_err(),
+            ShapeError::InvalidCoordinates
+        );
+        assert_eq!(
+            VoxelShape::from_box(Aabb::new(
+                Vec3::new(f64::NAN, 0.0, 0.0),
+                Vec3::new(1.0, 1.0, 1.0),
+            ))
+            .unwrap_err(),
+            ShapeError::InvalidCoordinates
         );
     }
 }

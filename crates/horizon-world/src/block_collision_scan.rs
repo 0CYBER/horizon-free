@@ -154,38 +154,7 @@ struct SectionFacts {
     reaches: bool,
 }
 
-/// Entries of the per-thread cache of moved full cubes.
-const MOVED_BLOCKS: usize = 256;
-type MovedBlocks = [Option<(BlockPos, VoxelShape)>; MOVED_BLOCKS];
-thread_local! {
-    static MOVED: std::cell::RefCell<Box<MovedBlocks>> =
-        std::cell::RefCell::new(Box::new(std::array::from_fn(|_| None)));
-}
-
-/// `shape.moved(offset)` for the full cube `shape` at block `p`: the same shape every time the
-/// block is scanned, so a crowd standing on one floor builds it once, not once per mob per
-/// tick. Direct-mapped by position; a miss builds it and takes the slot.
-fn moved_block(p: BlockPos, offset: Vec3, shape: &VoxelShape) -> VoxelShape {
-    let slot = (p.x.wrapping_mul(73_856_093)
-        ^ p.y.wrapping_mul(19_349_663)
-        ^ p.z.wrapping_mul(83_492_791)) as u32 as usize
-        % MOVED_BLOCKS;
-    MOVED.with(|cache| {
-        let Ok(mut cache) = cache.try_borrow_mut() else {
-            return shape.moved(offset);
-        };
-        if let Some((at, moved)) = &cache[slot]
-            && *at == p
-        {
-            return moved.clone();
-        }
-        let moved = shape.moved(offset);
-        cache[slot] = Some((p, moved.clone()));
-        moved
-    })
-}
-
-/// Entries of the per-thread cache of moved non-full shapes (stairs, slabs, walls, fences...).
+/// Entries of the per-thread cache of moved multi-cell non-full shapes (stairs, slabs, walls, fences...).
 const MOVED_SHAPES: usize = 512;
 type MovedShapes = [Option<(BlockPos, VoxelShape, VoxelShape)>; MOVED_SHAPES];
 thread_local! {
@@ -195,7 +164,20 @@ thread_local! {
 
 /// `shape.moved(offset)` for a non-full `shape` at block `p`, keyed by position and exact
 /// unmoved shape identity (`VoxelShape::same_identity`), so context-dependent shapes never alias.
+/// Single-cell shapes that move inline without heap allocation bypass the cache so they do not
+/// evict multi-cell shapes.
 fn moved_shape(p: BlockPos, offset: Vec3, shape: &VoxelShape) -> VoxelShape {
+    if shape.sizes() == [1, 1, 1]
+        && shape.bounds().is_some_and(|b| {
+            let lo = b.min_position();
+            let hi = b.max_position();
+            (lo.x + offset.x >= 1.0 || hi.x + offset.x <= 0.0)
+                && (lo.y + offset.y >= 1.0 || hi.y + offset.y <= 0.0)
+                && (lo.z + offset.z >= 1.0 || hi.z + offset.z <= 0.0)
+        })
+    {
+        return shape.moved(offset);
+    }
     let slot = (p.x.wrapping_mul(73_856_093)
         ^ p.y.wrapping_mul(19_349_663)
         ^ p.z.wrapping_mul(83_492_791)) as u32 as usize
@@ -562,7 +544,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 if self.presence_only {
                     VoxelShape::block()
                 } else {
-                    moved_block(p, offset, &shape)
+                    shape.moved(offset)
                 }
             } else {
                 // Shapes whose bounds miss the box share no volume with it:
