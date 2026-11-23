@@ -78,6 +78,22 @@ pub fn with_dispatch<R>(mods: Mods, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Run a closure while saving this thread's Parts snapshot and restoring it on exit or unwind.
+///
+/// Nested scopes and panic unwinding restore the preceding snapshot; other threads are unaffected.
+// hidden: API-owned test setup uses this vocabulary fixture, not mod authoring code.
+#[doc(hidden)]
+pub fn with_parts_scope<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<&'static crate::parts::Installed>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::parts::TEST_PARTS.set(self.0);
+        }
+    }
+    let _restore = Restore(crate::parts::TEST_PARTS.get());
+    f()
+}
+
 /// Rebuild a fixture's Parts snapshot from a fresh registration epoch on this thread.
 ///
 /// On success the replacement stays installed. An error or unwinding restores the previous snapshot.
