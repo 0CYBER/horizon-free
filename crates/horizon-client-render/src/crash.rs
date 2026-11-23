@@ -911,6 +911,39 @@ mod tests {
     /// The panic hook is process-wide: tests that swap it hold this so they never overlap.
     static PANIC_HOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Installs a panic hook that forwards any panic for which `handle` returns `false` to the
+    /// previous hook, and restores the previous hook when dropped (including on unwind).
+    /// Callers must hold [`PANIC_HOOK`].
+    fn scoped_panic_hook(
+        handle: impl Fn(&std::panic::PanicHookInfo<'_>) -> bool + Send + Sync + 'static,
+    ) -> impl Drop {
+        type Hook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>;
+        struct Restore(Option<std::sync::Arc<Hook>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                if let Some(previous) = self.0.take() {
+                    let restore = move || {
+                        std::panic::set_hook(Box::new(move |info| previous(info)));
+                    };
+                    // `std::panic::set_hook` panics if called from an unwinding thread.
+                    if std::thread::panicking() {
+                        let _ = std::thread::spawn(restore).join();
+                    } else {
+                        restore();
+                    }
+                }
+            }
+        }
+        let previous = std::sync::Arc::new(std::panic::take_hook());
+        let fallback = std::sync::Arc::clone(&previous);
+        std::panic::set_hook(Box::new(move |info| {
+            if !handle(info) {
+                fallback(info);
+            }
+        }));
+        Restore(Some(previous))
+    }
+
     #[test]
     fn reporting_threads_write_once_and_contained_server_panics_write_nothing() {
         let _lock = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1215,12 +1248,14 @@ mod tests {
         let caught = std::sync::Arc::new(std::sync::Mutex::new(None));
         let sink = caught.clone();
         let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
+        let restore = scoped_panic_hook(move |info| {
             if panic_message(info).contains("the guest crash") {
                 *sink.lock().unwrap() = Some(panic_report(info, "client"));
+                true
+            } else {
+                false
             }
-        }));
+        });
         let _runtime = enter_native_mod(ModCall {
             id: "runtime",
             hook: "dispatch",
@@ -1232,7 +1267,7 @@ mod tests {
             let _scope = package.enter("tick", "Foo.tick(Foo.java:42)").unwrap();
             panic!("the guest crash");
         });
-        std::panic::set_hook(previous);
+        drop(restore);
         let report = caught.lock().unwrap().take().expect("the hook saw it");
         assert!(
             report.error.ends_with(
@@ -1364,12 +1399,14 @@ mod tests {
         let caught = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = caught.clone();
         let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
+        let restore = scoped_panic_hook(move |info| {
             if panic_message(info).contains("the test crash") {
                 sink.lock().unwrap().push(panic_report(info, "client"));
+                true
+            } else {
+                false
             }
-        }));
+        });
         let _ = std::panic::catch_unwind(|| panic!("the test crash"));
         // The same panic inside a native mod's hook, which the hook sees before the unwind.
         let _ = std::panic::catch_unwind(|| {
@@ -1380,7 +1417,7 @@ mod tests {
             });
             panic!("the test crash")
         });
-        std::panic::set_hook(previous);
+        drop(restore);
         // A caught panic leaves the thread as it found it.
         assert_eq!(attributed("boom".into()), "boom");
         let mut reports = std::mem::take(&mut *caught.lock().unwrap());
@@ -1508,13 +1545,15 @@ mod tests {
         let caught = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = caught.clone();
         let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
+        let restore = scoped_panic_hook(move |info| {
             let error = panic_report(info, "client").error;
             if error.contains("a broken mod") {
                 sink.lock().unwrap().push(error);
+                true
+            } else {
+                false
             }
-        }));
+        });
         let unwound = mod_platform::testing::with_mods(mods.into(), || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 mod_api::dispatch_component_types(
@@ -1525,7 +1564,7 @@ mod tests {
         });
         // Once the dispatch has unwound, the thread is in no mod.
         let _ = std::panic::catch_unwind(|| panic!("a broken mod's caller"));
-        std::panic::set_hook(previous);
+        drop(restore);
         // The game stops as before: the panic goes on to the dispatch's caller.
         assert!(unwound.is_err());
         let errors = caught.lock().unwrap();
@@ -1536,5 +1575,43 @@ mod tests {
             errors[0]
         );
         assert!(!errors[1].contains("in native mod"), "{}", errors[1]);
+    }
+
+    #[test]
+    fn scoped_panic_hook_forwards_unmatched_panics_and_restores_on_unwind() {
+        let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+        let forwarded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let forwarded_sink = forwarded.clone();
+        let _outer = scoped_panic_hook(move |info| {
+            let msg = panic_message(info);
+            if msg.contains("other test failure") || msg.contains("matched panic") {
+                forwarded_sink.lock().unwrap().push(msg);
+                true
+            } else {
+                false
+            }
+        });
+        let matched = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let matched_sink = matched.clone();
+        let _ = std::panic::catch_unwind(|| {
+            let _inner = scoped_panic_hook(move |info| {
+                if panic_message(info).contains("matched panic") {
+                    *matched_sink.lock().unwrap() += 1;
+                    true
+                } else {
+                    false
+                }
+            });
+            let _ = std::panic::catch_unwind(|| panic!("matched panic"));
+            // Unmatched panic is forwarded to the previous hook and unwinds `_inner`.
+            panic!("other test failure");
+        });
+        // After unwind, `_inner` has been restored so "matched panic" now reaches `_outer`.
+        let _ = std::panic::catch_unwind(|| panic!("matched panic"));
+        assert_eq!(*matched.lock().unwrap(), 1);
+        let seen = forwarded.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].contains("other test failure"), "{}", seen[0]);
+        assert!(seen[1].contains("matched panic"), "{}", seen[1]);
     }
 }
