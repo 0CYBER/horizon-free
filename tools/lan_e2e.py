@@ -3318,25 +3318,48 @@ def grid_items(game):
 
 
 def check_recipes(host, guest, out):
+    def toggle_craftable(book):
+        button = next(rect for rect in book['targets'] if rect[2:] == [26.0, 16.0])
+        guest.raw('click-at', *centre(button))
+        guest.wait(5)
+        return guest('screen')['recipe_book']
+
     guest('command', command='clear @s')
     guest('command', command='give @s minecraft:oak_log 4')
     guest.wait(40)
     guest.raw('key', 'e', 'tap')
     guest.wait(5)
+    restore_filter = False
     try:
         book = guest('screen').get('recipe_book')
         assert book, 'the guest\'s inventory has no recipe book'
-        if len(book['targets']) == 1:
+        if not book['open']:
             guest.raw('click-at', *centre(book['targets'][0]))
             guest.wait(5)
             book = guest('screen').get('recipe_book')
         known = book['known']
         assert known > 0, f'the guest\'s book is empty: {book}'
-        guest.raw('click-at', *centre(book['targets'][1]))
+        # Search, paging and tabs also export targets. The craftable filter
+        # keeps earlier checks' recipe unlocks from affecting the selection.
+        if not book['filtering']:
+            book = toggle_craftable(book)
+            restore_filter = book['filtering']
+        assert book['filtering'], f"the guest's book did not filter: {book}"
+        recipes = [rect for rect in book['targets'] if rect[2:] == [25.0, 25.0]]
+        assert recipes, f"the guest's book has no craftable recipe buttons: {book}"
+        guest.raw('click-at', *centre(recipes[0]))
         guest.wait(10)
         grid = grid_items(guest)
         guest.shot(out, 'recipes')
     finally:
+        if restore_filter:
+            # The alternatives popup below needs the uncraftable entries too.
+            book = guest('screen')['recipe_book']
+            if not book['open']:
+                guest.raw('click-at', *centre(book['targets'][0]))
+                guest.wait(5)
+                book = guest('screen')['recipe_book']
+            toggle_craftable(book)
         guest.raw('key', 'esc', 'tap')
         guest.wait(5)
     assert any('oak_log' in str(item) for item in grid.values()), f'nothing placed in the grid: {grid}'
