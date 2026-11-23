@@ -160,8 +160,12 @@ pub fn rear_offset(m: &Mob) -> [f64; 3] {
     [0.0, 0.15 * stand * scale, -0.7 * stand * scale]
 }
 /// `AbstractHorse.isImmobile`: no goals while it eats or rears. A mount its
-/// rider steers still takes their input (`travelRidden`).
+/// rider steers still takes their input (`travelRidden`). `Llama.isImmobile`:
+/// only while it eats (a loaded `EatingHaystack`; it never grazes).
 pub fn immobile(m: &Mob) -> bool {
+    if super::llama::is_llama(m.species()) {
+        return m.extra.flag;
+    }
     can_rear(m.species()) && (m.extra.flag || m.extra.counter > 0) && !controlled(m)
 }
 /// `AbstractHorse.onElasticLeashPull`: a lead pulled taut ends the horse's
@@ -1571,6 +1575,24 @@ mod tests {
         assert!(m.extra.counter > 0);
         stand_tick(&mut m);
         assert_eq!(m.extra.counter, 0);
+    }
+
+    /// `Llama.isImmobile` is `isDeadOrDying() || isEating()`: an eating llama
+    /// runs no goals, and a llama does not stand (#18677).
+    #[test]
+    fn an_eating_llama_is_immobile() {
+        for (species, id) in [
+            (Species::Llama, "minecraft:llama"),
+            (Species::TraderLlama, "minecraft:trader_llama"),
+        ] {
+            let mut m = equine(1, species, id);
+            assert!(!immobile(&m), "{id}");
+            m.extra.flag = true;
+            assert!(immobile(&m), "{id} eating");
+            m.extra.flag = false;
+            m.extra.counter = 5;
+            assert!(!immobile(&m), "{id} has no standing");
+        }
     }
 
     #[test]

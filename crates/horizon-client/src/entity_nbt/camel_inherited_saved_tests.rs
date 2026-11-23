@@ -154,7 +154,7 @@ fn camel_signed_state_and_mutations_override_contradictory_raw() {
 }
 
 #[test]
-fn camel_saved_carry_leaves_the_seven_equine_paths_unchanged() {
+fn the_seven_equine_paths_load_and_save_their_inherited_fields() {
     for (species, id) in [
         (Species::Horse, "minecraft:horse"),
         (Species::Donkey, "minecraft:donkey"),
@@ -168,18 +168,53 @@ fn camel_saved_carry_leaves_the_seven_equine_paths_unchanged() {
         put(&mut raw, "Tame", Tag::Byte(1));
         let mob = mob_from_nbt(&raw, &types(species, id), 92, None).unwrap();
         assert_eq!(mob.extra.equine_temper, 12);
-        assert!(!mob.extra.flag, "the other species' load path is unchanged");
+        // `EatingHaystack:1b` loads as eating for every equine (#18677).
+        assert!(mob.extra.flag, "{id} loads its eating state");
         for source in [None, Some(&raw)] {
             let saved = mob_to_nbt(&mob, [92, 0, 0, 1], source, None, |_| None);
             assert_eq!(saved.get("Temper"), Some(&Tag::Int(12)));
             assert_eq!(saved.get("Tame"), Some(&Tag::Byte(1)));
             assert_eq!(saved.get("Bred"), Some(&Tag::Byte(1)));
-            // Preserve the existing raw/default behavior outside Camel;
-            // this control does not claim the other species' eating codec.
-            assert_eq!(
-                saved.get("EatingHaystack"),
-                Some(&Tag::Byte(i8::from(source.is_some())))
-            );
+            // The live eating state, with or without the loaded compound.
+            assert_eq!(saved.get("EatingHaystack"), Some(&Tag::Byte(1)));
+        }
+    }
+}
+
+/// `AbstractHorse.readAdditionalSaveData` reads `EatingHaystack` for every
+/// equine as `getBooleanOr`, and `addAdditionalSaveData` writes the live
+/// eating state, whatever stale value the loaded compound held (#18677).
+#[test]
+fn every_equine_loads_and_saves_its_eating_state() {
+    for (species, id) in [
+        (Species::Horse, "minecraft:horse"),
+        (Species::Donkey, "minecraft:donkey"),
+        (Species::Mule, "minecraft:mule"),
+        (Species::SkeletonHorse, "minecraft:skeleton_horse"),
+        (Species::ZombieHorse, "minecraft:zombie_horse"),
+        (Species::Llama, "minecraft:llama"),
+        (Species::TraderLlama, "minecraft:trader_llama"),
+    ] {
+        let types = types(species, id);
+        for (loaded, eating) in [
+            (None, false),
+            (Some(0), false),
+            (Some(-1), true),
+            (Some(1), true),
+        ] {
+            let mut raw = input(id, None);
+            if let Some(v) = loaded {
+                put(&mut raw, "EatingHaystack", Tag::Byte(v));
+            }
+            let mut mob = mob_from_nbt(&raw, &types, 92, None).unwrap();
+            assert_eq!(mob.extra.flag, eating, "{id} loads {loaded:?}");
+            let saved = mob_to_nbt(&mob, [92, 0, 0, 1], Some(&raw), None, |_| None);
+            let want = Some(&Tag::Byte(i8::from(eating)));
+            assert_eq!(saved.get("EatingHaystack"), want, "{id} saves {loaded:?}");
+            // A grazing that ended since the load saves as not eating.
+            mob.extra.flag = false;
+            let saved = mob_to_nbt(&mob, [92, 0, 0, 1], Some(&raw), None, |_| None);
+            assert_eq!(saved.get("EatingHaystack"), Some(&Tag::Byte(0)), "{id}");
         }
     }
 }
