@@ -1,4 +1,4 @@
 pub use entity::player_data::{
-    PlayerDataRefusal, PlayerInventoryError, PlayerInventoryKind, PlayerInventoryMove,
-    PlayerInventorySnapshot,
+    OfflinePlayerDataRefusal, PlayerDataRefusal, PlayerInventoryError, PlayerInventoryKind,
+    PlayerInventoryMove, PlayerInventorySnapshot,
 };

@@ -151,3 +151,18 @@ impl crate::NoBackend for PlayerInventoryError {
         Self::NoServer
     }
 }
+
+/// Why a whole saved player file could not be read or written by `offline_player_data` or
+/// `set_offline_player_data`. Nothing was written when one comes back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum OfflinePlayerDataRefusal {
+    /// No authoritative server is open, or this is a client or a remote world.
+    NoServer,
+    /// The player is online: their live state is written with the player writes
+    /// (`player_set_inventory_slot` and the others), not with their file.
+    Online,
+    /// The file could not be written; the saved file stays as it was.
+    Write,
+}

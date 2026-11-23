@@ -104,6 +104,25 @@ pub trait PlayersServerHost {
     #[access(WorldOnly)]
     fn profile_by_uuid(&self, uuid: u128) -> Option<GameProfile>;
     /// Side: server.
+    /// The whole saved player file of the player with this UUID (`players/data/<uuid>.dat`), as the
+    /// vanilla player compound `PlayerDataStorage` loads, so a mod can copy or restore a player who
+    /// is not online. None for no file, a file that does not read, a client, or a remote world. An
+    /// online player reads as of their last save; their live state is `player_ender_chest` and the
+    /// other player reads. Reads only.
+    #[access(WorldOnly)]
+    fn offline_player_data(&self, uuid: u128) -> Option<Compound>;
+    /// Side: server.
+    /// Writes `data` as the saved player file of the player with this UUID, replacing it whole, as
+    /// `write_dat` writes a save. Refuses with nothing written: `NoServer` on a client or a remote
+    /// world, `Online` while the player is connected (write them with the player writes instead),
+    /// `Write` when the file cannot be written. Call it outside a transaction.
+    #[access(WorldOnly)]
+    fn set_offline_player_data(
+        &mut self,
+        uuid: u128,
+        data: Compound,
+    ) -> Result<(), OfflinePlayerDataRefusal>;
+    /// Side: server.
     /// The profile of the player with this name, any case, as
     /// `profile_by_uuid` knows it: an online player's, else an unexpired
     /// user cache entry. Never asked of Mojang, and an unknown name is not

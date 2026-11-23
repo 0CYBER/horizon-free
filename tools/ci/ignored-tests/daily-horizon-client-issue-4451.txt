@@ -1833,6 +1833,8 @@ horizon-client game::native_mob_refs::tests::piglin_target_write_drives_anger_so
 horizon-client game::native_mob_refs::tests::player_target_round_trips_through_the_mob_binding lib daily resources
 horizon-client game::native_mob_refs::tests::redirected_fake_target_is_refused_with_the_original_target_intact lib daily resources
 horizon-client game::native_net::tests::mod_packets_require_joined_player_and_physical_transport lib daily resources
+horizon-client game::native_offline_player_data::tests::an_offline_player_file_is_read_whole_and_refused_without_a_server lib daily resources
+horizon-client game::native_offline_player_data::tests::an_offline_player_file_is_refused_for_the_guest_and_the_owner_and_written_for_others lib daily resources
 horizon-client game::native_on_caught_fire_tests::a_block_part_hears_it_burned_and_writes_the_level lib daily resources
 horizon-client game::native_passage_cross::tests::a_crossing_the_server_cannot_follow_is_refused_by_name lib daily resources
 horizon-client game::native_passage_cross::tests::a_mod_vetoes_a_crossing_before_the_server_follows lib daily resources

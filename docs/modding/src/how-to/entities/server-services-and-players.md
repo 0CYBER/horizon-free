@@ -424,3 +424,12 @@ Measuring a client's transaction round trip (a lag-compensating anticheat): send
 `ConfigServerHost::entity_range_percent()` (server side) returns the entity broadcast range the server hosts with,
 in percent of vanilla's (`entity-broadcast-range-percentage` of server.properties). It is `100` when no server is
 hosting a world, which is vanilla's default. Read only.
+
+## A player who is not online
+
+`host.offline_player_data(uuid)` returns the saved player file of a player who is not connected (`players/data/<uuid>.dat`)
+as the vanilla player compound, or None when there is no file, the file is not a compound, or the world is remote. It only
+reads. `host.set_offline_player_data(uuid, data)` replaces that file whole, the way a save writes it. It refuses with
+`OfflinePlayerDataRefusal::Online` while the player is connected: change a connected player through the player writes
+(their inventory, ender chest and hands), since their file is written again when they leave. A client or a remote world
+gets `NoServer`, and a file that cannot be written gets `Write`; nothing is changed by a refusal.
