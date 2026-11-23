@@ -363,6 +363,19 @@ The inventory menu has no slot for body or saddle. All four player data writes
 are undone by an open transaction abort; equipment effects and overflow drops
 wait for the outermost commit.
 
+## Scoreboard teams
+
+`host.team(name)` gives a team handle or `None`; `host.add_team(name)` makes a new team (`Err(NameTaken)` when it exists,
+`Err(Unavailable)` for an empty name, one with a space or one the saved scoreboard could not keep).
+`host.team_set_color(team, Some(TeamColor::Red))` sets its color to one of the sixteen chat colors, `None` for no color,
+as `/team modify <team> color` does, and is `true` only when the color changed. `host.team_join(team, holder)` moves a
+`ScoreHolder` (`Player`, `Entity` or a `Name`) into the team: `Ok(true)` when it moved, `Ok(false)` when it was on that
+team already, `Err(UnknownHolder)` for a holder the scoreboard cannot key and `Err(Stale)` for a team that is gone.
+`host.team_leave(team, holder)` takes the holder out of that team (`true` when it was on it) and `host.team_remove(team)`
+deletes a team and leaves its members with none. Teams are kept in the world's scoreboard, which the server saves, and
+members take the color in every client from the next tick's sync. A team handle resolves again on each call and goes
+stale when its team is removed or the world is opened again. Server only: a refused call changes nothing.
+
 ## Advancement progress
 
 For mods that carry a player's advancements between servers. Server only. `player.advancements(host)` returns

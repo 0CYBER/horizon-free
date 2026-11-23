@@ -286,6 +286,10 @@ pub mod game {
     pub fn boss_bar_ref(epoch: WorldEpoch, uuid: u128) -> BossBarRef {
         BossBarRef { epoch, uuid }
     }
+    /// A team handle the game names.
+    pub fn team_ref(epoch: WorldEpoch, name: String) -> TeamRef {
+        TeamRef { epoch, name }
+    }
     /// A chunk handle the game names.
     pub fn chunk_ref(level: LevelRef, pos: [i32; 2]) -> ChunkRef {
         ChunkRef { level, pos }
@@ -400,6 +404,21 @@ pub mod game {
             BossBarRefFields {
                 epoch: self.epoch,
                 uuid: self.uuid,
+            }
+        }
+    }
+
+    #[non_exhaustive]
+    pub struct TeamRefFields<'a> {
+        pub epoch: WorldEpoch,
+        pub name: &'a str,
+    }
+    impl Fields for TeamRef {
+        type Fields<'a> = TeamRefFields<'a>;
+        fn fields(&self) -> TeamRefFields<'_> {
+            TeamRefFields {
+                epoch: self.epoch,
+                name: &self.name,
             }
         }
     }

@@ -1616,3 +1616,83 @@ impl NoBackend for WantedPositionError {
         Self::Unavailable
     }
 }
+
+/// A scoreboard team by name, as `team` and `add_team` return it. A handle resolves again on each call:
+/// it reads as `None` or `false` once the team is removed, and for a handle of an earlier open.
+#[derive(horizon_mod_api_macros::Wire)]
+#[wire(internal_field_layouts)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+// exhaustive: its fields are private, so mods cannot build or destructure it
+pub struct TeamRef {
+    pub(crate) epoch: WorldEpoch,
+    pub(crate) name: String,
+}
+
+/// The sixteen chat colours a team can take (`ChatFormatting` colours, `PlayerTeam.setColor`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum TeamColor {
+    /// `black`.
+    Black,
+    /// `dark_blue`.
+    DarkBlue,
+    /// `dark_green`.
+    DarkGreen,
+    /// `dark_aqua`.
+    DarkAqua,
+    /// `dark_red`.
+    DarkRed,
+    /// `dark_purple`.
+    DarkPurple,
+    /// `gold`.
+    Gold,
+    /// `gray`.
+    Gray,
+    /// `dark_gray`.
+    DarkGray,
+    /// `blue`.
+    Blue,
+    /// `green`.
+    Green,
+    /// `aqua`.
+    Aqua,
+    /// `red`.
+    Red,
+    /// `light_purple`.
+    LightPurple,
+    /// `yellow`.
+    Yellow,
+    /// `white`.
+    White,
+}
+
+/// Who or what a team holds: the scoreboard keeps a player by name and any other entity by UUID.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum ScoreHolder {
+    /// A player, by their name.
+    Player(PlayerRef),
+    /// An entity, by its UUID (a player's name for a player).
+    Entity(EntityRef),
+    /// A name as written: what `/team join <team> <name>` takes, an offline player's included.
+    Name(String),
+}
+
+/// Why a team call was refused. Nothing changes then.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum TeamError {
+    /// The host has no game backend (for example, a mod test double).
+    Unavailable,
+    /// The team handle is stale: the team is gone, or the handle is of an earlier open.
+    Stale,
+    /// A team of that name exists.
+    NameTaken,
+    /// The holder is not a player or entity the scoreboard can key, or is not there.
+    UnknownHolder,
+}
+impl NoBackend for TeamError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}

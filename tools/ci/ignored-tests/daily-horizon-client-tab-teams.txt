@@ -1,0 +1,2 @@
+# horizon-rust/horizon#17845: these mod-API tests read the prepared 26.3 data.
+horizon-client game::native_teams::tests::teams_are_kept_in_the_worlds_scoreboard lib daily resources
