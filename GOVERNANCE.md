@@ -108,7 +108,7 @@ council matter.
 | **🧭 Server & SMP lead** | The server's settings, by the written rules (backup first, warning in game) | As every lead | A panel sub-user once a council accounts poll gives one | As every lead |
 | **🧭 Group lead** | The group's free actions; gives and removes its helper role | In the group's channels: delete messages, manage and pin threads, ping the group; the helper role through Kira | — | Triage on the group's labels through Kira (no repository role) |
 | **🌌 Horizon Team** | Merges; elects Team members | #horizon-team and the staff channels. The role still carries timeout and delete; whether it keeps them is a mod matter | — | `horizon-team`: write on horizon, horizon-mods, horizon-mixins, horizon-native-mod-template and horizon-server; also kira and horizon-site if P37 passes |
-| **🔧 Server Manager** | — | Manage Channels and Manage Roles (the server's layout); given by council poll | — | — |
+| **🔧 Server Manager** | — | Manage Channels and Manage Roles for the server layout. Manage Server for Community Onboarding and the Server Guide. Given by council poll | — | — |
 | **🏛️ Council** | Council polls, vetoes, emergencies (any 2) | A moderator's permissions plus Ban, mention @everyone and pin; #council | Panel sub-users for two members if P38 passes | The `council` team: code-owner reviews and the release tools' owner powers if P35 passes, security managers if P36 passes; a second organisation owner if P28 passes |
 | **Account holder** (the founder) | Carries out decisions on his accounts (section 11) | Server owner | The panel's owner account | Organisation owner |
 
