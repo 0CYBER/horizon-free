@@ -158,3 +158,55 @@ fn the_end_only_gpu_field_arrives_whole() {
     let mut follower = Follower::new();
     assert_eq!(follower.push(&file).unwrap(), expected);
 }
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(bytes).unwrap();
+    gz.finish().unwrap()
+}
+
+#[test]
+fn a_field_longer_than_the_limit_is_refused_before_its_bytes_are_buffered() {
+    // Field 5, length-delimited, claiming 100000 bytes, with only a few of them present.
+    let mut inflated = vec![5 << 3 | 2];
+    inflated.extend([0xa0, 0x8d, 0x06]);
+    inflated.extend([0u8; 16]);
+    let file = gzip(&inflated);
+    let mut follower = Follower::with_limits(1 << 20, 1000);
+    let error = follower.push(&file[..file.len() - 8]).unwrap_err();
+    assert!(
+        matches!(&error, Error::Corrupt(why) if why.contains("larger than")),
+        "{error:?}"
+    );
+    // The same bytes are fine under a limit that fits the field.
+    let mut roomy = Follower::with_limits(1 << 20, 200_000);
+    assert!(roomy.push(&file[..file.len() - 8]).unwrap().is_empty());
+}
+
+#[test]
+fn a_stream_that_inflates_past_the_total_budget_is_refused() {
+    // 4 MiB of zeros deflate to a few KiB; the budget is 64 KiB.
+    let file = gzip(&vec![0u8; 4 << 20]);
+    assert!(file.len() < 16 * 1024);
+    let mut follower = Follower::with_limits(64 * 1024, 1 << 20);
+    let error = follower.push(&file).unwrap_err();
+    assert!(
+        matches!(&error, Error::Corrupt(why) if why.contains("inflates to more than")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_normal_capture_reads_under_limits_that_just_fit_it() {
+    let file = write_capture(&synthetic_fields()).bytes;
+    let mut inflated = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&file[..]), &mut inflated)
+        .unwrap();
+    let mut follower = Follower::with_limits(inflated.len() as u64, inflated.len() as u64);
+    let mut got = Vec::new();
+    for slice in file.chunks(100) {
+        got.extend(follower.push(slice).unwrap());
+    }
+    assert_eq!(got, expected_entries(&synthetic_fields()));
+}

@@ -3,6 +3,10 @@ use flate2::{Crc, Decompress, FlushDecompress, Status};
 use crate::error::Error;
 
 const OUT_CHUNK: usize = 64 * 1024;
+/// The longest gzip header accepted. The capture writer's header is 10 bytes; the optional extra
+/// field, name and comment of a longer one are scanned again for each slice that arrives, so this
+/// cap also bounds that work.
+const MAX_HEADER: usize = 64 * 1024;
 
 enum State {
     Header(Vec<u8>),
@@ -15,6 +19,10 @@ enum State {
 pub struct GzipInflater {
     state: State,
     crc: Crc,
+    produced: u64,
+    limit: u64,
+    /// Where one inflate step writes before its bytes are counted and kept.
+    scratch: Vec<u8>,
 }
 
 impl Default for GzipInflater {
@@ -22,11 +30,22 @@ impl Default for GzipInflater {
         Self {
             state: State::Header(Vec::new()),
             crc: Crc::new(),
+            produced: 0,
+            limit: crate::follow::MAX_INFLATED,
+            scratch: Vec::new(),
         }
     }
 }
 
 impl GzipInflater {
+    /// An inflater that fails once the stream has produced more than `limit` bytes.
+    pub fn with_limit(limit: u64) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+
     /// True once the trailer has arrived and matched.
     pub fn is_done(&self) -> bool {
         matches!(self.state, State::Done)
@@ -38,7 +57,14 @@ impl GzipInflater {
             State::Header(buf) => {
                 buf.extend_from_slice(bytes);
                 check_magic(buf)?;
-                let Some(len) = header_len(buf) else {
+                let len = header_len(buf);
+                if len.unwrap_or(buf.len()) > MAX_HEADER {
+                    return Err(Error::Corrupt(format!(
+                        "the gzip header is longer than {} KiB",
+                        MAX_HEADER >> 10
+                    )));
+                }
+                let Some(len) = len else {
                     return Ok(());
                 };
                 let rest = buf.split_off(len);
@@ -49,12 +75,27 @@ impl GzipInflater {
                 let start = out.len();
                 let mut input = bytes;
                 let mut ended = false;
+                // One step writes into a scratch slice no longer than what the limit leaves, plus
+                // one byte to see it passed, and only then into `out`.
+                let scratch = &mut self.scratch;
+                scratch.resize(OUT_CHUNK, 0);
                 loop {
-                    out.reserve(OUT_CHUNK);
+                    let room = (self.limit.saturating_sub(self.produced))
+                        .saturating_add(1)
+                        .min(OUT_CHUNK as u64) as usize;
                     let (before_in, before_out) = (inflater.total_in(), inflater.total_out());
                     let status = inflater
-                        .decompress_vec(input, out, FlushDecompress::None)
+                        .decompress(input, &mut scratch[..room], FlushDecompress::None)
                         .map_err(|e| Error::Corrupt(e.to_string()))?;
+                    let made = (inflater.total_out() - before_out) as usize;
+                    self.produced += made as u64;
+                    if self.produced > self.limit {
+                        return Err(Error::Corrupt(format!(
+                            "the capture inflates to more than {} MiB",
+                            self.limit >> 20
+                        )));
+                    }
+                    out.extend_from_slice(&scratch[..made]);
                     let used = (inflater.total_in() - before_in) as usize;
                     input = &input[used..];
                     if status == Status::StreamEnd {
@@ -128,4 +169,43 @@ fn header_len(buf: &[u8]) -> Option<usize> {
         at += 2;
     }
     (buf.len() >= at).then_some(at)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_more_than_the_limit_is_kept_and_a_stream_ending_at_it_is_whole() {
+        use std::io::Write;
+        let gzip = |len: usize| {
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+            gz.write_all(&vec![0u8; len]).unwrap();
+            gz.finish().unwrap()
+        };
+        let mut out = Vec::new();
+        let mut past = GzipInflater::with_limit(1000);
+        assert!(past.push(&gzip(1 << 20), &mut out).is_err());
+        assert!(out.len() <= 1000, "{}", out.len());
+        let mut out = Vec::new();
+        let mut exact = GzipInflater::with_limit(1000);
+        exact.push(&gzip(1000), &mut out).unwrap();
+        assert!(exact.is_done());
+        assert_eq!(out.len(), 1000);
+    }
+
+    #[test]
+    fn a_gzip_header_past_the_cap_is_refused_while_it_arrives() {
+        // A header announcing a file name (FNAME) that never ends.
+        let mut inflater = GzipInflater::default();
+        let mut out = Vec::new();
+        inflater
+            .push(&[0x1f, 0x8b, 8, 0x08, 0, 0, 0, 0, 0, 0xff], &mut out)
+            .unwrap();
+        let slice = [b'a'; 1024];
+        let refused = (0..=MAX_HEADER / slice.len())
+            .map(|_| inflater.push(&slice, &mut out))
+            .any(|r| r.is_err());
+        assert!(refused);
+    }
 }

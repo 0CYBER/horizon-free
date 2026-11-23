@@ -1,5 +1,5 @@
 use horizon_perf_format::v1::{Attachment, Capture, Side};
-use horizon_perf_format::{FORMAT, Field};
+use horizon_perf_format::{FORMAT, Field, MAX_PART_FIELD, MAX_PART_INFLATED};
 use prost::Message;
 
 use crate::error::Error;
@@ -51,12 +51,28 @@ impl Entry {
     }
 }
 
+/// The most one capture may inflate to: a client side and a server part, each held to
+/// `MAX_PART_INFLATED` (512 MiB, room for the 256 MiB timeline cap plus a 600 s session) by the merge.
+pub const MAX_INFLATED: u64 = 2 * MAX_PART_INFLATED;
+/// The longest top-level field: what the writer's merge accepts, and the most that waits half-arrived.
+pub const MAX_FIELD: u64 = MAX_PART_FIELD;
+/// The most compressed bytes inflated before the fields are looked at again. Deflate expands at
+/// most about 1032 to 1, so a step adds at most about 1 MiB to what waits: a field announced
+/// past `max_field` is refused before more than that of it is buffered.
+const PUSH_STEP: usize = 1024;
+
 /// The follow reader: inflates a growing capture incrementally and yields each whole top-level field once.
-#[derive(Default)]
 pub struct Follower {
     gz: GzipInflater,
     pending: Vec<u8>,
     sides: Vec<(Side, bool)>,
+    max_field: u64,
+}
+
+impl Default for Follower {
+    fn default() -> Self {
+        Self::with_limits(MAX_INFLATED, MAX_FIELD)
+    }
 }
 
 impl Follower {
@@ -64,18 +80,33 @@ impl Follower {
         Self::default()
     }
 
+    /// A reader that fails once the stream inflates past `max_inflated` bytes or announces a field longer than `max_field`.
+    pub fn with_limits(max_inflated: u64, max_field: u64) -> Self {
+        Self {
+            gz: GzipInflater::with_limit(max_inflated),
+            pending: Vec::new(),
+            sides: Vec::new(),
+            max_field,
+        }
+    }
+
     /// Feeds the next bytes of the file, in any split, and returns the fields that became whole.
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Entry>, Error> {
-        self.gz.push(bytes, &mut self.pending)?;
         let mut entries = Vec::new();
-        let mut at = 0;
-        while let Some((number, len)) = next_field(&self.pending[at..])? {
-            let entry = decode_entry(number, &self.pending[at..at + len])?;
-            at += len;
-            self.note(&entry)?;
-            entries.push(entry);
+        for step in bytes.chunks(PUSH_STEP) {
+            self.gz.push(step, &mut self.pending)?;
+            let mut at = 0;
+            while let Some((number, len)) = next_field(&self.pending[at..], self.max_field)? {
+                let entry = decode_entry(number, &self.pending[at..at + len])?;
+                at += len;
+                self.note(&entry)?;
+                entries.push(entry);
+            }
+            self.pending.drain(..at);
         }
-        self.pending.drain(..at);
+        if bytes.is_empty() {
+            self.gz.push(bytes, &mut self.pending)?;
+        }
         if self.gz.is_done() && !self.pending.is_empty() {
             return Err(Error::Corrupt("the capture ends inside a field".into()));
         }
@@ -187,7 +218,7 @@ fn decode_entry(number: u32, bytes: &[u8]) -> Result<Entry, Error> {
 }
 
 /// The field number and byte length of the whole top-level field at the start of `buf`, if it has all arrived.
-fn next_field(buf: &[u8]) -> Result<Option<(u32, usize)>, Error> {
+fn next_field(buf: &[u8], max_field: u64) -> Result<Option<(u32, usize)>, Error> {
     let Some((key, key_len)) = varint(buf)? else {
         return Ok(None);
     };
@@ -204,8 +235,14 @@ fn next_field(buf: &[u8]) -> Result<Option<(u32, usize)>, Error> {
         1 => 8,
         5 => 4,
         2 => match varint(rest)? {
-            Some((len, n)) if len <= i32::MAX as u64 => n + len as usize,
-            Some(_) => return Err(Error::Corrupt("a field is larger than 2 GiB".into())),
+            // Whatever limit is asked for, a length stays below 2 GiB so the sums below cannot overflow.
+            Some((len, n)) if len <= max_field.min(i32::MAX as u64) => n + len as usize,
+            Some(_) => {
+                return Err(Error::Corrupt(format!(
+                    "a field is larger than {} MiB",
+                    max_field.min(i32::MAX as u64) >> 20
+                )));
+            }
             None => return Ok(None),
         },
         wire => return Err(Error::Corrupt(format!("unsupported wire type {wire}"))),
@@ -227,4 +264,42 @@ fn varint(buf: &[u8]) -> Result<Option<(u64, usize)>, Error> {
         return Err(Error::Corrupt("a varint is longer than 10 bytes".into()));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_field_in_one_push_is_refused_before_it_is_buffered() {
+        use std::io::Write;
+        // Field 5 announcing 16 MiB, all of it present and compressed to a few KiB.
+        let len = 16u64 << 20;
+        let mut inflated = vec![5 << 3 | 2];
+        let mut n = len;
+        while n >= 0x80 {
+            inflated.push((n as u8 & 0x7f) | 0x80);
+            n >>= 7;
+        }
+        inflated.push(n as u8);
+        inflated.resize(inflated.len() + len as usize, 0);
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gz.write_all(&inflated).unwrap();
+        let file = gz.finish().unwrap();
+        let mut follower = Follower::with_limits(1 << 30, 1000);
+        assert!(follower.push(&file).is_err());
+        // At most one step of inflated bytes waited behind the header, not the field.
+        assert!(
+            follower.pending.len() < 2 << 20,
+            "{}",
+            follower.pending.len()
+        );
+    }
+
+    #[test]
+    fn a_field_past_2_gib_is_refused_under_any_field_limit() {
+        // Field 5 announcing 4 GiB: a length varint of 2^32.
+        let header = [5 << 3 | 2, 0x80, 0x80, 0x80, 0x80, 0x10];
+        assert!(next_field(&header, u64::MAX).is_err());
+    }
 }
