@@ -353,7 +353,7 @@ pub fn curseforge(manifest: &Value, names: &[String]) -> Pack {
 
 /// Crash Assistant's `config/crash_assistant/modlist.json`: jar name → mod
 /// id, name, version and Modrinth SHA-1, with the loader as an entry of its
-/// own. NeoForge `21.1.x` runs Minecraft 1.21.1.
+/// own. NeoForge `21.1.x` runs Minecraft 1.21.1, `26.3.0.x` runs 26.3.
 pub fn modlist(list: &Value) -> Result<Pack, String> {
     let entries = list.as_object().ok_or("modlist.json: not an object")?;
     let mut pack = Pack {
@@ -368,15 +368,10 @@ pub fn modlist(list: &Value) -> Result<Pack, String> {
             let (loader, v) = version.split_once('-').unwrap_or(("", &version));
             pack.loader = loader.to_owned();
             pack.loader_version = v.to_owned();
-            if loader == "neoforge" {
-                let mut parts = v.split('.');
-                if let (Some(a), Some(b)) = (parts.next(), parts.next()) {
-                    pack.minecraft = if b == "0" {
-                        format!("1.{a}")
-                    } else {
-                        format!("1.{a}.{b}")
-                    };
-                }
+            if loader == "neoforge"
+                && let Some(minecraft) = neoforge_minecraft(v)
+            {
+                pack.minecraft = minecraft;
             }
             continue;
         }
@@ -397,6 +392,26 @@ pub fn modlist(list: &Value) -> Result<Pack, String> {
     }
     pack.files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(pack)
+}
+
+/// The Minecraft version a NeoForge version plays. Before Minecraft's year versions NeoForge is
+/// `{minor}.{patch}.{build}` (`21.1.259` plays 1.21.1, `21.0.167` plays 1.21); since them it is
+/// `{year}.{drop}.{patch}.{build}` (`26.3.0.115` plays 26.3, `26.1.2.7` plays 26.1.2), as the
+/// launcher's `neoforge_prefix` writes it.
+fn neoforge_minecraft(version: &str) -> Option<String> {
+    let mut parts = version.split('.');
+    let (a, b) = (parts.next()?, parts.next()?);
+    if a.parse::<u32>().is_ok_and(|year| year >= 26) {
+        return Some(match parts.next() {
+            Some(patch) if patch != "0" => format!("{a}.{b}.{patch}"),
+            _ => format!("{a}.{b}"),
+        });
+    }
+    Some(if b == "0" {
+        format!("1.{a}")
+    } else {
+        format!("1.{a}.{b}")
+    })
 }
 
 fn prism_components(pack: &mut Pack, mmc: &Value) {
@@ -730,6 +745,28 @@ mod tests {
         assert_eq!(paths, ["datapacks/sawmill.zip", "mods/mcw-doors-1.1.2.jar"]);
         assert!(pack.files[1].sha1.is_some());
         assert_eq!(pack.files[1].mod_id.as_deref(), Some("mcwdoors"));
+    }
+
+    /// NeoForge's year versions play Minecraft's year versions: `26.3.0.115` is 26.3, not 1.26.3.
+    #[test]
+    fn a_neoforge_mod_list_names_the_minecraft_its_version_plays() {
+        for (neoforge, minecraft) in [
+            ("21.1.259", "1.21.1"),
+            ("21.0.167", "1.21"),
+            ("26.3.0.115", "26.3"),
+            ("26.1.2.7", "26.1.2"),
+            ("26.1.0.3", "26.1"),
+        ] {
+            let key = format!("neoforge-{neoforge} (modloader)");
+            let mut list = serde_json::Map::new();
+            list.insert(
+                key.clone(),
+                json!({"jarName": key, "modId": "neoforge", "version": format!("neoforge-{neoforge}")}),
+            );
+            let pack = modlist(&Value::Object(list)).unwrap();
+            assert_eq!(pack.minecraft, minecraft, "{neoforge}");
+            assert_eq!(pack.loader_version, neoforge);
+        }
     }
 
     #[test]
