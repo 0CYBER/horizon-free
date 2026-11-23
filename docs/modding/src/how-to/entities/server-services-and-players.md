@@ -56,6 +56,29 @@ current dimension, even when another dimension is ticking. On a client they
 identify the local player's level. Unknown, disconnected, replaced or stale handles
 return `None`.
 
+## Health and network entity ID
+
+A `PlayerRef` gives you the player's UUID. To read health, first call
+`player.entity()` for its `EntityRef`, then `host.living(entity)` for its
+`LivingRef`. Call `health(host)` and `max_health(host)` on that handle. Both
+return health points, where two points make one heart. Maximum health includes
+attribute modifiers. Use `entity.id()` for the network entity ID that entity
+events carry, and `player.uuid()` for persistent player identity.
+
+```rust
+use mod_api::{PlayerRef, ServerHost};
+
+fn player_health(host: &dyn ServerHost, player: PlayerRef) -> Option<(u32, f32, f32)> {
+    let entity = player.entity();
+    let living = host.living(entity)?;
+    Some((entity.id(), living.health(host)?, living.max_health(host)?))
+}
+```
+
+Handle `None` when the player has no body available to this hook or the handle
+has gone stale. A network ID comes from the entity handle itself, so reading
+`entity.id()` does not check that the entity still exists.
+
 ## Profiles and skins
 
 Two server-side lookups answer different questions.
