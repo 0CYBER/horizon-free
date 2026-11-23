@@ -1,5 +1,7 @@
+import json
 import random
 import unittest
+from pathlib import Path
 
 from tools import parity_fuzz as fuzz
 from tools import parity_fuzz_scenarios as families
@@ -135,6 +137,219 @@ class FamilyTests(unittest.TestCase):
                 self.assertEqual(scenario, family(random.Random(seed), seed))
                 self.assertTrue(fuzz.runnable(scenario), (name, seed))
                 self.assertTrue(any(op.get('read') for op in fuzz.render(scenario, 1)), (name, seed))
+
+
+class StackTests(unittest.TestCase):
+    step = {'k': 'stack', 'how': 'with', 'at': [7, 2, 7], 'item': 'minecraft:iron_pickaxe', 'count': 1,
+            'nbt': {'minecraft:damage': '0', 'minecraft:lore': None}}
+
+    def test_a_stack_renders_as_a_command_argument_and_as_saved_nbt(self):
+        self.assertEqual(fuzz.stack_command(self.step, '1 2 3'), '/item replace block 1 2 3 container.0 with '
+                         'minecraft:iron_pickaxe[minecraft:damage=0,!minecraft:lore] 1')
+        saved = '{Slot:0b,id:"minecraft:iron_pickaxe",count:1,components:{"minecraft:damage":0,"!minecraft:lore":{}}}'
+        self.assertEqual(fuzz.stack_command({**self.step, 'how': 'nbt', 'block': 'barrel'}, '1 2 3'),
+                         f'/setblock 1 2 3 barrel{{Items:[{saved}]}}')
+        self.assertEqual(fuzz.stack_command({**self.step, 'how': 'merge'}, '1 2 3'),
+                         f'/data merge block 1 2 3 {{Items:[{saved}]}}')
+        self.assertIn('{type:"minecraft:set_components",components:{"minecraft:damage":0,"!minecraft:lore":{}}}',
+                      fuzz.stack_command({**self.step, 'how': 'loot'}, '1 2 3'))
+        self.assertEqual(fuzz.stack_command({**self.step, 'nbt': {}}, '1 2 3'),
+                         '/item replace block 1 2 3 container.0 with minecraft:iron_pickaxe 1')
+
+    def test_a_patch_entry_shrinks_away_and_a_command_keeps_its_own_braces(self):
+        scenario = {'family': 'items', 'seed': 1, 'steps': [
+            self.step, {'k': 'cmd', 'cmd': '/execute if items block {0} container.0 *[minecraft:custom_data~{a:1b}]',
+                        'at': [[7, 2, 7]], 'subject': 'if_items/partial'},
+            {'k': 'read_block', 'at': [7, 2, 7], 'path': 'Items', 'subject': 'with'}]}
+        self.assertIn(('nbt', 0, 'minecraft:lore'), list(fuzz.edits(scenario)))
+        commands = [op['cmd'] for op in fuzz.render(scenario, 0) if op.get('step', -1) >= 0]
+        self.assertEqual(commands[1], '/execute if items block 4103 302 4103 container.0 *[minecraft:custom_data~{a:1b}]')
+        self.assertEqual(commands[2], '/data get block 4103 302 4103 Items')
+        self.assertEqual(fuzz.subject(scenario, scenario['steps'][2]), 'with')
+
+    def test_a_merge_goes_into_the_block_already_placed(self):
+        scenario = {'family': 'blockdata', 'seed': 1, 'steps': [
+            {'k': 'block', 'block': 'chest', 'at': [7, 0, 7]},
+            {'k': 'block', 'block': 'chest', 'at': [7, 0, 7], 'nbt': {'CustomName': '"fz"'}, 'merge': True},
+            {'k': 'read_block', 'at': [7, 0, 7]}]}
+        commands = [op['cmd'] for op in fuzz.render(scenario, 0) if op.get('step', -1) >= 0]
+        self.assertEqual(commands[:2], ['/setblock 4103 300 4103 chest',
+                                        '/data merge block 4103 300 4103 {CustomName:"fz"}'])
+
+    def test_prototype_values_become_snbt(self):
+        from tools import parity_fuzz_data as data
+        self.assertEqual(data.to_snbt({'a': [1, 2.5, True, 'x"y'], 'minecraft:b': {}}),
+                         '{"a":[1,2.5d,true,"x\\"y"],"minecraft:b":{}}')
+        rng = random.Random(3)
+        patched = data.patch(rng, {'minecraft:max_stack_size': 64, 'minecraft:lore': []})
+        self.assertTrue(patched and all(value is None or isinstance(value, str) for value in patched.values()))
+        self.assertEqual(data.mistype(random.Random(1), '"x"'), '7')
+        self.assertNotEqual(data.mistype(random.Random(1), '5L'), '5L')
+
+
+    def test_ordinary_inputs_keep_to_command_built_stacks_and_values_vanilla_saves(self):
+        from tools import parity_fuzz_data as data
+        data.EDGES = False
+        try:
+            for seed in range(60):
+                routes = [step['how'] for step in data.items(random.Random(seed), seed)['steps'] if step['k'] == 'stack']
+                self.assertTrue(set(routes) <= {'with', 'modify', 'loot'}, routes)
+                placed = [step for step in data.blockdata(random.Random(seed), seed)['steps'] if step.get('nbt')]
+                for step in placed:
+                    block = step['block']
+                    self.assertTrue(all(value == data.BLOCKS[block][key][0] for key, value in step['nbt'].items()))
+        finally:
+            data.EDGES = True
+
+    def test_shard_logs_merge_into_clusters_by_field_and_kind_of_difference(self):
+        from tools import parity_fuzz_probe as probe
+        where = [7, '/data get block 1 2 3 Items', [['[0].components.minecraft:food.saturation', '8.0d', '8.0f']]]
+        self.assertEqual(probe.cluster('items|with|live|[0].components', where),
+                         'items|with|[].components.minecraft:food.saturation|tag type')
+        where[2][0][1:] = [None, '{}']
+        self.assertTrue(probe.cluster('items|with|live|x', where).endswith('|only horizon'))
+
+
+    def test_a_stack_count_stays_within_the_limit_its_patch_leaves(self):
+        from tools import parity_fuzz_data as data
+        slab = {'minecraft:max_stack_size': 64}
+        self.assertEqual(data.stack_limit(slab, {'minecraft:max_stack_size': '1'}), (1, True))
+        self.assertEqual(data.stack_limit(slab, {'minecraft:max_stack_size': None}), (1, True))
+        self.assertEqual(data.stack_limit(slab, {'minecraft:max_damage': '250'}), (64, False))
+        self.assertEqual(data.stack_limit({'minecraft:max_stack_size': 1, 'minecraft:max_damage': 250}, {}), (1, True))
+        old = dict(data.PROTOTYPES), dict(data.GAME)
+        data.PROTOTYPES.update({'minecraft:spruce_slab': slab, 'minecraft:iron_pickaxe': {
+            'minecraft:max_stack_size': 1, 'minecraft:max_damage': 250}})
+        data.GAME.update({'minecraft:max_stack_size': ['1', '16', '64'], 'minecraft:max_damage': ['250']})
+        data.EDGES = False
+        try:
+            for seed in range(400):
+                for step in data.items(random.Random(seed), seed)['steps']:
+                    if step['k'] == 'stack':
+                        limit, valid = data.stack_limit(data.PROTOTYPES.get(step['item'], {}), step['nbt'])
+                        self.assertTrue(valid and step['count'] <= limit, (seed, step))
+        finally:
+            data.EDGES = True
+            for store, kept in zip((data.PROTOTYPES, data.GAME), old):
+                store.clear()
+                store.update(kept)
+
+    def test_a_retried_shard_counts_once_in_a_merge(self):
+        import tempfile
+        from tools import parity_fuzz_probe as probe
+        found = {'scenarios': 50, 'invalid': [], 'refused': [], 'groups': [
+            {'signature': 'items|with|live|x', 'seeds': [3], 'where': [[3, '/data get', [['x', '1', '2']]]]}]}
+        with tempfile.TemporaryDirectory() as folder:
+            paths = []
+            for name in ('fuzz_probe#1.log', 'fuzz_probe#1.first-run.log', 'fuzz_probe#2.first-run.log'):
+                paths.append(Path(folder) / name)
+                paths[-1].write_text('=== found.json ===' + chr(10) + json.dumps(found) + chr(10), encoding='utf-8')
+            merged = probe.merge(paths)
+        self.assertEqual(merged['totals']['scenarios'], 100)
+        self.assertEqual(merged['groups']['items|with|live|x']['seeds'], [3, 3])
+
+    def test_a_merge_takes_the_retry_when_the_first_run_stopped_without_a_result(self):
+        import tempfile
+        from tools import parity_fuzz_probe as probe
+        found = json.dumps({'scenarios': 25, 'invalid': [], 'refused': [], 'groups': []})
+        with tempfile.TemporaryDirectory() as folder:
+            logs = {'fuzz_probe#1.first-run.log': 'parity_fuzz stopped after 1800 s',
+                    'fuzz_probe#1.log': '=== found.json ===' + chr(10) + found,
+                    'fuzz_probe#2.first-run.log': '=== found.json ===' + chr(10) + found,
+                    'fuzz_probe#2.log': 'parity_fuzz stopped after 1800 s',
+                    'fuzz_probe#3.first-run.log': 'batch 1', 'fuzz_probe#3.log': 'batch 1',
+                    'fuzz_probe#4.first-run.log': 'parity_fuzz stopped after 1800 s',
+                    'fuzz_probe#4.log': '6 scenarios: 0 diverge (--smoke)' + chr(10) + 'parity_fuzz exited 0'}
+            for name, text in logs.items():
+                (Path(folder) / name).write_text(text + chr(10), encoding='utf-8')
+            merged = probe.merge(sorted(Path(folder).iterdir()))
+        self.assertEqual(merged['totals']['scenarios'], 50)
+        self.assertEqual(merged['lost'], ['fuzz_probe#3.first-run.log'])
+
+    def test_a_stack_patched_where_it_lies_is_placed_within_the_bare_items_limit(self):
+        from tools import parity_fuzz_data as data
+        old = dict(data.PROTOTYPES), dict(data.GAME)
+        data.PROTOTYPES.clear()
+        data.PROTOTYPES['minecraft:ender_pearl'] = {'minecraft:max_stack_size': 16}
+        data.GAME.clear()
+        data.GAME['minecraft:max_stack_size'] = ['64']
+        data.EDGES = False
+        real, data.ITEMS = data.ITEMS, ['ender_pearl']
+        try:
+            placed = []
+            for seed in range(300):
+                scenario = data.items(random.Random(seed), seed)
+                if any(step.get('how') == 'modify' for step in scenario['steps']):
+                    placed += [op['cmd'] for op in fuzz.render(scenario, 0)
+                               if op['op'] == 'cmd' and ' with minecraft:ender_pearl ' in op['cmd']]
+            self.assertTrue(placed)
+            self.assertTrue(all(int(cmd.rsplit(' ', 1)[1]) <= 16 for cmd in placed), placed[:3])
+        finally:
+            data.EDGES, data.ITEMS = True, real
+            for store, kept in zip((data.PROTOTYPES, data.GAME), old):
+                store.clear()
+                store.update(kept)
+
+    def test_retype_draws_the_same_whatever_order_vanilla_saved_the_fields_in(self):
+        from tools import parity_fuzz_scenarios as families
+        fields = {'Air': '300s', 'Fire': '-1s', 'PortalCooldown': '0', 'Motion': {'x': '0.0d'}, 'CustomName': '"a"'}
+        old = dict(families.KNOWN)
+        try:
+            made = []
+            for order in (list(fields), list(reversed(fields))):
+                families.KNOWN.update({'entity': {'pig': {key: fields[key] for key in order}}, 'block': {'barrel': {}}})
+                made.append([families.retype(random.Random(seed), seed) for seed in range(40)])
+            self.assertEqual(made[0], made[1])
+        finally:
+            families.KNOWN.clear()
+            families.KNOWN.update(old)
+
+
+class CommandTreeTests(unittest.TestCase):
+    tree = {'type': 'root', 'children': {
+        'kill': {'type': 'literal', 'executable': True, 'children': {
+            'targets': {'type': 'argument', 'parser': 'minecraft:entity', 'executable': True,
+                        'properties': {'type': 'entities', 'amount': 'multiple'}}}},
+        'effect': {'type': 'literal', 'children': {'give': {'type': 'literal', 'children': {
+            'targets': {'type': 'argument', 'parser': 'minecraft:entity',
+                        'properties': {'type': 'players', 'amount': 'multiple'}}}}}}}}
+
+    def test_a_walk_never_reaches_command_storage(self):
+        from tools import parity_fuzz_commands as commands
+        nbt = {'type': 'argument', 'parser': 'minecraft:nbt_compound_tag', 'executable': True}
+        tree = {'type': 'root', 'children': {'data': {'type': 'literal', 'children': {'merge': {
+            'type': 'literal', 'children': {
+                'storage': {'type': 'literal', 'children': {'target': {
+                    'type': 'argument', 'parser': 'minecraft:resource_location', 'children': {'nbt': nbt}}}},
+                'entity': {'type': 'literal', 'children': {'target': {
+                    'type': 'argument', 'parser': 'minecraft:entity',
+                    'properties': {'type': 'entities', 'amount': 'single'}, 'children': {'nbt': nbt}}}}}}}}}}
+        old = dict(commands.TREE)
+        try:
+            commands.TREE.clear()
+            commands.TREE.update(tree)
+            made = [commands.command(random.Random(seed), 7) for seed in range(60)]
+            self.assertTrue(any(made))
+            self.assertFalse([m for m in made if m and 'storage' in m[0]])
+        finally:
+            commands.TREE.clear()
+            commands.TREE.update(old)
+
+    def test_a_walk_names_its_own_entities_and_never_the_sender_or_a_player(self):
+        from tools import parity_fuzz_commands as commands
+        old = dict(commands.TREE)
+        try:
+            commands.TREE.clear()
+            commands.TREE.update(self.tree)
+            made = [commands.command(random.Random(seed), 7) for seed in range(40)]
+            self.assertTrue(all(m is None or m[0].startswith('kill ') and m[1] == 'kill' for m in made))
+            self.assertTrue(any(made))  # a bare /kill (the sender) and /effect give <players> are never made
+            scenario = commands.commands(random.Random(1), 7)
+            texts = [op['cmd'] for op in fuzz.render(scenario, 0) if op['op'] == 'cmd']
+            self.assertFalse(any('{u' in text for text in texts))
+        finally:
+            commands.TREE.clear()
+            commands.TREE.update(old)
 
 
 class ShulkerHitTests(unittest.TestCase):

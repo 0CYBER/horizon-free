@@ -4,6 +4,7 @@
 Each scenario comes from a seed: an area far from the player, forceloaded; a setup and an actor (summon with NBT,
 a block entity with NBT, a dispenser, a drop, an explosion, a piston); time steps; optionally an unload and reload of
 the area's chunk, which saves and loads it through each engine's chunk and entity storage; and reads (`/data get`).
+An item stack is a step of its own (`stack`): one item and component patch, built by a command or loaded from NBT.
 Every scenario syncs both engines' randoms first (docs/parity-workflow.md, "Randoms that repeat"). A batch runs
 through tools/test_command_exec_parity.py (`--groups-file`), each read is compared exactly (SNBT parsed, so a
 difference names its field), failures are shrunk while the same field still differs, and grouped by family, subject
@@ -188,6 +189,42 @@ def uuid_text(words):
                      f'{words[2] >> 16:04x}', f'{words[2] & 0xffff:04x}{words[3]:08x}'])
 
 
+def patch_nbt(step):
+    """A stack step's component patch as saved NBT: {component: SNBT value}, None removing one (`"!id":{}`)."""
+    return '{' + ','.join(f'"!{key}":{{}}' if value is None else f'"{key}":{value}'
+                          for key, value in (step.get('nbt') or {}).items()) + '}'
+
+
+def stack_text(step, nbt, head=''):
+    """A stack step's item with its patch: `id[patch]` as a command takes it, or the NBT a save holds."""
+    patch = step.get('nbt') or {}
+    if not nbt:
+        parts = ','.join(f'!{key}' if value is None else f'{key}={value}' for key, value in patch.items())
+        return step['item'] + (f'[{parts}]' if patch else '')
+    return f'{{{head}id:"{step["item"]}",count:{step["count"]}' + (f',components:{patch_nbt(step)}' if patch else '') + '}'
+
+
+def stack_command(step, pos):
+    """How a stack step reaches slot 0 of the container at its place: `/item replace ... with`; the container placed
+    with the stack in its NBT; `/data merge` into a placed container; `/item modify` (set_components) of a stack
+    already there; an inline loot table whose entry sets the components."""
+    how = step['how']
+    if how == 'with':
+        return f'/item replace block {pos} container.0 with {stack_text(step, False)} {step["count"]}'
+    if how == 'nbt':
+        return f'/setblock {pos} {step["block"]}{{Items:[{stack_text(step, True, "Slot:0b,")}]}}'
+    if how == 'merge':
+        return f'/data merge block {pos} {{Items:[{stack_text(step, True, "Slot:0b,")}]}}'
+    set_components = f'{{type:"minecraft:set_components",components:{patch_nbt(step)}}}'
+    if how == 'modify':
+        return f'/item modify block {pos} container.0 {set_components}'
+    if how == 'loot':
+        return (f'/loot replace block {pos} container.0 loot {{pools:[{{rolls:1,entries:[{{type:"minecraft:item",'
+                f'name:"{step["item"]}",functions:[{set_components},{{type:"minecraft:set_count",'
+                f'count:{step["count"]}}}]}}]}}]}}')
+    raise ValueError(how)
+
+
 def sync_op(seed, slot):
     """Both engines' randoms from one state; entity ids are unique in a batch, the same modulo 4 in every slot."""
     return {'op': 'sync_randoms', 'uniquifier': seed, 'entity_id': 10_000_000 + 10_000 * slot, 'level_seed': seed}
@@ -225,12 +262,18 @@ def render(scenario, slot):
             text = re.sub(r'\{iu(\d+)\}', lambda m: '[I;' + ','.join(map(str, uuid_words(slot, int(m.group(1))))) + ']', text)
             ops.append(cmd(f'/summon {step["type"]} {at(step["at"])} {text}', i))
         elif kind == 'block':
-            ops.append(cmd(f'/setblock {at(step["at"])} {step["block"]}{snbt(step.get("nbt") or {}) if step.get("nbt") else ""}', i))
+            if step.get('merge'):  # into the block already there: `BlockEntity.loadWithComponents` of the merged tag
+                ops.append(cmd(f'/data merge block {at(step["at"])} {snbt(step.get("nbt") or {})}', i))
+            else:
+                ops.append(cmd(f'/setblock {at(step["at"])} {step["block"]}{snbt(step.get("nbt") or {}) if step.get("nbt") else ""}', i))
+        elif kind == 'stack':
+            ops.append(cmd(stack_command(step, at(step['at'])), i))
         elif kind == 'cmd':
             text = step['cmd']
             if step.get('uuids'):  # `{uN}`: the UUID of the entity summoned as n=N
                 text = re.sub(r'\{u(\d+)\}', lambda m: uuid_text(uuid_words(slot, int(m.group(1)))), text)
-            op = cmd(text.format(*[at(o) for o in step.get('at', [])]), i)
+            # `{N}`: the step's Nth place. Not str.format: a command's SNBT has braces of its own.
+            op = cmd(re.sub(r'\{(\d+)\}', lambda m: at(step['at'][int(m.group(1))]), text), i)
             if 'guard' in step:
                 op['guard'] = step['guard']
             ops.append(op)
@@ -252,15 +295,18 @@ def render(scenario, slot):
                     *({**cmd(f'/execute if entity {uuid}', i), 'guard': 'entity'} for uuid in summoned),
                     cmd(f'/forceload add {x0} {z0}', i, False), {'op': 'wait_chunks', 'chunks': chunk}]
         elif kind == 'read_entity':
-            ops.append({**cmd(f'/data get entity {uuid_text(uuid_words(slot, step["n"]))}', i), 'read': True})
+            path = f' {step["path"]}' if step.get('path') else ''
+            ops.append({**cmd(f'/data get entity {uuid_text(uuid_words(slot, step["n"]))}{path}', i), 'read': True})
         elif kind == 'read_near':
             ox, oy, oz = (a + b for a, b in zip(area(slot), step['at']))
+            path = f' {step["path"]}' if step.get('path') else ''
             ops.append({**cmd(f'/data get entity @e[type={step["type"]},x={ox}.5,y={oy},z={oz}.5,distance=..6,'
-                              f'sort=nearest,limit=1]', i), 'read': True})
+                              f'sort=nearest,limit=1]{path}', i), 'read': True})
             ops.append({**cmd(f'/execute if entity @e[type={step["type"]},x={ox}.5,y={oy},z={oz}.5,distance=..12]', i),
                         'read': True})
         elif kind == 'read_block':
-            ops.append({**cmd(f'/data get block {at(step["at"])}', i), 'read': True})
+            path = f' {step["path"]}' if step.get('path') else ''
+            ops.append({**cmd(f'/data get block {at(step["at"])}{path}', i), 'read': True})
         else:
             raise ValueError(kind)
     if player_at is not None:
@@ -276,7 +322,9 @@ def render(scenario, slot):
 
 
 def subject(scenario, step):
-    """The entity or block type a read looks at."""
+    """The entity or block type a read looks at, or the label its family gave the step."""
+    if step.get('subject'):
+        return step['subject']
     if step['k'] == 'read_entity':
         return next((s['type'] for s in scenario['steps'] if s['k'] == 'summon' and s['n'] == step['n']), '?')
     if step['k'] == 'read_near':
@@ -340,13 +388,16 @@ class Runner:
             shutil.rmtree(batch / 'run' / world, ignore_errors=True)
         out, position = [], 0
         for scenario, ops in zip(scenarios, rendered):
-            entry = {'failures': [], 'invalid': None, 'reads': []}
+            entry = {'failures': [], 'invalid': None, 'refused': None, 'reads': []}
             for op in ops:
                 if op['op'] != 'cmd' or op.get('record') is False:
                     continue
                 vanilla, rust = records[0][position], records[1][position]
                 position += 1
                 step = scenario['steps'][op['step']]
+                if step.get('setup') and not any(result[0] for result in vanilla['results']):
+                    # Not invalid: a setup Horizon accepts and vanilla refuses is a difference, compared below.
+                    entry['refused'] = op['cmd']
                 if op.get('guard'):
                     invalid, failure = witness(scenario['family'], op, vanilla, rust)
                     if invalid:
@@ -358,7 +409,7 @@ class Runner:
                     entry['reads'].append((op['cmd'], vanilla, rust))
                 differences = compare(vanilla, rust)
                 if differences:
-                    what = subject(scenario, step) if op.get('read') else op['cmd'].split()[0]
+                    what = subject(scenario, step) if op.get('read') else step.get('subject') or op['cmd'].split()[0]
                     reloaded = any(s['k'] == 'reload' for s in scenario['steps'][:op['step']])
                     first = normalise(differences[0][0])
                     entry['failures'].append((f'{scenario["family"]}|{what}|{"reloaded" if reloaded else "live"}|{first}',
@@ -485,6 +536,8 @@ def main():
     source.add_argument('--smoke', action='store_true', help='fixed scenarios that must match: the tool works')
     parser.add_argument('--batch', type=int, default=40, help='scenarios per harness run')
     parser.add_argument('--shrink-rounds', type=int, default=6)
+    parser.add_argument('--ordinary', action='store_true',
+                        help='items, blockdata, commands: only what a command or a played world gives')
     parser.add_argument('--binary', type=Path, help='an already built Horizon game')
     parser.add_argument('--work-dir', type=Path, default=lab.LOCAL / 'parity-fuzz')
     args = parser.parse_args()
@@ -494,13 +547,16 @@ def main():
     if args.smoke or args.replay:
         scenarios = SMOKE if args.smoke else json.loads(args.replay.read_text(encoding='utf-8'))
     else:
-        families.discover(runner, work)
+        families.parity_fuzz_data.EDGES = not args.ordinary
+        families.prepare(args.family, runner, work)
         scenarios = [families.FAMILIES[args.family](random.Random(seed), seed)
                      for seed in range(args.seed, args.seed + args.count)]
     results = runner.run(scenarios)
     failing = [(s, r) for s, r in zip(scenarios, results) if signatures(r)]
     invalid = [(s['seed'], r['invalid']) for s, r in zip(scenarios, results) if r.get('invalid')]
-    print(f'{len(scenarios)} scenarios: {len(failing)} diverge, {len(invalid)} invalid', flush=True)
+    refused = [(s['seed'], r['refused']) for s, r in zip(scenarios, results) if r.get('refused')]
+    print(f'{len(scenarios)} scenarios: {len(failing)} diverge, {len(invalid)} invalid, vanilla refused the setup of '
+          f'{len(refused)}', flush=True)
     if args.smoke:
         empty = [cmd for r in results for cmd, vanilla, _ in r.get('reads', []) if vanilla['results'][:1] != [[True, 1]]]
         if failing or invalid or empty:
@@ -512,10 +568,20 @@ def main():
         for sig in signatures(result):
             groups.setdefault(sig, []).append((scenario, result))
     known, new_groups, not_observed = classify(groups)
+    # Before shrinking, which can outlast a runner's time limit: every group with its seeds, and each member's first
+    # differing command with its first difference (what tells two causes in one group apart).
+    found = [{'signature': sig, 'seeds': [s['seed'] for s, _ in members],
+              'where': [[s['seed'], *next(([cmd, d[:2]] for g, cmd, d in r.get('failures', []) if g == sig),
+                                          [r.get('crash', '')[-300:]])] for s, r in members[:40]]}
+             for sig, members in sorted(groups.items(), key=lambda g: -len(g[1]))]
+    lab.write_json(work / 'found.json', {'scenarios': len(scenarios), 'invalid': invalid, 'refused': refused,
+                                         'groups': found})
+    for group in found:
+        print(f'found {len(group["seeds"]):3d}  {group["signature"]}  seeds {group["seeds"][:8]}', flush=True)
     # One bug, one shrink: each new group's smallest scenario stands for it.
     shrunk = shrink(runner, {sig: min(members, key=lambda m: len(json.dumps(m[0])))
                              for sig, members in new_groups.items()}, args.shrink_rounds)
-    report = {'scenarios': len(scenarios), 'invalid': invalid, 'diverging': len(failing),
+    report = {'scenarios': len(scenarios), 'invalid': invalid, 'refused': refused, 'diverging': len(failing),
               'known': [{'issue': issue, 'signatures': signatures} for issue, signatures in sorted(known.items())],
               'not_observed': [{'issue': issue, 'pattern': pattern} for issue, pattern in not_observed],
               # Each diverging seed's signatures, to compare runs of the same seeds before and after a change.

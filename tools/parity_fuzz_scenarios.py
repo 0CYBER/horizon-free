@@ -8,10 +8,12 @@ import json
 import re
 
 try:
-    from . import lab
+    from . import lab, parity_fuzz_commands, parity_fuzz_data
     from .parity_fuzz import read_data
 except ImportError:
     import lab
+    import parity_fuzz_commands
+    import parity_fuzz_data
     from parity_fuzz import read_data
 
 # Not summonable alone (a player, a bobber without its owner), gone at once (lightning), or whole fights that
@@ -128,6 +130,64 @@ def persist(rng, seed):
     steps += ([{'k': 'tick', 'n': before}] if before else []) + [read, {'k': 'reload'}, read,
                                                                     {'k': 'tick', 'n': after}, read]
     return {'family': 'persist', 'seed': seed, 'steps': steps}
+
+
+# What a field's reader must settle when the tag is not the one vanilla saves: the type's limits, a value past
+# them in a wider type, a fraction, a negative.
+LIMITS = {'b': ['127b', '-128b', '2b', '200', '-1'], 's': ['32767s', '-32768s', '40000', '-1'],
+          '': ['2147483647', '-2147483648', '3000000000L', '-1', '1.9f'], 'L': ['9223372036854775807L', '-1L', '5'],
+          'f': ['-1.0f', '3.4E38f', '7', '0.1d'], 'd': ['-1.0d', '1.7E308d', '7', '0.1f']}
+SUFFIXES = ['', 'b', 's', 'L', 'f', 'd']
+
+
+def retyped(rng, value):
+    """A saved scalar given back as another tag: the same number in another type, a limit, or a string for a number
+    and a number or an unknown name for a string. None for what is no scalar."""
+    if not isinstance(value, str):
+        return None
+    if value.startswith(('"', "'")):
+        return rng.choice(['7', '"minecraft:fz_missing"', '""'])
+    match = re.fullmatch(r'(-?[0-9.]+)(?:E-?[0-9]+)?([bsLfd]?)', value)
+    if not match:
+        return None
+    if rng.random() < 0.5:
+        return rng.choice(LIMITS[match.group(2)])
+    whole = match.group(1).split('.')[0] or '0'
+    other = rng.choice([s for s in SUFFIXES if s != match.group(2)] + ['"'])
+    return f'"{whole}"' if other == '"' else whole + ('.5' if other in 'fd' and other else '') + other
+
+
+def retype(rng, seed):
+    """One or two fields of what vanilla saves for an entity or a block entity, each given back as another NBT tag
+    (also one level down, as a compound with that one key); read, unload and reload, read."""
+    kind = rng.choice(['entity', 'entity', 'block'])
+    name = rng.choice(sorted(KNOWN[kind]))
+    saved = KNOWN[kind][name]
+    options = {}
+    for key, value in sorted(saved.items()):  # vanilla's own key order changes run to run; the draws must not
+        if key in FIXED:
+            continue
+        if isinstance(value, dict):
+            inner = {k: retyped(rng, v) for k, v in sorted(value.items())}
+            inner = {k: v for k, v in inner.items() if v is not None}
+            if inner:
+                pick = rng.choice(sorted(inner))
+                options[key] = f'{{{pick}:{inner[pick]}}}'
+        else:
+            options[key] = retyped(rng, value)
+    options = {k: v for k, v in options.items() if v is not None}
+    nbt = {k: options[k] for k in sorted(rng.sample(sorted(options), min(len(options), rng.randint(1, 2))))}
+    if kind == 'entity':
+        if 'PersistenceRequired' in saved:  # as persist: no AI drift, and no despawn far from the player
+            nbt.setdefault('NoAI', '1b')
+            nbt.setdefault('PersistenceRequired', '1b')
+        steps = [{'k': 'summon', 'type': name, 'at': [7.5, 0, 7.5], 'n': 0, 'nbt': nbt, 'setup': True}]
+        read = {'k': 'read_entity', 'n': 0}
+    else:
+        steps = [{'k': 'block', 'block': name, 'at': [7, 0, 7], 'nbt': nbt, 'setup': True}]
+        read = {'k': 'read_block', 'at': [7, 0, 7]}
+    steps += [read, {'k': 'tick', 'n': 1}, read, {'k': 'reload'}, read]
+    return {'family': 'retype', 'seed': seed, 'steps': steps}
 
 
 # Dispensed item -> the entity it makes (an item entity when the dispenser just drops it).
@@ -266,5 +326,17 @@ def uuid_arg(n):
     return '{u%d}' % n
 
 
-FAMILIES = {'persist': persist, 'spawn': spawn, 'shulker': shulker}
+FAMILIES = {'persist': persist, 'spawn': spawn, 'shulker': shulker, 'retype': retype,
+            'items': parity_fuzz_data.items, 'blockdata': parity_fuzz_data.blockdata,
+            'commands': parity_fuzz_commands.commands}
+
+
+def prepare(family, runner, work):
+    """What a family reads from vanilla before it generates: the saved fields, or the items' prototypes."""
+    if family in ('persist', 'retype'):
+        discover(runner, work)
+    elif family == 'items':
+        parity_fuzz_data.load_prototypes()
+    elif family == 'commands':
+        parity_fuzz_commands.load_tree()
 
