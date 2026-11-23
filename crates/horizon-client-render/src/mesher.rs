@@ -713,23 +713,41 @@ impl SectionMesh {
             &mut self.solid_sources,
             &mut self.solid_looks,
         );
-        self.bounds = self.compute_bounds();
         self.packed.clear();
-        self.meshlets.clear();
         self.packed_far = false;
         if packed::packing() && quads > 0 && self.solid_tints.len() == quads {
             packed::layout_into(&self.solid, &self.solid_tints, &mut self.packed);
         }
         self.solid_tints.clear();
         self.meshlets.clear();
-        if meshlet::packing_meshlets() && quads > 0 {
-            meshlet::build_section_meshlets_into(
+        let solid_bounds = if meshlet::packing_meshlets() && quads > 0 {
+            meshlet::build_section_meshlets_with_bounds(
                 &self.sides,
                 &self.solid,
                 &self.packed,
                 &mut self.meshlets,
-            );
+            )
+        } else {
+            None
+        };
+        self.bounds = match solid_bounds {
+            Some((min, max)) => Some(self.finish_bounds(min, max)),
+            None => self.compute_bounds(),
+        };
+    }
+
+    /// Finishes section bounds by folding `translucent` vertices and `BOUNDS_PAD`
+    /// onto precomputed solid vertex extrema.
+    fn finish_bounds(&self, min: [f32; 3], max: [f32; 3]) -> [glam::Vec3; 2] {
+        let mut min = glam::Vec3::from(min);
+        let mut max = glam::Vec3::from(max);
+        for v in &self.translucent {
+            let p = glam::Vec3::from(v.pos);
+            min = min.min(p);
+            max = max.max(p);
         }
+        let pad = glam::Vec3::splat(Self::BOUNDS_PAD);
+        [min - pad, max + pad]
     }
 
     /// Sorts the solid quads by the side they face for far-terrain (LOD) tiles,
