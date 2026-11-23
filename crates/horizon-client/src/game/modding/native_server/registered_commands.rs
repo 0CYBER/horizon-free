@@ -14,6 +14,8 @@ use std::{
 pub(in crate::game) struct NativeCommands {
     /// Each root's traversal level.
     pub(super) levels: HashMap<String, u8>,
+    /// Each root's text for a player below its level (`Command::denied_message`).
+    pub(super) denied: HashMap<String, String>,
     /// The mods' tree, without Horizon's moderation commands.
     pub(super) tree: Value,
     pub(super) arguments: CommandArguments,
@@ -37,6 +39,27 @@ impl NativeCommandState {
     pub(in crate::game) fn level(&self, line: &str) -> Option<u8> {
         let name = line.split(' ').next().unwrap_or_default();
         self.registered.as_ref()?.levels.get(name).copied()
+    }
+
+    /// The text a player below the level of `line`'s root is answered with, when a usage of that
+    /// root set one (`Command::denied_message`); `None` keeps vanilla's unknown-command answer.
+    pub(in crate::game) fn denied(&self, line: &str) -> Option<&str> {
+        let name = line.split(' ').next().unwrap_or_default();
+        self.registered
+            .as_ref()?
+            .denied
+            .get(name)
+            .map(String::as_str)
+    }
+
+    /// The denied text for a player of `permission` typing `line`: only when the player is below
+    /// the root's traversal level, which is its lowest usage level. A player who reaches the root
+    /// is refused further in by the dispatcher, with vanilla's answer.
+    pub(in crate::game) fn denied_for(&self, line: &str, permission: u8) -> Option<&str> {
+        if permission >= self.level(line)? {
+            return None;
+        }
+        self.denied(line)
     }
 }
 
@@ -69,6 +92,7 @@ impl Game<'_> {
         state.generation = state.generation.wrapping_add(1);
         state.registered = Some(NativeCommands {
             levels,
+            denied: denied_texts(&usages),
             tree,
             arguments,
             usages,
@@ -130,6 +154,19 @@ impl Game<'_> {
             );
         }
     }
+}
+/// The root of each usage that sets a denied text: the first usage of a root that sets one
+/// answers for it, so a usage's own level still decides who runs the command.
+fn denied_texts(usages: &[mod_api::Command]) -> HashMap<String, String> {
+    let mut texts = HashMap::new();
+    for usage in usages {
+        let Some(text) = &usage.denied else {
+            continue;
+        };
+        let root = usage.usage.split(' ').next().unwrap_or_default();
+        texts.entry(root.to_owned()).or_insert_with(|| text.clone());
+    }
+    texts
 }
 
 impl Game<'_> {
@@ -225,6 +262,46 @@ fn vanilla_command_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_text_shows_only_when_the_whole_root_is_above_the_player() {
+        let state = NativeCommandState {
+            registered: Some(NativeCommands {
+                levels: HashMap::from([("music".to_owned(), 0), ("mod".to_owned(), 2)]),
+                denied: HashMap::from([
+                    ("music".to_owned(), "No.".to_owned()),
+                    ("mod".to_owned(), "Staff only.".to_owned()),
+                ]),
+                tree: Value::Null,
+                arguments: CommandArguments::default(),
+                usages: Vec::new(),
+            }),
+            ..NativeCommandState::default()
+        };
+        // A root with a public and a protected usage has level 0: a level-0 guest typing
+        // `music stop` is refused by the dispatcher, not by the text.
+        assert_eq!(state.denied_for("music stop", 0), None);
+        assert_eq!(state.denied_for("mod ban", 1), Some("Staff only."));
+        assert_eq!(state.denied_for("mod ban", 2), None);
+        assert_eq!(state.denied_for("unknown", 0), None);
+    }
+
+    #[test]
+    fn the_first_denied_text_of_a_root_answers_for_it() {
+        let usages = [
+            mod_api::Command::op("music <name:word>", 2),
+            mod_api::Command::op("music stop", 2).denied_message("Ask a moderator."),
+            mod_api::Command::new("music").denied_message("Not for you."),
+            mod_api::Command::new("other"),
+        ];
+        let texts = denied_texts(&usages);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(
+            texts.get("music").map(String::as_str),
+            Some("Ask a moderator.")
+        );
+        assert_eq!(usages[0].denied, None);
+    }
 
     #[test]
     fn a_mod_command_answers_with_its_usages_and_the_lowest_level() {

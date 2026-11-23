@@ -1,0 +1,3 @@
+ids = ["method:Hooks::register_commands", "method:Hooks::register_client_commands", "type:Command"]
+why = "Command gains an optional denied text (Command::denied_message): a player below the level of every usage of a root sees it instead of vanilla's unknown-command error. The Command record a registering mod hands over carries the new field, so the two registration hooks change layout."
+migrate = "Rebuild mods that register commands against this version. A usage without denied_message behaves as before; add .denied_message(\"...\") to a usage to show that text to players who may run none of the root's usages."

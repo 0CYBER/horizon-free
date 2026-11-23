@@ -82,16 +82,29 @@ impl Game<'_> {
         let integrated = host.hub.config.integrated;
         if let Some(level) = self.native_commands.level(command)
             && let Some(permission) = host.hub.guest(conn).map(|g| g.permission)
-            && permission >= level
         {
-            host.commands.push(GuestCommand {
-                conn,
-                command: command.to_owned(),
-                permission,
-                integrated,
-                quiet: false,
-            });
-            return;
+            if permission >= level {
+                host.commands.push(GuestCommand {
+                    conn,
+                    command: command.to_owned(),
+                    permission,
+                    integrated,
+                    quiet: false,
+                });
+                return;
+            }
+            // `Command::denied_message`: a player below the root's level gets the mod's text, not
+            // vanilla's unknown-command answer.
+            if let Some(text) = self.native_commands.denied_for(command, permission) {
+                host.hub.send_to(
+                    conn,
+                    &C::SystemChat(play::SystemChat {
+                        content: horizon_protocol::text::literal(text),
+                        overlay: false,
+                    }),
+                );
+                return;
+            }
         }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
