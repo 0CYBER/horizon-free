@@ -54,6 +54,32 @@ def write_build_data(root: Path, identity: dict | None = None, commit: str = COM
 
 
 class StageToolTests(unittest.TestCase):
+    def test_tracked_blobs_drains_tar_padding_before_waiting_for_git(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive_path = root / "fixture.tar"
+            content = b"tracked file contents"
+            with tarfile.open(archive_path, "w") as archive:
+                member = tarfile.TarInfo("tracked.txt")
+                member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
+            with archive_path.open("ab") as archive:
+                # Use more padding than a pipe can buffer, so the writer needs the reader to finish.
+                archive.write(bytes(2 * 1024 * 1024))
+
+            pipe_archive = (
+                "from pathlib import Path; import sys; "
+                "sys.stdout.buffer.write(Path(sys.argv[1]).read_bytes())"
+            )
+            real_popen = subprocess.Popen
+
+            def archive_process(_command, **kwargs):
+                return real_popen([sys.executable, "-c", pipe_archive, str(archive_path)],
+                                  stderr=subprocess.DEVNULL, **kwargs)
+
+            with patch.object(prebuilt_game.subprocess, "Popen", side_effect=archive_process):
+                self.assertEqual(list(prebuilt_game.tracked_blobs(root, COMMIT)), [("tracked.txt", content)])
+
     def test_prebuilt_tool_stages_fresh_tracked_copy_without_cargo(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

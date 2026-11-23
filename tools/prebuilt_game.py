@@ -148,6 +148,9 @@ def tracked_blobs(root: Path, commit: str, paths: tuple[str, ...] = ()):
         for member in archive:
             if member.isfile():
                 yield member.name, archive.extractfile(member).read()
+        # Tar parsing stops at the end marker, but Git may still be writing record padding.
+        while stream.read(64 * 1024):
+            pass
     if process.returncode != 0:
         sys.exit(f"git archive {commit} failed in {root}")
 
