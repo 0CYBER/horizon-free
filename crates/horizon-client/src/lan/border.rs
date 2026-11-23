@@ -67,8 +67,19 @@ impl Sent {
                     lerp_time: now.remaining,
                 }));
             }
-        } else if now.size != self.size && !(self.remaining > 0 && now.size == self.target) {
-            out.push(C::SetBorderSize(play::SetBorderSize { size: now.size }));
+        } else {
+            // The size the players' border has: the one they were last
+            // told of, or the target of a change that just ran its last
+            // tick. A change ended early (a size set at once) still runs
+            // on theirs, so any size is sent then.
+            let theirs = match self.remaining {
+                ..=0 => Some(self.size),
+                1 => Some(self.target),
+                _ => None,
+            };
+            if theirs != Some(now.size) {
+                out.push(C::SetBorderSize(play::SetBorderSize { size: now.size }));
+            }
         }
         if now.warning_time != self.warning_time {
             out.push(C::SetBorderWarningDelay(play::SetBorderWarningDelay {
@@ -126,5 +137,37 @@ mod tests {
         b.warning_distance = 1;
         assert_eq!(kinds(&Sent::of(&b).changes(&b)), [] as [&str; 0]);
         assert_eq!(kinds(&sent.changes(&b)), ["distance"]);
+    }
+
+    /// A size set at once while a change runs is sent, even the size the
+    /// change was going to or the size the border stood at: each client
+    /// would keep running the change for the rest of its ticks.
+    #[test]
+    fn a_change_ended_early_is_sent() {
+        let moving = || {
+            let mut b = WorldBorder::default();
+            b.set_size(100.0);
+            b.lerp_to(1000.0, 72_000);
+            b.tick();
+            b
+        };
+        // Set at once to where the change was going.
+        let mut b = moving();
+        let sent = Sent::of(&b);
+        b.set_size(1000.0);
+        let packets = sent.changes(&b);
+        assert_eq!(kinds(&packets), ["size"]);
+        assert_eq!(
+            packets[0],
+            C::SetBorderSize(play::SetBorderSize { size: 1000.0 })
+        );
+        // Stopped at the size it had when the players were last told of it.
+        let mut b = moving();
+        let sent = Sent::of(&b);
+        let size = b.size();
+        b.set_size(size);
+        let packets = sent.changes(&b);
+        assert_eq!(kinds(&packets), ["size"]);
+        assert_eq!(packets[0], C::SetBorderSize(play::SetBorderSize { size }));
     }
 }
