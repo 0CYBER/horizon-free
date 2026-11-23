@@ -252,7 +252,16 @@ impl OreFeature {
         size_y: i32,
     ) -> Result<bool, FeatureExecutionError<W::Error>> {
         let size = self.size as usize;
-        let mut data = vec![[0f64; 4]; size];
+        // Vanilla ore sizes are <= 64 and their bitsets fit in <= 64 words;
+        // keep both on the stack so each ore vein attempt makes zero heap allocations.
+        let mut data_stack = [[0f64; 4]; 64];
+        let mut data_heap = Vec::new();
+        let data: &mut [[f64; 4]] = if size <= data_stack.len() {
+            &mut data_stack[..size]
+        } else {
+            data_heap.resize(size, [0f64; 4]);
+            &mut data_heap
+        };
         for (i, entry) in data.iter_mut().enumerate() {
             let step = i as f32 / self.size as f32;
             let step64 = f64::from(step);
@@ -286,11 +295,19 @@ impl OreFeature {
             }
         }
         let tested_len = (size_xz as usize) * (size_y as usize) * (size_xz as usize);
-        let mut tested = vec![0u64; tested_len.div_ceil(64)];
+        let tested_words = tested_len.div_ceil(64);
+        let mut tested_stack = [0u64; 64];
+        let mut tested_heap = Vec::new();
+        let tested: &mut [u64] = if tested_words <= tested_stack.len() {
+            &mut tested_stack[..tested_words]
+        } else {
+            tested_heap.resize(tested_words, 0u64);
+            &mut tested_heap
+        };
         let mut placed = 0;
         let mut matches = TargetMemo::default();
         let mut squares = SphereSquares::default();
-        for sphere in data {
+        for &sphere in &*data {
             if sphere[3] < 0.0 {
                 continue;
             }

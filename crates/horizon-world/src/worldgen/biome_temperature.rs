@@ -1,12 +1,13 @@
 //! Biome temperature sampling and a worker-local vanilla temperature cache.
 use super::{DecodeError, Object, number_text, optional, required};
 use horizon_core::{
+    fast_hash::FxHashMap,
     noise::{Noise, NoiseStack, SimplexNoise},
     position::BlockPos,
     random::LegacyRandom,
 };
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{VecDeque, hash_map::Entry},
     sync::{Arc, OnceLock},
 };
 
@@ -118,7 +119,7 @@ impl BiomeTemperatureSettings {
 #[derive(Debug)]
 pub struct BiomeTemperature {
     settings: BiomeTemperatureSettings,
-    values: HashMap<i64, f32>,
+    values: FxHashMap<i64, f32>,
     order: VecDeque<i64>,
     /// Entries kept before the oldest goes: vanilla's 1,024 ([`Self::new`]).
     limit: usize,
@@ -142,7 +143,7 @@ impl BiomeTemperature {
     fn with_limit(settings: BiomeTemperatureSettings, limit: usize) -> Self {
         Self {
             settings,
-            values: HashMap::new(),
+            values: FxHashMap::default(),
             order: VecDeque::new(),
             limit,
         }

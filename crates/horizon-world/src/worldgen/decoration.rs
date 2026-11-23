@@ -4,10 +4,11 @@ use super::{
     placement::FeaturePlacer,
 };
 use horizon_core::{
+    fast_hash::FxHashMap,
     position::ChunkPos,
     random::{WorldgenRandom, XoroshiroRandom},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 pub use super::biome::BiomeId as DecorationBiome;
 
@@ -43,7 +44,9 @@ impl<E: std::error::Error + 'static> std::error::Error for DecorationError<E> {}
 
 #[derive(Clone, Debug)]
 pub struct FeatureDecorationPlan {
-    biomes: BTreeMap<DecorationBiome, Vec<Vec<FeatureIdentity>>>,
+    /// Step-local feature indices for each biome and step, pre-resolved at
+    /// plan construction so per-chunk decoration needs no `BTreeMap` lookups.
+    biome_steps: FxHashMap<DecorationBiome, Vec<Vec<usize>>>,
     steps: Vec<StepFeatureData>,
 }
 impl FeatureDecorationPlan {
@@ -58,11 +61,28 @@ impl FeatureDecorationPlan {
             .collect::<Vec<_>>();
         let steps = build_features_per_step(&ordered)?;
         let count = biomes.len();
-        let biomes = biomes.into_iter().collect::<BTreeMap<_, _>>();
-        if biomes.len() != count {
-            return Err(FeatureSortError::DuplicateBiome);
+        let mut biome_steps = FxHashMap::default();
+        biome_steps.reserve(count);
+        for (biome, per_step) in biomes {
+            let resolved: Vec<Vec<usize>> = per_step
+                .into_iter()
+                .enumerate()
+                .map(|(step, features)| {
+                    let data = &steps[step];
+                    features
+                        .into_iter()
+                        .map(|feature| {
+                            data.index(feature)
+                                .expect("plan owns complete biome feature lists")
+                        })
+                        .collect()
+                })
+                .collect();
+            if biome_steps.insert(biome, resolved).is_some() {
+                return Err(FeatureSortError::DuplicateBiome);
+            }
         }
-        Ok(Self { biomes, steps })
+        Ok(Self { biome_steps, steps })
     }
 
     /// The step and the step-local index vanilla mixes into `set_feature_seed`.
@@ -136,7 +156,9 @@ impl FeatureDecorationPlan {
         {
             return Err(DecorationError::WorkLimit);
         }
-        let mut present = BTreeSet::new();
+        let mut present = Vec::with_capacity(8);
+        let mut seen = [0u64; 128];
+        let mut seen_spill = BTreeSet::new();
         for z in chunk.z - 1..=chunk.z + 1 {
             for x in chunk.x - 1..=chunk.x + 1 {
                 let values = world
@@ -145,7 +167,21 @@ impl FeatureDecorationPlan {
                 if values.len() > 65536 {
                     return Err(DecorationError::WorkLimit);
                 }
-                present.extend(values.into_iter().filter(|id| self.biomes.contains_key(id)));
+                for id in values {
+                    let word = id.0 as usize / 64;
+                    if let Some(bits) = seen.get_mut(word) {
+                        let mask = 1u64 << (id.0 % 64);
+                        if *bits & mask != 0 {
+                            continue;
+                        }
+                        *bits |= mask;
+                    } else if !seen_spill.insert(id) {
+                        continue;
+                    }
+                    if let Some(steps) = self.biome_steps.get(&id) {
+                        present.push(steps);
+                    }
+                }
             }
         }
         let mut placer = FeaturePlacer::new();
@@ -154,23 +190,47 @@ impl FeatureDecorationPlan {
             let Some(data) = self.steps.get(step) else {
                 continue;
             };
-            let mut selected = BTreeSet::new();
-            for biome in &present {
-                if let Some(features) = self.biomes[biome].get(step) {
-                    selected.extend(features.iter().map(|feature| {
-                        data.index(*feature)
-                            .expect("plan owns complete biome feature lists")
-                    }));
+            let features = data.features();
+            if features.len() <= 512 {
+                let mut selected = [0u64; 8];
+                for biome_steps in &present {
+                    if let Some(indices) = biome_steps.get(step) {
+                        for &index in indices {
+                            selected[index / 64] |= 1u64 << (index % 64);
+                        }
+                    }
                 }
-            }
-            for index in selected {
-                let feature = data.features()[index];
-                random.set_feature_seed(seed, index as i32, step as i32);
-                world
-                    .set_currently_generating(Some(feature))
-                    .map_err(|error| DecorationError::Feature { feature, error })?;
-                place(world, &mut placer, &mut random, feature, origin)
-                    .map_err(|error| DecorationError::Feature { feature, error })?;
+                for (word_idx, &word) in selected.iter().enumerate() {
+                    let mut w = word;
+                    while w != 0 {
+                        let bit = w.trailing_zeros() as usize;
+                        w &= w - 1;
+                        let index = word_idx * 64 + bit;
+                        let feature = features[index];
+                        random.set_feature_seed(seed, index as i32, step as i32);
+                        world
+                            .set_currently_generating(Some(feature))
+                            .map_err(|error| DecorationError::Feature { feature, error })?;
+                        place(world, &mut placer, &mut random, feature, origin)
+                            .map_err(|error| DecorationError::Feature { feature, error })?;
+                    }
+                }
+            } else {
+                let mut selected = BTreeSet::new();
+                for biome_steps in &present {
+                    if let Some(indices) = biome_steps.get(step) {
+                        selected.extend(indices.iter().copied());
+                    }
+                }
+                for index in selected {
+                    let feature = features[index];
+                    random.set_feature_seed(seed, index as i32, step as i32);
+                    world
+                        .set_currently_generating(Some(feature))
+                        .map_err(|error| DecorationError::Feature { feature, error })?;
+                    place(world, &mut placer, &mut random, feature, origin)
+                        .map_err(|error| DecorationError::Feature { feature, error })?;
+                }
             }
         }
         world

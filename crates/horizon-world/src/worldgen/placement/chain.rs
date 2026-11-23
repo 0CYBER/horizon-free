@@ -214,6 +214,78 @@ impl FeaturePlacer {
         if modifiers.is_empty() {
             return feature(context, random, origin).map_err(FeaturePlacementError::Feature);
         }
+        if modifiers.len() == 1 && self.pending.is_empty() && self.modified.is_empty() {
+            if remaining.get() == 0 {
+                return Err(FeaturePlacementError::WorkLimit);
+            }
+            remaining.set(remaining.get() - 1);
+            let mut stack = [[0i32; 3]; 16];
+            let mut stack_len = 0usize;
+            let mut spilled = false;
+            let modified = &mut self.modified;
+            if let Err(e) = modifiers[0].modify_in(
+                &mut Queries {
+                    world: context,
+                    top,
+                },
+                random,
+                origin,
+                |_, p| {
+                    if !spilled {
+                        if stack_len < stack.len() {
+                            stack[stack_len] = p;
+                            stack_len += 1;
+                            return Ok(());
+                        }
+                        modified.extend_from_slice(&stack);
+                        spilled = true;
+                    }
+                    if modified.len() >= LIMIT {
+                        return Err(());
+                    }
+                    modified.push(p);
+                    Ok(())
+                },
+            ) {
+                if !spilled {
+                    modified.extend_from_slice(&stack[..stack_len]);
+                }
+                return Err(match e {
+                    PlacementError::Random(e) => FeaturePlacementError::Random(e),
+                    PlacementError::World(e) => FeaturePlacementError::World(e),
+                    PlacementError::Output(()) | PlacementError::WorkLimit => {
+                        FeaturePlacementError::WorkLimit
+                    }
+                });
+            }
+            let mut any = false;
+            if !spilled {
+                for &p in &stack[..stack_len] {
+                    if remaining.get() == 0 {
+                        self.modified.extend_from_slice(&stack[..stack_len]);
+                        return Err(FeaturePlacementError::WorkLimit);
+                    }
+                    remaining.set(remaining.get() - 1);
+                    match feature(context, random, p) {
+                        Ok(placed) => any |= placed,
+                        Err(e) => {
+                            self.modified.extend_from_slice(&stack[..stack_len]);
+                            return Err(FeaturePlacementError::Feature(e));
+                        }
+                    }
+                }
+            } else {
+                for p in &self.modified {
+                    if remaining.get() == 0 {
+                        return Err(FeaturePlacementError::WorkLimit);
+                    }
+                    remaining.set(remaining.get() - 1);
+                    any |= feature(context, random, *p).map_err(FeaturePlacementError::Feature)?;
+                }
+                self.modified.clear();
+            }
+            return Ok(any);
+        }
         self.pending.push((origin, 0));
         let mut any = false;
         while let Some((position, index)) = self.pending.pop() {
