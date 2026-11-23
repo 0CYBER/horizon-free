@@ -110,6 +110,7 @@ fn parser_id(ty: &ArgType) -> String {
             "minecraft:dialog" => "minecraft:dialog".into(),
             _ => "minecraft:feature".into(),
         },
+        ArgType::ServerLootTable => "minecraft:loot_table".into(),
     }
 }
 

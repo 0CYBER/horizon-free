@@ -302,19 +302,19 @@ impl Game<'_> {
             .first()
             .and_then(|s| self.slot_get(s)))
     }
-    /// `LootCommand.dropBlockLoot`: copy the actual block entity's components
-    /// into the mine result without removing the source block or its contents.
+    /// `LootCommand.dropChestLoot`: resolve a named table from the world's
+    /// reloadable loot registry. `dropBlockLoot` keeps the mined block's components.
     pub(super) fn cmd_loot(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let keep_empty = ctx.literals.iter().any(|literal| literal == "replace");
         // The drops.
         let (drops, table): (Vec<ItemStack>, Option<String>) = match id {
             "loot.loot" | "loot.fish" => {
-                let Some(Arg::Resource(table)) = ctx.get("loot_table").cloned() else {
+                let Some(Arg::Resource(table)) = ctx.get("loot_table") else {
                     return Ok(0);
                 };
                 // An inline table (ResourceOrIdArgument) keeps its random sequence.
                 if table.starts_with('{') {
-                    let (tag, _) = horizon_core::nbt::parse_snbt(&table)
+                    let (tag, _) = horizon_core::nbt::parse_snbt(table)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let json = horizon_client::scoreboard::tag_to_json(&tag);
                     // LootCommand's omitted fishing tool is EMPTY, not mainhand.
@@ -344,27 +344,28 @@ impl Game<'_> {
                     };
                     (drops, None)
                 } else {
-                    if !self.items().has_loot_table(&table) {
-                        return Err(err("argument.resource_or_id.failed_to_parse", &[&table]));
+                    if !world_items!(self).has_loot_table(table) {
+                        return Err(err("argument.resource_or_id.failed_to_parse", &[table]));
                     }
                     let held = if id == "loot.fish" {
                         self.tool_stack(ctx)?
                     } else {
                         None
                     };
-                    let drops = match world_items!(self).loot_sequence(&table) {
+                    let items = world_items!(self);
+                    let drops = match items.loot_sequence(table) {
                         Some(seq) => {
                             let random = self.rand_sequences.get(&seq, self.level.seed);
-                            world_items!(self).loot_table_for_command(
-                                &table,
+                            items.loot_table_for_command(
+                                table,
                                 false,
                                 held.as_ref(),
                                 random,
                                 keep_empty,
                             )
                         }
-                        None => world_items!(self).loot_table_for_command(
-                            &table,
+                        None => items.loot_table_for_command(
+                            table,
                             false,
                             held.as_ref(),
                             &mut self.world.random,

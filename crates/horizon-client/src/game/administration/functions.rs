@@ -484,8 +484,6 @@ impl Game<'_> {
         // The candidate's named predicates/modifiers must also be available to
         // argument codecs before any of its functions can be exposed.
         self.sync_enchantment_registries();
-        // A function's `loot ... loot <id>` names the reloaded packs' tables.
-        self.sync_loot_table_ids();
         // `ReloadableServerRegistries.reload` binds the packs' tags before
         // `ServerFunctionLibrary` compiles its functions: an item or block
         // argument's `#tag` resolves against them.

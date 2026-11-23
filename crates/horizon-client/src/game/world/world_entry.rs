@@ -614,6 +614,7 @@ impl Game<'_> {
         self.forget_book();
         horizon_client::structure_blocks::forget_loot_data();
         self.load_server_loot();
+        self.sync_loot_table_ids();
         // Before the players are sent the reloaded data below.
         self.sync_recipe_content();
         // PlayerList.reloadResources: the tags and recipes go to the players

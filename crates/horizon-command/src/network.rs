@@ -80,6 +80,10 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
                         .as_ref()
                         .map_or(ArgType::Word, |(id, props)| argument_type(*id, props)),
                 };
+                let ty = match ty {
+                    ArgType::ResourceOrId("minecraft:loot_table") => ArgType::ServerLootTable,
+                    _ => ty,
+                };
                 NodeKind::Argument {
                     name: node.name.clone(),
                     ty,
@@ -89,7 +93,18 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
         };
         // The server's providers, as the client knows them
         // (ArgumentNodeStub.build): its own custom ones arrive as `ask_server`.
-        let suggests = node.suggestions.as_deref().and_then(provider);
+        let suggests = node.suggestions.as_deref().and_then(provider).or_else(|| {
+            // ClientSuggestionProvider.suggestRegistryElements: reloadable loot tables
+            // are not in the client's registry access, so request the server's IDs.
+            matches!(
+                &kind,
+                NodeKind::Argument {
+                    ty: ArgType::ServerLootTable,
+                    ..
+                }
+            )
+            .then_some(Suggests::AskServer)
+        });
         nodes[index(i)] = Some(Node {
             kind: if i == root { NodeKind::Root } else { kind },
             children: node.children.iter().filter_map(valid).map(index).collect(),

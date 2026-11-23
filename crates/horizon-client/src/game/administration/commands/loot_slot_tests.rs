@@ -353,3 +353,102 @@ fn loot_mine_reads_a_hand_only_when_named_and_only_a_living_ones() {
         );
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn loot_replace_uses_live_world_pack_tables() {
+    use horizon_client::command::{Registries, network, vanilla};
+    use horizon_client::lan::commands::CommandTree;
+    use horizon_items::equipment::MAINHAND;
+    use horizon_protocol::{
+        buf::{Codec, Reader, Writer},
+        packets::play::Commands,
+        registry::Builtin,
+    };
+
+    const TABLE: &str = "loot_fixture:biome/plains";
+    const COMMAND: &str = "loot replace entity @s weapon.mainhand loot ";
+
+    with_game(|game| {
+        let scratch = tempfile::tempdir().unwrap();
+        game.world_root = scratch.path().to_path_buf();
+        let pack = scratch.path().join("datapacks/loot_fixture");
+        let tables = pack.join("data/loot_fixture/loot_table/biome");
+        std::fs::create_dir_all(&tables).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"Loot command fixture"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tables.join("plains.json"),
+            r#"{"type":"minecraft:chest","pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:dirt"}]}]}"#,
+        )
+        .unwrap();
+
+        let root = game.options.resources.clone();
+        let packs = game.open_world_datapacks(&[]).unwrap();
+        game.open_world_tables(&packs, &root).unwrap();
+        game.load_server_loot();
+        game.load_world_state().unwrap();
+        game.set_allow_commands(true);
+
+        // The wire tree has the argument type, but not the world's reloadable registry.
+        let builtin = Builtin::load(&Builtin::find(&root).unwrap()).unwrap();
+        let permission = 2;
+        let packet = CommandTree::load(&root)
+            .unwrap()
+            .packet(permission, false, &builtin);
+        let mut wire = Writer::new();
+        Commands::write(&packet, &mut wire);
+        let packet = Commands::read(&mut Reader::new(&wire.data)).unwrap();
+        let client = network::from_packet(&packet, vanilla::dispatcher());
+        // The client receives its permission separately from ClientboundCommandsPacket.
+        // Without game-master permission, @s is refused before the loot argument is read.
+        let reg = Registries {
+            permission,
+            ..Default::default()
+        };
+        let parse = client.parse(&format!("{COMMAND}{TABLE}"), &reg);
+        assert!(parse.is_valid(), "{parse:#?}");
+        let prefix = format!("{COMMAND}loot_fixture:biome/pla");
+        let parse = client.parse(&prefix, &reg);
+        let (range, local, asks_server) =
+            client.client_suggestions_asking(&parse, prefix.len(), &reg);
+        assert!(
+            asks_server && local.is_empty(),
+            "expected a server request, got {local:?} at {range:?} for {parse:#?}"
+        );
+        let suggestions = |game: &Game<'_>| {
+            let d = &game.ui.dispatcher.0;
+            let reg = &game.ui.registries;
+            let parse = d.parse(&prefix, reg);
+            d.client_suggestions(&parse, prefix.len(), reg).1
+        };
+        assert!(suggestions(game).iter().any(|entry| entry.text == TABLE));
+
+        assert!(
+            game.run_command(
+                r#"summon armor_stand 8.5 200 8.5 {Tags:["loot_fixture"],NoGravity:1b}"#
+            )
+        );
+        let as_stand = format!("execute as @e[tag=loot_fixture,limit=1] run {COMMAND}");
+        let command = format!("{as_stand}{TABLE}");
+        assert!(game.run_command(&command));
+        let assert_slot = |game: &Game<'_>| {
+            let hand = game.armor_stands[0].equipment.get(MAINHAND).unwrap();
+            assert_eq!((hand.item.as_ref(), hand.count), ("minecraft:dirt", 1));
+        };
+        assert_slot(game);
+
+        assert!(game.run_command(r#"datapack disable "file/loot_fixture""#));
+        assert!(suggestions(game).is_empty());
+        let (ok, feedback) = run(game, &command);
+        assert!(!ok);
+        assert!(
+            feedback.contains("argument.resource_or_id.no_such_element"),
+            "{feedback}"
+        );
+        assert_slot(game);
+    });
+}

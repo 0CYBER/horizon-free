@@ -324,6 +324,7 @@ horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_furna
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_clears_empty_position_and_writes_following_real_item lib daily resources
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_kill_fills_an_accepting_slot_and_leaves_a_refusing_one lib daily resources
 horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_mine_fills_an_accepting_slot_and_leaves_a_refusing_one lib daily resources
+horizon-client game::commands::terrain_cmds::loot_slot_tests::loot_replace_uses_live_world_pack_tables lib daily resources
 horizon-client game::commands::vehicle_kill_tests::kill_spills_explicit_vehicle_contents_after_menu_writeback lib daily resources
 horizon-client game::commands::world_cmds::attribute_tests::failed_modifier_value_get_leaves_the_attribute_store_and_its_save_alone lib daily resources
 horizon-client game::commands::world_cmds::particle_command_tests::block_crumble_draws_the_block_it_names lib daily resources

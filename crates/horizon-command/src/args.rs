@@ -219,6 +219,8 @@ pub enum ArgType {
     SlotSource,
     /// ResourceOrIdArgument over a registry: an id or an inline SNBT value.
     ResourceOrId(&'static str),
+    /// A received loot table argument: the server owns the registry and codec lookup.
+    ServerLootTable,
     /// ResourceSelectorArgument: a `*`/`?` pattern over a registry's ids.
     ResourceSelector(&'static str),
     /// A registered argument type: the mod's parser and suggestions.
@@ -1887,6 +1889,10 @@ impl ArgType {
                 super::codec::resource_or_id(reader, reg, registry)?;
                 Arg::Resource(reader.string[start..reader.cursor].to_owned())
             }
+            ArgType::ServerLootTable => {
+                super::codec::resource_or_id_syntax(reader)?;
+                Arg::Resource(reader.string[start..reader.cursor].to_owned())
+            }
             ArgType::NbtPath => {
                 parse_nbt_path(reader)?;
                 Arg::Str(reader.string[start..reader.cursor].to_owned())
@@ -2105,7 +2111,7 @@ impl ArgType {
             }
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
             ArgType::Component | ArgType::Style | ArgType::NbtTag => super::snbt::suggest(builder),
-            ArgType::Swizzle | ArgType::Message | ArgType::Nbt => {}
+            ArgType::Swizzle | ArgType::Message | ArgType::Nbt | ArgType::ServerLootTable => {}
             ArgType::Custom(custom) => {
                 let prefix = builder.remaining().to_owned();
                 for suggestion in (custom.suggest)(reg, &prefix) {

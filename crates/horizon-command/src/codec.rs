@@ -429,12 +429,23 @@ fn read_non_empty(reader: &mut Reader) -> Option<String> {
 /// ResourceOrIdArgument.parse: a registry id (checked) or an inline SNBT
 /// value decoded with the registry's codec.
 pub fn resource_or_id(reader: &mut Reader, reg: &Registries, registry: &str) -> CmdResult<()> {
+    parse_resource_or_id(reader, Some((reg, registry)))
+}
+
+/// `ResourceOrIdArgument.parse` without an element lookup on the client.
+pub(crate) fn resource_or_id_syntax(reader: &mut Reader) -> CmdResult<()> {
+    parse_resource_or_id(reader, None)
+}
+
+fn parse_resource_or_id(reader: &mut Reader, lookup: Option<(&Registries, &str)>) -> CmdResult<()> {
     let start = reader.cursor;
     let mut r = reader.clone();
     r.skip_whitespace();
     if let Some(id) = read_non_empty(&mut r) {
         reader.cursor = r.cursor;
-        if !reg.ids(registry).contains(&id) {
+        if let Some((reg, registry)) = lookup
+            && !reg.ids(registry).contains(&id)
+        {
             return Err(CommandError::tr_at(
                 "argument.resource_or_id.no_such_element",
                 &[&id, &registry],
@@ -445,6 +456,9 @@ pub fn resource_or_id(reader: &mut Reader, reg: &Registries, registry: &str) -> 
     }
     reader.cursor = start;
     let tag = super::snbt::parse_tag_argument(reader)?;
+    let Some((reg, registry)) = lookup else {
+        return Ok(());
+    };
     decode(registry, &tag, reg)
         .map_err(|m| CommandError::tr_at("argument.resource_or_id.failed_to_parse", &[&m], reader))
 }

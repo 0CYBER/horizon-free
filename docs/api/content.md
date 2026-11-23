@@ -44,6 +44,8 @@ starts and writes them when the player changes a setting.
 - **When a change applies.** Every change above applies at the next start. While the game plays, its own
   screens switch packs, shader packs and assets-only content mods live; a content mod that adds blocks, items,
   entity types or world generation loads only at start ([mods.md](../mods.md)).
+- **Loot tables** from enabled data packs are available to `/loot` by namespaced ID. Command completions
+  use the server's current tables, including after `/reload` or a data pack selection change.
 - **Native mods** need Horizon rebuilt with them (horizon-mixins, [native-mods.md](../native-mods.md)). A launcher
   that doesn't build Horizon doesn't offer them.
 - **A modpack** isn't copied into the game folder. A launcher reads its `horizon-modpack.toml`, installs each mod
