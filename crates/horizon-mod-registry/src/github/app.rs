@@ -224,24 +224,28 @@ impl Installation {
         api: &str,
         timeout: Duration,
     ) -> Result<String> {
-        let now = unix_now();
-        let old = {
+        let refreshing = {
             let state = self.state();
+            let now = unix_now();
             if let Some(answer) = state.settled(now) {
                 return answer;
             }
-            state.usable(now, USABLE_FOR)
+            // Decided under `state`'s lock: a token another call just dropped (`forget`) is never handed out.
+            match self.refreshing.try_lock() {
+                Ok(guard) => Some(guard),
+                Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+                Err(TryLockError::WouldBlock) => match state.usable(now, USABLE_FOR) {
+                    Some(token) => return Ok(token),
+                    None => None,
+                },
+            }
         };
-        let _refreshing = match self.refreshing.try_lock() {
-            Ok(guard) => guard,
-            Err(TryLockError::Poisoned(e)) => e.into_inner(),
-            Err(TryLockError::WouldBlock) => match old {
-                Some(token) => return Ok(token),
-                None => self
-                    .refreshing
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner),
-            },
+        let _refreshing = match refreshing {
+            Some(guard) => guard,
+            None => self
+                .refreshing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
         };
         // What the exchange this call waited for left.
         let now = unix_now();
@@ -259,7 +263,8 @@ impl Installation {
             Err(e) => {
                 let mut state = self.state();
                 state.failed = Some((Instant::now(), e.message.clone(), e.timed_out));
-                state.usable(now, USABLE_FOR).ok_or(e)
+                // The exchange took time: what is left is counted from now.
+                state.usable(unix_now(), USABLE_FOR).ok_or(e)
             }
         }
     }
@@ -269,6 +274,8 @@ impl Installation {
         let mut state = self.state();
         if state.cached.as_ref().is_some_and(|c| c.token == token) {
             state.cached = None;
+            // The cooldown only kept this token serving: with it gone, the retry must try an exchange.
+            state.failed = None;
         }
     }
 

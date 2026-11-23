@@ -34,8 +34,10 @@ struct Mock {
     refuse: usize,
     /// Exchanges asked for, failed ones too.
     attempts: usize,
-    /// Every exchange fails (a 500, after a moment).
+    /// Every exchange fails (a 500).
     fail: bool,
+    /// How long an exchange takes.
+    delay: std::time::Duration,
     /// The token handed out instead of `ghs_test<n>`.
     token: Option<String>,
 }
@@ -59,6 +61,7 @@ async fn mock() -> (String, Shared) {
         refuse: 0,
         attempts: 0,
         fail: false,
+        delay: std::time::Duration::ZERO,
         token: None,
     }));
     let app = Router::new()
@@ -69,13 +72,13 @@ async fn mock() -> (String, Shared) {
                     if id != INSTALLATION {
                         return Err((StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))));
                     }
-                    let fail = {
+                    let (fail, delay) = {
                         let mut s = s.lock().unwrap();
                         s.attempts += 1;
-                        s.fail
+                        (s.fail, s.delay)
                     };
+                    tokio::time::sleep(delay).await;
                     if fail {
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"message": "ghs_test_in_error"}))));
                     }
                     let mut s = s.lock().unwrap();
@@ -273,10 +276,57 @@ async fn a_failed_refresh_keeps_the_old_token_while_it_lasts() {
     assert_eq!(mock.attempts, 2);
 }
 
+/// A failed refresh leaves the old token and a cooldown; when GitHub then refuses that token,
+/// it and the cooldown go, so the call's one retry exchanges for a new token.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_old_token_ends_the_cooldown() {
+    let (base, mock) = mock().await;
+    mock.lock().unwrap().expires_at = iso(now() + 8 * 60);
+    let gh = client(&base, INSTALLATION);
+    blob(&gh).await.unwrap();
+    mock.lock().unwrap().fail = true;
+    blob(&gh).await.unwrap();
+    {
+        let mut mock = mock.lock().unwrap();
+        mock.fail = false;
+        mock.refuse = 1;
+    }
+    assert_eq!(blob(&gh).await.unwrap().as_deref(), Some("blob1"));
+    let mock = mock.lock().unwrap();
+    assert_eq!(
+        mock.used,
+        ["ghs_test1", "ghs_test1", "ghs_test1", "ghs_test2"]
+    );
+    assert_eq!(mock.attempts, 3);
+}
+
+/// The same while GitHub is still down: the retry makes one exchange, and the calls after it
+/// get its failure for the cooldown instead of each trying again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_old_token_during_an_outage_tries_once() {
+    let (base, mock) = mock().await;
+    mock.lock().unwrap().expires_at = iso(now() + 8 * 60);
+    let gh = client(&base, INSTALLATION);
+    blob(&gh).await.unwrap();
+    mock.lock().unwrap().fail = true;
+    blob(&gh).await.unwrap();
+    mock.lock().unwrap().refuse = 1;
+    let failure = blob(&gh).await.unwrap_err();
+    assert!(failure.message.contains("500"), "{}", failure.message);
+    assert!(blob(&gh).await.is_err());
+    let mock = mock.lock().unwrap();
+    assert_eq!(mock.used, ["ghs_test1"; 3]);
+    assert_eq!(mock.attempts, 3);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_exchange_answers_every_waiting_call() {
     let (base, mock) = mock().await;
-    mock.lock().unwrap().fail = true;
+    {
+        let mut mock = mock.lock().unwrap();
+        mock.fail = true;
+        mock.delay = std::time::Duration::from_millis(300);
+    }
     let gh = client(&base, INSTALLATION);
     let calls: Vec<_> = (0..4)
         .map(|_| tokio::spawn(blob_owned(gh.clone())))
@@ -303,6 +353,62 @@ async fn a_token_that_isnt_one_is_refused_unseen() {
     assert_eq!(failure.status, 0);
     assert_no_secret(&failure.message);
     assert!(mock.lock().unwrap().used.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_an_old_token_has_left_counts_from_the_failed_exchanges_end() {
+    let (base, mock) = mock().await;
+    // Due for a refresh, and two seconds past `USABLE_FOR` (six minutes) when the refresh starts.
+    mock.lock().unwrap().expires_at = iso(now() + 6 * 60 + 2);
+    let gh = client(&base, INSTALLATION);
+    blob(&gh).await.unwrap();
+    {
+        let mut mock = mock.lock().unwrap();
+        mock.fail = true;
+        mock.delay = std::time::Duration::from_millis(2500);
+    }
+    // Past the exchange less than six minutes are left: the old token no longer serves.
+    let failure = blob(&gh).await.unwrap_err();
+    assert!(failure.message.contains("500"), "{}", failure.message);
+    let mock = mock.lock().unwrap();
+    assert_eq!(mock.used, ["ghs_test1"]);
+    assert_eq!(mock.attempts, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_refused_during_a_refresh_is_not_handed_out_again() {
+    let (base, mock) = mock().await;
+    mock.lock().unwrap().expires_at = iso(now() + 8 * 60);
+    let gh = client(&base, INSTALLATION);
+    blob(&gh).await.unwrap();
+    {
+        let mut mock = mock.lock().unwrap();
+        mock.delay = std::time::Duration::from_millis(1500);
+        mock.expires_at = "2099-01-01T00:00:00Z".into();
+    }
+    // One call refreshes, slowly; meanwhile the old token is refused for another, which drops it.
+    let refreshing = tokio::spawn(blob_owned(gh.clone()));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    mock.lock().unwrap().refuse = 1;
+    let refused = tokio::spawn(blob_owned(gh.clone()));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Every call from here waits for the new token.
+    let later = tokio::spawn(blob_owned(gh.clone()));
+    for call in [refreshing, refused, later] {
+        call.await.unwrap().unwrap();
+    }
+    let mock = mock.lock().unwrap();
+    assert_eq!(
+        mock.used,
+        [
+            "ghs_test1",
+            "ghs_test1",
+            "ghs_test2",
+            "ghs_test2",
+            "ghs_test2"
+        ]
+    );
+    assert_eq!(mock.attempts, 2);
 }
 
 fn now() -> u64 {
