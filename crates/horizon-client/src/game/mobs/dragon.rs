@@ -42,7 +42,7 @@ use horizon_core::{
     random::{LegacyRandom, RandomSource},
 };
 use horizon_protocol::entity_data::Value;
-use mod_api::DragonPhase;
+use mod_api::{DragonPhase, DragonRef};
 use rays::dragon_rays;
 
 /// `HealOrHarmMobEffect.applyInstantaneousEffect` at an `AreaEffectCloud`'s
@@ -425,6 +425,13 @@ pub(in crate::game) struct Dragon {
     pub(super) flame_ended: bool,
     flame_count: i32,
     sitting_damage: f32,
+    /// Phases a hit asked for (the dying flight, taking off from the fountain): there is no
+    /// hook host inside a hit, so the game asks mods and applies them as soon as the hit
+    /// is over ([`Game::settle_dragon_phases`]).
+    phase_requests: Vec<Phase>,
+    /// True from the moment `dragon_change_phase` listeners are asked until the change
+    /// commits: a change asked meanwhile is not asked of the hook again.
+    changing_phase: bool,
     /// `LivingEntity.equipment`: nothing in the fight reads it; it is kept
     /// for mods and saves.
     pub equipment: horizon_items::equipment::Equipment,
@@ -644,6 +651,8 @@ impl Dragon {
             flame_ended: false,
             flame_count: 0,
             sitting_damage: 0.0,
+            phase_requests: Vec::new(),
+            changing_phase: false,
             equipment: Default::default(),
             live: Default::default(),
             growl: 100,
@@ -881,7 +890,7 @@ impl Dragon {
             } else {
                 // handleKillingBlow: dying flight first.
                 self.health = 1.0;
-                self.set_phase(Phase::Dying {
+                self.request_phase(Phase::Dying {
                     target: None,
                     time: 0,
                 });
@@ -909,7 +918,7 @@ impl Dragon {
             self.sitting_damage += before - self.health.max(0.0);
             if self.sitting_damage > 0.25 * MAX_HEALTH {
                 self.sitting_damage = 0.0;
-                self.set_phase(Phase::Takeoff {
+                self.request_phase(Phase::Takeoff {
                     first: true,
                     path: None,
                     target: None,
@@ -1048,10 +1057,23 @@ impl Dragon {
         DragonPhase::from_id(self.phase.id()).expect("the phases are the vanilla ones")
     }
     /// `EnderDragonPhaseManager.setPhase`: nothing when it is the phase it
-    /// holds (a strafing dragon too), else the new phase begins fresh.
+    /// holds (a strafing dragon too), else the new phase begins fresh. No mod is asked:
+    /// the game goes through `Game::change_dragon_phase_to`; the tests set up with this.
+    #[allow(dead_code)]
     pub(super) fn set_native_phase(&mut self, phase: DragonPhase) {
         if phase != self.native_phase() {
             self.set_phase(Phase::from_id(phase.id()));
+        }
+    }
+    /// Asks for a phase from inside a hit; see `phase_requests`.
+    fn request_phase(&mut self, phase: Phase) {
+        self.phase_requests.push(phase);
+    }
+    /// Applies the requested phases at once, asking no mod (the tests' hits).
+    #[cfg(test)]
+    fn settle_phases(&mut self) {
+        for phase in std::mem::take(&mut self.phase_requests) {
+            self.set_phase(phase);
         }
     }
     fn set_phase(&mut self, phase: Phase) {
@@ -1750,7 +1772,7 @@ impl Game<'_> {
                     return false;
                 };
                 let level = super::entity::damage_level_of!(self, scoped);
-                return matches!(
+                let landed = matches!(
                     d.hurt_from(
                         level,
                         BODY,
@@ -1762,6 +1784,9 @@ impl Game<'_> {
                     ),
                     Hurt::Landed { .. }
                 );
+                // `hurt_from` only queues the phases the hit asked for.
+                self.settle_dragon_phases();
+                return landed;
             }
             return false;
         }
@@ -1945,6 +1970,10 @@ impl Game<'_> {
             origin.from,
             true,
         );
+        self.settle_dragon_phases();
+        let Some(d) = self.dragon.as_mut() else {
+            return hurt;
+        };
         // LivingEntity.hurtServer: damage that is applied sets lastHurtByPlayer
         // (100 ticks); a hit the damage cooldown absorbs returns before that.
         if counts
@@ -2267,14 +2296,15 @@ impl Game<'_> {
             && matches!(d.phase, Phase::Holding { .. })
         {
             let target = players.iter().find(|p| p.who == who).copied();
-            if let Some(t) = target {
-                d.set_phase(Phase::Strafe {
+            if let Some(t) = target
+                && self.change_dragon_phase(Phase::Strafe {
                     charge: 0,
                     path: None,
                     target: None,
                     clockwise: false,
                     player: Some(t.who),
-                });
+                })
+            {
                 self.strafe_begin(t.position);
             }
         }
@@ -2363,7 +2393,7 @@ impl Game<'_> {
                     });
                     self.dragon.as_mut().expect("dragon").phase = phase;
                     if let Some(n) = next {
-                        self.dragon.as_mut().expect("dragon").set_phase(n);
+                        self.change_dragon_phase(n);
                     }
                     return;
                 };
@@ -2650,11 +2680,11 @@ impl Game<'_> {
         }
         let d = self.dragon.as_mut().expect("dragon");
         d.phase = phase;
-        if let Some(n) = next {
-            d.set_phase(n);
-            if let Some(at) = strafe_at {
-                self.strafe_begin(at);
-            }
+        if let Some(n) = next
+            && self.change_dragon_phase(n)
+            && let Some(at) = strafe_at
+        {
+            self.strafe_begin(at);
         }
     }
     /// `getHeadLookVector`.
@@ -3188,6 +3218,69 @@ impl Game<'_> {
     /// a quarter duration scale): shrinking, puffing particles, harming players and mobs.
     /// `DragonSittingFlamingPhase.end`: the flame cloud goes once the
     /// phase is left.
+    /// `EnderDragonPhaseManager.setPhase`, with mods asked first (`dragon_change_phase`):
+    /// they may cancel the change or begin another phase instead. A phase the dragon
+    /// already holds is no change and is not asked about (`set_phase` keeps its rule for
+    /// it). The dying flight is never offered: it always happens, and a listener's
+    /// replacement with `Dying` is refused (the asked phase stays). A change asked while the
+    /// hook runs for this dragon (a listener hurting it, say) is applied at once without
+    /// asking again, so a listener cannot recurse; the guard holds until the outer change
+    /// commits. A mod's own `set_phase` never comes here. True when the dragon now begins a
+    /// phase.
+    fn change_dragon_phase(&mut self, wanted: Phase) -> bool {
+        let Some(d) = self.dragon.as_mut() else {
+            return false;
+        };
+        if d.phase.id() == wanted.id() || d.changing_phase || matches!(wanted, Phase::Dying { .. })
+        {
+            d.set_phase(wanted);
+            return true;
+        }
+        let (id, current) = (d.id, d.native_phase());
+        let asked = DragonPhase::from_id(wanted.id()).expect("the phases are the vanilla ones");
+        let (mut new_phase, mut cancel) = (asked, false);
+        if self.native_authoritative()
+            && mod_api::__private::listened(mod_api::HookId::DragonChangePhase)
+            && let Some(epoch) = self.native_lifecycle.epoch()
+        {
+            let dragon = DragonRef::new(mod_api::EntityRef::new(epoch, id));
+            if let Some(d) = self.dragon.as_mut() {
+                d.changing_phase = true;
+            }
+            self.native_dragon_change_phase(dragon, current, &mut new_phase, &mut cancel);
+            if let Some(d) = self.dragon.as_mut() {
+                d.changing_phase = false;
+            }
+        }
+        if new_phase == DragonPhase::Dying {
+            new_phase = asked;
+        }
+        // A listener cannot remove the dragon, but it may have hurt it dead meanwhile.
+        let Some(d) = self.dragon.as_mut() else {
+            return false;
+        };
+        // Nor may the outer change overwrite the dying flight a nested hit began.
+        if cancel || matches!(d.phase, Phase::Dying { .. }) || new_phase == d.native_phase() {
+            return false;
+        }
+        d.set_phase(if new_phase == asked {
+            wanted
+        } else {
+            Phase::from_id(new_phase.id())
+        });
+        true
+    }
+    /// Asks mods about, then applies, the phases a hit requested (`Dragon::request_phase`).
+    fn settle_dragon_phases(&mut self) {
+        let requests = self
+            .dragon
+            .as_mut()
+            .map(|d| std::mem::take(&mut d.phase_requests))
+            .unwrap_or_default();
+        for phase in requests {
+            self.change_dragon_phase(phase);
+        }
+    }
     pub(super) fn end_dragon_flame(&mut self) {
         if self
             .dragon

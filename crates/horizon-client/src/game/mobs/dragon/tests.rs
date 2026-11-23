@@ -780,6 +780,7 @@ fn a_melee_hit_knocks_a_flying_dragon_and_not_a_perched_one() {
     let mut taking_off = dragon(Phase::Flaming { ticks: 0 });
     taking_off.velocity = velocity;
     taking_off.hurt_from(level, 0, 60.0, HIT, false, Some(from), false);
+    taking_off.settle_phases();
     assert!(matches!(taking_off.phase, Phase::Takeoff { .. }));
     assert_eq!(taking_off.velocity, velocity);
 
@@ -973,6 +974,97 @@ fn base_check_only_receives_qualifying_dragon_hits() {
     assert!(!d.reaches_base_check(0, 1.0, true, false));
 }
 
+/// Cancels every `dragon_change_phase` and remembers what was asked.
+struct KeepPhase(std::sync::Arc<std::sync::Mutex<Vec<(i32, i32)>>>);
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for KeepPhase {
+    fn dragon_change_phase(
+        &self,
+        _: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::DragonChangePhaseEvent<'_>,
+    ) -> mod_api::Flow {
+        self.0
+            .lock()
+            .unwrap()
+            .push((event.current.id(), event.new_phase.id()));
+        mod_api::Flow::Cancel
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_hit_that_would_make_the_dragon_take_off_asks_mods_but_dying_is_never_offered() {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "keep-phase",
+        Box::new(KeepPhase(asked.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let hit = |game: &mut Game<'_>, amount| {
+                game.hurt_dragon_part_at(
+                    0,
+                    amount,
+                    true,
+                    None,
+                    DamageKind::Generic,
+                    DragonHitOrigin {
+                        direct: None,
+                        entity_id: None,
+                        from: None,
+                        invulnerability_checked: false,
+                    },
+                )
+            };
+            // Perched and flaming: 60 damage is over a quarter of its health, so it
+            // would take off (4); the listener keeps it on the fountain (5).
+            game.dragon.replace(dragon(Phase::Flaming { ticks: 0 }));
+            assert_eq!(hit(game, 60.0), Hurt::Landed { full: true });
+            assert_eq!(game.dragon.as_ref().unwrap().phase.id(), 5);
+            assert_eq!(*asked.lock().unwrap(), vec![(5, 4)]);
+            // Flying with its last health: the killing blow starts the dying flight (9)
+            // whatever the listener says, and is not asked about.
+            asked.lock().unwrap().clear();
+            game.dragon.replace(dragon(flying()));
+            game.dragon.as_mut().unwrap().health = 1.0;
+            hit(game, 5.0);
+            assert_eq!(game.dragon.as_ref().unwrap().phase.id(), 9);
+            assert!(asked.lock().unwrap().is_empty());
+        })
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_phase_asked_while_the_hook_runs_is_applied_without_asking_again() {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "keep-phase",
+        Box::new(KeepPhase(asked.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.dragon.replace(dragon(flying()));
+            // What a listener's nested change sees: the guard is up.
+            game.dragon.as_mut().unwrap().changing_phase = true;
+            assert!(game.change_dragon_phase(Phase::Flaming { ticks: 0 }));
+            assert_eq!(game.dragon.as_ref().unwrap().phase.id(), 5);
+            assert!(asked.lock().unwrap().is_empty());
+            // Down again, the same change is asked about (and the listener cancels it).
+            game.dragon.as_mut().unwrap().changing_phase = false;
+            assert!(!game.change_dragon_phase(Phase::Takeoff {
+                first: true,
+                path: None,
+                target: None,
+            }));
+            assert_eq!(asked.lock().unwrap().len(), 1);
+            assert!(!game.dragon.as_ref().unwrap().changing_phase);
+        })
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn carry_dragon_dispatches_only_after_phase_and_source_guards() {
@@ -1147,6 +1239,7 @@ fn the_native_damage_hook_changes_or_cancels_a_dragons_hit() {
         Hurt::Landed { full: true }
     );
     assert_eq!(d.health, 1.0);
+    d.settle_phases();
     assert!(matches!(d.phase, Phase::Dying { .. }));
 }
 
@@ -1182,6 +1275,7 @@ fn a_quarter_of_its_health_while_perched_makes_it_take_off() {
     assert!(d.phase.sitting());
     d.invulnerable = 0;
     d.hurt(level, 0, 21.0, HIT, false);
+    d.settle_phases();
     assert!(matches!(d.phase, Phase::Takeoff { .. }));
     assert_eq!(d.sitting_damage, 0.0);
 }

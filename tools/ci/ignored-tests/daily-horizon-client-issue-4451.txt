@@ -523,6 +523,8 @@ horizon-client game::dragon::residency_tests::singleton_join_rejection_discards_
 horizon-client game::dragon::residency_tests::singleton_late_dragon_id_reserves_all_eight_parts_once lib daily resources
 horizon-client game::dragon::residency_tests::singleton_lifecycle_commands_unload_and_parked_owners lib daily resources
 horizon-client game::dragon::residency_tests::singleton_live_owner_is_not_reported_as_departed lib daily resources
+horizon-client game::dragon::tests::a_hit_that_would_make_the_dragon_take_off_asks_mods_but_dying_is_never_offered lib daily resources
+horizon-client game::dragon::tests::a_phase_asked_while_the_hook_runs_is_applied_without_asking_again lib daily resources
 horizon-client game::dragon::tests::a_spawn_egg_dragon_joins_once_and_a_canceled_spawn_fails lib daily resources
 horizon-client game::dragon::tests::carry_dragon_dispatches_only_after_phase_and_source_guards lib daily resources
 horizon-client game::dragon::tests::dragon_finalization_preserves_the_site_and_both_cancels lib daily resources
@@ -1187,12 +1189,14 @@ horizon-client game::native_display_refs::tests::each_start_delay_write_forces_a
 horizon-client game::native_display_refs::tests::stale_removed_and_client_displays_do_nothing lib daily resources
 horizon-client game::native_dragon_refs::tests::a_clients_dragon_parts_resolve_through_its_own_copy lib daily resources
 horizon-client game::native_dragon_refs::tests::a_dragon_that_has_no_id_yet_has_no_parts lib daily resources
+horizon-client game::native_dragon_refs::tests::a_mods_set_phase_is_not_asked_of_listeners_and_returns_as_before lib daily resources
 horizon-client game::native_dragon_refs::tests::an_invulnerable_player_is_not_a_target lib daily resources
 horizon-client game::native_dragon_refs::tests::dragon_target_change_can_be_cancelled lib daily resources
 horizon-client game::native_dragon_refs::tests::leaving_flaming_discards_the_cloud_at_once lib daily resources
 horizon-client game::native_dragon_refs::tests::the_dragon_is_a_mob_with_mob_state lib daily resources
 horizon-client game::native_dragon_refs::tests::the_dragons_parts_resolve_as_entities_of_their_own lib daily resources
 horizon-client game::native_dragon_refs::tests::the_phase_is_read_set_synced_and_saved lib daily resources
+horizon-client game::native_dragon_refs::tests::without_a_listener_a_phase_is_set_as_before lib daily resources
 horizon-client game::native_effect_category::tests::registered_effect_categories_use_type_definitions lib daily resources
 horizon-client game::native_entities::tests::joins_follow_insertion_order_and_canceled_entities_never_leave lib daily resources
 horizon-client game::native_entities::tests::native_roots_keep_the_loaded_id_and_do_not_allocate_twice lib daily resources

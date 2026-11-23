@@ -179,6 +179,57 @@ mod tests {
         });
     }
 
+    /// `dragon_change_phase` listener of these tests: it records `(current, new_phase)` and
+    /// cancels every change.
+    struct PhaseRules(std::sync::Arc<std::sync::Mutex<Vec<(DragonPhase, DragonPhase)>>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for PhaseRules {
+        fn dragon_change_phase(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::DragonChangePhaseEvent<'_>,
+        ) -> mod_api::Flow {
+            self.0
+                .lock()
+                .unwrap()
+                .push((event.current, *event.new_phase));
+            mod_api::Flow::Cancel
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_mods_set_phase_is_not_asked_of_listeners_and_returns_as_before() {
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mods = vec![mod_api::ModEntry::new(
+            "phase-rules",
+            Box::new(PhaseRules(heard.clone())),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                let (_, dragon) = dragon_in(game);
+                assert!(dragon.set_phase(game, DragonPhase::HoldingPattern));
+                assert_eq!(dragon.phase(game), Some(DragonPhase::HoldingPattern));
+                assert!(dragon.set_phase(game, DragonPhase::Landing));
+                assert_eq!(dragon.phase(game), Some(DragonPhase::Landing));
+                // The phase it holds is no change, as before.
+                assert!(dragon.set_phase(game, DragonPhase::Landing));
+                assert!(heard.lock().unwrap().is_empty());
+            })
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn without_a_listener_a_phase_is_set_as_before() {
+        with_game(|game| {
+            let (_, dragon) = dragon_in(game);
+            assert!(dragon.set_phase(game, DragonPhase::Landing));
+            assert_eq!(dragon.phase(game), Some(DragonPhase::Landing));
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn the_dragon_is_a_mob_with_mob_state() {
