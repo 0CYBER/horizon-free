@@ -55,6 +55,125 @@ struct HexGlyph {
     left: u32,
     right: u32,
 }
+/// Compact entry in a sorted `HexTable`: 12 bytes instead of a 72-byte
+/// `HexGlyph` plus `HashMap` bucket overhead, while `rows` holds only the
+/// bytes each glyph's width actually uses (1..=4 bytes/row instead of 64).
+#[derive(Clone, Copy)]
+struct HexEntry {
+    codepoint: u32,
+    /// Byte offset into `HexTable::rows` (`16 * bytes_per_row` bytes).
+    offset: u32,
+    left: u8,
+    right: u8,
+    /// 1, 2, 3 or 4 bytes per row (corresponding to 8, 16, 24 or 32 px wide).
+    bytes_per_row: u8,
+    /// Set when a `size_overrides` entry gave `left` or `right` > 255; exact
+    /// `u32` bounds then live in `HexTable::wide_bounds`.
+    wide_bounds: bool,
+}
+/// Compact, sorted GNU Unifont glyph table shared across every provider with
+/// the same `(hex_file, size_overrides)` definition.
+struct HexTable {
+    /// Sorted by `codepoint` for O(log N) binary-search lookup.
+    entries: Vec<HexEntry>,
+    /// Packed row bitmaps, `16 * bytes_per_row` bytes per entry.
+    rows: Vec<u8>,
+    /// Rare `size_overrides` whose `left` or `right` exceeds `u8::MAX`, sorted
+    /// by codepoint: `(codepoint, left, right)`. Empty for standard tables.
+    wide_bounds: Vec<(u32, u32, u32)>,
+}
+impl HexTable {
+    fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+            rows: Vec::new(),
+            wide_bounds: Vec::new(),
+        }
+    }
+    #[inline]
+    fn bounds(&self, e: HexEntry) -> (u32, u32) {
+        if e.wide_bounds
+            && let Ok(i) = self
+                .wide_bounds
+                .binary_search_by_key(&e.codepoint, |&(cp, _, _)| cp)
+        {
+            let (_, left, right) = self.wide_bounds[i];
+            return (left, right);
+        }
+        (u32::from(e.left), u32::from(e.right))
+    }
+    fn get(&self, codepoint: u32) -> Option<HexGlyph> {
+        let idx = self
+            .entries
+            .binary_search_by_key(&codepoint, |e| e.codepoint)
+            .ok()?;
+        let e = self.entries[idx];
+        let bpr = usize::from(e.bytes_per_row);
+        let base = e.offset as usize;
+        let mut rows = [0u32; 16];
+        for (r, row) in rows.iter_mut().enumerate() {
+            let src = base + r * bpr;
+            let mut bytes = [0u8; 4];
+            bytes[..bpr].copy_from_slice(&self.rows[src..src + bpr]);
+            *row = u32::from_be_bytes(bytes);
+        }
+        let (left, right) = self.bounds(e);
+        Some(HexGlyph { rows, left, right })
+    }
+    fn advance(&self, codepoint: u32) -> Option<f32> {
+        let idx = self
+            .entries
+            .binary_search_by_key(&codepoint, |e| e.codepoint)
+            .ok()?;
+        let (left, right) = self.bounds(self.entries[idx]);
+        let width = right.saturating_sub(left) + 1;
+        Some((width / 2 + 1) as f32)
+    }
+}
+/// Cache key identifying a Unihex provider's loaded table: its normalized
+/// archive resource path plus its `size_overrides` tuples `(from, to, left, right)`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct UnihexKey {
+    path: Option<String>,
+    overrides: Vec<(u32, u32, u32, u32)>,
+}
+impl UnihexKey {
+    fn of(p: &serde_json::Value) -> Self {
+        let path = p["hex_file"].as_str().map(unihex_resource_path);
+        let overrides = p["size_overrides"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|o| {
+                let bound = |k: &str| {
+                    o[k].as_str()
+                        .and_then(|s| s.chars().next())
+                        .map_or(0, u32::from)
+                };
+                (
+                    bound("from"),
+                    bound("to"),
+                    o["left"].as_u64().unwrap_or(0) as u32,
+                    o["right"].as_u64().unwrap_or(15) as u32,
+                )
+            })
+            .collect();
+        Self { path, overrides }
+    }
+}
+/// Outcome of loading a Unihex archive for a single provider.
+enum HexLoad {
+    /// Every `.hex` member in the archive was read (including an omitted
+    /// `hex_file` or a valid empty archive): safe to share in `Cache::unihex`.
+    Complete(HexTable),
+    /// The archive opened, but at least one `.hex` member could not be read:
+    /// keep all glyphs parsed from readable members for this provider without
+    /// caching the partial table in `Cache::unihex` so a later provider can retry.
+    Partial(HexTable),
+    /// The archive could not be read or opened as a ZIP: leave `Cache::unihex`
+    /// unpopulated so a later provider can retry.
+    Failed,
+}
 /// A provider's `filter` (`FontOption.Filter`): the options it needs.
 #[derive(Clone, Copy, Default)]
 struct Filter {
@@ -276,8 +395,9 @@ struct TrueType {
 enum Provider {
     Space(HashMap<char, f32>),
     Bitmap(Filter, HashMap<char, BitmapGlyph>),
-    /// The definition, and its glyphs once read.
-    Unihex(Filter, serde_json::Value, Option<HashMap<u32, HexGlyph>>),
+    /// The filter, cache key while unloaded (cleared once read), and the
+    /// shared compact glyph table once read.
+    Unihex(Filter, Option<Box<UnihexKey>>, Option<Arc<HexTable>>),
     TrueType(Filter, Box<TrueType>),
 }
 /// One font (`FontSet`): its providers and the glyphs resolved so far.
@@ -304,6 +424,9 @@ struct Cache {
     sets: Vec<(String, FontSet)>,
     region: Region,
     strips: StripCache,
+    /// Loaded Unihex tables shared across font sets and filter variants that
+    /// reference the same archive and `size_overrides`.
+    unihex: HashMap<UnihexKey, Arc<HexTable>>,
     /// `Font.random`: picks obfuscated glyphs.
     random: horizon_core::random::LegacyRandom,
 }
@@ -326,11 +449,27 @@ pub struct Font {
     /// "Japanese Glyph Variants": the `jp` filter option.
     pub japanese: bool,
 }
+#[inline]
 fn parse_hex_digit(b: u8) -> Option<u32> {
-    (b as char).to_digit(16)
+    match b {
+        b'0'..=b'9' => Some(u32::from(b - b'0')),
+        b'a'..=b'f' => Some(u32::from(b - b'a' + 10)),
+        b'A'..=b'F' => Some(u32::from(b - b'A' + 10)),
+        _ => None,
+    }
 }
-/// UnihexProvider.readFromStream over one `.hex` file.
-fn parse_hex(text: &[u8], out: &mut HashMap<u32, HexGlyph>) {
+#[inline]
+fn parse_hex_byte(hi: u8, lo: u8) -> Option<u8> {
+    Some(((parse_hex_digit(hi)? << 4) | parse_hex_digit(lo)?) as u8)
+}
+/// UnihexProvider.readFromStream over one `.hex` file into compact row storage.
+fn parse_hex(
+    text: &[u8],
+    entries: &mut Vec<HexEntry>,
+    rows_buf: &mut Vec<u8>,
+    by_cp: &mut crate::fast_hash::FxHashMap<u32, usize>,
+    has_dead_rows: &mut bool,
+) {
     for line in text.split(|b| *b == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         let Some(colon) = line.iter().position(|b| *b == b':') else {
@@ -346,40 +485,84 @@ fn parse_hex(text: &[u8], out: &mut HashMap<u32, HexGlyph>) {
         else {
             continue;
         };
-        let digits_per_row = match data.len() {
-            32 => 2,
-            64 => 4,
-            96 => 6,
-            128 => 8,
+        let bpr = match data.len() {
+            32 => 1usize,
+            64 => 2,
+            96 => 3,
+            128 => 4,
             _ => continue,
         };
-        let bit_width = digits_per_row as u32 * 4;
-        let mut rows = [0u32; 16];
+        let bit_width = (bpr as u32) * 8;
+        let mut row_bytes = [0u8; 64];
         let mut mask = 0u32;
         let mut ok = true;
-        for (r, row) in rows.iter_mut().enumerate() {
-            let chunk = &data[r * digits_per_row..(r + 1) * digits_per_row];
-            match chunk
-                .iter()
-                .try_fold(0u32, |a, b| parse_hex_digit(*b).map(|d| a << 4 | d))
-            {
-                Some(v) => {
-                    *row = v << (32 - bit_width);
-                    mask |= *row;
+        for r in 0..16 {
+            let mut be = [0u8; 4];
+            for j in 0..bpr {
+                let pos = (r * bpr + j) * 2;
+                match parse_hex_byte(data[pos], data[pos + 1]) {
+                    Some(byte) => {
+                        row_bytes[r * bpr + j] = byte;
+                        be[j] = byte;
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
                 }
-                None => ok = false,
             }
+            if !ok {
+                break;
+            }
+            mask |= u32::from_be_bytes(be);
         }
         if !ok {
             continue;
         }
         // LineData.calculateWidth.
         let (left, right) = if mask == 0 {
-            (0, bit_width)
+            (0u8, bit_width as u8)
         } else {
-            (mask.leading_zeros(), 31 - mask.trailing_zeros())
+            (
+                mask.leading_zeros() as u8,
+                (31 - mask.trailing_zeros()) as u8,
+            )
         };
-        out.insert(codepoint, HexGlyph { rows, left, right });
+        let slice = &row_bytes[..16 * bpr];
+        match by_cp.entry(codepoint) {
+            std::collections::hash_map::Entry::Occupied(occ) => {
+                let existing = &mut entries[*occ.get()];
+                if usize::from(existing.bytes_per_row) == bpr {
+                    let start = existing.offset as usize;
+                    rows_buf[start..start + slice.len()].copy_from_slice(slice);
+                } else {
+                    let Ok(offset) = u32::try_from(rows_buf.len()) else {
+                        continue;
+                    };
+                    existing.offset = offset;
+                    existing.bytes_per_row = bpr as u8;
+                    rows_buf.extend_from_slice(slice);
+                    *has_dead_rows = true;
+                }
+                existing.left = left;
+                existing.right = right;
+            }
+            std::collections::hash_map::Entry::Vacant(vac) => {
+                let Ok(offset) = u32::try_from(rows_buf.len()) else {
+                    continue;
+                };
+                rows_buf.extend_from_slice(slice);
+                vac.insert(entries.len());
+                entries.push(HexEntry {
+                    codepoint,
+                    offset,
+                    left,
+                    right,
+                    bytes_per_row: bpr as u8,
+                    wide_bounds: false,
+                });
+            }
+        }
     }
 }
 fn read_json(source: &ResourceSource, path: &str) -> Option<serde_json::Value> {
@@ -388,6 +571,9 @@ fn read_json(source: &ResourceSource, path: &str) -> Option<serde_json::Value> {
 fn resource_path(id: &str, folder: &str, ext: &str) -> String {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
     format!("assets/{ns}/{folder}/{}{ext}", path.trim_end_matches(ext))
+}
+fn unihex_resource_path(file: &str) -> String {
+    resource_path(file, "", "").replace("//", "/")
 }
 /// A bitmap provider's `height` (8 when missing or null) and `ascent`, as
 /// vanilla decodes them: any JSON number taken as an integer, a fraction
@@ -903,43 +1089,125 @@ impl TrueType {
         ))
     }
 }
-fn load_hex(source: &ResourceSource, p: &serde_json::Value) -> HashMap<u32, HexGlyph> {
-    let mut glyphs = HashMap::new();
-    let Some(file) = p["hex_file"].as_str() else {
-        return glyphs;
+/// Load a Unihex archive and apply `size_overrides`.
+///
+/// Returns [`HexLoad::Failed`] when the archive itself cannot be read or opened
+/// as a ZIP, [`HexLoad::Partial`] when the archive opens but at least one `.hex`
+/// member fails to read (keeping all glyphs parsed from readable members while
+/// leaving the shared cache unpopulated for a later retry), and
+/// [`HexLoad::Complete`] when `hex_file` is omitted or every `.hex` member is
+/// read cleanly.
+fn load_hex(source: &ResourceSource, key: &UnihexKey) -> HexLoad {
+    let Some(path) = key.path.as_deref() else {
+        return HexLoad::Complete(HexTable::empty());
     };
-    let path = resource_path(file, "", "").replace("//", "/");
-    let Ok(zip) = source.read(&path).and_then(Zip::from_bytes) else {
-        return glyphs;
+    let Ok(zip) = source.read(path).and_then(Zip::from_bytes) else {
+        return HexLoad::Failed;
     };
     let names: Vec<String> = zip
         .names()
         .filter(|n| n.ends_with(".hex"))
         .map(str::to_owned)
         .collect();
+    let mut entries = Vec::new();
+    let mut rows = Vec::new();
+    let mut by_cp = crate::fast_hash::FxHashMap::default();
+    let mut has_dead_rows = false;
+    let mut complete = true;
     for name in names {
-        if let Ok(bytes) = zip.read(&name) {
-            parse_hex(&bytes, &mut glyphs);
-        }
-    }
-    for o in p["size_overrides"].as_array().into_iter().flatten() {
-        let bound = |k: &str| {
-            o[k].as_str()
-                .and_then(|s| s.chars().next())
-                .map_or(0, u32::from)
+        let Ok(bytes) = zip.read(&name) else {
+            complete = false;
+            continue;
         };
-        let (left, right) = (
-            o["left"].as_u64().unwrap_or(0) as u32,
-            o["right"].as_u64().unwrap_or(15) as u32,
+        parse_hex(
+            &bytes,
+            &mut entries,
+            &mut rows,
+            &mut by_cp,
+            &mut has_dead_rows,
         );
-        for c in bound("from")..=bound("to") {
-            if let Some(g) = glyphs.get_mut(&c) {
-                g.left = left;
-                g.right = right;
+    }
+    let mut wide_bounds_map: crate::fast_hash::FxHashMap<u32, (u32, u32)> =
+        crate::fast_hash::FxHashMap::default();
+    for &(from, to, left, right) in &key.overrides {
+        for c in from..=to {
+            if let Some(&idx) = by_cp.get(&c) {
+                let entry = &mut entries[idx];
+                if let (Ok(l), Ok(r)) = (u8::try_from(left), u8::try_from(right)) {
+                    entry.left = l;
+                    entry.right = r;
+                    if entry.wide_bounds {
+                        entry.wide_bounds = false;
+                        wide_bounds_map.remove(&c);
+                    }
+                } else {
+                    entry.left = 0;
+                    entry.right = 0;
+                    entry.wide_bounds = true;
+                    wide_bounds_map.insert(c, (left, right));
+                }
             }
         }
     }
-    glyphs
+    drop(by_cp);
+    entries.sort_unstable_by_key(|e| e.codepoint);
+    if has_dead_rows {
+        let total: usize = entries
+            .iter()
+            .map(|e| 16 * usize::from(e.bytes_per_row))
+            .sum();
+        let mut compacted = Vec::with_capacity(total);
+        for e in &mut entries {
+            let len = 16 * usize::from(e.bytes_per_row);
+            let start = e.offset as usize;
+            e.offset = compacted.len() as u32;
+            compacted.extend_from_slice(&rows[start..start + len]);
+        }
+        rows = compacted;
+    }
+    let mut wide_bounds: Vec<(u32, u32, u32)> = wide_bounds_map
+        .into_iter()
+        .map(|(cp, (left, right))| (cp, left, right))
+        .collect();
+    wide_bounds.sort_unstable_by_key(|&(cp, _, _)| cp);
+    entries.shrink_to_fit();
+    rows.shrink_to_fit();
+    wide_bounds.shrink_to_fit();
+    let table = HexTable {
+        entries,
+        rows,
+        wide_bounds,
+    };
+    if complete {
+        HexLoad::Complete(table)
+    } else {
+        HexLoad::Partial(table)
+    }
+}
+fn ensure_unihex<'a>(
+    source: &ResourceSource,
+    lazy: &mut Option<Box<UnihexKey>>,
+    loaded: &'a mut Option<Arc<HexTable>>,
+    unihex_cache: &mut HashMap<UnihexKey, Arc<HexTable>>,
+) -> &'a HexTable {
+    loaded.get_or_insert_with(|| {
+        let Some(key) = lazy.take() else {
+            return Arc::new(HexTable::empty());
+        };
+        let key = *key;
+        if let Some(table) = unihex_cache.get(&key) {
+            return table.clone();
+        }
+        match load_hex(source, &key) {
+            HexLoad::Complete(table) => {
+                let table = Arc::new(table);
+                unihex_cache.insert(key, table.clone());
+                table
+            }
+            HexLoad::Partial(table) => Arc::new(table),
+            HexLoad::Failed => Arc::new(HexTable::empty()),
+        }
+    })
 }
 /// The ids of every font definition (`font/**/*.json` of each namespace).
 fn font_ids(source: &ResourceSource) -> Vec<String> {
@@ -1092,6 +1360,7 @@ impl Font {
                     full: false,
                 },
                 strips: StripCache::default(),
+                unihex: HashMap::new(),
                 // `Font.random`: `RandomSource.create()`.
                 random: crate::random_source::create(),
             }),
@@ -1143,7 +1412,11 @@ impl Font {
                         self.metrics_only,
                     ),
                 )),
-                "unihex" => Some(Provider::Unihex(Filter::of(p), p.clone(), None)),
+                "unihex" => Some(Provider::Unihex(
+                    Filter::of(p),
+                    Some(Box::new(UnihexKey::of(p))),
+                    None,
+                )),
                 "ttf" => Some(Provider::TrueType(
                     Filter::of(p),
                     Box::new(load_true_type(&self.source, p)?),
@@ -1212,6 +1485,7 @@ impl Font {
             sets,
             region,
             strips,
+            unihex,
             ..
         } = &mut *cache;
         // FontManager.getFontSetRaw: a font that doesn't exist draws every
@@ -1223,7 +1497,7 @@ impl Font {
             return *g;
         }
         let was_full = std::mem::replace(&mut region.full, false);
-        let found = self.resolve(set, region, strips, c, false);
+        let found = self.resolve(set, region, strips, unihex, c, false);
         // No room: the missing glyph for now, not remembered, so the
         // character is tried again once `begin_frame` cleared the region.
         let overflowed = std::mem::replace(&mut region.full, was_full);
@@ -1248,6 +1522,7 @@ impl Font {
             sets,
             region,
             strips,
+            unihex,
             ..
         } = &mut *cache;
         let Some((_, set)) = sets.iter_mut().find(|(k, _)| k == id) else {
@@ -1257,7 +1532,7 @@ impl Font {
             return *g;
         }
         let was_full = std::mem::replace(&mut region.full, false);
-        let found = self.resolve(set, region, strips, c, true);
+        let found = self.resolve(set, region, strips, unihex, c, true);
         let overflowed = std::mem::replace(&mut region.full, was_full);
         region.full |= overflowed;
         if overflowed {
@@ -1272,6 +1547,7 @@ impl Font {
         set: &mut FontSet,
         region: &mut Region,
         strips: &mut StripCache,
+        unihex_cache: &mut HashMap<UnihexKey, Arc<HexTable>>,
         c: char,
         non_fishy: bool,
     ) -> Option<Glyph> {
@@ -1314,9 +1590,9 @@ impl Font {
                         _ => {}
                     }
                 }
-                Provider::Unihex(filter, def, glyphs) if filter.passes(uniform, japanese) => {
-                    let glyphs = glyphs.get_or_insert_with(|| load_hex(&self.source, def));
-                    if let Some(h) = glyphs.get(&u32::from(c)).copied()
+                Provider::Unihex(filter, lazy, loaded) if filter.passes(uniform, japanese) => {
+                    let table = ensure_unihex(&self.source, lazy, loaded, unihex_cache);
+                    if let Some(h) = table.get(u32::from(c))
                         && !(non_fishy && fishy_advance(hex_advance(&h)))
                     {
                         return self.rasterize_hex(region, h);
@@ -1406,12 +1682,17 @@ impl Font {
         let width = advance.ceil() as i32;
         let pick = {
             let mut cache = self.cache.borrow_mut();
-            let Cache { sets, random, .. } = &mut *cache;
+            let Cache {
+                sets,
+                unihex,
+                random,
+                ..
+            } = &mut *cache;
             let Some((_, set)) = sets.iter_mut().find(|(k, _)| k == id) else {
                 return self.missing;
             };
             if set.by_width.is_none() {
-                set.by_width = Some(self.glyphs_by_width(set));
+                set.by_width = Some(self.glyphs_by_width(set, unihex));
             }
             set.by_width
                 .as_ref()
@@ -1423,7 +1704,11 @@ impl Font {
         };
         pick.map_or(self.missing, |c| self.glyph_non_fishy(id, c))
     }
-    fn glyphs_by_width(&self, set: &mut FontSet) -> HashMap<i32, Vec<char>> {
+    fn glyphs_by_width(
+        &self,
+        set: &mut FontSet,
+        unihex_cache: &mut HashMap<UnihexKey, Arc<HexTable>>,
+    ) -> HashMap<i32, Vec<char>> {
         let (uniform, japanese) = (self.uniform, self.japanese);
         let mut chars = std::collections::BTreeSet::new();
         let mut in_atlas = false;
@@ -1447,7 +1732,7 @@ impl Font {
         }
         let mut out: HashMap<i32, Vec<char>> = HashMap::new();
         for c in chars {
-            if let Some(advance) = self.provider_advance(set, c) {
+            if let Some(advance) = self.provider_advance(set, unihex_cache, c) {
                 out.entry(advance.ceil() as i32).or_default().push(c);
             }
         }
@@ -1455,7 +1740,12 @@ impl Font {
     }
     /// A character's advance in `set` (its first provider that has it, fishy or not, as the
     /// by-width table of `FontSet.reload` takes it), without rasterizing it.
-    fn provider_advance(&self, set: &mut FontSet, c: char) -> Option<f32> {
+    fn provider_advance(
+        &self,
+        set: &mut FontSet,
+        unihex_cache: &mut HashMap<UnihexKey, Arc<HexTable>>,
+        c: char,
+    ) -> Option<f32> {
         let (uniform, japanese) = (self.uniform, self.japanese);
         for provider in &mut set.providers {
             match provider {
@@ -1475,10 +1765,10 @@ impl Font {
                         _ => {}
                     }
                 }
-                Provider::Unihex(filter, def, glyphs) if filter.passes(uniform, japanese) => {
-                    let glyphs = glyphs.get_or_insert_with(|| load_hex(&self.source, def));
-                    if let Some(h) = glyphs.get(&u32::from(c)) {
-                        return Some(hex_advance(h));
+                Provider::Unihex(filter, lazy, loaded) if filter.passes(uniform, japanese) => {
+                    let table = ensure_unihex(&self.source, lazy, loaded, unihex_cache);
+                    if let Some(advance) = table.advance(u32::from(c)) {
+                        return Some(advance);
                     }
                 }
                 Provider::TrueType(filter, ttf) if filter.passes(uniform, japanese) => {
@@ -1808,21 +2098,122 @@ mod tests {
         let decoded = STRIP_DECODED_BYTES.with(std::cell::Cell::get);
         (out, decoded)
     }
+    fn parse_hex_table(chunks: &[&[u8]]) -> HexTable {
+        let mut entries = Vec::new();
+        let mut rows = Vec::new();
+        let mut by_cp = crate::fast_hash::FxHashMap::default();
+        let mut has_dead_rows = false;
+        for chunk in chunks {
+            parse_hex(
+                chunk,
+                &mut entries,
+                &mut rows,
+                &mut by_cp,
+                &mut has_dead_rows,
+            );
+        }
+        entries.sort_unstable_by_key(|e| e.codepoint);
+        if has_dead_rows {
+            let total: usize = entries
+                .iter()
+                .map(|e| 16 * usize::from(e.bytes_per_row))
+                .sum();
+            let mut compacted = Vec::with_capacity(total);
+            for e in &mut entries {
+                let len = 16 * usize::from(e.bytes_per_row);
+                let start = e.offset as usize;
+                e.offset = compacted.len() as u32;
+                compacted.extend_from_slice(&rows[start..start + len]);
+            }
+            rows = compacted;
+        }
+        entries.shrink_to_fit();
+        rows.shrink_to_fit();
+        HexTable {
+            entries,
+            rows,
+            wide_bounds: Vec::new(),
+        }
+    }
+
+    fn zip_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn zip_with_corrupt_member(entries: &[(&str, &[u8])], corrupt_name: &str) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in entries {
+            writer.start_file(*name, deflated).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let (start, len) = {
+            let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+            let index = archive.index_for_name(corrupt_name).unwrap();
+            let entry = archive.by_index_raw(index).unwrap();
+            (
+                entry.data_start().unwrap() as usize,
+                entry.compressed_size() as usize,
+            )
+        };
+        assert!(len > 0);
+        bytes[start..start + len].fill(0xff);
+        bytes
+    }
+
     #[test]
     fn unihex_rows_and_widths() {
-        let mut out = HashMap::new();
-        // 'A' from unifont (8 wide) and a 16-wide glyph with an empty left column.
-        let wide = format!("4E00:{}7FFE{}\n", "0000".repeat(4), "0000".repeat(11));
-        parse_hex(b"0041:0000000018242442427E424242420000\n", &mut out);
-        parse_hex(wide.as_bytes(), &mut out);
-        let a = out[&0x41];
+        // 'A' from unifont (8 wide), a 16-wide glyph with an empty left column,
+        // 24-wide, 32-wide, and an all-zero 8-wide blank glyph.
+        let wide16 = format!("4E00:{}7FFE{}\n", "0000".repeat(4), "0000".repeat(11));
+        let wide24 = format!(
+            "1F600:{}00FF00{}\n",
+            "000000".repeat(2),
+            "000000".repeat(13)
+        );
+        let wide32 = format!("1F601:0000000000000001{}\n", "00000000".repeat(14));
+        let blank8 = format!("0020:{}\n", "00".repeat(16));
+        let table = parse_hex_table(&[
+            b"0041:0000000018242442427E424242420000\n",
+            wide16.as_bytes(),
+            wide24.as_bytes(),
+            wide32.as_bytes(),
+            blank8.as_bytes(),
+            // Unparseable lines are skipped.
+            b"zz:00\n",
+        ]);
+        assert_eq!(table.entries.len(), 5);
+        let a = table.get(0x41).unwrap();
         assert_eq!((a.left, a.right), (1, 6));
         assert_eq!(a.rows[4], 0x18 << 24);
-        let yi = out[&0x4E00];
+        assert_eq!(table.advance(0x41), Some(hex_advance(&a)));
+        let yi = table.get(0x4E00).unwrap();
         assert_eq!((yi.left, yi.right), (1, 14));
-        // Unparseable lines are skipped.
-        parse_hex(b"zz:00\n", &mut out);
-        assert_eq!(out.len(), 2);
+        assert_eq!(yi.rows[4], 0x7FFE << 16);
+        assert_eq!(table.advance(0x4E00), Some(hex_advance(&yi)));
+        let g24 = table.get(0x1F600).unwrap();
+        assert_eq!((g24.left, g24.right), (8, 15));
+        assert_eq!(g24.rows[2], 0x00FF00 << 8);
+        assert_eq!(table.advance(0x1F600), Some(hex_advance(&g24)));
+        let g32 = table.get(0x1F601).unwrap();
+        assert_eq!((g32.left, g32.right), (31, 31));
+        assert_eq!(g32.rows[1], 1);
+        assert_eq!(table.advance(0x1F601), Some(hex_advance(&g32)));
+        let sp = table.get(0x20).unwrap();
+        assert_eq!((sp.left, sp.right), (0, 8));
+        assert_eq!(table.advance(0x20), Some(hex_advance(&sp)));
+        assert!(table.get(0x9999).is_none());
+        assert!(table.advance(0x9999).is_none());
     }
 
     #[test]
@@ -1993,9 +2384,8 @@ mod tests {
             assert_eq!(metrics.advance(c, &alt), rendered.advance(c, &alt));
             assert!(metrics.glyph_styled(c, &alt).rect.is_none());
         }
-        let mut hex = HashMap::new();
-        parse_hex(b"0041:0000000018242442427E424242420000\n", &mut hex);
-        let h = hex[&0x41];
+        let hex = parse_hex_table(&[b"0041:0000000018242442427E424242420000\n"]);
+        let h = hex.get(0x41).unwrap();
         let glyph = metrics
             .rasterize_hex(&mut metrics.cache.borrow_mut().region, h)
             .unwrap();
@@ -3084,7 +3474,8 @@ mod tests {
         // empty-outline spaces still fit the TrueType provider.
         {
             let mut cache = font.cache.borrow_mut();
-            let by_width = font.glyphs_by_width(&mut cache.sets[0].1);
+            let Cache { sets, unihex, .. } = &mut *cache;
+            let by_width = font.glyphs_by_width(&mut sets[0].1, unihex);
             assert_eq!(
                 by_width.get(&3).map(Vec::as_slice),
                 Some(&['A'][..]),
@@ -3097,7 +3488,7 @@ mod tests {
                 "oversized TTF glyph is not indexed under rejected TTF advance"
             );
             assert!(
-                font.provider_advance(&mut cache.sets[0].1, ' ')
+                font.provider_advance(&mut sets[0].1, unihex, ' ')
                     .is_some_and(|adv| adv > 32.0),
                 "empty-outline space still fits the TrueType provider"
             );
@@ -3155,7 +3546,8 @@ mod tests {
         let fit_bucket = a_fit.advance.ceil() as i32;
         {
             let mut cache = fitting.cache.borrow_mut();
-            let by_width = fitting.glyphs_by_width(&mut cache.sets[0].1);
+            let Cache { sets, unihex, .. } = &mut *cache;
+            let by_width = fitting.glyphs_by_width(&mut sets[0].1, unihex);
             assert!(
                 by_width
                     .get(&fit_bucket)
@@ -3178,8 +3570,9 @@ mod tests {
         );
         {
             let mut cache = metrics.cache.borrow_mut();
+            let Cache { sets, unihex, .. } = &mut *cache;
             assert_eq!(
-                metrics.provider_advance(&mut cache.sets[0].1, 'A'),
+                metrics.provider_advance(&mut sets[0].1, unihex, 'A'),
                 Some(a_fit.advance),
                 "metrics-only font keeps TTF advance without an atlas region"
             );
@@ -3323,5 +3716,403 @@ mod tests {
                 assert_eq!(ttf.glyph_id('\u{e001}'), None);
             }
         }
+    }
+
+    #[test]
+    fn compact_unihex_table_lookup_overrides_and_memory_savings() {
+        assert_eq!(std::mem::size_of::<HexEntry>(), 12);
+        assert_eq!(std::mem::size_of::<HexGlyph>(), 72);
+
+        use std::fmt::Write as _;
+
+        // Include duplicate codepoints (same width and changed width to exercise
+        // dead-row compaction) plus standard and >255 size_overrides.
+        let mut hex = String::new();
+        writeln!(hex, "0041:{}", "FF".repeat(16)).unwrap();
+        // Overwrite 0041 with a 16-wide glyph so the old 8-wide row slice becomes dead.
+        writeln!(hex, "0041:{}7FFE{}", "0000".repeat(4), "0000".repeat(11)).unwrap();
+        // Overwrite 0042 in place with the same width.
+        writeln!(hex, "0042:{}", "0F".repeat(16)).unwrap();
+        writeln!(hex, "0042:{}", "F0".repeat(16)).unwrap();
+        writeln!(hex, "0043:{}", "FF".repeat(16)).unwrap();
+        writeln!(hex, "0044:{}", "FF".repeat(16)).unwrap();
+        let archive = zip_with(&[("glyphs.hex", hex.as_bytes())]);
+        let def: serde_json::Value = serde_json::from_slice(
+            br#"{
+                "type":"unihex",
+                "hex_file":"pack:font/unihex.zip",
+                "size_overrides":[
+                    {"from":"A","to":"B","left":2,"right":11},
+                    {"from":"C","to":"D","left":10,"right":300},
+                    {"from":"D","to":"D","left":1,"right":9}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let root_dir = root(
+            "unihex-compact-overrides",
+            &[("assets/pack/font/unihex.zip", &archive)],
+        );
+        let source = ResourceSource::directory(root_dir.clone());
+        let HexLoad::Complete(table) = load_hex(&source, &UnihexKey::of(&def)) else {
+            panic!("expected complete Unihex table load");
+        };
+        let _ = std::fs::remove_dir_all(&root_dir);
+
+        // Dead 8-wide slice for 0041 was compacted out: 1x32 + 3x16 = 80 bytes.
+        assert_eq!(table.entries.len(), 4);
+        assert_eq!(table.rows.len(), 32 + 16 * 3);
+
+        // 'A' kept the 16-wide rows and received the standard override (2, 11).
+        let a = table.get(0x41).unwrap();
+        assert_eq!(a.rows[4], 0x7FFE << 16);
+        assert_eq!((a.left, a.right), (2, 11));
+        assert_eq!(table.advance(0x41), Some(hex_advance(&a)));
+
+        // 'B' kept the in-place overwritten 0xF0 rows and standard override (2, 11).
+        let b = table.get(0x42).unwrap();
+        assert_eq!(b.rows[0], 0xF0 << 24);
+        assert_eq!((b.left, b.right), (2, 11));
+        assert_eq!(table.advance(0x42), Some(hex_advance(&b)));
+
+        // 'C' preserves exact u32 size_overrides > 255 without truncating to 255.
+        let c = table.get(0x43).unwrap();
+        assert_eq!((c.left, c.right), (10, 300));
+        assert_eq!(table.advance(0x43), Some(146.0));
+        assert_eq!(table.advance(0x43), Some(hex_advance(&c)));
+
+        // 'D' had a >255 override replaced by a normal override (1, 9), clearing wide_bounds.
+        let d = table.get(0x44).unwrap();
+        assert_eq!((d.left, d.right), (1, 9));
+        assert_eq!(table.advance(0x44), Some(hex_advance(&d)));
+        assert_eq!(table.wide_bounds, [(0x43, 10, 300)]);
+
+        // Memory savings on a 2,000-glyph mixed 8-wide / 16-wide table vs HashMap<u32, HexGlyph>.
+        let mut bulk = String::new();
+        let mut old_map: HashMap<u32, HexGlyph> = HashMap::new();
+        for i in 0u32..2_000 {
+            let cp = 0x0100 + i;
+            let row_hex = if i.is_multiple_of(2) {
+                "18".repeat(16)
+            } else {
+                "7FFE".repeat(16)
+            };
+            writeln!(bulk, "{cp:04X}:{row_hex}").unwrap();
+            let mut rows = [0u32; 16];
+            let (left, right) = if i.is_multiple_of(2) {
+                rows.fill(0x18 << 24);
+                (3, 4)
+            } else {
+                rows.fill(0x7FFE << 16);
+                (1, 14)
+            };
+            old_map.insert(cp, HexGlyph { rows, left, right });
+        }
+        let compact = parse_hex_table(&[bulk.as_bytes()]);
+        assert_eq!(compact.entries.len(), 2_000);
+        assert!(compact.wide_bounds.is_empty());
+        for (&cp, expected) in &old_map {
+            let got = compact.get(cp).unwrap();
+            assert_eq!(got.rows, expected.rows);
+            assert_eq!((got.left, got.right), (expected.left, expected.right));
+            assert_eq!(compact.advance(cp), Some(hex_advance(expected)));
+        }
+        let compact_bytes = compact.entries.capacity() * std::mem::size_of::<HexEntry>()
+            + compact.rows.capacity()
+            + compact.wide_bounds.capacity() * std::mem::size_of::<(u32, u32, u32)>();
+        let old_bytes =
+            old_map.capacity() * (std::mem::size_of::<u32>() + std::mem::size_of::<HexGlyph>());
+        assert!(
+            compact_bytes * 2 < old_bytes,
+            "expected compact HexTable ({compact_bytes} B) to be <50% of HashMap<u32, HexGlyph> ({old_bytes} B)"
+        );
+    }
+
+    #[test]
+    fn unihex_table_is_shared_across_filter_variants_and_font_sets() {
+        let archive = zip_with(&[(
+            "glyphs.hex",
+            format!("0041:{}\n", "FF".repeat(16)).as_bytes(),
+        )]);
+        let default = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","filter":{"jp":false}},
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","filter":{"jp":true}}
+        ]}"#;
+        let alt = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip"}
+        ]}"#;
+        let wide_a = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","size_overrides":[{"from":"A","to":"A","left":0,"right":300}]}
+        ]}"#;
+        let wide_b = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","size_overrides":[{"from":"A","to":"A","left":0,"right":400}]}
+        ]}"#;
+        let root_dir = root(
+            "unihex-shared-variants",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/minecraft/font/alt.json", alt),
+                ("assets/pack/font/unihex.zip", &archive),
+            ],
+        );
+        let mut font = load(&root_dir);
+
+        // First filter variant lazily loads the archive from disk.
+        assert_eq!(font.glyph('A').advance, 5.0);
+        assert_eq!(font.cache.borrow().unihex.len(), 1);
+        let _ = std::fs::remove_dir_all(&root_dir);
+
+        // Switching filter variants and resetting the glyph cache reuses the same Arc<HexTable>
+        // even though the archive directory has already been removed from disk.
+        font.japanese = true;
+        font.reset_cache();
+        assert_eq!(font.glyph('A').advance, 5.0);
+
+        // Another font set referencing the same archive shares the same Arc<HexTable>,
+        // including through the provider_advance / random_glyph path.
+        let alt_style = Style {
+            font: Some("minecraft:alt".into()),
+            ..Style::default()
+        };
+        assert_eq!(font.random_glyph(&alt_style, 5.0).advance, 5.0);
+        assert_eq!(font.cache.borrow().unihex.len(), 1);
+
+        // Distinct >255 size_overrides do not collide in the shared Unihex cache.
+        // Reload from a live root for the two wide override sets.
+        let root_dir = root(
+            "unihex-wide-distinct",
+            &[
+                ("assets/minecraft/font/wide_a.json", wide_a),
+                ("assets/minecraft/font/wide_b.json", wide_b),
+                ("assets/pack/font/unihex.zip", &archive),
+            ],
+        );
+        let wide_font = load(&root_dir);
+        assert_eq!(wide_font.glyph_in("minecraft:wide_a", 'A').advance, 151.0);
+        assert_eq!(wide_font.glyph_in("minecraft:wide_b", 'A').advance, 201.0);
+        assert_eq!(wide_font.cache.borrow().unihex.len(), 2);
+        let _ = std::fs::remove_dir_all(&root_dir);
+
+        let cache = font.cache.borrow();
+        let (_, default_set) = cache.sets.iter().find(|(k, _)| k == DEFAULT).unwrap();
+        let (_, alt_set) = cache
+            .sets
+            .iter()
+            .find(|(k, _)| k == "minecraft:alt")
+            .unwrap();
+        let Provider::Unihex(_, _, Some(jp_false)) = &default_set.providers[0] else {
+            panic!("jp=false unihex provider should be loaded");
+        };
+        let Provider::Unihex(_, _, Some(jp_true)) = &default_set.providers[1] else {
+            panic!("jp=true unihex provider should be loaded");
+        };
+        let Provider::Unihex(_, _, Some(alt_table)) = &alt_set.providers[0] else {
+            panic!("alt unihex provider should be loaded");
+        };
+        assert!(Arc::ptr_eq(jp_false, jp_true));
+        assert!(Arc::ptr_eq(jp_false, alt_table));
+    }
+
+    #[test]
+    fn failed_unihex_load_is_not_cached_as_empty() {
+        let def = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","filter":{"jp":false}},
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","filter":{"jp":true}}
+        ]}"#;
+        let valid_archive = zip_with(&[(
+            "glyphs.hex",
+            format!("0041:{}\n", "FF".repeat(16)).as_bytes(),
+        )]);
+
+        // 1. Missing archive: first filter variant fails without poisoning cache.unihex;
+        // once the archive appears, the second filter variant retries and loads it.
+        let root_missing = root(
+            "unihex-retry-missing",
+            &[("assets/minecraft/font/default.json", def)],
+        );
+        let mut font = load(&root_missing);
+        assert_eq!(font.glyph('A').advance, 6.0);
+        assert!(font.cache.borrow().unihex.is_empty());
+
+        let archive_path = root_missing.join("assets/pack/font/unihex.zip");
+        std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+        std::fs::write(&archive_path, &valid_archive).unwrap();
+        font.japanese = true;
+        font.reset_cache();
+        assert_eq!(font.glyph('A').advance, 5.0);
+        assert_eq!(font.cache.borrow().unihex.len(), 1);
+        let _ = std::fs::remove_dir_all(&root_missing);
+
+        // 2. Corrupt archive bytes: also treated as a read failure, never cached as empty.
+        let root_corrupt = root(
+            "unihex-retry-corrupt",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                ("assets/pack/font/unihex.zip", b"not a zip archive"),
+            ],
+        );
+        let mut font = load(&root_corrupt);
+        assert_eq!(font.glyph('A').advance, 6.0);
+        assert!(font.cache.borrow().unihex.is_empty());
+
+        std::fs::write(
+            root_corrupt.join("assets/pack/font/unihex.zip"),
+            &valid_archive,
+        )
+        .unwrap();
+        font.japanese = true;
+        font.reset_cache();
+        assert_eq!(font.glyph('A').advance, 5.0);
+        assert_eq!(font.cache.borrow().unihex.len(), 1);
+        let _ = std::fs::remove_dir_all(&root_corrupt);
+
+        // 3. Valid archive containing an empty .hex file IS cached and shared across variants.
+        let empty_archive = zip_with(&[("empty.hex", b"")]);
+        let root_empty = root(
+            "unihex-valid-empty",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                ("assets/pack/font/unihex.zip", &empty_archive),
+            ],
+        );
+        let mut font = load(&root_empty);
+        assert_eq!(font.glyph('A').advance, 6.0);
+        assert_eq!(font.cache.borrow().unihex.len(), 1);
+        let _ = std::fs::remove_dir_all(&root_empty);
+
+        font.japanese = true;
+        font.reset_cache();
+        assert_eq!(font.glyph('A').advance, 6.0);
+        let cache = font.cache.borrow();
+        let (_, default_set) = cache.sets.iter().find(|(k, _)| k == DEFAULT).unwrap();
+        let Provider::Unihex(_, _, Some(first)) = &default_set.providers[0] else {
+            panic!("first empty unihex provider should be loaded");
+        };
+        let Provider::Unihex(_, _, Some(second)) = &default_set.providers[1] else {
+            panic!("second empty unihex provider should be loaded");
+        };
+        assert!(first.entries.is_empty());
+        assert!(Arc::ptr_eq(first, second));
+    }
+
+    #[test]
+    fn unreadable_unihex_member_keeps_readable_glyphs_without_caching_partial() {
+        let a_hex = format!("0041:{}\n", "FF".repeat(16));
+        let b_hex = format!("0042:{}\n", "7FFE".repeat(16));
+        let c_hex = format!("0043:{}\n0044:{}\n", "18".repeat(16), "FF".repeat(16));
+        let partial_archive = zip_with_corrupt_member(
+            &[
+                ("a_good.hex", a_hex.as_bytes()),
+                ("b_corrupt.hex", b_hex.as_bytes()),
+                ("c_good.hex", c_hex.as_bytes()),
+            ],
+            "b_corrupt.hex",
+        );
+        let repaired_archive = zip_with(&[
+            ("a_good.hex", a_hex.as_bytes()),
+            ("b_corrupt.hex", b_hex.as_bytes()),
+            ("c_good.hex", c_hex.as_bytes()),
+        ]);
+
+        // Verify the fixture opens cleanly as a ZIP while only the middle .hex member fails.
+        let probe = Zip::from_bytes(partial_archive.clone()).unwrap();
+        assert!(probe.read("a_good.hex").is_ok());
+        assert!(probe.read("b_corrupt.hex").is_err());
+        assert!(probe.read("c_good.hex").is_ok());
+
+        let def = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","size_overrides":[{"from":"D","to":"D","left":0,"right":11}],"filter":{"jp":false}},
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","size_overrides":[{"from":"D","to":"D","left":0,"right":11}],"filter":{"jp":true}}
+        ]}"#;
+        let alt = br#"{"providers":[
+            {"type":"unihex","hex_file":"pack:font/unihex.zip","size_overrides":[{"from":"D","to":"D","left":0,"right":11}]}
+        ]}"#;
+        let root_dir = root(
+            "unihex-partial-member",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                ("assets/minecraft/font/alt.json", alt),
+                ("assets/pack/font/unihex.zip", &partial_archive),
+            ],
+        );
+
+        let source = ResourceSource::directory(root_dir.clone());
+        let parsed_def: serde_json::Value = serde_json::from_slice(def).unwrap();
+        let key = UnihexKey::of(&parsed_def["providers"][0]);
+        match load_hex(&source, &key) {
+            HexLoad::Partial(table) => {
+                assert_eq!(table.advance(0x41), Some(5.0));
+                assert_eq!(table.advance(0x42), None);
+                assert_eq!(table.advance(0x43), Some(2.0));
+                assert_eq!(table.advance(0x44), Some(7.0));
+            }
+            HexLoad::Complete(_) => {
+                panic!("archive with an unreadable .hex member must return HexLoad::Partial");
+            }
+            HexLoad::Failed => {
+                panic!("archive with readable .hex members must not drop the whole table");
+            }
+        }
+
+        // First provider keeps glyphs from both readable members (before and after the
+        // corrupt one) with size_overrides applied, skips the corrupt member's glyph,
+        // and leaves the shared cache unpopulated.
+        let mut font = load(&root_dir);
+        let a = font.glyph('A');
+        assert_eq!(a.advance, 5.0);
+        assert_eq!(a.offset, 0.5);
+        assert!(a.rect.is_some());
+        let c = font.glyph('C');
+        assert_eq!(c.advance, 2.0);
+        assert_eq!(c.offset, 0.5);
+        assert!(c.rect.is_some());
+        let d = font.glyph('D');
+        assert_eq!(d.advance, 7.0);
+        assert_eq!(d.offset, 0.5);
+        assert!(d.rect.is_some());
+        let b_missing = font.glyph('B');
+        assert_eq!(b_missing.advance, 6.0);
+        assert!(b_missing.rect.is_none());
+        assert!(font.cache.borrow().unihex.is_empty());
+
+        // Repair the archive: a later provider retries, loads all glyphs (including 'B'),
+        // and populates the shared cache for subsequent providers.
+        std::fs::write(
+            root_dir.join("assets/pack/font/unihex.zip"),
+            &repaired_archive,
+        )
+        .unwrap();
+        font.japanese = true;
+        font.reset_cache();
+        assert_eq!(font.glyph('A').advance, 5.0);
+        let b = font.glyph('B');
+        assert_eq!(b.advance, 8.0);
+        assert_eq!(b.offset, 0.5);
+        assert!(b.rect.is_some());
+        assert_eq!(font.glyph('C').advance, 2.0);
+        assert_eq!(font.glyph('D').advance, 7.0);
+        assert_eq!(font.cache.borrow().unihex.len(), 1);
+        let _ = std::fs::remove_dir_all(&root_dir);
+
+        // Another font set reuses the cached complete table without touching disk.
+        assert_eq!(font.glyph_in("minecraft:alt", 'B').advance, 8.0);
+        let cache = font.cache.borrow();
+        let (_, default_set) = cache.sets.iter().find(|(k, _)| k == DEFAULT).unwrap();
+        let (_, alt_set) = cache
+            .sets
+            .iter()
+            .find(|(k, _)| k == "minecraft:alt")
+            .unwrap();
+        let Provider::Unihex(_, _, Some(partial_table)) = &default_set.providers[0] else {
+            panic!("first unihex provider should hold its partial table");
+        };
+        let Provider::Unihex(_, _, Some(full_table)) = &default_set.providers[1] else {
+            panic!("second unihex provider should hold the complete table");
+        };
+        let Provider::Unihex(_, _, Some(alt_table)) = &alt_set.providers[0] else {
+            panic!("alt unihex provider should share the complete table");
+        };
+        assert!(!Arc::ptr_eq(partial_table, full_table));
+        assert!(Arc::ptr_eq(full_table, alt_table));
     }
 }
