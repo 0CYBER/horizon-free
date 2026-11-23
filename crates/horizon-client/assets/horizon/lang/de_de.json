@@ -417,8 +417,6 @@
   "%s KiB/frame": "%s KiB/Bild",
   "Auto (%s)": "Auto (%s)",
   "Full-detail terrain range. LOD Distance can extend local worlds farther.": "Gelände mit vollen Details. Die LOD-Entfernung reicht weiter.",
-  "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.": "Grobes fernes Gelände in lokalen Welten. Integrierte GPUs: max. 128.",
-  "Reduced draws far terrain coarser: faster on this integrated GPU.": "Reduziert: fernes Gelände gröber, schneller auf dieser GPU.",
   "Reduced draws far terrain coarser, for GPUs it slows down.": "Reduziert: fernes Gelände gröber, für GPUs, die sonst bremsen.",
   "Caps frames per second; a cap saves power and heat.": "Begrenzt die Bilder pro Sekunde; spart Strom und Wärme.",
   "Waits for the display's refresh: no tearing, a little latency.": "Wartet auf den Bildaufbau: kein Tearing, etwas Latenz.",
@@ -1047,5 +1045,6 @@
   "horizon.developer_offline.single_player": "Offline developer session: single-player only.",
   "horizon.get_the_game.button": "Launcher herunterladen",
   "horizon.options.radial_stick.either": "Oder",
-  "horizon.touch.sprint": "Sprinten"
+  "horizon.touch.sprint": "Sprinten",
+  "Coarse distant terrain in local worlds.": "Grobes fernes Gelände in lokalen Welten."
 }

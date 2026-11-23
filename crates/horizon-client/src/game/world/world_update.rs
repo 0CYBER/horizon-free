@@ -393,8 +393,7 @@ impl Game<'_> {
                 arriving || (meshing && self.view_arrival.recent(now)) || sampling,
             );
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
-                let lod_distance =
-                    horizon_client::graphics::lod_distance_capped(far_distance, &renderer.info);
+                let lod_distance = far_distance.min(horizon_client::lod::MAX_CHUNKS);
                 lod.set_near_loading(self.streaming.terrain_loading());
                 lod.set_reduced_detail(far_reduced);
                 // The covered columns change only with the complete ones and

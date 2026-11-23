@@ -128,8 +128,6 @@
   "%s KiB/frame": "Kare başına %s KiB",
   "Auto (%s)": "Otomatik (%s)",
   "Full-detail terrain range. LOD Distance can extend local worlds farther.": "Arazinin tam ayrıntıyla görüntülendiği mesafe. LOD Mesafesi, yerel dünyalarda bu mesafeyi daha da artırabilir.",
-  "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.": "Yerel dünyalarda uzaktaki arazileri daha düşük ayrıntıyla görüntüler. Tümleşik GPU'larda sınır 128 parçadır.",
-  "Reduced draws far terrain coarser: faster on this integrated GPU.": "Düşük ayarı, uzak arazileri daha düşük ayrıntıyla görüntüler. Bu tümleşik GPU'da daha yüksek performans sağlar.",
   "Reduced draws far terrain coarser, for GPUs it slows down.": "Düşük ayarı, uzak arazileri daha düşük ayrıntıyla görüntüler. Bazı GPU'larda performansı düşürebilir.",
   "Field of view. Wider shows more terrain at once.": "Görüş alanı. Daha geniş bir açı, aynı anda daha fazla arazi görmenizi sağlar.",
   "Caps frames per second; a cap saves power and heat.": "Saniyedeki kare sayısını sınırlar. Bu sınır, güç tüketimini ve ısınmayı azaltır.",

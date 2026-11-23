@@ -424,8 +424,6 @@
   "%s KiB/frame": "%s KiB/frame",
   "Auto (%s)": "Auto (%s)",
   "Full-detail terrain range. LOD Distance can extend local worlds farther.": "Full-detail terrain range. LOD Distance can extend local worlds farther.",
-  "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.": "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.",
-  "Reduced draws far terrain coarser: faster on this integrated GPU.": "Reduced draws far terrain coarser: faster on this integrated GPU.",
   "Reduced draws far terrain coarser, for GPUs it slows down.": "Reduced draws far terrain coarser, for GPUs it slows down.",
   "Caps frames per second; a cap saves power and heat.": "Caps frames per second; a cap saves power and heat.",
   "Waits for the display's refresh: no tearing, a little latency.": "Waits for the display's refresh: no tearing, a little latency.",
@@ -1334,5 +1332,6 @@
   "horizon.options.menu_navigation": "Menu Navigation",
   "horizon.options.menu_pointer": "Pointer",
   "horizon.screenshot.canceled": "Screenshot canceled",
-  "horizon.screenshot.success_hdr": "Saved screenshot as %s and %s"
+  "horizon.screenshot.success_hdr": "Saved screenshot as %s and %s",
+  "Coarse distant terrain in local worlds.": "Coarse distant terrain in local worlds."
 }

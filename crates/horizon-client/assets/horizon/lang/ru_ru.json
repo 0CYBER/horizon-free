@@ -528,8 +528,6 @@
   "%s KiB/frame": "%s КиБ/кадр",
   "Auto (%s)": "Авто (%s)",
   "Full-detail terrain range. LOD Distance can extend local worlds farther.": "Дальность прорисованного рельефа в деталях. Дистанция LOD может продлить её для локальных миров.",
-  "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.": "Грубый дальний рельеф в локальных мирах. На встроенной графике — не дальше 128 чанков.",
-  "Reduced draws far terrain coarser: faster on this integrated GPU.": "«Снижено» рисует дальний рельеф грубее: на этой встроенной видеокарте быстрее.",
   "Reduced draws far terrain coarser, for GPUs it slows down.": "«Снижено» рисует дальний рельеф грубее — для карт, которым он мешает.",
   "Caps frames per second; a cap saves power and heat.": "Ограничивает кадры в секунду: предел экономит энергию и снижает нагрев.",
   "Waits for the display's refresh: no tearing, a little latency.": "Ждёт обновления экрана: без разрывов, с небольшой задержкой.",

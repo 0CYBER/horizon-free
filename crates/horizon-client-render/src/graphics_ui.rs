@@ -163,12 +163,6 @@ fn e(item: crate::extras::Item, cost: Cost) -> Setting {
 /// Every page's settings, in named groups of related rows.
 pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
     use Cost::*;
-    // Suggested, never switched on, where far terrain costs the GPU most.
-    let far = if crate::graphics::reduced_far_detail_suggested() {
-        "Reduced draws far terrain coarser: faster on this integrated GPU."
-    } else {
-        "Reduced draws far terrain coarser, for GPUs it slows down."
-    };
     let mut pages = vec![
         (
             Page::General,
@@ -199,9 +193,13 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         h(
                             H::LodDistance,
                             Medium,
-                            "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.",
+                            "Coarse distant terrain in local worlds.",
                         ),
-                        h(H::FarDetail, Medium, far),
+                        h(
+                            H::FarDetail,
+                            Medium,
+                            "Reduced draws far terrain coarser, for GPUs it slows down.",
+                        ),
                         v(
                             Opt::SimulationDistance,
                             Medium,
@@ -1512,7 +1510,6 @@ impl Screen for GraphicsScreen {
             self.output,
             g::translucent_batching_offered(),
             g::gpu_culling_offer(),
-            g::reduced_far_detail_suggested(),
         );
         shell::stamp_of(&(read(s), s.fullbright_held, &s.running_pack, offers))
     }
