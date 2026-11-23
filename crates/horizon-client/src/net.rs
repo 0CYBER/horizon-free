@@ -1016,7 +1016,12 @@ fn run(
         let (host, port, token) = match address.strip_prefix(FRIEND) {
             Some(code) => join_friend(code, lang, send)?,
             None => {
-                let Some(target) = parse_address(address) else {
+                let target = if lan {
+                    lan_target(address)
+                } else {
+                    parse_address(address)
+                };
+                let Some(target) = target else {
                     // A refusal: never retried (`horizon.multiplayer
                     // .invalid_address` is in reconnect's key list).
                     return Err(Reason::keyed_arg(
@@ -1990,8 +1995,42 @@ fn continues_after_failed_join(lan: bool, signed_in: bool) -> bool {
     lan && signed_in
 }
 
+/// Where a LAN game's join leads: only an IP and a port from 1 to 65535 (the
+/// multiplayer list passes the sender's IP and the announced port). Anything
+/// else is an invalid address, so a LAN announcement never starts a host name
+/// or SRV lookup.
+fn lan_target(address: &str) -> Option<(String, u16)> {
+    let target: std::net::SocketAddr = address.parse().ok()?;
+    (target.port() != 0).then(|| (target.ip().to_string(), target.port()))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_lan_join_takes_only_an_ip_and_a_port() {
+        use super::lan_target;
+        assert_eq!(
+            lan_target("192.168.1.10:25565"),
+            Some(("192.168.1.10".to_owned(), 25565))
+        );
+        assert_eq!(
+            lan_target("[fe80::1]:25566"),
+            Some(("fe80::1".to_owned(), 25566))
+        );
+        for refused in [
+            "192.168.1.10:",
+            "10.0.0.2:x",
+            "10.0.0.2:0",
+            "10.0.0.2:80:evil.example",
+            "10.0.0.2:evil.example:80",
+            "evil.example:25565",
+            "localhost:25565",
+            "",
+        ] {
+            assert_eq!(lan_target(refused), None, "{refused}");
+        }
+    }
+
     #[test]
     fn a_refused_address_stays_out_of_the_logged_reason() {
         // The text is in the player's language and holds what they typed; the key says which

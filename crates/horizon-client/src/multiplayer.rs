@@ -407,7 +407,10 @@ fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option
             .games()
             .into_iter()
             .nth(index - servers.len())
-            .map(|g| (g.address, true)),
+            // A LAN game joins its sender's IP and announced port, never the
+            // listed text as a host name. One that names no port passes its
+            // listed text, which the LAN connection refuses as an invalid address.
+            .map(|g| (g.join.map_or(g.address, |a| a.to_string()), true)),
     }
 }
 
@@ -1251,15 +1254,12 @@ impl Screen {
                             batch.text(atlas, &game.motd, cx + 35.0, cy + 12.0, gray, false);
                             // NetworkServerEntry.extractContent: `hideServerAddress`
                             // draws HIDDEN_ADDRESS_TEXT in the address's place.
-                            let hidden;
                             let address = if hide_address {
-                                hidden =
-                                    crate::lang::get_or("selectServer.hiddenAddress", "(Hidden)");
-                                &hidden
+                                crate::lang::get_or("selectServer.hiddenAddress", "(Hidden)")
                             } else {
-                                &game.address
+                                game.shown_address()
                             };
-                            batch.text(atlas, address, cx + 35.0, cy + 23.0, gray, false);
+                            batch.text(atlas, &address, cx + 35.0, cy + 23.0, gray, false);
                         }
                     }
                 }
@@ -2246,6 +2246,7 @@ mod tests {
             lan: Scanner::for_tests(vec![crate::lan::discovery::LanGame {
                 motd: "LAN".into(),
                 address: address.into(),
+                join: address.parse().ok(),
             }]),
             scroll: Default::default(),
             held: None,

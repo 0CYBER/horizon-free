@@ -4,7 +4,7 @@
 //! announcements for the multiplayer screen.
 use std::{
     io,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -55,11 +55,24 @@ pub fn parse_address(s: &str) -> Option<String> {
 /// multiplayer screen copies the list every frame. Vanilla's list has no bound;
 /// this one only matters past 64 distinct announcements.
 pub const MAX_GAMES: usize = 64;
+/// The port a LAN announcement's address names: ASCII digits that make a port
+/// from 1 to 65535, or 25565 when it is empty. Anything else names none.
+pub fn announced_port(address: &str) -> Option<u16> {
+    if address.is_empty() {
+        return Some(25565);
+    }
+    if !address.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    address.parse::<u16>().ok().filter(|&port| port != 0)
+}
 /// LanServerDetection.LanServerList.addServer: an announcement from `ip`.
 /// A new address joins the list; a known one keeps its first MOTD. True
-/// when the list changed. The address is joined as `ip:address` as announced,
-/// even when it is empty or no port (vanilla lists it; joining it fails).
-/// A full list takes no more.
+/// when the list changed. The listed address is `ip:address` as announced,
+/// even when it is empty or no port, as vanilla lists it. Joining goes to `ip`
+/// and the [`announced_port`] (an empty address joins on 25565), so a LAN
+/// announcement never points a join at another host; one that names no port
+/// has nowhere to join. A full list takes no more.
 pub fn add_server(games: &mut Vec<LanGame>, ping: &str, ip: &str) -> bool {
     let motd = parse_motd(ping);
     let Some(address) = parse_address(ping) else {
@@ -68,11 +81,20 @@ pub fn add_server(games: &mut Vec<LanGame>, ping: &str, ip: &str) -> bool {
     if games.len() >= MAX_GAMES {
         return false;
     }
+    let join = ip
+        .parse::<IpAddr>()
+        .ok()
+        .zip(announced_port(&address))
+        .map(|(ip, port)| SocketAddr::new(ip, port));
     let address = format!("{ip}:{address}");
     if games.iter().any(|g| g.address == address) {
         return false;
     }
-    games.push(LanGame { motd, address });
+    games.push(LanGame {
+        motd,
+        address,
+        join,
+    });
     true
 }
 
@@ -119,7 +141,42 @@ impl Drop for Pinger {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LanGame {
     pub motd: String,
+    /// The address as vanilla lists it: the sender's IP, a colon and the
+    /// announced text.
     pub address: String,
+    /// Where joining it connects: the sender's IP and the announced port.
+    /// None when the announcement names no port.
+    pub join: Option<SocketAddr>,
+}
+/// The most characters of an address a LAN row shows.
+const SHOWN_ADDRESS_CHARS: usize = 64;
+impl LanGame {
+    /// The address as its row shows it: control and bidirectional-control
+    /// characters escaped as `\u{..}`, so announced text cannot reorder or
+    /// break the row, and cut to [`SHOWN_ADDRESS_CHARS`] with an ellipsis.
+    pub fn shown_address(&self) -> String {
+        let mut shown = String::new();
+        for (i, c) in self.address.chars().enumerate() {
+            if i == SHOWN_ADDRESS_CHARS {
+                shown.push('\u{2026}');
+                break;
+            }
+            let bidi = matches!(
+                c,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            );
+            if c.is_control() || bidi {
+                shown += &format!("\\u{{{:x}}}", c as u32);
+            } else {
+                shown.push(c);
+            }
+        }
+        shown
+    }
 }
 type Games = Arc<Mutex<Vec<LanGame>>>;
 
@@ -279,6 +336,63 @@ mod tests {
             &ping_string_text("B", ""),
             "192.168.1.10"
         ));
+    }
+
+    /// Joining goes to the sender's IP and a plain port, never to a host the
+    /// announced text names.
+    #[test]
+    fn joining_goes_to_the_sender_and_a_plain_port() {
+        for (address, port) in [
+            ("", Some(25565)),
+            ("1", Some(1)),
+            ("65535", Some(65535)),
+            ("0080", Some(80)),
+            ("0", None),
+            ("65536", None),
+            ("+80", None),
+            ("-1", None),
+            (" 80", None),
+            ("x", None),
+            ("80:evil.example", None),
+            ("evil.example:80", None),
+            ("1:2", None),
+            ("\u{0661}", None),
+        ] {
+            assert_eq!(announced_port(address), port, "{address:?}");
+            let mut games = Vec::new();
+            assert!(add_server(
+                &mut games,
+                &ping_string_text("A", address),
+                "10.0.0.2"
+            ));
+            let expected = port.map(|p| SocketAddr::from(([10, 0, 0, 2], p)));
+            assert_eq!(games[0].join, expected, "{address:?}");
+        }
+        let mut games = Vec::new();
+        assert!(add_server(&mut games, &ping_string("A", 25566), "fe80::1"));
+        assert_eq!(games[0].address, "fe80::1:25566");
+        assert_eq!(games[0].join.unwrap().to_string(), "[fe80::1]:25566");
+    }
+
+    /// The row shows control and bidi characters escaped and a long address
+    /// cut; the listed address keeps them.
+    #[test]
+    fn the_shown_address_is_escaped_and_cut() {
+        let game = |address: &str| LanGame {
+            motd: String::new(),
+            address: address.to_owned(),
+            join: None,
+        };
+        assert_eq!(game("10.0.0.2:25565").shown_address(), "10.0.0.2:25565");
+        assert_eq!(
+            game("10.0.0.2:\u{202e}x\n\u{2066}").shown_address(),
+            "10.0.0.2:\\u{202e}x\\u{a}\\u{2066}"
+        );
+        let long = format!("10.0.0.2:{}", "9".repeat(100));
+        let shown = game(&long).shown_address();
+        assert_eq!(shown.chars().count(), SHOWN_ADDRESS_CHARS + 1);
+        assert!(shown.ends_with('\u{2026}'));
+        assert!(long.starts_with(shown.trim_end_matches('\u{2026}')));
     }
 
     #[test]
