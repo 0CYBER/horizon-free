@@ -604,7 +604,13 @@ impl Game<'_> {
             return self.player_named(name).into_iter().collect();
         }
         if let Some(uuid) = s.uuid {
-            return self.target_by_uuid(uuid).into_iter().collect();
+            // `Level.getEntity`: a dead player's removed body is in no level.
+            // (EntityArgument.parse refuses a UUID in a players-only argument.)
+            return self
+                .target_by_uuid(uuid)
+                .filter(|&t| !self.player_body_removed(t))
+                .into_iter()
+                .collect();
         }
         let origin = {
             let p = self.source_position();
@@ -929,6 +935,34 @@ impl Game<'_> {
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<R> {
         let dim = self.resident_target_dimension(t)?;
+        if dim == self.dim {
+            return Some(f(self));
+        }
+        let back = self.enter_command_level(dim)?;
+        let result = f(self);
+        self.enter_command_level(back);
+        Some(result)
+    }
+    /// [`Self::in_target_level`] for a command that reads the entity it was
+    /// given: a dead player whose body its level no longer holds
+    /// (`LivingEntity.tickDeath` removed it at its twentieth tick) is still
+    /// the `ServerPlayer` the selector returned (`@s`, a name, `@a`, `@p`,
+    /// `@r`), so it is read in its own level until it respawns.
+    pub(in crate::game) fn in_read_target_level<R>(
+        &mut self,
+        t: Target,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if self.resident_target_dimension(t).is_some() {
+            return self.in_target_level(t, f);
+        }
+        let conn = match t {
+            Target::Player => self.lan_acting?,
+            Target::Guest(conn) => conn,
+            _ => return None,
+        };
+        let guest = self.command_guest(conn).filter(|g| !g.body_present())?;
+        let dim = Dim::from_id(&guest.dimension);
         if dim == self.dim {
             return Some(f(self));
         }

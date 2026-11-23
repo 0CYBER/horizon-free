@@ -195,6 +195,9 @@ impl Game<'_> {
             .flat_map(|h| h.hub.online_players())
             .filter(|g| self.native_command_player_available(g))
             .filter(|g| !limited || g.dimension == here || Some(g.conn) == in_place)
+            // `ServerLevel.getPlayers` no longer holds a dead player whose body
+            // was removed (LivingEntity.tickDeath); the player list still does.
+            .filter(|g| !limited || g.body_present())
             .filter(|g| !alive || (!g.dead && g.health > 0.0))
             .map(|g| {
                 if Some(g.conn) == in_place {
@@ -204,6 +207,19 @@ impl Game<'_> {
                 }
             })
             .collect()
+    }
+
+    /// Whether `t` is a dead player whose body its level no longer holds
+    /// (`LivingEntity.tickDeath` removed it at its twentieth tick): still in
+    /// the player list until it respawns, but in no level.
+    pub(in crate::game) fn player_body_removed(&self, t: Target) -> bool {
+        let conn = match t {
+            Target::Player => self.lan_acting,
+            Target::Guest(conn) => Some(conn),
+            _ => None,
+        };
+        conn.and_then(|c| self.command_guest(c))
+            .is_some_and(|g| !g.body_present())
     }
 
     /// A guest's experience level and game mode, for `level=` and `gamemode=`.
