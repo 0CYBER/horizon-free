@@ -30,6 +30,22 @@ if __name__ == '__main__':
         tables['minecraft:entities/armor_stand'] = TABLE
         return advancements, tables
     driver.corpus_module.advancement_loot_fixtures = with_stand_table
+    install_fixtures = driver.install_datapack_fixtures
+
+    def with_curse(world, *args, **kwargs):
+        install_fixtures(world, *args, **kwargs)
+        root = world / 'datapacks/command-selector-fixture/data/stand_test/enchantment'
+        root.mkdir(parents=True, exist_ok=True)
+        for name, effect in [('vanish', 'prevent_equipment_drop'), ('bind', 'prevent_armor_change')]:
+            definition = {
+                'description': name, 'supported_items': 'minecraft:leather_boots',
+                'weight': 1, 'max_level': 1, 'min_cost': {'base': 1, 'per_level_above_first': 0},
+                'max_cost': {'base': 1, 'per_level_above_first': 0}, 'anvil_cost': 1, 'slots': ['feet'],
+                'effects': {'minecraft:' + effect: {}},
+            }
+            (root / f'{name}.json').write_text(json.dumps(definition), encoding='utf-8')
+
+    driver.install_datapack_fixtures = with_curse
     sys.argv.append('--allow-gaps')
     driver.main()
     # The installed table's exact bytes on both sides.

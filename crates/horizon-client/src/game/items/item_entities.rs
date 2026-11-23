@@ -713,7 +713,8 @@ impl Game<'_> {
             stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
             stacks.extend(self.offhand.take());
             stacks.extend(self.equipment.take_all());
-            stacks.retain(|s| s.enchantment_level("minecraft:vanishing_curse") == 0);
+            let enchantments = &world_stations!(self).enchantments;
+            stacks.retain(|s| !enchantments.has_component(s, "minecraft:prevent_equipment_drop"));
             self.apply_equipment();
         }
         let stacks = stacks.into_iter().map(|stack| (stack, at, 0)).collect();

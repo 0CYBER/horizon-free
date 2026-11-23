@@ -1038,7 +1038,7 @@ impl Game<'_> {
         self.audio
             .play("minecraft:entity.armor_stand.break", Some(at), 1.0, 1.0);
         self.armor_stand_death_drops(&a, "minecraft:player_attack", self.own_entity_id() as u32);
-        let (above, drops) = broken_armor_stand_equipment(a);
+        let (above, drops) = broken_armor_stand_equipment(a, &world_stations!(self).enchantments);
         for stack in drops {
             self.pop_resource(above, stack);
         }
@@ -1610,7 +1610,7 @@ impl Game<'_> {
         let source = self
             .level_entity(causing as i32)
             .or(Some(super::commands::Target::Stand(a.id)));
-        let (pos, drops) = broken_armor_stand_equipment(a);
+        let (pos, drops) = broken_armor_stand_equipment(a, &world_stations!(self).enchantments);
         for stack in drops {
             self.pop_resource(pos, stack);
         }
@@ -2575,7 +2575,10 @@ pub(super) fn spared_by_blast(a: &ArmorStand) -> bool {
 
 /// `ArmorStand.brokenByAnything`: the equipment, less what curse of vanishing
 /// keeps (`PREVENT_EQUIPMENT_DROP`), popped at `blockPosition().above()`.
-fn broken_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
+fn broken_armor_stand_equipment(
+    a: ArmorStand,
+    enchantments: &horizon_items::enchant::Enchantments,
+) -> ([i32; 3], Vec<ItemStack>) {
     let pos = [
         a.position.x.floor() as i32,
         a.position.y.floor() as i32 + 1,
@@ -2585,7 +2588,7 @@ fn broken_armor_stand_equipment(a: ArmorStand) -> ([i32; 3], Vec<ItemStack>) {
         .equipment
         .into_iter()
         .flatten()
-        .filter(|stack| stack.enchantment_level("minecraft:vanishing_curse") == 0)
+        .filter(|stack| !enchantments.has_component(stack, "minecraft:prevent_equipment_drop"))
         .collect();
     (pos, drops)
 }

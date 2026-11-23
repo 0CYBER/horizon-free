@@ -10,7 +10,9 @@ A world pack overrides `minecraft:entities/armor_stand` with one stick. The worl
 stepped. Each stand has a fixed UUID, `Fire:200s`, `Health:0.6f` and a diamond helmet, on a stone floor in
 its own region: a normal stand (with vanishing-cursed boots too), a small one, one that burns while
 `mob_drops` is off, and one removed by `/kill`. A direct `/loot spawn` of the same table, in a region of
-its own, shows the table the pack installed.
+its own, shows the table the pack installed. The small stand and a player
+death use the pack's own prevent_equipment_drop enchantment. A zombie villager
+cure checks prevent_armor_change on equipment with a guaranteed drop chance.
 
 Label classes, declared before any native run: `target-` rows read the sticks a burnt stand drops; `diag-`
 rows are recorded diagnostics (clocks, random item motion); every other row is a setup admission or a
@@ -25,7 +27,8 @@ TABLE = {'type': 'minecraft:entity', 'pools': [{'rolls': 1, 'entries': [
 STANDS = [
     ('normal', 1, 4, ',feet:{id:"minecraft:leather_boots",count:1,components:{"minecraft:enchantments":'
                      '{"minecraft:vanishing_curse":1}}}'),
-    ('small', 2, 12, ''),
+    ('small', 2, 12, ',feet:{id:"minecraft:leather_boots",count:1,components:{"minecraft:enchantments":'
+                     '{"stand_test:vanish":1}}}'),
     ('nodrops', 3, 20, ''),
     ('kill', 4, 28, ''),
     # #12514: `brokenByPlayer` (an `always_kills_armor_stands` hit, a second player hit within five ticks)
@@ -146,4 +149,31 @@ def stand_break_loot(full=False):
     cmd('/execute store result score now sb run time query gametime', 'diag-clock-now', admission=False,
         diagnostic=True)
     cmd('/scoreboard players operation now sb -= start sb', 'clock', 2)
+    # A conversion preserves bound boots in the villager's inventory. A
+    # guaranteed drop chance distinguishes preservation from a missing item.
+    cmd('/summon zombie_villager 44.5 100 8.5 {ConversionTime:1,PersistenceRequired:1b,NoAI:1b,'
+        'equipment:{feet:{id:"minecraft:leather_boots",count:1,components:{"minecraft:enchantments":'
+        '{"stand_test:bind":1}}}},drop_chances:{feet:2.0f}}', 'cure-summon')
+    step(2, 'cure-ticks')
+    villager = '@e[type=villager,x=44.5,y=100,z=8.5,distance=..3,limit=1]'
+    cmd(f'/execute if entity {villager}', 'cure-villager', 1)
+    cmd(f'/execute if data entity {villager} Inventory[{{id:"minecraft:leather_boots"}}]',
+        'cure-boots-preserved', 1, admission=False)
+    cmd('/execute if entity @e[type=item,x=44.5,y=100,z=8.5,distance=..3,nbt={Item:{id:"minecraft:leather_boots"}}]',
+        'cure-boots-dropped', admission=False)
+    # The player inventory uses the same component, independently of stand equipment.
+    cmd('/clear @s', 'clear-player', admission=False, diagnostic=True)
+    cmd('/tp @s 34.5 100 8.5', 'death-scene', admission=False)
+    cmd('/gamemode survival @s', 'death-survival', admission=False)
+    cmd('/gamerule keep_inventory false', 'death-drops-on', admission=False)
+    cmd('/item replace entity @s hotbar.0 with minecraft:leather_boots'
+        '[enchantments={"stand_test:vanish":1}]', 'death-cursed-boots')
+    cmd('/item replace entity @s hotbar.1 with minecraft:emerald', 'death-control-item')
+    cmd('/damage @s 1000 minecraft:generic_kill', 'death-kill', admission=False, diagnostic=True)
+    step(1, 'death-ticks')
+    cmd('/execute if entity @e[type=item,x=34.5,y=100,z=8.5,distance=..3,nbt={Item:{id:"minecraft:leather_boots"}}]',
+        'death-boots', admission=False)
+    cmd('/execute if entity @e[type=item,x=34.5,y=100,z=8.5,distance=..3,nbt={Item:{id:"minecraft:emerald"}}]',
+        'death-control-drop', 1)
+
     return ops

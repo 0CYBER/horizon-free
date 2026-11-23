@@ -482,7 +482,12 @@ fn deferred_zombie_finalization_keeps_unknown_profession_through_save_and_cure()
             restored.position,
             0.0,
         );
-        super::super::zombie_villagers::convert_to_villager(&restored, &mut cured, false);
+        super::super::zombie_villagers::convert_to_villager(
+            &restored,
+            &mut cured,
+            false,
+            &world_stations!(game).enchantments,
+        );
         assert_eq!(cured.extra.profession.id(), "example:engineer");
     });
 }

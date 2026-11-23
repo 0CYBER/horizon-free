@@ -1,4 +1,5 @@
 use super::*;
+use horizon_items::enchant::Enchantments;
 #[test]
 fn only_visible_non_marker_stands_are_broken_by_blasts() {
     let mut stand = ArmorStand::new(1, Vec3::new(0.5, 64.0, 0.5), 0.0);
@@ -20,7 +21,12 @@ fn burnt_equipment_drops_above_the_block_and_vanishing_items_do_not_drop() {
         .push(("minecraft:vanishing_curse".into(), 1));
     stand.equipment[0] = Some(kept.clone());
     stand.equipment[1] = Some(vanished);
-    let (pos, drops) = broken_armor_stand_equipment(stand);
+    let definition = serde_json::json!({"effects":{"minecraft:prevent_equipment_drop":{}}});
+    let enchantments = Enchantments::default()
+        .with_entries([("minecraft:vanishing_curse", &definition)])
+        .unwrap()
+        .unwrap();
+    let (pos, drops) = broken_armor_stand_equipment(stand, &enchantments);
     assert_eq!(pos, [-1, 5, 0]);
     assert_eq!(drops, vec![kept]);
 }
@@ -37,7 +43,7 @@ fn a_broken_stand_pops_body_and_saddle_after_the_other_six_slots() {
             (slot, stack)
         })
         .collect();
-    let (_, drops) = broken_armor_stand_equipment(stand);
+    let (_, drops) = broken_armor_stand_equipment(stand, &Enchantments::default());
     let order = |slots: [usize; 4]| {
         slots
             .map(|s| {

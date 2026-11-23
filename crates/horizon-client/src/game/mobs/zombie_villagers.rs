@@ -11,6 +11,7 @@ use horizon_client::{
     mobs::{Mob, Species, drops, finalize, villager, zombie_villager},
 };
 use horizon_core::random::RandomSource;
+use horizon_items::enchant::Enchantments;
 use horizon_world::food::Difficulty;
 
 /// The `Zombie` subclasses that convert the villagers they kill.
@@ -169,7 +170,7 @@ impl Game<'_> {
         let Some(v) = self.mobs.iter_mut().find(|m| m.id == vid) else {
             return;
         };
-        let drops = convert_to_villager(&old, v, nausea);
+        let drops = convert_to_villager(&old, v, nausea, &world_stations!(self).enchantments);
         for rider in self.mobs.iter_mut() {
             if rider.extra.mount == Some(old.id) {
                 rider.extra.mount = Some(vid);
@@ -323,7 +324,12 @@ pub(super) fn convert_to_zombie_villager(from: &Mob, to: &mut Mob) {
 }
 /// A cured zombie villager becomes a villager again, queasy for 10 seconds
 /// when `nausea` (the `canBeAffected` ask on the fresh villager) allows it.
-pub(super) fn convert_to_villager(from: &Mob, to: &mut Mob, nausea: bool) -> Vec<ItemStack> {
+pub(super) fn convert_to_villager(
+    from: &Mob,
+    to: &mut Mob,
+    nausea: bool,
+    enchantments: &Enchantments,
+) -> Vec<ItemStack> {
     carry_over(from, to);
     let mut drops_out = Vec::new();
     // `EquipmentSlot.VALUES` order: main hand, off hand, feet, legs, chest, head.
@@ -332,7 +338,7 @@ pub(super) fn convert_to_villager(from: &Mob, to: &mut Mob, nausea: bool) -> Vec
             continue;
         };
         drops::clear_slot(to, name);
-        if stack.enchantment_level("minecraft:binding_curse") > 0 {
+        if enchantments.prevents_armor_change(&stack) {
             // `getIndex() + 300`: hands 0..1, then feet, legs, chest, head 0..3.
             let index = if slot < 2 { slot } else { slot - 2 };
             let inventory = &mut villager::ext_mut(to).inventory;
@@ -382,7 +388,7 @@ mod tests {
         assert_eq!(zombie.extra.body_damage(), 7);
         assert_eq!(zombie.extra.body_stack(), source.extra.body_stack());
         let mut cured = mob(3, "minecraft:villager");
-        convert_to_villager(&zombie, &mut cured, true);
+        convert_to_villager(&zombie, &mut cured, true, &Enchantments::default());
         assert_eq!(cured.extra.body_id(), Some("minecraft:wolf_armor"));
         assert_eq!(cured.extra.body_damage(), 7);
         assert_eq!(cured.extra.body_stack(), source.extra.body_stack());
@@ -492,7 +498,7 @@ mod tests {
         assert_eq!(zombie.extra.mount, Some(99));
         assert!(zombie.extra.passenger);
         let mut cured = mob(3, Species::Villager, "minecraft:villager");
-        convert_to_villager(&zombie, &mut cured, true);
+        convert_to_villager(&zombie, &mut cured, true, &Enchantments::default());
         assert!(cured.silent);
         assert!(cured.no_ai);
         assert!(cured.no_gravity);
@@ -513,7 +519,12 @@ mod tests {
         boots.set_crafting_enchantments(vec![("minecraft:binding_curse".into(), 1)]);
         set_item_stack(&mut gear, FEET, boots);
         let mut bare = mob(5, Species::Villager, "minecraft:villager");
-        let drops = convert_to_villager(&gear, &mut bare, true);
+        let definition = serde_json::json!({"effects":{"minecraft:prevent_armor_change":{}}});
+        let enchantments = Enchantments::default()
+            .with_entries([("minecraft:binding_curse", &definition)])
+            .unwrap()
+            .unwrap();
+        let drops = convert_to_villager(&gear, &mut bare, true, &enchantments);
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].item.as_ref(), "minecraft:iron_sword");
         for slot in 0..=5 {
