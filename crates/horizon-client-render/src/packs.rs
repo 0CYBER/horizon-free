@@ -167,6 +167,15 @@ fn build(v: &serde_json::Value, parent: &Style, out: &mut Text) -> Style {
         serde_json::Value::Null => Style::default(),
     }
 }
+/// `Codec.INT` reads any JSON number through `Number.intValue`: a decimal such as
+/// `97.1` counts as its whole part (97), as it does for the game.
+fn codec_int(v: &serde_json::Value) -> Option<i64> {
+    v.as_i64().or_else(|| {
+        v.as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| f.trunc() as i64)
+    })
+}
 fn format_of(v: &serde_json::Value) -> Option<(i64, i64)> {
     match v {
         serde_json::Value::Number(n) => Some((n.as_i64()?, 0)),
@@ -191,17 +200,8 @@ fn last_pre_minor(current: Format) -> i64 {
 /// `PackFormat.fullCodec(default_minor)`: an int, or a list of 1 to 256
 /// non-negative ints whose second is the minor. None: it does not parse.
 fn format_codec(v: &serde_json::Value, default_minor: i64) -> Option<Format> {
-    // `Codec.INT` reads any JSON number through `Number.intValue`: a decimal such as `97.1`
-    // counts as its whole part (97), as it does for the game.
-    let non_negative = |v: &serde_json::Value| {
-        v.as_i64()
-            .or_else(|| {
-                v.as_f64()
-                    .filter(|f| f.is_finite())
-                    .map(|f| f.trunc() as i64)
-            })
-            .filter(|n| *n >= 0 && *n <= i64::from(i32::MAX))
-    };
+    let non_negative =
+        |v: &serde_json::Value| codec_int(v).filter(|n| *n >= 0 && *n <= i64::from(i32::MAX));
     match v {
         serde_json::Value::Array(a) if (1..=256).contains(&a.len()) => {
             let list: Option<Vec<i64>> = a.iter().map(non_negative).collect();
@@ -215,7 +215,7 @@ fn format_codec(v: &serde_json::Value, default_minor: i64) -> Option<Format> {
 /// `InclusiveRange.codec(Codec.INT)`: `[min, max]` or
 /// `{min_inclusive, max_inclusive}`, min not above max.
 fn int_range_codec(v: &serde_json::Value) -> Option<(i64, i64)> {
-    let int = |v: &serde_json::Value| v.as_i64().filter(|n| i32::try_from(*n).is_ok());
+    let int = |v: &serde_json::Value| codec_int(v).filter(|n| i32::try_from(*n).is_ok());
     let (min, max) = match v {
         serde_json::Value::Array(a) if a.len() == 2 => (int(&a[0])?, int(&a[1])?),
         serde_json::Value::Object(o) => {
@@ -274,7 +274,7 @@ pub fn validate_pack_range(
     })
     .map_err(|()| bad("max_format"))?;
     let format = optional(&pack["pack_format"], |v| {
-        v.as_i64().filter(|n| i32::try_from(*n).is_ok())
+        codec_int(v).filter(|n| i32::try_from(*n).is_ok())
     })
     .map_err(|()| bad("pack_format"))?;
     let supported = optional(&pack[OLD], int_range_codec).map_err(|()| bad(OLD))?;
@@ -2131,6 +2131,16 @@ mod tests {
             check(r#"{"min_format":[97,0],"max_format":[97,1]}"#),
             Ok(((97, 0), (97, 1)))
         );
+
+        // The same decimal leniency for the main format and for `supported_formats` (#20494).
+        assert_eq!(
+            check(r#"{"min_format":[97.1],"max_format":[97.1],"pack_format":97.1}"#),
+            Ok(((97, 0), (97, i64::from(i32::MAX))))
+        );
+        assert_eq!(
+            check(r#"{"supported_formats":[34.9,60.9],"pack_format":40.9}"#),
+            Ok(((34, 0), (60, 0)))
+        );
         // validatePackFormatForRange: a pack_format outside the range.
         assert!(
             check(r#"{"min_format":97,"max_format":98,"pack_format":99}"#)
@@ -2210,6 +2220,15 @@ mod tests {
         assert_eq!(
             compatibility(&v(r#"{"pack":{"pack_format":97}}"#)),
             Compat::Unknown
+        );
+
+        // The pack.mcmeta of #20494: a decimal in every format field is compatible with
+        // 97.1, as it loads in the game, instead of parsing as an unknown format.
+        assert_eq!(
+            compatibility(&v(
+                r#"{"pack":{"pack_format":97.1,"min_format":[97.1],"max_format":[97.1]}}"#
+            )),
+            Compat::Compatible
         );
         assert_eq!(
             compatibility(&v(
