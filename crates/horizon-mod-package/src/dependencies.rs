@@ -11,9 +11,11 @@ use std::path::Path;
 /// Parse an installed mod version, padding omitted minor and patch components.
 /// This is also the comparison used for saved-world mod versions.
 pub fn parse_version(version: &str) -> Result<Version, semver::Error> {
-    let padded = match version.matches('.').count() {
-        0 => format!("{version}.0.0"),
-        1 => format!("{version}.0"),
+    let split = version.find(['-', '+']).unwrap_or(version.len());
+    let (core, suffix) = version.split_at(split);
+    let padded = match core.matches('.').count() {
+        0 => format!("{core}.0.0{suffix}"),
+        1 => format!("{core}.0{suffix}"),
         _ => version.to_owned(),
     };
     Version::parse(&padded)
@@ -1162,5 +1164,25 @@ mod tests {
             resolve(&[item("user", "1.0.0", &required), base]),
             Err(Error::NoApi { .. })
         ));
+    }
+
+    #[test]
+    fn parse_version_pads_short_cores_before_prerelease_and_build_suffixes() {
+        for (input, expected) in [
+            ("1.2-beta", "1.2.0-beta"),
+            ("1.2-beta.1", "1.2.0-beta.1"),
+            ("1-alpha+1", "1.0.0-alpha+1"),
+            ("1+build.42", "1.0.0+build.42"),
+            ("1.2+build", "1.2.0+build"),
+            ("1.2.3-rc.1+sha.abc", "1.2.3-rc.1+sha.abc"),
+        ] {
+            assert_eq!(
+                parse_version(input).unwrap(),
+                Version::parse(expected).unwrap(),
+                "{input}"
+            );
+        }
+        assert!(parse_version("-beta").is_err());
+        assert!(parse_version("").is_err());
     }
 }
