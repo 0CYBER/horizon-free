@@ -458,6 +458,76 @@ impl ItemStack {
         }
         Ok(())
     }
+    /// The stack's shown name (`minecraft:custom_name`, Bukkit's `ItemMeta.displayName`), as
+    /// `set_display` writes it, or None when the stack has none of its own, the name is not
+    /// one text component, or the host refuses to read it. An item's prototype name
+    /// (`item_default_component`) is not the stack's own.
+    pub fn display_name(&self, host: &dyn crate::Host) -> Option<crate::Text> {
+        let name = self.component_value("minecraft:custom_name")?;
+        host.text_from_nbt(name).ok().flatten()
+    }
+    /// The stack's lore lines (`minecraft:lore`, `ItemMeta.lore`), top first, as `set_display`
+    /// writes them. A line that is not one text component is left out; a stack with no lore
+    /// of its own has none.
+    pub fn lore(&self, host: &dyn crate::Host) -> Vec<crate::Text> {
+        let Some(Tag::List(lines)) = self.component_value("minecraft:lore") else {
+            return Vec::new();
+        };
+        lines
+            .iter()
+            .take(MAX_LORE_LINES)
+            .filter_map(|line| host.text_from_nbt(line).ok().flatten())
+            .collect()
+    }
+    /// The decimal numbers of the stack's `minecraft:custom_model_data` (its `floats`; the first
+    /// is Bukkit's `getCustomModelData`), empty when it has none of its own.
+    pub fn custom_model_data_floats(&self) -> Vec<f32> {
+        let Some(Tag::Compound(data)) = self.component_value("minecraft:custom_model_data") else {
+            return Vec::new();
+        };
+        let Some(Tag::List(floats)) = data.get(&JavaString::from("floats")) else {
+            return Vec::new();
+        };
+        floats
+            .iter()
+            .filter_map(|tag| match tag {
+                // Vanilla's float codec takes any numeric tag.
+                Tag::Byte(v) => Some(f32::from(*v)),
+                Tag::Short(v) => Some(f32::from(*v)),
+                Tag::Int(v) => Some(*v as f32),
+                Tag::Long(v) => Some(*v as f32),
+                Tag::Float(bits) => Some(f32::from_bits(*bits)),
+                Tag::Double(bits) => Some(f64::from_bits(*bits) as f32),
+                _ => None,
+            })
+            .collect()
+    }
+    /// The strings of the stack's `minecraft:custom_model_data` (its `strings`, which a resource
+    /// pack's item model selects on), empty when it has none of its own.
+    pub fn custom_model_data_strings(&self) -> Vec<String> {
+        let Some(Tag::Compound(data)) = self.component_value("minecraft:custom_model_data") else {
+            return Vec::new();
+        };
+        let Some(Tag::List(strings)) = data.get(&JavaString::from("strings")) else {
+            return Vec::new();
+        };
+        strings
+            .iter()
+            .filter_map(|tag| match tag {
+                Tag::String(s) => Some(s.to_string_lossy()),
+                _ => None,
+            })
+            .collect()
+    }
+    /// This stack's own value of component `id` as raw NBT, None when its patch has none (a prototype
+    /// default is not read) or the patch removes it.
+    fn component_value(&self, id: &str) -> Option<&Tag> {
+        let patch = self.components()?.as_nbt();
+        if patch.contains_key(&JavaString::from(format!("!{id}").as_str())) {
+            return None;
+        }
+        patch.get(&JavaString::from(id))
+    }
     /// Encode the item NBT escape using this host's canonical id, never a process-local key.
     /// Returns None when id metadata is unavailable. Only components present on the
     /// stack are written; effective defaults and maxima belong to the items host area.
@@ -521,6 +591,12 @@ mod tests {
     /// A host whose text NBT is the literal string, and which refuses "bad".
     struct TextNbt;
     impl crate::prelude::TextHost for TextNbt {
+        fn text_from_nbt(&self, tag: &Tag) -> Result<Option<crate::Text>, crate::TextFormError> {
+            Ok(match tag {
+                Tag::String(s) => Some(crate::Text::literal(s.to_string_lossy())),
+                _ => None,
+            })
+        }
         fn text_to_nbt(&self, text: &crate::Text) -> Result<Tag, crate::TextFormError> {
             match &text.content {
                 crate::text::TextContent::Literal(s) if s == "bad" => {
@@ -583,6 +659,98 @@ mod tests {
         assert_eq!(stack, before);
         stack.set_display(&TextNbt, None, &[]).unwrap();
         assert!(stack.components().is_none(), "both components removed");
+    }
+
+    /// The name and lore `set_display` wrote read back, a stack with none reads empty, a line that is
+    /// not a text is left out, and the model data's floats and strings read in order.
+    #[test]
+    fn display_and_custom_model_data_read_back() {
+        let mut stack = ItemStack::of(ItemKey(0));
+        assert_eq!(stack.display_name(&TextNbt), None);
+        assert!(stack.lore(&TextNbt).is_empty());
+        assert!(stack.custom_model_data_floats().is_empty());
+        let lines = [crate::Text::literal("one"), crate::Text::literal("two")];
+        stack
+            .set_display(&TextNbt, Some(&crate::Text::literal("Sword")), &lines)
+            .unwrap();
+        assert_eq!(
+            stack.display_name(&TextNbt),
+            Some(crate::Text::literal("Sword"))
+        );
+        assert_eq!(stack.lore(&TextNbt), lines);
+        stack
+            .set_component_value(
+                "minecraft:lore",
+                Tag::List(vec![
+                    Tag::String("a".into()),
+                    Tag::Int(3),
+                    Tag::String("b".into()),
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            stack.lore(&TextNbt),
+            [crate::Text::literal("a"), crate::Text::literal("b")]
+        );
+        let mut data = Compound::new();
+        data.insert(
+            JavaString::from("floats"),
+            Tag::List(vec![
+                Tag::Float(1.5f32.to_bits()),
+                Tag::Float(7.0f32.to_bits()),
+            ]),
+        );
+        data.insert(
+            JavaString::from("strings"),
+            Tag::List(vec![Tag::String("gem".into())]),
+        );
+        stack
+            .set_component_value("minecraft:custom_model_data", Tag::Compound(data))
+            .unwrap();
+        assert_eq!(stack.custom_model_data_floats(), [1.5, 7.0]);
+        assert_eq!(stack.custom_model_data_strings(), ["gem".to_owned()]);
+    }
+
+    /// A patch holding a component and its removal marker reads as removed; model-data floats
+    /// take any numeric tag.
+    #[test]
+    fn removal_markers_hide_components_and_floats_take_any_number() {
+        let mut stack = ItemStack::of(ItemKey(0));
+        let mut data = Compound::new();
+        data.insert(
+            JavaString::from("floats"),
+            Tag::List(vec![
+                Tag::Int(1),
+                Tag::Double(2.5f64.to_bits()),
+                Tag::String("x".into()),
+            ]),
+        );
+        let mut patch = Compound::new();
+        patch.insert(
+            JavaString::from("minecraft:custom_name"),
+            Tag::String("Sword".into()),
+        );
+        patch.insert(
+            JavaString::from("minecraft:lore"),
+            Tag::List(vec![Tag::String("a".into())]),
+        );
+        patch.insert(
+            JavaString::from("minecraft:custom_model_data"),
+            Tag::Compound(data),
+        );
+        stack.set_components(patch.clone()).unwrap();
+        assert_eq!(stack.custom_model_data_floats(), [1.0, 2.5]);
+        for id in ["custom_name", "lore", "custom_model_data"] {
+            patch.insert(
+                JavaString::from(format!("!minecraft:{id}").as_str()),
+                Tag::Compound(Compound::new()),
+            );
+        }
+        stack.set_components(patch).unwrap();
+        assert_eq!(stack.display_name(&TextNbt), None);
+        assert!(stack.lore(&TextNbt).is_empty());
+        assert!(stack.custom_model_data_floats().is_empty());
+        assert!(stack.custom_model_data_strings().is_empty());
     }
 
     /// [`TextNbt`] over an item whose prototype supplies a name and a lore.

@@ -13,6 +13,15 @@ impl Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// A component as an item or block entity stores it, read as `text_from_json` reads its JSON:
+    /// None when it isn't one component.
+    pub(super) fn text_from_nbt(&self, tag: &horizon_core::nbt::Tag) -> Read {
+        let json = horizon_client::lan::conn::component_json(tag);
+        Read(component_from_json(&json, &self.ui.registries))
+    }
+}
+
 /// What `text_from_json` read: the component, none, or the nesting refusal, crossing to the
 /// API as one `Result`.
 pub(super) struct Read(Result<Option<Text>, TextFormError>);
@@ -63,6 +72,29 @@ mod tests {
 
     fn api(text: &Text) -> mod_api::Text {
         text.try_into_api().unwrap()
+    }
+
+    /// What an item stores for a name or a lore line reads back as the text `text_to_nbt` wrote: a
+    /// plain string is a literal and a compound keeps its colour; what is no component is None.
+    #[test]
+    fn text_from_nbt_reads_what_an_item_stores() {
+        use horizon_core::nbt::{Compound, JavaString, Tag};
+        let read = |tag: Tag| {
+            let json = horizon_client::lan::conn::component_json(&tag);
+            super::component_from_json(&json, &horizon_client::command::Registries::default())
+                .unwrap()
+        };
+        let plain = read(Tag::String("Prize".into())).unwrap();
+        assert_eq!(api(&plain).content, TextContent::Literal("Prize".into()));
+        assert_eq!(api(&plain).style.color, None);
+        let mut coloured = Compound::new();
+        coloured.insert(JavaString::from("text"), Tag::String("Gold".into()));
+        coloured.insert(JavaString::from("color"), Tag::String("gold".into()));
+        let coloured = read(Tag::Compound(coloured)).unwrap();
+        assert_eq!(api(&coloured).content, TextContent::Literal("Gold".into()));
+        assert_eq!(api(&coloured).style.color.as_deref(), Some("gold"));
+        assert!(read(Tag::List(Vec::new())).is_none());
+        assert!(read(Tag::Int(5)).is_none());
     }
 
     /// JSON and SNBT components keep their structure: styles, children, translations
