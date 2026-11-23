@@ -141,6 +141,17 @@ impl<'a> BiomeResolver<'a> {
     ) -> Result<ClimateVolume, BiomeError> {
         Ok(self.climate.sample_volume(context, minimum, extents)?)
     }
+    pub(crate) fn prepare_volume_with_buffers(
+        &self,
+        context: &mut SamplerContext,
+        minimum: [i32; 3],
+        extents: [i32; 3],
+        storage: &mut [Vec<f32>; 6],
+    ) -> Result<ClimateVolume, BiomeError> {
+        Ok(self
+            .climate
+            .sample_volume_with_buffers(context, minimum, extents, storage)?)
+    }
     /// Query order shares the same previous-leaf state as scalar resolution.
     pub fn sample_prepared(
         &mut self,

@@ -1,21 +1,40 @@
 //! The generator's cache of chunks' biomes ([`super::generator`]).
 
 use super::{biome::BiomeId, biome_chunk::BiomeChunk};
-use std::{collections::HashMap, sync::Arc};
+use horizon_core::fast_hash::FxHashMap;
+use std::sync::Arc;
 
 /// Chunks the biome cache keeps ([`BiomeChunks`]).
 pub(crate) const CACHE_LIMIT: usize = 4096;
 
 /// The biomes of recently generated chunks, which their neighbours' noise, surface and structures read
 /// again: two generations, the one filling and the one before. A chunk read from the old one moves to the
-/// new; when the new one holds half of [`CACHE_LIMIT`], the old one goes. One map of 16,384 chunks cleared
+/// new; when the new one holds half of its limit, the old one goes. One map of 16,384 chunks cleared
 /// all at once held about four times as much. A miss only builds the same biomes again.
-#[derive(Default)]
 pub(crate) struct BiomeChunks {
-    now: HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>,
-    old: HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>,
+    now: FxHashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>,
+    old: FxHashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>,
+    limit: usize,
+}
+impl Default for BiomeChunks {
+    fn default() -> Self {
+        Self::with_limit(CACHE_LIMIT)
+    }
 }
 impl BiomeChunks {
+    pub(crate) fn with_limit(limit: usize) -> Self {
+        Self {
+            now: FxHashMap::default(),
+            old: FxHashMap::default(),
+            limit: limit.max(2),
+        }
+    }
+    pub(crate) fn get_now(&self, key: &(i32, i32)) -> Option<&Arc<BiomeChunk<BiomeId>>> {
+        self.now.get(key)
+    }
+    pub(crate) fn has_old(&self, key: &(i32, i32)) -> bool {
+        self.old.contains_key(key)
+    }
     pub(crate) fn get(&mut self, key: &(i32, i32)) -> Option<&Arc<BiomeChunk<BiomeId>>> {
         if !self.now.contains_key(key) {
             let moved = self.old.remove(key)?;
@@ -24,7 +43,7 @@ impl BiomeChunks {
         self.now.get(key)
     }
     pub(crate) fn insert(&mut self, key: (i32, i32), chunk: Arc<BiomeChunk<BiomeId>>) {
-        if self.now.len() >= CACHE_LIMIT / 2 && !self.now.contains_key(&key) {
+        if self.now.len() >= self.limit / 2 && !self.now.contains_key(&key) {
             self.old = std::mem::take(&mut self.now);
         }
         self.now.insert(key, chunk);

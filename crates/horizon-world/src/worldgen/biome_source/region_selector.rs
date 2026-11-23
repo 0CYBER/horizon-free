@@ -245,6 +245,15 @@ impl<'a> RegionResolver<'a> {
     ) -> Result<ClimateVolume, BiomeError> {
         self.searches[0].prepare_volume(context, minimum, extents)
     }
+    pub(crate) fn prepare_volume_with_buffers(
+        &self,
+        context: &mut SamplerContext,
+        minimum: [i32; 3],
+        extents: [i32; 3],
+        storage: &mut [Vec<f32>; 6],
+    ) -> Result<ClimateVolume, BiomeError> {
+        self.searches[0].prepare_volume_with_buffers(context, minimum, extents, storage)
+    }
     pub fn sample_prepared(
         &mut self,
         volume: &ClimateVolume,

@@ -268,7 +268,7 @@ fn chunk_fill_far_terrain_and_structure_height_read_the_mods_density() {
                 assert_eq!(filled_top(&chunk, x, z), expected, "chunk fill at {x} {z}");
                 assert_eq!(sample.unwrap().height, expected, "far terrain at {x} {z}");
                 assert_eq!(
-                    pipeline.base_height(x, z, HeightmapType::WorldSurfaceWg),
+                    pipeline.base_height(&mut worker.state, x, z, HeightmapType::WorldSurfaceWg),
                     expected,
                     "structure base height at {x} {z}"
                 );
@@ -291,7 +291,7 @@ fn volume_readers_call_fill_not_sample() {
     worker.generate_proto(ChunkPos::new(1, -1)).unwrap();
     worker.lod_grid(0, 0, 8, 8, false).unwrap();
     worker.lod_grid(0, 0, 32, 8, true).unwrap();
-    pipeline.base_height(5, 9, HeightmapType::WorldSurfaceWg);
+    pipeline.base_height(&mut worker.state, 5, 9, HeightmapType::WorldSurfaceWg);
     assert_eq!(COUNTED_POINTS.load(Ordering::Relaxed), 0);
     assert!(COUNTED_VOLUMES.load(Ordering::Relaxed) > 0);
 }

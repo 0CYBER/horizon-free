@@ -86,10 +86,27 @@ impl ClimateSampler {
         quart_minimum: [i32; 3],
         extents: [i32; 3],
     ) -> Result<ClimateVolume, SampleError> {
+        let mut storage: [Vec<f32>; 6] = Default::default();
+        self.sample_volume_with_buffers(context, quart_minimum, extents, &mut storage)
+    }
+    /// [`Self::sample_volume`] reusing caller-owned field buffers (`ClimateVolume::recycle`).
+    pub(crate) fn sample_volume_with_buffers(
+        &self,
+        context: &mut SamplerContext,
+        quart_minimum: [i32; 3],
+        extents: [i32; 3],
+        storage: &mut [Vec<f32>; 6],
+    ) -> Result<ClimateVolume, SampleError> {
         let volume = DensityVolume::new(extents, quart_minimum.map(|v| v.wrapping_shl(2)), [4; 3])?;
-        let mut fields = std::array::from_fn(|_| vec![0.; volume.size()]);
+        let size = volume.size();
+        let mut fields = std::mem::take(storage);
         for (sampler, field) in self.samplers.iter().zip(&mut fields) {
-            sampler.sample_volume(context, field, volume)?;
+            field.resize(size, 0.0);
+            field.fill(0.0);
+            if let Err(error) = sampler.sample_volume(context, field, volume) {
+                *storage = fields;
+                return Err(error);
+            }
         }
         Ok(ClimateVolume {
             quart_minimum,
@@ -105,8 +122,13 @@ pub struct ClimateVolume {
     fields: [Vec<f32>; 6],
 }
 impl ClimateVolume {
+    /// Return the six field buffers to `storage` for reuse by the next volume.
+    pub(crate) fn recycle(self, storage: &mut [Vec<f32>; 6]) {
+        *storage = self.fields;
+    }
     /// Coordinates must be inside the prepared quart volume. The bounded Rust
     /// API rejects invalid coordinates instead of Java's unchecked buffer alias.
+    #[inline]
     pub fn target(&self, quart: [i32; 3]) -> Option<TargetPoint> {
         let relative =
             std::array::from_fn(|i| quart[i].wrapping_sub(self.quart_minimum[i]) as usize);
@@ -114,5 +136,157 @@ impl ClimateVolume {
         Some(TargetPoint::from_values(std::array::from_fn(|i| {
             self.fields[i][index]
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::{
+        density::{GradientSampler, TilingMode},
+        geometry::Axis,
+    };
+
+    #[test]
+    fn sample_volume_with_buffers_matches_sample_volume_and_recycles_storage() {
+        let sampler = ClimateSampler::new([
+            Arc::new(GradientSampler::new(
+                Axis::X,
+                TilingMode::ClampToEdge,
+                -32,
+                32,
+                -1.0,
+                1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Y,
+                TilingMode::ClampToEdge,
+                -64,
+                64,
+                -0.5,
+                0.75,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Z,
+                TilingMode::ClampToEdge,
+                -32,
+                32,
+                0.0,
+                1.5,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::X,
+                TilingMode::ClampToEdge,
+                0,
+                64,
+                1.0,
+                -1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Y,
+                TilingMode::ClampToEdge,
+                -16,
+                48,
+                -0.25,
+                0.25,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Z,
+                TilingMode::ClampToEdge,
+                -16,
+                16,
+                0.5,
+                -0.5,
+            )),
+        ]);
+        let mut storage: [Vec<f32>; 6] = std::array::from_fn(|_| Vec::new());
+        let mut ctx_pooled = SamplerContext::cached();
+        let mut ctx_fresh = SamplerContext::cached();
+
+        for (minimum, extents) in [
+            ([-2, -4, 3], [2, 3, 2]),
+            ([0, -2, -1], [4, 5, 4]),
+            ([5, 1, -3], [1, 2, 1]),
+        ] {
+            let expected = sampler
+                .sample_volume(&mut ctx_fresh, minimum, extents)
+                .unwrap();
+            let actual = sampler
+                .sample_volume_with_buffers(&mut ctx_pooled, minimum, extents, &mut storage)
+                .unwrap();
+            for qx in minimum[0]..minimum[0] + extents[0] {
+                for qy in minimum[1]..minimum[1] + extents[1] {
+                    for qz in minimum[2]..minimum[2] + extents[2] {
+                        let quart = [qx, qy, qz];
+                        assert_eq!(actual.target(quart), expected.target(quart), "{quart:?}");
+                    }
+                }
+            }
+            actual.recycle(&mut storage);
+            let needed = (extents[0] * extents[1] * extents[2]) as usize;
+            assert!(storage.iter().all(|buf| buf.capacity() >= needed));
+        }
+
+        // An error during sampling must restore `storage` without discarding capacities.
+        let capacities: [usize; 6] = std::array::from_fn(|i| storage[i].capacity());
+        let failing = ClimateSampler::new([
+            Arc::new(GradientSampler::new(
+                Axis::X,
+                TilingMode::ClampToEdge,
+                0,
+                16,
+                0.0,
+                1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Y,
+                TilingMode::Repeat,
+                0,
+                0,
+                0.0,
+                1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Z,
+                TilingMode::ClampToEdge,
+                0,
+                16,
+                0.0,
+                1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::X,
+                TilingMode::ClampToEdge,
+                0,
+                16,
+                0.0,
+                1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Y,
+                TilingMode::ClampToEdge,
+                0,
+                16,
+                0.0,
+                1.0,
+            )),
+            Arc::new(GradientSampler::new(
+                Axis::Z,
+                TilingMode::ClampToEdge,
+                0,
+                16,
+                0.0,
+                1.0,
+            )),
+        ]);
+        assert_eq!(
+            failing
+                .sample_volume_with_buffers(&mut ctx_pooled, [0, 0, 0], [2, 2, 2], &mut storage)
+                .unwrap_err(),
+            SampleError::ZeroGradientPeriod
+        );
+        for (buf, cap) in storage.iter().zip(capacities) {
+            assert!(buf.capacity() >= cap);
+        }
     }
 }

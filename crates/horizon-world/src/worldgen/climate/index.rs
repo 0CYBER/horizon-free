@@ -22,6 +22,7 @@ impl Parameter {
         }
         Ok(Self::new(quantize(min), quantize(max)))
     }
+    #[inline(always)]
     pub fn distance(self, value: i64) -> i64 {
         let above = value.wrapping_sub(self.max);
         if above > 0 {
@@ -96,9 +97,9 @@ struct Node {
     space: [Parameter; 7],
     children: Children,
 }
-/// A node's box as the search reads it: the six climate intervals, and the
-/// squared distance of its offset interval from the target's offset, which
-/// is always 0, so it is the same for every target.
+/// A node's box as the search reads it: the six climate intervals pre-ordered
+/// in [`AXES`] order for sequential scans, and the squared distance of its
+/// offset interval from the target's offset, which is always 0.
 #[derive(Clone, Copy, Debug)]
 struct SearchSpace {
     coordinates: [Parameter; 6],
@@ -108,20 +109,21 @@ impl SearchSpace {
     fn new(space: &[Parameter; 7]) -> Self {
         let offset = space[6].distance(0);
         Self {
-            coordinates: std::array::from_fn(|i| space[i]),
+            coordinates: AXES.map(|axis| space[axis]),
             offset: offset.wrapping_mul(offset),
         }
     }
     /// Vanilla's `Node.distance`: the sum of the seven squared distances, in
     /// wrapping long arithmetic, whose sums do not depend on their order.
+    /// `values` are in [`AXES`] order.
+    #[inline(always)]
     fn distance(&self, values: &[i64; 6]) -> i64 {
-        self.coordinates
-            .iter()
-            .zip(values)
-            .fold(self.offset, |sum, (parameter, value)| {
-                let distance = parameter.distance(*value);
-                sum.wrapping_add(distance.wrapping_mul(distance))
-            })
+        let mut sum = self.offset;
+        for (parameter, &value) in self.coordinates.iter().zip(values) {
+            let distance = parameter.distance(value);
+            sum = sum.wrapping_add(distance.wrapping_mul(distance));
+        }
+        sum
     }
     /// `distance` when it is below `limit`, else at least `limit`: the sum
     /// stops once it reaches `limit`. Only for bounded boxes and targets, whose
@@ -129,10 +131,15 @@ impl SearchSpace {
     /// together, so the sum only grows and a part of it is at most the whole.
     /// A search only compares a distance with `limit`, its best so far, and
     /// uses it only when it is below, so the stop changes no result.
+    /// `values` are in [`AXES`] order.
+    #[inline(always)]
     fn distance_until(&self, values: &[i64; 6], limit: i64) -> i64 {
         let mut sum = self.offset;
-        for axis in AXES {
-            let distance = self.coordinates[axis].distance(values[axis]);
+        if sum >= limit {
+            return sum;
+        }
+        for (parameter, &value) in self.coordinates.iter().zip(values) {
+            let distance = parameter.distance(value);
             sum += distance * distance;
             if sum >= limit {
                 break;
@@ -353,32 +360,55 @@ impl<T> ClimateIndex<T> {
         walk(&self.links, 0, &mut result);
         result
     }
-    /// Vanilla's `SubTree.search` below `id`, whose best leaf so far is `best`
-    /// at distance `fitness` (`i64::MAX` with none), returning the best leaf
-    /// and its distance. Vanilla measures the best leaf again in every subtree
-    /// and after each one; passing its distance along gives the same values.
-    /// `bounded`: the tree and the target are, so distances may stop early.
-    fn search(
+    /// Vanilla's `SubTree.search` below `id` for bounded trees and targets:
+    /// every box distance is non-negative and cannot overflow `i64`, so early
+    /// stopping at `limit` and terminating immediately at `fitness == 0`
+    /// preserve every decision bit for bit.
+    fn search_bounded(
         &self,
         id: usize,
         values: &[i64; 6],
-        bounded: bool,
         mut best: Option<usize>,
         mut fitness: i64,
     ) -> Result<(usize, i64), IndexError> {
         let (first, count) = self.links[id];
         let children = first as usize..(first + count) as usize;
         for (child, space) in children.clone().zip(&self.spaces[children]) {
-            let lower = if bounded {
-                space.distance_until(values, fitness)
-            } else {
-                space.distance(values)
-            };
+            let lower = space.distance_until(values, fitness);
             if fitness > lower {
                 let (result, next) = if self.links[child].1 == 0 {
                     (child, lower)
                 } else {
-                    self.search(child, values, bounded, best, fitness)?
+                    self.search_bounded(child, values, best, fitness)?
+                };
+                if fitness > next {
+                    fitness = next;
+                    best = Some(result);
+                    if fitness == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        best.map(|best| (best, fitness)).ok_or(IndexError::NoResult)
+    }
+    /// Unbounded fallback for extreme/wrapping coordinates.
+    fn search_unbounded(
+        &self,
+        id: usize,
+        values: &[i64; 6],
+        mut best: Option<usize>,
+        mut fitness: i64,
+    ) -> Result<(usize, i64), IndexError> {
+        let (first, count) = self.links[id];
+        let children = first as usize..(first + count) as usize;
+        for (child, space) in children.clone().zip(&self.spaces[children]) {
+            let lower = space.distance(values);
+            if fitness > lower {
+                let (result, next) = if self.links[child].1 == 0 {
+                    (child, lower)
+                } else {
+                    self.search_unbounded(child, values, best, fitness)?
                 };
                 if fitness > next {
                     fitness = next;
@@ -397,17 +427,25 @@ pub struct ClimateSearch<'a, T> {
 impl<'a, T> ClimateSearch<'a, T> {
     pub fn find(&mut self, target: TargetPoint) -> Result<&'a T, IndexError> {
         let parameters = target.parameters();
-        let values = std::array::from_fn(|i| parameters[i]);
+        let values = AXES.map(|axis| parameters[axis]);
         let result = if self.index.links[0].1 == 0 {
             0
         } else {
+            let bounded = self.index.bounded && values.iter().all(|value| bounded(*value));
             let fitness = self
                 .last
                 .map_or(i64::MAX, |id| self.index.spaces[id].distance(&values));
-            let bounded = self.index.bounded && values.iter().all(|value| bounded(*value));
-            self.index
-                .search(0, &values, bounded, self.last, fitness)?
-                .0
+            if bounded {
+                if fitness == 0 {
+                    self.last.expect("zero fitness comes from a cached leaf")
+                } else {
+                    self.index.search_bounded(0, &values, self.last, fitness)?.0
+                }
+            } else {
+                self.index
+                    .search_unbounded(0, &values, self.last, fitness)?
+                    .0
+            }
         };
         self.last = Some(result);
         let (entry, 0) = self.index.links[result] else {
@@ -709,5 +747,74 @@ mod tests {
         }
         // Extreme spans can leave no finite split cost; most trees build.
         assert!(built > 110, "{built} trees built");
+    }
+
+    #[test]
+    fn reordered_bounded_and_unbounded_search_matches_reference() {
+        let mut rng = Rng(0x5eed_19537);
+        let extremes = [
+            i64::MIN,
+            i64::MIN + 1,
+            -(1 << 31),
+            -1,
+            0,
+            1,
+            (1 << 31) - 1,
+            i64::MAX - 1,
+            i64::MAX,
+        ];
+        let edges = [-BOUND, 1 - BOUND, -100, 0, 100, BOUND - 1, BOUND];
+        let mut built = 0usize;
+        for (case, branching) in [2usize, 6, 19, 2, 6, 19, 4, 8, 12, 16, 6, 19]
+            .into_iter()
+            .enumerate()
+        {
+            let wrapping = case >= 9;
+            let near_bound = (6..9).contains(&case);
+            let count = [12usize, 64, 180][case % 3];
+            let mut entries = Vec::with_capacity(count);
+            for id in 0..count {
+                let point = ParameterPoint {
+                    coordinates: std::array::from_fn(|_| {
+                        let (a, b) = if wrapping {
+                            (rng.pick(&extremes), rng.pick(&extremes))
+                        } else if near_bound {
+                            (rng.pick(&edges), rng.pick(&edges))
+                        } else {
+                            (rng.range(-5, 5) * 100, rng.range(-5, 5) * 100)
+                        };
+                        Parameter::new(a.min(b), a.max(b))
+                    }),
+                    offset: if case.is_multiple_of(2) {
+                        0
+                    } else if wrapping {
+                        rng.pick(&extremes)
+                    } else {
+                        rng.range(-3, 3) * 100
+                    },
+                };
+                entries.push((point, id));
+            }
+            let mut targets = if wrapping {
+                (0..200)
+                    .map(|_| target(std::array::from_fn(|_| rng.pick(&extremes))))
+                    .collect::<Vec<_>>()
+            } else if near_bound {
+                walk(&mut rng, &entries, 300, BOUND + (1 << 20))
+            } else {
+                walk(&mut rng, &entries, 300, 600)
+            };
+            // Repeat exact leaf-center hits back-to-back to exercise fitness == 0 early exits.
+            for (point, _) in entries.iter().take(8) {
+                let center = target(std::array::from_fn(|axis| point.coordinates[axis].center()));
+                targets.push(center);
+                targets.push(center);
+            }
+            built += usize::from(compare(entries, branching, &targets));
+        }
+        assert!(
+            built >= 10,
+            "expected most test trees to build, got {built}"
+        );
     }
 }

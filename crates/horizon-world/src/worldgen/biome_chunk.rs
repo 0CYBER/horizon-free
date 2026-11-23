@@ -50,6 +50,21 @@ impl<T: Clone> BiomeChunk<T> {
                 .collect(),
         })
     }
+    /// The chunk coordinates of this biome chunk.
+    #[inline]
+    pub fn position(&self) -> ChunkPos {
+        self.position
+    }
+    /// The lowest block Y stored by this biome chunk.
+    #[inline]
+    pub(crate) fn min_y(&self) -> i32 {
+        self.min_y
+    }
+    /// The vertical block span stored by this biome chunk.
+    #[inline]
+    pub(crate) fn height(&self) -> i32 {
+        self.height
+    }
     pub fn section(&self, index: usize) -> Option<&[T; 64]> {
         self.sections.get(index)
     }
