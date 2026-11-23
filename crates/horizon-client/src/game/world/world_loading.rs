@@ -172,6 +172,9 @@ impl WorldRequest {
         horizon_client::save::upgrade_older_world_with(&save_root, upgrade)?;
         horizon_client::save::migrate_legacy(&save_root)?;
         let session_lock = horizon_client::save::SessionLock::acquire(&save_root)?;
+        // A world Paper saved keeps the seed, rules, weather and clocks under the Overworld only.
+        horizon_world::datafix::files::adopt_dimension_saved_data(&save_root)
+            .map_err(|e| format!("reading {}'s saved data: {e}", save_root.display()))?;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         let rand_sequences = super::trading::read_random_sequences(&save_root);
         let existing = Level::read_with_registry(&save_root, rule_registry.clone());

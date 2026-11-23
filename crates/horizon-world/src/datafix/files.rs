@@ -729,6 +729,93 @@ fn fix_world_files_deferred(
     Ok((loaded, Some(data)))
 }
 
+/// The saved data 26.3 keeps in the world's own `data/minecraft` (`MinecraftServer`'s
+/// `SavedDataStorage`): the generator settings, the game rules, the weather and the clocks.
+const SERVER_SAVED_DATA: [&str; 4] = [
+    "world_gen_settings.dat",
+    "game_rules.dat",
+    "weather.dat",
+    "world_clocks.dat",
+];
+
+/// Names the files an adoption is still copying, so a stop part way is finished by the next open.
+const ADOPTING_MARKER: &str = ".adopting";
+
+/// A world saved by Paper 26.x keeps [`SERVER_SAVED_DATA`] only under the Overworld's
+/// `dimensions/minecraft/overworld/data/minecraft`, where vanilla reads them from the root
+/// `data/minecraft`. When the root has none of the four, copy those the Overworld has
+/// to the root, so the seed, rules and clocks come with the world. The Overworld's files
+/// stay as they are; a root that already has one of them is left alone. A marker lists the
+/// files before the first copy, so an open after a stop part way copies the missing ones
+/// and leaves the others as they are. Returns the file names copied.
+pub fn adopt_dimension_saved_data(base: &Path) -> io::Result<Vec<&'static str>> {
+    let root = base.join("data/minecraft");
+    let overworld = base.join("dimensions/minecraft/overworld/data/minecraft");
+    let marker = root.join(ADOPTING_MARKER);
+    let pending: Vec<&'static str> = if marker.is_file() {
+        let listed = fs::read_to_string(&marker)?;
+        SERVER_SAVED_DATA
+            .into_iter()
+            .filter(|f| listed.lines().any(|l| l == *f))
+            .collect()
+    } else {
+        if SERVER_SAVED_DATA.iter().any(|f| root.join(f).is_file()) {
+            return Ok(Vec::new());
+        }
+        let wanted: Vec<&'static str> = SERVER_SAVED_DATA
+            .into_iter()
+            .filter(|f| overworld.join(f).is_file())
+            .collect();
+        if wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        fs::create_dir_all(&root)?;
+        fs::write(&marker, wanted.join("\n"))?;
+        wanted
+    };
+    let resumed = marker_resumed(&root, &pending);
+    let mut copied = Vec::new();
+    for file in pending {
+        let from = overworld.join(file);
+        if root.join(file).is_file() || !from.is_file() {
+            continue;
+        }
+        if let Err(e) = adopt_one(&from, &root, file) {
+            // A fresh attempt is one operation: what it put in the root goes again, so a later
+            // open finds no root file and adopts all. A resumed one keeps its files and
+            // the marker, and the next open continues.
+            if !resumed {
+                for done in &copied {
+                    let _ = fs::remove_file(root.join(done));
+                }
+                let _ = fs::remove_file(&marker);
+            }
+            return Err(e);
+        }
+        copied.push(file);
+    }
+    let _ = fs::remove_file(&marker);
+    Ok(copied)
+}
+
+/// Whether the root already holds one of the files the marker lists, the sign of a resumed
+/// adoption.
+fn marker_resumed(root: &Path, pending: &[&str]) -> bool {
+    pending.iter().any(|f| root.join(f).is_file())
+}
+
+/// Copies one saved data file into the root through a temporary name, so a failed copy never
+/// leaves a partial file under the real one.
+fn adopt_one(from: &Path, root: &Path, file: &str) -> io::Result<()> {
+    fs::create_dir_all(root)?;
+    let partial = root.join(format!("{file}.adopting"));
+    let copied = fs::copy(from, &partial).and_then(|_| fs::rename(&partial, root.join(file)));
+    if copied.is_err() {
+        let _ = fs::remove_file(&partial);
+    }
+    copied
+}
+
 /// The world's generator settings as 26.3 reads them once the file fixes have run, without
 /// running them: for a world older than 4772 they come out of level.dat the way
 /// `LevelDatToSavedDataFileFix` moves them (`world_gen_settings.dat` is not there yet), for any
@@ -2279,5 +2366,164 @@ mod upgrade_tests {
         assert!(whole(&read_dat(&file).unwrap().unwrap()));
         assert!(whole(&read_saved_dat(&file).unwrap().unwrap()));
         let _ = fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod paper_layout_tests {
+    use super::*;
+
+    const OVERWORLD: &str = "dimensions/minecraft/overworld/data/minecraft";
+
+    fn world(name: &str) -> PathBuf {
+        let base =
+            std::env::temp_dir().join(format!("horizon-paper-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        base
+    }
+
+    fn settings(seed: i64) -> Tag {
+        Tag::compound([("seed", Tag::Long(seed))])
+    }
+
+    /// Paper's layout: the four files only under the Overworld, plus the root files Paper
+    /// leaves in `data/minecraft`. The seed and rules come to the root, byte for byte.
+    #[test]
+    fn paper_layout_is_adopted_from_the_overworld() {
+        let base = world("adopt");
+        for f in SERVER_SAVED_DATA {
+            write_saved_data(
+                &base.join(OVERWORLD).join(f),
+                settings(-4172144997902289642),
+                4899,
+            )
+            .unwrap();
+        }
+        write_saved_data(
+            &base.join("data/minecraft/scoreboard.dat"),
+            Tag::Compound(Compound::new()),
+            4899,
+        )
+        .unwrap();
+        let copied = adopt_dimension_saved_data(&base).unwrap();
+        assert_eq!(copied, SERVER_SAVED_DATA.to_vec());
+        for f in SERVER_SAVED_DATA {
+            assert_eq!(
+                fs::read(base.join("data/minecraft").join(f)).unwrap(),
+                fs::read(base.join(OVERWORLD).join(f)).unwrap(),
+                "{f}"
+            );
+        }
+        let seed = read_saved_dat(&base.join("data/minecraft/world_gen_settings.dat"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            seed.get("data").and_then(|d| d.get("seed")),
+            Some(&Tag::Long(-4172144997902289642))
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A copy that fails halfway takes back what that attempt wrote: the next open adopts all
+    /// four, instead of stopping at the one root file the failed attempt left.
+    #[test]
+    fn a_failed_adoption_is_taken_back_and_retried_whole() {
+        let base = world("retry");
+        for f in SERVER_SAVED_DATA {
+            write_saved_data(&base.join(OVERWORLD).join(f), settings(7), 4899).unwrap();
+        }
+        // The second file's temporary name is taken by a folder: its copy fails.
+        let blocked = base
+            .join("data/minecraft")
+            .join(format!("{}.adopting", SERVER_SAVED_DATA[1]));
+        fs::create_dir_all(blocked.join("x")).unwrap();
+        assert!(adopt_dimension_saved_data(&base).is_err());
+        for f in SERVER_SAVED_DATA {
+            assert!(!base.join("data/minecraft").join(f).exists(), "{f}");
+        }
+        fs::remove_dir_all(&blocked).unwrap();
+        let copied = adopt_dimension_saved_data(&base).unwrap();
+        assert_eq!(copied, SERVER_SAVED_DATA.to_vec());
+        for f in SERVER_SAVED_DATA {
+            assert_eq!(
+                fs::read(base.join("data/minecraft").join(f)).unwrap(),
+                fs::read(base.join(OVERWORLD).join(f)).unwrap(),
+                "{f}"
+            );
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A stop after the first file leaves the marker: the next open copies the other three and
+    /// keeps the file already there, then drops the marker.
+    #[test]
+    fn a_stopped_adoption_is_resumed() {
+        let base = world("resume");
+        for f in SERVER_SAVED_DATA {
+            write_saved_data(&base.join(OVERWORLD).join(f), settings(7), 4899).unwrap();
+        }
+        let root = base.join("data/minecraft");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(ADOPTING_MARKER), SERVER_SAVED_DATA.join("\n")).unwrap();
+        fs::copy(
+            base.join(OVERWORLD).join(SERVER_SAVED_DATA[0]),
+            root.join(SERVER_SAVED_DATA[0]),
+        )
+        .unwrap();
+        let copied = adopt_dimension_saved_data(&base).unwrap();
+        assert_eq!(copied, SERVER_SAVED_DATA[1..].to_vec());
+        for f in SERVER_SAVED_DATA {
+            assert!(root.join(f).is_file(), "{f}");
+        }
+        assert!(!root.join(ADOPTING_MARKER).exists());
+        assert!(adopt_dimension_saved_data(&base).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A root that has any of the four is the world's own: nothing is overwritten, and a
+    /// second call after an adoption copies nothing.
+    #[test]
+    fn root_files_are_never_replaced() {
+        let base = world("keep");
+        write_saved_data(
+            &base.join(OVERWORLD).join("game_rules.dat"),
+            settings(1),
+            4899,
+        )
+        .unwrap();
+        write_saved_data(&base.join(OVERWORLD).join("weather.dat"), settings(1), 4899).unwrap();
+        write_saved_data(
+            &base.join("data/minecraft/game_rules.dat"),
+            settings(2),
+            4899,
+        )
+        .unwrap();
+        assert!(adopt_dimension_saved_data(&base).unwrap().is_empty());
+        assert!(!base.join("data/minecraft/weather.dat").exists());
+        let kept = read_saved_dat(&base.join("data/minecraft/game_rules.dat"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            kept.get("data").and_then(|d| d.get("seed")),
+            Some(&Tag::Long(2))
+        );
+
+        let fresh = world("twice");
+        write_saved_data(
+            &fresh.join(OVERWORLD).join("weather.dat"),
+            settings(3),
+            4899,
+        )
+        .unwrap();
+        assert_eq!(adopt_dimension_saved_data(&fresh).unwrap(), ["weather.dat"]);
+        assert!(adopt_dimension_saved_data(&fresh).unwrap().is_empty());
+        // A world with no per-dimension files is untouched, no empty folders appear.
+        let plain = world("plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert!(adopt_dimension_saved_data(&plain).unwrap().is_empty());
+        assert!(!plain.join("data").exists());
+        for b in [base, fresh, plain] {
+            let _ = fs::remove_dir_all(&b);
+        }
     }
 }
