@@ -29,6 +29,9 @@ vanilla's canonicalization. Region allocation layout may change.
 properties. `edit-block-data` changes an existing saved section's block data and
 preserves other chunk fields. It does **not** perform a gameplay placement:
 heightmaps, light, block entities, ticks and neighbor updates are not updated.
+When repacking the section, the editor emits states in first-use order, merges
+duplicate imported palette entries, and drops unused entries without rehashing
+each cell's NBT. This preserves the packed output; it does not change game autosaves.
 The raw command accepts descriptors without validating them against a loaded
 registry. The library's `BlockRegistry::resolve` validates properties and
 supplies defaults, and `BlockSection` uses that registry for resident storage.

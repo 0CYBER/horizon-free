@@ -96,6 +96,94 @@ fn invalid_palette_data_fails_before_access() {
     assert!(PalettedContainer::from_nbt(&tag, 4096, 4).is_err());
 }
 
+#[test]
+fn packing_matches_the_structural_tag_encoder_after_loading_duplicate_slots_and_editing() {
+    fn old_pack(section: &PalettedContainer) -> Tag {
+        let mut map = section.extra.clone();
+        let mut seen = HashMap::new();
+        let mut palette = Vec::new();
+        let mut ids = Vec::with_capacity(section.entries);
+        for cell in 0..section.entries {
+            let tag = section.get(cell).unwrap();
+            ids.push(*seen.entry(tag).or_insert_with(|| {
+                palette.push(tag.clone());
+                palette.len() as u32 - 1
+            }));
+        }
+        let bits = bits_for_palette(palette.len(), section.min_bits);
+        map.insert(key("palette"), Tag::List(palette));
+        if bits > 0 {
+            let mut storage = PackedStorage::new(bits, section.entries).unwrap();
+            for (cell, id) in ids.into_iter().enumerate() {
+                storage.set(cell, id).unwrap();
+            }
+            map.insert(
+                key("data"),
+                Tag::LongArray(storage.words().iter().map(|word| *word as i64).collect()),
+            );
+        }
+        Tag::Compound(map)
+    }
+    fn state(id: usize) -> Tag {
+        Tag::compound([
+            ("Name", Tag::String(key(&format!("test:block_{}", id / 4)))),
+            (
+                "Properties",
+                Tag::compound([("variation", Tag::Int((id % 4) as i32))]),
+            ),
+        ])
+    }
+    let encode = |tag| {
+        horizon_core::nbt::write_named(
+            &NamedTag { name: key(""), tag },
+            horizon_core::nbt::Limits::saved(),
+        )
+        .unwrap()
+    };
+    let mut rng = 0x32d3_7495_b3b1_7805u64;
+    let mut next = |limit: usize| {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        (rng % limit as u64) as usize
+    };
+    for distinct in [1, 4, 16, 17, 32, 64] {
+        // An alias of the first entry appears in cell order before its original
+        // slot. Saving must still emit one entry at the first *cell* using it.
+        let mut tags: Vec<_> = (0..distinct).map(state).collect();
+        tags.extend([state(0), state(distinct - 1), state(distinct + 1)]);
+        let mut storage = PackedStorage::new(bits_for_palette(tags.len(), 4), 4096).unwrap();
+        storage.set(0, distinct as u32).unwrap();
+        for i in 1..4096 {
+            storage.set(i, next(distinct + 2) as u32).unwrap();
+        }
+        let input = Tag::compound([
+            ("palette", Tag::List(tags)),
+            (
+                "data",
+                Tag::LongArray(storage.words().iter().map(|&w| w as i64).collect()),
+            ),
+            ("test:untouched", Tag::List(vec![Tag::Long(99)])),
+        ]);
+        let mut section = PalettedContainer::from_nbt(&input, 4096, 4).unwrap();
+        assert_eq!(
+            encode(section.to_nbt()),
+            encode(old_pack(&section)),
+            "loaded P={distinct}"
+        );
+        for round in 0..4 {
+            for _ in 0..47 {
+                section.set(next(4096), state(next(distinct + 5))).unwrap();
+            }
+            assert_eq!(
+                encode(section.to_nbt()),
+                encode(old_pack(&section)),
+                "edited P={distinct} round {round}"
+            );
+        }
+    }
+}
+
 /// The pre-optimization `get`, kept to compare against in the benchmark.
 fn baseline_get(section: &BlockSection<'_>, index: usize) -> io::Result<BlockStateId> {
     if index >= 4096 {
