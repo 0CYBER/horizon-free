@@ -1608,27 +1608,38 @@ impl Plan {
         }
         backdrop
     }
-    /// Whether chunk column (x, z) is drawn by the tile planned there (ready;
-    /// at level 0, also `filled`) rather than by a coarser ancestor standing
-    /// in for it, or is past the far terrain.
-    fn replaces(
-        &self,
-        (x, z): (i32, i32),
-        ready: &FxHashMap<TileKey, impl Sized>,
-        filled: impl Fn(TileKey) -> bool,
-    ) -> bool {
-        let Some(key) = (0..=MAX_LEVEL)
+    /// The finest planned leaf tile covering chunk column `(x, z)`, or `None`
+    /// if the column is outside the far plan (including under a split node
+    /// whose child there is out of range).
+    fn planned_leaf(&self, (x, z): (i32, i32)) -> Option<TileKey> {
+        (0..=MAX_LEVEL)
             .map(|level| TileKey {
                 x: (x * 16).div_euclid(16 << level),
                 z: (z * 16).div_euclid(16 << level),
                 level,
             })
             .find(|key| self.nodes.contains(key))
-        else {
+            .filter(|key| !self.split.contains(key))
+    }
+    /// Whether chunk column `column` lies under a planned leaf tile that can
+    /// consume a chunk summary (levels `0..=4`, where cell width is at most a
+    /// chunk).
+    fn needs_summary(&self, column: (i32, i32)) -> bool {
+        self.planned_leaf(column).is_some_and(|key| key.level <= 4)
+    }
+    /// Whether chunk column (x, z) is drawn by the tile planned there (ready;
+    /// at level 0, also `filled`) rather than by a coarser ancestor standing
+    /// in for it, or is past the far terrain.
+    fn replaces(
+        &self,
+        column: (i32, i32),
+        ready: &FxHashMap<TileKey, impl Sized>,
+        filled: impl Fn(TileKey) -> bool,
+    ) -> bool {
+        let Some(key) = self.planned_leaf(column) else {
             return true;
         };
-        // A split node's child there is out of range: nothing is drawn.
-        self.split.contains(&key) || (ready.contains_key(&key) && (key.level > 0 || filled(key)))
+        ready.contains_key(&key) && (key.level > 0 || filled(key))
     }
 }
 /// The tiles to sample, `Wanted`'s order best first. First the planned
@@ -2116,6 +2127,14 @@ pub struct Lod {
     /// render distance shrinks, their coarsest ancestors would otherwise
     /// stand in for it for minutes.
     retiring: FxHashSet<(i32, i32)>,
+    /// Columns that started retiring since the game last took them
+    /// (`take_summary_asks`): a resident chunk there is summarized now, not
+    /// when it arrived (`summarizes_arrivals`).
+    summary_asks: FxHashSet<(i32, i32)>,
+    /// Summaries queued (`observe`) and not applied yet, by column: a
+    /// retiring column waits for its own instead of asking the source for
+    /// detail, which could be drawn for a few frames before it.
+    summarizing: FxHashMap<(i32, i32), u32>,
     /// The covered columns the active meshes leave out, when a mesh job
     /// has finished since the last `take_cutout`.
     cutout: Option<Arc<FxHashSet<(i32, i32)>>>,
@@ -2496,6 +2515,8 @@ impl Lod {
             covered_bounds: None,
             full: FxHashSet::default(),
             retiring: FxHashSet::default(),
+            summary_asks: FxHashSet::default(),
+            summarizing: FxHashMap::default(),
             cutout: None,
             cutout_pending: None,
             cutout_waiting: FxHashSet::default(),
@@ -2902,10 +2923,14 @@ impl Lod {
     }
     /// Capture actual block columns, including canopy gaps and material
     /// layers: the worker summarizes the chunk (`summarize`, a few
-    /// milliseconds a chunk), then `finish_observed` keeps it.
+    /// milliseconds a chunk, and its reductions), then `finish_observed`
+    /// keeps it. Called for a chunk leaving the near area (unloaded, or
+    /// asked for by `take_summary_asks`), not for every chunk that arrives,
+    /// unless `summarizes_arrivals`.
     pub fn observe(&mut self, chunk: Arc<Chunk>, facts: &BlockFacts) {
         self.shared.kinds.get_or_init(|| state_kinds(facts));
         let key = (chunk.x, chunk.z);
+        self.summary_asks.remove(&key);
         if self
             .shared
             .observed
@@ -2914,6 +2939,8 @@ impl Lod {
             .insert(key, chunk)
             .is_none()
         {
+            // One `Done::Observed` comes back per job queued here.
+            *self.summarizing.entry(key).or_default() += 1;
             self.shared
                 .jobs
                 .lock()
@@ -2921,6 +2948,47 @@ impl Lod {
                 .push_back(Job::Observe(key));
             self.shared.wake.notify_all();
         }
+    }
+    /// Whether every resident chunk is summarized as it arrives and as it
+    /// changes: the source keeps the summaries (`LodSource::keeps_observed`,
+    /// a server's terrain), so one never summarized would be missing from it
+    /// after the game quits, and it has nothing else to draw there. Other
+    /// sources draw a chunk under the near area from nothing (it is covered)
+    /// and summarize it once it leaves.
+    pub fn summarizes_arrivals(&self) -> bool {
+        self.keeps_observed
+    }
+    /// Up to `limit` columns that left the full-detail area and still need a
+    /// summary in the current far plan: the game summarizes those still
+    /// resident (`observe`) within `OBSERVE_AHEAD` before their full-detail
+    /// meshes can retire. Deferred columns stay queued for subsequent ticks.
+    pub fn take_summary_asks(&mut self, limit: usize) -> Vec<(i32, i32)> {
+        if limit == 0 || self.summary_asks.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(limit.min(self.summary_asks.len()));
+        let mut drop = Vec::new();
+        for &column in &self.summary_asks {
+            if !self.plan.needs_summary(column) {
+                drop.push(column);
+                continue;
+            }
+            out.push(column);
+            if out.len() == limit {
+                break;
+            }
+        }
+        for column in drop {
+            self.summary_asks.remove(&column);
+        }
+        for &column in &out {
+            self.summary_asks.remove(&column);
+        }
+        out
+    }
+    /// Whether the column's own summary is asked for or queued.
+    fn summary_on_its_way(&self, column: (i32, i32)) -> bool {
+        self.summary_asks.contains(&column) || self.summarizing.contains_key(&column)
     }
     /// Chunks waiting for the worker to summarize them. A resident chunk
     /// held here is copied by its next edit (`Arc::make_mut`), so callers
@@ -2933,13 +3001,37 @@ impl Lod {
     pub fn sampling(&self) -> bool {
         !self.pending.is_empty()
     }
-    /// Keeps a visited chunk's summary, unless it is unchanged.
+    /// Keeps a visited chunk's summary, unless it is unchanged; still restores
+    /// cached detail when the column's current fine tile lost it across a replan.
     fn finish_observed(&mut self, key: (i32, i32), columns: ReducedColumns) {
-        if self
-            .saved
-            .get(&key)
-            .is_some_and(|saved| **saved == *columns.columns)
+        if let Some(count) = self.summarizing.get_mut(&key) {
+            *count -= 1;
+            if *count == 0 {
+                self.summarizing.remove(&key);
+            }
+        }
+        if let Some(saved) = self.saved.get(&key).cloned()
+            && *saved == *columns.columns
         {
+            let fine = TileKey {
+                x: key.0,
+                z: key.1,
+                level: 0,
+            };
+            let fine_needs_detail = (self.plan.nodes.contains(&fine)
+                || self.ready.contains_key(&fine))
+                && (self.detail_masks.get(&fine) != Some(&[u64::MAX; 4])
+                    || self
+                        .ready
+                        .get(&fine)
+                        .is_none_or(|old| !Arc::ptr_eq(old, &saved) && **old != *saved));
+            if fine_needs_detail {
+                if let Some(reduced) = self.reduced.get(&key).cloned() {
+                    self.apply_detail(key, &reduced);
+                } else {
+                    self.apply_fine(key, &saved);
+                }
+            }
             return;
         }
         if !self.saved.contains_key(&key) {
@@ -3257,10 +3349,12 @@ impl Lod {
         // while their normal meshes still cover the gap. Request their detail
         // explicitly: neither the active-tile requests nor sampling an already
         // ready stand-in can fill it, so its GPU sections would never retire.
+        // Not those whose summary is on its way: it is the column itself, and
+        // the source's detail could be drawn for a few frames before it.
         keys.extend(retiring_detail(
             &self.plan,
             &self.retiring,
-            &self.saved,
+            |column| self.summary_on_its_way(column),
             &self.detail_masks,
         ));
         keys.sort_unstable_by_key(|key| (key.distance(camera), *key));
@@ -3443,6 +3537,9 @@ impl Lod {
         self.restale.retain(|key| self.plan.nodes.contains(key));
         self.detail_masks
             .retain(|key, _| self.plan.nodes.contains(key));
+        let plan = &self.plan;
+        self.summary_asks
+            .retain(|&column| plan.needs_summary(column));
         // Complete resident columns need no duplicate noise work.
         let mut standins = Vec::new();
         let mut empty_standin: Option<Arc<TileColumns>> = None;
@@ -3691,8 +3788,19 @@ impl Lod {
         if let Some(full) = covered
             && self.full != full
         {
-            self.retiring.extend(self.full.difference(&full).copied());
+            let leaving: Vec<_> = self.full.difference(&full).copied().collect();
+            if !self.keeps_observed {
+                let plan = &self.plan;
+                self.summary_asks.extend(
+                    leaving
+                        .iter()
+                        .copied()
+                        .filter(|&column| plan.needs_summary(column)),
+                );
+            }
+            self.retiring.extend(leaving);
             self.retiring.retain(|column| !full.contains(column));
+            self.summary_asks.retain(|column| !full.contains(column));
             self.full = full;
             self.leave_out();
         }
@@ -3709,10 +3817,12 @@ impl Lod {
             .iter()
             .copied()
             .filter(|&column| {
-                // A saved summary alone is not detail: the tile may still be
-                // the empty covered stand-in. Only a completed mask proves
-                // its columns replaced the full-detail mesh.
-                !plan.replaces(column, ready, |key| masks.get(&key) == Some(&[u64::MAX; 4]))
+                // Keep a retiring column while its observed summary is still
+                // pending for a planned far tile, even if an earlier visit
+                // left a complete detail mask behind. A saved summary alone is
+                // not detail: the tile may still be the empty covered stand-in.
+                (plan.planned_leaf(column).is_some() && self.summary_on_its_way(column))
+                    || !plan.replaces(column, ready, |key| masks.get(&key) == Some(&[u64::MAX; 4]))
             })
             .collect();
         if keep.len() != self.retiring.len() {
@@ -4290,15 +4400,20 @@ fn tile_overlaps_covered(
 /// Fine retiring stand-ins need actual column detail before `Plan::replaces`
 /// can release their normal meshes. The caller keeps the usual detail-request
 /// budget and waits for the replacement mesh before changing cutout.
+/// `summarizing`: columns whose own summary is on its way, which completes
+/// their detail without a request.
 fn retiring_detail<'a>(
     plan: &'a Plan,
     retiring: &'a FxHashSet<(i32, i32)>,
-    _saved: &'a Saved,
+    summarizing: impl Fn((i32, i32)) -> bool + 'a,
     masks: &'a FxHashMap<TileKey, [u64; 4]>,
 ) -> impl Iterator<Item = TileKey> + 'a {
     retiring.iter().filter_map(move |&(x, z)| {
         let key = TileKey { x, z, level: 0 };
-        (plan.nodes.contains(&key) && masks.get(&key) != Some(&[u64::MAX; 4])).then_some(key)
+        (plan.nodes.contains(&key)
+            && masks.get(&key) != Some(&[u64::MAX; 4])
+            && !summarizing((x, z)))
+        .then_some(key)
     })
 }
 #[cfg(test)]
@@ -4472,7 +4587,6 @@ mod tests {
         Arc::make_mut(&mut plan.nodes).insert(fine);
         let ready: FxHashMap<TileKey, ()> = [(fine, ())].into_iter().collect();
         let retiring = [column].into_iter().collect();
-        let saved = Saved::default();
         let mut masks = FxHashMap::default();
         // A covered stand-in is ready, but empty: ordinary sampling skips it,
         // and selection leaves it out of `active`. It cannot yet replace the
@@ -4480,14 +4594,14 @@ mod tests {
         assert!(!plan.replaces(column, &ready, |key| masks.get(&key)
             == Some(&[u64::MAX; 4])));
         assert_eq!(
-            retiring_detail(&plan, &retiring, &saved, &masks).collect::<Vec<_>>(),
+            retiring_detail(&plan, &retiring, |_| false, &masks).collect::<Vec<_>>(),
             [fine]
         );
         // The existing RequestDetail -> apply_fine path marks complete detail;
         // only then may selection retire it and publish the new mesh cutout.
         masks.insert(fine, [u64::MAX; 4]);
         assert!(
-            retiring_detail(&plan, &retiring, &saved, &masks)
+            retiring_detail(&plan, &retiring, |_| false, &masks)
                 .next()
                 .is_none()
         );
@@ -4501,21 +4615,267 @@ mod tests {
         Arc::make_mut(&mut plan.nodes).extend((0..4).map(fine));
         Arc::make_mut(&mut plan.nodes).insert(fine(5));
         let retiring = (0..5).map(|x| (x, 0)).collect();
-        let mut saved = Saved::default();
-        saved.insert((1, 0), TileColumns::empty());
         let masks = [
             (fine(2), [u64::MAX; 4]),
             (fine(3), [u64::MAX, u64::MAX, u64::MAX, u64::MAX - 1]),
         ]
         .into_iter()
         .collect();
-        let mut requested: Vec<_> = retiring_detail(&plan, &retiring, &saved, &masks).collect();
+        let mut requested: Vec<_> =
+            retiring_detail(&plan, &retiring, |column| column == (1, 0), &masks).collect();
         requested.sort_unstable();
-        // Complete detail needs no request. A saved summary without a
-        // completed mask still does: it may predate the tile's stand-in.
-        // An unplanned retiree and a planned column that is not retiring
-        // must not consume the budget.
-        assert_eq!(requested, [fine(0), fine(1), fine(3)]);
+        // Complete detail needs no request, nor a column whose own summary
+        // is on its way. An unplanned retiree and a planned column that is
+        // not retiring must not consume the budget.
+        assert_eq!(requested, [fine(0), fine(3)]);
+    }
+    /// A near chunk is summarized when it leaves the full-detail area, not
+    /// when it arrives: its column is asked for once, and until its summary
+    /// is applied it asks the source for no detail.
+    #[test]
+    fn leaving_columns_ask_for_their_summary_and_wait_for_it() {
+        let mut lod = Lod::scheduler_for_test();
+        assert!(!lod.summarizes_arrivals());
+        let fine = TileKey {
+            x: 1,
+            z: 0,
+            level: 0,
+        };
+        let other = TileKey {
+            x: 3,
+            z: 0,
+            level: 0,
+        };
+        Arc::make_mut(&mut lod.plan.nodes).extend([fine, other]);
+        lod.cover(Some([(1, 0), (2, 0)].into_iter().collect()));
+        assert!(
+            lod.take_summary_asks(OBSERVE_AHEAD).is_empty(),
+            "arrivals ask nothing"
+        );
+        lod.cover(Some([(2, 0)].into_iter().collect()));
+        assert!(lod.retiring.contains(&(1, 0)));
+        assert!(lod.summary_on_its_way((1, 0)));
+        assert_eq!(lod.take_summary_asks(OBSERVE_AHEAD), [(1, 0)]);
+        assert!(
+            lod.take_summary_asks(OBSERVE_AHEAD).is_empty(),
+            "asked once"
+        );
+        // Taken but not resident: the source's detail is asked for instead.
+        assert!(!lod.summary_on_its_way((1, 0)));
+        // Observed (as `Lod::observe` counts it): no detail until it is applied.
+        lod.summarizing.insert((1, 0), 1);
+        assert!(lod.summary_on_its_way((1, 0)));
+        lod.finish_observed(
+            (1, 0),
+            ReducedColumns::new(Arc::new(std::array::from_fn(|_| Column::default()))),
+        );
+        assert!(!lod.summary_on_its_way((1, 0)));
+        assert_eq!(lod.detail_masks.get(&fine), Some(&[u64::MAX; 4]));
+        // Back in the full-detail area before it was taken: nothing to ask.
+        lod.cover(Some([(2, 0), (3, 0)].into_iter().collect()));
+        lod.cover(Some([(2, 0)].into_iter().collect()));
+        assert!(lod.summary_on_its_way((3, 0)));
+        lod.cover(Some([(2, 0), (3, 0)].into_iter().collect()));
+        assert!(lod.take_summary_asks(OBSERVE_AHEAD).is_empty());
+    }
+    /// Leaving the same column a second time after a replan discarded its fine
+    /// tile and detail mask still restores the cached summary into the new
+    /// covered stand-in, so retiring sections do not wait indefinitely.
+    #[test]
+    fn revisiting_a_column_across_a_replan_restores_its_cached_summary() {
+        let mut lod = Lod::scheduler_for_test();
+        let column = (1, 0);
+        let fine = TileKey {
+            x: 1,
+            z: 0,
+            level: 0,
+        };
+        let columns = |height| {
+            ReducedColumns::new(Arc::new(std::array::from_fn(|_| {
+                Column::from_surface(Some(Surface {
+                    height,
+                    state: BlockStateId(1),
+                    water: None,
+                    biome: 0,
+                }))
+            })))
+        };
+        // First visit: cover, leave, summarize, and retire cleanly.
+        lod.replan([16, 0], 2, 32, 0, None);
+        assert!(lod.plan.nodes.contains(&fine));
+        lod.cover(Some([column].into_iter().collect()));
+        lod.cover(Some(FxHashSet::default()));
+        assert_eq!(lod.take_summary_asks(OBSERVE_AHEAD), [column]);
+        lod.summarizing.insert(column, 1);
+        lod.finish_observed(column, columns(70));
+        let saved_arc = Arc::clone(&lod.saved[&column]);
+        lod.prune_retiring();
+        assert!(!lod.retiring.contains(&column));
+        assert_eq!(lod.ready[&fine].surface(0).unwrap().height, 70);
+
+        // Replan far away and back: the fine tile and its detail mask are
+        // discarded while `saved` keeps the summary.
+        lod.replan([10_000, 0], 2, 32, 0, None);
+        assert!(!lod.ready.contains_key(&fine));
+        assert!(!lod.detail_masks.contains_key(&fine));
+        assert!(lod.saved.contains_key(&column));
+        lod.replan([16, 0], 2, 32, 0, None);
+        assert!(lod.plan.nodes.contains(&fine));
+
+        // Second visit: entering coverage creates an empty stand-in without a
+        // detail mask; leaving with the same unchanged terrain must reapply
+        // the cached summary and allow retirement.
+        lod.cover(Some([column].into_iter().collect()));
+        assert!(lod.ready[&fine].surface(0).is_none());
+        assert!(!lod.detail_masks.contains_key(&fine));
+        lod.cover(Some(FxHashSet::default()));
+        assert_eq!(lod.take_summary_asks(OBSERVE_AHEAD), [column]);
+        lod.summarizing.insert(column, 1);
+        lod.finish_observed(column, columns(70));
+        assert!(Arc::ptr_eq(&lod.saved[&column], &saved_arc));
+        assert_eq!(lod.detail_masks.get(&fine), Some(&[u64::MAX; 4]));
+        assert_eq!(lod.ready[&fine].surface(0).unwrap().height, 70);
+        lod.prune_retiring();
+        assert!(!lod.retiring.contains(&column));
+        assert!(!lod.covered.contains(&column));
+    }
+    /// Re-entering coverage leaves the previous detail mask intact; on the next
+    /// departure, `prune_retiring` must keep holding the column until its new
+    /// observed summary arrives instead of flashing the stale far silhouette.
+    #[test]
+    fn prune_retiring_waits_for_pending_summary_despite_existing_detail_mask() {
+        let mut lod = Lod::scheduler_for_test();
+        let column = (1, 0);
+        let fine = TileKey {
+            x: 1,
+            z: 0,
+            level: 0,
+        };
+        let columns = |height| {
+            ReducedColumns::new(Arc::new(std::array::from_fn(|_| {
+                Column::from_surface(Some(Surface {
+                    height,
+                    state: BlockStateId(1),
+                    water: None,
+                    biome: 0,
+                }))
+            })))
+        };
+        Arc::make_mut(&mut lod.plan.nodes).insert(fine);
+        lod.cover(Some([column].into_iter().collect()));
+        lod.cover(Some(FxHashSet::default()));
+        assert_eq!(lod.take_summary_asks(OBSERVE_AHEAD), [column]);
+        lod.summarizing.insert(column, 1);
+        lod.finish_observed(column, columns(70));
+        lod.prune_retiring();
+        assert!(!lod.retiring.contains(&column));
+        assert_eq!(lod.detail_masks.get(&fine), Some(&[u64::MAX; 4]));
+
+        // Re-enter and depart after an edit: the old detail mask is still
+        // complete, so retiring must wait for both the queued ask and the
+        // in-flight observation before releasing the column.
+        lod.cover(Some([column].into_iter().collect()));
+        lod.cover(Some(FxHashSet::default()));
+        lod.prune_retiring();
+        assert!(lod.retiring.contains(&column), "waiting on summary ask");
+        assert!(lod.covered.contains(&column));
+
+        assert_eq!(lod.take_summary_asks(OBSERVE_AHEAD), [column]);
+        lod.summarizing.insert(column, 1);
+        lod.prune_retiring();
+        assert!(
+            lod.retiring.contains(&column),
+            "waiting on in-flight summary"
+        );
+        assert!(lod.covered.contains(&column));
+
+        lod.finish_observed(column, columns(95));
+        lod.prune_retiring();
+        assert!(!lod.retiring.contains(&column));
+        assert!(!lod.covered.contains(&column));
+        assert_eq!(lod.ready[&fine].surface(0).unwrap().height, 95);
+    }
+    /// Out-of-plan departing columns are not asked for summaries, and in-plan
+    /// asks drain within the caller's budget while deferred columns remain held
+    /// for subsequent ticks (and drop cleanly if a later replan removes them).
+    #[test]
+    fn summary_asks_filter_out_of_plan_columns_and_drain_within_budget() {
+        let mut lod = Lod::scheduler_for_test();
+        let fine = |x| TileKey { x, z: 0, level: 0 };
+        let planned: Vec<(i32, i32)> = (0..10).map(|x| (x, 0)).collect();
+        let out_of_plan = (20, 0);
+        let too_coarse_tile = TileKey {
+            x: 0,
+            z: 1,
+            level: 5,
+        };
+        let too_coarse_col = (0, 32);
+        {
+            let nodes = Arc::make_mut(&mut lod.plan.nodes);
+            nodes.extend(planned.iter().map(|&(x, _)| fine(x)));
+            nodes.insert(too_coarse_tile);
+        }
+        let all: FxHashSet<_> = planned
+            .iter()
+            .copied()
+            .chain([out_of_plan, too_coarse_col])
+            .collect();
+        lod.cover(Some(all));
+        lod.cover(Some(FxHashSet::default()));
+
+        assert!(!lod.summary_on_its_way(out_of_plan));
+        assert!(!lod.summary_on_its_way(too_coarse_col));
+        for &col in &planned {
+            assert!(lod.summary_on_its_way(col));
+        }
+
+        // First tick hands off at most `OBSERVE_AHEAD` columns; deferred ones
+        // stay queued and held in `retiring` without falling back to detail.
+        let first = lod.take_summary_asks(OBSERVE_AHEAD);
+        assert_eq!(first.len(), OBSERVE_AHEAD);
+        let first_set: FxHashSet<_> = first.iter().copied().collect();
+        assert_eq!(first_set.len(), OBSERVE_AHEAD);
+        let deferred: Vec<_> = planned
+            .iter()
+            .copied()
+            .filter(|col| !first_set.contains(col))
+            .collect();
+        assert_eq!(deferred.len(), 2);
+        for &col in &deferred {
+            assert!(lod.summary_on_its_way(col));
+        }
+        lod.prune_retiring();
+        for &col in &deferred {
+            assert!(lod.retiring.contains(&col), "deferred column stays held");
+        }
+        assert!(
+            retiring_detail(
+                &lod.plan,
+                &lod.retiring,
+                |col| lod.summary_on_its_way(col),
+                &lod.detail_masks,
+            )
+            .all(|key| !deferred.contains(&(key.x, key.z)))
+        );
+
+        // If one deferred column leaves the plan before the next tick, it is
+        // skipped and only the still-planned column is handed off.
+        Arc::make_mut(&mut lod.plan.nodes).remove(&fine(deferred[0].0));
+        let second = lod.take_summary_asks(OBSERVE_AHEAD);
+        assert_eq!(second, [deferred[1]]);
+        assert!(lod.take_summary_asks(OBSERVE_AHEAD).is_empty());
+        assert!(!lod.summary_on_its_way(deferred[0]));
+    }
+    /// A server's kept terrain is the summaries: every arriving chunk is
+    /// summarized as before, and nothing is asked when one leaves.
+    #[test]
+    fn sources_keeping_summaries_summarize_arrivals() {
+        let mut lod = Lod::scheduler_for_test();
+        lod.keeps_observed = true;
+        assert!(lod.summarizes_arrivals());
+        lod.cover(Some([(1, 0)].into_iter().collect()));
+        lod.cover(Some(FxHashSet::default()));
+        assert!(lod.take_summary_asks(OBSERVE_AHEAD).is_empty());
     }
     #[test]
     fn reduced_far_detail_only_merges_tiles_away_from_the_near_terrain() {

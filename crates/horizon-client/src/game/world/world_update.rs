@@ -112,7 +112,8 @@ impl Game<'_> {
             lod.set_looks(self.streaming.looks, self.streaming.nether_shading);
             lod.set_shader_pack(self.streaming.shader_pack);
             self.lod = Some(lod);
-            self.lod_observe.extend(self.world.chunks.keys().copied());
+            let resident: Vec<_> = self.world.chunks.keys().copied().collect();
+            self.lod_observe_later(resident);
         }
     }
     pub(in crate::game) fn update_world(&mut self) {
@@ -230,18 +231,34 @@ impl Game<'_> {
         for chunk in &unloaded {
             self.world.modified.unloaded(&(chunk.x, chunk.z));
         }
+        self.lod_observe_later(uploads.iter().map(|(key, _)| (key.0, key.2)));
         if let Some(lod) = &mut self.lod {
-            self.lod_observe
-                .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
             for chunk in &unloaded {
                 self.lod_observe.remove(&(chunk.x, chunk.z));
             }
             // Unloaded columns first (their summaries are all that remains),
-            // then a few resident ones (an edit copies a chunk the worker
-            // still holds). The worker summarizes them.
+            // then resident ones that left the full-detail area (their
+            // sections are held until their summary is drawn), then a few
+            // other resident ones (an edit copies a chunk the worker still
+            // holds). The worker summarizes them.
             horizon_client::spans::time("lod_observe", || {
                 for chunk in &unloaded {
                     lod.observe(chunk.clone(), self.res.facts());
+                }
+                let mut remaining =
+                    horizon_client::lod::OBSERVE_AHEAD.saturating_sub(lod.observing());
+                while remaining > 0 {
+                    let asks = lod.take_summary_asks(remaining);
+                    if asks.is_empty() {
+                        break;
+                    }
+                    for key in asks {
+                        if let Some(chunk) = self.world.chunks.get(&key) {
+                            self.lod_observe.remove(&key);
+                            lod.observe(chunk.clone(), self.res.facts());
+                            remaining -= 1;
+                        }
+                    }
                 }
                 while lod.observing() < horizon_client::lod::OBSERVE_AHEAD
                     && let Some(&key) = self.lod_observe.iter().next()
@@ -493,10 +510,7 @@ impl Game<'_> {
         if !spent.is_empty() {
             self.streaming.free(spent);
         }
-        if self.lod.is_some() {
-            self.lod_observe
-                .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
-        }
+        self.lod_observe_later(uploads.iter().map(|(key, _)| (key.0, key.2)));
         if let Some(renderer) = self.renderer.as_mut() {
             for (key, mesh) in &uploads {
                 renderer.upload(*key, mesh);
