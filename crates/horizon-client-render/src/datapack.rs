@@ -969,14 +969,13 @@ impl DataStore {
         s
     }
     /// `ServerFunctionLibrary.getTag`: only valid function tags expand
-    /// (nested tags included, each function once).
+    /// (nested tags included, each function once, each tag resolved once).
     pub fn tag_functions(&self, id: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut seen_fns = std::collections::HashSet::new();
-        let mut seen_tags = std::collections::HashSet::new();
         let invalid = self.invalid_function_tags(id);
-        self.expand(id, &mut out, &mut seen_fns, &mut seen_tags, &invalid);
-        out
+        self.expand(id, &invalid)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
     /// `TagLoader.tryBuildTag`: missing required members invalidate their tag and
     /// required parents. Optional invalid children contribute nothing.
@@ -1020,72 +1019,236 @@ impl DataStore {
         }
         invalid
     }
-    /// Depth-first walk keeping first-seen order. Each tag is expanded at most
-    /// once, so reference cycles end and nesting depth is not capped.
+    /// Expands a tag keeping first-seen order, as if every reference were expanded afresh
+    /// with the tags being expanded at that moment (the stack of open tags) disabled: a tag
+    /// that is open again contributes nothing, which ends reference cycles.
+    ///
+    /// The walk uses an explicit stack, so a long chain cannot overflow the call stack, and a
+    /// finished tag is remembered so that a shared tag is not walked again, with two limits:
+    /// - Only a tag that is on no cycle is remembered: its walk reaches no tag that can be
+    ///   open when it is asked for again (such a tag would reach it back), so its list is the
+    ///   same whenever it is built. A tag on a cycle (its list can be cut short by the tags
+    ///   open above it) is handed to the entry that asked for it and walked again by the
+    ///   next one.
+    /// - A remembered list is freed once its last reference has been applied (references are
+    ///   counted in a first pass), and what stays is charged by the storage it holds, capped
+    ///   at `cache_cap` list slots: a list that would pass the cap is not remembered, and
+    ///   its tag is walked again, so the result is the same, only slower.
+    ///
+    /// A walk of more than [`MAX_EXPAND_STEPS`] entries (only a crafted pack with cycles
+    /// gets there) is refused with a warning: the tag resolves to no functions.
     fn expand<'a>(
         &'a self,
-        id: &'a str,
-        out: &mut Vec<String>,
-        seen_fns: &mut std::collections::HashSet<&'a str>,
-        seen_tags: &mut std::collections::HashSet<&'a str>,
+        root: &'a str,
         invalid: &std::collections::HashSet<&'a str>,
-    ) {
-        if invalid.contains(id) || !seen_tags.insert(id) {
-            return;
+    ) -> Vec<&'a str> {
+        self.expand_with(root, invalid, MAX_RETAINED_TAG_MEMBERS)
+    }
+    fn expand_with<'a>(
+        &'a self,
+        root: &'a str,
+        invalid: &std::collections::HashSet<&'a str>,
+        cache_cap: usize,
+    ) -> Vec<&'a str> {
+        use std::collections::{HashMap, HashSet};
+        struct Frame<'a> {
+            id: &'a str,
+            entries: &'a [TagEntryOf],
+            next: usize,
+            out: Vec<&'a str>,
+            seen: HashSet<&'a str>,
         }
-        let Some(entries) = self.function_tags.get(id) else {
-            return;
-        };
-        for (e, required, remove) in entries {
+        struct Finished<'a> {
+            id: &'a str,
+            list: Vec<&'a str>,
+        }
+        // How many entries still have to read each tag's finished members, and which tags
+        // are on a cycle (Tarjan's strongly connected components, without recursion).
+        let mut refs: HashMap<&'a str, usize> = HashMap::new();
+        let mut cyclic: HashSet<&'a str> = HashSet::new();
+        if !invalid.contains(root)
+            && let Some(entries) = self.function_tags.get(root)
+        {
+            let mut index: HashMap<&'a str, usize> = HashMap::from([(root, 0)]);
+            let mut low: HashMap<&'a str, usize> = HashMap::from([(root, 0)]);
+            let mut members: Vec<&'a str> = vec![root];
+            let mut on_members: HashSet<&'a str> = HashSet::from([root]);
+            let mut calls: Vec<(&'a str, &'a [TagEntryOf], usize)> = vec![(root, entries, 0)];
+            while let Some(top) = calls.last_mut() {
+                let (tag, entries, at) = (top.0, top.1, top.2);
+                top.2 += 1;
+                let Some((e, _, _)) = entries.get(at) else {
+                    calls.pop();
+                    if low[tag] == index[tag] {
+                        let mut component = Vec::new();
+                        while let Some(n) = members.pop() {
+                            on_members.remove(n);
+                            component.push(n);
+                            if n == tag {
+                                break;
+                            }
+                        }
+                        if component.len() > 1 {
+                            cyclic.extend(component);
+                        }
+                    }
+                    if let Some(&(parent, _, _)) = calls.last() {
+                        let lowest = low[parent].min(low[tag]);
+                        low.insert(parent, lowest);
+                    }
+                    continue;
+                };
+                let Some(inner) = e.strip_prefix('#').filter(|inner| !invalid.contains(inner))
+                else {
+                    continue;
+                };
+                let Some(inner_entries) = self.function_tags.get(inner) else {
+                    continue;
+                };
+                *refs.entry(inner).or_default() += 1;
+                if inner == tag {
+                    cyclic.insert(tag);
+                } else if let Some(&seen_at) = index.get(inner) {
+                    if on_members.contains(inner) {
+                        let lowest = low[tag].min(seen_at);
+                        low.insert(tag, lowest);
+                    }
+                } else {
+                    let n = index.len();
+                    index.insert(inner, n);
+                    low.insert(inner, n);
+                    members.push(inner);
+                    on_members.insert(inner);
+                    calls.push((inner, inner_entries, 0));
+                }
+            }
+        }
+        let mut done: HashMap<&'a str, Vec<&'a str>> = HashMap::new();
+        let mut retained = 0usize;
+        // Open tags and where they are on the stack.
+        let mut open: HashMap<&'a str, usize> = HashMap::new();
+        let mut stack: Vec<Frame<'a>> = Vec::new();
+        let start =
+            |id: &'a str, stack: &mut Vec<Frame<'a>>, open: &mut HashMap<&'a str, usize>| {
+                if let Some(entries) = self.function_tags.get(id) {
+                    open.insert(id, stack.len());
+                    stack.push(Frame {
+                        id,
+                        entries,
+                        next: 0,
+                        out: Vec::new(),
+                        seen: HashSet::new(),
+                    });
+                }
+            };
+        if !invalid.contains(root) {
+            start(root, &mut stack, &mut open);
+        }
+        let mut finished: Option<Finished<'a>> = None;
+        let mut steps = 0usize;
+        let mut result = Vec::new();
+        while let Some(frame) = stack.last_mut() {
+            let Some((e, _required, remove)) = frame.entries.get(frame.next) else {
+                let frame = stack.pop().expect("frame was just borrowed");
+                open.remove(frame.id);
+                if stack.is_empty() {
+                    result = frame.out;
+                } else {
+                    finished = Some(Finished {
+                        id: frame.id,
+                        list: frame.out,
+                    });
+                }
+                continue;
+            };
+            steps += 1;
+            if steps > MAX_EXPAND_STEPS {
+                log::warn!(
+                    "Horizon: function tag {root} takes more than {MAX_EXPAND_STEPS} steps to \
+                     expand; it resolves to no functions"
+                );
+                return Vec::new();
+            }
+            let inner = e.strip_prefix('#').filter(|inner| !invalid.contains(inner));
+            let mut taken: Option<Finished<'a>> = None;
+            if let Some(inner) = inner {
+                if finished.as_ref().is_some_and(|f| f.id == inner) {
+                    taken = finished.take();
+                } else if open.contains_key(inner) {
+                    // Open again: contributes nothing.
+                } else if !done.contains_key(inner) && self.function_tags.contains_key(inner) {
+                    // Expand the child first; this entry is revisited afterwards.
+                    start(inner, &mut stack, &mut open);
+                    continue;
+                }
+            }
+            let members: &[&'a str] = match (&taken, inner) {
+                (Some(f), _) => &f.list,
+                (None, Some(inner)) => done.get(inner).map_or(&[], Vec::as_slice),
+                (None, None) => &[],
+            };
             // A removal (a `remove` list's entry, after the file's values)
             // takes an id or a tag's members out of the set built so far; it
             // is optional: an unknown id removes nothing and never
             // invalidates the tag.
             if *remove {
-                match e.strip_prefix('#') {
-                    Some(inner) => {
-                        let mut members = Vec::new();
-                        self.expand(
-                            inner,
-                            &mut members,
-                            &mut Default::default(),
-                            seen_tags,
-                            invalid,
-                        );
-                        out.retain(|f| !members.contains(f));
-                        seen_fns.retain(|f| !members.iter().any(|member| member.as_str() == *f));
-                    }
-                    None => {
-                        out.retain(|f| f.as_str() != e.as_str());
-                        seen_fns.remove(e.as_str());
+                if e.starts_with('#') {
+                    let gone: HashSet<&str> = members.iter().copied().collect();
+                    frame.out.retain(|f| !gone.contains(f));
+                    frame.seen.retain(|f| !gone.contains(f));
+                } else if frame.seen.remove(e.as_str()) {
+                    frame.out.retain(|f| *f != e.as_str());
+                }
+            } else if e.starts_with('#') {
+                for &member in members {
+                    if frame.seen.insert(member) {
+                        frame.out.push(member);
                     }
                 }
-                continue;
+            } else if let Some((key, _)) = self.functions.get_key_value(e)
+                && frame.seen.insert(key)
+            {
+                frame.out.push(key);
             }
-            let _ = required;
-            match e.strip_prefix('#') {
-                Some(inner) => {
-                    let mut members = Vec::new();
-                    let mut member_ids = Default::default();
-                    self.expand(inner, &mut members, &mut member_ids, seen_tags, invalid);
-                    for member in members {
-                        if let Some(&id) = member_ids.get(member.as_str())
-                            && seen_fns.insert(id)
-                        {
-                            out.push(member);
-                        }
+            frame.next += 1;
+            // The last entry that reads a tag's members frees them; until then they are kept
+            // when they fit the cache.
+            let Some(inner) = inner else { continue };
+            let left = refs.get_mut(inner).map(|n| {
+                *n = n.saturating_sub(1);
+                *n
+            });
+            match taken {
+                Some(Finished { mut list, .. })
+                    if !cyclic.contains(inner) && left.is_some_and(|n| n > 0) =>
+                {
+                    // `retain` leaves the allocation; the cache is charged what it holds.
+                    list.shrink_to_fit();
+                    if retained + list.capacity() <= cache_cap {
+                        retained += list.capacity();
+                        done.insert(inner, list);
                     }
                 }
+                Some(_) => {}
                 None => {
-                    if self.functions.contains_key(e) && seen_fns.insert(e) {
-                        out.push(e.clone());
+                    if left == Some(0)
+                        && let Some(list) = done.remove(inner)
+                    {
+                        retained -= list.capacity();
                     }
                 }
             }
         }
-        seen_tags.remove(id);
+        result
     }
 }
+/// Most list slots the expansion of one function tag keeps for tags still to be read (4 Mi,
+/// 64 MiB): real tags keep a few; only a crafted pack gets near it. Past it a list is not kept
+/// and its tag is walked again.
+const MAX_RETAINED_TAG_MEMBERS: usize = 1 << 22;
+/// Most tag entries one expansion walks (8 Mi). Real packs walk thousands; only cycles that
+/// make shared tags depend on the open tags need more than a few times the entries.
+const MAX_EXPAND_STEPS: usize = 1 << 23;
 fn normalize(id: &str) -> String {
     if id.contains(':') {
         id.to_owned()
@@ -1957,6 +2120,234 @@ mod tests {
             .function_tags
             .insert("d:40".into(), vec![("t:deep".into(), true, false)]);
         assert_eq!(store.tag_functions("d:0"), ["t:deep"]);
+    }
+
+    #[test]
+    fn tag_resolution_expands_shared_tags_once_and_survives_long_chains() {
+        let mut store = DataStore::default();
+        for id in ["t:a", "t:b", "t:leaf"] {
+            store.functions.insert(
+                id.into(),
+                Function {
+                    id: id.into(),
+                    lines: Vec::new(),
+                    parameters: Vec::new(),
+                },
+            );
+        }
+        // Each level includes the next one twice: 2^24 visits without memoising.
+        for i in 0..24 {
+            let next = (format!("#d:{}", i + 1), true, false);
+            store
+                .function_tags
+                .insert(format!("d:{i}"), vec![next.clone(), next]);
+        }
+        store.function_tags.insert(
+            "d:24".into(),
+            vec![("t:leaf".into(), true, false), ("t:a".into(), true, false)],
+        );
+        let start = std::time::Instant::now();
+        assert_eq!(store.tag_functions("d:0"), ["t:leaf", "t:a"]);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        // A shared tag keeps working for a later removal of its members.
+        store.function_tags.insert(
+            "s:shared".into(),
+            vec![("t:a".into(), true, false), ("t:b".into(), true, false)],
+        );
+        store.function_tags.insert(
+            "s:top".into(),
+            vec![
+                ("#s:shared".into(), true, false),
+                ("#s:shared".into(), true, true),
+                ("t:b".into(), true, false),
+            ],
+        );
+        assert_eq!(store.tag_functions("s:top"), ["t:b"]);
+        // A chain far deeper than any thread stack could recurse through.
+        for i in 0..200_000 {
+            store.function_tags.insert(
+                format!("c:{i:06}"),
+                vec![(format!("#c:{:06}", i + 1), true, false)],
+            );
+        }
+        store
+            .function_tags
+            .insert("c:200000".into(), vec![("t:leaf".into(), true, false)]);
+        assert_eq!(store.tag_functions("c:000000"), ["t:leaf"]);
+    }
+
+    /// Every tag adds a function and includes the next: finished lists must not pile up.
+    #[test]
+    fn a_chain_of_tags_that_each_add_a_function_resolves_in_order() {
+        const N: usize = 3_000;
+        let mut store = DataStore::default();
+        for i in 0..N {
+            let id = format!("f:{i}");
+            store.functions.insert(
+                id.clone(),
+                Function {
+                    id,
+                    lines: Vec::new(),
+                    parameters: Vec::new(),
+                },
+            );
+            let mut entries = vec![(format!("f:{i}"), true, false)];
+            if i + 1 < N {
+                entries.push((format!("#c:{}", i + 1), true, false));
+            }
+            store.function_tags.insert(format!("c:{i}"), entries);
+        }
+        let got = store.tag_functions("c:0");
+        let want: Vec<String> = (0..N).map(|i| format!("f:{i}")).collect();
+        assert_eq!(got, want);
+        // A root that reads the last 200 levels one after the other (each is a suffix of the
+        // first) resolves to the same functions in first-seen order.
+        let all: Vec<TagEntryOf> = (0..200)
+            .map(|i| (format!("#c:{}", N - 200 + i), true, false))
+            .collect();
+        store.function_tags.insert("all".into(), all);
+        let got = store.tag_functions("all");
+        let want: Vec<String> = (N - 200..N).map(|i| format!("f:{i}")).collect();
+        assert_eq!(got, want);
+    }
+
+    /// Every reference expanded afresh with the open tags disabled: what a cached list must equal.
+    fn expanded_afresh(
+        store: &DataStore,
+        tag: &str,
+        open: &mut Vec<String>,
+        invalid: &std::collections::HashSet<&str>,
+    ) -> Vec<String> {
+        let Some(entries) = store.function_tags.get(tag) else {
+            return Vec::new();
+        };
+        if invalid.contains(tag) || open.iter().any(|o| o == tag) {
+            return Vec::new();
+        }
+        open.push(tag.to_owned());
+        let mut out: Vec<String> = Vec::new();
+        for (entry, _, remove) in entries {
+            if let Some(inner) = entry.strip_prefix('#') {
+                let members = if invalid.contains(inner) {
+                    Vec::new()
+                } else {
+                    expanded_afresh(store, inner, open, invalid)
+                };
+                if *remove {
+                    out.retain(|f| !members.contains(f));
+                } else {
+                    for member in members {
+                        if !out.contains(&member) {
+                            out.push(member);
+                        }
+                    }
+                }
+            } else if *remove {
+                out.retain(|f| f != entry);
+            } else if store.functions.contains_key(entry) && !out.contains(entry) {
+                out.push(entry.clone());
+            }
+        }
+        open.pop();
+        out
+    }
+
+    /// Tags that reach each other, shared tags read by several parents and removals of tags: the
+    /// cached expansion gives what expanding every reference afresh gives, whatever the cache
+    /// holds (nothing, a few lists, all of them).
+    #[test]
+    fn cached_tag_expansion_matches_expanding_every_reference_afresh() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |n: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % n
+        };
+        for _ in 0..600 {
+            let mut store = DataStore::default();
+            for i in 0..4 {
+                let id = format!("f:{i}");
+                store.functions.insert(
+                    id.clone(),
+                    Function {
+                        id,
+                        lines: Vec::new(),
+                        parameters: Vec::new(),
+                    },
+                );
+            }
+            for t in 0..6 {
+                let entries: Vec<TagEntryOf> = (0..next(6))
+                    .map(|_| {
+                        // `f:4` and `t:6` are never defined.
+                        let id = if next(5) < 2 {
+                            format!("f:{}", next(5))
+                        } else {
+                            format!("#t:{}", next(7))
+                        };
+                        (id, next(6) != 0, next(4) == 0)
+                    })
+                    .collect();
+                store.function_tags.insert(format!("t:{t}"), entries);
+            }
+            for root in 0..6 {
+                let root = format!("t:{root}");
+                let invalid = store.invalid_function_tags(&root);
+                let want = expanded_afresh(&store, &root, &mut Vec::new(), &invalid);
+                for cap in [0, 1, 2, 3, 5, 8, usize::MAX] {
+                    assert_eq!(
+                        store.expand_with(&root, &invalid, cap),
+                        want,
+                        "{root} with room for {cap}: {:?}",
+                        store.function_tags
+                    );
+                }
+            }
+        }
+    }
+
+    /// A list reused later, in a removal, while a cycle cut it short on its first walk.
+    #[test]
+    fn a_tag_cut_by_an_open_ancestor_is_not_reused_as_whole() {
+        let mut store = DataStore::default();
+        for id in ["f:1", "f:2", "f:3"] {
+            store.functions.insert(
+                id.into(),
+                Function {
+                    id: id.into(),
+                    lines: Vec::new(),
+                    parameters: Vec::new(),
+                },
+            );
+        }
+        let entry = |id: &str, remove: bool| (id.to_owned(), true, remove);
+        // `x` reaches `y`, which reaches `x` again: under `y` it is cut and gives [f:1].
+        store.function_tags.insert(
+            "t:y".into(),
+            vec![entry("#t:x", false), entry("f:2", false)],
+        );
+        store.function_tags.insert(
+            "t:x".into(),
+            vec![
+                entry("f:1", false),
+                entry("#t:y", false),
+                entry("f:3", false),
+            ],
+        );
+        store.function_tags.insert(
+            "t:root".into(),
+            vec![
+                entry("#t:y", false),
+                entry("#t:x", true),
+                entry("f:1", false),
+            ],
+        );
+        let invalid = store.invalid_function_tags("t:root");
+        let want = expanded_afresh(&store, "t:root", &mut Vec::new(), &invalid);
+        assert_eq!(store.tag_functions("t:root"), want);
+        // Reusing `x`'s first, cut list [f:1, f:3] would leave f:2 in front.
+        assert_eq!(want, ["f:1"]);
     }
 
     #[test]

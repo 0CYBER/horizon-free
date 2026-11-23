@@ -132,6 +132,10 @@ impl TimerQueue {
 #[derive(Default)]
 pub(super) struct FnState {
     pub store: DataStore,
+    /// The `#minecraft:tick` functions, resolved once per store (`ServerFunctionManager`
+    /// keeps `ticking` from the last reload): `None` until the first tick after the store was
+    /// replaced.
+    ticking: Option<Arc<[String]>>,
     packs: Vec<Arc<DataPack>>,
     /// Enabled pack ids, in load order (later overrides earlier).
     enabled: Vec<String>,
@@ -144,6 +148,21 @@ pub(super) struct FnState {
     schedule_loaded: bool,
     /// A dedicated server's `function-permission-level`.
     pub permission: Option<u8>,
+}
+impl FnState {
+    /// Installs a reloaded store; what was resolved from the old one is dropped.
+    fn replace_store(&mut self, store: DataStore) {
+        self.store = store;
+        self.ticking = None;
+    }
+    /// The functions of `#minecraft:tick`, resolved when first asked for after a reload.
+    fn ticking(&mut self) -> Arc<[String]> {
+        let store = &self.store;
+        Arc::clone(
+            self.ticking
+                .get_or_insert_with(|| store.tag_functions("minecraft:tick").into()),
+        )
+    }
 }
 /// What a function reported through `return`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -528,7 +547,7 @@ impl Game<'_> {
         for (id, e) in &store.errors {
             log::warn!("Horizon: failed to load function {id}: {e}");
         }
-        self.fns.store = store;
+        self.fns.replace_store(store);
         self.sync_function_registries(stack);
     }
     /// The item and block tags the world's packs define, as `TagLoader` binds
@@ -728,8 +747,8 @@ impl Game<'_> {
                 self.run_function_by_id(&f, None, source);
             }
         }
-        for f in self.fns.store.tag_functions("minecraft:tick") {
-            self.run_function_by_id(&f, None, source);
+        for f in self.fns.ticking().iter() {
+            self.run_function_by_id(f, None, source);
         }
     }
     /// `ServerLevel.tickTime`'s `getScheduledEvents().tick`: the scheduled
@@ -3821,6 +3840,37 @@ mod required_tag_tests {
             assert_eq!(game.world.game_time, clock);
             std::fs::remove_dir_all(dir).unwrap();
         });
+    }
+
+    #[test]
+    fn the_tick_tag_is_resolved_once_per_loaded_store() {
+        let function = |id: &str| Function {
+            id: id.into(),
+            lines: Vec::new(),
+            parameters: Vec::new(),
+        };
+        let store_with = |ids: &[&str]| {
+            let mut store = DataStore::default();
+            for id in ids {
+                store.functions.insert((*id).into(), function(id));
+            }
+            store.function_tags.insert(
+                "minecraft:tick".into(),
+                ids.iter().map(|id| ((*id).to_owned(), true, false)).collect(),
+            );
+            store
+        };
+        let mut fns = FnState::default();
+        fns.replace_store(store_with(&["t:a"]));
+        assert_eq!(&*fns.ticking(), ["t:a"]);
+        // Later ticks read the list resolved at the load, not the store's tag again...
+        fns.store.function_tags.clear();
+        for _ in 0..3 {
+            assert_eq!(&*fns.ticking(), ["t:a"]);
+        }
+        // ...until a reload replaces the store.
+        fns.replace_store(store_with(&["t:b", "t:c"]));
+        assert_eq!(&*fns.ticking(), ["t:b", "t:c"]);
     }
 
     #[test]
