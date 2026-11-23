@@ -403,6 +403,7 @@ async fn setup_keyed(
         update_key: update_key.map(<[u8]>::to_vec),
         scratch,
         database: ":memory:".into(),
+        trust_proxy: false,
     };
     let client = Client {
         app: router(App::new(config).unwrap()),
@@ -789,6 +790,7 @@ async fn a_submission_comes_from_the_sites_own_pages() {
                 update_key: None,
                 scratch: std::env::temp_dir().join("horizon-mod-registry-test"),
                 database: ":memory:".into(),
+                trust_proxy: false,
             })
             .unwrap(),
         )
@@ -1302,6 +1304,46 @@ async fn an_owner_edits_the_page_without_a_version() {
     let csrf = client.sign_in().await;
     let (status, json) = edit(&mut client, &csrf, |f| f["tags"] = json!(["x"])).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+}
+
+/// The limits count the TCP peer unless the service is told a proxy fronts it: a client reaching
+/// it directly cannot dodge its per-address cap by sending its own `CF-Connecting-IP`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forged_client_address_does_not_dodge_the_poll_limit() {
+    let (client, _) = setup().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            client
+                .app
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let statuses = tokio::task::spawn_blocking(move || {
+        // A malformed base answers 400 once the limit let the request in.
+        (0..125)
+            .map(|n| {
+                let response = ureq::get(&format!(
+                    "http://{at}/api/native-builds?base=x&target=t&key=k"
+                ))
+                .set("CF-Connecting-IP", &format!("198.51.100.{n}"))
+                .call();
+                match response {
+                    Ok(r) => r.status(),
+                    Err(ureq::Error::Status(code, _)) => code,
+                    Err(e) => panic!("{e}"),
+                }
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap();
+    assert!(statuses[..120].iter().all(|s| *s == 400), "{statuses:?}");
+    assert!(statuses[120..].iter().all(|s| *s == 429), "{statuses:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -11,11 +11,11 @@ pub mod page;
 pub mod ratings;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::Body,
     extract::{
-        DefaultBodyLimit, FromRequest, Multipart, Path as UrlPath, Query, Request, State,
-        multipart::MultipartError,
+        ConnectInfo, DefaultBodyLimit, FromRequest, Multipart, Path as UrlPath, Query, Request,
+        State, multipart::MultipartError,
     },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
@@ -35,6 +35,7 @@ use serde_json::json;
 use sha2::Sha256;
 use std::{
     collections::{HashMap, VecDeque},
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -80,13 +81,16 @@ pub struct Config {
     pub scratch: PathBuf,
     /// The ratings' SQLite file (a volume): `:memory:` keeps them in memory.
     pub database: PathBuf,
+    /// `REGISTRY_TRUST_PROXY=1`: the service is only reachable through a proxy that overwrites
+    /// `CF-Connecting-IP`, so the client's address is read from the headers. Off: the TCP peer.
+    pub trust_proxy: bool,
 }
 
 impl Config {
     /// `REGISTRY_PUBLIC_URL`, `REGISTRY_SESSION_KEY`, `REGISTRY_REPO`,
     /// `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_BOT_TOKEN`,
     /// `REGISTRY_UPDATE_KEY` (optional), `REGISTRY_DB` (default
-    /// `/data/registry.sqlite3`).
+    /// `/data/registry.sqlite3`), `REGISTRY_TRUST_PROXY` (`1` behind a proxy).
     pub fn from_env() -> Result<Config, String> {
         let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is not set"));
         let key = var("REGISTRY_SESSION_KEY")?;
@@ -114,6 +118,7 @@ impl Config {
             scratch: std::env::temp_dir().join("horizon-mod-registry"),
             database: std::env::var_os("REGISTRY_DB")
                 .map_or_else(|| PathBuf::from("/data/registry.sqlite3"), PathBuf::from),
+            trust_proxy: std::env::var("REGISTRY_TRUST_PROXY").is_ok_and(|v| v == "1"),
         })
     }
 
@@ -1211,25 +1216,32 @@ pub fn publish(
     Ok(url)
 }
 
-/// The client's address as the proxy in front of the service saw it: Cloudflare's `CF-Connecting-IP`
-/// (its edge overwrites one a client sends), else the last `X-Forwarded-For` hop (the one the proxy
-/// appended). The first hop is whatever the
-/// client sent, so a limit keyed on it could be dodged by changing the header.
-fn client_ip(headers: &HeaderMap) -> String {
-    let real = headers
-        .get("cf-connecting-ip")
-        .and_then(|v| v.to_str().ok());
+/// The client's address, for the rate limits. Behind a proxy (`trust_proxy`) the TCP peer is the
+/// proxy, so it is Cloudflare's `CF-Connecting-IP` (its edge overwrites one a client sends), else
+/// the last `X-Forwarded-For` hop (the one the proxy appended; the first is whatever the client
+/// sent). Otherwise the headers are the client's own and only the TCP peer counts.
+fn client_ip(config: &Config, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     let forwarded = || {
-        headers
-            .get_all("x-forwarded-for")
-            .iter()
-            .filter_map(|v| v.to_str().ok())
-            .flat_map(|v| v.split(','))
-            .last()
+        let real = headers
+            .get("cf-connecting-ip")
+            .and_then(|v| v.to_str().ok());
+        let hops = || {
+            headers
+                .get_all("x-forwarded-for")
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .flat_map(|v| v.split(','))
+                .last()
+        };
+        real.or_else(hops)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
     };
-    real.or_else(forwarded)
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
+    config
+        .trust_proxy
+        .then(forwarded)
+        .flatten()
+        .or_else(|| peer.map(|p| p.ip().to_string()))
         .unwrap_or_else(|| "anonymous".to_string())
 }
 
@@ -1272,11 +1284,16 @@ pub struct NativeBuildQuery {
 
 async fn request_native_build(
     State(app): State<App>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(payload): Json<NativeBuildRequest>,
 ) -> Result<Json<serde_json::Value>, Refusal> {
     let inner = app.0.clone();
-    let ip = client_ip(&headers);
+    let ip = client_ip(
+        &inner.config,
+        &headers,
+        peer.map(|Extension(ConnectInfo(a))| a),
+    );
     if !allow(
         &inner.build_windows,
         &ip,
@@ -1432,12 +1449,17 @@ async fn request_native_build(
 
 async fn get_native_build(
     State(app): State<App>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Query(query): Query<NativeBuildQuery>,
 ) -> Result<Json<serde_json::Value>, Refusal> {
     if !allow(
         &app.0.poll_windows,
-        &client_ip(&headers),
+        &client_ip(
+            &app.0.config,
+            &headers,
+            peer.map(|Extension(ConnectInfo(a))| a),
+        ),
         POLLS_PER_ADDRESS,
         POLLS_PER_HOUR,
     ) {
@@ -1534,6 +1556,7 @@ mod tests {
             update_key: None,
             scratch: PathBuf::from("/tmp/horizon-mod-registry-test"),
             database: PathBuf::from(":memory:"),
+            trust_proxy: false,
         };
         let branch = "submit/example-1.0.0";
         let login = "12345678901";
@@ -1646,12 +1669,34 @@ mod tests {
 
     #[test]
     fn a_client_cannot_pick_its_own_rate_limit_address() {
+        let config = |trust_proxy| Config {
+            public_url: "https://example.invalid".into(),
+            session_key: Vec::new(),
+            github: GitHub::new(
+                github::Endpoints::default(),
+                "owner/repo".into(),
+                "client".into(),
+                "secret".into(),
+                "token".into(),
+            ),
+            update_key: None,
+            scratch: PathBuf::new(),
+            database: PathBuf::from(":memory:"),
+            trust_proxy,
+        };
+        let peer = Some("192.0.2.1:5000".parse().unwrap());
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "1.2.3.4, 203.0.113.9".parse().unwrap());
-        assert_eq!(client_ip(&headers), "203.0.113.9");
         headers.insert("cf-connecting-ip", "198.51.100.7".parse().unwrap());
-        assert_eq!(client_ip(&headers), "198.51.100.7");
-        assert_eq!(client_ip(&HeaderMap::new()), "anonymous");
+        // Reached directly, the headers are the client's own: only the TCP peer counts.
+        assert_eq!(client_ip(&config(false), &headers, peer), "192.0.2.1");
+        assert_eq!(client_ip(&config(false), &headers, None), "anonymous");
+        // Behind the proxy, the address it wrote.
+        let behind = config(true);
+        assert_eq!(client_ip(&behind, &headers, peer), "198.51.100.7");
+        headers.remove("cf-connecting-ip");
+        assert_eq!(client_ip(&behind, &headers, peer), "203.0.113.9");
+        assert_eq!(client_ip(&behind, &HeaderMap::new(), peer), "192.0.2.1");
     }
 
     #[test]

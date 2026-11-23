@@ -80,6 +80,7 @@ REGISTRY_PUBLIC_URL=http://localhost:4173 REGISTRY_SESSION_KEY=... GITHUB_CLIENT
 | `PORT` | Default 8080 |
 
 | `HOST` | Default `0.0.0.0` |
+| `REGISTRY_TRUST_PROXY` | `1` behind a proxy that overwrites `CF-Connecting-IP` (the Cloudflare Tunnel): the per-address limits then count that header (else the last `X-Forwarded-For` hop). Unset, the TCP peer counts and the headers are ignored, so a service reachable directly can't have its limits dodged. Behind a proxy without it, every client shares the proxy's address |
 
 Production runs on Ludovic's home server **ludothinkpad** (NixOS) since 2026-11-22, next to the website, declared in
 `nixos/ludothinkpad/horizon.nix` of ludovic111/LifeOS: the system service `horizon-registry` (user `horizon`, a
@@ -92,5 +93,5 @@ goes live** when it changes a path in `deploy.json` (`watchPatterns`): the host'
 build script reads the game's hook sources and that inventory, and `horizon-mod-package` includes that patch),
 restarts the service, checks `/healthz` and rolls back if it fails. The `Dockerfile` builds the same thing as an image
 (the `mod-registry` workflow checks it). Secrets are one environment file in 1Password (Agents, `Horizon host env
-registry`), written to the host by `horizon-secrets registry`. The client address for limits is Cloudflare's
-`CF-Connecting-IP`.
+registry`), written to the host by `horizon-secrets registry`. The service sets `REGISTRY_TRUST_PROXY=1`, so the client
+address for limits is Cloudflare's `CF-Connecting-IP`.
