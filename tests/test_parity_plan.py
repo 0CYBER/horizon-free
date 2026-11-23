@@ -129,6 +129,33 @@ class HostedTests(unittest.TestCase):
                          {"music": "no sounds", "datafix#1": "known failing: #1: worlds",
                           "datafix#2": "known failing: #1: worlds", "lan": "named only: slow"})
 
+    def test_main_runs_keep_the_known_failing_in_but_not_what_hosted_runners_cannot_run(self):
+        config = {"hosts": {"hosted": {"exclude": {"datafix": "old worlds"}}},
+                  "known_failing": {"datafix": "#1: worlds", "sculk": "#2: orbs", "save_roundtrip": "#3: keys"},
+                  "local_only": {"save_roundtrip": "vscreen"}, "named_only": {"lan": "slow"}}
+        names = ["food", "sculk", "datafix#1", "save_roundtrip", "lan"]
+        self.assertEqual(parity_plan.hosted_left_out(names, config, known_failing=True),
+                         {"datafix#1": "old worlds", "save_roundtrip": "local only: vscreen", "lan": "named only: slow"})
+        self.assertEqual(parity_plan.hosted_left_out(names, config)["sculk"], "known failing: #2: orbs")
+
+    def test_the_known_failing_flag_reaches_the_hosted_selection(self):
+        config = {"known_failing": {"sculk": "#2: orbs"}}
+        # A new left-out dict per call: main adds to the one selection returns.
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity_plan, "selection", side_effect=lambda _: (["food", "sculk"], {})), \
+                mock.patch.object(parity, "host_config", return_value=config), \
+                mock.patch.object(parity, "load_state", return_value={"harnesses": {}}), \
+                mock.patch.object(parity_plan, "artifacts", return_value=[WORLD]), mock.patch("builtins.print"):
+            path = Path(temp) / "plan.json"
+            planned = {}
+            for flags in ([], ["--known-failing"]):
+                self.assertEqual(parity_plan.main(["--hosted", *flags, "--plan", str(path), "--", "--all"]), 0)
+                planned[bool(flags)] = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(planned[False]["shards"][0]["harnesses"], ["food"])
+        self.assertEqual(planned[False]["left_out"], {"sculk": "known failing: #2: orbs"})
+        self.assertEqual(planned[True]["shards"][0]["harnesses"], ["food", "sculk"])
+        self.assertEqual(planned[True]["left_out"], {})
+
     def test_the_repositorys_hosted_excludes_name_real_harnesses(self):
         found = {parity.base_name(name) for name in parity.harnesses()}
         excluded = parity.host_config()["hosts"]["hosted"]["exclude"]

@@ -73,7 +73,8 @@ alone, with a warning. The check is still reported on the head.
 
 Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
-**Hosted parity.** A maintainer can also run harnesses on Blacksmith's runners, away from the Mac mini:
+**Hosted parity.** A push to main runs the full hosted selection on Blacksmith's runners, away from the Mac mini,
+at most every 3 hours, and a maintainer can run harnesses there too:
 `gh workflow run parity-hosted.yml --ref <branch> -f harnesses="..."`, or `-f base=<commit>` for what the branch's
 changes reach. The data comes encrypted from the maintainers' private `horizon-rust/vanilla-data`. The only thing
 that leaves the runner is the harness logs: the first-attempt and failure logs, holding compared values, log tails and

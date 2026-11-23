@@ -146,15 +146,37 @@ of the game, the server and the bots took 9 minutes on 2026-11-22, and comparing
 ## Hosted parity
 
 `.github/workflows/parity-hosted.yml` runs vanilla harnesses on Blacksmith's 16-vCPU runners, outside the Mac mini.
-For now a maintainer starts it by hand (`workflow_dispatch` only). It is advisory: no required check waits for it,
-and its jobs are named `hosted parity …` so nobody mistakes them for the Mac's `parity / parity`. The job to read is
+A push to main starts it for every harness hosted runners can run, that commit alone (not merged with a newer
+main), at most every 3 hours, and a maintainer can start it by hand. It is advisory: no required check waits for
+it, and its jobs are named `hosted parity …` so nobody mistakes them for the Mac's `parity / parity`. The job to read is
 `hosted parity (advisory)`: it fails when a shard failed, when the plan failed, and when the run had no access to
 the data ("hosted parity did not run: no access to the data"). It passes only when every shard passed, or when the
 plan had nothing to run.
 
+- **Main's runs, one at a time.** Pushes to main share one concurrency group that never cancels a run in progress.
+  Of the runs waiting, GitHub keeps only the newest. A hand-started run has a group of its own. There is no
+  schedule: a scheduled event carries no repository object, which the cache gate and the trusted commit read.
+- **Spacing.** A push runs in full only when main's last full push run started at least 3 hours ago, about 8 a day.
+  Otherwise its first job, `hosted parity spacing`, ends it: `hosted parity (advisory)` passes with one line saying
+  when the last full run started and after when the next push runs in full, and leaves no verdict. A full push run
+  uploads a `parity-hosted-full-start` artifact (kept a day). The spacing job reads the newest one whose run the
+  runs API names as this workflow file's, on a push to main of this repository (another workflow's marker holds
+  nothing back), with `actions: read`, the only permission any job has beyond `contents: read`; it checks nothing
+  out, restores nothing and holds no secret. What it cannot read skips the run. A hand start (`-f full=true`, as the
+  Nightly cut uses) is never spaced.
+- **The verdict.** `hosted parity (advisory)` ends with the tested commit, the harnesses planned, passed and failed
+  (by name), those that passed only on retry, did not finish, or were left out (with why, as one escaped line), and
+  the known failing ones that failed again, passed in every harness or shard they cover (those can come off
+  `known_failing` once parity-main agrees, shards left out of the plan included), or passed where run but not in all
+  of them. When shards ran, it passes only with every shard's results downloaded and a result for every planned
+  harness; otherwise it fails as incomplete, naming what is missing. The same is in the `parity-hosted-verdict`
+  artifact (`verdict.json`, kept 30 days) and on one `parity-hosted-verdict {...}` line of the job's log. Main's
+  verdict is the run whose `event` is `push` and `selection` is `full`.
+
 ```sh
 gh workflow run parity-hosted.yml --ref <branch> -f harnesses="food light spawn_loot"   # these, by name
 gh workflow run parity-hosted.yml --ref <branch> -f base=<commit>                       # what the branch's changes reach
+gh workflow run parity-hosted.yml --ref <branch> -f full=true                           # everything, as main's pushes
 ```
 
 - **The game's data.** Horizon's code never downloads the game. The data comes from `horizon-rust/vanilla-data`, a
@@ -190,7 +212,7 @@ gh workflow run parity-hosted.yml --ref <branch> -f base=<commit>               
   - The dataset's encrypted chunks, as they are. The fetch script takes them only when they are plain files that
     match the MANIFEST it reads from `horizon-rust/vanilla-data` each run, and downloads the dataset otherwise.
   - Sealed by `tools/ci/sealed-cache.sh`: the build folders (`.local/parity-target`, `target/`, one entry per probe
-    group, keyed by the toolchain and `Cargo.lock`), the prepared resources, and the oracle results with the
+    group, keyed by the toolchain and the UTC week), the prepared resources, and the oracle results with the
     parity state. Sealing is tar, zstd, the dataset's own encryption (AES-256-CBC, PBKDF2), then HMAC-SHA256 with
     a second key derived from the passphrase, over the entry's kind, its full cache key and the ciphertext.
     Sealing takes folders and regular files only: symbolic links stay out (each run makes its own again: the
@@ -225,13 +247,23 @@ gh workflow run parity-hosted.yml --ref <branch> -f base=<commit>               
     compared with it, as in `parity.yml`.
   - Each shard runs on a `run` runner with Xvfb and Mesa's software Vulkan (lavapipe), as playhorizon has. The oracle
     cache is created before the harnesses start, since shims that create it at once can fail.
-  - `hosted parity (advisory)` states the result and lists what was not run. It lists a harness as passed on its
-    retry only when its saved record says so; a first log without one (a shard stopped mid-retry) is listed as a
-    retry not finished.
+  - Each shard uploads `results-<shard>.json`: whether each harness passed and whether it was retried, from the
+    records its own run finished (the restored state holds main's earlier ones). A harness without one, a shard
+    stopped mid-run or mid-retry included, is listed as not finished, never as passed.
 - **Not run on hosted runners.** These are listed with their reason, never counted as passed:
   - the harnesses the `hosted` entry of `tools/parity_hosts.json` excludes: sounds, other languages, sources, older
     servers' worlds, the network;
-  - `known_failing` and `named_only` ones.
+  - `named_only` and `local_only` ones, and `known_failing` ones except in a full run.
+- **A full run (main's pushes), 2026-11-23.** 659 harnesses (17 of them known failing; 42 left out), in 14 shards
+  of about 50, then about 20-30 min a shard (a 50-harness shard took 29 min on 2026-11-22): about 280-420 minutes
+  of 16-vCPU runner time and 30-35 min of wall time per run. With the spacing, about 8 a day: about 2,200-3,400
+  16-vCPU minutes a day, plus a minute or two of 2-vCPU time for each push that is skipped.
+- **Cache entries by the week.** A key is never overwritten, and the runners' cache can be pruned only from its
+  dashboard or with an account token no workflow holds. So the build and oracle keys name the UTC week instead of
+  the commit: main's first full run of a week saves the build (about 15 GB) and one oracle entry per shard (about
+  0.2 GB each); later runs that week restore them and save nothing. Last week's entries go unused and are evicted 7
+  days after their last use: about 18 GB current, up to about 36 GB in the week after a change of week. During a
+  week, a run rebuilds what changed since the week's first run (Cargo's fingerprints, with the sources' dates).
 - **Cost, measured 2026-11-19 (cold).**
   - About a minute of setup and data per runner.
   - Cold probe builds: world 40 s; client 530 s (two profiles); the game 480 s.

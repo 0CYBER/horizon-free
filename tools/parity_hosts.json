@@ -29,7 +29,7 @@
    "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), its CI runner has CPUs 4-7, so workers get 0-3 (as tools/remote.sh runs do) and 3 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
   },
   "hosted": {
-   "note": "Not a worker: the hosted runners without a GPU that .github/workflows/parity-hosted.yml uses. tools/parity_plan.py --hosted leaves these out, and known_failing and named_only too, and lists them as not run there.",
+   "note": "Not a worker: the hosted runners without a GPU that .github/workflows/parity-hosted.yml uses. tools/parity_plan.py --hosted leaves these out, and local_only, named_only and (but with --known-failing, as main's full runs) known_failing too, and lists them as not run there.",
    "exclude": {
     "ambient_sound": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
     "audio_attributes": "needs the vanilla sounds, which the hosted runners' data leaves out (tools/ci/fetch-vanilla-data.sh)",
