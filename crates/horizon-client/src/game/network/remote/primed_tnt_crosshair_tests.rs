@@ -116,6 +116,77 @@ fn the_crosshair_picks_only_visible_in_reach_primed_tnt() {
             check_spectator_crosshair(game);
         });
     });
+    print_use_clicks();
+}
+
+/// One use click for each order of a wind charge and the TNT along the view, a stick in the main
+/// hand and the off hand empty: the pick, then the packets as the server's end of the connection
+/// reads them. The harness compares these lines with the pinned client's `LocalPlayer.pick` and
+/// `Minecraft.startUseItem`.
+fn print_use_clicks() {
+    use horizon_protocol::packets::{Empty, play::Serverbound as S};
+
+    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    crate::game::native_entity_refs::tests::with_game_at(root, |game| {
+        // Play packets reach the wire only once login and configuration are done.
+        let (mut server, _writer) = crate::game::remote::tests::connect_menu_test(game);
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.5)).unwrap());
+        game.set_mode_id(0);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.inventory[game.selected] = Some(ItemStack::new("minecraft:stick", 1));
+        game.offhand = None;
+        game.entity_reach = 3.0;
+        game.block_reach = 4.5;
+        game.yaw = 0.0;
+        game.pitch = 0.0;
+        game.add_primed_tnt(BlockPos::new(0, 65, 5), 0.0, 80, None, None);
+        // The oracle's game mode has the selected slot as sent (`ensureHasSentCarriedItem` adds
+        // nothing); this connection has sent none yet, and its first click would carry it.
+        game.remote_send_carried();
+        let tnt = game.tnts[0].id as i32;
+        for (order, z) in [("tnt_first", 7.35), ("charge_first", 5.0)] {
+            game.creatures.projectiles.clear();
+            let charge = game.add_projectile(Projectile::new(
+                ProjectileKind::WindCharge,
+                Vec3::new(0.5, 65.5, z),
+                None,
+            )) as i32;
+            let name = |id: i32| match id {
+                id if id == tnt => "tnt",
+                id if id == charge => "wind_charge",
+                _ => "other",
+            };
+            let picked = game.crosshair_entity(false).map_or("none", |p| name(p.id));
+            println!("tnt-crosshair: pick {order} {picked}");
+            // A punch fences the click: what was sent before it is dropped, what follows is the
+            // click's.
+            let mut fenced = |game: &mut Game<'_>, click: bool| {
+                game.send(S::Punch(Empty));
+                loop {
+                    let (id, body) = server.recv().unwrap();
+                    let line = match S::decode(id, &body).unwrap() {
+                        S::Punch(_) => return,
+                        S::Interact(p) => {
+                            let hand = if p.hand == 0 { "main" } else { "off" };
+                            format!("interact {hand} {}", name(p.id))
+                        }
+                        S::UseItem(p) => {
+                            format!("use_item {}", if p.hand == 0 { "main" } else { "off" })
+                        }
+                        _ => format!("other {id}"),
+                    };
+                    if click {
+                        println!("tnt-crosshair: use {order} {line}");
+                    }
+                }
+            };
+            fenced(game, false);
+            game.remote_use(mod_api::InteractionAttempt::Press);
+            fenced(game, true);
+        }
+    });
 }
 
 fn check_projectile_order(game: &mut Game<'_>, spy: &ClickSpy) {
@@ -123,11 +194,11 @@ fn check_projectile_order(game: &mut Game<'_>, spy: &ClickSpy) {
     let id = game.tnts[0].id as i32;
     for (z, tnt_first) in [(7.35, true), (5.0, false)] {
         game.creatures.projectiles.clear();
-        game.add_projectile(Projectile::new(
+        let charge = game.add_projectile(Projectile::new(
             ProjectileKind::WindCharge,
             Vec3::new(0.5, 65.5, z),
             None,
-        ));
+        )) as i32;
         assert!(game.redirectable_hit().is_some());
         assert_eq!(
             game.pick_entity_hit(),
@@ -144,14 +215,18 @@ fn check_projectile_order(game: &mut Game<'_>, spy: &ClickSpy) {
         };
         assert_eq!(*spy.0.lock().unwrap(), expected_attack);
 
+        // `Minecraft.startUseItem`: each hand's turn interacts with the crosshair's entity
+        // whatever it is (`MultiPlayerGameMode.interact` always sends the packet). A wind
+        // charge passes as primed TNT does (`Entity.interact`), so the packets are the same
+        // and only their target tells the two apart.
+        assert_eq!(
+            game.crosshair_entity(false).map(|pick| pick.id),
+            Some(if tnt_first { id } else { charge }),
+            "use target with the wind charge at z={z}"
+        );
         spy.0.lock().unwrap().clear();
         game.remote_use(mod_api::InteractionAttempt::Press);
-        let expected_use: &[&str] = if tnt_first {
-            &["interact", "use_item", "interact"]
-        } else {
-            &["use_item"]
-        };
-        assert_eq!(*spy.0.lock().unwrap(), expected_use);
+        assert_eq!(*spy.0.lock().unwrap(), ["interact", "use_item", "interact"]);
     }
     game.creatures.projectiles.clear();
     game.remove_entity(id);

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Check a visible primed TNT's crosshair pick against the pinned LocalPlayer.pick."""
+"""Check a visible primed TNT's crosshair pick against the pinned LocalPlayer.pick, and a use click's packets with a
+wind charge behind and in front of it against the pinned Minecraft.startUseItem."""
 import argparse
 import os
 from pathlib import Path
@@ -18,6 +19,8 @@ TEST = ('game::remote::interaction_event_tests::primed_tnt_crosshair_tests::'
         'the_crosshair_picks_only_visible_in_reach_primed_tnt')
 PREFIX = 'tnt-crosshair: '
 CASES = ('open', 'wall', 'nearer_cow', 'farther_cow', 'out_of_reach', 'removed')
+# After the cases: `pick <order> <entity>`, then `use <order> <packet> <hand> [<entity>]` for each packet of the click.
+ORDERS = ('tnt_first', 'charge_first')
 
 
 def main():
@@ -53,9 +56,15 @@ def main():
     lines = [line.removeprefix(PREFIX) for line in output.splitlines() if line.startswith(PREFIX)]
     actual = build / 'rust.txt'
     actual.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    if tuple(line.split()[0] for line in expected.read_text(encoding='utf-8').splitlines()) != CASES:
+    vanilla = expected.read_text(encoding='utf-8').splitlines()
+    if tuple(line.split()[0] for line in vanilla[:len(CASES)]) != CASES:
         raise AssertionError('Vanilla oracle did not cover every pick case')
-    matched = harness.compare(expected, actual, len(CASES))
+    clicks = vanilla[len(CASES):]
+    if [line.split()[:2] for line in clicks if line.startswith('pick ')] != [['pick', order] for order in ORDERS]:
+        raise AssertionError('Vanilla oracle did not pick for every order of the wind charge and the TNT')
+    # Fixed words the oracle and the test print (no game data), so they may show in the run's log.
+    print('The pinned client:', *clicks, sep='\n  ')
+    matched = harness.compare(expected, actual, len(vanilla))
     base.ensure_sources_unchanged(sources, hashes)
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], cases=matched,
