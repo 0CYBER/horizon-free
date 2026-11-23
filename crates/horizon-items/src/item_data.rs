@@ -1544,6 +1544,7 @@ fn elided_prototype_key(item: &str) -> Option<&'static str> {
     match item {
         "minecraft:filled_map" => Some("minecraft:map_decorations"),
         "minecraft:enchanted_book" => Some("minecraft:stored_enchantments"),
+        "minecraft:writable_book" => Some("minecraft:writable_book_content"),
         "minecraft:beehive" | "minecraft:bee_nest" => Some("minecraft:block_state"),
         _ if has_empty_banner_patterns_prototype(item) => Some("minecraft:banner_patterns"),
         _ => None,
@@ -1566,6 +1567,13 @@ fn is_prototype_patch(key: &str, value: &Tag) -> bool {
     let Tag::Compound(entries) = value else {
         return false;
     };
+    // Items.WRITABLE_BOOK starts with WritableBookContent.EMPTY. Its codec
+    // defaults omitted pages to an empty list.
+    if key == "minecraft:writable_book_content" {
+        return entries.is_empty()
+            || (entries.len() == 1
+                && matches!(value.get("pages"), Some(Tag::List(pages)) if pages.is_empty()));
+    }
     if key == "minecraft:block_state" {
         entries.len() == 1
             && matches!(value.get("honey_level"), Some(Tag::String(level)) if level.to_string_lossy() == "0")
@@ -2122,11 +2130,14 @@ fn decode_component_patch(
     if let Tag::Compound(map) = c {
         for (k, v) in map {
             let key = k.to_string_lossy();
-            // `PatchedDataComponentMap.applyPatch`: only the positive value
-            // equal to the prototype is redundant, not a `!` removal.
-            if key == "minecraft:banner_patterns"
+            // These modelled components can use a raw marker for an explicit
+            // empty value. Do not keep one for the item's own prototype (or
+            // confuse it with a `!` removal).
+            if matches!(
+                key.as_str(),
+                "minecraft:banner_patterns" | "minecraft:writable_book_content"
+            ) && item.and_then(elided_prototype_key) == Some(key.as_str())
                 && is_prototype_patch(&key, v)
-                && item.is_some_and(has_empty_banner_patterns_prototype)
             {
                 continue;
             }

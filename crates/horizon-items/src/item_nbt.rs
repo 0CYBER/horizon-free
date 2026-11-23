@@ -248,6 +248,41 @@ mod tests {
     }
 
     #[test]
+    fn empty_writable_book_content_is_only_elided_for_its_own_prototype() {
+        let key = "minecraft:writable_book_content";
+        let removed = "!minecraft:writable_book_content";
+        let writable_book = "minecraft:writable_book";
+        let stack = |item, patch| {
+            item_from_nbt(&Tag::compound([
+                ("id", string(item)),
+                ("components", patch),
+            ]))
+            .unwrap()
+        };
+        let empty = Tag::compound([("pages", Tag::List(vec![]))]);
+        for value in [Tag::Compound(Default::default()), empty] {
+            let book = stack(writable_book, Tag::compound([(key, value)]));
+            assert_eq!(item_to_nbt(&book).get("components"), None);
+        }
+
+        let page = Tag::compound([(
+            "pages",
+            Tag::List(vec![Tag::compound([("raw", string("draft"))])]),
+        )]);
+        for (item, patch_key, value) in [
+            ("minecraft:paper", key, Tag::Compound(Default::default())),
+            (writable_book, key, page),
+            (writable_book, removed, Tag::Compound(Default::default())),
+        ] {
+            let patch = Tag::compound([(patch_key, value)]);
+            assert_eq!(
+                item_to_nbt(&stack(item, patch.clone())).get("components"),
+                Some(&patch)
+            );
+        }
+    }
+
+    #[test]
     fn runtime_counts_remain_independent_of_the_nbt_decode_range() {
         let stack = crate::items::ItemStack::new("minecraft:diamond_sword", 1000);
         assert_eq!(stack.count, 1000);
