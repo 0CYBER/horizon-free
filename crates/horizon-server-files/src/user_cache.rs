@@ -5,7 +5,7 @@
 use crate::{
     json::{self, Json},
     profiles::valid_player_name,
-    user_lists::{NameAndId, format_date, parse_date, read_utf8},
+    user_lists::{NameAndId, format_date, parse_date, read_saved, read_utf8},
 };
 use horizon_java_properties::{civil_from_days, days_from_civil, now_millis};
 use std::{collections::HashMap, path::PathBuf};
@@ -60,14 +60,32 @@ impl UserCache {
             resolve_offline_users: true,
         };
         let mut warnings = Vec::new();
-        let entries = match read_utf8(&cache.file) {
-            Ok(text) => cache.parse(&text, &mut warnings),
+        let entries = match read_saved(&cache.file, |bytes| cache.whole(bytes)) {
+            Ok((text, copy)) => {
+                if let Some(copy) = copy {
+                    warnings.push(format!(
+                        "{} was cut off by an interrupted save; loading its complete copy {}",
+                        cache.file.display(),
+                        copy.display()
+                    ));
+                }
+                cache.parse(&text, &mut warnings)
+            }
             Err(_) => Vec::new(),
         };
         for info in entries.into_iter().rev() {
             cache.safe_add(info);
         }
         (cache, warnings)
+    }
+
+    /// `bytes` are a cache every entry of which [`Self::parse`] reads, none skipped: only such a
+    /// copy is taken for a cut-off save.
+    fn whole(&self, bytes: &[u8]) -> bool {
+        let text = read_utf8(bytes);
+        let mut skipped = Vec::new();
+        matches!(json::parse(&text, false), Ok(Json::Array(items))
+            if self.parse(&text, &mut skipped).len() == items.len() && skipped.is_empty())
     }
 
     fn parse(&self, text: &str, warnings: &mut Vec<String>) -> Vec<Info> {
@@ -238,7 +256,9 @@ impl UserCache {
 
     /// `save`: errors are ignored, as vanilla does.
     pub fn save(&self) {
-        let _ = std::fs::write(&self.file, self.to_json());
+        let _ = crate::durable::write_in_place(&self.file, self.to_json().as_bytes(), |bytes| {
+            self.whole(bytes)
+        });
     }
 }
 
@@ -304,6 +324,23 @@ mod tests {
             format_date(one_month_later(jan31_leap)),
             "2028-02-29 00:00:00 +0000"
         );
+    }
+
+    /// A cache save cut off while the file was rewritten: the load takes the complete copy and says so.
+    #[test]
+    fn an_interrupted_save_is_loaded_from_its_complete_copy() {
+        let dir = crate::durable::scratch_dir("usercache-cut");
+        let file = dir.join("usercache.json");
+        let saved = r#"[{"name":"Notch","uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","expiresOn":"2099-01-01 00:00:00 +0000"}]"#;
+        let copy = crate::durable::cut_off_write_in_place(&file, saved.as_bytes());
+        let (c, warnings) = UserCache::load(&file);
+        assert!(c.find_by_name("Notch").is_some());
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains(&copy.display().to_string()),
+            "{warnings:?}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

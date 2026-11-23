@@ -296,8 +296,11 @@ fn load<E: horizon_platform::server_files::user_lists::Entry>(
     mut list: horizon_platform::server_files::user_lists::UserList<E>,
 ) -> Result<horizon_platform::server_files::user_lists::UserList<E>, String> {
     // UserList::load deliberately tolerates I/O errors for the running game's vanilla behavior.
-    // A stopped command must not edit an empty replacement for a file it could not read.
-    let text = match std::fs::read_to_string(&list.file) {
+    // A stopped command must not edit an empty replacement for a file it could not read. Read under
+    // the list's lock, so a save the game is making (`whitelist add` while it runs) is waited for.
+    let read = horizon_platform::server_files::user_lists::read_locked(&list.file)
+        .and_then(|bytes| String::from_utf8(bytes).map_err(std::io::Error::other));
+    let text = match read {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(list),
         Err(error) => return Err(format!("{}: {error}", list.file.display())),

@@ -461,16 +461,35 @@ impl<E: Entry> UserList<E> {
         Json::Array(items).pretty()
     }
     pub fn save(&self) -> std::io::Result<()> {
-        std::fs::write(&self.file, self.to_json())
+        // An existing list is written in place, so its owner and access controls stay; a new one is
+        // created whole.
+        crate::durable::write_in_place(&self.file, self.to_json().as_bytes(), |bytes| {
+            Self::whole(&read_utf8(bytes))
+        })
     }
     /// StoredUserList.load: a missing file leaves the list as it is; a path that exists but cannot
     /// be read is an error, as vanilla's reader throws before it clears the map.
     pub fn load(&mut self) -> Result<(), String> {
-        match read_utf8(&self.file) {
-            Ok(text) => self.load_str(&text),
+        match read_saved(&self.file, |bytes| Self::whole(&read_utf8(bytes))) {
+            Ok((text, copy)) => {
+                if let Some(copy) = copy {
+                    log::warn!(
+                        "{} was cut off by an interrupted save; loading its complete copy {}",
+                        self.file.display(),
+                        copy.display()
+                    );
+                }
+                self.load_str(&text)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(format!("{}: {e}", self.file.display())),
         }
+    }
+    /// `text` is a list every entry of which [`Self::load_str`] reads, none skipped.
+    fn whole(text: &str) -> bool {
+        matches!(json::parse(text, false), Ok(Json::Array(items)) if items
+            .iter()
+            .all(|item| matches!(item, Json::Object(_)) && E::from_json(item).is_some()))
     }
     pub fn load_str(&mut self, text: &str) -> Result<(), String> {
         self.map = JavaHashMap::default();
@@ -499,14 +518,327 @@ pub type IpBanList = UserList<BanEntry<String>>;
 
 /// A list or cache file as vanilla reads it, through Guava's UTF-8 reader: a byte
 /// sequence that is not UTF-8 becomes U+FFFD, grouped as Java's decoder groups it (`java_utf8`), and the
-/// rest is kept. A file that cannot be read at all is an error, as before.
-pub(crate) fn read_utf8(file: &std::path::Path) -> std::io::Result<String> {
-    Ok(horizon_protocol::buf::java_utf8(&std::fs::read(file)?))
+/// rest is kept.
+pub(crate) fn read_utf8(bytes: &[u8]) -> String {
+    horizon_protocol::buf::java_utf8(bytes)
+}
+
+/// A list or cache file's bytes, read under its lock (`durable::lock`), so a save of it under way
+/// is waited for and never seen half written.
+pub fn read_locked(file: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let _lock = crate::durable::lock(file)?;
+    std::fs::read(file)
+}
+
+/// A list or cache file's text to load ([`read_utf8`]), and the copy it was read from instead, under
+/// `durable::lock`. A file that is a JSON array is read, and copies left by earlier saves are removed.
+/// Otherwise the copy of the save that cut this file off (`durable::cut_off_copy`: the file is the
+/// start of its bytes, and `valid` takes it whole, every entry included; every copy is looked at,
+/// newest first) is read, and that save is finished (the file gets the copy, the copy goes). A folder
+/// or copy that cannot be read is an error. Anything else reads the file as it is.
+pub(crate) fn read_saved(
+    file: &std::path::Path,
+    valid: impl Fn(&[u8]) -> bool,
+) -> std::io::Result<(String, Option<std::path::PathBuf>)> {
+    let lock = crate::durable::lock(file)?;
+    let raw = std::fs::read(file)?;
+    let text = read_utf8(&raw);
+    // Unlocked, another save may be under way: its copy is neither read nor removed.
+    if !lock.held() {
+        return Ok((text, None));
+    }
+    if matches!(json::parse(&text, false), Ok(Json::Array(_))) {
+        // The file is whole, so no copy holds anything to recover: a copy left in place (the folder
+        // or a copy could not be listed or removed) is only ever read against a cut-off file.
+        for copy in crate::durable::kept_copies(file).unwrap_or_default() {
+            let _ = crate::durable::remove(&copy);
+        }
+        return Ok((text, None));
+    }
+    // A folder or copy that cannot be read is an error, never "no copy": the list stays as it is.
+    let copies = crate::durable::kept_copies(file)?;
+    let Some((copy, saved)) = crate::durable::cut_off_copy(&raw, &copies, valid)? else {
+        return Ok((text, None));
+    };
+    if let Err(e) = crate::durable::finish_cut_off_save(file, &copy, &saved) {
+        log::warn!(
+            "{} could not be rewritten from {}: {e}",
+            file.display(),
+            copy.display()
+        );
+    }
+    Ok((read_utf8(&saved), Some(copy)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_save_leaves_the_previous_list() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::durable::scratch_dir("lists-save");
+        let file = dir.join("ops.json");
+        let old = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":3}]"#;
+        std::fs::write(&file, old).unwrap();
+        let mut ops = OpList::new(&file);
+        ops.load_str("[]").unwrap();
+        // A list that cannot be written is left as it was (nothing is truncated first).
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let probe = std::fs::OpenOptions::new().write(true).open(&file).is_ok();
+        let result = ops.save();
+        // Root can write anywhere, so the failure can't be produced.
+        if !probe {
+            assert!(result.is_err());
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), old);
+        }
+        // The list and its lock file, no copy.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A list the server may write but not read, with no copy beside it, is saved as on main.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_only_list_is_saved() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::durable::scratch_dir("lists-writeonly");
+        let file = dir.join("ops.json");
+        std::fs::write(&file, "[]").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o200)).unwrap();
+        // Root reads anything, so a write-only list can't be produced.
+        let write_only = std::fs::read(&file).is_err();
+        let mut ops = OpList::new(&file);
+        ops.load_str(r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#).unwrap();
+        let result = ops.save();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if write_only {
+            result.unwrap();
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), ops.to_json());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A list the server may write in a folder it may not create files in is still saved, as on main,
+    /// only without the complete copy.
+    #[cfg(unix)]
+    #[test]
+    fn a_list_in_a_folder_closed_to_new_files_is_still_saved() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::durable::scratch_dir("lists-closed");
+        let file = dir.join("ops.json");
+        std::fs::write(&file, "[]").unwrap();
+        let notch = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#;
+        let mut ops = OpList::new(&file);
+        ops.load_str(notch).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root can create files anywhere, so the closed folder can't be produced.
+        let closed = std::fs::write(dir.join("probe"), "").is_err();
+        let result = ops.save();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if closed {
+            result.unwrap();
+            let mut loaded = OpList::new(&file);
+            loaded.load().unwrap();
+            assert_eq!(loaded.to_json(), ops.to_json());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A save cut off while the list was rewritten in place: the next load takes the complete copy
+    /// that save made first and finishes the save, so the list is whole and the copy gone.
+    #[test]
+    fn an_interrupted_save_is_loaded_from_its_complete_copy() {
+        let dir = crate::durable::scratch_dir("lists-cut");
+        let file = dir.join("ops.json");
+        let saved = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#;
+        let copy = crate::durable::cut_off_write_in_place(&file, saved.as_bytes());
+        let mut whole = OpList::new(&file);
+        whole.load_str(saved).unwrap();
+        let mut ops = OpList::new(&file);
+        ops.load().unwrap();
+        assert_eq!(ops.to_json(), whole.to_json());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+        assert!(!copy.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A load that comes while a save holds the list's lock waits for it: it neither removes the
+    /// save's copy nor reads the list before the save is done.
+    #[test]
+    fn a_load_waits_for_a_save_in_progress_and_leaves_its_copy() {
+        let dir = crate::durable::scratch_dir("lists-locked");
+        let file = dir.join("ops.json");
+        let notch = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#;
+        // A save that has written its copy and not yet touched the list, which is whole.
+        let held = crate::durable::lock(&file).unwrap();
+        let copy = crate::durable::cut_off_write_in_place(&file, notch.as_bytes());
+        std::fs::write(&file, "[]").unwrap();
+        let reader = std::thread::spawn({
+            let file = file.clone();
+            move || {
+                let mut ops = OpList::new(&file);
+                ops.load().unwrap();
+                ops.entries().len()
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(copy.exists());
+        assert!(!reader.is_finished());
+        // The save finishes and lets go.
+        std::fs::write(&file, notch).unwrap();
+        std::fs::remove_file(&copy).unwrap();
+        drop(held);
+        assert_eq!(reader.join().unwrap(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A copy an older save left is never loaded over a list a later save cut off, and the next save
+    /// removes it before it touches the list.
+    #[test]
+    fn an_older_saves_copy_is_never_loaded() {
+        let dir = crate::durable::scratch_dir("lists-older");
+        let file = dir.join("ops.json");
+        let mut older = OpList::new(&file);
+        older.load_str(r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#).unwrap();
+        let stale = crate::durable::cut_off_write_in_place(&file, older.to_json().as_bytes());
+        let mut newer = OpList::new(&file);
+        newer.load_str(r#"[{"uuid":"853c80ef-3c37-49fd-aa49-938b674adae6","name":"jeb_","level":4,"bypassesPlayerLimit":false}]"#).unwrap();
+        let bytes = newer.to_json();
+        std::fs::write(&file, &bytes[..bytes.len() * 3 / 4]).unwrap();
+        let mut ops = OpList::new(&file);
+        assert!(ops.load().is_err());
+        assert!(ops.entries().is_empty());
+        assert!(stale.exists());
+        newer.save().unwrap();
+        assert!(!stale.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A save that failed while it rewrote the list left the cut-off list and its copy; a later save
+    /// made its own copy durable and stopped before it removed the first. The load still takes the
+    /// copy the list was cut from, not the newer one.
+    #[test]
+    fn a_cut_off_list_is_recovered_past_a_later_saves_copy() {
+        let dir = crate::durable::scratch_dir("lists-two");
+        let file = dir.join("ops.json");
+        let mut first = OpList::new(&file);
+        first.load_str(r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false},{"uuid":"853c80ef-3c37-49fd-aa49-938b674adae6","name":"jeb_","level":3,"bypassesPlayerLimit":false}]"#).unwrap();
+        let mut later = OpList::new(&file);
+        later.load_str(r#"[{"uuid":"853c80ef-3c37-49fd-aa49-938b674adae6","name":"jeb_","level":3,"bypassesPlayerLimit":false}]"#).unwrap();
+        let first_bytes = first.to_json();
+        crate::durable::cut_off_write_in_place(&file, first_bytes.as_bytes());
+        let newer = crate::durable::cut_off_write_in_place(&file, later.to_json().as_bytes());
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&newer)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        // The later save never touched the list: it is still cut from the first save.
+        std::fs::write(&file, &first_bytes[..first_bytes.len() / 2]).unwrap();
+        let mut ops = OpList::new(&file);
+        ops.load().unwrap();
+        assert_eq!(ops.to_json(), first_bytes);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), first_bytes);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// In a folder whose files cannot be listed (write and search, no read), the copies beside a
+    /// cut-off list cannot be told: a save fails and leaves the list and its copy as they are, rather
+    /// than staging a copy of its own and removing nothing, or the wrong thing.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_in_a_folder_that_cannot_be_listed_leaves_the_list_and_its_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::durable::scratch_dir("lists-unlisted");
+        let file = dir.join("ops.json");
+        let saved = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#;
+        let copy = crate::durable::cut_off_write_in_place(&file, saved.as_bytes());
+        let mut ops = OpList::new(&file);
+        ops.load_str("[]").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+        // Root lists anything, so the folder can't be produced.
+        let unlisted = std::fs::read_dir(&dir).is_err();
+        let result = ops.save();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if unlisted {
+            assert!(result.is_err());
+            assert_eq!(
+                std::fs::read(&file).unwrap(),
+                &saved.as_bytes()[..saved.len() / 2]
+            );
+            assert_eq!(std::fs::read_to_string(&copy).unwrap(), saved);
+            // The list, its lock file and the one copy: none staged.
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A copy that cannot be read beside a list cut off to nothing may be the one it was cut from:
+    /// the load is an error rather than an empty list, and the save that follows a failed load (as a
+    /// dedicated server's start does) fails too, so the copy stays.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_copy_is_an_error_not_a_missing_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::durable::scratch_dir("lists-unreadable-copy");
+        let file = dir.join("ops.json");
+        let saved = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#;
+        let copy = crate::durable::cut_off_write_in_place(&file, saved.as_bytes());
+        std::fs::write(&file, "").unwrap();
+        std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root reads anything, so the copy can't be made unreadable.
+        let unreadable = std::fs::read(&copy).is_err();
+        let mut ops = OpList::new(&file);
+        let loaded = ops.load();
+        let saved_after = ops.save();
+        std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if unreadable {
+            assert!(loaded.is_err());
+            assert!(saved_after.is_err());
+            assert_eq!(std::fs::read_to_string(&copy).unwrap(), saved);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A copy holding an entry the list would skip is not loaded.
+    #[test]
+    fn a_copy_with_an_invalid_entry_is_not_loaded() {
+        let dir = crate::durable::scratch_dir("lists-invalid");
+        let file = dir.join("ops.json");
+        let saved = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false},{"uuid":"not a uuid","name":"jeb_","level":4,"bypassesPlayerLimit":false}]"#;
+        let copy = crate::durable::cut_off_write_in_place(&file, saved.as_bytes());
+        let mut ops = OpList::new(&file);
+        assert!(ops.load().is_err());
+        assert!(ops.entries().is_empty());
+        assert!(copy.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The default list paths are bare file names: the first save creates the list, the next one
+    /// rewrites it, and it loads back.
+    #[test]
+    fn a_list_at_a_bare_file_name_saves_and_loads() {
+        let name = crate::durable::claim_bare_name("lists-bare");
+        struct Cleanup<'a>(&'a str);
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0);
+                let _ = std::fs::remove_file(format!(".{}.lock", self.0));
+            }
+        }
+        let _cleanup = Cleanup(&name);
+        let notch = r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","level":4,"bypassesPlayerLimit":false}]"#;
+        let mut ops = OpList::new(&name);
+        ops.load_str(notch).unwrap();
+        ops.save().unwrap();
+        ops.save().unwrap();
+        let mut loaded = OpList::new(&name);
+        loaded.load().unwrap();
+        assert_eq!(loaded.to_json(), ops.to_json());
+    }
+
     #[test]
     fn saves_like_gson() {
         let mut ops = OpList::new("/nonexistent/ops.json");
@@ -704,7 +1036,11 @@ mod tests {
             (&b"Caf\xE9"[..], "Caf\u{fffd}"),
         ] {
             std::fs::write(&file, bytes).unwrap();
-            assert_eq!(read_utf8(&file).unwrap(), expected, "{bytes:x?}");
+            assert_eq!(
+                read_utf8(&std::fs::read(&file).unwrap()),
+                expected,
+                "{bytes:x?}"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
