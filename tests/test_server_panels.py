@@ -29,8 +29,9 @@ PANEL_OWNED = {"HORIZON_PORT"}
 
 
 def init_variables():
-    """The HORIZON_* names `Answers::from_env` reads."""
-    body = INIT_RS.split("pub fn from_env", 1)[1].split("\n    }\n", 1)[0]
+    """The HORIZON_* names the answers read from the environment: every `var("HORIZON_X")` or `flag("HORIZON_X")` in
+    `impl Answers`, whatever the functions there are called."""
+    body = INIT_RS.split("impl Answers {", 1)[1].split("\n}\n", 1)[0]
     return set(re.findall(r'(?:var|flag)\("(HORIZON_[A-Z]+)"\)', body))
 
 
