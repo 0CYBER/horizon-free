@@ -65,7 +65,36 @@ def program():
     cmd('/execute store result score end h213 run time query gametime', 'clock-end', diagnostic=True)
     cmd('/scoreboard players operation end h213 -= start h213', 'clock-delta-operation', 0)
     cmd('/scoreboard players get end h213', 'clock-delta', 0)
+    piercing_kills(cmd, ops)
     return ops
+
+
+# AbstractArrow.onHitEntity: a piercing arrow keeps the entities it killed and
+# passes all of them to KILLED_BY_ARROW. Two phantoms grant
+# adventure/two_birds_one_arrow, five entity types adventure/arbalistic.
+LANES = [('birds', 1, 10.5, ['phantom', 'phantom'], 'two_birds_one_arrow'),
+         ('types', 4, 12.5, ['pig', 'cow', 'sheep', 'chicken', 'rabbit'], 'arbalistic')]
+
+
+def piercing_kills(cmd, ops):
+    cmd('/kill @e[type=arrow]', 'pierce-clear-arrows', admission=False)
+    cmd('/difficulty normal', 'pierce-difficulty')
+    cmd('/time set midnight', 'pierce-night')
+    cmd('/fill 0 200 15 15 203 15 stone', 'pierce-wall', 64)
+    for n, (lane, _, x, victims, advancement) in enumerate(LANES):
+        cmd(f'/advancement revoke @s only minecraft:adventure/{advancement}', lane+'-revoke', admission=False)
+        for i, kind in enumerate(victims):
+            z = 4.5 + 2*i
+            cmd(f'/summon {kind} {x} 201.2 {z} {{UUID:[I;213,20,{n},{i}],Tags:["h213_{lane}"],NoAI:1b,NoGravity:1b,Silent:1b,PersistenceRequired:1b,Health:1f}}', f'{lane}-{i}-summon', 1)
+            cmd(f'/execute if entity @e[type=minecraft:{kind},tag=h213_{lane},nbt={{Health:1f,Pos:[{x}d,201.2d,{z}d]}}]', f'{lane}-{i}-identity', 1)
+    for lane, pierce, x, _, _ in LANES:
+        cmd(f'/summon arrow {x} 201.5 1.5 {{Tags:["h213_{lane}_arrow"],NoGravity:1b,Motion:[0d,0d,2d],Owner:{PLAYER},PierceLevel:{pierce}b,weapon:{{id:"minecraft:crossbow",count:1}}}}', lane+'-arrow-summon', 1)
+        cmd(f'/data get entity @e[type=arrow,tag=h213_{lane}_arrow,limit=1] PierceLevel', lane+'-arrow-pierce', pierce)
+    cmd('/tick step 20', 'pierce-step', admission=False)
+    ops.append(dict(op='tick', n=20))
+    for lane, _, _, _, advancement in LANES:
+        cmd(f'/execute unless entity @e[tag=h213_{lane}]', lane+'-all-killed', 1)
+        cmd(f'/execute if entity @s[advancements={{minecraft:adventure/{advancement}=true}}]', lane+'-advancement', admission=False)
 
 
 def main():

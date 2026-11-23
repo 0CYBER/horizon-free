@@ -190,6 +190,10 @@ pub struct ArrowState {
     /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
     /// through (cleared when it sticks in a block).
     pub pierced: Vec<Who>,
+    /// `piercedAndKilledEntities`: what a piercing arrow has killed so far, as
+    /// `KILLED_BY_ARROW` sees it. Made on its first piercing hit, emptied (not
+    /// dropped) when it sticks in a block.
+    pub pierced_and_killed: Option<Vec<crate::advancements::EntityView>>,
     /// `Entity.remainingFireTicks`.
     pub fire_ticks: i32,
     /// The server's shared fire flag, independent of the client-local fire timer.
@@ -289,6 +293,7 @@ impl ArrowState {
             effect_color: -1,
             pierce: 0,
             pierced: Vec::new(),
+            pierced_and_killed: None,
             fire_ticks: 0,
             synced_fire: false,
             fall_distance: 0.0,
@@ -1024,6 +1029,7 @@ impl Ticker<'_, '_, '_, '_> {
             // AbstractArrow.onHitEntity: past pierce level + 1 entities the
             // arrow is discarded before it hurts the next one.
             if (self.st.pierce as i8) > 0 {
+                self.st.pierced_and_killed.get_or_insert_with(Vec::new);
                 if self.st.pierced.len() > usize::from(self.st.pierce) {
                     self.st.removed = true;
                     return Hit::None;
@@ -1150,6 +1156,9 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.set_critical(false);
         self.st.pierce = 0;
         self.st.pierced.clear();
+        if let Some(killed) = &mut self.st.pierced_and_killed {
+            killed.clear();
+        }
     }
     /// `Projectile.mayInteract`: a mob's arrows need `mob_griefing`, or a
     /// mod's yes for the owner (NeoForge's `canEntityGrief(level, owner)`).
