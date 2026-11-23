@@ -1227,7 +1227,7 @@ impl Game<'_> {
             .data()
             .and_then(|d| d.written.as_ref())
             .map(|w| w.title.clone())
-            .filter(|t| !t.trim().is_empty())
+            .filter(|t| !horizon_core::java_character::is_blank(t))
         {
             Text::literal(title)
         } else if item == "minecraft:shield"

@@ -357,6 +357,33 @@ class Gen:
         return out
 
 
+def blank_name_cases():
+    """StringUtil.isBlank (Character.isWhitespace or isSpaceChar), which the anvil asks of the
+    new name and ItemStack.getCustomName of a written book's title. Fixed cases after the
+    seeded ones, so those stay as they were."""
+    book = ('{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":'
+            '{title:"%s",author:"a"}}}')
+    named = [
+        # NEXT LINE passes filterText and is no blank: a rename that costs a level.
+        (snbt('minecraft:iron_sword', 1), '\u0085'),
+        # No-break spaces are space chars: blank, so nothing to rename.
+        (snbt('minecraft:iron_sword', 1), '   '),
+        # A title of a separator is blank: the book is called Written Book, so naming it
+        # that changes nothing.
+        (book % '\u001f', 'Written Book'),
+        (book % '\u001f', 'Diary'),
+        # A NEXT LINE title is the book's name.
+        (book % '\u0085', 'Written Book'),
+    ]
+    cases = []
+    for stack, name in named:
+        slots = ['-'] * MENUS['anvil']
+        slots[0] = stack
+        cases.append({'menu': 'anvil', 'creative': False, 'slots': slots, 'levels': 30, 'carried': '-',
+                      'data': [], 'ops': [[0, 0, 'RENAME', name], [2, 0, 'PICKUP']]})
+    return cases
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seed', type=int, default=7)
@@ -497,6 +524,8 @@ def main():
                       'levels': rng.choice([0, 1, 3, 8, 30, 39, 40]),
                       'carried': carried, 'data': [datum(i) for i in range(DATA.get(menu, 0))],
                       'ops': g.ops(size, menu, slots)})
+    if 'anvil' in chosen:
+        cases += blank_name_cases()
     (work / 'cases.jsonl').write_text(''.join(json.dumps(c) + '\n' for c in cases))
     vanilla.run('VanillaMenuOracle', work / 'cases.jsonl', work / 'native.txt')
     lib.cargo_example('horizon-client', 'menu_fixture', lib.RESOURCES, work / 'cases.jsonl', work / 'rust.txt')

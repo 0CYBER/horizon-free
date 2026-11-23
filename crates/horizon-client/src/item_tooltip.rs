@@ -743,7 +743,7 @@ pub fn written_book_lines(
         return Vec::new();
     };
     let mut lines = Vec::new();
-    if !book.author.trim().is_empty() {
+    if !horizon_core::java_character::is_blank(&book.author) {
         lines.push(
             crate::text::format_translation(
                 &text("book.byAuthor"),

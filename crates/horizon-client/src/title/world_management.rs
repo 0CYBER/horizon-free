@@ -54,7 +54,10 @@ pub fn rename(saves: &Path, folder: &str, name: &str) -> crate::Result<()> {
     let Some(Tag::Compound(data)) = root.get_mut("Data") else {
         return Err("Missing level data".into());
     };
-    data.insert("LevelName".into(), Tag::String(name.trim().into()));
+    data.insert(
+        "LevelName".into(),
+        Tag::String(horizon_core::java_character::trim(name).into()),
+    );
     write_dat(&path, root)
 }
 

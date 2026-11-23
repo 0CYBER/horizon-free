@@ -499,7 +499,8 @@ impl Game<'_> {
         while pages.len() > 1 && pages.last().is_some_and(String::is_empty) {
             pages.pop();
         }
-        let title = sign.then(|| title.trim().to_owned());
+        // BookSignScreen sends `getValue().trim()`: Java's trim, not Unicode's.
+        let title = sign.then(|| horizon_core::java_character::trim(&title).to_owned());
         if self.remote.is_some() {
             self.send(S::EditBook(play::EditBook {
                 slot: slot as i32,
@@ -1246,7 +1247,7 @@ impl Game<'_> {
                     signing: true,
                     title,
                     ..
-                }) if !title.trim().is_empty() => self.save_book(true),
+                }) if !horizon_core::java_character::is_blank(title) => self.save_book(true),
                 Some(BookScreen::Edit { .. }) => self.set_book_signing(true),
                 _ => return Err("not a book and quill".into()),
             },
@@ -1437,7 +1438,7 @@ impl Game<'_> {
                 title,
                 ..
             }) => {
-                let blank = title.trim().is_empty();
+                let blank = horizon_core::java_character::is_blank(title);
                 if inside(w / 2.0 - 100.0, 196.0, 98.0, 20.0) && !blank {
                     click(self);
                     self.save_book(true);
@@ -1697,7 +1698,7 @@ impl Game<'_> {
                     w / 2.0 - 100.0,
                     98.0,
                     &tr("book.finalizeButton", "Sign and Close"),
-                    !title.trim().is_empty(),
+                    !horizon_core::java_character::is_blank(title),
                 );
                 action_button(
                     batch,

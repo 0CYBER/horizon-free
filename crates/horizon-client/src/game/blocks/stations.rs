@@ -1513,7 +1513,7 @@ impl Game<'_> {
             .data()
             .and_then(|d| d.written.as_ref())
             .map(|w| w.title.as_str())
-            .filter(|t| !t.trim().is_empty())
+            .filter(|t| !horizon_core::java_character::is_blank(t))
         {
             title.to_owned()
         } else if let Some(n) = stack.item_name() {

@@ -23,6 +23,41 @@ pub fn digit(unit: u16, radix: u32) -> Option<u32> {
     (value < radix).then_some(value)
 }
 
+/// Minecraft's `StringUtil.isWhitespace` for one Java char:
+/// `Character.isWhitespace(c) || Character.isSpaceChar(c)`.
+///
+/// Unlike Rust's `char::is_whitespace` it takes the separators U+001C..U+001F
+/// and not NEXT LINE (U+0085). The no-break spaces (U+00A0, U+2007, U+202F)
+/// are space chars, so they count here too.
+pub fn is_whitespace_or_space(unit: u16) -> bool {
+    matches!(
+        unit,
+        0x0009..=0x000D
+            | 0x001C..=0x0020
+            | 0x00A0
+            | 0x1680
+            | 0x2000..=0x200A
+            | 0x2028
+            | 0x2029
+            | 0x202F
+            | 0x205F
+            | 0x3000
+    )
+}
+
+/// Minecraft's `StringUtil.isBlank`: empty, or every UTF-16 unit is
+/// [`is_whitespace_or_space`]. Not Java's `String.isBlank`, which asks
+/// `Character.isWhitespace` alone.
+pub fn is_blank(text: &str) -> bool {
+    text.encode_utf16().all(is_whitespace_or_space)
+}
+
+/// Java's `String.trim`: drops the chars up to U+0020 at both ends, and no
+/// other whitespace (NEXT LINE and the no-break spaces stay).
+pub fn trim(text: &str) -> &str {
+    text.trim_matches(|c: char| c <= ' ')
+}
+
 const LETTER_OR_DIGIT: &[(u16, u16)] = &[
     (0x0030, 0x0039),
     (0x0041, 0x005A),
@@ -489,6 +524,27 @@ mod tests {
         assert!(is_letter_or_digit(0x0661));
         assert!(!is_letter_or_digit(0x00B2));
         assert!(!is_letter_or_digit(0xD800));
+    }
+
+    /// Where `StringUtil.isBlank` and Rust's `trim().is_empty()` part, as
+    /// JDK 25 answers `Character.isWhitespace(c) || Character.isSpaceChar(c)`.
+    #[test]
+    fn blank_follows_string_util() {
+        assert!(is_blank(""));
+        assert!(is_blank(" \t\n"));
+        assert!(is_blank("\u{1C}\u{1D}\u{1E}\u{1F}"));
+        assert!(is_blank("\u{A0}\u{2007}\u{202F}\u{3000}"));
+        assert!(!is_blank("\u{85}"));
+        assert!(!is_blank("\u{200B}"));
+        assert!(!is_blank(" a "));
+    }
+
+    /// JDK 25's `String.trim` on the same edges.
+    #[test]
+    fn trim_follows_string_trim() {
+        assert_eq!(trim("\u{85}x\u{1F} "), "\u{85}x");
+        assert_eq!(trim("\u{85}"), "\u{85}");
+        assert_eq!(trim(" \u{1F}a\u{A0}"), "a\u{A0}");
     }
 
     /// Compares every unit and radix with `tools/JavaCharacterTables.java dump`, which asks the JDK.

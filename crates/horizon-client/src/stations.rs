@@ -311,7 +311,7 @@ pub fn hover_name(names: &crate::creative::Names, stack: &ItemStack) -> String {
         .data()
         .and_then(|d| d.written.as_ref())
         .map(|w| w.title.as_str())
-        .filter(|t| !t.trim().is_empty())
+        .filter(|t| !horizon_core::java_character::is_blank(t))
     {
         return title.to_owned();
     }
@@ -440,7 +440,7 @@ pub fn anvil_result(
         }
     }
     match name {
-        Some(n) if !n.trim().is_empty() => {
+        Some(n) if !horizon_core::java_character::is_blank(n) => {
             if n != hover_name {
                 naming_cost = 1;
                 price += 1;

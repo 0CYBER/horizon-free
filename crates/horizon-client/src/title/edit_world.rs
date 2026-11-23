@@ -80,7 +80,7 @@ impl Title {
         else {
             return;
         };
-        if name.trim().is_empty() {
+        if horizon_core::java_character::is_blank(name) {
             return;
         }
         let folder = world.folder.clone();

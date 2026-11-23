@@ -276,7 +276,8 @@ impl Title {
                         top + 214.0,
                         98.0,
                         &lang::get_or("selectWorld.edit.save", "Save"),
-                        !name.trim().is_empty(),
+                        // EditWorldScreen: `renameButton.active = !StringUtil.isBlank(name)`.
+                        !horizon_core::java_character::is_blank(name),
                         35,
                     ),
                     b(

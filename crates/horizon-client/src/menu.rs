@@ -1422,7 +1422,7 @@ impl Menu {
             return false;
         }
         if let Some(result) = self.state.containers[RESULT][0].as_mut() {
-            result.data_mut().custom_name = (!name.trim().is_empty())
+            result.data_mut().custom_name = (!horizon_core::java_character::is_blank(&name))
                 .then(|| horizon_core::nbt::Tag::String(name.as_str().into()));
             result.tidy();
         }

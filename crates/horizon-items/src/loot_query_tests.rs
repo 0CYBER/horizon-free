@@ -361,3 +361,38 @@ fn queried_ability_tags_use_prepared_item_sets() {
         assert!(!context.condition(&invalid, &mut LegacyRandom::new(9)));
     }
 }
+
+/// `set_count` reads an int provider, whose constant `Codec.INT` truncates
+/// (DFU on 26.3's libraries: 2.5 and 2.7 give 2, -2.5 gives -2).
+#[test]
+fn set_count_truncates_a_fractional_constant() {
+    let data = data(vec![]);
+    for (modifier, expected) in [
+        (json!({"type":"minecraft:set_count","count":2.5}), 2),
+        // Beyond the int range Number.intValue keeps the low 32 bits.
+        (
+            json!({"type":"minecraft:set_count","count":4294967298u64}),
+            2,
+        ),
+        (
+            json!({"type":"minecraft:set_count","count":9223372036854775809u64}),
+            1,
+        ),
+        (
+            json!({"type":"minecraft:set_count","count":{"type":"minecraft:constant","value":2.7}}),
+            2,
+        ),
+        (
+            json!([{"type":"minecraft:set_count","count":5},{"type":"minecraft:set_count","count":-2.5,"add":true}]),
+            3,
+        ),
+    ] {
+        let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:emerald","modifier":modifier}]}]});
+        let drops = data.inline_loot_table(&table, &mut LegacyRandom::new(9));
+        assert_eq!(
+            drops.iter().map(|d| d.count).sum::<u32>(),
+            expected,
+            "{modifier}"
+        );
+    }
+}
