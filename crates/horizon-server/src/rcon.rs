@@ -19,7 +19,7 @@ use horizon_server_launch::config;
 use serde_json::Value;
 use std::{
     io::{self, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener, TcpStream},
     path::Path,
     sync::{
         Arc,
@@ -184,21 +184,37 @@ struct Limits {
     refused: Duration,
 }
 
+/// The address a client's connections count under: IPv4 (including IPv4-mapped IPv6), or an
+/// IPv6 address's /64 prefix, so rotating addresses inside one /64 cannot hold every RCON slot.
+fn rate_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+        v4 => v4,
+    }
+}
+
 /// Frees a connection's place when its thread ends.
 /// A connection's place: one of the [`Limits::clients`], and one of its address's [`PER_ADDRESS`].
 struct Place {
     open: Arc<AtomicUsize>,
-    per_address: Arc<std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>>,
-    address: std::net::IpAddr,
+    per_address: Arc<std::sync::Mutex<std::collections::HashMap<IpAddr, usize>>>,
+    address: IpAddr,
 }
 
 impl Place {
     fn take(
         open: &Arc<AtomicUsize>,
-        per_address: &Arc<std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, usize>>>,
-        address: std::net::IpAddr,
+        per_address: &Arc<std::sync::Mutex<std::collections::HashMap<IpAddr, usize>>>,
+        address: IpAddr,
         clients: usize,
     ) -> Option<Self> {
+        let address = rate_key(address);
         let mut per = per_address.lock().unwrap_or_else(|e| e.into_inner());
         let mine = per.entry(address).or_default();
         if *mine >= PER_ADDRESS {
@@ -683,6 +699,43 @@ mod tests {
             })
             .collect();
         assert_eq!(many.len(), 3);
+    }
+
+    #[test]
+    fn ipv6_addresses_share_a_64_bucket_and_mapped_ipv4_shares_with_ipv4() {
+        let open = Arc::new(AtomicUsize::new(0));
+        let per_address = Arc::default();
+        // Distinct host IDs within the same /64 share PER_ADDRESS.
+        let same_block: Vec<_> = (1u16..=10)
+            .filter_map(|host| {
+                let ip = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 1, 0, 0, 0, host));
+                Place::take(&open, &per_address, ip, MAX_CLIENTS)
+            })
+            .collect();
+        assert_eq!(same_block.len(), PER_ADDRESS);
+        // A different /64 gets its own bucket.
+        let other_block = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 2, 0, 0, 0, 1));
+        let other = Place::take(&open, &per_address, other_block, MAX_CLIENTS);
+        assert!(other.is_some(), "a different /64 gets its own bucket");
+        drop(same_block);
+        drop(other);
+        assert_eq!(open.load(Ordering::SeqCst), 0);
+        assert!(per_address.lock().unwrap().is_empty());
+
+        // An IPv4-mapped IPv6 address shares its bucket with the plain IPv4 address.
+        let v4 = std::net::Ipv4Addr::new(198, 51, 100, 7);
+        let mapped = IpAddr::V6(v4.to_ipv6_mapped());
+        let plain = IpAddr::V4(v4);
+        let half = PER_ADDRESS / 2;
+        let mut held: Vec<_> = (0..half)
+            .filter_map(|_| Place::take(&open, &per_address, plain, MAX_CLIENTS))
+            .collect();
+        held.extend((0..10).filter_map(|_| Place::take(&open, &per_address, mapped, MAX_CLIENTS)));
+        assert_eq!(held.len(), PER_ADDRESS);
+        assert!(Place::take(&open, &per_address, plain, MAX_CLIENTS).is_none());
+        drop(held);
+        assert_eq!(open.load(Ordering::SeqCst), 0);
+        assert!(per_address.lock().unwrap().is_empty());
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
