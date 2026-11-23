@@ -42,6 +42,8 @@ struct Mock {
     slow_pull: Option<std::time::Duration>,
     /// Branches moved back to main.
     resets: Vec<String>,
+    /// Every request GitHub got, as "METHOD path".
+    requests: Vec<String>,
 }
 
 type Shared = Arc<Mutex<Mock>>;
@@ -184,6 +186,16 @@ async fn mock_github() -> (String, Shared) {
                 Json(json!([]))
             }),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            |State(s): State<Shared>, request: Request<Body>, next: axum::middleware::Next| async move {
+                s.lock()
+                    .unwrap()
+                    .requests
+                    .push(format!("{} {}", request.method(), request.uri().path()));
+                next.run(request).await
+            },
+        ))
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -1290,4 +1302,26 @@ async fn an_owner_edits_the_page_without_a_version() {
     let csrf = client.sign_in().await;
     let (status, json) = edit(&mut client, &csrf, |f| f["tags"] = json!(["x"])).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_of_a_malformed_id_never_reaches_github() {
+    let (mut client, mock) = setup().await;
+    let csrf = client.sign_in().await;
+    client.images.clear();
+    mock.lock().unwrap().requests.clear();
+    for id in [
+        "../../../../other/repo/contents/x",
+        "%2e%2e/%2e%2e/x",
+        "coords_hud?ref=x",
+        "coords_hud#",
+        "Coords_Hud",
+        "",
+    ] {
+        let (status, json) = edit(&mut client, &csrf, |f| f["id"] = json!(id)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{id:?}: {json}");
+    }
+    let m = mock.lock().unwrap();
+    assert!(m.requests.is_empty(), "{:?}", m.requests);
+    assert!(m.branches.is_empty());
 }

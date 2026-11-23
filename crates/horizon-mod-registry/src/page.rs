@@ -5,7 +5,7 @@
 //! Also "Edit project": an owner changes the page with no new version.
 use crate::{Config, Form, Ownership, Refusal, bad, github::GitHub, github_down, now, ownership};
 use axum::http::StatusCode;
-use horizon_platform::mod_package::index::{Kind, page as rules, registry::Entry};
+use horizon_platform::mod_package::index::{self, Kind, page as rules, registry::Entry};
 
 /// The biggest image part: a screenshot (an icon is smaller, checked when added).
 pub const MAX_IMAGE: usize = rules::MAX_SCREENSHOT as usize;
@@ -162,6 +162,10 @@ pub fn edit(
     images: &Uploads,
 ) -> Result<String, Refusal> {
     let gh = &config.github;
+    // The id goes into GitHub API paths and a branch name: check it before any call.
+    if !index::valid_id(&form.id) {
+        return Err(bad("an id is 1 to 64 of a-z, 0-9 and _"));
+    }
     let Some((before, blob)) = gh.entry(&form.id).map_err(github_down)? else {
         return Err(Refusal::new(
             StatusCode::NOT_FOUND,

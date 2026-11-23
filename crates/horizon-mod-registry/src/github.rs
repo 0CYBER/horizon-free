@@ -176,6 +176,28 @@ impl GitHub {
         }
     }
 
+    /// Refuses a name that could leave its place in an API path: the bot's token must only reach
+    /// this repository's own files and refs.
+    fn path_safe(name: &str) -> Result<()> {
+        let plain = !name.is_empty()
+            && !name.starts_with('/')
+            && !name
+                .split('/')
+                .any(|part| part.is_empty() || part.starts_with('.'))
+            && name.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+' | b'/')
+            });
+        if plain {
+            Ok(())
+        } else {
+            Err(Failure {
+                status: 0,
+                message: format!("{name:?} is not a plain path"),
+                timed_out: false,
+            })
+        }
+    }
+
     fn call(&self, method: &str, path: &str) -> ureq::Request {
         self.agent
             .request(
@@ -190,6 +212,7 @@ impl GitHub {
 
     /// `mods/<id>.toml` on main, with its blob sha; None when it isn't there.
     pub fn entry(&self, id: &str) -> Result<Option<(Entry, String)>> {
+        Self::path_safe(id)?;
         let response = self
             .call("GET", &format!("/contents/mods/{id}.toml"))
             .query("ref", "main")
@@ -214,6 +237,7 @@ impl GitHub {
 
     /// The blob sha of `path` on main, None when it isn't there: what replacing it needs.
     pub fn blob(&self, path: &str) -> Result<Option<String>> {
+        Self::path_safe(path)?;
         match self
             .call("GET", &format!("/contents/{path}"))
             .query("ref", "main")
@@ -262,6 +286,7 @@ impl GitHub {
 
     /// Makes branch `name` from main; false when it already exists.
     pub fn branch(&self, name: &str) -> Result<bool> {
+        Self::path_safe(name)?;
         let main = self
             .call("GET", "/git/ref/heads/main")
             .call()
@@ -296,6 +321,7 @@ impl GitHub {
 
     /// The messages of `branch`'s commits that aren't on main.
     pub fn commits(&self, branch: &str) -> Result<Vec<String>> {
+        Self::path_safe(branch)?;
         let compare = self
             .call("GET", &format!("/compare/main...{branch}"))
             .call()
@@ -313,6 +339,7 @@ impl GitHub {
 
     /// Moves branch `name` back to main, dropping its own commits.
     pub fn reset(&self, name: &str) -> Result<()> {
+        Self::path_safe(name)?;
         let main = self
             .call("GET", "/git/ref/heads/main")
             .call()
@@ -334,6 +361,8 @@ impl GitHub {
         sha: Option<&str>,
         message: &str,
     ) -> Result<()> {
+        Self::path_safe(path)?;
+        Self::path_safe(branch)?;
         let mut body = json!({
             "message": message,
             "content": STANDARD.encode(content),
