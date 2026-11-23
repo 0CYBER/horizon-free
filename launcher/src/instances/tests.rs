@@ -460,8 +460,9 @@ fn migration_leaves_both_files_untouched_when_version_or_instance_data_cannot_be
     fs::remove_file(&versions).unwrap();
     fs::rename(data.join("versions-kept"), &versions).unwrap();
     let game = backend::game_home();
-    let port = game.join("ports/family-pack/pack.json");
-    let registry = game.join("horizon-packs/quiet/pack.json");
+    // Joined part by part: the errors name the path with the platform's separators.
+    let port = game.join("ports").join("family-pack").join("pack.json");
+    let registry = game.join("horizon-packs").join("quiet").join("pack.json");
     put(&port, "broken Java pack");
     assert!(absorb_held_selection()
         .unwrap_err()

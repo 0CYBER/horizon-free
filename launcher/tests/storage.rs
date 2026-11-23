@@ -418,6 +418,12 @@ fn explicit_version_removal_refuses_before_changing_install_metadata() {
     let home = Home::new();
     let marker = home.file("launcher/versions/spare/.installed", b"installed");
     let game = home.file("launcher/versions/spare/game", b"game binary");
+    // Horizon's own instance plays the newest Nightly since #19944; without one it would play
+    // `spare` and refuse the removal for that reason first.
+    home.file(
+        "launcher/versions/nightly-2026-11-22-bbbbbbb/.installed",
+        b"installed",
+    );
     // A client without runtime leases is removable since #18405; an installed native build
     // that takes its resources from `spare` still refuses the removal on every platform.
     home.file(
