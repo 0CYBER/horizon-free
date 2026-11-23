@@ -1569,7 +1569,8 @@ pub trait LevelsBackendMut {
     /// they award). True once the orbs are awarded, even if a mod keeps a new
     /// one out (`entity_join_level`). False, with no orbs, for 0, a
     /// value that isn't finite, on a client, for a stale handle or a level
-    /// not in place.
+    /// not in place. One call awards at most 1,000,000 points (about 400
+    /// orbs): a larger `amount` is cut to that, so award in several calls.
     #[access(WorldOnly)]
     fn level_award_experience(
         &mut self,

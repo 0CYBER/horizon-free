@@ -9,6 +9,12 @@ use super::{Game, spill};
 use horizon_items::items::ItemStack;
 use mod_api::{EntityRef, LevelRef};
 
+/// The most experience one `level_award_experience` call awards: about 400 orbs
+/// of the largest size. Vanilla's `ExperienceOrb.award` has no cap, but only
+/// trusted code calls it; a mod's call can't be interrupted, and `u32::MAX`
+/// points are 1.7 million orbs, each scanning the others for a merge.
+pub(super) const MAX_AWARD: u32 = 1_000_000;
+
 impl Game<'_> {
     /// Whether vanilla could make an item entity of `stack`: not empty
     /// (`ItemStack.isEmpty`) and of an item the registry has.
@@ -133,7 +139,8 @@ impl Game<'_> {
     /// they award). True once the orbs are awarded, even if a mod keeps a new
     /// one out (`native_entity_join_level`). False, with no orbs, for 0, a
     /// value that isn't finite, on a client, for a stale handle or a level
-    /// not in place.
+    /// not in place. One call awards at most `MAX_AWARD` points: more is cut
+    /// to that, so the host call stays bounded (an orb is at most 2477).
     pub(super) fn level_award_experience(
         &mut self,
         level: LevelRef,
@@ -145,7 +152,7 @@ impl Game<'_> {
         if amount == 0 || ![x, y, z].iter().all(|v| v.is_finite()) || !self.level_in_place(level) {
             return false;
         }
-        self.spawn_orbs([x, y, z], amount);
+        self.spawn_orbs([x, y, z], amount.min(MAX_AWARD));
         true
     }
 }
@@ -153,6 +160,22 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use mod_api::ServerHost;
+
+    /// The orbs `spawn_orbs_toward` creates for `value` points, before merging.
+    fn orbs_for(mut value: u32) -> u32 {
+        let mut orbs = 0;
+        while value > 0 {
+            value -= horizon_client::entities::ExperienceOrb::split(value);
+            orbs += 1;
+        }
+        orbs
+    }
+
+    #[test]
+    fn one_award_is_cut_to_a_bounded_number_of_orbs() {
+        assert!(orbs_for(u32::MAX) > 1_000_000, "uncapped it is millions");
+        assert!(orbs_for(super::MAX_AWARD) <= 410);
+    }
     #[test]
     #[ignore = "daily"]
     fn a_level_pops_spawns_and_awards_as_vanilla() {
@@ -250,6 +273,12 @@ mod tests {
             let values: Vec<u32> = game.orbs.iter().map(|o| o.points()).collect();
             assert_eq!(values, [73, 17, 7, 3]);
             assert!(!game.level_award_experience(level, 100.5, 70.0, 0.5, 0));
+            // A huge amount is cut to `MAX_AWARD`: a bounded number of orbs.
+            game.orbs.clear();
+            assert!(game.level_award_experience(level, 100.5, 70.0, 0.5, u32::MAX));
+            assert!(game.orbs.len() <= 410);
+            let total: u64 = game.orbs.iter().map(|o| u64::from(o.points()) * u64::from(o.count)).sum();
+            assert_eq!(total, u64::from(super::MAX_AWARD));
 
             let stale = LevelRef::new(WorldEpoch::new(0), game.dim.key());
             assert!(
