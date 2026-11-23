@@ -16,8 +16,9 @@ use crate::{
 #[path = "chat_tests.rs"]
 mod tests;
 
-/// A chat message's log line. One line whatever the text holds: a later line of a multi-line
-/// message would carry no `[CHAT]` mark and stay in the log a bug report attaches.
+/// A chat message's log line, with `\r` and `\n` written out as vanilla does. One line whatever the
+/// text holds: a later line of a multi-line message would carry no `[CHAT]` mark and stay in the
+/// log a bug report attaches.
 fn chat_log_line(plain: &str) -> String {
     format!("[CHAT] {}", crate::logging::one_line(plain))
 }

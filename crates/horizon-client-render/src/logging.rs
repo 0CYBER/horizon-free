@@ -613,16 +613,25 @@ pub fn init(home: &Path, main_thread: &'static str) {
     }
 }
 
-/// `text` on one line: every line break (also the Unicode ones) becomes a space. For text a server
-/// controls, which would otherwise log lines of its own (the launcher drops chat by the `[CHAT]`
-/// mark on a line, and a forged line could pass for a genuine entry).
+/// `text` on one line. A carriage return and a line feed are written as the two visible characters
+/// `\r` and `\n`, as vanilla's `ChatComponent.logChatMessage` does
+/// (`replaceAll("\r", "\\\\r").replaceAll("\n", "\\\\n")` in its Java source: the replacement is
+/// a backslash and `r` or `n`, read from 26.3's bytecode). The other line separators (vertical
+/// tab, form feed, NEL, U+2028, U+2029) vanilla leaves in; Horizon's own protection turns them into
+/// a space, as some viewers split a line at them. For text a server controls, which would otherwise
+/// log lines of its own (the launcher drops chat by the `[CHAT]` mark on a line, and a forged line
+/// could pass for a genuine entry).
 pub fn one_line(text: &str) -> String {
-    text.replace(
-        [
-            '\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}',
-        ],
-        " ",
-    )
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A line in the log from code that prints it elsewhere itself (the dedicated server console).
@@ -698,7 +707,12 @@ mod tests {
 
     #[test]
     fn server_text_stays_on_one_line() {
-        assert_eq!(one_line("a\r\nb\nc\u{2028}d\u{85}e"), "a  b c d e");
+        // Vanilla's escapes for CR and LF; a space for the separators vanilla leaves in.
+        assert_eq!(one_line("a\r\nb\nc"), "a\\r\\nb\\nc");
+        assert_eq!(
+            one_line("c\u{2028}d\u{85}e\u{b}f\u{c}g\u{2029}h"),
+            "c d e f g h"
+        );
         assert_eq!(one_line("plain § text"), "plain § text");
     }
 

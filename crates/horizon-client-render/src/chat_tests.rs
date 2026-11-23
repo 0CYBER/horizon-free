@@ -11,7 +11,10 @@ fn full() -> ChatAbilities {
 fn a_multi_line_message_is_one_marked_log_line() {
     let line = chat_log_line("first\nsecond\r\n[12:00:00] [main/ERROR]: forged");
     assert_eq!(line.lines().count(), 1);
-    assert!(line.starts_with("[CHAT] first second"));
+    assert_eq!(
+        line,
+        "[CHAT] first\\nsecond\\r\\n[12:00:00] [main/ERROR]: forged"
+    );
 }
 
 #[test]
