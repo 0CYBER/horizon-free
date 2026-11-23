@@ -836,6 +836,7 @@ horizon-client game::lan_actions::boat_holder_movement_tests::walking_then_still
 horizon-client game::lan_actions::crack_feedback_tests::crack_packets_follow_start_clock_and_strict_observer_radius lib daily resources
 horizon-client game::lan_actions::guest_body::tests::accepted_hit_moves_through_teleport_restore_but_not_respawn lib daily resources
 horizon-client game::lan_actions::guest_body::tests::co_located_guests_own_distinct_streams_and_restore_the_saved_body lib daily resources
+horizon-client game::lan_actions::guest_body::tests::fall_reset::a_geyser_caps_only_the_slow_fall_of_a_guest_in_its_column lib daily resources
 horizon-client game::lan_actions::guest_body::tests::fall_reset::a_guest_move_that_goes_up_ends_its_fall lib daily resources
 horizon-client game::lan_actions::guest_close_listener_tests::ordinary_guest_final_close_posts_to_actual_listener lib daily resources
 horizon-client game::lan_actions::hotbar_tests::a_hotbar_switch_fires_pre_then_post_and_pre_can_keep_the_slot lib daily resources

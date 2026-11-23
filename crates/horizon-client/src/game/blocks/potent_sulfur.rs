@@ -350,8 +350,8 @@ impl Game<'_> {
     /// `PotentSulfurBlockEntity.LAUNCH_ENTITY_TICKER` on the server: mobs, items,
     /// primed TNT, projectiles, boats and minecarts in the geyser's column with less than
     /// `0.3 + 0.1 * water` upward speed get 0.2 more, unless they ride
-    /// something or are of a type geysers do not move. Players are moved by
-    /// their own client.
+    /// something or are of a type geysers do not move. Guests keep their
+    /// client's launch motion, but their fall distance is capped here too.
     fn launch_entity_ticker(&mut self, pos: Pos) {
         let Some(source) = self.potent_sulfur_source(pos) else {
             return;
@@ -366,6 +366,28 @@ impl Game<'_> {
         };
         let height = unobstructed_block_count(&level, [pos.0, pos.1 + 1, pos.2], water_blocks);
         let area = launch_area(pos, height);
+        if let Some(host) = &mut self.lan {
+            for i in 0..host.hub.guests.len() {
+                let guest = &host.hub.guests[i];
+                // Entity.checkFallDistanceAccumulation comes before the
+                // velocity exclusions for flying and riding. Horizon does not
+                // simulate guest travel; use the last accepted vertical movement
+                // as the guest's delta movement, as for the server elytra check.
+                if host.hub.here(guest)
+                    && !guest.dead
+                    && !guest.spectator()
+                    && guest.known_movement[1] > -0.5
+                    && guest
+                        .motion
+                        .as_ref()
+                        .is_some_and(|p| !p.health.dead_or_dying() && p.fall_distance > 1.0)
+                    && guest.bounds().intersects(area)
+                    && let Some(player) = host.hub.guests.motion_mut(guest.conn)
+                {
+                    player.fall_distance = 1.0;
+                }
+            }
+        }
         let limit = f64::from(0.3f32) + f64::from(water_blocks) * 0.1;
         let push = f64::from(0.2f32);
         let mut near = Vec::new();

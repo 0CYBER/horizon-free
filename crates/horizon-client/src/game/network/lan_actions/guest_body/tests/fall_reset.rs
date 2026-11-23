@@ -1,4 +1,4 @@
-//! `handlePlayerPositionChange`: a move that goes up ends the guest's fall.
+//! `handlePlayerPositionChange` and block entity ticks update the guest's fall.
 use super::guest;
 use crate::game::Game;
 use horizon_client::lan::guest::InboxItem;
@@ -16,29 +16,13 @@ const NAME: &str = "GuestBodyTest";
 const CRITERIA: [&str; 3] = ["any", "short", "five"];
 
 /// A server with one survival guest in the air at 12.5 110 12.5, over a stone floor at y 99.
-fn scene(resources: &mut Option<Arc<crate::game::Resources>>) -> Game<'_> {
+fn scene(resources: &mut Option<Arc<crate::game::Resources>>, with_advancements: bool) -> Game<'_> {
     let mut g = crate::game::game_tests::tests::server_game(resources);
     g.build_registries();
     g.set_allow_commands(true);
-    let scratch = std::env::current_dir().unwrap().join("guest-fall-reset");
-    assert!(!scratch.exists());
-    let folder = scratch.join("data/fall/advancement");
-    std::fs::create_dir_all(&folder).unwrap();
-    g.world_root = scratch.clone();
-    for (name, distance) in CRITERIA.into_iter().zip([
-        serde_json::Value::Null,
-        serde_json::json!({"max": 1.0}),
-        serde_json::json!({"min": 4.9, "max": 5.1}),
-    ]) {
-        let mut criterion = serde_json::json!({"trigger": "minecraft:fall_from_height"});
-        if !distance.is_null() {
-            criterion["conditions"] = serde_json::json!({"distance": {"y": distance}});
-        }
-        let advancement = serde_json::json!({"criteria": {name: criterion}});
-        std::fs::write(folder.join(format!("{name}.json")), advancement.to_string()).unwrap();
+    if with_advancements {
+        install_fall_advancements(&mut g);
     }
-    g.adv.tree = Arc::new(Tree::load(&scratch.join("data")));
-    assert_eq!(g.adv.tree.list.len(), CRITERIA.len());
     let stone = g.pack.assets.registry.default_state("minecraft:stone");
     let mut chunk = Chunk::empty(0, 0);
     for x in 0..16 {
@@ -92,15 +76,37 @@ fn scene(resources: &mut Option<Arc<crate::game::Resources>>) -> Game<'_> {
     g
 }
 
-/// One server tick in which the guest's client sent these positions, one per client tick.
-fn tick_with_moves(g: &mut Game<'_>, heights: &[f64]) {
+fn install_fall_advancements(g: &mut Game<'_>) {
+    let scratch = std::env::current_dir().unwrap().join("guest-fall-reset");
+    assert!(!scratch.exists());
+    let folder = scratch.join("data/fall/advancement");
+    std::fs::create_dir_all(&folder).unwrap();
+    g.world_root = scratch.clone();
+    for (name, distance) in CRITERIA.into_iter().zip([
+        serde_json::Value::Null,
+        serde_json::json!({"max": 1.0}),
+        serde_json::json!({"min": 4.9, "max": 5.1}),
+    ]) {
+        let mut criterion = serde_json::json!({"trigger": "minecraft:fall_from_height"});
+        if !distance.is_null() {
+            criterion["conditions"] = serde_json::json!({"distance": {"y": distance}});
+        }
+        let advancement = serde_json::json!({"criteria": {name: criterion}});
+        std::fs::write(folder.join(format!("{name}.json")), advancement.to_string()).unwrap();
+    }
+    g.adv.tree = Arc::new(Tree::load(&scratch.join("data")));
+    assert_eq!(g.adv.tree.list.len(), CRITERIA.len());
+}
+
+/// Moves as sent by a client, one per client tick.
+fn queue_moves(g: &mut Game<'_>, x: f64, heights: &[f64]) {
     g.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
         guest
             .inbox
             .push_back(InboxItem::Packet(S::ClientTickEnd(Empty), None));
         for &y in heights {
             let to = play::MovePlayerPos {
-                x: 12.5,
+                x,
                 y,
                 z: 12.5,
                 flags: 0,
@@ -113,6 +119,10 @@ fn tick_with_moves(g: &mut Game<'_>, heights: &[f64]) {
                 .push_back(InboxItem::Packet(S::ClientTickEnd(Empty), None));
         }
     });
+}
+
+fn tick_with_moves(g: &mut Game<'_>, heights: &[f64]) {
+    queue_moves(g, 12.5, heights);
     g.tick_lan_packets();
     let guest = &g.lan.as_ref().unwrap().hub.guests[0];
     assert_eq!(guest.moves.len(), heights.len(), "every move is accepted");
@@ -139,7 +149,7 @@ fn fall(g: &Game<'_>) -> (f64, Option<[f64; 3]>, [bool; 3]) {
 #[ignore = "daily"]
 fn a_guest_move_that_goes_up_ends_its_fall() {
     let mut resources = None;
-    let mut g = scene(&mut resources);
+    let mut g = scene(&mut resources, true);
     // One block down: a fall of 1, tracked from where the tick left the guest.
     tick_with_moves(&mut g, &[109.0]);
     assert_eq!(fall(&g), (1.0, Some([12.5, 109.0, 12.5]), [false; 3]));
@@ -181,4 +191,63 @@ fn a_guest_move_that_goes_up_ends_its_fall() {
     );
     // Half a block up from where the last fall began: any fall, and a short one.
     assert_eq!(fall(&g).2, [true, true, false]);
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_geyser_caps_only_the_slow_fall_of_a_guest_in_its_column() {
+    let mut resources = None;
+    let mut trace = |sulfur: &str| {
+        let mut g = scene(&mut resources, false);
+        // Lava beneath the sulfur; four glass sides contain one water source.
+        // The active column spans y=102 through y<108.
+        for command in [
+            "setblock 12 100 12 minecraft:lava",
+            "setblock 11 102 12 minecraft:glass",
+            "setblock 13 102 12 minecraft:glass",
+            "setblock 12 102 11 minecraft:glass",
+            "setblock 12 102 13 minecraft:glass",
+            "setblock 12 102 12 minecraft:water",
+        ] {
+            assert!(g.run_command(command), "{command}");
+        }
+        assert!(g.run_command(&format!("setblock 12 101 12 {sulfur}")));
+        [
+            (12.5, 109.25),
+            (12.5, 108.0), // touches the top without overlapping
+            (12.5, 107.5), // exactly -0.5 is still too fast
+            (12.5, 107.25),
+            (12.5, 107.0),  // no upward packet is needed
+            (10.5, 106.75), // outside the column at the same height
+            (10.5, 106.0),
+        ]
+        .map(|(x, y)| {
+            queue_moves(&mut g, x, &[y]);
+            assert!(g.run_command("tick step 1"));
+            g.tick_server(false).unwrap();
+            let guest = &g.lan.as_ref().unwrap().hub.guests[0];
+            assert_eq!(
+                guest.position,
+                [x, y, 12.5],
+                "the server accepted this move"
+            );
+            let body = guest.motion.as_ref().unwrap();
+            (body.fall_distance, body.velocity)
+        })
+    };
+    let active = trace("minecraft:potent_sulfur[potent_sulfur_state=continuous]");
+    let no_geyser = trace("minecraft:smooth_stone");
+    assert_eq!(
+        active.map(|(fall, _)| fall),
+        [0.75, 2.0, 2.5, 1.0, 1.0, 1.25, 2.0]
+    );
+    assert_eq!(
+        no_geyser.map(|(fall, _)| fall),
+        [0.75, 2.0, 2.5, 2.75, 3.0, 3.25, 4.0]
+    );
+    assert_eq!(
+        active.map(|(_, velocity)| velocity),
+        no_geyser.map(|(_, velocity)| velocity),
+        "the server does not add a launch impulse"
+    );
 }

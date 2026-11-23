@@ -42,6 +42,10 @@ chunk's current priority, sub-tick order and deadline in its collection heap.
 It refreshes the head after polling the chunk, and clears the heap before
 dispatch. Callbacks can still schedule work for the next collection.
 
+An active potent sulfur geyser caps the fall distance of a slowly descending player in its own
+level's column. The client still simulates the launch; the server limits its own fall-damage
+counter using the player's last accepted vertical movement, without adding a second launch.
+
 ## One code path for both
 
 The dedicated server and the server thread are the same code. Each `Game` has an explicit
