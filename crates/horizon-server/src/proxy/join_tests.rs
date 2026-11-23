@@ -761,3 +761,51 @@ fn a_stop_for_good_reaches_the_player_as_the_games_kick() {
     assert!(String::from_utf8_lossy(&payload).contains("server_shutdown"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// How many of `streams` the proxy still holds open: a closed one reads end-of-stream at once.
+fn held_open(streams: &mut [TcpStream]) -> usize {
+    streams
+        .iter_mut()
+        .filter_map(|s| {
+            s.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+            let mut byte = [0u8; 1];
+            matches!(
+                std::io::Read::read(s, &mut byte),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut
+            )
+            .then_some(())
+        })
+        .count()
+}
+
+#[test]
+fn silent_connections_are_closed_past_the_most_the_proxy_holds_before_login() {
+    let dir = temp_dir("flood");
+    let secret = super::secret(&dir).unwrap();
+    let game = FakeGame::start(&secret);
+    let (_proxy, port) = proxy_for(&game, &dir);
+    // The player limit plus the 64 spare places, worked out here and not read back from the proxy.
+    let most = Config::default().server.max_players as usize + 64;
+    let mut silent: Vec<TcpStream> = (0..most + 100)
+        .map(|_| TcpStream::connect(("127.0.0.1", port)).unwrap())
+        .collect();
+    thread::sleep(Duration::from_millis(500));
+    assert_eq!(held_open(&mut silent), most);
+}
+
+#[test]
+fn a_player_who_logged_in_no_longer_holds_a_place_before_login() {
+    let dir = temp_dir("place");
+    let secret = super::secret(&dir).unwrap();
+    let game = FakeGame::start(&secret);
+    let (proxy, port) = proxy_for(&game, &dir);
+    proxy.game_up();
+    let _player = join(port, "Alex", &[]);
+    let open = &proxy.inner.admission.open;
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while open.load(Ordering::SeqCst) != 0 && std::time::Instant::now() < end {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(open.load(Ordering::SeqCst), 0);
+}

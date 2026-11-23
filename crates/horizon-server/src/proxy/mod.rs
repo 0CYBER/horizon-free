@@ -15,7 +15,8 @@ mod wire;
 
 use horizon_server_launch::config::Config;
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -56,6 +57,8 @@ pub struct Inner {
     /// Every player through the proxy.
     pub sessions: Mutex<Vec<Arc<session::Session>>>,
     log: Mutex<Box<dyn Fn(&str, &str) + Send>>,
+    /// The connections still before login: see [`Admission`].
+    admission: Admission,
 }
 
 /// Whether the game takes logins.
@@ -193,6 +196,7 @@ pub fn start(
         hold: Duration::from_secs(u64::from(config.proxy.hold_seconds)),
         sessions: Mutex::new(Vec::new()),
         log: Mutex::new(Box::new(log)),
+        admission: Admission::new(config.server.max_players as usize),
     });
     let accepting = inner.clone();
     thread::Builder::new()
@@ -339,21 +343,111 @@ pub fn remove_own_secret(dir: &Path) {
     }
 }
 
+/// Connections from one source (an IPv6 /64 counts as one) still before login at once, as the game's own
+/// per-address limit.
+const PER_SOURCE: usize = 10;
+/// Connections before login beyond the player limit, as the game's spare places for logins and pings.
+const SPARE_CONNECTIONS: usize = 64;
+
+/// Who counts as one source: an IPv4 address, or an IPv6 /64 (one subscriber holds a whole prefix).
+fn source(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !(u64::MAX as u128))),
+        v4 => v4,
+    }
+}
+
+/// Whether many players may come from `ip`: a tunnel, a container's port forward or the local network
+/// hands them all over from one address.
+fn shared_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
+}
+
+/// Caps the connections that have not logged in yet, so silent ones can't take a thread each without end.
+/// Players that logged in are not counted: they are the game's players and its own limits apply.
+struct Admission {
+    open: Arc<std::sync::atomic::AtomicUsize>,
+    by_source: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    most: usize,
+}
+
+impl Admission {
+    fn new(max_players: usize) -> Self {
+        Self {
+            open: Arc::default(),
+            by_source: Arc::default(),
+            most: max_players.saturating_add(SPARE_CONNECTIONS),
+        }
+    }
+
+    /// A place for a connection from `ip`, or None when its source or the proxy has its most.
+    fn take(&self, ip: IpAddr) -> Option<Place> {
+        // Judge the address itself: grouping an IPv6 address into its /64 turns `::1` into `::`,
+        // which is no longer loopback.
+        let exempt = shared_address(ip.to_canonical());
+        let key = source(ip);
+        let mut by = self.by_source.lock().unwrap_or_else(|e| e.into_inner());
+        if !exempt && by.get(&key).copied().unwrap_or(0) >= PER_SOURCE {
+            return None;
+        }
+        let slot = crate::http::Slot::take(&self.open, self.most)?;
+        if !exempt {
+            *by.entry(key).or_default() += 1;
+        }
+        Some(Place {
+            _slot: slot,
+            by_source: self.by_source.clone(),
+            counted: (!exempt).then_some(key),
+        })
+    }
+}
+
+/// A connection's place before login, given back when dropped.
+struct Place {
+    _slot: crate::http::Slot,
+    by_source: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    counted: Option<IpAddr>,
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        let Some(key) = self.counted else { return };
+        let mut by = self.by_source.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = by.get_mut(&key) {
+            *n -= 1;
+            if *n == 0 {
+                by.remove(&key);
+            }
+        }
+    }
+}
+
 fn accept(listener: TcpListener, inner: &Arc<Inner>) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
+        let Some(place) = stream
+            .peer_addr()
+            .ok()
+            .and_then(|a| inner.admission.take(a.ip()))
+        else {
+            // Closed before it costs a thread.
+            continue;
+        };
         let inner = inner.clone();
         let _ = thread::Builder::new()
             .name("Proxy client".into())
             .spawn(move || {
-                if let Err(e) = serve(stream, &inner) {
+                if let Err(e) = serve(stream, &inner, place) {
                     inner.note("DEBUG", &format!("A connection to the proxy ended: {e}"));
                 }
             });
     }
 }
 
-fn serve(stream: TcpStream, inner: &Arc<Inner>) -> Result<(), String> {
+fn serve(stream: TcpStream, inner: &Arc<Inner>, place: Place) -> Result<(), String> {
     stream
         .set_write_timeout(Some(CLIENT_WRITE_TIMEOUT))
         .map_err(|e| e.to_string())?;
@@ -363,7 +457,7 @@ fn serve(stream: TcpStream, inner: &Arc<Inner>) -> Result<(), String> {
         .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
         .map_err(|e| e.to_string())?;
     // The timeout above is per read: this one ends the whole handshake and login.
-    let deadline = Deadline::start(&c, HANDSHAKE_TIMEOUT)?;
+    let deadline = Deadline::start(&c, HANDSHAKE_TIMEOUT, place)?;
     let e = |e: wire::Error| e.to_string();
     let (id, payload) = c.recv().map_err(e)?;
     let hello =
@@ -395,10 +489,12 @@ fn serve(stream: TcpStream, inner: &Arc<Inner>) -> Result<(), String> {
 struct Deadline {
     done: Arc<AtomicBool>,
     watcher: thread::Thread,
+    /// Held until login is over: [`Admission`] counts only connections before it.
+    _place: Place,
 }
 
 impl Deadline {
-    fn start(c: &Connection, limit: Duration) -> Result<Deadline, String> {
+    fn start(c: &Connection, limit: Duration, place: Place) -> Result<Deadline, String> {
         let closer = c.reader.closer().map_err(|e| e.to_string())?;
         let done = Arc::new(AtomicBool::new(false));
         let flag = done.clone();
@@ -418,6 +514,7 @@ impl Deadline {
         Ok(Deadline {
             done,
             watcher: watcher.thread().clone(),
+            _place: place,
         })
     }
 }
@@ -537,5 +634,33 @@ mod tests {
         remove_own_secret(&dir);
         assert!(!dir.join(SECRET_FILE).exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_source_has_its_share_of_places_an_ipv6_prefix_counts_as_one_and_places_come_back() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let admission = Admission::new(100);
+        let mut held: Vec<Place> = (0..PER_SOURCE)
+            .map(|_| admission.take(ip("203.0.113.7")).unwrap())
+            .collect();
+        assert!(admission.take(ip("203.0.113.7")).is_none());
+        assert!(admission.take(ip("198.51.100.2")).is_some());
+        // Local addresses (a tunnel or a container hands everyone over from one) have no share.
+        let local: Vec<Place> = (0..PER_SOURCE + 5)
+            .map(|_| admission.take(ip("127.0.0.1")).unwrap())
+            .collect();
+        let v6: Vec<Place> = (0..PER_SOURCE)
+            .map(|i| admission.take(ip(&format!("2001:db8:1:2::{i:x}"))).unwrap())
+            .collect();
+        assert!(admission.take(ip("2001:db8:1:2:ffff::1")).is_none());
+        assert!(admission.take(ip("2001:db8:1:3::1")).is_some());
+        let loopback6: Vec<Place> = (0..PER_SOURCE + 5)
+            .map(|_| admission.take(ip("::1")).unwrap())
+            .collect();
+        held.pop();
+        assert!(admission.take(ip("203.0.113.7")).is_some());
+        drop((held, local, v6, loopback6));
+        assert_eq!(admission.open.load(Ordering::SeqCst), 0);
+        assert!(admission.by_source.lock().unwrap().is_empty());
     }
 }
