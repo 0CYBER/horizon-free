@@ -19,7 +19,20 @@ use horizon_core::{
     position::BlockPos,
     random::RandomSource,
 };
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
+
+thread_local! {
+    /// Reusable per-column block cache avoiding a 1.5 KiB Vec allocation per chunk.
+    static COLUMN_CACHE: RefCell<ColumnCache> = RefCell::new(ColumnCache::default());
+}
+
+pub(crate) fn release_scratch() {
+    let _ = COLUMN_CACHE.try_with(|slot| {
+        if let Ok(mut guard) = slot.try_borrow_mut() {
+            *guard = ColumnCache::default();
+        }
+    });
+}
 
 pub struct SurfaceInputs<'a, R: RandomSource, S: MaterialSurfaceQueries> {
     pub generation: WorldGenerationContext,
@@ -121,6 +134,9 @@ struct Column<'a, 'r, B: TerrainBlockStates> {
     /// This column's `TerrainChunk::worldgen_column_bounds`: most writes are
     /// far below the heightmaps and need no update.
     bounds: Option<ColumnBounds>,
+    /// Lowest y at which a block change can move `WorldSurfaceWg` (`top - 1`).
+    top_watch: i32,
+    wrote_top: bool,
 }
 impl<'a, 'r, B: TerrainBlockStates> Column<'a, 'r, B> {
     fn new(
@@ -170,6 +186,8 @@ impl<'a, 'r, B: TerrainBlockStates> Column<'a, 'r, B> {
             low,
             high,
             bounds,
+            top_watch: top.wrapping_sub(1),
+            wrote_top: false,
         }
     }
     fn cache_index(&self, y: i32) -> Option<usize> {
@@ -209,6 +227,15 @@ impl<'a, 'r, B: TerrainBlockStates> Column<'a, 'r, B> {
         if high < low {
             return Ok(());
         }
+        if !self.chunk.block_properties(state).has_fluid()
+            && let (Some(lo), Some(hi)) = (self.cache_index(low), self.cache_index(high))
+            && self.cache.states[lo..=hi].iter().all(|&s| s == state)
+        {
+            return Ok(());
+        }
+        if high >= self.top_watch {
+            self.wrote_top = true;
+        }
         self.set_block(high, state)?;
         if high > low {
             match self.bounds {
@@ -246,6 +273,9 @@ impl<B: TerrainBlockStates> MaterialColumn for Column<'_, '_, B> {
             let properties = self.chunk.block_properties(state);
             // Most of the Nether's rule writes netherrack over netherrack.
             if self.block(y)? != state {
+                if y >= self.top_watch {
+                    self.wrote_top = true;
+                }
                 self.chunk
                     .set_block_worldgen_column(self.x, y, self.z, state, &mut self.bounds)?;
                 if let Some(index) = self.cache_index(y) {
@@ -447,180 +477,254 @@ where
     R::Positional: Clone,
 {
     let min = chunk.min_y();
-    let rule = worker.add_shared_rule(rule, shared)?;
-    let mut variants = worker.surface_variants(rule)?;
+    let (mut variants, cached_slot) = worker.prepare_shared_surface(rule, shared)?;
     let cx = chunk.position().x.wrapping_shl(4);
     let cz = chunk.position().z.wrapping_shl(4);
-    // One block buffer, refilled per column and kept across columns.
-    let mut cache = ColumnCache::default();
-    for lx in 0..16 {
-        for lz in 0..16 {
-            let x = cx.wrapping_add(lx);
-            let z = cz.wrapping_add(lz);
-            let original_top = first_available(chunk, lx, lz)?;
-            let biome = worker
-                .biome_at(BlockPos::new(x, original_top, z))?
-                .ok_or(MaterialRuleError::MissingBiome)?;
-            if biome.as_ref() == "minecraft:eroded_badlands" {
-                extensions.eroded_badlands(
-                    &mut Column::new(
-                        chunk,
-                        x,
-                        z,
-                        write_min_y,
-                        write_max_y,
-                        original_top,
-                        &mut cache,
-                    ),
-                    x,
-                    z,
-                    original_top,
-                    min,
-                )?;
+    // Extension hooks only trigger in eroded_badlands and frozen_ocean/deep_frozen_ocean.
+    // When the caller supplies a possible-biome bitset and numbers biomes, skip the
+    // per-column biome lookup if none of those three biomes can appear in the 3x3 region.
+    let check_extensions = match worker.possible_biome_ids() {
+        Some(bits) => [
+            "minecraft:eroded_badlands",
+            "minecraft:frozen_ocean",
+            "minecraft:deep_frozen_ocean",
+        ]
+        .into_iter()
+        .any(|name| match worker.biome_index(name) {
+            Some(Some(id)) => {
+                let id = id as usize;
+                bits.get(id / 64).is_some_and(|w| w & (1 << (id % 64)) != 0)
             }
-            let top = first_available(chunk, lx, lz)?;
-            let gx = first_available(chunk, (lx + 1).min(15), lz)?.wrapping_sub(first_available(
-                chunk,
-                (lx - 1).max(0),
-                lz,
-            )?);
-            let gz = first_available(chunk, lx, (lz + 1).min(15))?.wrapping_sub(first_available(
-                chunk,
-                lx,
-                (lz - 1).max(0),
-            )?);
-            worker.update_xz(x, z, gx, gz);
-            let mut above = 0i32;
-            let mut water = i32::MIN;
-            let mut bottom = i32::MAX;
-            let mut y = top;
-            let mut budget = 1 << 20;
-            // The walk descends, so the band only steps down.
-            let mut band = variants.band(top);
-            let mut band_low = variants.band_bounds(band)[0];
-            // The column's minimum surface level, read once when first needed.
-            let mut minimum = None;
-            let mut column = Column::new(chunk, x, z, write_min_y, write_max_y, top, &mut cache);
-            while y >= min {
-                tick(&mut budget)?;
-                match column.kind(y) {
-                    BlockKind::Air => {
-                        above = 0;
-                        water = i32::MIN;
-                    }
-                    BlockKind::Fluid => {
-                        if water == i32::MIN {
-                            water = y.wrapping_add(1);
-                        }
-                    }
-                    BlockKind::Solid => {
-                        if bottom >= y {
-                            bottom = -32512; // DimensionType.MIN_Y << 4 for 26.3.
-                            let mut below = y.wrapping_sub(1);
-                            while below >= min - 1 {
-                                tick(&mut budget)?;
-                                if column.kind(below) != BlockKind::Solid {
-                                    bottom = below.wrapping_add(1);
-                                    break;
-                                }
-                                below = below.wrapping_sub(1);
-                            }
-                        }
-                        above = above.wrapping_add(1);
-                        if y >= write_min_y && y <= write_max_y {
-                            let surface = variants.surface
-                                && y >= match minimum {
-                                    Some(level) => level,
-                                    None => *minimum.insert(worker.minimum_surface_level()?),
-                                };
-                            while y < band_low {
-                                band -= 1;
-                                band_low = variants.band_bounds(band)[0];
-                            }
-                            // Where the rule gives no block, the block's context
-                            // is not needed: each application sets its own first.
-                            if let Some(band_rule) =
-                                worker.surface_variant(&mut variants, band, surface)
-                            {
-                                worker.update_y(
-                                    above,
-                                    y.wrapping_sub(bottom).wrapping_add(1),
-                                    water,
-                                    y,
-                                );
-                                // A run of blocks the rule gives one state where
-                                // none of its ore veins places one is written
-                                // through the section fill, down to the first y
-                                // where a vein can place a block, the band's
-                                // bottom or the write bounds.
-                                if let BandRule::Fill(_, index) = band_rule {
-                                    let fill = variants.fill(index);
-                                    if column.fills_runs(fill.block)
-                                        && worker.veins_miss(fill, BlockPos::new(x, y, z))?
-                                    {
-                                        // A run above the minimum surface level stops
-                                        // there too: below it the band takes its other
-                                        // variant (`surface` is false).
-                                        let lowest = match minimum {
-                                            Some(level) if surface => {
-                                                band_low.max(write_min_y).max(level)
-                                            }
-                                            _ => band_low.max(write_min_y),
-                                        };
-                                        let mut run_low = y;
-                                        loop {
-                                            let next = run_low.wrapping_sub(1);
-                                            if next < lowest {
-                                                break;
-                                            }
-                                            tick(&mut budget)?;
-                                            if column.kind(next) != BlockKind::Solid
-                                                || !worker
-                                                    .veins_miss(fill, BlockPos::new(x, next, z))?
-                                            {
-                                                break;
-                                            }
-                                            run_low = next;
-                                        }
-                                        column.fill_opaque(run_low, y, fill.block)?;
-                                        above = above.wrapping_add(y.wrapping_sub(run_low));
-                                        // The run's blocks are written: the
-                                        // loop continues below it.
-                                        y = run_low.wrapping_sub(1);
-                                        continue;
-                                    }
-                                }
-                                if let Some(state) =
-                                    worker.try_apply(band_rule.rule(), BlockPos::new(x, y, z))?
-                                {
-                                    column.set_block(y, state)?;
-                                }
-                            }
-                        }
-                    }
-                }
-                y = y.wrapping_sub(1);
-            }
-            if matches!(
-                biome.as_ref(),
-                "minecraft:frozen_ocean" | "minecraft:deep_frozen_ocean"
-            ) {
-                let minimum = worker.minimum_surface_level()?;
-                extensions.frozen_ocean_with_melt(
-                    &mut column,
-                    [x, z],
-                    original_top,
-                    minimum,
-                    |position, sea| {
-                        worker
-                            .melts_frozen_ocean(&biome, position, sea)
-                            .map_err(SurfaceError::from)
-                    },
-                )?;
+            Some(None) => false,
+            None => true,
+        }),
+        None => true,
+    };
+    let mut cache = COLUMN_CACHE
+        .try_with(|slot| {
+            slot.try_borrow_mut()
+                .map(|mut guard| std::mem::take(&mut *guard))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let result = (|| -> Result<(), SurfaceError> {
+        // Cache all 256 WorldSurfaceWg tops in a flat array and refresh only when
+        // a column actually writes at or above its top (or runs an extension hook).
+        let mut tops = [0i32; 256];
+        for lx in 0..16 {
+            for lz in 0..16 {
+                tops[(lx as usize) * 16 + (lz as usize)] = first_available(chunk, lx, lz)?;
             }
         }
-    }
-    Ok(())
+        for lx in 0..16 {
+            for lz in 0..16 {
+                let cell_idx = (lx as usize) * 16 + (lz as usize);
+                let x = cx.wrapping_add(lx);
+                let z = cz.wrapping_add(lz);
+                let original_top = tops[cell_idx];
+                let biome = if check_extensions {
+                    let biome = worker
+                        .biome_at(BlockPos::new(x, original_top, z))?
+                        .ok_or(MaterialRuleError::MissingBiome)?;
+                    if biome.as_ref() == "minecraft:eroded_badlands" {
+                        extensions.eroded_badlands(
+                            &mut Column::new(
+                                chunk,
+                                x,
+                                z,
+                                write_min_y,
+                                write_max_y,
+                                original_top,
+                                &mut cache,
+                            ),
+                            x,
+                            z,
+                            original_top,
+                            min,
+                        )?;
+                        tops[cell_idx] = first_available(chunk, lx, lz)?;
+                    }
+                    Some(biome)
+                } else {
+                    #[cfg(debug_assertions)]
+                    if let Some(actual) = worker.biome_at(BlockPos::new(x, original_top, z))? {
+                        debug_assert!(
+                            !matches!(
+                                actual.as_ref(),
+                                "minecraft:eroded_badlands"
+                                    | "minecraft:frozen_ocean"
+                                    | "minecraft:deep_frozen_ocean"
+                            ),
+                            "possible_biome_ids skipped extension check for biome {actual}"
+                        );
+                        if let (Some(bits), Some(Some(id))) = (
+                            worker.possible_biome_ids(),
+                            worker.biome_index(actual.as_ref()),
+                        ) {
+                            let id = id as usize;
+                            debug_assert!(
+                                bits.get(id / 64).is_some_and(|w| w & (1 << (id % 64)) != 0),
+                                "possible_biome_ids missing visible biome {actual} (id {id})"
+                            );
+                        }
+                    }
+                    None
+                };
+                let top = tops[cell_idx];
+                let gx = tops[((lx + 1).min(15) as usize) * 16 + (lz as usize)]
+                    .wrapping_sub(tops[((lx - 1).max(0) as usize) * 16 + (lz as usize)]);
+                let gz = tops[(lx as usize) * 16 + ((lz + 1).min(15) as usize)]
+                    .wrapping_sub(tops[(lx as usize) * 16 + ((lz - 1).max(0) as usize)]);
+                worker.update_xz(x, z, gx, gz);
+                let mut above = 0i32;
+                let mut water = i32::MIN;
+                let mut bottom = i32::MAX;
+                let mut y = top;
+                let mut budget = 1 << 20;
+                // The walk descends, so the band only steps down.
+                let mut band = variants.band(top);
+                let mut band_low = variants.band_bounds(band)[0];
+                // The column's minimum surface level, read once when first needed.
+                let mut minimum = None;
+                let mut column =
+                    Column::new(chunk, x, z, write_min_y, write_max_y, top, &mut cache);
+                while y >= min {
+                    tick(&mut budget)?;
+                    match column.kind(y) {
+                        BlockKind::Air => {
+                            above = 0;
+                            water = i32::MIN;
+                        }
+                        BlockKind::Fluid => {
+                            if water == i32::MIN {
+                                water = y.wrapping_add(1);
+                            }
+                        }
+                        BlockKind::Solid => {
+                            if bottom >= y {
+                                bottom = -32512; // DimensionType.MIN_Y << 4 for 26.3.
+                                let mut below = y.wrapping_sub(1);
+                                while below >= min - 1 {
+                                    tick(&mut budget)?;
+                                    if column.kind(below) != BlockKind::Solid {
+                                        bottom = below.wrapping_add(1);
+                                        break;
+                                    }
+                                    below = below.wrapping_sub(1);
+                                }
+                            }
+                            above = above.wrapping_add(1);
+                            if y >= write_min_y && y <= write_max_y {
+                                let surface = variants.surface
+                                    && y >= match minimum {
+                                        Some(level) => level,
+                                        None => *minimum.insert(worker.minimum_surface_level()?),
+                                    };
+                                while y < band_low {
+                                    band -= 1;
+                                    band_low = variants.band_bounds(band)[0];
+                                }
+                                // Where the rule gives no block, the block's context
+                                // is not needed: each application sets its own first.
+                                if let Some(band_rule) =
+                                    worker.surface_variant(&mut variants, band, surface)
+                                {
+                                    worker.update_y(
+                                        above,
+                                        y.wrapping_sub(bottom).wrapping_add(1),
+                                        water,
+                                        y,
+                                    );
+                                    // A run of blocks the rule gives one state where
+                                    // none of its ore veins places one is written
+                                    // through the section fill, down to the first y
+                                    // where a vein can place a block, the band's
+                                    // bottom or the write bounds.
+                                    if let BandRule::Fill(_, index) = band_rule {
+                                        let fill = variants.fill(index);
+                                        if column.fills_runs(fill.block)
+                                            && worker.veins_miss(fill, BlockPos::new(x, y, z))?
+                                        {
+                                            // A run above the minimum surface level stops
+                                            // there too: below it the band takes its other
+                                            // variant (`surface` is false).
+                                            let lowest = match minimum {
+                                                Some(level) if surface => {
+                                                    band_low.max(write_min_y).max(level)
+                                                }
+                                                _ => band_low.max(write_min_y),
+                                            };
+                                            let mut run_low = y;
+                                            loop {
+                                                let next = run_low.wrapping_sub(1);
+                                                if next < lowest {
+                                                    break;
+                                                }
+                                                tick(&mut budget)?;
+                                                if column.kind(next) != BlockKind::Solid
+                                                    || !worker.veins_miss(
+                                                        fill,
+                                                        BlockPos::new(x, next, z),
+                                                    )?
+                                                {
+                                                    break;
+                                                }
+                                                run_low = next;
+                                            }
+                                            column.fill_opaque(run_low, y, fill.block)?;
+                                            above = above.wrapping_add(y.wrapping_sub(run_low));
+                                            // The run's blocks are written: the
+                                            // loop continues below it.
+                                            y = run_low.wrapping_sub(1);
+                                            continue;
+                                        }
+                                    }
+                                    if let Some(state) = worker
+                                        .try_apply(band_rule.rule(), BlockPos::new(x, y, z))?
+                                    {
+                                        column.set_block(y, state)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    y = y.wrapping_sub(1);
+                }
+                let mut refresh_top = column.wrote_top;
+                if let Some(biome) = &biome
+                    && matches!(
+                        biome.as_ref(),
+                        "minecraft:frozen_ocean" | "minecraft:deep_frozen_ocean"
+                    )
+                {
+                    let minimum = worker.minimum_surface_level()?;
+                    extensions.frozen_ocean_with_melt(
+                        &mut column,
+                        [x, z],
+                        original_top,
+                        minimum,
+                        |position, sea| {
+                            worker
+                                .melts_frozen_ocean(biome, position, sea)
+                                .map_err(SurfaceError::from)
+                        },
+                    )?;
+                    refresh_top = true;
+                }
+                if refresh_top {
+                    tops[cell_idx] = first_available(chunk, lx, lz)?;
+                }
+            }
+        }
+        Ok(())
+    })();
+    let _ = COLUMN_CACHE.try_with(|slot| {
+        if let Ok(mut guard) = slot.try_borrow_mut() {
+            *guard = cache;
+        }
+    });
+    worker.finish_shared_surface(shared, variants, cached_slot);
+    result
 }
 
 #[cfg(test)]
@@ -775,5 +879,307 @@ mod tests {
         assert_same(&per_block, &filled);
         // Below the chunk: the run stops at the write bounds.
         assert_ne!(filled.block(0, -70, 0), STONE);
+    }
+
+    #[derive(Debug)]
+    struct ConstNoise(f32);
+    impl horizon_core::noise::Noise for ConstNoise {
+        fn range(&self) -> Result<[f32; 2], horizon_core::noise::NanRange> {
+            Ok([self.0, self.0])
+        }
+        fn get2(&self, _: f64, _: f64) -> f32 {
+            self.0
+        }
+        fn get3(&self, _: f64, _: f64, _: f64) -> f32 {
+            self.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct ZeroDensity;
+    impl DensitySampler for ZeroDensity {
+        fn sample_value(
+            &self,
+            _: &mut SamplerContext,
+            _: [i32; 3],
+        ) -> Result<f32, horizon_core::density::SampleError> {
+            Ok(0.0)
+        }
+    }
+
+    struct ExtensionSurface {
+        biome: &'static str,
+        possible_ids: Option<Vec<u64>>,
+        numbered: bool,
+    }
+    impl MaterialSurfaceQueries for ExtensionSurface {
+        fn possible_biome_ids(&self) -> Option<&[u64]> {
+            self.possible_ids.as_deref()
+        }
+        fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+            if !self.numbered {
+                return None;
+            }
+            Some(match name {
+                "minecraft:plains" => Some(0),
+                "minecraft:eroded_badlands" => Some(1),
+                "minecraft:frozen_ocean" => Some(2),
+                _ => None,
+            })
+        }
+        fn biome(&mut self, _: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+            Ok(Some(Arc::from(self.biome)))
+        }
+        fn biome_id(&mut self, _: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+            Ok(match self.biome {
+                "minecraft:plains" => Some(0),
+                "minecraft:eroded_badlands" => Some(1),
+                "minecraft:frozen_ocean" => Some(2),
+                _ => None,
+            })
+        }
+        fn surface_depth(&mut self, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn surface_secondary(&mut self, _: i32, _: i32) -> f64 {
+            0.0
+        }
+    }
+
+    fn test_extensions(
+        root: <horizon_core::random::LegacyRandom as RandomSource>::Positional,
+    ) -> MaterialExtensions<<horizon_core::random::LegacyRandom as RandomSource>::Positional> {
+        use crate::worldgen::material_extensions::{ExtensionBlocks, ExtensionNoises};
+        let noise: Arc<dyn horizon_core::noise::Noise> = Arc::new(ConstNoise(0.5));
+        MaterialExtensions::new(
+            root,
+            ExtensionBlocks {
+                default: STONE,
+                water: BlockStateId(3),
+                packed_ice: STONE,
+                snow: STONE,
+            },
+            ExtensionNoises {
+                badlands_surface: Arc::clone(&noise),
+                badlands_pillar: Arc::clone(&noise),
+                badlands_roof: Arc::clone(&noise),
+                iceberg_surface: Arc::clone(&noise),
+                iceberg_pillar: Arc::clone(&noise),
+                iceberg_roof: Arc::clone(&noise),
+            },
+            0,
+        )
+    }
+
+    #[test]
+    fn check_extensions_matches_full_scan_and_handles_unnumbered_surface() {
+        use horizon_core::random::LegacyRandom;
+
+        let registry = registry();
+        let root = LegacyRandom::new(99).fork_positional();
+        let extensions = test_extensions(root);
+        let generation = WorldGenerationContext::new(-64, 128, 0);
+        let volume = DensityVolume::new([16, 128, 16], [0, -64, 0], [1, 1, 1]).unwrap();
+        let prelim: Arc<dyn DensitySampler> = Arc::new(ZeroDensity);
+        let rule = MaterialRule::Block(STONE);
+
+        for (biome, possible_ids, numbered, expect_pillar) in [
+            ("minecraft:plains", Some(vec![1 << 0]), true, false),
+            ("minecraft:eroded_badlands", Some(vec![1 << 1]), true, true),
+            ("minecraft:eroded_badlands", Some(vec![]), false, true),
+        ] {
+            let mut with_hint = chunk(&registry, 10);
+            let mut full_scan = chunk(&registry, 10);
+            let mut ctx_a = SamplerContext::default();
+            let mut ctx_b = SamplerContext::default();
+            let mut shared = None;
+            build_surface_shared::<LegacyRandom, _, _>(
+                &mut with_hint,
+                &rule,
+                &mut shared,
+                SurfaceInputs {
+                    generation,
+                    noise_volume: volume,
+                    root,
+                    surface: ExtensionSurface {
+                        biome,
+                        possible_ids,
+                        numbered,
+                    },
+                    preliminary_surface: Arc::clone(&prelim),
+                    density_context: &mut ctx_a,
+                    write_min_y: -64,
+                    write_max_y: 63,
+                },
+                &extensions,
+            )
+            .unwrap();
+            build_surface::<LegacyRandom, _, _>(
+                &mut full_scan,
+                rule.clone(),
+                SurfaceInputs {
+                    generation,
+                    noise_volume: volume,
+                    root,
+                    surface: ExtensionSurface {
+                        biome,
+                        possible_ids: None,
+                        numbered,
+                    },
+                    preliminary_surface: Arc::clone(&prelim),
+                    density_context: &mut ctx_b,
+                    write_min_y: -64,
+                    write_max_y: 63,
+                },
+                &extensions,
+            )
+            .unwrap();
+            assert_same(&with_hint, &full_scan);
+            let raised = (11..64).any(|y| with_hint.block(0, y, 0) == STONE);
+            assert_eq!(raised, expect_pillar, "biome={biome}, numbered={numbered}");
+        }
+    }
+
+    struct RegionSurface<'a> {
+        region: &'a crate::worldgen::biome_chunk::BiomeRegion<u32>,
+        possible_ids: Option<Vec<u64>>,
+    }
+    impl MaterialSurfaceQueries for RegionSurface<'_> {
+        fn possible_biome_ids(&self) -> Option<&[u64]> {
+            self.possible_ids.as_deref()
+        }
+        fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+            Some(match name {
+                "minecraft:plains" => Some(0),
+                "minecraft:eroded_badlands" => Some(1),
+                "minecraft:desert" => Some(2),
+                _ => None,
+            })
+        }
+        fn biome(&mut self, pos: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+            let id = *self
+                .region
+                .biome(pos)
+                .map_err(|_| MaterialRuleError::MissingBiome)?;
+            let name = match id {
+                0 => "minecraft:plains",
+                1 => "minecraft:eroded_badlands",
+                2 => "minecraft:desert",
+                _ => return Ok(None),
+            };
+            Ok(Some(Arc::from(name)))
+        }
+        fn biome_id(&mut self, pos: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+            Ok(Some(
+                *self
+                    .region
+                    .biome(pos)
+                    .map_err(|_| MaterialRuleError::MissingBiome)?,
+            ))
+        }
+        fn surface_depth(&mut self, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn surface_secondary(&mut self, _: i32, _: i32) -> f64 {
+            0.0
+        }
+    }
+
+    #[test]
+    fn badlands_border_chunk_with_region_bitset_matches_unconditional_path() {
+        use crate::worldgen::biome_chunk::{BiomeChunk, BiomeRegion};
+        use horizon_core::{biome::obfuscate_seed, random::LegacyRandom};
+
+        let registry = registry();
+        let root = LegacyRandom::new(99).fork_positional();
+        let extensions = test_extensions(root);
+        let generation = WorldGenerationContext::new(-64, 128, 0);
+        let volume = DensityVolume::new([16, 128, 16], [0, -64, 0], [1, 1, 1]).unwrap();
+        let prelim: Arc<dyn DensitySampler> = Arc::new(ZeroDensity);
+        let rule = MaterialRule::Block(STONE);
+
+        // Center chunk (0, 0) is entirely plains; surrounding neighbor chunks
+        // hold either eroded_badlands (id 1) or desert (id 2). Voronoi biome
+        // zoom bleeds neighbor biomes across the border of chunk (0, 0), so
+        // the 3x3 possible-biome bitset must cover every biome a column can see.
+        for (neighbor_id, expect_border_pillars) in [(1u32, true), (2u32, false)] {
+            let mut chunks = Vec::with_capacity(9);
+            let mut mask = 0u64;
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    let biome_id = if dx == 0 && dz == 0 { 0 } else { neighbor_id };
+                    mask |= 1 << biome_id;
+                    chunks
+                        .push(BiomeChunk::new(ChunkPos::new(dx, dz), -64, 128, biome_id).unwrap());
+                }
+            }
+            let region = BiomeRegion::new(chunks, obfuscate_seed(42)).unwrap();
+
+            let mut with_hint = chunk(&registry, 10);
+            let mut unconditional = chunk(&registry, 10);
+            let mut ctx_a = SamplerContext::default();
+            let mut ctx_b = SamplerContext::default();
+            let mut shared = None;
+            build_surface_shared::<LegacyRandom, _, _>(
+                &mut with_hint,
+                &rule,
+                &mut shared,
+                SurfaceInputs {
+                    generation,
+                    noise_volume: volume,
+                    root,
+                    surface: RegionSurface {
+                        region: &region,
+                        possible_ids: Some(vec![mask]),
+                    },
+                    preliminary_surface: Arc::clone(&prelim),
+                    density_context: &mut ctx_a,
+                    write_min_y: -64,
+                    write_max_y: 63,
+                },
+                &extensions,
+            )
+            .unwrap();
+            build_surface::<LegacyRandom, _, _>(
+                &mut unconditional,
+                rule.clone(),
+                SurfaceInputs {
+                    generation,
+                    noise_volume: volume,
+                    root,
+                    surface: RegionSurface {
+                        region: &region,
+                        possible_ids: None,
+                    },
+                    preliminary_surface: Arc::clone(&prelim),
+                    density_context: &mut ctx_b,
+                    write_min_y: -64,
+                    write_max_y: 63,
+                },
+                &extensions,
+            )
+            .unwrap();
+            assert_same(&with_hint, &unconditional);
+
+            let mut saw_pillar = false;
+            let mut saw_plain = false;
+            for lx in 0..16 {
+                for lz in 0..16 {
+                    if (11..64).any(|y| with_hint.block(lx, y, lz) == STONE) {
+                        saw_pillar = true;
+                    } else {
+                        saw_plain = true;
+                    }
+                }
+            }
+            assert_eq!(
+                saw_pillar, expect_border_pillars,
+                "neighbor_id={neighbor_id}"
+            );
+            assert!(
+                saw_plain,
+                "expected interior plains columns without pillars (neighbor_id={neighbor_id})"
+            );
+        }
     }
 }

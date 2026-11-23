@@ -15,6 +15,9 @@ use super::{
 use crate::registry::BlockStateId;
 pub use codec::{MaterialBiomeTag, MaterialConditionReference, MaterialConditionRegistry};
 pub use density::MaterialDensitySources;
+pub(crate) fn release_density_scratch() {
+    density::release_scratch();
+}
 use horizon_core::noise::Noise;
 use horizon_core::{
     position::BlockPos,
@@ -59,6 +62,12 @@ pub trait MaterialSurfaceQueries {
         Err(MaterialRuleError::MissingDensityProvider)
     }
     fn possible_biomes(&self) -> Option<BTreeSet<String>> {
+        None
+    }
+    /// Possible biome indices as a bitset (bit `id % 64` in word `id / 64`),
+    /// avoiding `BTreeSet<String>` allocation and name-to-id round-trips when
+    /// the caller already tracks possible biomes by [`Self::biome_index`].
+    fn possible_biome_ids(&self) -> Option<&[u64]> {
         None
     }
     fn biome(&mut self, _position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
@@ -123,6 +132,9 @@ impl<T: MaterialSurfaceQueries + ?Sized> MaterialSurfaceQueries for &mut T {
     }
     fn possible_biomes(&self) -> Option<BTreeSet<String>> {
         (**self).possible_biomes()
+    }
+    fn possible_biome_ids(&self) -> Option<&[u64]> {
+        (**self).possible_biome_ids()
     }
     fn biome(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         (**self).biome(position)
@@ -231,11 +243,17 @@ struct Context<S> {
     minimum: i32,
     noises: Vec<CachedNoise>,
     noise_indices: BTreeMap<(String, bool), usize>,
+    noises_indexed: bool,
     possible_biomes: Option<BTreeSet<String>>,
+    /// Whether `Compiled::compile` folds `Biome` conditions against possible biomes.
+    /// Cleared when compiling an unfolded shared rule or when `with_possible_biomes`
+    /// explicitly disables possible-biome shortcuts.
+    fold_possible: bool,
     biome: Option<Arc<str>>,
     biome_id: Option<u32>,
 }
 struct CachedNoise {
+    name: Arc<str>,
     sampler: Arc<dyn Noise>,
     is_3d: bool,
     revision: i64,
@@ -270,6 +288,14 @@ impl<S: MaterialSurfaceQueries> Context<S> {
         Ok(self.biome_id)
     }
     fn bind_noise(&mut self, name: &str, is_3d: bool) -> Result<usize, DecodeError> {
+        if !self.noises_indexed {
+            self.noise_indices.clear();
+            for (index, cached) in self.noises.iter().enumerate() {
+                self.noise_indices
+                    .insert((cached.name.to_string(), cached.is_3d), index);
+            }
+            self.noises_indexed = true;
+        }
         let key = (name.to_owned(), is_3d);
         if let Some(index) = self.noise_indices.get(&key) {
             return Ok(*index);
@@ -277,6 +303,7 @@ impl<S: MaterialSurfaceQueries> Context<S> {
         let sampler = self.surface.bind_noise(name)?;
         let index = self.noises.len();
         self.noises.push(CachedNoise {
+            name: Arc::from(name),
             sampler,
             is_3d,
             revision: if is_3d {
@@ -330,7 +357,7 @@ enum Kind<R: RandomSource> {
     Simple(MaterialCondition),
     Biome(BTreeSet<String>),
     /// `Biome` for queries that number their biomes: a bit per index.
-    BiomeIds(Vec<u64>),
+    BiomeIds(Box<[u64]>),
     Constant(bool),
     Noise {
         sampler: usize,
@@ -389,11 +416,11 @@ where
         }
     }
 }
-/// A chunk's possible biomes, by name and, where the surface numbers its
-/// biomes, as a bit per index (`Kind::BiomeIds`).
+/// A chunk's possible biomes, by optional name set and, where the surface
+/// numbers its biomes, as a bit per index (`Kind::BiomeIds`).
 struct PossibleBiomes<'a> {
-    names: &'a BTreeSet<String>,
-    ids: Vec<u64>,
+    names: Option<&'a BTreeSet<String>>,
+    ids: &'a [u64],
 }
 impl<R: RandomSource> Compiled<R>
 where
@@ -402,19 +429,27 @@ where
     /// This condition as `compile` makes it for a chunk with `possible`
     /// biomes: a biome condition none of them, or all of them, meet is
     /// constant.
-    fn fold_biomes(&self, possible: &PossibleBiomes) -> Self {
+    fn fold_biomes(&self, possible: &PossibleBiomes<'_>) -> Self {
         let decided = match &self.kind {
-            Kind::Biome(names) if names.is_disjoint(possible.names) => Some(false),
-            Kind::Biome(names) if possible.names.is_subset(names) => Some(true),
+            Kind::Biome(names) if names.is_empty() => Some(false),
+            Kind::Biome(names) => possible.names.and_then(|pnames| {
+                if names.is_disjoint(pnames) {
+                    Some(false)
+                } else if pnames.is_subset(names) {
+                    Some(true)
+                } else {
+                    None
+                }
+            }),
             Kind::BiomeIds(bits) => {
                 let bit = |ids: &[u64], i: usize| ids.get(i).copied().unwrap_or(0);
                 let mut words = 0..possible.ids.len().max(bits.len());
                 if words
                     .clone()
-                    .all(|i| bit(bits, i) & bit(&possible.ids, i) == 0)
+                    .all(|i| bit(bits, i) & bit(possible.ids, i) == 0)
                 {
                     Some(false)
-                } else if words.all(|i| bit(&possible.ids, i) & !bit(bits, i) == 0) {
+                } else if words.all(|i| bit(possible.ids, i) & !bit(bits, i) == 0) {
                     Some(true)
                 } else {
                     None
@@ -472,6 +507,20 @@ impl<R: RandomSource> Compiled<R> {
             _ => {}
         }
     }
+    /// Retained cache budget units for this condition: AST nodes plus owned
+    /// biome-mask `u64` words (`BiomeIds`) and biome-name storage (`Biome`),
+    /// so cloning dense masks across band variants is charged to the entry cap.
+    pub(super) fn retained_cost(&self) -> usize {
+        match &self.kind {
+            Kind::Not(child) => 1usize.saturating_add(child.retained_cost()),
+            Kind::BiomeIds(bits) => 1usize.saturating_add(bits.len()),
+            Kind::Biome(names) => names.iter().fold(1usize, |acc, name| {
+                acc.saturating_add(1)
+                    .saturating_add(name.len().div_ceil(std::mem::size_of::<u64>()))
+            }),
+            _ => 1,
+        }
+    }
     fn constant_result(&self) -> Option<bool> {
         match &self.kind {
             Kind::Constant(value) => Some(*value),
@@ -510,13 +559,29 @@ impl<R: RandomSource> Compiled<R> {
                     .iter()
                     .map(|name| codec::identifier(name))
                     .collect::<Result<BTreeSet<_>, _>>()?;
-                match &context.possible_biomes {
-                    Some(possible) if names.is_disjoint(possible) => Kind::Constant(false),
-                    Some(possible) if possible.is_subset(&names) => Kind::Constant(true),
-                    // An empty list would not ask whether the surface numbers
-                    // its biomes.
-                    _ if names.is_empty() => Kind::Biome(names),
-                    _ => match names
+                let folded = if context.fold_possible
+                    && let Some(possible) = &context.possible_biomes
+                {
+                    if names.is_disjoint(possible) {
+                        Some(false)
+                    } else if possible.is_subset(&names) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(value) = folded {
+                    Kind::Constant(value)
+                } else if names.is_empty() {
+                    if context.fold_possible && context.surface.possible_biome_ids().is_some() {
+                        Kind::Constant(false)
+                    } else {
+                        Kind::Biome(names)
+                    }
+                } else {
+                    match names
                         .iter()
                         .map(|name| context.surface.biome_index(name))
                         .collect::<Option<Vec<_>>>()
@@ -531,10 +596,29 @@ impl<R: RandomSource> Compiled<R> {
                                 }
                                 bits[word] |= 1 << (id % 64);
                             }
-                            Kind::BiomeIds(bits)
+                            if context.fold_possible
+                                && context.possible_biomes.is_none()
+                                && let Some(possible_ids) = context.surface.possible_biome_ids()
+                            {
+                                let bit = |s: &[u64], i: usize| s.get(i).copied().unwrap_or(0);
+                                let mut words = 0..possible_ids.len().max(bits.len());
+                                if words
+                                    .clone()
+                                    .all(|i| bit(&bits, i) & bit(possible_ids, i) == 0)
+                                {
+                                    Kind::Constant(false)
+                                } else if words.all(|i| bit(possible_ids, i) & !bit(&bits, i) == 0)
+                                {
+                                    Kind::Constant(true)
+                                } else {
+                                    Kind::BiomeIds(bits.into_boxed_slice())
+                                }
+                            } else {
+                                Kind::BiomeIds(bits.into_boxed_slice())
+                            }
                         }
                         None => Kind::Biome(names),
-                    },
+                    }
                 }
             }
             MaterialCondition::NoiseThreshold {
@@ -720,8 +804,15 @@ pub struct MaterialConditions<R: RandomSource, S: MaterialSurfaceQueries> {
 }
 impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
     pub fn new(generation: WorldGenerationContext, root: R::Positional, surface: S) -> Self {
-        let possible_biomes = surface.possible_biomes();
-        Self::with_possible_biomes(generation, root, surface, possible_biomes)
+        let has_ids = surface.possible_biome_ids().is_some();
+        let possible_biomes = if has_ids {
+            None
+        } else {
+            surface.possible_biomes()
+        };
+        let mut this = Self::with_possible_biomes(generation, root, surface, possible_biomes);
+        this.context.fold_possible = has_ids || this.context.possible_biomes.is_some();
+        this
     }
     pub(crate) fn with_possible_biomes(
         generation: WorldGenerationContext,
@@ -729,6 +820,7 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
         surface: S,
         possible_biomes: Option<BTreeSet<String>>,
     ) -> Self {
+        let fold_possible = possible_biomes.is_some();
         Self {
             root,
             context: Context {
@@ -748,7 +840,9 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
                 minimum: 0,
                 noises: Vec::new(),
                 noise_indices: BTreeMap::new(),
+                noises_indexed: true,
                 possible_biomes,
+                fold_possible,
                 biome: None,
                 biome_id: None,
             },
@@ -793,6 +887,12 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
     /// Direct biome lookup for the outer column scan, independent of condition caching.
     pub fn biome_at(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         self.context.surface.biome(position)
+    }
+    pub(crate) fn possible_biome_ids(&self) -> Option<&[u64]> {
+        self.context.surface.possible_biome_ids()
+    }
+    pub(crate) fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+        self.context.surface.biome_index(name)
     }
     pub fn melts_frozen_ocean(
         &mut self,

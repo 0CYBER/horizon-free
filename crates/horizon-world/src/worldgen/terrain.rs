@@ -21,6 +21,14 @@ thread_local! {
     static SCRATCH_DENSITY: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
+pub(crate) fn release_scratch() {
+    let _ = SCRATCH_DENSITY.try_with(|scratch| {
+        if let Ok(mut guard) = scratch.try_borrow_mut() {
+            *guard = Vec::new();
+        }
+    });
+}
+
 /// Behavior and resolved tags for every state in the chunk's immutable registry.
 pub trait TerrainBlockStates {
     type State: HeightmapState;
@@ -193,8 +201,11 @@ impl<B: TerrainBlockStates> HeightmapChunk for TerrainBlocks<'_, B> {
 impl<B: TerrainBlockStates> TerrainBlocks<'_, B> {
     #[inline]
     fn section_index(&self, y: i32) -> Option<usize> {
-        let dy = i64::from(y) - i64::from(self.min_y);
-        (dy >= 0 && dy < i64::from(self.height)).then_some((dy >> 4) as usize)
+        // `min_y` and `height` are validated by `Heightmap::new` (-2032..=2031,
+        // 16..=4064), so `y.wrapping_sub(min_y) as u32 < height as u32` holds
+        // for all `y: i32` iff `min_y <= y < min_y + height`.
+        let dy = y.wrapping_sub(self.min_y) as u32;
+        (dy < self.height as u32).then_some((dy >> 4) as usize)
     }
     #[inline]
     fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
@@ -385,23 +396,26 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
             return Ok(state);
         }
         let previous = self.set_block_raw(x, y, z, state)?;
-        let mut missing = Vec::new();
+        let (lx, lz) = (x & 15, z & 15);
+        let properties = self.blocks.properties.heightmap_state(state);
+        let mut missing = [HeightmapType::WorldSurfaceWg; 6];
+        let mut missing_len = 0usize;
         for &kind in self.stage.heightmaps() {
-            match self.heightmap(kind) {
-                // `Heightmap::update` would return at once: no state is read.
-                Some(map) if map.below_update(&self.blocks, x & 15, y, z & 15) => {
-                    if self.blocks.registry.state(state).is_none() {
-                        return Err(TerrainError::InvalidState);
-                    }
+            match self.heightmaps[kind as usize].as_mut() {
+                // `Heightmap::update` would return at once: `set_block_raw`
+                // already validated `state` against the registry.
+                Some(map) if map.below_update(&self.blocks, lx, y, lz) => {}
+                Some(map) => {
+                    map.update(&self.blocks, lx, y, lz, properties)?;
                 }
-                Some(_) => {
-                    self.update_heightmap(kind, x & 15, y, z & 15, state)?;
+                None => {
+                    missing[missing_len] = kind;
+                    missing_len += 1;
                 }
-                None => missing.push(kind),
             }
         }
-        if !missing.is_empty() {
-            self.prime_heightmaps(&missing)?;
+        if missing_len > 0 {
+            self.prime_heightmaps(&missing[..missing_len])?;
         }
         Ok(previous)
     }
@@ -691,30 +705,68 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
             .update(&self.blocks, x, y, z, state)?)
     }
     pub fn prime_heightmaps(&mut self, kinds: &[HeightmapType]) -> Result<(), TerrainError> {
-        let mut order = Vec::new();
+        let mut order = [0usize; 6];
+        let mut len = 0usize;
         for &kind in kinds {
             self.ensure_heightmap(kind);
-            if !order.contains(&(kind as usize)) {
-                order.push(kind as usize);
+            let key = kind as usize;
+            if !order[..len].contains(&key) {
+                order[len] = key;
+                len += 1;
             }
         }
-        // Split references preserve the supplied set's iteration order.
-        let mut maps: Vec<_> = self
-            .heightmaps
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, map)| {
-                order
-                    .iter()
-                    .position(|&key| key == i)
-                    .map(|position| (position, map.as_mut().unwrap()))
-            })
-            .collect();
-        maps.sort_by_key(|(position, _)| *position);
-        Heightmap::prime(
-            &self.blocks,
-            &mut maps.into_iter().map(|(_, map)| map).collect::<Vec<_>>(),
-        )?;
+        if len == 0 {
+            return Ok(());
+        }
+        let mut slots = self.heightmaps.each_mut().map(Option::as_mut);
+        match len {
+            1 => Heightmap::prime(&self.blocks, &mut [slots[order[0]].take().unwrap()])?,
+            2 => Heightmap::prime(
+                &self.blocks,
+                &mut [
+                    slots[order[0]].take().unwrap(),
+                    slots[order[1]].take().unwrap(),
+                ],
+            )?,
+            3 => Heightmap::prime(
+                &self.blocks,
+                &mut [
+                    slots[order[0]].take().unwrap(),
+                    slots[order[1]].take().unwrap(),
+                    slots[order[2]].take().unwrap(),
+                ],
+            )?,
+            4 => Heightmap::prime(
+                &self.blocks,
+                &mut [
+                    slots[order[0]].take().unwrap(),
+                    slots[order[1]].take().unwrap(),
+                    slots[order[2]].take().unwrap(),
+                    slots[order[3]].take().unwrap(),
+                ],
+            )?,
+            5 => Heightmap::prime(
+                &self.blocks,
+                &mut [
+                    slots[order[0]].take().unwrap(),
+                    slots[order[1]].take().unwrap(),
+                    slots[order[2]].take().unwrap(),
+                    slots[order[3]].take().unwrap(),
+                    slots[order[4]].take().unwrap(),
+                ],
+            )?,
+            _ => Heightmap::prime(
+                &self.blocks,
+                &mut [
+                    slots[order[0]].take().unwrap(),
+                    slots[order[1]].take().unwrap(),
+                    slots[order[2]].take().unwrap(),
+                    slots[order[3]].take().unwrap(),
+                    slots[order[4]].take().unwrap(),
+                    slots[order[5]].take().unwrap(),
+                ],
+            )?,
+        }
         Ok(())
     }
     /// Before replaying a saved chunk's `PostProcessing` lists.
@@ -743,7 +795,7 @@ pub fn fill_noise<B: TerrainBlockStates>(
     default_block: BlockStateId,
 ) -> Result<(), TerrainError> {
     let size = volume.size();
-    SCRATCH_DENSITY.with_borrow_mut(|scratch| {
+    let mut run_with = |scratch: &mut Vec<f32>| {
         if scratch.len() < size {
             scratch.resize(size, 0.0);
         }
@@ -757,7 +809,17 @@ pub fn fill_noise<B: TerrainBlockStates>(
             default_block,
             &mut scratch[..size],
         )
-    })
+    };
+    match SCRATCH_DENSITY.try_with(|cell| {
+        cell.try_borrow_mut()
+            .map(|mut scratch| run_with(&mut scratch))
+    }) {
+        Ok(Ok(res)) => res,
+        _ => {
+            let mut local = Vec::new();
+            run_with(&mut local)
+        }
+    }
 }
 
 fn fill_noise_inner<B: TerrainBlockStates>(
@@ -786,15 +848,12 @@ fn fill_noise_inner<B: TerrainBlockStates>(
     chunk.ensure_heightmap(HeightmapType::WorldSurfaceWg);
     final_density.sample_volume(context, density, volume)?;
     let air_above = aquifer.air_above_y();
+    let default_props = chunk.blocks.properties.heightmap_state(default_block);
     // A non-air, non-fluid default block may be written as a run without asking
     // the aquifer or touching the heightmap below the run's top.
-    let solid_runs = default_block != chunk.blocks.air
-        && !chunk
-            .blocks
-            .properties
-            .heightmap_state(default_block)
-            .has_fluid();
+    let solid_runs = default_block != chunk.blocks.air && !default_props.has_fluid();
     const MAPS: [HeightmapType; 2] = [HeightmapType::OceanFloorWg, HeightmapType::WorldSurfaceWg];
+    let default_opaque = MAPS.map(|kind| kind.is_opaque(default_props));
     for z in 0..sz {
         let world_z = bz.wrapping_add(z as i32);
         for x in 0..sx {
@@ -827,16 +886,21 @@ fn fill_noise_inner<B: TerrainBlockStates>(
                     }
                     aquifer.note_skipped();
                     chunk.fill_solid_run(x as i32, world_y, z as i32, run as i32, default_block)?;
-                    for (kind, bound) in MAPS.into_iter().zip(&mut bounds) {
-                        if matches!(bound, Ok(current) if world_y <= *current) {
+                    for (slot, kind) in MAPS.into_iter().enumerate() {
+                        if let Ok(current) = bounds[slot]
+                            && (world_y <= current
+                                || (!default_opaque[slot] && world_y != current.wrapping_add(1)))
+                        {
                             continue;
                         }
-                        chunk.update_heightmap(kind, x as i32, world_y, z as i32, default_block)?;
-                        *bound = chunk.heightmaps[kind as usize]
-                            .as_ref()
-                            .expect("ensured heightmap")
-                            .first_available(x as i32, z as i32)
-                            .map(|first| first.wrapping_sub(2));
+                        let map = chunk.heightmaps[kind as usize]
+                            .as_mut()
+                            .expect("ensured heightmap");
+                        if map.update(&chunk.blocks, x as i32, world_y, z as i32, default_props)? {
+                            bounds[slot] = map
+                                .first_available(x as i32, z as i32)
+                                .map(|first| first.wrapping_sub(2));
+                        }
                     }
                     y -= run - 1;
                     continue;
@@ -876,20 +940,24 @@ fn fill_noise_inner<B: TerrainBlockStates>(
                     continue;
                 }
                 chunk.set_block_raw(x as i32, world_y, z as i32, state)?;
-                for (kind, bound) in MAPS.into_iter().zip(&mut bounds) {
-                    if matches!(bound, Ok(current) if world_y <= *current) {
+                let props = chunk.blocks.properties.heightmap_state(state);
+                for (slot, kind) in MAPS.into_iter().enumerate() {
+                    if let Ok(current) = bounds[slot]
+                        && (world_y <= current
+                            || (!kind.is_opaque(props) && world_y != current.wrapping_add(1)))
+                    {
                         continue;
                     }
-                    chunk.update_heightmap(kind, x as i32, world_y, z as i32, state)?;
-                    *bound = chunk.heightmaps[kind as usize]
-                        .as_ref()
-                        .expect("ensured heightmap")
-                        .first_available(x as i32, z as i32)
-                        .map(|first| first.wrapping_sub(2));
+                    let map = chunk.heightmaps[kind as usize]
+                        .as_mut()
+                        .expect("ensured heightmap");
+                    if map.update(&chunk.blocks, x as i32, world_y, z as i32, props)? {
+                        bounds[slot] = map
+                            .first_available(x as i32, z as i32)
+                            .map(|first| first.wrapping_sub(2));
+                    }
                 }
-                if aquifer.should_schedule_fluid_update()
-                    && chunk.blocks.properties.heightmap_state(state).has_fluid()
-                {
+                if aquifer.should_schedule_fluid_update() && props.has_fluid() {
                     chunk.mark_postprocessing(world_x, world_y, world_z);
                 }
             }
@@ -1094,5 +1162,49 @@ mod tests {
             elapsed,
             elapsed.as_secs_f64() * 1000.0 / iters as f64
         );
+    }
+
+    #[test]
+    fn release_scratch_inside_fill_noise_callback_does_not_panic() {
+        struct ReleasingAquifer {
+            released: usize,
+        }
+        impl TerrainAquifer for ReleasingAquifer {
+            fn compute_substance(
+                &mut self,
+                _: &mut SamplerContext,
+                _: [i32; 3],
+                _: f64,
+            ) -> Result<Option<BlockStateId>, AquiferError> {
+                release_scratch();
+                self.released += 1;
+                Ok(None)
+            }
+            fn should_schedule_fluid_update(&self) -> bool {
+                false
+            }
+        }
+
+        let registry = test_registry();
+        let volume = DensityVolume::new([16, 16, 16], [0, 0, 0], [1, 1, 1]).unwrap();
+        let sampler = ConstantSampler(-1.0);
+        let mut context = SamplerContext::sparse();
+        let mut chunk =
+            TerrainChunk::new(ChunkPos::new(0, 0), 0, 16, &registry, Properties).unwrap();
+        let mut aquifer = ReleasingAquifer { released: 0 };
+        fill_noise(
+            &mut chunk,
+            volume,
+            &sampler,
+            &mut context,
+            &mut aquifer,
+            BlockStateId(2),
+        )
+        .unwrap();
+        assert!(aquifer.released > 0);
+        // Once fill_noise finishes, a subsequent release_scratch drops the retained buffer.
+        release_scratch();
+        let cap_after = SCRATCH_DENSITY.with_borrow(|scratch| scratch.capacity());
+        assert_eq!(cap_after, 0);
     }
 }

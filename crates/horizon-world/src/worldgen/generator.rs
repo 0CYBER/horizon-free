@@ -920,24 +920,16 @@ where
                 neighbors.push((*chunk).clone());
             }
         }
-        let possible =
-            seen.iter()
-                .chain(seen_spill.iter())
-                .enumerate()
-                .flat_map(|(word, &bits)| {
-                    let mut bits = bits;
-                    std::iter::from_fn(move || {
-                        (bits != 0).then(|| {
-                            let bit = bits.trailing_zeros();
-                            bits &= bits - 1;
-                            BiomeId(word as u32 * 64 + bit)
-                        })
-                    })
-                });
+        let possible_ids_spill: Vec<u64>;
+        let possible_ids: &[u64] = if seen_spill.is_empty() {
+            &seen
+        } else {
+            possible_ids_spill = seen.iter().copied().chain(seen_spill).collect();
+            &possible_ids_spill
+        };
         let center = neighbors[4].clone();
         let biomes =
             BiomeRegion::new(neighbors, obfuscate_seed(self.seed)).map_err(stage("biomes"))?;
-        let possible = possible.map(|id| data.biome_name(id).to_owned()).collect();
         worker.timings.biomes += lap(&mut clock);
         let mut chunk = TerrainChunk::new(
             pos,
@@ -1102,6 +1094,9 @@ where
             .map(|cache| *cache);
         let stages = self.mod_terrain.as_ref().map(|terrain| terrain.stages);
         if stages.is_none_or(|stages| stages.surface) && !self.identity_end_surface(pos) {
+            worker
+                .uniform_biomes
+                .reset(pos, self.settings.level_min_y, self.settings.level_height);
             build_surface_shared(
                 &mut chunk,
                 &self.rule,
@@ -1114,12 +1109,8 @@ where
                         pipeline: self,
                         temperatures: &mut worker.temperatures,
                         biome: Biomes::Region(&biomes),
-                        uniform_biomes: Some(UniformSurfaceBiomes::new(
-                            pos,
-                            self.settings.level_min_y,
-                            self.settings.level_height,
-                        )),
-                        possible: Some(possible),
+                        uniform_biomes: Some(&mut worker.uniform_biomes),
+                        possible_ids: Some(possible_ids),
                     },
                     preliminary_surface: self.preliminary.clone(),
                     density_context: context,
@@ -1161,7 +1152,7 @@ where
                         temperatures: &mut worker.temperatures,
                         biome: Biomes::Resolver(&mut resolver, &mut biome_context),
                         uniform_biomes: None,
-                        possible: None,
+                        possible_ids: None,
                     },
                     preliminary_surface: self.preliminary.clone(),
                     density_context: context,
@@ -1601,19 +1592,34 @@ struct UniformSurfaceBiomes {
     last: ([i32; 3], SurfaceCell),
 }
 impl UniformSurfaceBiomes {
-    fn new(pos: ChunkPos, min_y: i32, height: i32) -> Self {
-        let height = (height >> 2) + 1;
+    fn empty() -> Self {
         Self {
-            origin: [
-                pos.x.wrapping_shl(4).wrapping_sub(2) >> 2,
-                min_y.wrapping_sub(2) >> 2,
-                pos.z.wrapping_shl(4).wrapping_sub(2) >> 2,
-            ],
-            height,
-            cells: vec![SurfaceCell::Unknown; 25 * height as usize],
+            origin: [0; 3],
+            height: 0,
+            cells: Vec::new(),
             mixed: Vec::new(),
             last: ([0; 3], SurfaceCell::Unknown),
         }
+    }
+    #[cfg(test)]
+    fn new(pos: ChunkPos, min_y: i32, height: i32) -> Self {
+        let mut cache = Self::empty();
+        cache.reset(pos, min_y, height);
+        cache
+    }
+    fn reset(&mut self, pos: ChunkPos, min_y: i32, height: i32) {
+        let height = (height >> 2) + 1;
+        self.origin = [
+            pos.x.wrapping_shl(4).wrapping_sub(2) >> 2,
+            min_y.wrapping_sub(2) >> 2,
+            pos.z.wrapping_shl(4).wrapping_sub(2) >> 2,
+        ];
+        self.height = height;
+        let len = 25 * height as usize;
+        self.cells.clear();
+        self.cells.resize(len, SurfaceCell::Unknown);
+        self.mixed.clear();
+        self.last = ([0; 3], SurfaceCell::Unknown);
     }
     #[inline]
     fn get(&mut self, region: &BiomeRegion<BiomeId>, p: BlockPos) -> Option<BiomeId> {
@@ -1676,8 +1682,8 @@ struct SurfaceQueries<'a, 'b, R: RandomSource> {
     pipeline: &'a Pipeline<R>,
     temperatures: &'a mut [BiomeTemperature],
     biome: Biomes<'a, 'b>,
-    possible: Option<BTreeSet<String>>,
-    uniform_biomes: Option<UniformSurfaceBiomes>,
+    possible_ids: Option<&'a [u64]>,
+    uniform_biomes: Option<&'a mut UniformSurfaceBiomes>,
 }
 impl<R: RandomSource> SurfaceQueries<'_, '_, R> {
     fn temperature(&mut self, name: &str) -> Result<&mut BiomeTemperature, MaterialRuleError> {
@@ -1710,7 +1716,27 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
             .ok_or(DecodeError::Field("unknown material noise"))
     }
     fn possible_biomes(&self) -> Option<BTreeSet<String>> {
-        self.possible.clone()
+        self.possible_ids.map(|ids| {
+            ids.iter()
+                .enumerate()
+                .flat_map(|(word, &bits)| {
+                    let mut bits = bits;
+                    std::iter::from_fn(move || {
+                        (bits != 0).then(|| {
+                            let bit = bits.trailing_zeros();
+                            bits &= bits - 1;
+                            self.pipeline
+                                .data
+                                .biome_name(BiomeId(word as u32 * 64 + bit))
+                                .to_owned()
+                        })
+                    })
+                })
+                .collect()
+        })
+    }
+    fn possible_biome_ids(&self) -> Option<&[u64]> {
+        self.possible_ids
     }
     fn biome(&mut self, p: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         Ok(self
@@ -1725,7 +1751,7 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
         let id = match &mut self.biome {
             Biomes::Region(region) => match self
                 .uniform_biomes
-                .as_mut()
+                .as_deref_mut()
                 .and_then(|cache| cache.get(region, p))
             {
                 Some(id) => id,
@@ -1810,6 +1836,8 @@ pub(super) struct WorkerState {
     /// The world's surface rule compiled once for this worker's chunks: a
     /// `CompiledSurfaceRule` of the pipeline's random.
     surface_rule: Option<Box<dyn Any + Send>>,
+    /// Reusable per-chunk uniform biome cell cache for the surface stage.
+    uniform_biomes: UniformSurfaceBiomes,
     /// Empty stand-in chunks recycled across decorated chunks so decoration
     /// does not allocate 9 throwaway `TerrainChunk`s per chunk.
     pub(super) decor_standins: Vec<TerrainChunk<'static, GenBlockStates>>,
@@ -2301,7 +2329,7 @@ where
             temperatures: &mut worker.temperatures,
             biome: Biomes::Resolver(&mut resolver, &mut biome_context),
             uniform_biomes: None,
-            possible: None,
+            possible_ids: None,
         };
         let sources = MaterialDensitySources::new(
             queries,
@@ -2574,7 +2602,7 @@ where
             temperatures: &mut worker.temperatures,
             biome: Biomes::Memo(&mut resolver, &mut biome_context, &mut biome_memo),
             uniform_biomes: None,
-            possible: None,
+            possible_ids: None,
         };
         let sources = MaterialDensitySources::new(
             queries,
@@ -2970,6 +2998,7 @@ impl OverworldGenerator {
                 structure_mobs: None,
                 heights: HashMap::new(),
                 surface_rule: None,
+                uniform_biomes: UniformSurfaceBiomes::empty(),
                 decor_standins: Vec::new(),
                 decor_uniform_biomes: Vec::new(),
             },
@@ -3152,8 +3181,13 @@ impl GeneratorWorker {
         state.carver_biomes = HashMap::new();
         state.structure_biomes = HashMap::new();
         state.heights = HashMap::new();
+        state.surface_rule = None;
+        state.uniform_biomes = UniformSurfaceBiomes::empty();
         state.decor_standins = Vec::new();
         state.decor_uniform_biomes = Vec::new();
+        super::terrain::release_scratch();
+        super::material_condition::release_density_scratch();
+        super::material_stage::release_scratch();
     }
 }
 
@@ -5545,9 +5579,23 @@ mod tests {
             assert_eq!(reused.state.decor_standins.len(), 9);
             assert!(!reused.state.decor_uniform_biomes.is_empty());
         }
+        // Verify release() drops cached surface-rule, uniform-biome, and
+        // decoration scratch state cleanly and subsequent generation still
+        // matches fresh workers byte-for-byte.
+        assert!(reused.state.surface_rule.is_some());
         reused.release();
+        assert!(reused.state.surface_rule.is_none());
+        assert!(reused.state.uniform_biomes.cells.is_empty());
         assert!(reused.state.decor_standins.is_empty());
         assert!(reused.state.decor_uniform_biomes.is_empty());
+        if let Some(&center) = centers.last() {
+            let chunk = reused.generate_proto(center).unwrap();
+            assert_proto_snapshot_equal(
+                &fresh_proto[&(center.x, center.z)],
+                &ProtoSnapshot::of(&chunk),
+                &format!("post-release proto ({}, {})", center.x, center.z),
+            );
+        }
         (fresh_decorated, fresh_stats)
     }
 

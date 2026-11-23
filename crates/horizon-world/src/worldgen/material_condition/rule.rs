@@ -10,7 +10,7 @@ use horizon_core::{
     position::BlockPos,
     random::{PositionalRandom, RandomSource},
 };
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub enum MaterialRule {
@@ -232,6 +232,47 @@ impl<R: RandomSource> CompiledRule<R> {
             }
         }
     }
+    /// Retained cache budget units for this rule tree: AST nodes plus owned
+    /// biome-mask / biome-name storage inside every condition.
+    fn retained_cost(&self) -> usize {
+        match self {
+            Self::Empty | Self::Block(_) | Self::OreVein { .. } | Self::Bandlands => 1,
+            Self::Condition { condition, rule } => 1usize
+                .saturating_add(condition.retained_cost())
+                .saturating_add(rule.retained_cost()),
+            Self::Sequence(children) => children.iter().fold(1usize, |acc, child| {
+                acc.saturating_add(child.retained_cost())
+            }),
+        }
+    }
+    /// The first y of each band in which this rule specialises differently
+    /// from the band below, unordered, and whether the preliminary surface is
+    /// asked for.
+    fn inputs(&self, starts: &mut Vec<i32>, surface: &mut bool) {
+        match self {
+            Self::Condition { condition, rule } => {
+                condition.inputs(starts, surface);
+                rule.inputs(starts, surface);
+            }
+            Self::Sequence(children) => {
+                for child in children {
+                    child.inputs(starts, surface);
+                }
+            }
+            Self::OreVein {
+                positive_y: [low, high],
+                ..
+            } if low <= high => {
+                if *low != i32::MIN {
+                    starts.push(*low);
+                }
+                if *high != i32::MAX {
+                    starts.push(high + 1);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 impl<R: RandomSource> CompiledRule<R>
 where
@@ -390,34 +431,6 @@ where
             Self::Empty | Self::OreVein { .. } | Self::Condition { .. } => false,
         }
     }
-    /// The first y of each band in which this rule specialises differently
-    /// from the band below, unordered, and whether the preliminary surface is
-    /// asked for.
-    fn inputs(&self, starts: &mut Vec<i32>, surface: &mut bool) {
-        match self {
-            Self::Condition { condition, rule } => {
-                condition.inputs(starts, surface);
-                rule.inputs(starts, surface);
-            }
-            Self::Sequence(children) => {
-                for child in children {
-                    child.inputs(starts, surface);
-                }
-            }
-            Self::OreVein {
-                positive_y: [low, high],
-                ..
-            } if low <= high => {
-                if *low != i32::MIN {
-                    starts.push(*low);
-                }
-                if *high != i32::MAX {
-                    starts.push(high + 1);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 impl MaterialRule {
     /// The highest y at which an ore vein of this rule can place a block
@@ -465,12 +478,15 @@ pub struct SurfaceVariants {
     /// The rule the variants specialise.
     base: usize,
     /// The first y of each band after the first, ascending.
-    starts: Vec<i32>,
+    starts: Box<[i32]>,
     /// Per band (two per band, below then above the surface, when
     /// `surface`): the variant once made, `Some(None)` when it gives no block.
-    rules: Vec<Option<Option<BandRule>>>,
+    rules: Box<[Option<Option<BandRule>>]>,
     /// The run fills the variants' `BandRule::Fill` refer to.
     fills: Vec<SurfaceFill>,
+    /// Retained budget units across `base` and every materialized band variant
+    /// (AST nodes plus owned biome-mask / biome-name storage).
+    retained_units: usize,
     pub surface: bool,
 }
 /// One band's specialised rule, as `build_surface_shared` applies it.
@@ -512,6 +528,32 @@ impl SurfaceFill {
     }
 }
 impl SurfaceVariants {
+    fn from_rule<R: RandomSource>(base: usize, rule: &CompiledRule<R>) -> Self {
+        let (mut starts, mut surface) = (Vec::new(), false);
+        rule.inputs(&mut starts, &mut surface);
+        starts.sort_unstable();
+        starts.dedup();
+        let starts = starts.into_boxed_slice();
+        let sides = if surface { 2 } else { 1 };
+        Self {
+            base,
+            rules: vec![None; (starts.len() + 1) * sides].into_boxed_slice(),
+            fills: Vec::new(),
+            starts,
+            retained_units: rule.retained_cost(),
+            surface,
+        }
+    }
+    /// Retained cache budget units across `base`, every materialized band
+    /// variant (including owned biome-mask / biome-name storage), band tables,
+    /// and the `key_words`-word `possible_ids` cache key.
+    fn retained_cost(&self, key_words: usize) -> usize {
+        self.retained_units
+            .saturating_add(self.starts.len())
+            .saturating_add(self.rules.len())
+            .saturating_add(self.fills.len())
+            .saturating_add(key_words)
+    }
     /// The band holding `y`.
     #[inline]
     pub fn band(&self, y: i32) -> usize {
@@ -543,18 +585,7 @@ where
             .rules
             .get(index)
             .ok_or(MaterialRuleError::UnknownRule)?;
-        let (mut starts, mut surface) = (Vec::new(), false);
-        rule.inputs(&mut starts, &mut surface);
-        starts.sort_unstable();
-        starts.dedup();
-        let sides = if surface { 2 } else { 1 };
-        Ok(SurfaceVariants {
-            base: index,
-            rules: vec![None; (starts.len() + 1) * sides],
-            fills: Vec::new(),
-            starts,
-            surface,
-        })
+        Ok(SurfaceVariants::from_rule(index, rule))
     }
     /// The variant for `band`, `above` the preliminary surface (ignored unless
     /// `variants.surface`), or `None` when it gives no block at any position
@@ -593,6 +624,8 @@ where
         let rule = match self.rules[variants.base].specialize(facts) {
             CompiledRule::Empty => None,
             rule => {
+                variants.retained_units =
+                    variants.retained_units.saturating_add(rule.retained_cost());
                 let index = self.rules.len();
                 let fill = rule.fill().map(|fill| {
                     variants.fills.push(fill);
@@ -624,14 +657,45 @@ where
         Ok(true)
     }
 }
+/// Cached biome-folded rule tree and its lazily populated `SurfaceVariants`,
+/// keyed by the trimmed possible-biome bitset of a chunk's 3x3 region.
+struct CachedVariantSet<R: RandomSource> {
+    possible_ids: Box<[u64]>,
+    rules: Vec<CompiledRule<R>>,
+    variants: SurfaceVariants,
+}
+
+const VARIANT_CACHE_LIMIT: usize = 16;
+/// Maximum retained budget units per `CachedVariantSet`, charging rule and
+/// condition AST nodes, owned biome-mask `u64` words (and biome-name storage)
+/// across `base` and every materialized variant, band tables, and the
+/// `possible_ids` cache key words. Entries that grow past this budget still
+/// build band variants on demand for the active chunk (leaving generated
+/// blocks unchanged) but are dropped when the chunk finishes instead of
+/// remaining cached on the worker.
+const VARIANT_ENTRY_BUDGET: usize = 4096;
+
+fn trim_words(words: &[u64]) -> &[u64] {
+    let mut len = words.len();
+    while len > 0 && words[len - 1] == 0 {
+        len -= 1;
+    }
+    &words[..len]
+}
+
 /// A world's surface rule compiled once for every chunk of a generator
 /// worker: the rule before any chunk's possible biomes fold it, the noises it
 /// bound, and the densities (ore veins) it binds to each chunk's volume, in
 /// the order it bound them.
 pub struct CompiledSurfaceRule<R: RandomSource> {
+    generation: super::WorldGenerationContext,
     rule: CompiledRule<R>,
-    noises: Vec<((String, bool), Arc<dyn Noise>)>,
+    noises: Vec<((Arc<str>, bool), Arc<dyn Noise>)>,
     densities: Vec<DensityBinding>,
+    /// Monotonic revision watermark across chunks reusing cached variant trees,
+    /// ensuring cached `Compiled` condition nodes never match a prior chunk's revision.
+    next_revision: i64,
+    cached: Vec<CachedVariantSet<R>>,
 }
 impl<R: RandomSource> CompiledSurfaceRule<R> {
     /// Whether binding this compiled rule to a worker samples any density
@@ -672,6 +736,103 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S>
 where
     R::Positional: Clone,
 {
+    fn build_surface_variants(&self, index: usize) -> SurfaceVariants {
+        SurfaceVariants::from_rule(index, &self.rules[index])
+    }
+
+    fn compile_shared_entry(
+        &mut self,
+        rule: &MaterialRule,
+    ) -> Result<CompiledSurfaceRule<R>, DecodeError> {
+        let possible = self.context.possible_biomes.take();
+        let prev_fold = self.context.fold_possible;
+        self.context.fold_possible = false;
+        let compiled =
+            CompiledRule::compile(rule.clone(), &self.root, &mut self.context, 0, &mut 0);
+        self.context.fold_possible = prev_fold;
+        self.context.possible_biomes = possible;
+        let compiled = compiled?;
+        let noises = self
+            .context
+            .noises
+            .iter()
+            .map(|cached| {
+                (
+                    (Arc::clone(&cached.name), cached.is_3d),
+                    Arc::clone(&cached.sampler),
+                )
+            })
+            .collect();
+        let mut densities = Vec::new();
+        density_bindings(rule, &mut densities);
+        Ok(CompiledSurfaceRule {
+            generation: self.context.generation,
+            rule: compiled,
+            noises,
+            densities,
+            next_revision: 0,
+            cached: Vec::new(),
+        })
+    }
+
+    fn bind_shared_resources(
+        &mut self,
+        cached: &CompiledSurfaceRule<R>,
+    ) -> Result<(), DecodeError> {
+        for ((name, is_3d), sampler) in &cached.noises {
+            self.context.noises.push(CachedNoise {
+                name: Arc::clone(name),
+                sampler: Arc::clone(sampler),
+                is_3d: *is_3d,
+                revision: if *is_3d {
+                    self.context.block_revision
+                } else {
+                    self.context.column_revision
+                }
+                .wrapping_sub(1),
+                value: 0.0,
+            });
+        }
+        self.context.noises_indexed = false;
+        for (sampler, eager, rows) in &cached.densities {
+            self.context
+                .surface
+                .bind_density_rows(Arc::clone(sampler), *eager, *rows)?;
+        }
+        Ok(())
+    }
+
+    /// Resolve possible biomes into a trimmed borrowed-or-owned bitset when the
+    /// surface numbers biomes (borrowing `possible_biome_ids` directly, or
+    /// converting `possible_biomes` via `biome_index`). Returns `Err(())` if
+    /// `possible_biomes` contains a biome the surface does not number.
+    fn resolve_possible_ids(&self) -> Result<Option<Cow<'_, [u64]>>, ()> {
+        if !self.context.fold_possible {
+            return Ok(None);
+        }
+        if let Some(ids) = self.context.surface.possible_biome_ids() {
+            return Ok(Some(Cow::Borrowed(trim_words(ids))));
+        }
+        let Some(names) = &self.context.possible_biomes else {
+            return Ok(None);
+        };
+        let mut ids = Vec::new();
+        for name in names {
+            let Some(Some(id)) = self.context.surface.biome_index(name) else {
+                return Err(());
+            };
+            let word = id as usize / 64;
+            if ids.len() <= word {
+                ids.resize(word + 1, 0);
+            }
+            ids[word] |= 1 << (id % 64);
+        }
+        while ids.last() == Some(&0) {
+            ids.pop();
+        }
+        Ok(Some(Cow::Owned(ids)))
+    }
+
     /// `add_rule`, compiling `rule` only the first time `shared` is used:
     /// later workers take the compiled rule and its noises, bind its densities
     /// to their own volume in the same order, and fold it with their own
@@ -687,79 +848,164 @@ where
         if !fresh || self.rules.len() >= 8192 {
             return self.add_rule(rule.clone());
         }
-        let mut ids = Vec::new();
-        if let Some(names) = &self.context.possible_biomes {
-            for name in names {
-                let Some(Some(id)) = self.context.surface.biome_index(name) else {
-                    return self.add_rule(rule.clone());
-                };
-                let word = id as usize / 64;
-                if ids.len() <= word {
-                    ids.resize(word + 1, 0);
+        // Only materialize an owned bitset when converting `possible_biomes`;
+        // a surface's borrowed `possible_biome_ids()` slice is re-borrowed below
+        // after binding shared resources without allocating.
+        let owned_ids =
+            if !self.context.fold_possible || self.context.surface.possible_biome_ids().is_some() {
+                None
+            } else {
+                match self.resolve_possible_ids() {
+                    Ok(Some(Cow::Owned(ids))) => Some(ids),
+                    Ok(Some(Cow::Borrowed(_))) | Ok(None) => None,
+                    Err(()) => return self.add_rule(rule.clone()),
                 }
-                ids[word] |= 1 << (id % 64);
-            }
-        }
-        match shared {
-            Some(shared) => {
-                for (key, sampler) in &shared.noises {
-                    let is_3d = key.1;
-                    let index = self.context.noises.len();
-                    self.context.noises.push(CachedNoise {
-                        sampler: Arc::clone(sampler),
-                        is_3d,
-                        revision: if is_3d {
-                            self.context.block_revision
-                        } else {
-                            self.context.column_revision
-                        }
-                        .wrapping_sub(1),
-                        value: 0.0,
-                    });
-                    self.context.noise_indices.insert(key.clone(), index);
-                }
-                for (sampler, eager, rows) in &shared.densities {
-                    self.context
-                        .surface
-                        .bind_density_rows(Arc::clone(sampler), *eager, *rows)?;
-                }
-            }
-            None => {
-                let possible = self.context.possible_biomes.take();
-                let compiled =
-                    CompiledRule::compile(rule.clone(), &self.root, &mut self.context, 0, &mut 0);
-                self.context.possible_biomes = possible;
-                let compiled = compiled?;
-                let mut noises: Vec<_> = self
-                    .context
-                    .noise_indices
-                    .iter()
-                    .map(|(key, &index)| (index, key.clone()))
-                    .collect();
-                noises.sort_unstable_by_key(|(index, _)| *index);
-                let noises = noises
-                    .into_iter()
-                    .map(|(index, key)| (key, Arc::clone(&self.context.noises[index].sampler)))
-                    .collect();
-                let mut densities = Vec::new();
-                density_bindings(rule, &mut densities);
-                *shared = Some(CompiledSurfaceRule {
-                    rule: compiled,
-                    noises,
-                    densities,
-                });
-            }
+            };
+        if let Some(cached) = shared.as_ref()
+            && cached.generation == self.context.generation
+        {
+            self.bind_shared_resources(cached)?;
+        } else {
+            *shared = Some(self.compile_shared_entry(rule)?);
         }
         let shared = shared.as_ref().expect("compiled above");
-        let possible = self
-            .context
-            .possible_biomes
-            .as_ref()
-            .map(|names| PossibleBiomes { names, ids });
+        let ids: Option<Cow<'_, [u64]>> = if !self.context.fold_possible {
+            None
+        } else {
+            match owned_ids {
+                Some(ids) => Some(Cow::Owned(ids)),
+                None => self
+                    .context
+                    .surface
+                    .possible_biome_ids()
+                    .map(|ids| Cow::Borrowed(trim_words(ids))),
+            }
+        };
+        let possible = ids.as_deref().map(|ids| PossibleBiomes {
+            names: self.context.possible_biomes.as_ref(),
+            ids,
+        });
         let folded = shared.rule.fold_biomes(possible.as_ref());
         let index = self.rules.len();
         self.rules.push(folded);
         Ok(index)
+    }
+
+    /// Prepare a chunk's folded surface rule and cached `SurfaceVariants`,
+    /// reusing a previously folded + band-specialized tree when a chunk's 3x3
+    /// neighborhood has the same possible-biome bitset. Must be paired with
+    /// [`Self::finish_shared_surface`].
+    pub(crate) fn prepare_shared_surface(
+        &mut self,
+        rule: &MaterialRule,
+        shared: &mut Option<CompiledSurfaceRule<R>>,
+    ) -> Result<(SurfaceVariants, Option<Box<[u64]>>), DecodeError> {
+        let fresh = self.rules.is_empty() && self.context.noises.is_empty();
+        if !fresh || self.rules.len() >= 8192 {
+            let id = self.add_rule(rule.clone())?;
+            let variants = self.build_surface_variants(id);
+            return Ok((variants, None));
+        }
+        if !self.context.fold_possible {
+            let id = self.add_shared_rule(rule, shared)?;
+            let variants = self.build_surface_variants(id);
+            return Ok((variants, None));
+        }
+        let owned_ids = if self.context.surface.possible_biome_ids().is_some() {
+            None
+        } else {
+            match self.resolve_possible_ids() {
+                Ok(Some(Cow::Owned(ids))) => Some(ids),
+                Ok(Some(Cow::Borrowed(_))) => None,
+                Ok(None) | Err(()) => {
+                    let id = self.add_shared_rule(rule, shared)?;
+                    let variants = self.build_surface_variants(id);
+                    return Ok((variants, None));
+                }
+            }
+        };
+        if shared
+            .as_ref()
+            .is_none_or(|cached| cached.generation != self.context.generation)
+        {
+            *shared = Some(self.compile_shared_entry(rule)?);
+        } else {
+            let cached = shared.as_mut().expect("checked above");
+            if cached.next_revision > i64::MAX - (1 << 30) {
+                cached.cached.clear();
+                cached.next_revision = 0;
+            }
+            let base = cached.next_revision;
+            self.context.column_revision = base;
+            self.context.block_revision = base;
+            self.context.secondary_revision = base.wrapping_sub(1);
+            self.context.minimum_revision = base.wrapping_sub(1);
+            self.bind_shared_resources(cached)?;
+        }
+        let cached = shared.as_mut().expect("compiled above");
+        let ids: Cow<'_, [u64]> = match owned_ids {
+            Some(ids) => Cow::Owned(ids),
+            None => Cow::Borrowed(trim_words(
+                self.context
+                    .surface
+                    .possible_biome_ids()
+                    .expect("checked above"),
+            )),
+        };
+        if let Some(pos) = cached
+            .cached
+            .iter()
+            .position(|entry| entry.possible_ids.as_ref() == ids.as_ref())
+        {
+            let entry = cached.cached.remove(pos);
+            self.rules = entry.rules;
+            return Ok((entry.variants, Some(entry.possible_ids)));
+        }
+        let possible = PossibleBiomes {
+            names: self.context.possible_biomes.as_ref(),
+            ids: ids.as_ref(),
+        };
+        let folded = cached.rule.fold_biomes(Some(&possible));
+        let variants = SurfaceVariants::from_rule(0, &folded);
+        let cached_slot =
+            (variants.retained_cost(ids.len()) <= VARIANT_ENTRY_BUDGET).then(|| match ids {
+                Cow::Owned(vec) => vec.into_boxed_slice(),
+                Cow::Borrowed(slice) => slice.into(),
+            });
+        self.rules.push(folded);
+        Ok((variants, cached_slot))
+    }
+
+    /// Return the chunk's folded rule + specialized `SurfaceVariants` to `shared`
+    /// and advance the revision watermark past all revisions used by this chunk.
+    /// Entries whose accumulated specialized variants and cache key exceed
+    /// [`VARIANT_ENTRY_BUDGET`] are dropped instead of persisting across chunks.
+    pub(crate) fn finish_shared_surface(
+        &mut self,
+        shared: &mut Option<CompiledSurfaceRule<R>>,
+        variants: SurfaceVariants,
+        cached_slot: Option<Box<[u64]>>,
+    ) {
+        let Some(cached) = shared.as_mut() else {
+            return;
+        };
+        let used_max = self
+            .context
+            .column_revision
+            .max(self.context.block_revision);
+        cached.next_revision = cached.next_revision.max(used_max.wrapping_add(2));
+        if let Some(possible_ids) = cached_slot
+            && variants.retained_cost(possible_ids.len()) <= VARIANT_ENTRY_BUDGET
+        {
+            if cached.cached.len() >= VARIANT_CACHE_LIMIT {
+                cached.cached.remove(0);
+            }
+            cached.cached.push(CachedVariantSet {
+                possible_ids,
+                rules: std::mem::take(&mut self.rules),
+                variants,
+            });
+        }
     }
 }
 impl<R: RandomSource, T: MaterialSurfaceQueries> MaterialConditions<R, MaterialDensitySources<T>> {
@@ -791,5 +1037,514 @@ impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {
             .get_mut(index)
             .ok_or(MaterialRuleError::UnknownRule)?
             .apply(position, &mut self.context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worldgen::anchor::{VerticalAnchor, WorldGenerationContext};
+    use horizon_core::random::LegacyRandom;
+
+    struct BitsetSurface {
+        possible_ids: Vec<u64>,
+        biome_name: &'static str,
+        biome_id: u32,
+    }
+    impl MaterialSurfaceQueries for BitsetSurface {
+        fn possible_biome_ids(&self) -> Option<&[u64]> {
+            Some(&self.possible_ids)
+        }
+        fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+            Some(match name {
+                "minecraft:plains" => Some(0),
+                "minecraft:desert" => Some(1),
+                _ => None,
+            })
+        }
+        fn biome(&mut self, _: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+            Ok(Some(Arc::from(self.biome_name)))
+        }
+        fn biome_id(&mut self, _: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+            Ok(Some(self.biome_id))
+        }
+        fn surface_depth(&mut self, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn surface_secondary(&mut self, _: i32, _: i32) -> f64 {
+            0.0
+        }
+    }
+
+    fn eval_band_rule<S: MaterialSurfaceQueries>(
+        worker: &mut MaterialConditions<LegacyRandom, S>,
+        variants: &mut SurfaceVariants,
+        x: i32,
+        y: i32,
+        z: i32,
+        gradient_x: i32,
+    ) -> Option<BlockStateId> {
+        worker.update_xz(x, z, gradient_x, 0);
+        worker.update_y(1, 0, i32::MIN, y);
+        let band = variants.band(y);
+        let rule = worker.surface_variant(variants, band, true)?;
+        worker
+            .try_apply(rule.rule(), BlockPos::new(x, y, z))
+            .unwrap()
+    }
+
+    #[test]
+    fn shared_surface_variants_reuse_borrowed_ids_and_isolate_revisions() {
+        let generation = WorldGenerationContext::new(0, 64, 32);
+        let root = LegacyRandom::new(7).fork_positional();
+        let steep_block = BlockStateId(1);
+        let plains_block = BlockStateId(2);
+        let desert_block = BlockStateId(3);
+        let rule = MaterialRule::Sequence(vec![
+            MaterialRule::Condition {
+                if_true: MaterialCondition::Steep,
+                then_run: Box::new(MaterialRule::Block(steep_block)),
+            },
+            MaterialRule::Condition {
+                if_true: MaterialCondition::Biome(vec!["minecraft:plains".into()]),
+                then_run: Box::new(MaterialRule::Block(plains_block)),
+            },
+            MaterialRule::Condition {
+                if_true: MaterialCondition::Biome(vec!["minecraft:desert".into()]),
+                then_run: Box::new(MaterialRule::Block(desert_block)),
+            },
+        ]);
+
+        let mut shared = None;
+        // Pass 1: miss, populates cached entry for {plains, desert} with trailing zero word.
+        let mut w1 = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: vec![0b11, 0],
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v1, slot1) = w1.prepare_shared_surface(&rule, &mut shared).unwrap();
+        // Steep triggers on gradient_x <= -4 || gradient_z >= 4.
+        assert_eq!(
+            eval_band_rule(&mut w1, &mut v1, 1, 20, 2, -5),
+            Some(steep_block)
+        );
+        // Also evaluate a non-steep plains column so Biome(plains) caches `true`.
+        assert_eq!(
+            eval_band_rule(&mut w1, &mut v1, 2, 20, 2, 0),
+            Some(plains_block)
+        );
+        // End pass 1 with Steep cached `true` as well.
+        assert_eq!(
+            eval_band_rule(&mut w1, &mut v1, 1, 20, 2, -5),
+            Some(steep_block)
+        );
+        w1.finish_shared_surface(&mut shared, v1, slot1);
+        assert_eq!(shared.as_ref().unwrap().cached.len(), 1);
+        assert_eq!(
+            shared.as_ref().unwrap().cached[0].possible_ids.as_ref(),
+            &[0b11]
+        );
+
+        // Pass 2: cache hit with same bitset; non-steep + desert must not see stale steep/plains cache.
+        let mut w2 = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: vec![0b11],
+                biome_name: "minecraft:desert",
+                biome_id: 1,
+            },
+        );
+        let (mut v2, slot2) = w2.prepare_shared_surface(&rule, &mut shared).unwrap();
+        assert_eq!(
+            eval_band_rule(&mut w2, &mut v2, 1, 20, 2, 0),
+            Some(desert_block)
+        );
+        w2.finish_shared_surface(&mut shared, v2, slot2);
+        assert_eq!(shared.as_ref().unwrap().cached.len(), 1);
+
+        // Pass 3: second cache hit after positive `next_revision` advance; non-steep + plains
+        // at the same coordinates must not see pass 2's cached desert result.
+        let mut w3 = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: vec![0b11],
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v3, slot3) = w3.prepare_shared_surface(&rule, &mut shared).unwrap();
+        assert_eq!(
+            eval_band_rule(&mut w3, &mut v3, 1, 20, 2, 0),
+            Some(plains_block)
+        );
+        w3.finish_shared_surface(&mut shared, v3, slot3);
+        assert_eq!(shared.as_ref().unwrap().cached.len(), 1);
+    }
+
+    #[test]
+    fn shared_surface_variants_drop_entries_exceeding_size_budget() {
+        let generation = WorldGenerationContext::new(0, 256, 64);
+        let root = LegacyRandom::new(11).fork_positional();
+        // Build many distinct vertical gradient bands combined with undecided
+        // conditions so visiting bands pushes retained_cost() over VARIANT_ENTRY_BUDGET.
+        let mut children = Vec::new();
+        for band in 0..80_i32 {
+            let y = band * 2;
+            children.push(MaterialRule::Condition {
+                if_true: MaterialCondition::VerticalGradient {
+                    random_name: format!("minecraft:grad_{band}"),
+                    true_at_and_below: VerticalAnchor::Absolute(y),
+                    false_at_and_above: VerticalAnchor::Absolute(y + 1),
+                },
+                then_run: Box::new(MaterialRule::Condition {
+                    if_true: MaterialCondition::Steep,
+                    then_run: Box::new(MaterialRule::Block(BlockStateId((band + 1) as u32))),
+                }),
+            });
+        }
+        // Add undecided trailing conditions so every band specializes to a large tree.
+        for extra in 0..40_i32 {
+            children.push(MaterialRule::Condition {
+                if_true: MaterialCondition::Water {
+                    offset: extra,
+                    surface_depth_multiplier: 0,
+                    add_stone_depth: false,
+                },
+                then_run: Box::new(MaterialRule::Block(BlockStateId((100 + extra) as u32))),
+            });
+        }
+        let rule = MaterialRule::Sequence(children);
+
+        let mut shared = None;
+        let mut w_shared = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: vec![0b1],
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v_shared, slot) = w_shared.prepare_shared_surface(&rule, &mut shared).unwrap();
+
+        let mut w_plain = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: vec![0b1],
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let plain_id = w_plain.add_rule(rule).unwrap();
+        let mut v_plain = w_plain.surface_variants(plain_id).unwrap();
+
+        for y in (0..160).step_by(2) {
+            let got = eval_band_rule(&mut w_shared, &mut v_shared, 3, y, 5, -4);
+            let want = eval_band_rule(&mut w_plain, &mut v_plain, 3, y, 5, -4);
+            assert_eq!(got, want, "mismatch at y={y}");
+            assert!(got.is_some(), "expected steep band hit at y={y}");
+        }
+        assert!(
+            v_shared.retained_cost(1) > VARIANT_ENTRY_BUDGET,
+            "expected test rule to exceed budget: {} <= {}",
+            v_shared.retained_cost(1),
+            VARIANT_ENTRY_BUDGET
+        );
+        w_shared.finish_shared_surface(&mut shared, v_shared, slot);
+        assert!(
+            shared.as_ref().unwrap().cached.is_empty(),
+            "oversized variant entry must not remain cached after chunk finishes"
+        );
+    }
+
+    struct SparseBitsetSurface {
+        possible_ids: Vec<u64>,
+        far_biome_id: u32,
+        biome_name: &'static str,
+        biome_id: u32,
+    }
+    impl MaterialSurfaceQueries for SparseBitsetSurface {
+        fn possible_biome_ids(&self) -> Option<&[u64]> {
+            Some(&self.possible_ids)
+        }
+        fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+            Some(match name {
+                "minecraft:plains" => Some(0),
+                "minecraft:desert" => Some(1),
+                "minecraft:far_biome" => Some(self.far_biome_id),
+                _ => None,
+            })
+        }
+        fn biome(&mut self, _: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+            Ok(Some(Arc::from(self.biome_name)))
+        }
+        fn biome_id(&mut self, _: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
+            Ok(Some(self.biome_id))
+        }
+        fn surface_depth(&mut self, _: i32, _: i32) -> i32 {
+            0
+        }
+        fn surface_secondary(&mut self, _: i32, _: i32) -> f64 {
+            0.0
+        }
+    }
+
+    fn dense_mask_rule(bands: i32) -> MaterialRule {
+        let mut children = Vec::with_capacity(bands as usize);
+        for band in 0..bands {
+            let y = band * 2;
+            children.push(MaterialRule::Condition {
+                if_true: MaterialCondition::VerticalGradient {
+                    random_name: format!("minecraft:dense_grad_{band}"),
+                    true_at_and_below: VerticalAnchor::Absolute(y),
+                    false_at_and_above: VerticalAnchor::Absolute(y + 1),
+                },
+                then_run: Box::new(MaterialRule::Condition {
+                    if_true: MaterialCondition::Biome(vec![
+                        "minecraft:plains".into(),
+                        "minecraft:far_biome".into(),
+                    ]),
+                    then_run: Box::new(MaterialRule::Block(BlockStateId((band + 1) as u32))),
+                }),
+            });
+        }
+        MaterialRule::Sequence(children)
+    }
+
+    #[test]
+    fn shared_surface_variants_budget_charges_dense_masks_and_cache_key() {
+        let generation = WorldGenerationContext::new(0, 64, 32);
+        let root = LegacyRandom::new(19).fork_positional();
+
+        // Part 1: Few AST nodes (~99 nodes across base + all 6 bands), tiny 1-word
+        // cache key, but each BiomeIds mask owns 200 u64 words (far_biome_id = 199 * 64).
+        // Pass 1 visits a single band and fits in cache; Pass 2 hits cache and
+        // materializes the remaining bands, cloning the dense masks past the budget.
+        let dense_rule = dense_mask_rule(6);
+        let far_dense_id = 199 * 64;
+        let mut shared_dense = None;
+
+        let mut w_pass1 = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11],
+                far_biome_id: far_dense_id,
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v_pass1, slot_pass1) = w_pass1
+            .prepare_shared_surface(&dense_rule, &mut shared_dense)
+            .unwrap();
+        assert!(slot_pass1.is_some());
+        assert_eq!(
+            eval_band_rule(&mut w_pass1, &mut v_pass1, 2, 10, 4, 0),
+            Some(BlockStateId(6))
+        );
+        assert!(v_pass1.retained_cost(1) <= VARIANT_ENTRY_BUDGET);
+        w_pass1.finish_shared_surface(&mut shared_dense, v_pass1, slot_pass1);
+        assert_eq!(shared_dense.as_ref().unwrap().cached.len(), 1);
+
+        let mut w_pass2 = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11],
+                far_biome_id: far_dense_id,
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v_pass2, slot_pass2) = w_pass2
+            .prepare_shared_surface(&dense_rule, &mut shared_dense)
+            .unwrap();
+        let mut w_plain = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11],
+                far_biome_id: far_dense_id,
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let plain_id = w_plain.add_rule(dense_rule.clone()).unwrap();
+        let mut v_plain = w_plain.surface_variants(plain_id).unwrap();
+        for y in (0..12).step_by(2) {
+            let got = eval_band_rule(&mut w_pass2, &mut v_pass2, 2, y, 4, 0);
+            let want = eval_band_rule(&mut w_plain, &mut v_plain, 2, y, 4, 0);
+            assert_eq!(got, want, "dense plains mismatch at y={y}");
+            assert_eq!(got, Some(BlockStateId((y / 2 + 1) as u32)));
+        }
+        assert!(
+            v_pass2.retained_cost(1) > VARIANT_ENTRY_BUDGET,
+            "expected cloned dense masks to exceed budget: {} <= {}",
+            v_pass2.retained_cost(1),
+            VARIANT_ENTRY_BUDGET
+        );
+        w_pass2.finish_shared_surface(&mut shared_dense, v_pass2, slot_pass2);
+        assert!(
+            shared_dense.as_ref().unwrap().cached.is_empty(),
+            "dense-mask variant entry must be dropped once cloned masks exceed budget"
+        );
+
+        // Non-matching biome on the same oversized dense-mask rule also matches uncached output.
+        let mut w_desert = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11],
+                far_biome_id: far_dense_id,
+                biome_name: "minecraft:desert",
+                biome_id: 1,
+            },
+        );
+        let (mut v_desert, slot_desert) = w_desert
+            .prepare_shared_surface(&dense_rule, &mut shared_dense)
+            .unwrap();
+        let mut w_desert_plain = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11],
+                far_biome_id: far_dense_id,
+                biome_name: "minecraft:desert",
+                biome_id: 1,
+            },
+        );
+        let desert_plain_id = w_desert_plain.add_rule(dense_rule.clone()).unwrap();
+        let mut v_desert_plain = w_desert_plain.surface_variants(desert_plain_id).unwrap();
+        for y in (0..12).step_by(2) {
+            let got = eval_band_rule(&mut w_desert, &mut v_desert, 2, y, 4, 0);
+            let want = eval_band_rule(&mut w_desert_plain, &mut v_desert_plain, 2, y, 4, 0);
+            assert_eq!(got, want, "dense desert mismatch at y={y}");
+            assert_eq!(got, None);
+        }
+        w_desert.finish_shared_surface(&mut shared_dense, v_desert, slot_desert);
+        assert!(shared_dense.as_ref().unwrap().cached.is_empty());
+
+        // Part 2: Calibration check — the same 6-band rule with vanilla-scale 2-word
+        // masks (~65 biomes, far_biome_id = 64) and a 2-word cache key stays cached.
+        let mut shared_small = None;
+        let mut w_small = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11, 0b1],
+                far_biome_id: 64,
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v_small, slot_small) = w_small
+            .prepare_shared_surface(&dense_rule, &mut shared_small)
+            .unwrap();
+        let mut w_small_plain = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            SparseBitsetSurface {
+                possible_ids: vec![0b11, 0b1],
+                far_biome_id: 64,
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let small_plain_id = w_small_plain.add_rule(dense_rule).unwrap();
+        let mut v_small_plain = w_small_plain.surface_variants(small_plain_id).unwrap();
+        for y in (0..12).step_by(2) {
+            let got = eval_band_rule(&mut w_small, &mut v_small, 2, y, 4, 0);
+            let want = eval_band_rule(&mut w_small_plain, &mut v_small_plain, 2, y, 4, 0);
+            assert_eq!(got, want, "small mask mismatch at y={y}");
+        }
+        assert!(v_small.retained_cost(2) <= VARIANT_ENTRY_BUDGET);
+        w_small.finish_shared_surface(&mut shared_small, v_small, slot_small);
+        assert_eq!(
+            shared_small.as_ref().unwrap().cached.len(),
+            1,
+            "normal 2-word biome mask entry must stay cached"
+        );
+
+        // Part 3: Oversized biome cache key (`possible_ids`) alone rejects caching even
+        // for a minimal 3-node rule with a 1-word biome mask, while a normal key caches.
+        let tiny_rule = MaterialRule::Condition {
+            if_true: MaterialCondition::Biome(vec!["minecraft:plains".into()]),
+            then_run: Box::new(MaterialRule::Block(BlockStateId(42))),
+        };
+        let mut oversized_key = vec![0u64; VARIANT_ENTRY_BUDGET + 1];
+        oversized_key[0] = 0b11;
+        oversized_key[VARIANT_ENTRY_BUDGET] = 1;
+        let oversized_key_len = oversized_key.len();
+
+        let mut shared_key = None;
+        let mut w_big_key = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: oversized_key.clone(),
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v_big_key, slot_big_key) = w_big_key
+            .prepare_shared_surface(&tiny_rule, &mut shared_key)
+            .unwrap();
+        assert!(
+            slot_big_key.is_none(),
+            "oversized biome cache key must skip cache-slot allocation"
+        );
+        let mut w_big_key_plain = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: oversized_key,
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let big_key_plain_id = w_big_key_plain.add_rule(tiny_rule.clone()).unwrap();
+        let mut v_big_key_plain = w_big_key_plain.surface_variants(big_key_plain_id).unwrap();
+        let got = eval_band_rule(&mut w_big_key, &mut v_big_key, 1, 10, 1, 0);
+        let want = eval_band_rule(&mut w_big_key_plain, &mut v_big_key_plain, 1, 10, 1, 0);
+        assert_eq!(got, want);
+        assert_eq!(got, Some(BlockStateId(42)));
+        assert!(v_big_key.retained_cost(0) <= VARIANT_ENTRY_BUDGET);
+        assert!(v_big_key.retained_cost(oversized_key_len) > VARIANT_ENTRY_BUDGET);
+        w_big_key.finish_shared_surface(&mut shared_key, v_big_key, slot_big_key);
+        assert!(
+            shared_key.as_ref().unwrap().cached.is_empty(),
+            "oversized biome cache key must not be retained"
+        );
+
+        let mut w_small_key = MaterialConditions::<LegacyRandom, _>::new(
+            generation,
+            root,
+            BitsetSurface {
+                possible_ids: vec![0b11, 0b1],
+                biome_name: "minecraft:plains",
+                biome_id: 0,
+            },
+        );
+        let (mut v_small_key, slot_small_key) = w_small_key
+            .prepare_shared_surface(&tiny_rule, &mut shared_key)
+            .unwrap();
+        assert!(slot_small_key.is_some());
+        assert_eq!(
+            eval_band_rule(&mut w_small_key, &mut v_small_key, 1, 10, 1, 0),
+            Some(BlockStateId(42))
+        );
+        w_small_key.finish_shared_surface(&mut shared_key, v_small_key, slot_small_key);
+        assert_eq!(
+            shared_key.as_ref().unwrap().cached.len(),
+            1,
+            "normal 2-word biome cache key must be retained"
+        );
     }
 }

@@ -75,6 +75,9 @@ impl<P: PositionalRandom, S: MaterialSurfaceQueries> MaterialSurfaceQueries
     fn possible_biomes(&self) -> Option<BTreeSet<String>> {
         self.surface.possible_biomes()
     }
+    fn possible_biome_ids(&self) -> Option<&[u64]> {
+        self.surface.possible_biome_ids()
+    }
     fn biome(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         self.surface.biome(position)
     }

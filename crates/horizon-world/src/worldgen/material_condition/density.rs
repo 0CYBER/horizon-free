@@ -6,7 +6,72 @@ use horizon_core::{
     noise::{DensityVolume, Noise},
     position::BlockPos,
 };
-use std::{collections::BTreeSet, sync::Arc};
+use std::{cell::RefCell, collections::BTreeSet, sync::Arc};
+
+thread_local! {
+    /// Pooled `f32` scratch buffers for ore-vein volumes and preliminary surface
+    /// planes (typically four 64 KiB buffers per chunk).
+    static DENSITY_BUFFER_POOL: RefCell<Vec<Vec<f32>>> = const { RefCell::new(Vec::new()) };
+}
+const MAX_POOLED_BUFFERS: usize = 8;
+const MAX_POOLED_CAPACITY: usize = 1 << 18;
+
+fn take_buffer(size: usize) -> Vec<f32> {
+    let mut buf = DENSITY_BUFFER_POOL
+        .try_with(|pool| {
+            let Ok(mut pool) = pool.try_borrow_mut() else {
+                return None;
+            };
+            let best = pool
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.capacity() >= size)
+                .min_by_key(|(_, v)| v.capacity())
+                .map(|(i, _)| i)
+                .or_else(|| {
+                    pool.iter()
+                        .enumerate()
+                        .max_by_key(|(_, v)| v.capacity())
+                        .map(|(i, _)| i)
+                });
+            best.map(|i| pool.swap_remove(i))
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    buf.clear();
+    buf.resize(size, 0.0);
+    buf
+}
+
+fn return_buffer(mut buf: Vec<f32>) {
+    if buf.capacity() == 0 || buf.capacity() > MAX_POOLED_CAPACITY {
+        return;
+    }
+    buf.clear();
+    let _ = DENSITY_BUFFER_POOL.try_with(|pool| {
+        if let Ok(mut pool) = pool.try_borrow_mut()
+            && pool.len() < MAX_POOLED_BUFFERS
+        {
+            pool.push(buf);
+        }
+    });
+}
+
+pub(crate) fn release_scratch() {
+    let _ = DENSITY_BUFFER_POOL.try_with(|pool| {
+        if let Ok(mut guard) = pool.try_borrow_mut() {
+            *guard = Vec::new();
+        }
+    });
+}
+
+struct PooledPlane(Vec<f32>);
+impl Drop for PooledPlane {
+    fn drop(&mut self) {
+        return_buffer(std::mem::take(&mut self.0));
+    }
+}
 
 /// A lazy unit-spaced XZ plane and scalar fallback for preliminary heights.
 /// Construct a fresh provider for each material context, with that world's
@@ -22,7 +87,7 @@ pub struct MaterialDensitySources<S: MaterialSurfaceQueries> {
     plane: DensityVolume,
     sampler: Arc<dyn DensitySampler>,
     context: SamplerContext,
-    buffer: Option<Vec<f32>>,
+    buffer: Option<PooledPlane>,
 }
 struct BoundDensity {
     sampler: Arc<dyn DensitySampler>,
@@ -40,6 +105,11 @@ struct DensityBuffer {
     /// whose steps are not 1, which `density_outside` reads.
     minimum: [i32; 3],
     sizes: [usize; 3],
+}
+impl Drop for DensityBuffer {
+    fn drop(&mut self) {
+        return_buffer(std::mem::take(&mut self.values));
+    }
 }
 impl DensityBuffer {
     fn new(values: Vec<f32>, volume: DensityVolume) -> Self {
@@ -107,6 +177,7 @@ impl<S: MaterialSurfaceQueries> MaterialDensitySources<S> {
         }
         for (sampler, buffer) in pending {
             let mut values = std::mem::take(&mut self.buffers[buffer].values);
+            values.clear();
             values.resize(volume.size(), 0.0);
             let sampled = sampler.sample_volume(&mut self.context, &mut values, volume);
             self.buffers[buffer] = DensityBuffer::new(values, volume);
@@ -184,11 +255,18 @@ impl<S: MaterialSurfaceQueries> MaterialDensitySources<S> {
                 Some(match shared {
                     Some(buffer) => buffer,
                     None => {
-                        let mut values = Vec::new();
-                        if sample {
-                            values.resize(volume.size(), 0.0);
-                            sampler.sample_volume(&mut self.context, &mut values, volume)?;
-                        }
+                        let values = if sample {
+                            let mut values = take_buffer(volume.size());
+                            if let Err(error) =
+                                sampler.sample_volume(&mut self.context, &mut values, volume)
+                            {
+                                return_buffer(values);
+                                return Err(error.into());
+                            }
+                            values
+                        } else {
+                            Vec::new()
+                        };
                         self.retained_samples += volume.size();
                         self.buffers.push(DensityBuffer::new(values, volume));
                         self.buffers.len() - 1
@@ -219,16 +297,16 @@ impl<S: MaterialSurfaceQueries> MaterialDensitySources<S> {
             let out = &mut self.buffers[buffer];
             if let Some(at) = block_index(out.volume, position) {
                 if out.values.is_empty() {
-                    out.values.resize(out.volume.size(), 0.0);
-                    let sampled = source.sampler.sample_volume(
-                        &mut self.context,
-                        &mut out.values,
-                        out.volume,
-                    );
+                    let mut values = take_buffer(out.volume.size());
+                    let sampled =
+                        source
+                            .sampler
+                            .sample_volume(&mut self.context, &mut values, out.volume);
                     if let Err(error) = sampled {
-                        out.values.clear();
+                        return_buffer(values);
                         return Err(error.into());
                     }
+                    out.values = values;
                 }
                 return Ok(out.values[at]);
             }
@@ -279,17 +357,22 @@ impl<S: MaterialSurfaceQueries> MaterialSurfaceQueries for MaterialDensitySource
         if let Some(index) = self.plane.index_of_block(position) {
             if self.buffer.is_none() {
                 // Retain the allocation and partial writes if sampling fails.
-                let buffer = self.buffer.insert(vec![0.0; self.plane.size()]);
+                let buffer = self
+                    .buffer
+                    .insert(PooledPlane(take_buffer(self.plane.size())));
                 self.sampler
-                    .sample_volume(&mut self.context, buffer, self.plane)?;
+                    .sample_volume(&mut self.context, &mut buffer.0, self.plane)?;
             }
-            Ok(self.buffer.as_ref().unwrap()[index])
+            Ok(self.buffer.as_ref().unwrap().0[index])
         } else {
             Ok(self.sampler.sample_value(&mut self.context, position)?)
         }
     }
     fn possible_biomes(&self) -> Option<BTreeSet<String>> {
         self.surface.possible_biomes()
+    }
+    fn possible_biome_ids(&self) -> Option<&[u64]> {
+        self.surface.possible_biome_ids()
     }
     fn biome(&mut self, position: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         self.surface.biome(position)
