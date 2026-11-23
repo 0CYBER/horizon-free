@@ -16,6 +16,12 @@ use crate::{
 #[path = "chat_tests.rs"]
 mod tests;
 
+/// A chat message's log line. One line whatever the text holds: a later line of a multi-line
+/// message would carry no `[CHAT]` mark and stay in the log a bug report attaches.
+fn chat_log_line(plain: &str) -> String {
+    format!("[CHAT] {}", crate::logging::one_line(plain))
+}
+
 /// `FilterMask.applyWithFormatting` over a player message's signed content, as
 /// the packet's mask `(type, bit set)`: as it is when passed through, none when
 /// fully filtered, and when partly filtered each masked UTF-16 unit becomes a
@@ -474,10 +480,10 @@ impl Chat {
             return;
         }
         // ChatComponent.logChatMessage: every message shown is in the log.
-        let plain = message.content.plain();
-        crate::logging::write_only(log::Level::Info, &format!("[CHAT] {plain}"));
+        let line = chat_log_line(&message.content.plain());
+        crate::logging::write_only(log::Level::Info, &line);
         if self.log {
-            println!("[CHAT] {plain}");
+            println!("{line}");
         }
         message.time = self.now();
         self.received += 1;

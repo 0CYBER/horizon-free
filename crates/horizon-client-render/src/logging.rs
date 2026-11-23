@@ -613,6 +613,18 @@ pub fn init(home: &Path, main_thread: &'static str) {
     }
 }
 
+/// `text` on one line: every line break (also the Unicode ones) becomes a space. For text a server
+/// controls, which would otherwise log lines of its own (the launcher drops chat by the `[CHAT]`
+/// mark on a line, and a forged line could pass for a genuine entry).
+pub fn one_line(text: &str) -> String {
+    text.replace(
+        [
+            '\r', '\n', '\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}',
+        ],
+        " ",
+    )
+}
+
 /// A line in the log from code that prints it elsewhere itself (the dedicated server console).
 pub fn write_only(level: log::Level, message: &str) {
     let current = std::thread::current();
@@ -683,6 +695,12 @@ pub fn newest_crash_report(home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_text_stays_on_one_line() {
+        assert_eq!(one_line("a\r\nb\nc\u{2028}d\u{85}e"), "a  b c d e");
+        assert_eq!(one_line("plain § text"), "plain § text");
+    }
 
     /// The tap keeps lines only while on, never a line logged inside `untapped`, and at most
     /// `TAP_LINES`, dropping the oldest.
