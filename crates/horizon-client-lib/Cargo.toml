@@ -221,6 +221,10 @@ name = "save_batch_bench"
 path = "../horizon-client/examples/save_batch_bench.rs"
 
 [[example]]
+name = "save_codec_bench"
+path = "../horizon-client/examples/save_codec_bench.rs"
+
+[[example]]
 name = "shared_json_startup_profile"
 path = "../horizon-client/examples/shared_json_startup_profile.rs"
 
