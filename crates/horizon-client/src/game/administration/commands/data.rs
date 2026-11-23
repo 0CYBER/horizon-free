@@ -226,7 +226,9 @@ impl Game<'_> {
             Target::Orb(id) => {
                 let uuid = self.uuid_for(id);
                 let tag = entity_nbt::orb_to_nbt(self.orbs.iter().find(|o| o.id == id)?, uuid);
-                crate::game::persist::with_raw(tag, self.persist.raw.get(&id))
+                let mut tag = crate::game::persist::with_raw(tag, self.persist.raw.get(&id));
+                self.save_portal_cooldown(id, &mut tag);
+                tag
             }
             Target::Projectile(id) => {
                 let uuid = self.uuid_for(id);
@@ -766,10 +768,10 @@ impl Game<'_> {
                 // Entity.load reads portalCooldown and leaves the portal
                 // process as it is.
                 if let Some(portal) = self.portals.entities.get_mut(&id) {
-                    portal.cooldown = match tag.get("PortalCooldown") {
-                        Some(Tag::Int(cooldown)) => *cooldown,
-                        _ => 0,
-                    };
+                    portal.cooldown = tag
+                        .get("PortalCooldown")
+                        .and_then(horizon_client::nbt_path::int_value)
+                        .unwrap_or(0);
                 } else {
                     self.restore_portal_cooldown(id, &tag);
                 }
@@ -863,6 +865,16 @@ impl Game<'_> {
                         a.read_spectral_duration(&tag);
                     }
                 });
+                // Entity.load reads portalCooldown and leaves the portal
+                // process as it is; the read path writes the live value back.
+                if let Some(portal) = self.portals.entities.get_mut(&id) {
+                    portal.cooldown = tag
+                        .get("PortalCooldown")
+                        .and_then(horizon_client::nbt_path::int_value)
+                        .unwrap_or(0);
+                } else {
+                    self.restore_portal_cooldown(id, &tag);
+                }
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
             _ => return Err(stale()),

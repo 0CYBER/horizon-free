@@ -1,0 +1,1 @@
+horizon-client game::orb_data_tests::a_summoned_portal_cooldown_is_saved_for_an_orb_and_an_arrow lib daily resources

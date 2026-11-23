@@ -2229,10 +2229,11 @@ impl Game<'_> {
         keys.contains(&chunk_of(o.position)).then(|| {
             let raw = anon_raw(&self.persist, "minecraft:experience_orb", o.position);
             let uuid = saved_uuid(&self.persist, o.id);
-            let tag = with_raw(
+            let mut tag = with_raw(
                 with_raw(entity_nbt::orb_to_nbt(o, uuid), raw.as_ref()),
                 self.persist.raw.get(&o.id),
             );
+            self.save_portal_cooldown(o.id, &mut tag);
             (chunk_of(o.position), tag)
         })
     }

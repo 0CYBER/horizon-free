@@ -258,3 +258,56 @@ fn a_loaded_ticks_frozen_is_kept_by_an_orb_and_an_arrow() {
         );
     });
 }
+
+/// #16909: an orb and an arrow summoned with `PortalCooldown:250` save it back
+/// as 250 (`Entity.saveWithoutId` writes the live countdown).
+#[test]
+#[ignore = "daily"]
+fn a_summoned_portal_cooldown_is_saved_for_an_orb_and_an_arrow() {
+    game(|game| {
+        let orb = load(
+            game,
+            "{Pos:[4.5d,100d,4.5d],Value:1s,Age:0s,Health:5s,Count:1,PortalCooldown:250}",
+            3,
+        );
+        let tag = game.command_target_nbt(commands::Target::Orb(orb)).unwrap();
+        assert_eq!(tag.get("PortalCooldown"), Some(&Tag::Int(250)));
+        let tag = parse_snbt(
+            "{Pos:[4.5d,100d,4.5d],Motion:[0d,0d,0d],Rotation:[0f,0f],PortalCooldown:250}",
+        )
+        .unwrap()
+        .0;
+        game.load_listed("minecraft:arrow", Some([9, 0, 0, 4]), None, tag)
+            .unwrap();
+        let arrow = game.next_entity;
+        let tag = game
+            .command_target_nbt(commands::Target::Projectile(arrow))
+            .unwrap();
+        assert_eq!(tag.get("PortalCooldown"), Some(&Tag::Int(250)));
+        // A merged cooldown survives the read path, which writes the live value.
+        assert!(
+            run(
+                game,
+                "data merge entity 00000009-0000-0000-0000-000000000004 {PortalCooldown:120}"
+            )
+            .0
+        );
+        let tag = game
+            .command_target_nbt(commands::Target::Projectile(arrow))
+            .unwrap();
+        assert_eq!(tag.get("PortalCooldown"), Some(&Tag::Int(120)));
+        // The chunk save writes the live cooldown for both as well.
+        let keys = std::collections::HashSet::from([(0, 0)]);
+        let index = game.orbs.iter().position(|o| o.id == orb).unwrap();
+        let (_, saved) = game.save_orb(index, &keys).unwrap();
+        assert_eq!(saved.get("PortalCooldown"), Some(&Tag::Int(250)));
+        let index = game
+            .creatures
+            .projectiles
+            .iter()
+            .position(|p| p.id == arrow)
+            .unwrap();
+        let (_, saved) = game.save_projectile(index, &keys).unwrap();
+        assert_eq!(saved.get("PortalCooldown"), Some(&Tag::Int(120)));
+    });
+}

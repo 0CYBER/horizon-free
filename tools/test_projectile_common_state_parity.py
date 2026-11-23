@@ -245,6 +245,42 @@ def groups():
             *setup(f'/kill {target}'),
         ])
     frozen_reload.extend(setup(f'/forceload remove {chunk}'))
+    # read back, ticks down, and survives a chunk save and reload.
+    portal_kinds = ('arrow', 'spectral_arrow', 'experience_orb')
+    portal = []
+    for kind in portal_kinds:
+        target = f'@e[type={kind},limit=1]'
+        for saved in ('', ',PortalCooldown:100', ',PortalCooldown:9.75d',
+                      ',PortalCooldown:-3', ',PortalCooldown:"bad"'):
+            portal.extend([
+                cmd(f'/summon {kind} 12.5 234 8.5 {{NoGravity:1b{saved}}}'),
+                cmd(f'/data get entity {target} PortalCooldown'),
+                {'op': 'tick', 'n': 3},
+                cmd(f'/data get entity {target} PortalCooldown'),
+                *setup(f'/kill {target}'),
+            ])
+    portal_reload = [*setup(f'/forceload add {chunk}'), wait]
+    for index, kind in enumerate(portal_kinds):
+        portal_reload.append(cmd(
+            f'/summon {kind} {4100 + 4 * index}.5 300 4104.5 {{NoGravity:1b,PortalCooldown:180}}'))
+    portal_reload.append({'op': 'tick', 'n': 3})
+    for kind in portal_kinds:
+        portal_reload.append(cmd(f'/data get entity @e[type={kind},limit=1] PortalCooldown'))
+    portal_reload.extend([
+        *setup(f'/forceload remove {chunk}'),
+        {'op': 'tick', 'n': 60},
+        cmd('/execute unless loaded 4096 300 4096', expect_result=1),
+        *setup(f'/forceload add {chunk}'),
+        wait,
+    ])
+    for kind in portal_kinds:
+        target = f'@e[type={kind},limit=1]'
+        portal_reload.extend([
+            cmd(f'/execute if entity {target}', expect_result=1),
+            cmd(f'/data get entity {target} PortalCooldown'),
+            *setup(f'/kill {target}'),
+        ])
+    portal_reload.extend(setup(f'/forceload remove {chunk}'))
     return [
         ('projectile common state', summon),
         ('projectile common state reload', reloads),
@@ -257,6 +293,8 @@ def groups():
         ('cloud fang and eye fire reload', fire_reload),
         ('arrow and orb frozen ticks', frozen),
         ('arrow and orb frozen ticks reload', frozen_reload),
+        ('arrow and orb portal cooldown', portal),
+        ('arrow and orb portal cooldown reload', portal_reload),
     ]
 
 
