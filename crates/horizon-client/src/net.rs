@@ -740,6 +740,15 @@ pub fn shown_address(address: &str) -> String {
     }
 }
 
+/// A disconnect reason as the log keeps it. The player sees the address they typed in the
+/// "invalid address" refusal; the log, which a bug report carries, gets `<server>` instead.
+pub fn logged_reason(reason: &str, key: Option<&str>) -> String {
+    match key {
+        Some("horizon.multiplayer.invalid_address") => "Invalid server address: <server>".into(),
+        _ => reason.to_owned(),
+    }
+}
+
 /// The relay the player set (`friendsRelay` in horizon.txt, beside
 /// options.txt), else the resolver's (`HORIZON_RELAY_URL`). None by default.
 pub fn friends_relay_setting() -> Option<String> {
@@ -1983,6 +1992,19 @@ fn continues_after_failed_join(lan: bool, signed_in: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refused_address_stays_out_of_the_logged_reason() {
+        // The text is in the player's language and holds what they typed; the key says which
+        // refusal it is.
+        let shown = "Ungültige Serveradresse: my-smp.example.com:99999";
+        let key = Some("horizon.multiplayer.invalid_address");
+        assert_eq!(
+            logged_reason(shown, key),
+            "Invalid server address: <server>"
+        );
+        assert_eq!(logged_reason("Timed out", None), "Timed out");
+    }
+
     #[test]
     fn older_servers_are_on_unless_the_variable_is_zero() {
         use std::ffi::OsStr;

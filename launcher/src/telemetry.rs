@@ -282,11 +282,55 @@ pub fn scrubber() -> Scrubber {
     s
 }
 
+/// What replaces a server's address in a log line.
+const SERVER: &str = "<server>";
+
+/// The game's log lines that print the address the player typed (a host name the scrubber's
+/// patterns don't know), as the text before it and after it: the address in between goes.
+const ADDRESS_LINES: [(&str, &str); 5] = [
+    ("Connecting to ", ", "),
+    ("Joining ", " as a "),
+    ("reconnecting to ", " in "),
+    ("Unknown host ", ": "),
+    // The refusal of an address that does not parse (a bad port), to the end of the line. The
+    // game logs `<server>` there itself; older games logged what was typed.
+    ("Invalid server address: ", ""),
+];
+
+/// `text` with the server addresses of [`ADDRESS_LINES`] replaced; the lines stay.
+fn hide_server_addresses(text: &str) -> String {
+    let mut out = text.to_owned();
+    for (before, after) in ADDRESS_LINES {
+        let mut from = 0;
+        while let Some(at) = out[from..].find(before) {
+            let start = from + at + before.len();
+            // The address ends where the text after it starts, else with the line.
+            let line_end = out[start..].find('\n').map_or(out.len(), |i| start + i);
+            let end = if after.is_empty() {
+                line_end
+            } else {
+                out[start..line_end]
+                    .find(after)
+                    .map_or(line_end, |i| start + i)
+            };
+            out.replace_range(start..end, SERVER);
+            from = start + SERVER.len();
+        }
+    }
+    out
+}
+
+/// A game log as a bug report carries it: without chat, the server addresses and everything
+/// `scrubber` knows hidden.
+pub fn report_log(text: &str, scrubber: &Scrubber) -> String {
+    let kept: Vec<&str> = text.lines().filter(|l| !l.contains("[CHAT]")).collect();
+    scrubber.scrub(&hide_server_addresses(&kept.join("\n")))
+}
+
 /// The end of the game's log as a bug report would carry it: scrubbed, without chat.
 pub fn log_for_report() -> Option<String> {
     let (_, text) = backend::read_logs(300, false).ok()?;
-    let kept: Vec<&str> = text.lines().filter(|l| !l.contains("[CHAT]")).collect();
-    let mut log = scrubber().scrub(&kept.join("\n"));
+    let mut log = report_log(&text, &scrubber());
     // Within the item's size, the newest lines first to stay.
     while log.len() > 64 * 1024 {
         let cut = log.find('\n').map_or(log.len(), |i| i + 1);
@@ -482,6 +526,32 @@ mod tests {
                 json.contains(&format!("\"{field}\":")),
                 "{field} missing from {json}"
             );
+        }
+    }
+
+    /// The lines the game writes when it joins a server, and a failed lookup, name the address
+    /// as the player typed it: a host name no pattern of the scrubber finds.
+    #[test]
+    fn a_report_log_keeps_the_lines_but_not_the_server_names() {
+        let log = "[10:00:00] [Server Connector #1/INFO]: Connecting to my-private-smp.example.com, 25565\n\
+            [10:00:01] [Render thread/INFO]: Joining my-private-smp.example.com:25565 as a 1.20.4 server\n\
+            [10:00:02] [Render thread/INFO]: Horizon: could not join server: Unknown host my-private-smp.example.com: failed to lookup\n\
+            [10:00:03] [Render thread/INFO]: Horizon: reconnecting to my-private-smp.example.com in 5 s\n\
+            [10:00:04] [Render thread/INFO]: [CHAT] <Ana> my-private-smp.example.com\n\
+            [10:00:05] [Render thread/INFO]: Horizon: disconnected: Invalid server address: my-private-smp.example.com:99999\n\
+            [10:00:06] [Render thread/INFO]: Reloading resource packs\n";
+        let kept = report_log(log, &Scrubber::bare());
+        assert!(!kept.contains("example.com"), "{kept}");
+        assert!(!kept.contains("CHAT"), "{kept}");
+        for line in [
+            "Connecting to <server>, 25565",
+            "Joining <server> as a 1.20.4 server",
+            "could not join server: Unknown host <server>: failed to lookup",
+            "reconnecting to <server> in 5 s",
+            "disconnected: Invalid server address: <server>",
+            "Reloading resource packs",
+        ] {
+            assert!(kept.contains(line), "{line} missing from {kept}");
         }
     }
 

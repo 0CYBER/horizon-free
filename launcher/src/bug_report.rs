@@ -46,9 +46,8 @@ pub fn write(text: &str, with_log: bool) -> Result<PathBuf, String> {
     );
     if with_log {
         let (_, log) = backend::read_logs(LOG_LINES, false)?;
-        let kept: Vec<&str> = log.lines().filter(|l| !l.contains("[CHAT]")).collect();
         report.push_str("\n--- end of the game's log ---\n");
-        report.push_str(&scrubber.scrub(&kept.join("\n")));
+        report.push_str(&crate::telemetry::report_log(&log, &scrubber));
         report.push('\n');
     }
     let dir = home.join("bug-reports");
