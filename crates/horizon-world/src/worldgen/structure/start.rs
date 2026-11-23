@@ -657,7 +657,10 @@ impl StructureRegistry {
         };
         let sx = spread(&mut random);
         let sz = spread(&mut random);
-        Some(ChunkPos::new(gx * spacing + sx, gz * spacing + sz))
+        Some(ChunkPos::new(
+            gx.wrapping_mul(spacing).wrapping_add(sx),
+            gz.wrapping_mul(spacing).wrapping_add(sz),
+        ))
     }
     pub fn is_structure_chunk(
         &self,
@@ -708,7 +711,8 @@ impl StructureRegistry {
                 };
                 let sx = spread(&mut random);
                 let sz = spread(&mut random);
-                gx * spacing + sx == x && gz * spacing + sz == z
+                gx.wrapping_mul(spacing).wrapping_add(sx) == x
+                    && gz.wrapping_mul(spacing).wrapping_add(sz) == z
             }
             Placement::ConcentricRings { .. } => rings
                 .get(&set.name)
@@ -718,6 +722,17 @@ impl StructureRegistry {
         if !placed {
             return false;
         }
+        self.structure_chunk_after_placed(set, seed, x, z, rings, zones)
+    }
+    fn structure_chunk_after_placed(
+        &self,
+        set: &StructureSet,
+        seed: i64,
+        x: i32,
+        z: i32,
+        rings: &Rings,
+        zones: bool,
+    ) -> bool {
         if set.rings.as_ref().is_some_and(|r| !r.allows(x, z)) {
             return false;
         }
@@ -763,10 +778,117 @@ impl StructureRegistry {
         let Some(other) = self.sets.iter().find(|s| s.name == other) else {
             return false;
         };
-        (x - range..=x + range).any(|tx| {
-            (z - range..=z + range)
-                .any(|tz| self.structure_chunk(other, seed, tx, tz, rings, zones))
-        })
+        let (Some(min_x), Some(max_x), Some(min_z), Some(max_z)) = (
+            x.checked_sub(range),
+            x.checked_add(range),
+            z.checked_sub(range),
+            z.checked_add(range),
+        ) else {
+            return (x - range..=x + range).any(|tx| {
+                (z - range..=z + range)
+                    .any(|tz| self.structure_chunk(other, seed, tx, tz, rings, zones))
+            });
+        };
+        if min_x > max_x || min_z > max_z {
+            return false;
+        }
+        // When `other` evaluates its own exclusion rules, candidate order is
+        // observable (a recursive branch can appear after a match that ends
+        // the scan in `(x, z)` order). Preserve strict ascending `(x, z)`
+        // evaluation order whenever `structure_chunk_after_placed` can recurse.
+        let can_recurse = zones && (other.exclusion.is_some() || other.avoid.is_some());
+        match other.placement {
+            Placement::DimensionOrigin => {
+                (min_x..=max_x).contains(&self.origin.x) && (min_z..=max_z).contains(&self.origin.z)
+            }
+            Placement::RandomSpread {
+                spacing,
+                separation,
+                triangular,
+            } if spacing > 0 && (0..spacing).contains(&separation) => {
+                // Each `spacing x spacing` sector produces at most one candidate chunk.
+                let limit = spacing - separation;
+                let spread = |r: &mut WorldgenRandom<LegacyRandom>| {
+                    if triangular {
+                        (r.next_int_bound(limit).unwrap_or(0)
+                            + r.next_int_bound(limit).unwrap_or(0))
+                            / 2
+                    } else {
+                        r.next_int_bound(limit).unwrap_or(0)
+                    }
+                };
+                let min_gx = min_x.div_euclid(spacing);
+                let max_gx = max_x.div_euclid(spacing);
+                let min_gz = min_z.div_euclid(spacing);
+                let max_gz = max_z.div_euclid(spacing);
+                // Across distinct `gx` sectors, `gx * spacing + sx` is strictly
+                // increasing (`0 <= sx < spacing`). Within one `gx` sector, `sx`
+                // varies with `gz` when `limit > 1`, so sort that column's
+                // in-range candidates by `(x, z)` before recursing.
+                let sort_column = can_recurse && limit > 1 && min_gz < max_gz;
+                let mut column = Vec::new();
+                for gx in min_gx..=max_gx {
+                    if sort_column {
+                        column.clear();
+                    }
+                    for gz in min_gz..=max_gz {
+                        let mut random = WorldgenRandom::new(LegacyRandom::new(0));
+                        random.set_large_feature_with_salt(seed, gx, gz, other.salt);
+                        let sx = spread(&mut random);
+                        let sz = spread(&mut random);
+                        let px = i64::from(gx) * i64::from(spacing) + i64::from(sx);
+                        let pz = i64::from(gz) * i64::from(spacing) + i64::from(sz);
+                        if (i64::from(min_x)..=i64::from(max_x)).contains(&px)
+                            && (i64::from(min_z)..=i64::from(max_z)).contains(&pz)
+                        {
+                            if sort_column {
+                                column.push((px as i32, pz as i32));
+                            } else if self.structure_chunk_after_placed(
+                                other, seed, px as i32, pz as i32, rings, zones,
+                            ) {
+                                return true;
+                            }
+                        }
+                    }
+                    if sort_column {
+                        column.sort_unstable();
+                        if column.iter().any(|&(px, pz)| {
+                            self.structure_chunk_after_placed(other, seed, px, pz, rings, zones)
+                        }) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            Placement::ConcentricRings { .. } => rings.get(&other.name).is_some_and(|list| {
+                if can_recurse {
+                    let mut candidates: Vec<(i32, i32)> = list
+                        .iter()
+                        .filter(|c| {
+                            (min_x..=max_x).contains(&c.x) && (min_z..=max_z).contains(&c.z)
+                        })
+                        .map(|c| (c.x, c.z))
+                        .collect();
+                    candidates.sort_unstable();
+                    candidates.dedup();
+                    candidates.into_iter().any(|(px, pz)| {
+                        self.structure_chunk_after_placed(other, seed, px, pz, rings, zones)
+                    })
+                } else {
+                    list.iter().any(|c| {
+                        (min_x..=max_x).contains(&c.x)
+                            && (min_z..=max_z).contains(&c.z)
+                            && self
+                                .structure_chunk_after_placed(other, seed, c.x, c.z, rings, zones)
+                    })
+                }
+            }),
+            Placement::Unsupported => false,
+            _ => (min_x..=max_x).any(|tx| {
+                (min_z..=max_z).any(|tz| self.structure_chunk(other, seed, tx, tz, rings, zones))
+            }),
+        }
     }
 }
 impl StructureSet {
@@ -2092,5 +2214,398 @@ mod tests {
         assert!(avoid.near(ChunkPos::new(1, -1), |q| {
             BiomeId(if q == [18, 30, 10] { 2 } else { 0 })
         }));
+    }
+
+    #[test]
+    fn has_start_in_range_matches_bruteforce_across_placements_and_bounds() {
+        let mut r = registry(
+            &[("t:s", json!({"type": "minecraft:igloo", "biomes": []}))],
+            &[
+                (
+                    "t:linear",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 16, "separation": 4, "salt": 10387312}}),
+                ),
+                (
+                    "t:non_pow2",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 30, "separation": 7, "salt": 34222645}}),
+                ),
+                (
+                    "t:sep_zero",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 8, "separation": 0, "salt": 99112233}}),
+                ),
+                (
+                    "t:triangular",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 12, "separation": 3, "spread_type": "triangular",
+                            "salt": 14357617, "frequency": 0.45}}),
+                ),
+                (
+                    "t:excluded",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 6, "separation": 1, "salt": 777,
+                            "exclusion_zone": {"other_set": "t:sep_zero", "chunk_count": 3}}}),
+                ),
+                (
+                    "t:min_dist",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 6, "separation": 1, "salt": 778,
+                            "exclusion_zone": {"other_set": "t:sep_zero", "chunk_count": 3},
+                            "horizon:min_distance_from_world_origin": 64}}),
+                ),
+                (
+                    "t:origin",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:dimension_origin"}}),
+                ),
+                (
+                    "t:rings",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:concentric_rings",
+                            "distance": 32, "spread": 3, "count": 4, "preferred_biomes": [],
+                            "salt": 55, "frequency": 0.5}}),
+                ),
+                (
+                    "t:sep_eq",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 8, "separation": 0, "salt": 123}}),
+                ),
+                (
+                    "t:sep_gt",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 6, "separation": 0, "salt": 456}}),
+                ),
+                (
+                    "t:unsupported",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:dimension_origin"}}),
+                ),
+            ],
+        );
+        // Exercise defensive fallback paths for invalid separation >= spacing and Unsupported.
+        for set in &mut r.sets {
+            match set.name.as_str() {
+                "t:sep_eq" => {
+                    set.placement = Placement::RandomSpread {
+                        spacing: 8,
+                        separation: 8,
+                        triangular: false,
+                    };
+                }
+                "t:sep_gt" => {
+                    set.placement = Placement::RandomSpread {
+                        spacing: 6,
+                        separation: 9,
+                        triangular: false,
+                    };
+                }
+                "t:unsupported" => {
+                    set.placement = Placement::Unsupported;
+                }
+                _ => {}
+            }
+        }
+        r.set_dimension_origin(ChunkPos::new(-17, 23));
+        let mut rings = Rings::new();
+        rings.insert(
+            "t:rings".to_owned(),
+            vec![
+                ChunkPos::new(-12, 5),
+                ChunkPos::new(0, 0),
+                ChunkPos::new(41, -38),
+                ChunkPos::new(i32::MAX - 3, i32::MIN + 4),
+            ],
+        );
+
+        let brute_force = |name: &str, seed: i64, x: i32, z: i32, range: i32, zones: bool| {
+            let Some(other) = r.sets.iter().find(|s| s.name == name) else {
+                return false;
+            };
+            (x - range..=x + range).any(|tx| {
+                (z - range..=z + range)
+                    .any(|tz| r.structure_chunk(other, seed, tx, tz, &rings, zones))
+            })
+        };
+
+        let names = [
+            "t:linear",
+            "t:non_pow2",
+            "t:sep_zero",
+            "t:triangular",
+            "t:excluded",
+            "t:min_dist",
+            "t:origin",
+            "t:rings",
+            "t:sep_eq",
+            "t:sep_gt",
+            "t:unsupported",
+            "t:missing",
+        ];
+        let coords = [
+            (0, 0),
+            (-17, 23),
+            (-15, 20),
+            (-35, -28),
+            (19, -44),
+            (i32::MAX - 10, i32::MAX - 10),
+            (i32::MIN + 10, i32::MIN + 10),
+            // `min_x == i32::MIN`: with spacing 30, `i32::MIN.div_euclid(30) * 30 < i32::MIN`,
+            // so widening to i64 is required to match Java's 32-bit `gx * spacing + sx`.
+            (i32::MIN + 2, i32::MIN + 2),
+            (i32::MAX - 3, i32::MIN + 4),
+        ];
+        let mut saw_true = false;
+        let mut saw_false = false;
+        for seed in [0_i64, 12345, -987_654_321] {
+            for name in names {
+                for &(x, z) in &coords {
+                    // `min_distance` squares `x * 16` in `i64`; stay within its representable range.
+                    if name == "t:min_dist" && (x.unsigned_abs() > 100 || z.unsigned_abs() > 100) {
+                        continue;
+                    }
+                    for range in [-1_i32, 0, 2, 10] {
+                        let margin = if name == "t:excluded" {
+                            range.saturating_add(10)
+                        } else {
+                            range
+                        };
+                        if x.checked_sub(margin).is_none()
+                            || x.checked_add(margin).is_none()
+                            || z.checked_sub(margin).is_none()
+                            || z.checked_add(margin).is_none()
+                        {
+                            continue;
+                        }
+                        for zones in [false, true] {
+                            let actual =
+                                r.has_start_in_range(name, seed, x, z, range, &rings, zones);
+                            let expected = brute_force(name, seed, x, z, range, zones);
+                            assert_eq!(
+                                actual, expected,
+                                "mismatch for {name} seed={seed} ({x},{z}) range={range} zones={zones}"
+                            );
+                            saw_true |= actual;
+                            saw_false |= !actual;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            saw_true && saw_false,
+            "test must cover both hits and misses"
+        );
+    }
+
+    #[test]
+    fn has_start_in_range_preserves_xz_order_for_recursive_exclusions() {
+        let r = registry(
+            &[("t:s", json!({"type": "minecraft:igloo", "biomes": []}))],
+            &[
+                // Linear RandomSpread mutual recursion: within `gx = 0`, `gz = 0`
+                // produces `(8, 11)` (recursive trap with `t:spread_b` at `(10, 11)`),
+                // while `gz = 1` produces `(5, 22)` (smaller `x`, matches first in
+                // `(x, z)` order and ends the scan without recursing into `(8, 11)`).
+                (
+                    "t:spread_a",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 16, "separation": 4, "salt": 35,
+                            "exclusion_zone": {"other_set": "t:spread_b", "chunk_count": 2}}}),
+                ),
+                (
+                    "t:spread_b",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 16, "separation": 4, "salt": 34,
+                            "exclusion_zone": {"other_set": "t:spread_a", "chunk_count": 2}}}),
+                ),
+                // Negative-coordinate RandomSpread with mutually recursive
+                // `horizon:exclusion_zone` (`their_zones: true`): within `gx = -1`,
+                // `gz = -1` produces `(-6, -6)` (recursive trap) while `gz = 0`
+                // produces `(-11, 4)` (smaller `x`, matches first).
+                (
+                    "t:neg_a",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                    "placement": {"type": "minecraft:random_spread",
+                        "spacing": 16, "separation": 4, "salt": 26,
+                        "horizon:exclusion_zone": {
+                            "other_sets": ["t:neg_b"], "chunk_count": 2, "their_zones": true
+                        }}}),
+                ),
+                (
+                    "t:neg_b",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                    "placement": {"type": "minecraft:concentric_rings",
+                        "distance": 32, "spread": 3, "count": 1, "preferred_biomes": [],
+                        "horizon:exclusion_zone": {
+                            "other_sets": ["t:neg_a"], "chunk_count": 2, "their_zones": true
+                        }}}),
+                ),
+                // Triangular RandomSpread with mutually recursive `exclusion_zone`:
+                // within `gx = 0`, `gz = 0` produces `(8, 8)` (recursive trap) while
+                // `gz = 1` produces `(5, 16)` (smaller `x`, matches first).
+                (
+                    "t:tri_a",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:random_spread",
+                            "spacing": 16, "separation": 4, "spread_type": "triangular",
+                            "salt": 40,
+                            "exclusion_zone": {"other_set": "t:tri_b", "chunk_count": 2}}}),
+                ),
+                (
+                    "t:tri_b",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:concentric_rings",
+                            "distance": 32, "spread": 3, "count": 1, "preferred_biomes": [],
+                            "exclusion_zone": {"other_set": "t:tri_a", "chunk_count": 2}}}),
+                ),
+                // ConcentricRings mutual recursion with unsorted ring order,
+                // duplicate entries, an earlier candidate rejected by `min_distance`,
+                // a middle candidate that matches, and a later recursive trap.
+                (
+                    "t:ring_x_a",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:concentric_rings",
+                            "distance": 32, "spread": 3, "count": 4, "preferred_biomes": [],
+                            "horizon:min_distance_from_world_origin": 32,
+                            "exclusion_zone": {"other_set": "t:ring_x_b", "chunk_count": 2}}}),
+                ),
+                (
+                    "t:ring_x_b",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:concentric_rings",
+                            "distance": 32, "spread": 3, "count": 1, "preferred_biomes": [],
+                            "exclusion_zone": {"other_set": "t:ring_x_a", "chunk_count": 2}}}),
+                ),
+                // ConcentricRings mutual recursion with equal `x` and unsorted `z`
+                // through `horizon:exclusion_zone` (`their_zones: true`).
+                (
+                    "t:ring_z_a",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                    "placement": {"type": "minecraft:concentric_rings",
+                        "distance": 32, "spread": 3, "count": 2, "preferred_biomes": [],
+                        "horizon:exclusion_zone": {
+                            "other_sets": ["t:ring_z_b"], "chunk_count": 2, "their_zones": true
+                        }}}),
+                ),
+                (
+                    "t:ring_z_b",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                    "placement": {"type": "minecraft:concentric_rings",
+                        "distance": 32, "spread": 3, "count": 1, "preferred_biomes": [],
+                        "horizon:exclusion_zone": {
+                            "other_sets": ["t:ring_z_a"], "chunk_count": 2, "their_zones": true
+                        }}}),
+                ),
+                // Public `is_structure_chunk` callers whose exclusion zones query
+                // the recursive sets above.
+                (
+                    "t:outer_spread",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:concentric_rings",
+                            "distance": 32, "spread": 3, "count": 1, "preferred_biomes": [],
+                            "exclusion_zone": {"other_set": "t:spread_a", "chunk_count": 6}}}),
+                ),
+                (
+                    "t:outer_ring",
+                    json!({"structures": [{"structure": "t:s", "weight": 1}],
+                        "placement": {"type": "minecraft:concentric_rings",
+                            "distance": 32, "spread": 3, "count": 1, "preferred_biomes": [],
+                            "exclusion_zone": {"other_set": "t:ring_x_a", "chunk_count": 5}}}),
+                ),
+            ],
+        );
+
+        let set = |name: &str| r.sets.iter().find(|s| s.name == name).unwrap();
+        // Pin the grid-sector candidates that invert `(gx, gz)` vs `(x, z)` order.
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:spread_a"), 0, 0, 0),
+            Some(ChunkPos::new(8, 11))
+        );
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:spread_a"), 0, 0, 16),
+            Some(ChunkPos::new(5, 22))
+        );
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:spread_b"), 0, 0, 0),
+            Some(ChunkPos::new(10, 11))
+        );
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:neg_a"), 0, -16, -16),
+            Some(ChunkPos::new(-6, -6))
+        );
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:neg_a"), 0, -16, 0),
+            Some(ChunkPos::new(-11, 4))
+        );
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:tri_a"), 0, 0, 0),
+            Some(ChunkPos::new(8, 8))
+        );
+        assert_eq!(
+            StructureRegistry::potential_chunk(set("t:tri_a"), 0, 0, 16),
+            Some(ChunkPos::new(5, 16))
+        );
+
+        let mut rings = Rings::new();
+        rings.insert("t:neg_b".to_owned(), vec![ChunkPos::new(-6, -6)]);
+        rings.insert("t:tri_b".to_owned(), vec![ChunkPos::new(8, 8)]);
+        rings.insert(
+            "t:ring_x_a".to_owned(),
+            vec![
+                ChunkPos::new(10, 0),
+                ChunkPos::new(5, 0),
+                ChunkPos::new(0, 0),
+                ChunkPos::new(5, 0),
+            ],
+        );
+        rings.insert("t:ring_x_b".to_owned(), vec![ChunkPos::new(10, 0)]);
+        rings.insert(
+            "t:ring_z_a".to_owned(),
+            vec![ChunkPos::new(0, 10), ChunkPos::new(0, 0)],
+        );
+        rings.insert("t:ring_z_b".to_owned(), vec![ChunkPos::new(0, 10)]);
+        rings.insert("t:outer_spread".to_owned(), vec![ChunkPos::new(6, 16)]);
+        rings.insert("t:outer_ring".to_owned(), vec![ChunkPos::new(5, 0)]);
+
+        let brute_force = |name: &str, x: i32, z: i32, range: i32| {
+            let other = set(name);
+            (x - range..=x + range).any(|tx| {
+                (z - range..=z + range).any(|tz| r.structure_chunk(other, 0, tx, tz, &rings, true))
+            })
+        };
+
+        for (name, x, z, range) in [
+            ("t:spread_a", 6, 16, 6),
+            ("t:neg_a", -9, -1, 5),
+            ("t:tri_a", 6, 12, 4),
+            ("t:ring_x_a", 5, 0, 5),
+            ("t:ring_z_a", 0, 5, 5),
+        ] {
+            assert!(
+                r.has_start_in_range(name, 0, x, z, range, &rings, true),
+                "{name} must stop at the earlier (x, z) match before reaching the recursive trap"
+            );
+            assert!(
+                brute_force(name, x, z, range),
+                "{name} brute-force (x, z) scan must agree"
+            );
+        }
+
+        // End-to-end through `is_structure_chunk`: both outer sets are excluded
+        // by the earlier `(x, z)` candidate without entering the recursive trap.
+        assert!(!r.is_structure_chunk(set("t:outer_spread"), 0, 6, 16, &rings));
+        assert!(!r.is_structure_chunk(set("t:outer_ring"), 0, 5, 0, &rings));
     }
 }
