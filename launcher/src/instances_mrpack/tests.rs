@@ -111,3 +111,31 @@ fn a_modded_pack_fills_the_instance_it_is_imported_into() {
     assert!(!home.join("mods/server-only.jar").exists());
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn a_loader_version_that_could_name_another_path_is_refused() {
+    for key in ["fabric-loader", "quilt-loader", "forge", "neoforge"] {
+        for bad in [
+            "../x",
+            "1/../../x",
+            "1?x=2",
+            "1#x",
+            "..",
+            "a b",
+            "",
+            &"1".repeat(65),
+        ] {
+            let index = json!({ "dependencies": { "minecraft": "1.21.4", key: bad } });
+            assert!(game_of(&index).is_err(), "{key} {bad:?}");
+        }
+        for good in [
+            "0.27.1-beta.1",
+            "0.26.0+build.1",
+            "1.12.2-14.23.5.2860",
+            "21.0.0-beta",
+        ] {
+            let index = json!({ "dependencies": { "minecraft": "1.21.4", key: good } });
+            assert!(game_of(&index).is_ok(), "{key} {good:?}");
+        }
+    }
+}

@@ -37,12 +37,29 @@ pub fn game_of(index: &Value) -> Result<(String, Option<Loader>), String> {
         let version = version
             .as_str()
             .ok_or_else(|| format!("The pack's {key} has no version."))?;
+        if !plausible_version(version) {
+            return Err(format!(
+                "The pack's {key} version isn't one Horizon can use."
+            ));
+        }
         loader = Some(Loader {
             kind,
             version: version.to_string(),
         });
     }
     Ok((minecraft.to_string(), loader))
+}
+
+/// Whether `version` looks like a loader release (`0.16.9`, `0.27.1-beta.1`, `47.3.0`,
+/// `21.1.77`, `1.12.2-14.23.5.2860`). The loader's version goes into a URL and a folder name, so
+/// a pack's must not carry a path or a query.
+fn plausible_version(version: &str) -> bool {
+    (1..=64).contains(&version.len())
+        && version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
+        && version != "."
+        && version != ".."
 }
 
 /// Makes a Java instance from the `.mrpack` `file`, named after the pack.
