@@ -6,6 +6,7 @@ use crate::{
         Arg, CmdResult, CommandError, Context,
         args::{ScoreHolderArg, Selector},
     },
+    component_codec::canonical_text_component,
     scoreboard::{
         self as sb, Comp, NumberFormat, RenderType, Scoreboard, Visibility, comp_text,
         criteria_read_only, literal,
@@ -298,7 +299,10 @@ fn scoreboard(id: &str, ctx: &Context, env: &mut dyn Env) -> CmdResult<i32> {
             let name = objective_name(ctx, env, "objective")?;
             let display = component(ctx, "displayName", env)?;
             let o = env.sb_mut().objective_mut(&name).expect("checked");
-            if o.display_name != display {
+            // ScoreboardCommand.setDisplayName compares decoded components.
+            if o.display_name != display
+                && canonical_text_component(&o.display_name) != canonical_text_component(&display)
+            {
                 o.display_name = display;
                 let shown = o.formatted_display_name();
                 env.feedback(tr(
