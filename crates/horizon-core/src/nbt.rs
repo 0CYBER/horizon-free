@@ -234,6 +234,14 @@ pub struct NamedTag {
     pub tag: Tag,
 }
 
+/// The most tags a saved file or a structure template may hold. An element can take one byte
+/// of the file (an empty compound in a list) and deflate to a thousandth of that, while its
+/// [`Tag`] takes 32 bytes: without a cap, a 1 MiB chunk asked for 32 GiB and the process
+/// aborted. A file with this many tags is over 100 MiB of NBT, past anything a world holds.
+pub const MAX_SAVED_NODES: usize = 1 << 25;
+/// Most list slots reserved before the elements are read.
+const LIST_PREALLOCATION: usize = 1 << 12;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub max_bytes: usize,
@@ -275,11 +283,11 @@ impl Limits {
     /// Chunks, entities, POI and the world's `.dat` files: vanilla reads and
     /// writes them with `NbtAccounter.unlimitedHeap()` (`NbtIo.read`), so a
     /// chunk past the default node cap (a few thousand full containers) still
-    /// loads. The byte cap stays as the only guard on the decompressed data.
+    /// loads. Past the byte cap, [`MAX_SAVED_NODES`] bounds what the tree takes in memory.
     pub fn saved() -> Self {
         Self {
             max_bytes: 1 << 30,
-            max_nodes: usize::MAX,
+            max_nodes: MAX_SAVED_NODES,
             max_depth: 512,
         }
     }
@@ -288,11 +296,11 @@ impl Limits {
     /// `NbtAccounter.unlimitedHeap()` (TemplateSource.readStructure), and
     /// mods ship templates past the default node cap (YUNG's Better Ocean
     /// Monuments' start piece, 115x64x126 blocks, holds millions of tags).
-    /// The byte cap stays as the only guard on the decompressed file.
+    /// [`MAX_SAVED_NODES`] is far past those and bounds the memory of the tree.
     pub fn templates() -> Self {
         Self {
             max_bytes: 1 << 28,
-            max_nodes: usize::MAX,
+            max_nodes: MAX_SAVED_NODES,
             max_depth: 512,
         }
     }
@@ -507,7 +515,10 @@ impl<'a> Reader<'a, '_> {
     fn list_payload(&mut self, depth: usize) -> Result<Tag, Error> {
         let (element_id, len) = self.list_header()?;
         self.charge(4 * len as u64)?;
-        let mut values = Vec::with_capacity(len);
+        // The declared length is only checked against the budget, so nested lists could each
+        // reserve all of it before reading an element: reserve a bounded share and let the
+        // vector grow with the elements actually read.
+        let mut values = Vec::with_capacity(len.min(LIST_PREALLOCATION));
         for _ in 0..len {
             let mut value = self.payload(element_id, depth + 1)?;
             if let Tag::Compound(map) = &mut value
@@ -1519,6 +1530,21 @@ mod tests {
         let bytes = write_named(&root, Limits::templates()).unwrap();
         assert!(read_named(&bytes, Limits::default()).is_err());
         assert_eq!(read_named(&bytes, Limits::templates()).unwrap().0, root);
+    }
+    #[test]
+    fn a_saved_list_of_more_tags_than_the_cap_is_refused() {
+        // `{a: [{}, {}, ...]}`: each empty compound is one byte of the file.
+        let bytes = |count: usize| {
+            let mut bytes = vec![10, 0, 0, 9, 0, 1, b'a', 10];
+            bytes.extend_from_slice(&(count as u32).to_be_bytes());
+            bytes.resize(bytes.len() + count + 1, 0);
+            bytes
+        };
+        for limits in [Limits::saved(), Limits::templates()] {
+            let error = read_named(&bytes(MAX_SAVED_NODES), limits).unwrap_err();
+            assert_eq!(error.reason, "node limit exceeded");
+        }
+        assert!(read_named(&bytes(1_000_001), Limits::saved()).is_ok());
     }
     #[test]
     fn depth_boundary_and_every_truncated_prefix() {
