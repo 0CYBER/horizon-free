@@ -372,9 +372,9 @@ jobs:
           [ "$TESTED" = true ] || cargo +stable fmt --check
           cargo +stable clippy --all-targets --locked -- -D warnings
           if [ "$TESTED" = true ]; then
-            cargo +stable test --locked --lib --bins --no-run
+            cargo +stable test --locked --lib --bins --tests --no-run
           else
-            cargo +stable test --locked --lib --bins
+            cargo +stable test --locked --lib --bins --tests
           fi
       - name: Load probe
         if: always()
