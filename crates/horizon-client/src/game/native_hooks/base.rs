@@ -729,9 +729,10 @@ impl Game<'_> {
     /// `vehicle_health` (only riding a mount), `contextual_info_bar` (the
     /// mount's jump bar, the locator bar or the experience bar, with the level
     /// number), `player_health` (the health, armor, food and air rows, drawn in
-    /// one pass), `selected_item_name`, `sleep_overlay`, `overlay_message`
-    /// (the action bar), `title`, `scoreboard_sidebar`, `subtitle_overlay`,
-    /// `chat` and `tab_list`. A layer F1 hides fires nothing, and the chat
+    /// one pass), `selected_item_name` or, for a spectator, `spectator_tooltip`
+    /// (the spectator menu's prompt or selected entry), `sleep_overlay`,
+    /// `overlay_message` (the action bar), `title`, `scoreboard_sidebar`,
+    /// `subtitle_overlay`, `chat` and `tab_list`. A layer F1 hides fires nothing, and the chat
     /// screen draws the focused chat itself, so `chat` is only the unfocused
     /// lines. The camera overlays and the debug screen are not layers here:
     /// they are not drawn in this pass. Draw with `native_fill`, `native_text`

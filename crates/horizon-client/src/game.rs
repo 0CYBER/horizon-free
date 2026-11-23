@@ -5159,7 +5159,13 @@ impl Game<'_> {
                     hud_layout::paint_with_scratch(batch, &g.gui.atlas, &draws, &mut glyph_scratch);
                 }
             });
-            if !spectator {
+            // Hud.extractHotbarAndDecorations, after the contextual bar: the held item's name,
+            // or SpectatorGui.extractAction for a spectator (NeoForge's `spectator_tooltip`).
+            if spectator {
+                self.gui_layer("minecraft:spectator_tooltip", batch, |g, batch| {
+                    g.draw_spectator_action(batch);
+                });
+            } else {
                 self.gui_layer("minecraft:selected_item_name", batch, |g, batch| {
                     g.draw_selected_name(batch, !g.creative);
                 });

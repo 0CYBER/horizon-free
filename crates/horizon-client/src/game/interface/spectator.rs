@@ -92,7 +92,7 @@ impl Game<'_> {
         let now = self.spectator_now();
         self.spectator_gui.on_mouse_scrolled(wheel, now);
     }
-    /// `Hud.extractHotbar` for a spectator, and `extractAction`'s prompt.
+    /// `Hud.extractHotbar` for a spectator.
     pub(super) fn draw_spectator_hotbar(&mut self, batch: &mut HudBatch) {
         let (w, h) = (batch.width as i32, batch.height as i32);
         let now = self.spectator_now();
@@ -100,16 +100,79 @@ impl Game<'_> {
             .map(|n| keybinds::display_name(self.settings.keys.get(&format!("key.hotbar.{n}"))))
             .collect();
         let font = &self.gui.atlas.font;
-        let mut draws = self
+        let draws = self
             .spectator_gui
             .hotbar(w, h, now, &|slot| labels[slot].clone(), font);
-        draws.extend(self.spectator_gui.action(
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
+    }
+
+    /// `SpectatorGui.extractAction`: the prompt or selected name above the contextual bar.
+    pub(super) fn draw_spectator_action(&self, batch: &mut HudBatch) {
+        let (w, h) = (batch.width as i32, batch.height as i32);
+        let draws = self.spectator_gui.action(
             w,
             h,
-            now,
-            font,
+            self.spectator_now(),
+            &self.gui.atlas.font,
             self.settings.text_background(0.0),
-        ));
+        );
         hud_layout::paint(batch, &self.gui.atlas, &draws);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::game::{Screen, native_entity_refs::tests::with_client_game};
+    use horizon_client::command::args::GameMode;
+    use mod_api::{ClientHost, Flow, GuiLayerPreEvent, Hooks, ModEntry};
+    use mod_platform::testing::with_mods;
+    use std::sync::Mutex;
+
+    /// The layers a frame fired, in order, and the one layer the mod hides.
+    static FIRED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static HIDDEN: Mutex<&str> = Mutex::new("");
+
+    struct Layers;
+    #[mod_api::__subscriptions]
+    impl Hooks for Layers {
+        fn gui_layer_pre(&self, _: &dyn ClientHost, event: &mut GuiLayerPreEvent<'_>) -> Flow {
+            FIRED.lock().unwrap().push(event.layer.to_string());
+            if event.layer == *HIDDEN.lock().unwrap() {
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        }
+    }
+
+    /// `Hud.extractHotbarAndDecorations` draws `SpectatorGui.extractAction` after the contextual
+    /// bar (the locator bar) and before the sleep overlay, in a layer of its own: hiding the
+    /// held item's name leaves the prompt, and hiding the prompt's layer removes it.
+    #[test]
+    #[ignore = "daily"]
+    fn the_spectator_prompt_draws_in_its_own_layer_above_the_contextual_bar() {
+        with_client_game(|game| {
+            game.title = None;
+            game.screen = Screen::Playing;
+            game.mode = GameMode::Spectator;
+            game.spectator_action_key();
+            assert!(game.spectator_gui.is_menu_active());
+            with_mods(vec![ModEntry::new("layers", Box::new(Layers))].into(), || {
+                let mut frame = |hidden: &'static str| {
+                    *HIDDEN.lock().unwrap() = hidden;
+                    FIRED.lock().unwrap().clear();
+                    game.hud_layers([320, 240]).vertices.len()
+                };
+                let shown = frame("");
+                let fired = FIRED.lock().unwrap().clone();
+                let at = |layer: &str| fired.iter().position(|fired| fired == layer);
+                let prompt = at("minecraft:spectator_tooltip").expect("the prompt's layer fired");
+                assert!(at("minecraft:contextual_info_bar").unwrap() < prompt);
+                assert!(prompt < at("minecraft:sleep_overlay").unwrap());
+                assert_eq!(at("minecraft:selected_item_name"), None);
+                assert_eq!(frame("minecraft:selected_item_name"), shown);
+                assert!(frame("minecraft:spectator_tooltip") < shown);
+            });
+        });
     }
 }

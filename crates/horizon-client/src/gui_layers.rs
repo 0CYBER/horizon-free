@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 /// Vanilla's HUD layers in the order Horizon draws them (`VanillaGuiLayers`, without the camera
 /// overlays and the debug screen, which the HUD pass does not draw): the ids `gui_layer_pre` fires.
-pub const VANILLA: [&str; 15] = [
+pub const VANILLA: [&str; 16] = [
     "minecraft:crosshair",
     "minecraft:hotbar",
     "minecraft:effects",
@@ -16,6 +16,7 @@ pub const VANILLA: [&str; 15] = [
     "minecraft:contextual_info_bar",
     "minecraft:player_health",
     "minecraft:selected_item_name",
+    "minecraft:spectator_tooltip",
     "minecraft:sleep_overlay",
     "minecraft:overlay_message",
     "minecraft:title",
