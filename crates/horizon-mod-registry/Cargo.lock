@@ -605,6 +605,7 @@ dependencies = [
  "horizon-platform",
  "horizon-release-sign",
  "http-body-util",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

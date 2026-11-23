@@ -11,7 +11,7 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
     let config = Config::from_env().unwrap_or_else(|e| panic!("horizon-mod-registry: {e}"));
-    let repo = config.github.repo.clone();
+    let repo = format!("{} as {}", config.github.repo, config.github.bot());
     // `HOST`: the address to listen on (127.0.0.1 on the host, where only the Cloudflare Tunnel reaches it).
     let host: std::net::IpAddr = std::env::var("HOST")
         .ok()

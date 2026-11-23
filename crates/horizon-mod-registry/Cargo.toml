@@ -21,6 +21,8 @@ toml = "1"
 # GitHub's API, blocking, on tokio's blocking pool: the launcher's HTTP client.
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 hmac = "0.12"
+# Signing the GitHub App's JWT (RS256): already here, under ureq's rustls.
+ring = "0.17"
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"

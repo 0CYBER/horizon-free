@@ -88,8 +88,9 @@ pub struct Config {
 
 impl Config {
     /// `REGISTRY_PUBLIC_URL`, `REGISTRY_SESSION_KEY`, `REGISTRY_REPO`,
-    /// `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_BOT_TOKEN`,
-    /// `REGISTRY_UPDATE_KEY` (optional), `REGISTRY_DB` (default
+    /// `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, the bot: `REGISTRY_APP_ID`,
+    /// `REGISTRY_APP_INSTALLATION_ID` and `REGISTRY_APP_KEY_FILE` (the App), else
+    /// `GITHUB_BOT_TOKEN`; `REGISTRY_UPDATE_KEY` (optional), `REGISTRY_DB` (default
     /// `/data/registry.sqlite3`), `REGISTRY_TRUST_PROXY` (`1` behind a proxy).
     pub fn from_env() -> Result<Config, String> {
         let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} is not set"));
@@ -97,20 +98,28 @@ impl Config {
         if key.len() < 32 {
             return Err("REGISTRY_SESSION_KEY needs at least 32 characters".into());
         }
+        let app = github::AppCredentials::from_vars(|name| std::env::var(name).ok())?;
+        let mut github = GitHub::new(
+            github::Endpoints::default(),
+            std::env::var("REGISTRY_REPO").unwrap_or_else(|_| "horizon-rust/horizon-mods".into()),
+            var("GITHUB_CLIENT_ID")?,
+            var("GITHUB_CLIENT_SECRET")?,
+            // The App writes when it is set: the token can stay for switching back.
+            match app {
+                Some(_) => String::new(),
+                None => var("GITHUB_BOT_TOKEN")?,
+            },
+        );
+        if let Some(app) = app {
+            github = github.as_app(app);
+        }
         Ok(Config {
             public_url: var("REGISTRY_PUBLIC_URL")?
                 .trim()
                 .trim_end_matches('/')
                 .to_owned(),
             session_key: key.into_bytes(),
-            github: GitHub::new(
-                github::Endpoints::default(),
-                std::env::var("REGISTRY_REPO")
-                    .unwrap_or_else(|_| "horizon-rust/horizon-mods".into()),
-                var("GITHUB_CLIENT_ID")?,
-                var("GITHUB_CLIENT_SECRET")?,
-                var("GITHUB_BOT_TOKEN")?,
-            ),
+            github,
             update_key: std::env::var("REGISTRY_UPDATE_KEY")
                 .ok()
                 .filter(|k| !k.is_empty())
@@ -1147,8 +1156,8 @@ pub fn publish(
         .map(|r| format!("- needs {} {}", r.id, r.version))
         .collect();
     let body = format!(
-        "<!-- submitted-by: {login} -->\n🤖 Submitted through [{site}]({public}/mods/submit) by @{login}. The form opens the pull request with \
-         the registry's token: neither Ludovic nor a reviewer wrote it.\n\n\
+        "<!-- submitted-by: {login} -->\n🤖 Submitted through [{site}]({public}/mods/submit) by @{login}. The form opens the pull request for \
+         them: no maintainer or reviewer wrote it.\n\n\
          | | |\n|---|---|\n| Project | `{id}` ({kind}, {new}) |\n| Version | {version} for {game} |\n| File | `{file}`, {size} bytes, SHA-256 `{sha256}` |\n| Signed | {signed} |\n| Source | {source} |\n\n{lists}\n\n\
          The checks below run the file's own checks again and, for a mod, a trial run in the sandbox. \
          Reviewers: read the source and the checks' report before you approve.",
