@@ -241,25 +241,43 @@ pub fn with_example_gpu(mut system: System) -> System {
 }
 
 /// "Delete my data": the server deletes everything sent under this install's ID, the waiting
-/// items go, and the install gets a new ID. If the server can't be reached the ID is kept, so
-/// the deletion can be asked again.
+/// items go, and the install gets a new ID. If the server can't be reached, or sending is turned
+/// off so it can't be asked, the ID is kept, so the deletion can be asked again.
 pub fn delete_my_data() -> Result<String, String> {
-    let home = home();
-    let mut consent = Consent::load(&home);
-    outbox::clear(&home).map_err(|e| e.to_string())?;
-    let remote = match horizon_telemetry::endpoint() {
+    delete_my_data_in(
+        &home(),
+        horizon_telemetry::endpoint(),
+        upload::delete_remote,
+    )
+}
+
+/// [`delete_my_data`] for the game folder `home`, asking the server at `endpoint` (None: sending
+/// is turned off) through `delete`.
+fn delete_my_data_in(
+    home: &Path,
+    endpoint: Option<String>,
+    delete: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Result<String, String> {
+    let mut consent = Consent::load(home);
+    outbox::clear(home).map_err(|e| e.to_string())?;
+    let remote = match endpoint {
         _ if consent.install_id.is_empty() => "Nothing was ever sent from here.",
         None => {
-            "Sending is turned off here (HORIZON_TELEMETRY_URL=off), so the server was not asked."
+            return Err(
+                "Sending is turned off here (HORIZON_TELEMETRY_URL=off), so the server \
+                can't be asked to delete what was sent. Nothing is waiting, and this install keeps \
+                its ID so you can ask again with sending on."
+                    .into(),
+            );
         }
         Some(url) => {
-            upload::delete_remote(&url, &consent.install_id)
+            delete(&url, &consent.install_id)
                 .map_err(|e| format!("The server could not be reached ({e}). Try again later."))?;
             "The server deleted everything sent from here."
         }
     };
     consent.reset_install_id();
-    consent.save(&home).map_err(|e| e.to_string())?;
+    consent.save(home).map_err(|e| e.to_string())?;
     Ok(format!(
         "{remote} Nothing is waiting, and this install has a new ID."
     ))
@@ -558,5 +576,33 @@ mod tests {
     #[test]
     fn every_kind_has_a_switch() {
         assert!(Kind::ALL.iter().all(|&k| !label(k).is_empty()));
+    }
+
+    /// With sending turned off the server can't be asked, so "Delete my data" keeps the install's
+    /// ID, as when the server can't be reached: what was sent under it can still be deleted. Only
+    /// a deletion the server answered gives the install a new ID.
+    #[test]
+    fn deleting_with_sending_off_keeps_the_id_to_ask_again() {
+        let home = std::env::temp_dir().join(format!(
+            "horizon-launcher-delete-my-data-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let mut consent = Consent::load(&home);
+        consent.answer(Choices::ALL);
+        consent.save(&home).unwrap();
+        let id = consent.install_id.clone();
+        let off = delete_my_data_in(&home, None, |_, _| panic!("the server isn't asked"));
+        assert!(off.unwrap_err().contains("HORIZON_TELEMETRY_URL=off"));
+        assert_eq!(Consent::load(&home).install_id, id);
+        let asked = std::cell::Cell::new(false);
+        let said = delete_my_data_in(&home, Some("https://example.org".into()), |_, from| {
+            asked.set(from == id);
+            Ok(())
+        })
+        .unwrap();
+        assert!(asked.get() && said.contains("deleted everything"), "{said}");
+        assert_ne!(Consent::load(&home).install_id, id);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }
