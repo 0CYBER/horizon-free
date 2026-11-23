@@ -37,18 +37,24 @@ impl Game<'_> {
                 answers.insert(cell, emission);
             }
         }
-        if let Some(chunk) = self.world.chunks.get_mut(&key)
-            && (pending || chunk.dynamic_emission != answers)
+        if self
+            .world
+            .chunks
+            .mutate_chunk(key, |chunk| {
+                if !pending && chunk.dynamic_emission == answers {
+                    return false;
+                }
+                // Saved light was not computed from these answers, and admission queues no light
+                // job for it: relight the column when they differ.
+                let relight = chunk.light_loaded && chunk.dynamic_emission != answers;
+                let chunk = Arc::make_mut(chunk);
+                chunk.dynamic_emission = answers;
+                chunk.dynamic_pending = false;
+                relight
+            })
+            .unwrap_or(false)
         {
-            // Saved light was not computed from these answers, and admission queues no light
-            // job for it: relight the column when they differ.
-            let relight = chunk.light_loaded && chunk.dynamic_emission != answers;
-            let chunk = Arc::make_mut(chunk);
-            chunk.dynamic_emission = answers;
-            chunk.dynamic_pending = false;
-            if relight {
-                self.world.dirty_light.insert(key);
-            }
+            self.world.dirty_light.insert(key);
         }
     }
     /// The cells this update's edits and light checks left in a `dynamic_light` state,
@@ -105,17 +111,21 @@ impl Game<'_> {
     /// One cell's answer stored in its chunk (`None` drops the one it had); the chunk is
     /// copied only when the answer changes.
     fn store_light_emission(&mut self, key: (i32, i32), cell: u32, emission: Option<u8>) {
-        let Some(chunk) = self.world.chunks.get_mut(&key) else {
-            return;
-        };
-        if chunk.dynamic_emission.get(&cell).copied() == emission {
+        if self
+            .world
+            .chunks
+            .get(&key)
+            .is_none_or(|chunk| chunk.dynamic_emission.get(&cell).copied() == emission)
+        {
             return;
         }
-        let answers = &mut Arc::make_mut(chunk).dynamic_emission;
-        match emission {
-            Some(emission) => answers.insert(cell, emission),
-            None => answers.remove(&cell),
-        };
+        self.world.chunks.mutate_chunk(key, |chunk| {
+            let answers = &mut Arc::make_mut(chunk).dynamic_emission;
+            match emission {
+                Some(emission) => answers.insert(cell, emission),
+                None => answers.remove(&cell),
+            };
+        });
     }
     /// One cell's answer, clamped to a light level as `LightTables` clamps a state's.
     fn ask_light_emission(

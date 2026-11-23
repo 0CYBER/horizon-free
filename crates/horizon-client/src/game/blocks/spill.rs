@@ -540,20 +540,21 @@ pub(super) fn put_saved_entity(
     tag: horizon_core::nbt::Tag,
 ) {
     use horizon_core::nbt::Tag;
-    let Some(chunk) = world.chunks.get_mut(&(pos[0] >> 4, pos[2] >> 4)) else {
-        return;
-    };
-    let chunk = std::sync::Arc::make_mut(chunk);
-    let saved = std::sync::Arc::make_mut(chunk.saved.get_or_insert_default());
-    let at = |t: &Tag| {
-        t.get("x") == Some(&Tag::Int(pos[0]))
-            && t.get("y") == Some(&Tag::Int(pos[1]))
-            && t.get("z") == Some(&Tag::Int(pos[2]))
-    };
-    match saved.block_entities.iter_mut().find(|t| at(t)) {
-        Some(old) => *old = tag,
-        None => saved.block_entities.push(tag),
-    }
+    world
+        .chunks
+        .mutate_chunk((pos[0] >> 4, pos[2] >> 4), |chunk| {
+            let chunk = std::sync::Arc::make_mut(chunk);
+            let saved = std::sync::Arc::make_mut(chunk.saved.get_or_insert_default());
+            let at = |t: &Tag| {
+                t.get("x") == Some(&Tag::Int(pos[0]))
+                    && t.get("y") == Some(&Tag::Int(pos[1]))
+                    && t.get("z") == Some(&Tag::Int(pos[2]))
+            };
+            match saved.block_entities.iter_mut().find(|t| at(t)) {
+                Some(old) => *old = tag,
+                None => saved.block_entities.push(tag),
+            }
+        });
 }
 
 impl GameLevel<'_> {
@@ -1067,20 +1068,27 @@ impl GameLevel<'_> {
             };
             int("x") == Some(pos.x) && int("y") == Some(pos.y) && int("z") == Some(pos.z)
         };
-        let Some(chunk) = self.world.chunks.get_mut(&chunk_key) else {
+        let Some(index) = self
+            .world
+            .chunks
+            .get(&chunk_key)
+            .and_then(|chunk| chunk.saved.as_ref())
+            .and_then(|saved| saved.block_entities.iter().position(at))
+        else {
             return false;
         };
-        let Some(saved) = chunk.saved.as_ref() else {
+        let Some(tag) = self
+            .world
+            .chunks
+            .mutate_chunk(chunk_key, |chunk| {
+                let chunk = std::sync::Arc::make_mut(chunk);
+                let saved = chunk.saved.as_mut()?;
+                Some(std::sync::Arc::make_mut(saved).block_entities.remove(index))
+            })
+            .flatten()
+        else {
             return false;
         };
-        let Some(index) = saved.block_entities.iter().position(at) else {
-            return false;
-        };
-        let chunk = std::sync::Arc::make_mut(chunk);
-        let Some(saved) = chunk.saved.as_mut() else {
-            return false;
-        };
-        let tag = std::sync::Arc::make_mut(saved).block_entities.remove(index);
         if !side_effects {
             return true;
         }

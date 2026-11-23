@@ -146,15 +146,18 @@ impl World {
             }
             out.changed += any;
             out.chunks += 1;
-            let chunk =
-                std::sync::Arc::make_mut(self.chunks.get_mut(&key).expect("looked up above"));
-            for s in 0..sections {
-                if changed[s]
-                    && let Some(v) = &values[s]
-                {
-                    chunk.replace_blocks(s, v);
-                }
-            }
+            self.chunks
+                .mutate_chunk(key, |chunk| {
+                    let chunk = std::sync::Arc::make_mut(chunk);
+                    for s in 0..sections {
+                        if changed[s]
+                            && let Some(v) = &values[s]
+                        {
+                            chunk.replace_blocks(s, v);
+                        }
+                    }
+                })
+                .expect("looked up above");
             self.revision = self.revision.wrapping_add(1);
             self.modified.insert(key);
             if self.block_log.is_some() {

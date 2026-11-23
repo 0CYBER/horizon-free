@@ -34,10 +34,11 @@ impl Game<'_> {
         // `postProcessGeneration`).
         self.sync_tick_chunks();
         for key in ready {
-            let Some(chunk) = self.world.chunks.get_mut(&key) else {
+            let Some(marks) = self.world.chunks.mutate_chunk(key, |chunk| {
+                std::mem::take(&mut Arc::make_mut(chunk).postprocess)
+            }) else {
                 continue;
             };
-            let marks = std::mem::take(&mut Arc::make_mut(chunk).postprocess);
             self.with_level(|b, level, ticks| {
                 for [x, y, z] in marks {
                     let pos = BlockPos::new(x, y, z);

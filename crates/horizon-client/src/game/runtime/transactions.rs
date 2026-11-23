@@ -1190,14 +1190,14 @@ impl Game<'_> {
         }
         let bottom_quart = self.world.bottom_y() >> 2;
         for ((qx, qy, qz), biome) in level.biomes {
-            if let Some(chunk) = self.world.chunks.get_mut(&(qx >> 2, qz >> 2)) {
+            self.world.chunks.mutate_chunk((qx >> 2, qz >> 2), |chunk| {
                 std::sync::Arc::make_mut(chunk).set_biome_cell(
                     qx & 3,
                     qy - bottom_quart,
                     qz & 3,
                     biome,
                 );
-            }
+            });
         }
         for (pos, state) in level.blocks {
             self.world.set_stored(pos.0, pos.1, pos.2, state);

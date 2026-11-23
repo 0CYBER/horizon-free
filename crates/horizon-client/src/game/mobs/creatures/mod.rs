@@ -1203,9 +1203,9 @@ impl Game<'_> {
             .filter(|k| self.world.chunks.get(k).is_some_and(|c| c.fresh && c.lit))
             .collect();
         for key in fresh {
-            if let Some(c) = self.world.chunks.get_mut(&key) {
+            self.world.chunks.mutate_chunk(key, |c| {
                 Arc::make_mut(c).fresh = false;
-            }
+            });
             self.world.chunks.remove_fresh(&key);
             self.spawn_generation_creatures(key.0, key.1);
         }

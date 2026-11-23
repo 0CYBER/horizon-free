@@ -111,21 +111,29 @@ impl ViewedWorld {
             }
             C::LightUpdate(p) => {
                 let (layers, _) = self.format.light(&p.light);
-                if let Some(chunk) = self.world.chunks.get_mut(&(p.x, p.z)) {
-                    horizon_client::light::update_light_layers(
-                        Arc::make_mut(chunk),
-                        &layers,
-                        self.format.has_skylight,
-                    );
+                let has_skylight = self.format.has_skylight;
+                if self
+                    .world
+                    .chunks
+                    .mutate_chunk((p.x, p.z), |chunk| {
+                        horizon_client::light::update_light_layers(
+                            Arc::make_mut(chunk),
+                            &layers,
+                            has_skylight,
+                        );
+                    })
+                    .is_some()
+                {
                     column_changed(&mut self.world, (p.x, p.z));
                 }
             }
             C::ChunksBiomes(p) => {
+                let format = &self.format;
                 for data in &p.chunks {
                     let [x, z] = data.pos;
-                    if let Some(chunk) = self.world.chunks.get_mut(&(x, z))
-                        && let Err(e) = self.format.replace_biomes(Arc::make_mut(chunk), data)
-                    {
+                    if let Some(Err(e)) = self.world.chunks.mutate_chunk((x, z), |chunk| {
+                        format.replace_biomes(Arc::make_mut(chunk), data)
+                    }) {
                         log::warn!("Horizon: {} biomes of chunk {x} {z}: {e}", self.level);
                     }
                     column_changed(&mut self.world, (x, z));

@@ -1111,11 +1111,13 @@ impl Game<'_> {
                 log::warn!("Ignoring chunk since it's not in the view range: {x}, {z}");
                 continue;
             }
-            let Some(chunk) = self.world.chunks.get_mut(&(x, z)) else {
+            let Some(result) = self.world.chunks.mutate_chunk((x, z), |chunk| {
+                format.replace_biomes(Arc::make_mut(chunk), data)
+            }) else {
                 log::warn!("Ignoring chunk since it's not present: {x}, {z}");
                 continue;
             };
-            if let Err(e) = format.replace_biomes(Arc::make_mut(chunk), data) {
+            if let Err(e) = result {
                 log::warn!("Horizon: biomes of chunk {x} {z}: {e}");
             }
         }
@@ -1142,14 +1144,15 @@ impl Game<'_> {
             return;
         }
         let layers = format.light_slices(&p.light);
-        let Some(chunk) = self.world.chunks.get_mut(&(p.x, p.z)) else {
+        let Some(changed) = self.world.chunks.mutate_chunk((p.x, p.z), |chunk| {
+            horizon_client::light::update_light_layers(
+                Arc::make_mut(chunk),
+                &layers,
+                format.has_skylight,
+            )
+        }) else {
             return;
         };
-        let changed = horizon_client::light::update_light_layers(
-            Arc::make_mut(chunk),
-            &layers,
-            format.has_skylight,
-        );
         Streaming::light_updated(&mut self.world, p.x, p.z, &changed);
         self.ask_updated_light_emission((p.x, p.z), &changed);
     }

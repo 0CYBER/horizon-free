@@ -18,7 +18,7 @@ impl Streaming {
         sections: Vec<Light>,
         snapshot: u64,
     ) {
-        if let Some(chunk) = world.chunks.get_mut(&(x, z)) {
+        let Some((first, mark_modified, changed)) = world.chunks.mutate_chunk((x, z), |chunk| {
             let chunk = Arc::make_mut(chunk);
             // Keep blocks edited since the snapshot; take only light.
             // A chunk relit (a neighbour loaded or changed) remeshes
@@ -33,22 +33,26 @@ impl Streaming {
             }
             // Saved unlit (at the edge of what was loaded), or its light
             // changed: saved again.
-            if (first && !chunk.light_loaded) || !changed.is_empty() {
-                world.modified.insert((x, z));
-            }
+            let mark_modified = (first && !chunk.light_loaded) || !changed.is_empty();
             chunk.lit = true;
-            if first {
-                for dz in -1..=1 {
-                    for dx in -1..=1 {
-                        for sy in 0..world.layout().sections() as i32 {
-                            world.dirty_sections.insert((x + dx, sy, z + dz));
-                        }
+            (first, mark_modified, changed)
+        }) else {
+            return;
+        };
+        if mark_modified {
+            world.modified.insert((x, z));
+        }
+        if first {
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    for sy in 0..world.layout().sections() as i32 {
+                        world.dirty_sections.insert((x + dx, sy, z + dz));
                     }
                 }
-            } else {
-                Self::mark_light_changes(world, &changed);
             }
-            self.replay_light_edits(world, x, z, snapshot);
+        } else {
+            Self::mark_light_changes(world, &changed);
         }
+        self.replay_light_edits(world, x, z, snapshot);
     }
 }

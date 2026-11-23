@@ -29,10 +29,10 @@ impl FillbiomeHost for Game<'_> {
         let key = (x >> 4, z >> 4);
         let qy =
             ((y - self.world.bottom_y()) >> 2).clamp(0, self.world.layout().height() / 4 - 1);
-        if let Some(chunk) = self.world.chunks.get_mut(&key) {
+        self.world.chunks.mutate_chunk(key, |chunk| {
             let chunk = std::sync::Arc::make_mut(chunk);
             chunk.set_biome_cell((x & 15) >> 2, qy, (z & 15) >> 2, target as u16);
-        }
+        });
     }
     fn commit_biome_columns(
         &mut self,

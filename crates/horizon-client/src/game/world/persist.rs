@@ -749,13 +749,15 @@ impl Game<'_> {
             self.tick_chunks.wait(key);
         }
         // The saved list is consumed: later saves take the scheduler's ticks.
-        if loaded && let Some(c) = self.world.chunks.get_mut(&key) {
-            let c = Arc::make_mut(c);
-            if let Some(s) = c.saved.as_mut() {
-                let s = Arc::make_mut(s);
-                s.block_ticks.clear();
-                s.fluid_ticks.clear();
-            }
+        if loaded {
+            self.world.chunks.mutate_chunk(key, |c| {
+                let c = Arc::make_mut(c);
+                if let Some(s) = c.saved.as_mut() {
+                    let s = Arc::make_mut(s);
+                    s.block_ticks.clear();
+                    s.fluid_ticks.clear();
+                }
+            });
         }
         // PistonMovingBlockEntity.loadAdditional: blocks saved mid-move carry
         // on moving; later saves take them from the level (arismoko/horizon#3310).
@@ -771,7 +773,7 @@ impl Game<'_> {
         for &(pos, piston) in &pistons {
             self.restore_moving_piston(pos, piston, saved.as_deref());
         }
-        if let Some(c) = self.world.chunks.get_mut(&key) {
+        self.world.chunks.mutate_chunk(key, |c| {
             let c = Arc::make_mut(c);
             if let Some(s) = c.saved.as_mut() {
                 Arc::make_mut(s).block_entities.retain(|tag| {
@@ -779,7 +781,7 @@ impl Game<'_> {
                     !pistons.iter().any(|(p, _)| [p.x, p.y, p.z] == at)
                 });
             }
-        }
+        });
     }
     /// `PistonMovingBlockEntity.loadAdditional`, for a `minecraft:piston`
     /// entity whose block is still a moving piston.
