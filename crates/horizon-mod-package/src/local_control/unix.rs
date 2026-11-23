@@ -5,7 +5,7 @@ use cap_std::fs::Dir;
 use std::{
     io,
     os::unix::net::{UnixListener, UnixStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Instant,
 };
 pub type Stream = UnixStream;
@@ -32,9 +32,10 @@ impl Marker {
         let name = format!("hz-{:032x}", u128::from_ne_bytes(nonce));
         let suitable = |path: &std::path::Path| -> bool {
             socket2::SockAddr::unix(path.join(&name).join("control")).is_ok()
-                && open_directory(path).is_ok_and(|dir| check_directory(&dir, true).is_ok())
+                && open_directory(path).is_ok_and(|dir| check_directory(&dir, path, true).is_ok())
                 && path.ancestors().skip(1).all(|ancestor| {
-                    open_directory(ancestor).is_ok_and(|dir| check_directory(&dir, false).is_ok())
+                    open_directory(ancestor)
+                        .is_ok_and(|dir| check_directory(&dir, ancestor, false).is_ok())
                 })
         };
         if let Some(runtime) = runtime.filter(|path| suitable(path)) {
@@ -53,20 +54,31 @@ impl Marker {
 
 impl Endpoint {
     pub fn bind(marker: &Marker) -> io::Result<Self> {
-        let parent = marker
+        let parent_path = marker
             .directory
             .parent()
             .ok_or(io::ErrorKind::InvalidInput)?;
-        let parent = open_directory(parent).map_err(|error| {
+        let parent = open_directory(parent_path).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("open control socket parent {}: {error:?}", parent.display()),
+                format!(
+                    "open control socket parent {}: {error:?}",
+                    parent_path.display()
+                ),
             )
         })?;
-        check_directory(&parent, false)?;
+        check_directory(&parent, parent_path, false)?;
         for ancestor in marker.directory.ancestors().skip(2) {
-            let directory = open_directory(ancestor).map_err(|_| io::ErrorKind::InvalidInput)?;
-            check_directory(&directory, false)?;
+            let directory = open_directory(ancestor).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "open control socket ancestor {}: {error:?}",
+                        ancestor.display()
+                    ),
+                )
+            })?;
+            check_directory(&directory, ancestor, false)?;
         }
         let name = marker
             .directory
@@ -88,7 +100,7 @@ impl Endpoint {
             listener: None,
         };
         let directory = endpoint.parent.open_dir_nofollow(name)?;
-        check_directory(&directory, true)?;
+        check_directory(&directory, &endpoint.path, true)?;
         let socket_path = endpoint.path.join("control");
         let listener = UnixListener::bind(&socket_path).map_err(|error| {
             io::Error::new(
@@ -139,7 +151,7 @@ pub fn connect(marker: &Marker, deadline: Instant) -> io::Result<Stream> {
             }
             Err(_) => return Err(io::ErrorKind::PermissionDenied.into()),
         };
-        check_directory(&directory, true)?;
+        check_directory(&directory, &marker.directory, true)?;
         let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
         let address = socket2::SockAddr::unix(marker.directory.join("control"))?;
         // AF_UNIX backlog exhaustion can report EAGAIN without a pending connection.
@@ -166,16 +178,28 @@ pub fn connect(marker: &Marker, deadline: Instant) -> io::Result<Stream> {
         }
     }
 }
-fn check_directory(directory: &Dir, private: bool) -> io::Result<()> {
+fn check_directory(directory: &Dir, path: &Path, private: bool) -> io::Result<()> {
     let metadata = rustix::fs::fstat(directory)?;
-    if (metadata.st_uid != unsafe { libc::geteuid() } && (private || metadata.st_uid != 0))
-        || (metadata.st_mode & 0o022 != 0 && (private || metadata.st_mode & 0o1000 == 0))
-        || (private && metadata.st_mode & 0o777 != 0o700)
-    {
-        return Err(io::ErrorKind::PermissionDenied.into());
-    }
-    Ok(())
+    let mode = metadata.st_mode & 0o7777;
+    let reason =
+        if metadata.st_uid != unsafe { libc::geteuid() } && (private || metadata.st_uid != 0) {
+            "unexpected owner"
+        } else if mode & 0o022 != 0 && (private || mode & 0o1000 == 0) {
+            "group or other users can write to it"
+        } else if private && mode & 0o777 != 0o700 {
+            "expected a private directory (mode 0700)"
+        } else {
+            return Ok(());
+        };
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "untrusted control socket directory {} (mode {mode:04o}): {reason}",
+            path.display()
+        ),
+    ))
 }
+
 fn peer(stream: &Stream) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     let uid = rustix::net::sockopt::socket_peercred(stream)?.uid.as_raw();

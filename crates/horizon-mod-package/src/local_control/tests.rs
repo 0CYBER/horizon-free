@@ -150,11 +150,26 @@ fn unsafe_parents_are_refused() {
     let redirected = Marker::new(parent.join("link/fresh")).unwrap();
     assert!(Endpoint::bind(&redirected).is_err());
     fs::create_dir(parent.join("safe")).unwrap();
+    fs::set_permissions(parent.join("safe"), fs::Permissions::from_mode(0o700)).unwrap();
     let nested = Marker::new(parent.join("safe/fresh")).unwrap();
     fs::set_permissions(parent, fs::Permissions::from_mode(0o777)).unwrap();
-    assert!(Endpoint::bind(&marker).is_err());
-    assert!(Endpoint::bind(&nested).is_err());
+    for target in [&marker, &nested] {
+        let error = Endpoint::bind(target).err().expect("unsafe parent refused");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("directory {} (mode 0777)", parent.display())),
+            "{message}"
+        );
+        assert!(
+            message.contains("group or other users can write"),
+            "{message}"
+        );
+        assert!(!target.directory.exists());
+    }
     fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).unwrap();
+    let _endpoint = Endpoint::bind(&nested).expect("the same path works with trusted permissions");
+    assert!(nested.directory.join("control").exists());
 }
 
 #[test]

@@ -540,6 +540,13 @@ launcher started crashes, the Play page says so, with buttons to open or copy th
 logs folder and report it on Discord; Settings has the logs folder too. A crash report leaves the
 machine only if you turn on crash reports (below).
 
+On Linux and macOS, `untrusted control socket directory` is a launch refusal
+before the game starts, not a game crash. The error names the directory it
+could not trust. Check that path and have the system administrator restore its
+expected ownership or permissions. Do not make it writable to get past the
+error. A normal Linux `/` is owned by root and is not group- or world-writable;
+the sticky-bit `/tmp` directory is allowed.
+
 ## Data collection
 
 The first time it opens, the launcher asks whether you want to send performance statistics,
