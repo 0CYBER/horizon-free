@@ -18,17 +18,27 @@ def snapshot_tests(build):
     # Fresh-case tests read the prepared resources from the environment
     # (native_entity_refs.rs:980); without them the parent panics.
     resources = os.environ.get("HORIZON_TEST_RESOURCES") or str(lab.RESOURCES)
-    run = subprocess.run(
-        ["cargo", "test", "--locked", "-p", "horizon-client", "-p", "horizon-client-lib",
-         "--lib", "datapack_damage_", "--", "--include-ignored"],
-        cwd=lab.ROOT, text=True, capture_output=True,
-        env={**os.environ, "HORIZON_TEST_RESOURCES": resources})
-    output = run.stdout + run.stderr
-    (build / "snapshot-tests.log").write_text(output)
-    if run.returncode:
-        print(output)
-    run.check_returncode()
-    passed = re.findall(r"^test (\S*datapack_damage_\S*) \.\.\. ok$", run.stdout, re.MULTILINE)
+    env = {**os.environ, "HORIZON_TEST_RESOURCES": resources}
+    packages = ("horizon-client", "horizon-client-lib")
+    logs = []
+    passed = []
+    log_path = build / "snapshot-tests.log"
+    for package in packages:
+        command = [
+            "cargo", "test", "--locked", "-p", package,
+            "--lib", "datapack_damage_", "--", "--include-ignored",
+        ]
+        run = subprocess.run(command, cwd=lab.ROOT, text=True, capture_output=True, env=env)
+        section = f"=== {package} (exit {run.returncode}) ===\n{run.stdout}{run.stderr}"
+        logs.append(section)
+        log_path.write_text("\n".join(logs))
+        if run.returncode:
+            reason = f"signal {-run.returncode}" if run.returncode < 0 else f"exit code {run.returncode}"
+            print(f"snapshot_tests failed for {package} ({reason}); see {log_path}")
+            print(section)
+            run.check_returncode()
+        passed.extend(re.findall(r"^test (\S*datapack_damage_\S*) \.\.\. ok$", run.stdout, re.MULTILINE))
+    output = "\n".join(logs)
     expected = {
         "datapack_damage_new_world_drops_a_removed_resource_root_definition",
         "datapack_damage_initial_snapshot_uses_the_prepared_worlds_features",
