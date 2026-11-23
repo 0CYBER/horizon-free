@@ -732,6 +732,10 @@ pub(super) struct Remote {
     pub(super) own_stingers: i32,
     /// `Player.DATA_SHOULDER_PARROT_LEFT` and `_RIGHT` of the own player.
     pub(super) own_shoulders: [Option<i32>; 2],
+    /// `Entity.DATA_POSE` of the own player as the server last sent it (a pose a plugin
+    /// shows only this viewer included), with the local pose it arrived over: the third-person
+    /// body draws it until the local pose changes.
+    pub(super) own_pose: Option<(crate::pose::Pose, crate::pose::Pose)>,
     /// The local player's profile UUID (always in the level).
     pub(super) profile: u128,
     /// The local player's profile name: its score holder and team member.

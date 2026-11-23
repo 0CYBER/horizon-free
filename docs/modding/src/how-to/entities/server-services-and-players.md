@@ -158,6 +158,22 @@ are shown, top first, each with its text and an optional right-hand value. The s
 world's scoreboard, so `/scoreboard` and other players do not see it, and it is gone when the player leaves.
 It returns `Ok(false)` for a player who is not online; a text the boundary refuses changes nothing.
 
+To show one player different data for an entity than everyone else has, call
+`player.send_entity_data(host, entity, data)` with an `EntityViewData`: any of a
+`custom_name` (or `remove_custom_name`), `custom_name_visible`, the shared `flags` byte
+(invisible, glowing, crouching, ...) and the `pose`. That player's client is sent one
+`ClientboundSetEntityDataPacket`; the server's own state and every other client are
+untouched. A per-player hologram text or a seat pose only the sitter sees is built on it. The
+entity's next data change, or its pairing again after the viewer left its range, gives the
+viewer the real values back, so a mod that keeps a view sends it again from
+`player_start_tracking`. The call refuses with `EntityViewError`: `Client`, `Stale`,
+`NoConnection` for a fake viewer, `StaleEntity`, `Empty` when no field is set, `Conflict` for a
+name together with its removal, `Text` for a name the text boundary refuses, and `TooLarge` for a
+name the network encoding cannot carry (over 65,535 bytes of modified UTF-8 or past the network NBT
+quota); nothing is sent then. Each field is replaced on its own: the server keeps no per-viewer
+override, so a later change it sends for a field (the flags, say) shows that field's real value
+again while the other replaced fields stay as sent.
+
 To change only the name in the Tab list, use `player.set_list_name(host, Some(text))`.
 Everyone sees the new name at once, colours included; `None` shows the nickname or real
 name again. The name is kept by UUID until a mod sets it again or the server stops, also

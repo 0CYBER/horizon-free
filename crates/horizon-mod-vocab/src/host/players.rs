@@ -805,6 +805,29 @@ pub trait PlayersBackendMut {
     #[access(WorldOnly)]
     fn player_hide(&mut self, player: PlayerRef, level: Option<u8>) -> bool;
     /// Side: server.
+    /// Sends one viewer different data for an entity than everyone else has
+    /// (`ClientboundSetEntityDataPacket` to that player alone): a custom name, whether it shows
+    /// from afar, the shared flags byte (invisible, glowing, crouching...) or the pose. A
+    /// per-player hologram text, a seat pose only the sitter sees and a marker only one client
+    /// gets are built on it. The server's own state is untouched and nobody else is sent
+    /// anything, so the game's next data change for the entity, or its pairing again after the
+    /// viewer left its range, gives the viewer the real values back; a mod that keeps a view
+    /// sends it again from `player_start_tracking`. The viewer need not track the entity now (its
+    /// client ignores data for one it does not have). Refuses with `EntityViewError`: `Client`,
+    /// `Stale` (the viewer handle), `NoConnection` (a fake viewer), `StaleEntity`, `Empty`
+    /// (nothing to send), `Conflict` (a name and its removal together), `Text` (a name the text boundary
+    /// refuses) and `TooLarge` (a name the network encoding cannot carry: over 65,535 bytes of modified
+    /// UTF-8 or past the network NBT quota; nothing is sent). Each field is replaced on its own: the
+    /// server keeps no per-viewer override, so a later change it sends for one field (the flags, say)
+    /// shows that field's real value again while the other replaced fields stay as sent.
+    #[access(WorldOnly)]
+    fn player_send_entity_data(
+        &mut self,
+        viewer: PlayerRef,
+        entity: EntityRef,
+        data: EntityViewData,
+    ) -> Result<(), EntityViewError>;
+    /// Side: server.
     /// Opens a block entity's menu for a connected player (`ServerPlayer.openMenu`).
     /// Returns Stale for an invalidated entity; Ok(false) for a wrong-level player,
     /// non-provider, cancelled open, or an unconnected player such as a fake player.

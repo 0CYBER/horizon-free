@@ -1332,6 +1332,7 @@ horizon-client game::native_entity_state::tests::portal_cooldown_write_reaches_a
 horizon-client game::native_entity_state::tests::portal_cooldown_write_reaches_an_item lib daily resources
 horizon-client game::native_entity_state::tests::secondary_use_reads_reachable_client_handles_and_keeps_server_flags lib daily resources
 horizon-client game::native_entity_state::tests::tick_count_reads_supported_entities_and_refuses_others lib daily resources
+horizon-client game::native_entity_view_data::tests::the_viewer_alone_is_sent_the_entity_data lib daily resources
 horizon-client game::native_falling::tests::falling_client_tick_commits_state_without_detaching_its_owner lib daily resources
 horizon-client game::native_falling::tests::falling_lifecycle_commands_unload_park_and_remote lib daily resources
 horizon-client game::native_falling::tests::falling_parked_swap_preserves_state_and_owner_until_discard lib daily resources

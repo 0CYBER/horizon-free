@@ -94,6 +94,7 @@ impl Game<'_> {
                     r.sequence = 0;
                     r.own_invisible = false;
                     r.own_on_fire = false;
+                    r.own_pose = None;
                     r.online_mode = p.online_mode;
                     r.levels.clone_from(&p.levels);
                     r.enforces_secure_chat = p.enforces_secure_chat;
@@ -164,6 +165,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.own_invisible = false;
                         r.own_on_fire = false;
+                        r.own_pose = None;
                         r.local_entity_silent = false;
                     }
                 }
@@ -758,6 +760,14 @@ impl Game<'_> {
                             (13, Value::Int(count)) => {
                                 if let Some(r) = self.remote.as_mut() {
                                     r.own_stingers = *count;
+                                }
+                            }
+                            // Entity.DATA_POSE: kept for the third-person body until the next
+                            // pose packet or a change of the local pose replaces it.
+                            (6, Value::Id(pose)) => {
+                                let local = self.player.as_ref().map(|p| p.pose);
+                                if let (Some(r), Some(local)) = (self.remote.as_mut(), local) {
+                                    r.own_pose = Some((crate::pose::Pose::from_id(*pose), local));
                                 }
                             }
                             (19 | 20, Value::Id(v)) => {
