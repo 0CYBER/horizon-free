@@ -3486,4 +3486,32 @@ mod tests {
         assert_eq!(bytes(5_292_542), "5.3 MB");
         assert_eq!(uptime(3725), "1 h 02 min");
     }
+
+    /// horizon-server lists every zip in its `backups/`, so a zip put there by hand reaches the
+    /// page too. It is shown by its name: no date is read from its first bytes, and a name whose
+    /// 21st byte falls inside a character does not end the page.
+    #[test]
+    fn a_backup_named_by_hand_is_shown_by_its_name() {
+        let b = |name: &str| Backup {
+            name: name.into(),
+            bytes: 1,
+            modified: None,
+        };
+        for name in [
+            "резервная копия",
+            "my world before the big update",
+            "2026-10-19 11-28-57-manual",
+            "2026-10-19_11-28-57",
+            "2026-10-19_11-28-57-",
+        ] {
+            assert_eq!(
+                backup_label(&b(&format!("{name}.zip"))),
+                (name.to_string(), String::new())
+            );
+        }
+        assert_eq!(
+            backup_label(&b("2026-10-19_11-28-57-копия.zip")),
+            ("2026-10-19 11:28:57 UTC".into(), "копия".into())
+        );
+    }
 }

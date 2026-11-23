@@ -10,10 +10,12 @@ pub(super) fn bytes(n: u64) -> String {
 }
 
 /// A backup's date and kind from its name (`2026-10-19_11-28-57-manual.zip`, UTC), for people.
+/// Any other zip in the server's `backups/` (one put there by hand) is shown by its name.
 pub(super) fn backup_label(b: &Backup) -> (String, String) {
     let stem = b.name.trim_end_matches(".zip");
-    let (when, kind) = match stem.get(..19) {
-        Some(when) if stem.len() > 20 => (when, &stem[20..]),
+    let kind = stem.get(19..).and_then(|rest| rest.strip_prefix('-'));
+    let (when, kind) = match (stem.get(..19), kind) {
+        (Some(when), Some(kind)) if stamped(when) && !kind.is_empty() => (when, kind),
         _ => return (stem.to_string(), String::new()),
     };
     let (date, time) = when.split_once('_').unwrap_or((when, ""));
@@ -32,6 +34,15 @@ pub(super) fn backup_label(b: &Backup) -> (String, String) {
         k => k.to_string(),
     };
     (label, kind)
+}
+
+/// Whether `when` is the time horizon-server names a backup by: `2026-10-19_11-28-57`.
+fn stamped(when: &str) -> bool {
+    when.bytes().enumerate().all(|(i, b)| match i {
+        4 | 7 | 13 | 16 => b == b'-',
+        10 => b == b'_',
+        _ => b.is_ascii_digit(),
+    })
 }
 
 pub(super) fn uptime(secs: u64) -> String {
