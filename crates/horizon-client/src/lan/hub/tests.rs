@@ -6,6 +6,7 @@ mod effect_meta_tests;
 #[path = "far_tests.rs"]
 mod far_tests;
 mod glide_motion_tests;
+mod ground_claim_tests;
 mod impulse_grace_tests;
 mod live_player_limit_tests;
 mod main_hand_tests;

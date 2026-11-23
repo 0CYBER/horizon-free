@@ -56,9 +56,14 @@ impl Hub {
                     .get_mut()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
+            // The ping below goes to the players in the world.
+            let placed = g.placed;
             if let Some(record) = g.record.as_deref_mut() {
                 for change in changes {
                     record.changed(ticks, change);
+                }
+                if placed {
+                    record.pinged(ticks);
                 }
             }
         });

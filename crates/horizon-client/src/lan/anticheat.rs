@@ -132,6 +132,19 @@ fn uuid_text(uuid: u128) -> String {
 /// Server ticks a claim of the ground keeps its height after the ground last held the player.
 const GROUND_GRACE: u64 = 10;
 
+/// How `ground` refused a claim of the ground ([`Hub::anticheat_ground`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GroundRefusal {
+    /// Flagged and dropped.
+    Dropped,
+    /// Dropped without a flag: the same claim again, standing still where one was dropped. The move
+    /// counts toward vanilla's floating kick and the client is told the blocks under it, as for a
+    /// claim that stands.
+    Again,
+    /// Flagged, and the player kicked: the move is refused.
+    Kicked,
+}
+
 /// Whether an entity of `kind` at `at` may carry a player standing at `player`: the entities players
 /// stand on (boats, rafts, minecarts, shulkers, happy ghasts, 4 blocks tall), within 4 blocks sideways and
 /// from a block above the player to a little more than a happy ghast's height below.
@@ -197,11 +210,24 @@ impl Hub {
             return;
         };
         if ac.config.runs(Check::Prediction) {
-            self.guests.update(i, |g| {
+            let overdue = self.guests.update(i, |g| {
                 let (input, sprinting) = (g.input, g.client_sprinting);
-                g.record.get_or_insert_default().tick_end(input, sprinting);
+                let record = g.record.get_or_insert_default();
+                record.tick_end(input, sprinting);
+                record
+                    .overdue()
+                    .filter(|_| record.ended().is_multiple_of(20))
             });
+            // A client that leaves the pings unanswered keeps the replay from knowing what it had
+            // seen: once a second while it does, that counts as a tick as far off as one can weigh.
+            if let Some(pings) = overdue {
+                let detail = format!("left the server's last {pings} pings unanswered");
+                self.flag(i, Check::Prediction, 5.0, &detail, events);
+            }
         }
+        let Some(ac) = self.anticheat.as_deref() else {
+            return;
+        };
         if !ac.config.runs(Check::Timer) {
             return;
         }
@@ -279,11 +305,11 @@ impl Hub {
 
     /// `ground`, for a move from guest `i` that says it ends on the ground at `to` (`stands`: the move
     /// itself was stopped by something below): None when the claim stands (or isn't judged, or the check
-    /// only logs: `setback = 0`), else whether the move is refused because the player was kicked. A
-    /// false claim is dropped (vanilla's fall damage follows); the player is never sent back, and the
-    /// move doesn't count toward vanilla's floating kick. A claim at the height where the
-    /// ground last held the player, within half a second, isn't judged: the block may have gone
-    /// server-side (broken, pushed) before the client heard.
+    /// only logs: `setback = 0`), else how it was refused. A false claim is dropped (vanilla's fall
+    /// damage follows); the player is never sent back, and the move doesn't count toward vanilla's
+    /// floating kick. A claim at the height where the ground last held the player, within half a
+    /// second, isn't judged: the block may have gone server-side (broken, pushed) before the client
+    /// heard.
     pub(super) fn anticheat_ground(
         &mut self,
         i: usize,
@@ -291,13 +317,16 @@ impl Hub {
         stands: bool,
         ctx: &TickCtx,
         events: &mut Vec<HostEvent>,
-    ) -> Option<bool> {
+    ) -> Option<GroundRefusal> {
         if !self.anticheat.as_deref()?.config.runs(Check::Ground) {
             return None;
         }
-        // Standing still: no fall to skip, whatever holds the player up (a block the server doesn't
-        // have, seen on the official server after a long teleport). Hovering is vanilla's floating kick.
-        if self.guests[i].position == to {
+        // Standing still where the server has the player at rest: no fall to skip, whatever holds the
+        // player up (a block the server doesn't have, seen on the official server after a long
+        // teleport). Hovering is vanilla's floating kick. A claim without a new position while the
+        // server has the player falling would end that fall: it is judged like any other.
+        let still = self.guests[i].position == to;
+        if still && !self.falling(i) {
             return None;
         }
         let ticks = self.ticks;
@@ -315,6 +344,12 @@ impl Hub {
             ticks.saturating_sub(t) <= GROUND_GRACE && (y - to[1]).abs() < 1.0E-3
         }) {
             return None;
+        }
+        // The same claim again, standing still where one was dropped: dropped again, without a flag.
+        // A client on a block the server doesn't have sends one with every turn of its head.
+        if still && self.guests[i].anticheat.ground_refused == Some(to) {
+            let logs_only = self.anticheat.as_deref()?.config.ground.setback == 0.0;
+            return (!logs_only).then_some(GroundRefusal::Again);
         }
         let (fx, fz) = (to[0].floor() as i32, to[2].floor() as i32);
         let below = if self
@@ -336,7 +371,22 @@ impl Hub {
         // The correction is the dropped claim, never a setback: sent back into the air it claimed to
         // stand in, an honest player (on a block the server doesn't have) claims it again and again,
         // and hovers there until vanilla's floating kick. Only the anticheat's own kick ends it.
-        Some(!self.guests[i].left_reason.is_empty())
+        self.guests
+            .update(i, |g| g.anticheat.ground_refused = Some(to));
+        Some(if self.guests[i].left_reason.is_empty() {
+            GroundRefusal::Dropped
+        } else {
+            GroundRefusal::Kicked
+        })
+    }
+
+    /// Whether the server has guest `i` falling: its last accepted move did not end on the ground,
+    /// and its body has a fall distance or a move accepted this tick went down.
+    fn falling(&self, i: usize) -> bool {
+        let g = &self.guests[i];
+        !g.on_ground
+            && (g.motion.as_ref().is_some_and(|m| m.fall_distance > 0.0)
+                || g.moves.iter().any(|(moved, _)| moved[1] < 0.0))
     }
 
     /// Whether something at `to` can hold guest `i` up; None: not judged. Only blocks that can't hold

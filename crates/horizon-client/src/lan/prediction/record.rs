@@ -24,6 +24,14 @@ const CHANGES_KEPT: usize = 64;
 /// Changes near the player kept until every kept tick has seen them.
 const NEAR_KEPT: usize = 1024;
 
+/// Pings a client's answers may be behind (five seconds of them) before that counts: its ticks are
+/// then taken to have handled every ping but the last [`UNANSWERED`], and the hub flags it.
+/// Five times the lag the timer check banks, well past the second of pings the ping ledger expects
+/// a slow client to have outstanding, and a third of vanilla's keep-alive timeout (15 seconds).
+/// Without it a client that never answers would have seen nothing, and every change near it would
+/// excuse its ticks for good.
+pub const UNANSWERED: u64 = 100;
+
 /// Something the server sent the player that changes how its client moves. The client applies it when
 /// it handles the packet, before its next tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -81,7 +89,9 @@ pub struct ClientTick {
     pub position: Option<[f64; 3]>,
     /// The tick's move packet's flags (1: on the ground, 2: against a wall), if it sent one.
     pub flags: Option<u8>,
-    /// The last server tick whose packets the client had handled (its pong) before this tick ended.
+    /// The last server tick whose packets the client had handled (its pong) before this tick ended,
+    /// or, when its answers were more than [`UNANSWERED`] pings behind, the one [`UNANSWERED`] ticks
+    /// before the last ping.
     pub seen: Option<u64>,
 }
 
@@ -94,6 +104,10 @@ pub struct Record {
     ticks: VecDeque<ClientTick>,
     /// The last server tick the client answered for.
     seen: Option<u64>,
+    /// The last server tick whose ping was sent to the client.
+    pinged: Option<u64>,
+    /// Pings sent after the last one the client answered.
+    unanswered: u64,
     /// Client ticks ended since the record began.
     ended: u64,
     /// Where an accepted teleport put the player, until the replay starts again from there.
@@ -130,7 +144,21 @@ impl Record {
             return false;
         }
         self.seen = Some(server_tick);
+        // The pings sent after the one answered are still waiting.
+        let after = self.pinged.map_or(0, |p| p.saturating_sub(server_tick));
+        self.unanswered = self.unanswered.min(after);
         true
+    }
+
+    /// The ping at the end of server tick `server_tick` went out to the client.
+    pub fn pinged(&mut self, server_tick: u64) {
+        self.pinged = Some(server_tick);
+        self.unanswered += 1;
+    }
+
+    /// The pings sent after the last one the client answered, when they are more than [`UNANSWERED`].
+    pub fn overdue(&self) -> Option<u64> {
+        (self.unanswered > UNANSWERED).then_some(self.unanswered)
     }
 
     /// ServerboundClientTickEndPacket: the tick ends with these keys held and this sprinting. The
@@ -138,7 +166,12 @@ impl Record {
     pub fn tick_end(&mut self, input: u8, sprinting: bool) -> &ClientTick {
         self.current.input = input;
         self.current.sprinting = sprinting;
-        self.current.seen = self.seen;
+        // Pings left unanswered for longer than a slow connection takes count as handled.
+        let handled = self
+            .overdue()
+            .and(self.pinged)
+            .and_then(|p| p.checked_sub(UNANSWERED));
+        self.current.seen = self.seen.max(handled);
         let next = ClientTick {
             yaw: self.current.yaw,
             pitch: self.current.pitch,
@@ -314,6 +347,43 @@ mod tests {
             "a change dropped unseen counts"
         );
         assert!(!r.unseen_near(Some(6), near));
+    }
+
+    /// A client that never answers a ping: its ticks are taken to have seen what the server sent
+    /// [`UNANSWERED`] ticks before, so a change near it no longer excuses them after that, and the
+    /// changes reach the replay.
+    #[test]
+    fn a_client_that_never_answers_has_seen_what_is_long_past() {
+        let mut r = Record::default();
+        r.changed_near(1, [0, 64, 0]);
+        r.changed(1, Change::Velocity([0.0, 0.4, 0.0]));
+        let mut excused = 0;
+        for server_tick in 1..=UNANSWERED + 2 * KEPT as u64 {
+            r.pinged(server_tick);
+            let seen = r.tick_end(0, false).seen;
+            if r.unseen_near(seen, |_| true) {
+                excused += 1;
+            }
+        }
+        assert_eq!(r.seen(), None, "no pong was heard");
+        assert_eq!(r.overdue(), Some(UNANSWERED + 2 * KEPT as u64));
+        assert_eq!(excused, UNANSWERED, "the ticks before the ping was overdue");
+        let last = r.ticks().last().unwrap().seen;
+        assert_eq!(
+            last,
+            Some(2 * KEPT as u64),
+            "the change of tick 1 is applied"
+        );
+        // An answer still counts as it did.
+        assert!(r.pong(2 * KEPT as u64 + 50, UNANSWERED + 2 * KEPT as u64));
+        assert_eq!(r.tick_end(0, false).seen, Some(2 * KEPT as u64 + 50));
+        assert_eq!(r.overdue(), None);
+        // An answer counts for the pings up to it: one far behind leaves the rest overdue.
+        for server_tick in UNANSWERED + 2 * KEPT as u64 + 1..=400 {
+            r.pinged(server_tick);
+        }
+        assert!(r.pong(2 * KEPT as u64 + 51, 400));
+        assert_eq!(r.overdue(), Some(400 - (2 * KEPT as u64 + 51)));
     }
 
     #[test]

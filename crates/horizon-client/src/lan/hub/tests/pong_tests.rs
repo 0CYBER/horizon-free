@@ -71,3 +71,33 @@ fn with_no_listener_a_pong_queues_nothing() {
     hub.pong_listened = false;
     assert!(pongs(&drain(&mut hub)).is_empty());
 }
+
+/// The anticheat's `prediction`: a client that answers none of the pings ending each server tick is
+/// flagged once its answers are more than `UNANSWERED` of them behind; one that answers is not.
+#[test]
+fn a_client_that_leaves_the_pings_unanswered_is_flagged_by_prediction() {
+    use crate::lan::prediction::record::UNANSWERED;
+    use horizon_anticheat::{Check, Config};
+    for answers in [false, true] {
+        let (mut hub, _rx) = hub_with_a_guest();
+        hub.set_anticheat(Config {
+            log: String::new(),
+            strikes: String::new(),
+            ..Config::default()
+        });
+        let mut events = Vec::new();
+        for _ in 0..UNANSWERED + 40 {
+            hub.anticheat_tick_end(0, &mut events);
+            hub.ticks += 1;
+            hub.anticheat_ping();
+            if answers {
+                hub.anticheat_pong(0, hub.ticks as i32);
+            }
+        }
+        let config = &hub.anticheat.as_deref().unwrap().config;
+        let level = hub.guests[0]
+            .anticheat
+            .vl(config, Check::Prediction, hub.ticks);
+        assert_eq!(level > 0.0, !answers, "answers: {answers}");
+    }
+}

@@ -156,7 +156,7 @@ checks! {
     /// the ground to skip fall damage) and walking on water. The claim is dropped, so vanilla's
     /// fall damage follows (the player is never sent back: `setback = 0` makes the check log only), and
     /// a player that keeps claiming is kicked, then banned at the second kick (`ban_after = 2`). A claim standing still isn't
-    /// judged (no fall to skip). On the official server's first two hours (67 players), every player who
+    /// judged while the server has the player at rest (no fall to skip). On the official server's first two hours (67 players), every player who
     /// wasn't flying or walking on water peaked at level 7 (4 claims standing still in one second); the
     /// ones who were, at 113 to 3749.
     ground: Ground => GroundConfig [10.0, 15.0, 30.0, 2.0, 2] {}
@@ -299,6 +299,8 @@ pub struct Player {
     pub timer: timer::Balance,
     /// The server tick and height where the ground last held the player.
     pub ground: Option<(u64, f64)>,
+    /// Where `ground` last dropped a claim of the ground.
+    pub ground_refused: Option<[f64; 3]>,
     /// The attacks of the client tick being heard.
     pub attacks: combat::Attacks,
 }
