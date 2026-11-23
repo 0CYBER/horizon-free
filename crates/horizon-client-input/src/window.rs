@@ -148,16 +148,21 @@ pub fn vsync_present_mode(supported: &[PresentMode], vsync: bool) -> Option<Pres
 
 /// The present mode for the VSync option and Horizon's present-mode setting
 /// (`None` for Auto). VSync on always means Fifo, in a window and in
-/// fullscreen alike, as in vanilla; the setting chooses only while VSync is
-/// off, when the surface supports it, and otherwise vanilla's choice applies.
+/// fullscreen alike, as in vanilla. With VSync off, explicit Mailbox
+/// falls back to tear-free Fifo rather than Immediate; other modes
+/// fall back to vanilla's choice when unavailable.
 pub fn chosen_present_mode(
     supported: &[PresentMode],
     vsync: bool,
     setting: Option<PresentMode>,
 ) -> Option<PresentMode> {
-    setting
-        .filter(|m| !vsync && supported.contains(m))
-        .or_else(|| vsync_present_mode(supported, vsync))
+    match setting {
+        Some(PresentMode::Mailbox) if !vsync => [PresentMode::Mailbox, PresentMode::Fifo]
+            .into_iter()
+            .find(|mode| supported.contains(mode)),
+        Some(mode) if !vsync && supported.contains(&mode) => Some(mode),
+        _ => vsync_present_mode(supported, vsync),
+    }
 }
 
 /// `FramerateLimiter.limitDisplayFPS` with an injectable clock so the sleep
@@ -1082,9 +1087,14 @@ mod tests {
             Some(Mailbox)
         );
         assert_eq!(chosen_present_mode(&all, false, Some(Fifo)), Some(Fifo));
-        // Metal has no Mailbox: vanilla's choice instead.
+        // A surface without Mailbox can still honor the explicit tear-free choice.
+        let without_mailbox = [Fifo, Immediate];
         assert_eq!(
-            chosen_present_mode(&[Fifo, Immediate], false, Some(Mailbox)),
+            chosen_present_mode(&without_mailbox, false, Some(Mailbox)),
+            Some(Fifo)
+        );
+        assert_eq!(
+            chosen_present_mode(&without_mailbox, false, None),
             Some(Immediate)
         );
     }

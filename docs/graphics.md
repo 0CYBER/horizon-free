@@ -16,6 +16,10 @@ Tab, the arrows, Enter and Space work it from the keyboard (Left and Right step 
 
 Every setting applies at once, except worker threads, the graphics API, translucent batching and the sizes battery mode halves the client's pools to (chunk building, the tick's helpers, chunk decoding, saves, network and chunk encoding), which apply at the next start (battery mode's frame cap applies at once). A preset sets the quality settings together; changing one of them turns it into Custom. Display preferences (FOV, framerate, VSync, GUI scale, fullscreen, present mode, pacing) leave the preset as it is.
 
+With VSync off, **Present Mode: Mailbox** uses FIFO on surfaces that do not support Mailbox, so
+the explicit tear-free choice never becomes Immediate. **Auto** still follows vanilla's selection.
+The F3 display shows the mode that the surface actually uses.
+
 Each preset is a fixed table (`graphics_preset.rs`), so picking one gives the same settings whatever was set before:
 
 | | Full Performance | Performance | Balanced | Quality | Ultra |
