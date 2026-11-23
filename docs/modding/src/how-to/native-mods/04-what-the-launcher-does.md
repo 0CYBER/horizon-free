@@ -29,12 +29,13 @@ that commit's SDK.
    build scripts or procedural macros. Cargo downloads those dependencies, and horizon-mixins when
    the launcher builds it from source, through the proxy set on the Settings page
    (`CARGO_HTTP_PROXY`, a SOCKS proxy as `socks5h://`); without one, Cargo reads `HTTPS_PROXY` as
-   the launcher does.
+   the launcher does. When multiple mods use the same pinned registry crates, the launcher can
+   link those crates once in a shared library, separate from the SDK and the mods' own libraries.
 6. For `[[native.mixin]]` rows, download the pinned game source, copy the targeted functions into one patch
    library, apply the rows with horizon-mixins, and compile that library against the SDK. The game
    crates are not compiled. Each checked replacement is installed through its typed installer.
-7. Install the SDK's unchanged executable alongside each mod's dynamic library and any patch library as
-   `native-<commit>-<key>`, then select that build for the instance.
+7. Install the SDK's unchanged executable alongside each mod's dynamic library and any shared
+   dependency or patch library as `native-<commit>-<key>`, then select that build for the instance.
    `native-mods.json` records the base, pins, mods and build tools. Client builds share their base's
    prepared resources; server exports include their resources.
    On Windows x64 the launcher also places the two GNU runtime libraries of its managed toolchain

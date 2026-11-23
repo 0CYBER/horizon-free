@@ -34,6 +34,23 @@ pub(super) struct RegistryLock {
 }
 
 impl RegistryLock {
+    /// Adding a launcher-owned local package must not re-resolve any original package.
+    pub(super) fn unchanged_with_added_local(&self, mut next: Self, name: &str) -> bool {
+        let Some(id) = next.local.keys().find(|id| id.name == name).cloned() else {
+            return false;
+        };
+        next.local.remove(&id);
+        for record in next.local.values_mut() {
+            record.edges.remove(&id);
+        }
+        let same = |old: &BTreeMap<Identity, Record>, new: &BTreeMap<Identity, Record>| {
+            old.iter()
+                .map(|(id, row)| (id, &row.checksum, &row.edges))
+                .eq(new.iter().map(|(id, row)| (id, &row.checksum, &row.edges)))
+        };
+        same(&self.packages, &next.packages) && same(&self.local, &next.local)
+    }
+
     /// Parse untrusted lock records once; consumers use typed identities and edges.
     pub fn parse(text: &str) -> Result<Self, String> {
         let lock: toml::Table = text.parse().map_err(|e| format!("Cargo.lock: {e}"))?;
