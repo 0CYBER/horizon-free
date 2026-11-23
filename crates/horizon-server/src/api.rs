@@ -465,7 +465,10 @@ impl Shared {
             update.busy = Some("Looking for the newest release".into());
         }
         if let Some(tag) = tag {
-            if !install.release(&tag).is_dir() || tag.contains(['/', '\\']) {
+            // A plain release name, as `update::unpack` requires: ".." is a folder without a slash, and
+            // would point `current` at the install's root.
+            let plain = !tag.is_empty() && !tag.starts_with('.') && !tag.contains(['/', '\\']);
+            if !plain || !install.release(&tag).is_dir() {
                 self.update.lock().unwrap().busy = None;
                 return Err(format!(
                     "{tag} isn't installed (`horizon-server update` downloads it)"
@@ -1055,6 +1058,40 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn an_update_names_a_release_not_a_folder_around_it() {
+        let root = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("horizon-server-update-tag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("releases/v2")).unwrap();
+        let dir = root.join("server");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = Shared::with_install(&dir, Some(Install { root: root.clone() }));
+        for tag in ["..", ".", "", ".hidden", "v2/../v2", "..\\x"] {
+            let err = shared
+                .start_update(Some(tag.into()), Duration::from_secs(1))
+                .unwrap_err();
+            assert!(err.contains("isn't installed"), "{tag:?}: {err}");
+            assert!(shared.update.lock().unwrap().pending.is_none(), "{tag:?}");
+        }
+        shared
+            .start_update(Some("v2".into()), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            shared
+                .update
+                .lock()
+                .unwrap()
+                .pending
+                .as_ref()
+                .map(|p| p.0.as_str()),
+            Some("v2")
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn tokens_compare_whole() {
