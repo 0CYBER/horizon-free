@@ -92,6 +92,24 @@ impl Game<'_> {
         let sneaking = self.keys.held(Action::Sneak);
         let vehicle = m.rider.is_some() || self.mount_passenger_count(m.id) > 0;
         let (baby, tamed) = (m.is_baby(), m.extra.tame);
+        // Entity.interact, before mobInteract: shears take a carpet off
+        // (`Equippable.canBeSheared`), not from a ridden llama
+        // (`canShearEquipment`) nor by a sneaking player.
+        if item == "minecraft:shears"
+            && !vehicle
+            && !sneaking
+            && let Some(carpet) = m.extra.body_stack()
+            && carpet.item.starts_with("minecraft:")
+            && carpet.item.ends_with("_carpet")
+            && !self.kept_on(carpet)
+        {
+            self.shear_equipment(
+                index,
+                horizon_items::equipment::BODY,
+                "minecraft:item.llama_carpet.unequip",
+            );
+            return true;
+        }
         let open_inventory = !baby && tamed && sneaking;
         if !vehicle && !open_inventory && !item.is_empty() {
             if self.mobs[index].kind.food.iter().any(|f| f == item) {
@@ -121,33 +139,18 @@ impl Game<'_> {
         }
         let m = &self.mobs[index];
         let carpet = |i: &str| i.ends_with("_carpet") && i.starts_with("minecraft:");
-        if !item.is_empty() {
-            if item == "minecraft:shears" && m.extra.body_id().is_some_and(carpet) {
-                // Equippable.canBeSheared: the carpet comes off.
-                let at = m.center();
-                let carpet = self.mobs[index].take_body_equipment().unwrap();
-                self.audio
-                    .play("minecraft:item.llama_carpet.unequip", Some(at), 1.0, 1.0);
-                self.spawn_item(carpet, at, [0.0, 0.2, 0.0], 10);
-                self.damage_held_tool();
-                let id = self.mobs[index].id;
-                let pos = self.mobs[index].position;
-                self.mob_equip_event(id, [pos.x, pos.y, pos.z], false);
-                return true;
-            }
-            if carpet(item) && m.extra.body_id().is_none() {
-                let held = self.inventory[self.selected].clone().map(|mut stack| {
-                    stack.count = 1;
-                    stack
-                });
-                self.mobs[index].extra.set_body_stack(held);
-                self.llama_sound(index, "entity.llama.swag", 1.0);
-                self.consume_held();
-                let id = self.mobs[index].id;
-                let pos = self.mobs[index].position;
-                self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
-                return true;
-            }
+        if !item.is_empty() && carpet(item) && m.extra.body_id().is_none() {
+            let held = self.inventory[self.selected].clone().map(|mut stack| {
+                stack.count = 1;
+                stack
+            });
+            self.mobs[index].extra.set_body_stack(held);
+            self.llama_sound(index, "entity.llama.swag", 1.0);
+            self.consume_held();
+            let id = self.mobs[index].id;
+            let pos = self.mobs[index].position;
+            self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
+            return true;
         }
         // TraderLlama.doPlayerRide: not while a wandering trader leads it.
         if self.is_led_by_trader(index) {

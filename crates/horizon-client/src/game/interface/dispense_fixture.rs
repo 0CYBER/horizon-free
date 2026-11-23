@@ -363,6 +363,8 @@ impl Game<'_> {
             });
         } else if let Some(op) = case.get("wake") {
             used.push(self.fixture_wake(origin, op)?);
+        } else if let Some(op) = case.get("use_entity") {
+            used = self.fixture_use_entity(op, &targets)?;
         } else if let Some(op) = case.get("attack") {
             used = self.fixture_attack(op, &targets)?;
         } else if case.get("hopper").is_some() {
@@ -742,6 +744,79 @@ impl Game<'_> {
         self.player = None;
         self.using = None;
         self.offhand = None;
+        Ok(out)
+    }
+
+    /// A player at the case's `player` position right-clicks the first target
+    /// holding the case's item, sneaking or not, as a guest's interact packet
+    /// reaches `Player.interactOn`: whether the click was taken and the held
+    /// stack, as `VanillaDispenserOracle.useEntity` prints them.
+    fn fixture_use_entity(&mut self, op: &Value, targets: &[Target]) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().unwrap_or("-"))?;
+        self.mode = if op["creative"].as_bool().unwrap_or(false) {
+            GameMode::Creative
+        } else {
+            GameMode::Survival
+        };
+        self.creative = self.mode == GameMode::Creative;
+        let p = &op["player"];
+        let at = horizon_core::geometry::Vec3::new(
+            p[0].as_f64().unwrap_or(0.0),
+            p[1].as_f64().unwrap_or(0.0),
+            p[2].as_f64().unwrap_or(0.0),
+        );
+        self.player = Some(PlayerMotion::new(self.motion, at)?);
+        self.keys.clear();
+        if op["sneaking"].as_bool().unwrap_or(false) {
+            self.keys.insert(KeyCode::ShiftLeft);
+        }
+        self.using = None;
+        self.armor = Default::default();
+        // The used and broken statistics of the held item, as the oracle's
+        // player records every statistic it is awarded.
+        let item = stack.as_ref().map(|s| s.item.clone());
+        let stats_before = item.as_ref().map_or((0, 0), |i| {
+            (self.stats.get("used", i), self.stats.get("broken", i))
+        });
+        self.inventory[self.selected] = stack;
+        self.offhand = None;
+        let Some(&Target::Mob(id)) = targets.first() else {
+            return Err("a use_entity case has a mob target".into());
+        };
+        self.guest_use = Some(super::GuestUse::Entity(
+            super::Hand::Main,
+            super::InteractTarget {
+                id: id as i32,
+                location: [0.0; 3],
+            },
+        ));
+        // The click is a server player's turn: a broken item's sound and crumbs
+        // are its client's (`LivingEntity.breakItem` from the entity event).
+        let acting = self.lan_acting.replace(0);
+        let used = self.use_item_as_player();
+        self.lan_acting = acting;
+        self.guest_equipment_breaks.clear();
+        self.guest_use = None;
+        let consumed = used?.is_some();
+        self.process_level_events()?;
+        let mut out = Vec::new();
+        if let Some(item) = &item {
+            let used = self.stats.get("used", item) - stats_before.0;
+            if used != 0 {
+                out.push(format!("stat {item} minecraft:used {used}"));
+            }
+            let broken = self.stats.get("broken", item) - stats_before.1;
+            if broken != 0 {
+                out.push(format!("stat {item} minecraft:broken {broken}"));
+            }
+        }
+        out.push(format!(
+            "use_entity {} held {}",
+            if consumed { "consumed" } else { "pass" },
+            canon_stack(self.inventory[self.selected].as_ref())
+        ));
+        self.player = None;
+        self.riding = None;
         Ok(out)
     }
 

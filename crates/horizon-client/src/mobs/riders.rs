@@ -64,6 +64,32 @@ pub fn type_attachment(v: &Mob) -> [f64; 3] {
     let s = scale(v);
     [x * s, y * s, z * s]
 }
+/// `EntityAttachments.getAverage(PASSENGER)`: the mean of the type's passenger
+/// points in its scale, unturned (where `Mob.shearItem` drops sheared equipment).
+pub fn average_attachment(v: &Mob) -> [f64; 3] {
+    // A camel's type lists none: `EntityAttachment.PASSENGER` falls back to the
+    // top of its box (`Camel.getPassengerAttachmentPoint` places the riders).
+    if matches!(v.species(), Species::Camel | Species::CamelHusk) {
+        return [0.0, f64::from(v.height()), 0.0];
+    }
+    let count = if !v.kind.passenger_attachments.is_empty() {
+        v.kind.passenger_attachments.len()
+    } else if v.species() == Species::HappyGhast {
+        4
+    } else {
+        1
+    };
+    let s = scale(v);
+    let mut sum = [0.0; 3];
+    for i in 0..count {
+        for (total, c) in sum.iter_mut().zip(base_attachment_at(v, i)) {
+            *total += c * s;
+        }
+    }
+    // `Vec3.scale(1.0F / points.size())`: the float's widening.
+    let share = f64::from(1.0_f32 / count as f32);
+    sum.map(|c| c * share)
+}
 /// An `EntityType` attachment point from `passengerAttachments(float... offsetYs)`:
 /// the builder takes floats, so the double the position math sees is the
 /// float's widening (`0.86875F` is `0.8687499761581421`).

@@ -112,19 +112,20 @@ impl Game<'_> {
             self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
             return true;
         }
-        // Equippable.canBeSheared: shears take the harness off again.
+        // Entity.interact: shears take the harness off again
+        // (`Equippable.canBeSheared`), not from a ridden ghast
+        // (`canShearEquipment`) nor by a sneaking player.
         if item == "minecraft:shears"
-            && harnessed
             && !sneaking
-            && let Some(harness) = self.mobs[index].take_body_equipment()
+            && self.mount_passenger_count(m.id) == 0
+            && let Some(harness) = m.extra.body_stack()
+            && !self.kept_on(harness)
         {
-            self.audio
-                .play("minecraft:entity.happy_ghast.unequip", Some(at), 1.0, 1.0);
-            self.spawn_item(harness, at, [0.0, 0.2, 0.0], 10);
-            self.damage_held_tool();
-            let id = self.mobs[index].id;
-            let pos = self.mobs[index].position;
-            self.mob_equip_event(id, [pos.x, pos.y, pos.z], false);
+            self.shear_equipment(
+                index,
+                horizon_items::equipment::BODY,
+                "minecraft:entity.happy_ghast.unequip",
+            );
             return true;
         }
         if harnessed && !sneaking {

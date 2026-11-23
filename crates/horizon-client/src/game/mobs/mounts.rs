@@ -130,8 +130,9 @@ impl Game<'_> {
         self.mobs.iter().position(|m| m.id == id)
     }
     /// `Entity.interact` / `Mob.canShearEquipment` / `Mob.attemptToShearEquipment`
-    /// / `Mob.shearItem`: the saddle of a `#can_equip_saddle` mob comes off
-    /// before its mobInteract can ride it, with the saddle's shearing sound.
+    /// / `Mob.shearItem`: the horse or nautilus armor of a `#can_equip_saddle`
+    /// mob, else its saddle, comes off before its mobInteract can ride it,
+    /// with the item's shearing sound.
     /// An occupied mount is not sheared: its mobInteract runs instead.
     pub(super) fn shear_saddle(&mut self, index: usize, item: &str) -> Option<bool> {
         let m = &self.mobs[index];
@@ -170,39 +171,72 @@ impl Game<'_> {
         if self.keys.held(Action::Sneak) {
             return None;
         }
-        // attemptToShearEquipment takes the body slot before the saddle: horse
-        // and nautilus armor come off first (not modelled here).
-        if m.extra
-            .body_id()
-            .is_some_and(|b| b.ends_with("_horse_armor") || b.ends_with("_nautilus_armor"))
-        {
-            return None;
-        }
-        let saddle = m.saddle_item()?;
-        if &*saddle.item != "minecraft:saddle" {
-            return None;
-        }
-        let silent = m.silent;
-        let at = m.position;
-        let offset = horizon_client::mobs::riders::passenger_attachment(m)[1];
+        // attemptToShearEquipment: the first shearable slot in EquipmentSlot
+        // order, so horse and nautilus armor (BODY) come off before the saddle.
+        let armor = m.extra.body_stack().and_then(|b| {
+            let sound = if b.item.ends_with("_horse_armor") {
+                "minecraft:item.horse_armor.unequip"
+            } else if b.item.ends_with("_nautilus_armor") {
+                "minecraft:item.armor.unequip_nautilus"
+            } else {
+                return None;
+            };
+            (!self.kept_on(b)).then_some((horizon_items::equipment::BODY, sound))
+        });
+        let (slot, sound) = match armor {
+            Some(found) => found,
+            None => {
+                let saddle = m.saddle_item()?;
+                if &*saddle.item != "minecraft:saddle" || self.kept_on(&saddle) {
+                    return None;
+                }
+                (horizon_items::equipment::SADDLE, "minecraft:item.saddle.unequip")
+            }
+        };
+        self.shear_equipment(index, slot, sound);
+        Some(true)
+    }
+    /// `EnchantmentHelper.has(stack, PREVENT_ARMOR_CHANGE)` for a survival
+    /// player: `attemptToShearEquipment` leaves such an item on.
+    pub(super) fn kept_on(&self, stack: &ItemStack) -> bool {
+        !self.creative && world_stations!(self).enchantments.prevents_armor_change(stack)
+    }
+    /// `Mob.shearItem` on mob `index`'s `slot` (BODY or SADDLE), then
+    /// `attemptToShearEquipment`'s `playSound(equippable.shearingSound())`:
+    /// the shears take a point of damage, the slot empties, `GameEvent.SHEAR`
+    /// fires, the item drops at the mob's average passenger attachment
+    /// (unturned) and `player_sheared_equipment` triggers.
+    pub(super) fn shear_equipment(&mut self, index: usize, slot: usize, sound: &str) {
+        let m = &self.mobs[index];
+        let (id, silent, at) = (m.id, m.silent, m.position);
+        let offset = horizon_client::mobs::riders::average_attachment(m);
+        let stack = if slot == horizon_items::equipment::SADDLE {
+            m.saddle_item()
+        } else {
+            m.extra.body_stack().cloned()
+        };
+        let Some(stack) = stack else { return };
         self.damage_held_tool();
-        self.mobs[index].set_saddle(None);
+        if slot == horizon_items::equipment::SADDLE {
+            self.mobs[index].set_saddle(None);
+        } else {
+            self.mobs[index].extra.set_body_stack(None);
+        }
         let context = self.who_context(Some(Who::Player), None);
         self.post_game_event("minecraft:shear", [at.x, at.y, at.z], context);
         self.mob_equip_event(id, [at.x, at.y, at.z], false);
-        self.spawn_at_location(at, offset, saddle.clone());
+        // Entity.spawnAtLocation(level, stack, offset): with the default pickup delay.
+        self.spawn_item_own(
+            stack.clone(),
+            [at.x + offset[0], at.y + offset[1], at.z + offset[2]],
+            10,
+        );
         let target = self.mob_entity(&self.mobs[index]);
-        self.trigger_item_entity("minecraft:player_sheared_equipment", &saddle, &target);
-        // attemptToShearEquipment: playSound(equippable.shearingSound()).
+        self.trigger_item_entity("minecraft:player_sheared_equipment", &stack, &target);
+        // Entity.playSound: nothing from a silent mob.
         if !silent {
-            self.audio.play(
-                "minecraft:item.saddle.unequip",
-                Some([at.x, at.y, at.z]),
-                1.0,
-                1.0,
-            );
+            self.audio.play(sound, Some([at.x, at.y, at.z]), 1.0, 1.0);
         }
-        Some(true)
     }
     /// `Pig` / `Strider.mobInteract`: saddle an adult, or ride a saddled one.
     fn interact_steerable(&mut self, index: usize, item: &str) -> bool {
