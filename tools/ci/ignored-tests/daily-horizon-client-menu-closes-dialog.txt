@@ -1,0 +1,1 @@
+horizon-client game::remote::tests::a_menu_the_server_opens_closes_an_open_dialog lib daily resources
