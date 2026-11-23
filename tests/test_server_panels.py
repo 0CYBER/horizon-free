@@ -108,6 +108,38 @@ class EggTests(unittest.TestCase):
                 result = subprocess.run([interpreter, "-n", str(path)], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_the_install_script_rejects_a_version_that_is_not_a_release_tag(self):
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("no bash")
+        script = self.egg["scripts"]["installation"]["script"]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "install.sh").write_text(script)
+            fake = tmp / "bin"
+            fake.mkdir()
+            # A curl that only records the address it was asked for, then fails: no network, no download.
+            (fake / "curl").write_text('#!/bin/sh\nfor a; do last=$a; done\necho "$last" >> "$CURL_LOG"\nexit 22\n')
+            (fake / "curl").chmod(0o755)
+            (fake / "sha256sum").write_text("#!/bin/sh\nexit 0\n")  # macOS has none; never reached for a good tag
+            (fake / "sha256sum").chmod(0o755)
+
+            def run(version):
+                log = tmp / "curl.log"
+                log.unlink(missing_ok=True)
+                env = {"PATH": f"{fake}:/usr/bin:/bin", "CURL_LOG": str(log), "HORIZON_INSTALL_DIR": str(tmp / "srv"), "HORIZON_VERSION": version}
+                done = subprocess.run([bash, str(tmp / "install.sh")], capture_output=True, text=True, env=env)
+                return done, log.read_text() if log.exists() else ""
+
+            for bad in ("v1';touch pwned;'", "../latest", "-x", "v1/../nightly", "a" * 65, "v 1"):
+                done, asked = run(bad)
+                self.assertNotEqual(done.returncode, 0, bad)
+                self.assertIn("must be a release tag" if len(bad) <= 64 else "longer than a release tag", done.stderr, bad)
+                self.assertEqual(asked, "", bad)  # nothing was requested for it
+            for good in ("nightly", "v2026.10.12", "nightly-2026-11-03-0c02067"):
+                done, asked = run(good)
+                self.assertIn(f"releases/tags/{good}", asked, good)  # it got as far as asking GitHub for it
+
 
 def read_kvp(path):
     """AMP's `Key=Value` lines (the value may itself hold `=`)."""
