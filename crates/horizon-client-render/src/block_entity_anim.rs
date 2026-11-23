@@ -11,7 +11,7 @@
 //! renderer's [`BlockAnim`]. Its tick methods take what the level answers
 //! (blocks, entities, game time) as closures, so the parity fixture can drive
 //! them with scripted inputs (`tools/test_block_entity_anim_parity.py`).
-use crate::block_entity_render::BlockAnim;
+use crate::block_entity_render::{AnimKind, BlockAnim};
 use crate::fast_hash::FxHashMap;
 use horizon_core::{
     geometry::trig::{self, Mth},
@@ -1011,19 +1011,28 @@ impl BlockEntityAnims {
         let mut anim = BlockAnim {
             sherds,
             // Gateways not ticked yet render settled (no beam).
-            gateway: self
-                .gateways
-                .get(&pos)
-                .map_or((i64::MAX, 0), |g| (g.age, g.teleport_cooldown)),
+            gateway: if self.gateways.is_empty() {
+                (i64::MAX, 0)
+            } else {
+                self.gateways
+                    .get(&pos)
+                    .map_or((i64::MAX, 0), |g| (g.age, g.teleport_cooldown))
+            },
             ..BlockAnim::default()
         };
-        if let Some(b) = self.books.get(&pos) {
+        if !self.books.is_empty()
+            && let Some(b) = self.books.get(&pos)
+        {
             anim.book = *b;
         }
-        if let Some(s) = self.shulkers.get(&pos) {
+        if !self.shulkers.is_empty()
+            && let Some(s) = self.shulkers.get(&pos)
+        {
             anim.shulker = (s.progress, s.progress_old);
         }
-        if let Some(b) = self.bells.get(&pos) {
+        if !self.bells.is_empty()
+            && let Some(b) = self.bells.get(&pos)
+        {
             anim.bell_ticks = b.ticks;
             anim.bell_shake = b
                 .shaking
@@ -1031,13 +1040,18 @@ impl BlockEntityAnims {
                 .flatten()
                 .map(|d| DIRECTIONS[usize::from(d)]);
         }
-        if let Some(c) = self.conduits.get(&pos) {
+        if !self.conduits.is_empty()
+            && let Some(c) = self.conduits.get(&pos)
+        {
             anim.conduit = (c.tick_count, c.is_active, c.is_hunting, c.active_rotation);
         }
-        if let Some(s) = self.skulls.get(&pos) {
+        if !self.skulls.is_empty()
+            && let Some(s) = self.skulls.get(&pos)
+        {
             anim.skull = (s.animating, s.tick_count);
         }
-        if let Some(w) = self.pots.get(&pos)
+        if !self.pots.is_empty()
+            && let Some(w) = self.pots.get(&pos)
             && w.style.is_some()
         {
             // extractRenderState never copies lastWobbleStyle into the render
@@ -1046,5 +1060,218 @@ impl BlockEntityAnims {
             anim.wobble = Some((false, w.progress(game_time, partial)));
         }
         anim
+    }
+
+    /// Animation state for one known block-entity `kind`, probing only that
+    /// kind's map (and skipping hashing altogether when that map is empty).
+    pub fn block_anim_for(
+        &self,
+        pos: [i32; 3],
+        kind: AnimKind,
+        game_time: i64,
+        partial: f32,
+        sherds: [Option<String>; 4],
+    ) -> BlockAnim {
+        let mut anim = BlockAnim {
+            sherds,
+            gateway: (i64::MAX, 0),
+            ..BlockAnim::default()
+        };
+        match kind {
+            AnimKind::Shulker => {
+                if !self.shulkers.is_empty()
+                    && let Some(s) = self.shulkers.get(&pos)
+                {
+                    anim.shulker = (s.progress, s.progress_old);
+                }
+            }
+            AnimKind::Bell => {
+                if !self.bells.is_empty()
+                    && let Some(b) = self.bells.get(&pos)
+                {
+                    anim.bell_ticks = b.ticks;
+                    anim.bell_shake = b
+                        .shaking
+                        .then_some(b.click_direction)
+                        .flatten()
+                        .map(|d| DIRECTIONS[usize::from(d)]);
+                }
+            }
+            AnimKind::DecoratedPot => {
+                if !self.pots.is_empty()
+                    && let Some(w) = self.pots.get(&pos)
+                    && w.style.is_some()
+                {
+                    anim.wobble = Some((false, w.progress(game_time, partial)));
+                }
+            }
+            AnimKind::Skull => {
+                if !self.skulls.is_empty()
+                    && let Some(s) = self.skulls.get(&pos)
+                {
+                    anim.skull = (s.animating, s.tick_count);
+                }
+            }
+            AnimKind::Gateway => {
+                if !self.gateways.is_empty()
+                    && let Some(g) = self.gateways.get(&pos)
+                {
+                    anim.gateway = (g.age, g.teleport_cooldown);
+                }
+            }
+            AnimKind::Conduit => {
+                if !self.conduits.is_empty()
+                    && let Some(c) = self.conduits.get(&pos)
+                {
+                    anim.conduit = (c.tick_count, c.is_active, c.is_hunting, c.active_rotation);
+                }
+            }
+            AnimKind::Book => {
+                if !self.books.is_empty()
+                    && let Some(b) = self.books.get(&pos)
+                {
+                    anim.book = *b;
+                }
+            }
+        }
+        anim
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_anim_for_matches_block_anim_across_all_kinds() {
+        let mut anims = BlockEntityAnims::default();
+        let pos = [3, 65, -7];
+        let empty_sherds: [Option<String>; 4] = Default::default();
+
+        // Empty maps fast path.
+        let full_empty = anims.block_anim(pos, 100, 0.5, empty_sherds.clone());
+        for kind in [
+            AnimKind::Shulker,
+            AnimKind::Bell,
+            AnimKind::DecoratedPot,
+            AnimKind::Skull,
+            AnimKind::Gateway,
+            AnimKind::Conduit,
+            AnimKind::Book,
+        ] {
+            let targeted = anims.block_anim_for(pos, kind, 100, 0.5, empty_sherds.clone());
+            assert_eq!(targeted.shulker, full_empty.shulker);
+            assert_eq!(targeted.bell_ticks, full_empty.bell_ticks);
+            assert_eq!(targeted.bell_shake, full_empty.bell_shake);
+            assert_eq!(targeted.wobble, full_empty.wobble);
+            assert_eq!(targeted.skull, full_empty.skull);
+            assert_eq!(targeted.gateway, full_empty.gateway);
+            assert_eq!(targeted.conduit, full_empty.conduit);
+            assert_eq!(targeted.book, full_empty.book);
+        }
+
+        // Populated maps: every targeted query matches the corresponding slice of `block_anim`.
+        anims.shulkers.insert(
+            pos,
+            Shulker {
+                progress: 0.75,
+                progress_old: 0.5,
+                ..Default::default()
+            },
+        );
+        anims.bells.insert(
+            pos,
+            Bell {
+                ticks: 14,
+                shaking: true,
+                click_direction: Some(3),
+                ..Default::default()
+            },
+        );
+        anims.pots.insert(
+            pos,
+            PotWobble {
+                started_at: 96,
+                style: Some(WobbleStyle::Positive),
+            },
+        );
+        anims.skulls.insert(
+            pos,
+            Skull {
+                animating: true,
+                tick_count: 23,
+            },
+        );
+        anims.gateways.insert(
+            pos,
+            EndGateway {
+                age: 42,
+                teleport_cooldown: 11,
+            },
+        );
+        anims.conduits.insert(
+            pos,
+            Conduit {
+                tick_count: 88,
+                active_rotation: 12.5,
+                is_active: true,
+                is_hunting: true,
+                effect_blocks: Vec::new(),
+            },
+        );
+        anims.books.insert(
+            pos,
+            EnchantingBook {
+                time: 19,
+                open: 0.8,
+                o_open: 0.6,
+                ..Default::default()
+            },
+        );
+
+        let sherds = [
+            Some("minecraft:angler_pottery_sherd".to_owned()),
+            None,
+            Some("minecraft:blade_pottery_sherd".to_owned()),
+            None,
+        ];
+        let full = anims.block_anim(pos, 100, 0.25, sherds.clone());
+
+        assert_eq!(
+            anims
+                .block_anim_for(pos, AnimKind::Shulker, 100, 0.25, empty_sherds.clone())
+                .shulker,
+            full.shulker
+        );
+        let bell = anims.block_anim_for(pos, AnimKind::Bell, 100, 0.25, empty_sherds.clone());
+        assert_eq!(bell.bell_ticks, full.bell_ticks);
+        assert_eq!(bell.bell_shake, full.bell_shake);
+        let pot = anims.block_anim_for(pos, AnimKind::DecoratedPot, 100, 0.25, sherds);
+        assert_eq!(pot.wobble, full.wobble);
+        assert_eq!(pot.sherds, full.sherds);
+        assert_eq!(
+            anims
+                .block_anim_for(pos, AnimKind::Skull, 100, 0.25, empty_sherds.clone())
+                .skull,
+            full.skull
+        );
+        assert_eq!(
+            anims
+                .block_anim_for(pos, AnimKind::Gateway, 100, 0.25, empty_sherds.clone())
+                .gateway,
+            full.gateway
+        );
+        assert_eq!(
+            anims
+                .block_anim_for(pos, AnimKind::Conduit, 100, 0.25, empty_sherds.clone())
+                .conduit,
+            full.conduit
+        );
+        assert_eq!(
+            anims
+                .block_anim_for(pos, AnimKind::Book, 100, 0.25, empty_sherds)
+                .book,
+            full.book
+        );
     }
 }

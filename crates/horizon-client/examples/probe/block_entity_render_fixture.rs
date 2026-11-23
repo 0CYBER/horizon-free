@@ -379,7 +379,7 @@ pub fn main() -> Result<()> {
                 -pitch * (std::f32::consts::PI / 180.0),
                 0.0,
             ),
-            anim: &|_| anim.clone(),
+            anim: &|_, _| anim.clone(),
             texts: Some(&texts),
             partial: float(&case["partial"]),
             game_time: case["gameTime"].as_i64().unwrap_or(0),
@@ -392,7 +392,12 @@ pub fn main() -> Result<()> {
             nether: false,
             lid: &|_| open,
             sign: &|_| sign.as_ref(),
-            banner: &|_| layers.clone(),
+            sign_revision: None,
+            banner: &|_, visit| {
+                for (texture, tint) in &layers {
+                    visit(texture, *tint);
+                }
+            },
             skull: &|_| None,
             glyph: &|c| atlas.glyph_cell(c),
             glyphs: atlas.font.epoch(),

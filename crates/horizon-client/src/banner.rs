@@ -5,7 +5,7 @@
 use crate::{block_entity_render::DYES, items::ItemStack, items::Items};
 use horizon_core::nbt::Tag;
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, fs, path::Path, sync::Arc};
 
 pub use horizon_items::banner_layer::{BannerLayer, PatternRef, layers_from_nbt, layers_to_nbt};
 
@@ -18,6 +18,8 @@ pub struct Pattern {
     pub id: Arc<str>,
     /// `asset_id` path, the texture under `entity/banner` and `entity/shield`.
     pub asset: String,
+    /// Pre-formatted `entity/banner/{asset}` sprite key for zero-alloc per-frame banner rendering.
+    banner_texture: String,
     pub translation_key: String,
 }
 
@@ -25,6 +27,8 @@ pub struct Pattern {
 #[derive(Default)]
 pub struct Banners {
     patterns: Vec<Pattern>,
+    /// `Pattern::id` -> index in `patterns` for O(1) lookup.
+    by_id: HashMap<Arc<str>, usize>,
     /// `#minecraft:no_item_required`, in tag order.
     no_item_required: Vec<Arc<str>>,
     /// Item -> `dye` component.
@@ -88,9 +92,14 @@ impl Banners {
                 .unwrap_or(stem)
                 .trim_start_matches("minecraft:")
                 .to_owned();
+            let id: Arc<str> = Arc::from(format!("minecraft:{stem}").as_str());
+            let banner_texture = format!("entity/banner/{asset}");
+            let index = banners.patterns.len();
+            banners.by_id.insert(id.clone(), index);
             banners.patterns.push(Pattern {
-                id: Arc::from(format!("minecraft:{stem}").as_str()),
+                id,
                 asset,
+                banner_texture,
                 translation_key: v["translation_key"].as_str().unwrap_or_default().to_owned(),
             });
         }
@@ -140,14 +149,24 @@ impl Banners {
         banners
     }
     pub fn pattern(&self, id: &str) -> Option<&Pattern> {
-        self.patterns.iter().find(|p| &*p.id == id)
+        self.by_id
+            .get(id)
+            .and_then(|&index| self.patterns.get(index))
+    }
+    /// `Sheets.getBannerSprite` texture name of a pattern, borrowing the pre-formatted
+    /// sprite key for registered patterns without heap allocation.
+    pub fn banner_texture_cow(&self, id: &str) -> Cow<'_, str> {
+        match self.pattern(id) {
+            Some(p) => Cow::Borrowed(&p.banner_texture),
+            None => Cow::Owned(format!(
+                "entity/banner/{}",
+                id.trim_start_matches("minecraft:")
+            )),
+        }
     }
     /// `Sheets.getBannerSprite` texture name of a pattern.
     pub fn banner_texture(&self, id: &str) -> String {
-        match self.pattern(id) {
-            Some(p) => format!("entity/banner/{}", p.asset),
-            None => format!("entity/banner/{}", id.trim_start_matches("minecraft:")),
-        }
+        self.banner_texture_cow(id).into_owned()
     }
     /// `Sheets.getShieldSprite` texture name of a pattern.
     pub fn shield_texture(&self, id: &str) -> String {
@@ -156,15 +175,21 @@ impl Banners {
             None => format!("entity/shield/{}", id.trim_start_matches("minecraft:")),
         }
     }
+    /// `Sheets.getBannerSprite` texture name of a layer: borrows the pre-formatted
+    /// sprite key for registered pattern ids; direct inline holders format their `asset_id`.
+    pub fn layer_texture_cow(&self, layer: &BannerLayer) -> Cow<'_, str> {
+        match &layer.pattern {
+            PatternRef::Id(id) => self.banner_texture_cow(id),
+            PatternRef::Inline { asset, .. } => Cow::Owned(format!(
+                "entity/banner/{}",
+                asset.trim_start_matches("minecraft:")
+            )),
+        }
+    }
     /// `Sheets.getBannerSprite` texture name of a layer: a direct holder names
     /// its own `asset_id`.
     pub fn layer_texture(&self, layer: &BannerLayer) -> String {
-        match &layer.pattern {
-            PatternRef::Id(id) => self.banner_texture(id),
-            PatternRef::Inline { asset, .. } => {
-                format!("entity/banner/{}", asset.trim_start_matches("minecraft:"))
-            }
-        }
+        self.layer_texture_cow(layer).into_owned()
     }
     /// `BannerPatternLayers.Layer.description` translation key.
     pub fn layer_key(&self, layer: &BannerLayer) -> String {
@@ -462,5 +487,39 @@ mod tests {
             BannerLayer::new("minecraft:border", "black"),
         ];
         assert_eq!(layers_from_nbt(Some(&layers_to_nbt(&l))), l);
+    }
+
+    #[test]
+    fn banner_texture_cow_borrows_registered_and_matches_owned() {
+        let mut b = Banners::default();
+        let id: Arc<str> = Arc::from("minecraft:flower");
+        b.by_id.insert(id.clone(), 0);
+        b.patterns.push(Pattern {
+            id,
+            asset: "flower".to_owned(),
+            banner_texture: "entity/banner/flower".to_owned(),
+            translation_key: "block.minecraft.banner.flower".to_owned(),
+        });
+
+        let registered = BannerLayer::new("minecraft:flower", "red");
+        let cow = b.layer_texture_cow(&registered);
+        assert!(matches!(cow, Cow::Borrowed("entity/banner/flower")));
+        assert_eq!(&*cow, b.layer_texture(&registered));
+
+        let fallback = BannerLayer::new("minecraft:custom_pattern", "blue");
+        let cow_fallback = b.layer_texture_cow(&fallback);
+        assert_eq!(&*cow_fallback, "entity/banner/custom_pattern");
+        assert_eq!(&*cow_fallback, b.layer_texture(&fallback));
+
+        let inline = BannerLayer {
+            pattern: PatternRef::Inline {
+                asset: Arc::from("minecraft:inline_art"),
+                translation_key: Arc::from(""),
+            },
+            color: Arc::from("white"),
+        };
+        let cow_inline = b.layer_texture_cow(&inline);
+        assert_eq!(&*cow_inline, "entity/banner/inline_art");
+        assert_eq!(&*cow_inline, b.layer_texture(&inline));
     }
 }

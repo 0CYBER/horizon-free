@@ -1,9 +1,11 @@
 use crate::{
     block_entity_render::{
-        BlockAnim, BlockEntityRenderer, BlockEntityShapes, CacheOptions, ChestPart, Kind,
-        ModelPart, SIGN_TEXT_KEEP, Scene, StaticSectionRevision, classify,
+        AnimKind, BlockAnim, BlockEntityRenderer, BlockEntityShapes, CacheOptions, ChestPart,
+        FlagQuads, Kind, ModelPart, Paint, SHULKER_FACINGS, SIGN_TEXT_KEEP, Scene,
+        StaticSectionRevision, classify, collect_part_quads, diffuse_lights, draw_part,
+        emit_flag_layer, is_baked_lights, vertex_light,
     },
-    chunk::Chunk,
+    chunk::{Chunk, Light, block_entity::BlockEntity},
     font::Glyph,
     hud::Rect,
     mesher::Vertex,
@@ -337,7 +339,7 @@ fn batched_callbacks_preserve_entity_ranges_and_allow_immediate_culling() {
     let renderer = shulker_renderer();
     let world = World::new(BlockStateId(0), 1);
     let sprites = sprites("entity/shulker/shulker");
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let scene = Scene {
         camera: DVec3::new(3.25, 64.5, -4.75),
         spyglass_outline: false,
@@ -355,7 +357,8 @@ fn batched_callbacks_preserve_entity_ranges_and_allow_immediate_culling() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -428,7 +431,7 @@ fn static_cache_qualifies_local_positions_by_section_and_drops_old_entries() {
     let renderer = shulker_renderer();
     let world = World::new(BlockStateId(0), 1);
     let sprites = sprites("entity/shulker/shulker");
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let mut scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -446,7 +449,8 @@ fn static_cache_qualifies_local_positions_by_section_and_drops_old_entries() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -477,7 +481,7 @@ fn gpu_static_cache_uses_section_local_chests_and_keeps_visibility_separate() {
     let world = World::new(BlockStateId(0), 1);
     let sprites = sprites("entity/chest/normal");
     let opaque_sprites = HashSet::new();
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let openness = Cell::new(0.0);
     let lid = |pos: [i32; 3]| {
         if pos == [100, 70, -32] {
@@ -503,7 +507,8 @@ fn gpu_static_cache_uses_section_local_chests_and_keeps_visibility_separate() {
         nether: false,
         lid: &lid,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -679,7 +684,7 @@ fn sign_text_cache_can_be_disabled_and_reenabled_without_changing_output() {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
         orientation: Quat::IDENTITY,
-        anim: &|_| BlockAnim::default(),
+        anim: &|_, _| BlockAnim::default(),
         texts: None,
         partial: 1.0,
         game_time: 0,
@@ -692,7 +697,8 @@ fn sign_text_cache_can_be_disabled_and_reenabled_without_changing_output() {
         nether: false,
         lid: &|_| 0.0,
         sign: &sign,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &glyph,
         glyphs: 0,
@@ -727,7 +733,7 @@ fn shulker_cache_tracks_settled_poses_and_does_not_freeze_opening_animation() {
     let world = World::new(BlockStateId(0), 1);
     let sprites = sprites("entity/shulker/shulker");
     let pose = Cell::new((0.0, 0.0));
-    let anim = |_: [i32; 3]| BlockAnim {
+    let anim = |_: [i32; 3], _| BlockAnim {
         shulker: pose.get(),
         ..Default::default()
     };
@@ -748,7 +754,8 @@ fn shulker_cache_tracks_settled_poses_and_does_not_freeze_opening_animation() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -834,7 +841,7 @@ fn shulker_cache_covers_all_colors_and_facing_directions() {
     let texture_refs: Vec<_> = textures.iter().map(String::as_str).collect();
     let sprites = sprite_atlas(&texture_refs);
     let world = World::new(BlockStateId(0), 1);
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -852,7 +859,8 @@ fn shulker_cache_covers_all_colors_and_facing_directions() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -887,7 +895,7 @@ fn cached_bells_keep_shaking_until_the_animation_ends() {
     let sprites = sprites("entity/bell/bell_body");
     let ticks = Cell::new(2);
     let shaking = Cell::new(true);
-    let anim = |_: [i32; 3]| BlockAnim {
+    let anim = |_: [i32; 3], _| BlockAnim {
         bell_ticks: ticks.get(),
         bell_shake: shaking.get().then_some("north"),
         ..Default::default()
@@ -909,7 +917,8 @@ fn cached_bells_keep_shaking_until_the_animation_ends() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -955,7 +964,7 @@ fn cached_closed_chests_match_the_direct_model_and_rebuild_when_opening() {
     let sprites = sprite_atlas(&["entity/chest/normal"]);
     let opening = Cell::new(0.0);
     let lid = |_: [i32; 3]| opening.get();
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let mut scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -973,7 +982,8 @@ fn cached_closed_chests_match_the_direct_model_and_rebuild_when_opening() {
         nether: false,
         lid: &lid,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1055,7 +1065,7 @@ fn closed_chest_cache_covers_all_materials_and_atlas_reloads() {
     let textures: Vec<_> = variants.iter().map(|(_, texture)| *texture).collect();
     let sprites = sprite_atlas(&textures);
     let world = World::new(BlockStateId(99), 1);
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let mut scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1073,7 +1083,8 @@ fn closed_chest_cache_covers_all_materials_and_atlas_reloads() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1146,7 +1157,7 @@ fn double_chest_cache_bypasses_both_halves_while_either_lid_is_open() {
     ]);
     let openings = Cell::new([0.0, 0.0]);
     let lid = |pos: [i32; 3]| openings.get()[usize::from(pos[0] != 0)];
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1164,7 +1175,8 @@ fn double_chest_cache_bypasses_both_halves_while_either_lid_is_open() {
         nether: false,
         lid: &lid,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1224,7 +1236,7 @@ fn decorated_pot_cache_tracks_sherds_and_bypasses_wobble_animation() {
         "entity/decorated_pot/front_pattern",
     ]);
     let animation = RefCell::new(BlockAnim::default());
-    let anim = |_: [i32; 3]| animation.borrow().clone();
+    let anim = |_: [i32; 3], _| animation.borrow().clone();
     let scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1242,7 +1254,8 @@ fn decorated_pot_cache_tracks_sherds_and_bypasses_wobble_animation() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1303,9 +1316,13 @@ fn banner_cache_keeps_the_pole_static_while_the_flag_and_patterns_update() {
         "entity/banner/pattern",
         "entity/banner/alternate_pattern",
     ]);
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let patterns = RefCell::new(vec![("entity/banner/pattern".to_owned(), 0x123456)]);
-    let banner_patterns = |_: [i32; 3]| patterns.borrow().clone();
+    let banner_patterns = |_: [i32; 3], visit: &mut dyn FnMut(&str, u32)| {
+        for (texture, tint) in patterns.borrow().iter() {
+            visit(texture, *tint);
+        }
+    };
     let mut scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1323,6 +1340,7 @@ fn banner_cache_keeps_the_pole_static_while_the_flag_and_patterns_update() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
+        sign_revision: None,
         banner: &banner_patterns,
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
@@ -1374,7 +1392,7 @@ fn cached_wall_banner_poles_use_the_wall_model() {
     let renderer = banner_renderer();
     let world = World::new(BlockStateId(0), 1);
     let sprites = sprite_atlas(&["entity/banner/banner_base", "entity/banner/base"]);
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1392,7 +1410,8 @@ fn cached_wall_banner_poles_use_the_wall_model() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1424,7 +1443,7 @@ fn copper_statue_cache_rebuilds_when_its_pose_state_changes() {
     let renderer = copper_statue_renderer();
     let world = World::new(BlockStateId(0), 1);
     let sprites = sprite_atlas(&["entity/copper_golem/copper_golem"]);
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1442,7 +1461,8 @@ fn copper_statue_cache_rebuilds_when_its_pose_state_changes() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1532,7 +1552,7 @@ fn copper_statue_cache_covers_weathering_waxing_and_all_poses() {
     let texture_strings: Vec<_> = variants.iter().map(|(_, texture)| *texture).collect();
     let sprites = sprite_atlas(&texture_strings);
     let world = World::new(BlockStateId(0), 1);
-    let anim = |_: [i32; 3]| BlockAnim::default();
+    let anim = |_: [i32; 3], _| BlockAnim::default();
     let scene = Scene {
         camera: DVec3::new(2.25, 64.5, -3.75),
         spyglass_outline: false,
@@ -1550,7 +1570,8 @@ fn copper_statue_cache_covers_weathering_waxing_and_all_poses() {
         nether: false,
         lid: &|_| 0.0,
         sign: &|_| None,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &|_| Glyph::default(),
         glyphs: 0,
@@ -1628,7 +1649,7 @@ fn a_scoping_first_person_camera_outlines_glowing_sign_text_from_afar() {
         camera: DVec3::new(0.5, 70.5, 20.5),
         spyglass_outline: false,
         orientation: Quat::IDENTITY,
-        anim: &|_| BlockAnim::default(),
+        anim: &|_, _| BlockAnim::default(),
         texts: None,
         partial: 0.0,
         game_time: 0,
@@ -1641,7 +1662,8 @@ fn a_scoping_first_person_camera_outlines_glowing_sign_text_from_afar() {
         nether: false,
         lid: &|_| 0.0,
         sign: &sign,
-        banner: &|_| Vec::new(),
+        sign_revision: None,
+        banner: &|_, _| {},
         skull: &|_| None,
         glyph: &glyph,
         glyphs: 0,
@@ -1665,4 +1687,898 @@ fn a_scoping_first_person_camera_outlines_glowing_sign_text_from_afar() {
     scene.spyglass_outline = false;
     scene.camera = DVec3::new(0.5, 70.5, 0.5);
     assert_eq!(text(&scene), scoping);
+}
+
+#[test]
+fn const_diffuse_lights_match_vec3_normalize_bit_exact() {
+    let expected_l0 = Vec3::new(0.2, 1.0, -0.7).normalize();
+    let expected_overworld_l1 = Vec3::new(-0.2, 1.0, 0.7).normalize();
+    let expected_nether_l1 = Vec3::new(-0.2, -1.0, 0.7).normalize();
+
+    let (ow_l0, ow_l1) = diffuse_lights(false);
+    let (n_l0, n_l1) = diffuse_lights(true);
+
+    for (actual, expected) in [
+        (ow_l0, expected_l0),
+        (ow_l1, expected_overworld_l1),
+        (n_l0, expected_l0),
+        (n_l1, expected_nether_l1),
+    ] {
+        assert_eq!(actual.x.to_bits(), expected.x.to_bits());
+        assert_eq!(actual.y.to_bits(), expected.y.to_bits());
+        assert_eq!(actual.z.to_bits(), expected.z.to_bits());
+    }
+    assert!(!is_baked_lights(diffuse_lights(false)));
+    assert!(!is_baked_lights(diffuse_lights(true)));
+    assert!(is_baked_lights((Vec3::X, Vec3::Y)));
+}
+
+#[test]
+fn closed_shulker_prebaked_matches_direct_draw_all_facings() {
+    let model = ModelPart {
+        pose: unit_pose(),
+        polygons: Vec::new(),
+        children: vec![("base".into(), part(0.0)), ("lid".into(), part(24.0))],
+    };
+    let kinds: Vec<Kind> = SHULKER_FACINGS
+        .iter()
+        .map(|facing| Kind::Shulker {
+            texture: "entity/shulker/shulker".into(),
+            facing,
+        })
+        .collect();
+    let renderer = renderer_with_shapes(
+        HashMap::from([("shulker_box", model)]),
+        kinds,
+        HashMap::new(),
+    );
+    let world = World::new(BlockStateId(0), 1);
+    let sprites = sprites("entity/shulker/shulker");
+    let pose = Cell::new((0.0_f32, 0.0_f32));
+    let anim = |_: [i32; 3], kind: AnimKind| {
+        assert_eq!(kind, AnimKind::Shulker);
+        BlockAnim {
+            shulker: pose.get(),
+            ..BlockAnim::default()
+        }
+    };
+    let mut scene = Scene {
+        camera: DVec3::new(3.25, 64.5, -2.75),
+        spyglass_outline: false,
+        orientation: Quat::IDENTITY,
+        anim: &anim,
+        texts: None,
+        partial: 0.5,
+        game_time: 10,
+        max_y: 320,
+        world: &world,
+        sprites: &sprites,
+        emissive: &Default::default(),
+        translucent_sprites: &HashSet::new(),
+        atlas_revision: 1,
+        nether: false,
+        lid: &|_| 0.0,
+        sign: &|_| None,
+        sign_revision: None,
+        banner: &|_, _| {},
+        skull: &|_| None,
+        glyph: &|_| Glyph::default(),
+        glyphs: 0,
+        font: None,
+        dynamic_visible: None,
+    };
+    let shapes = renderer.shapes();
+    let base = Mat4::from_translation(Vec3::new(4.5, -2.25, 7.75));
+    for nether in [false, true] {
+        scene.nether = nether;
+        for (state, facing) in SHULKER_FACINGS.iter().enumerate() {
+            let mut prebaked = Vec::new();
+            let mut direct = Vec::new();
+            renderer.render_one(
+                &shapes,
+                &scene,
+                [1, 64, 2],
+                renderer.kind(state as u32),
+                base,
+                0xC7,
+                diffuse_lights(nether),
+                false,
+                true,
+                &mut prebaked,
+            );
+            renderer.render_one(
+                &shapes,
+                &scene,
+                [1, 64, 2],
+                renderer.kind(state as u32),
+                base,
+                0xC7,
+                diffuse_lights(nether),
+                false,
+                false,
+                &mut direct,
+            );
+            assert!(!prebaked.is_empty(), "facing {facing} emitted vertices");
+            assert_eq!(
+                prebaked.len(),
+                direct.len(),
+                "facing {facing} nether={nether} vertex count"
+            );
+            for (a, b) in prebaked.iter().zip(&direct) {
+                assert!(
+                    (Vec3::from_array(a.pos) - Vec3::from_array(b.pos)).length() < 1e-5,
+                    "facing {facing} pos mismatch: {:?} vs {:?}",
+                    a.pos,
+                    b.pos
+                );
+                assert_eq!(a.uv, b.uv, "facing {facing} uv");
+                assert_eq!(a.normal, b.normal, "facing {facing} normal");
+                assert_eq!(a.color, b.color, "facing {facing} color");
+                assert_eq!(a.light, b.light, "facing {facing} light");
+            }
+        }
+    }
+    // An opening shulker (`progress > 0.0`) must bypass the closed pre-baked table.
+    let mut closed_verts = Vec::new();
+    let mut open_verts = Vec::new();
+    pose.set((0.0, 0.0));
+    renderer.render_one(
+        &shapes,
+        &scene,
+        [1, 64, 2],
+        renderer.kind(1),
+        base,
+        0xC7,
+        diffuse_lights(scene.nether),
+        false,
+        true,
+        &mut closed_verts,
+    );
+    pose.set((0.5, 0.5));
+    renderer.render_one(
+        &shapes,
+        &scene,
+        [1, 64, 2],
+        renderer.kind(1),
+        base,
+        0xC7,
+        diffuse_lights(scene.nether),
+        false,
+        true,
+        &mut open_verts,
+    );
+    assert_ne!(
+        closed_verts.iter().map(|v| v.pos).collect::<Vec<_>>(),
+        open_verts.iter().map(|v| v.pos).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn banner_single_transform_matches_multi_pass_draw_part() {
+    // 10 polygons (> FlagQuads inline capacity of 8) to exercise both inline and overflow storage.
+    let flag_model = ModelPart {
+        pose: unit_pose(),
+        polygons: Vec::new(),
+        children: vec![(
+            "flag".into(),
+            ModelPart {
+                pose: [0.0, 2.0, -1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                polygons: (0..10)
+                    .map(|i| {
+                        let y = i as f32 * 1.5;
+                        [
+                            [0.0, y, 0.0, 0.0, 0.0],
+                            [16.0, y, 0.0, 1.0, 0.0],
+                            [16.0, y + 1.0, 0.0, 1.0, 1.0],
+                            [0.0, y + 1.0, 0.0, 0.0, 1.0],
+                        ]
+                    })
+                    .collect(),
+                children: Vec::new(),
+            },
+        )],
+    };
+    let transform = Mat4::from_translation(Vec3::new(1.25, -0.5, 2.75))
+        * Mat4::from_rotation_y(0.75)
+        * Mat4::from_scale(Vec3::splat(2.0 / 3.0));
+    let wave = |name: &str, p: &mut [f32; 9]| {
+        if name == "flag" {
+            p[3] = -0.05;
+        }
+    };
+    let glow_rect = Rect {
+        u0: 0.75,
+        v0: 0.5,
+        u1: 0.875,
+        v1: 0.625,
+        w: 16,
+        h: 16,
+    };
+    let layers = [
+        (
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 0.125,
+                v1: 0.125,
+                w: 16,
+                h: 16,
+            },
+            0xFFFFFF,
+            None,
+        ),
+        (
+            Rect {
+                u0: 0.125,
+                v0: 0.0,
+                u1: 0.25,
+                v1: 0.125,
+                w: 16,
+                h: 16,
+            },
+            0xB02E26,
+            Some(glow_rect),
+        ),
+        (
+            Rect {
+                u0: 0.25,
+                v0: 0.0,
+                u1: 0.375,
+                v1: 0.125,
+                w: 16,
+                h: 16,
+            },
+            0x3C44AA,
+            None,
+        ),
+        (
+            Rect {
+                u0: 0.375,
+                v0: 0.0,
+                u1: 0.5,
+                v1: 0.125,
+                w: 16,
+                h: 16,
+            },
+            0xFED83D,
+            Some(glow_rect),
+        ),
+    ];
+
+    for lights in [
+        diffuse_lights(false),
+        diffuse_lights(true),
+        (Vec3::new(0.4, 0.8, 0.4).normalize(), Vec3::Y),
+    ] {
+        let baked = is_baked_lights(lights);
+        let mut quads = FlagQuads::new();
+        collect_part_quads(
+            &flag_model,
+            "root",
+            transform,
+            &wave,
+            lights,
+            baked,
+            &mut quads,
+        );
+        assert_eq!(quads.len(), 10);
+
+        let mut single_pass = Vec::new();
+        let mut multi_pass = Vec::new();
+        for (sprite, tint, glow) in layers {
+            let paint = Paint {
+                sprite,
+                tint,
+                light: 0x00D0_00E0,
+                lights,
+                glow,
+            };
+            emit_flag_layer(&quads, paint, baked, &mut single_pass);
+            draw_part(
+                &flag_model,
+                "root",
+                transform,
+                &wave,
+                paint,
+                &mut multi_pass,
+            );
+        }
+        assert_eq!(single_pass.len(), multi_pass.len());
+        for (a, b) in single_pass.iter().zip(&multi_pass) {
+            assert_eq!(a.pos.map(f32::to_bits), b.pos.map(f32::to_bits));
+            assert_eq!(a.uv.map(f32::to_bits), b.uv.map(f32::to_bits));
+            assert_eq!(a.normal, b.normal);
+            assert_eq!(a.color, b.color);
+            assert_eq!(a.light, b.light);
+            assert_eq!(a.layer, b.layer);
+            assert_eq!(a.glint_uv.map(f32::to_bits), b.glint_uv.map(f32::to_bits));
+        }
+    }
+}
+
+#[test]
+fn single_pass_gpu_cache_default_skips_candidates_and_clears_on_disable() {
+    let renderer = chest_renderer();
+    let world = World::new(BlockStateId(0), 1);
+    let sprites = sprites("entity/chest/normal");
+    let anim = |_: [i32; 3], _| BlockAnim::default();
+    let scene = Scene {
+        camera: DVec3::new(0.5, 64.5, 0.5),
+        spyglass_outline: false,
+        orientation: Quat::IDENTITY,
+        anim: &anim,
+        texts: None,
+        partial: 0.0,
+        game_time: 1,
+        max_y: 320,
+        world: &world,
+        sprites: &sprites,
+        emissive: &Default::default(),
+        translucent_sprites: &HashSet::new(),
+        atlas_revision: 1,
+        nether: false,
+        lid: &|_| 0.0,
+        sign: &|_| None,
+        sign_revision: None,
+        banner: &|_, _| {},
+        skull: &|_| None,
+        glyph: &|_| Glyph::default(),
+        glyphs: 0,
+        font: None,
+        dynamic_visible: None,
+    };
+    let blocks = [([0, 64, 0], 0u32), ([2, 64, 0], 0u32)];
+    let default_options = CacheOptions {
+        signs: true,
+        ..Default::default()
+    };
+
+    // With default options (`!any_model_cache()`), neither `cache_candidates` nor
+    // `section_revision` may be polled.
+    let candidate_polls = Cell::new(0u32);
+    let revision_polls = Cell::new(0u32);
+    let mut single_pass_out = Vec::new();
+    let (sections, visible_sections, stats) = renderer.render_with_gpu_cache_options(
+        &scene,
+        blocks.iter(),
+        blocks.iter().inspect(|_| {
+            candidate_polls.set(candidate_polls.get() + 1);
+        }),
+        default_options,
+        1,
+        |_| {
+            revision_polls.set(revision_polls.get() + 1);
+            Some(StaticSectionRevision {
+                mesh: 1,
+                block_entities: 1,
+            })
+        },
+        &mut single_pass_out,
+    );
+    assert_eq!(candidate_polls.get(), 0);
+    assert_eq!(revision_polls.get(), 0);
+    assert!(sections.is_empty());
+    assert!(visible_sections.is_empty());
+    assert_eq!(stats.snapshot_revision, 0);
+    assert_eq!(stats.dynamic_entities_drawn, 2);
+
+    let mut uncached_out = Vec::new();
+    renderer.render_with_cache_options(&scene, blocks.iter(), default_options, &mut uncached_out);
+    assert_eq!(single_pass_out.len(), uncached_out.len());
+    for (a, b) in single_pass_out.iter().zip(&uncached_out) {
+        assert_eq!(a.pos.map(f32::to_bits), b.pos.map(f32::to_bits));
+        assert_eq!(a.uv.map(f32::to_bits), b.uv.map(f32::to_bits));
+        assert_eq!(a.normal, b.normal);
+        assert_eq!(a.color, b.color);
+        assert_eq!(a.light, b.light);
+    }
+
+    // Enable chest model cache -> populates static GPU section snapshot.
+    let chest_options = CacheOptions {
+        chests: true,
+        signs: true,
+        ..Default::default()
+    };
+    let mut cached_out = Vec::new();
+    let (cached_sections, cached_visible, cached_stats) = renderer.render_with_gpu_cache_options(
+        &scene,
+        blocks.iter(),
+        blocks.iter(),
+        chest_options,
+        1,
+        |_| {
+            Some(StaticSectionRevision {
+                mesh: 1,
+                block_entities: 1,
+            })
+        },
+        &mut cached_out,
+    );
+    assert_eq!(cached_sections.len(), 1);
+    assert_eq!(cached_visible.len(), 1);
+    assert!(cached_stats.snapshot_revision > 0);
+    assert!(cached_out.is_empty());
+
+    // Disable chest model cache -> clears cached sections and bumps snapshot_revision
+    // so GPU drops stale buffers, still without polling `cache_candidates` or `section_revision`.
+    let mut cleared_out = Vec::new();
+    let (cleared_sections, cleared_visible, cleared_stats) = renderer
+        .render_with_gpu_cache_options(
+            &scene,
+            blocks.iter(),
+            blocks.iter().inspect(|_| {
+                candidate_polls.set(candidate_polls.get() + 1);
+            }),
+            default_options,
+            1,
+            |_| {
+                revision_polls.set(revision_polls.get() + 1);
+                Some(StaticSectionRevision {
+                    mesh: 1,
+                    block_entities: 1,
+                })
+            },
+            &mut cleared_out,
+        );
+    assert_eq!(candidate_polls.get(), 0);
+    assert_eq!(revision_polls.get(), 0);
+    assert!(cleared_sections.is_empty());
+    assert!(cleared_visible.is_empty());
+    assert!(cleared_stats.snapshot_revision > cached_stats.snapshot_revision);
+    assert_eq!(cleared_out.len(), uncached_out.len());
+
+    // Subsequent default frame keeps the cleared snapshot_revision steady.
+    let mut steady_out = Vec::new();
+    let (_, _, steady_stats) = renderer.render_with_gpu_cache_options(
+        &scene,
+        blocks.iter(),
+        std::iter::empty(),
+        default_options,
+        1,
+        |_| unreachable!("section_revision must not run when model caches are off"),
+        &mut steady_out,
+    );
+    assert_eq!(
+        steady_stats.snapshot_revision,
+        cleared_stats.snapshot_revision
+    );
+    assert_eq!(steady_out.len(), uncached_out.len());
+}
+
+#[test]
+fn gpu_static_cache_pass2_dedups_validation_and_matches_uncached() {
+    let renderer = shulker_renderer();
+    let world = World::new(BlockStateId(0), 1);
+    let sprites = sprites("entity/shulker/shulker");
+    let anim_calls = Cell::new(0u32);
+    let anim = |_: [i32; 3], kind: AnimKind| {
+        assert_eq!(kind, AnimKind::Shulker);
+        anim_calls.set(anim_calls.get() + 1);
+        BlockAnim::default()
+    };
+    let scene = Scene {
+        camera: DVec3::new(0.5, 64.5, 0.5),
+        spyglass_outline: false,
+        orientation: Quat::IDENTITY,
+        anim: &anim,
+        texts: None,
+        partial: 0.0,
+        game_time: 10,
+        max_y: 320,
+        world: &world,
+        sprites: &sprites,
+        emissive: &Default::default(),
+        translucent_sprites: &HashSet::new(),
+        atlas_revision: 1,
+        nether: false,
+        lid: &|_| 0.0,
+        sign: &|_| None,
+        sign_revision: None,
+        banner: &|_, _| {},
+        skull: &|_| None,
+        glyph: &|_| Glyph::default(),
+        glyphs: 0,
+        font: None,
+        dynamic_visible: None,
+    };
+    let blocks = [([0, 64, 0], 0u32), ([2, 64, 0], 0u32), ([4, 64, 0], 0u32)];
+    let options = CacheOptions {
+        shulker_boxes: true,
+        ..Default::default()
+    };
+    let rev = |_: [i32; 3]| {
+        Some(StaticSectionRevision {
+            mesh: 1,
+            block_entities: 1,
+        })
+    };
+
+    // Warm frame.
+    let mut dynamic_out = Vec::new();
+    let (sections, visible, stats) = renderer.render_with_gpu_cache_options(
+        &scene,
+        blocks.iter(),
+        blocks.iter(),
+        options,
+        1,
+        rev,
+        &mut dynamic_out,
+    );
+    assert_eq!(sections.len(), 1);
+    assert_eq!(visible.len(), 1);
+    assert_eq!(stats.static_entities_drawn, 3);
+    assert!(dynamic_out.is_empty());
+
+    // Steady frame: pass 1 validates each of the 3 shulkers once; pass 2 hits the
+    // `validated_frame` fast path without re-querying `scene.anim`!
+    anim_calls.set(0);
+    let mut steady_dynamic = Vec::new();
+    let (sections2, visible2, stats2) = renderer.render_with_gpu_cache_options(
+        &scene,
+        blocks.iter(),
+        blocks.iter(),
+        options,
+        1,
+        rev,
+        &mut steady_dynamic,
+    );
+    assert_eq!(
+        anim_calls.get(),
+        3,
+        "pass 2 must not re-validate entries already validated in pass 1"
+    );
+    assert_eq!(sections2.len(), 1);
+    assert_eq!(visible2, [sections2[0].section]);
+    assert_eq!(stats2.static_entities_drawn, 3);
+    assert!(steady_dynamic.is_empty());
+    let camera_relative = sections2[0]
+        .vertices
+        .iter()
+        .map(|vertex| Vertex {
+            pos: std::array::from_fn(|i| {
+                vertex.pos[i]
+                    + (f64::from(sections2[0].origin[i]) - scene.camera.to_array()[i]) as f32
+            }),
+            ..*vertex
+        })
+        .collect::<Vec<_>>();
+    assert!(!camera_relative.is_empty());
+    assert_same_vertices(&camera_relative, &render_direct(&renderer, &scene, &blocks));
+}
+
+#[test]
+fn gpu_static_cache_pass2_banner_fast_path_reads_live_light() {
+    let renderer = banner_renderer();
+    let sprites = sprite_atlas(&[
+        "entity/banner/banner_base",
+        "entity/banner/base",
+        "entity/banner/stripe_bottom",
+    ]);
+    let blocks = [([0, 64, 0], 0u32)];
+    let options = CacheOptions {
+        banners: true,
+        ..Default::default()
+    };
+    let set_light = |world: &mut World, packed: u8| {
+        let mut chunk = Chunk::empty(0, 0);
+        let section_idx = chunk.section_index(64).unwrap();
+        Arc::make_mut(&mut chunk.sections[section_idx]).light = Light::Uniform(packed);
+        world.chunks.insert((0, 0), Arc::new(chunk));
+    };
+    let camera = DVec3::new(0.5, 64.5, 2.5);
+    let run_frame = |world: &World, mesh_rev: u64| {
+        let scene = Scene {
+            camera,
+            spyglass_outline: false,
+            orientation: Quat::IDENTITY,
+            anim: &|_, _| BlockAnim::default(),
+            texts: None,
+            partial: 0.25,
+            game_time: 10,
+            max_y: 320,
+            world,
+            sprites: &sprites,
+            emissive: &Default::default(),
+            translucent_sprites: &HashSet::new(),
+            atlas_revision: 1,
+            nether: false,
+            lid: &|_| 0.0,
+            sign: &|_| None,
+            sign_revision: None,
+            banner: &|_, visit: &mut dyn FnMut(&str, u32)| {
+                visit("entity/banner/stripe_bottom", 0x3C44AA);
+            },
+            skull: &|_| None,
+            glyph: &|_| Glyph::default(),
+            glyphs: 0,
+            font: None,
+            dynamic_visible: None,
+        };
+        let rev = |_: [i32; 3]| {
+            Some(StaticSectionRevision {
+                mesh: mesh_rev,
+                block_entities: 1,
+            })
+        };
+        let mut dynamic_out = Vec::new();
+        let (sections, visible, _) = renderer.render_with_gpu_cache_options(
+            &scene,
+            blocks.iter(),
+            blocks.iter(),
+            options,
+            1,
+            rev,
+            &mut dynamic_out,
+        );
+        assert_eq!(sections.len(), 1);
+        assert_eq!(visible, [sections[0].section]);
+        let static_camera_relative = sections[0]
+            .vertices
+            .iter()
+            .map(|vertex| Vertex {
+                pos: std::array::from_fn(|i| {
+                    vertex.pos[i]
+                        + (f64::from(sections[0].origin[i]) - scene.camera.to_array()[i]) as f32
+                }),
+                ..*vertex
+            })
+            .collect::<Vec<_>>();
+        let direct = render_direct(&renderer, &scene, &blocks);
+        (static_camera_relative, dynamic_out, direct)
+    };
+
+    let mut world = World::new(BlockStateId(0), 1);
+    set_light(&mut world, 0xF0);
+    assert_eq!(world.light(0, 64, 0), 0xF0);
+
+    // Frame 1 (warm): caches the banner pole at 0xF0 and draws the dynamic flag at 0xF0.
+    let (warm_pole, warm_flag, warm_direct) = run_frame(&world, 1);
+    let warm_pole_len = warm_pole.len();
+    assert!(!warm_pole.is_empty());
+    assert!(!warm_flag.is_empty());
+    assert!(warm_flag.iter().all(|v| v.light == vertex_light(0xF0)));
+    let mut warm_combined = warm_pole;
+    warm_combined.extend_from_slice(&warm_flag);
+    assert_same_vertices(&warm_combined, &warm_direct);
+
+    // Change world light without bumping `section_revision` (before remesh upload):
+    // pass 1 keeps the cached banner pole (`key.light == 0xF0`) and stamps
+    // `validated_frame`; pass 2 hits the fast path and must read live light 0x3A
+    // for the dynamic flag, matching the direct uncached draw.
+    set_light(&mut world, 0x3A);
+    assert_eq!(world.light(0, 64, 0), 0x3A);
+    let (steady_pole, steady_flag, steady_direct) = run_frame(&world, 1);
+    assert_eq!(steady_pole.len(), warm_pole_len);
+    assert_eq!(steady_flag.len(), warm_flag.len());
+    assert!(steady_pole.iter().all(|v| v.light == vertex_light(0xF0)));
+    assert!(steady_flag.iter().all(|v| v.light == vertex_light(0x3A)));
+    assert_eq!(steady_direct.len(), steady_pole.len() + steady_flag.len());
+    assert_same_vertices(&steady_flag, &steady_direct[steady_pole.len()..]);
+
+    // Once the section's mesh revision bumps, the cached pole rebuilds at 0x3A too
+    // and the full static + dynamic draw matches `render_direct`.
+    let (rebuilt_pole, rebuilt_flag, rebuilt_direct) = run_frame(&world, 2);
+    assert!(rebuilt_pole.iter().all(|v| v.light == vertex_light(0x3A)));
+    assert!(rebuilt_flag.iter().all(|v| v.light == vertex_light(0x3A)));
+    let mut rebuilt_combined = rebuilt_pole;
+    rebuilt_combined.extend_from_slice(&rebuilt_flag);
+    assert_same_vertices(&rebuilt_combined, &rebuilt_direct);
+}
+
+#[test]
+fn sign_text_revision_skips_recomparison_and_invalidates_on_edit_and_pack_reload() {
+    let renderer = BlockEntityRenderer {
+        kinds: vec![Kind::Sign {
+            hanging: false,
+            wall: false,
+            angle: 180.0,
+        }],
+        ..Default::default()
+    };
+    let mut world = World::new(BlockStateId(0), 1);
+    let sign_a = SignData {
+        front: SignText {
+            lines: ["alpha".into(), String::new(), String::new(), String::new()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let sign_b = SignData {
+        front: SignText {
+            lines: ["beta".into(), String::new(), String::new(), String::new()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    world
+        .block_entities
+        .insert((0, 64, 0), BlockEntity::Sign(sign_a.clone()));
+    world
+        .block_entities
+        .insert((2, 64, 0), BlockEntity::Sign(sign_b.clone()));
+    let rev_initial = world.block_entities.sign_revision();
+
+    // Non-sign mutations must not bump `sign_revision`.
+    world
+        .block_entities
+        .insert((5, 64, 0), BlockEntity::Chest(Vec::new()));
+    assert_eq!(world.block_entities.sign_revision(), rev_initial);
+    let _ = world.block_entities.get_mut(&(5, 64, 0));
+    assert_eq!(world.block_entities.sign_revision(), rev_initial);
+    let _ = world.block_entities.remove(&(5, 64, 0));
+    assert_eq!(world.block_entities.sign_revision(), rev_initial);
+
+    let sprites = HashMap::new();
+    let glyph_reads = Cell::new(0u32);
+    let beta_char_reads = Cell::new(0u32);
+    let glyph = |c: char| {
+        glyph_reads.set(glyph_reads.get() + 1);
+        if c == 'b' {
+            beta_char_reads.set(beta_char_reads.get() + 1);
+        }
+        Glyph {
+            rect: (c != ' ').then_some(Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 0.0625,
+                v1: 0.0625,
+                w: 8,
+                h: 8,
+            }),
+            right: 8.0,
+            bottom: 8.0,
+            advance: 6.0,
+            ..Glyph::default()
+        }
+    };
+    let blocks = [([0, 64, 0], 0u32), ([2, 64, 0], 0u32)];
+
+    let render_world = |world: &World, atlas_revision: u64, glyphs: u64| {
+        let sign_fn = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
+            Some(BlockEntity::Sign(sign)) => Some(sign),
+            _ => None,
+        };
+        let scene = Scene {
+            camera: DVec3::new(1.0, 64.5, 4.0),
+            spyglass_outline: false,
+            orientation: Quat::IDENTITY,
+            anim: &|_, _| BlockAnim::default(),
+            texts: None,
+            partial: 0.0,
+            game_time: 10,
+            max_y: 320,
+            world,
+            sprites: &sprites,
+            emissive: &Default::default(),
+            translucent_sprites: &HashSet::new(),
+            atlas_revision,
+            nether: false,
+            lid: &|_| 0.0,
+            sign: &sign_fn,
+            sign_revision: Some(world.block_entities.sign_revision()),
+            banner: &|_, _| {},
+            skull: &|_| None,
+            glyph: &glyph,
+            glyphs,
+            font: None,
+            dynamic_visible: None,
+        };
+        let mut out = Vec::new();
+        renderer.render(&scene, blocks.iter(), &mut out);
+        out
+    };
+
+    // Frame 1: lays out both signs ("alpha" = 5 chars, "beta" = 4 chars).
+    let first = render_world(&world, 1, 0);
+    assert!(!first.is_empty());
+    let initial_reads = glyph_reads.get();
+    assert!(initial_reads > 0);
+    assert!(beta_char_reads.get() > 0);
+
+    // Frame 2: steady revision -> zero glyph layout reads, bit-identical output.
+    glyph_reads.set(0);
+    beta_char_reads.set(0);
+    let second = render_world(&world, 1, 0);
+    assert_eq!(glyph_reads.get(), 0);
+    assert_eq!(beta_char_reads.get(), 0);
+    assert_eq!(first.len(), second.len());
+
+    // Edit only sign_a via `get_mut` -> bumps `sign_revision`, rebuilds sign_a ONLY.
+    if let Some(BlockEntity::Sign(sign)) = world.block_entities.get_mut(&(0, 64, 0)) {
+        sign.front.lines[0] = "omega_edited".into();
+    }
+    assert_ne!(world.block_entities.sign_revision(), rev_initial);
+    glyph_reads.set(0);
+    beta_char_reads.set(0);
+    let edited = render_world(&world, 1, 0);
+    assert!(glyph_reads.get() > 0);
+    assert_eq!(
+        beta_char_reads.get(),
+        0,
+        "unedited sign_b must stay cached without re-layout"
+    );
+    assert_ne!(edited.len(), first.len());
+
+    // Next steady frame at the new revision -> zero glyph reads again.
+    glyph_reads.set(0);
+    beta_char_reads.set(0);
+    let steady_after_edit = render_world(&world, 1, 0);
+    assert_eq!(glyph_reads.get(), 0);
+    assert_eq!(steady_after_edit.len(), edited.len());
+
+    // Pack reload (`atlas_revision` bump) must invalidate even when `sign_revision` is unchanged.
+    glyph_reads.set(0);
+    beta_char_reads.set(0);
+    let _reloaded = render_world(&world, 2, 0);
+    assert!(glyph_reads.get() >= initial_reads);
+    assert!(beta_char_reads.get() > 0);
+
+    // Distinct `World` (dimension switch / reload) gets a distinct `sign_revision`.
+    let mut world2 = World::new(BlockStateId(0), 1);
+    world2.block_entities.insert(
+        (0, 64, 0),
+        BlockEntity::Sign(SignData {
+            front: SignText {
+                lines: ["x".into(), String::new(), String::new(), String::new()],
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+    );
+    assert_ne!(
+        world2.block_entities.sign_revision(),
+        world.block_entities.sign_revision()
+    );
+    glyph_reads.set(0);
+    let other_world = render_world(&world2, 2, 0);
+    assert!(glyph_reads.get() > 0);
+    assert_ne!(other_world.len(), edited.len());
+
+    // Direct verification that matching `Some(rev)` skips `SignData` comparison
+    // and bumping `rev` or passing `None` immediately re-compares.
+    let pos = [10, 64, 10];
+    let (a_fn, b_fn) = (|_: [i32; 3]| Some(&sign_a), |_: [i32; 3]| Some(&sign_b));
+    let mut direct_scene = Scene {
+        camera: DVec3::new(10.5, 64.5, 13.0),
+        spyglass_outline: false,
+        orientation: Quat::IDENTITY,
+        anim: &|_, _| BlockAnim::default(),
+        texts: None,
+        partial: 0.0,
+        game_time: 10,
+        max_y: 320,
+        world: &world,
+        sprites: &sprites,
+        emissive: &Default::default(),
+        translucent_sprites: &HashSet::new(),
+        atlas_revision: 1,
+        nether: false,
+        lid: &|_| 0.0,
+        sign: &a_fn,
+        sign_revision: Some(777),
+        banner: &|_, _| {},
+        skull: &|_| None,
+        glyph: &glyph,
+        glyphs: 0,
+        font: None,
+        dynamic_visible: None,
+    };
+    let mut out_a = Vec::new();
+    renderer.render(&direct_scene, [(pos, 0u32)].iter(), &mut out_a);
+    // Same `Some(777)` skips deep compare -> returns cached `sign_a` vertex count.
+    direct_scene.sign = &b_fn;
+    let mut out_cached = Vec::new();
+    renderer.render(&direct_scene, [(pos, 0u32)].iter(), &mut out_cached);
+    assert_eq!(out_cached.len(), out_a.len());
+    // Bumped `Some(778)` detects `sign_b != sign_a` and updates.
+    direct_scene.sign_revision = Some(778);
+    let mut out_b = Vec::new();
+    renderer.render(&direct_scene, [(pos, 0u32)].iter(), &mut out_b);
+    assert_ne!(out_b.len(), out_a.len());
+    // `None` always compares directly.
+    direct_scene.sign = &a_fn;
+    direct_scene.sign_revision = None;
+    let mut out_none = Vec::new();
+    renderer.render(&direct_scene, [(pos, 0u32)].iter(), &mut out_none);
+    assert_eq!(out_none.len(), out_a.len());
 }

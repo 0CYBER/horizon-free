@@ -9,7 +9,7 @@ use horizon_client::{
         BellEntity, ConduitServer, ConduitTarget, EndGateway, Shulker, ShulkerStatus, Ticker,
         closer_to_center_than,
     },
-    block_entity_render::BlockAnim,
+    block_entity_render::{AnimKind, BlockAnim},
     collisions::{SceneCollisions, no_collision_empty},
     containers::BlockEntity,
     effects::EffectInstance,
@@ -897,25 +897,37 @@ impl Game<'_> {
                 })
             })
     }
+    fn pot_sherds(&self, pos: [i32; 3]) -> [Option<String>; 4] {
+        let sherds = self.saved_tag(pos).and_then(|t| t.get("sherds"));
+        ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
+            // An item id, or the item stack the processed templates hold.
+            Some(Tag::String(id)) => Some(id.to_string_lossy()),
+            Some(stack) => horizon_client::save::item_from_nbt(stack).map(|s| s.item.to_string()),
+            None => None,
+        })
+    }
     /// The renderer's view of the block entity at `pos`, with a decorated
     /// pot's saved `sherds` (back, left, right, front).
     pub(super) fn block_anim(&self, pos: [i32; 3], partial: f32) -> BlockAnim {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let sherds = if &*self.res.facts().get(state).name == "minecraft:decorated_pot" {
-            let sherds = self.saved_tag(pos).and_then(|t| t.get("sherds"));
-            ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
-                // An item id, or the item stack the processed templates hold.
-                Some(Tag::String(id)) => Some(id.to_string_lossy()),
-                Some(stack) => {
-                    horizon_client::save::item_from_nbt(stack).map(|s| s.item.to_string())
-                }
-                None => None,
-            })
+            self.pot_sherds(pos)
         } else {
             Default::default()
         };
         self.be_anims
             .block_anim(pos, self.world.game_time, partial, sherds)
+    }
+    /// Block-entity animation state for a known render `kind`, avoiding `world.block()`,
+    /// `BlockFacts` lookup, and unrelated animation map probes per block entity.
+    pub(super) fn block_anim_for(&self, pos: [i32; 3], kind: AnimKind, partial: f32) -> BlockAnim {
+        let sherds = if kind == AnimKind::DecoratedPot {
+            self.pot_sherds(pos)
+        } else {
+            Default::default()
+        };
+        self.be_anims
+            .block_anim_for(pos, kind, self.world.game_time, partial, sherds)
     }
     /// The client chest ticker, also used when replaying a moved chest.
     pub(super) fn tick_chest_lid(&mut self, pos: [i32; 3]) {
