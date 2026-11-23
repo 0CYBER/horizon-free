@@ -106,6 +106,10 @@ impl BlockStateFile {
         })
     }
 }
+/// The most parts one `multipart` list may hold. Every block state binds its own list of the
+/// parts that apply to it, so a list costs up to (block states) × (parts), and a state meshes
+/// every part it binds. Vanilla's largest is 52 (`chiseled_bookshelf`); vanilla sets no limit.
+pub const MAX_MULTIPART_SELECTORS: usize = 1024;
 fn root(text: &str) -> Result<&RawValue> {
     let raw: &RawValue = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))?;
     validate_number_tokens(raw)?;
@@ -133,6 +137,9 @@ impl BlockStateDefinition {
                 let values = array(v)?;
                 if values.is_empty() {
                     return Err(error("empty multipart list"));
+                }
+                if values.len() > MAX_MULTIPART_SELECTORS {
+                    return Err(error("too many multipart selectors"));
                 }
                 values
                     .into_iter()

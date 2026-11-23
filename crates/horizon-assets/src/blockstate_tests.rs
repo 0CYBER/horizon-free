@@ -124,3 +124,18 @@ fn vanilla_variants_and_multipart_bind_as_before() {
         ]
     );
 }
+
+/// A multipart list may hold up to the limit; one part more refuses the file, so its block
+/// falls back as for any definition that doesn't read.
+#[test]
+fn a_multipart_list_past_the_limit_is_refused() {
+    let file = |parts: usize| {
+        let part = r#"{"apply":{"model":"block/stone"}}"#;
+        format!(r#"{{"multipart":[{}]}}"#, vec![part; parts].join(","))
+    };
+    let limit = super::MAX_MULTIPART_SELECTORS;
+    let definition = BlockStateDefinition::from_json(&file(limit)).unwrap();
+    assert_eq!(definition.multipart.map(|parts| parts.len()), Some(limit));
+    assert!(BlockStateDefinition::from_json(&file(limit + 1)).is_err());
+    assert!(BlockStateFile::from_json(&file(limit + 1)).is_err());
+}
