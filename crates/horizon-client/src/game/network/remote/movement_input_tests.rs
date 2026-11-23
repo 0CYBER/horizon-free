@@ -48,6 +48,15 @@ fn tick(game: &mut Game<'_>) {
     game.tick_local_player(Vec::new(), Vec3::ZERO, 7).unwrap();
 }
 
+/// Lights the column `at` stands in, as a server's arrival lights the one it puts a
+/// player down in: `connect` lights only the origin, while the remote player tick
+/// reaches `Player.tick` only once the player's own column is lit.
+fn light_column(game: &mut Game<'_>, at: Vec3) {
+    let (cx, cz) = ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4);
+    game.streaming
+        .insert_remote(&mut game.world, horizon_client::chunk::Chunk::empty(cx, cz));
+}
+
 fn matrix(mods: mod_api::Mods) {
     mod_platform::testing::with_mods(mods, || {
         with_client_game(|game| {
@@ -303,3 +312,9 @@ fn movement_input_disabled_listener_keeps_vanilla_keys() {
 
 #[path = "local_rotation_tests.rs"]
 mod local_rotation_tests;
+
+#[path = "player_world_edge_tests.rs"]
+mod player_world_edge_tests;
+
+#[path = "player_world_edge_parity_tests.rs"]
+mod player_world_edge_parity_tests;

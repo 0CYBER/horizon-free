@@ -1,0 +1,4 @@
+# The world edge in the player's own tick: Player.tick's X/Z clamp, at the end of Player.tick (#17227).
+# Rows: PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::remote::movement_input_tests::player_world_edge_tests::a_mounted_tick_keeps_the_seat_past_the_world_edge lib daily resources
+horizon-client game::remote::movement_input_tests::player_world_edge_tests::a_spectators_move_across_the_world_edge_stops_on_it lib daily resources

@@ -359,6 +359,16 @@ impl Game<'_> {
                 passenger.passenger_block_effects_tick()?;
             }
         }
+        // Player.tick holds the player at the world's edge after the move: X
+        // and Z clamp, Y does not (Player.java:264-265). A passenger is left
+        // alone: Entity.rideTick runs Player.tick and only then seats the rider
+        // on the vehicle (`Entity.java:2433-2439`), so the seat's position is
+        // what survives the tick, and clamping here would pull a rider off a
+        // seat that legally sits past the edge.
+        if !riding {
+            player.position.x = player.position.x.clamp(-2.9999999E7, 2.9999999E7);
+            player.position.z = player.position.z.clamp(-2.9999999E7, 2.9999999E7);
+        }
         // The server decides fire the window cannot predict (blaze fireballs,
         // fire aspect, lightning): Entity.isOnFire reads the synched flag, so
         // the predicted tick's countdown must not end it while it is set.

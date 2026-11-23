@@ -458,6 +458,14 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::remote::movement_input_tests::player_world_edge_parity_tests::a_tick_from_the_world_edge_lands_like_vanilla",
+    "path": "crates/horizon-client/src/game/network/remote/player_world_edge_parity_tests.rs",
+    "reason": "parity harness: tools/test_player_tick_world_edge_parity.py runs it",
+    "rationale": "The Rust side of the player-tick world-edge parity harness, run by its own driver: python tools/test_player_tick_world_edge_parity.py compiles the vanilla oracle, runs it, then exact-selects this test with --ignored --exact and HORIZON_PLAYER_TICK_TRACE pointing at its trace file, and compares the two JSON outputs case by case. The test writes no trace and asserts nothing without that variable, so daily shards have nothing to run here; the driver runs it wherever the harness runs (the parity job, which a maintainer starts on a fork's pull request, and main's own parity run)."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::interaction_click_parity_tests::a_click_on_a_server_interaction_consumes_like_vanilla",
     "path": "crates/horizon-client/src/game/items/interaction_click_parity_tests.rs",
     "reason": "parity harness: tools/test_interaction_click_parity.py runs it",
