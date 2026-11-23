@@ -60,7 +60,9 @@ horizon-shader-api = { path = "../horizon-shader-api" }
 horizon-narrator = { path = "../horizon-narrator" }
 # Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/modding/src/how-to/content-mods.md).
 # Their runtime is the `mods` feature.
-horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index", "junction"] }
+# Keep `horizon-mod-package` features aligned with `horizon-client` so alternating client and
+# client-lib builds/tests unify the same dependency set and reuse compiled artifacts.
+horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index", "junction", "runtime-process"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
 winit = "0.30.13"
 pollster = "0.4"
