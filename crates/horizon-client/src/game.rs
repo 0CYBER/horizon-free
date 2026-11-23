@@ -961,6 +961,9 @@ struct Game<'a> {
     streaming: Streaming,
     lod: Option<horizon_client::lod::Lod>,
     lod_source_attempted: bool,
+    /// Whether the next far terrain created should arm its world-entry
+    /// first-load hold (`Lod::arm_first_load`).
+    lod_first_load: bool,
     lod_observe: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
     /// The server level far terrain keeps the chunks of.
     lod_level: Option<String>,
@@ -6592,7 +6595,7 @@ impl Game<'_> {
         self.using = None;
         self.set_screen(Screen::Playing);
         self.hide_title();
-        self.clear_lod();
+        self.clear_lod_for_world_entry();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections(self.world.layout());
@@ -6644,6 +6647,7 @@ impl Game<'_> {
         self.clear_entities();
         self.set_screen(Screen::Playing);
         self.clear_lod();
+        self.lod_first_load = false;
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections(self.world.layout());
@@ -10790,6 +10794,7 @@ impl<'a> Game<'a> {
             streaming,
             lod: None,
             lod_source_attempted: false,
+            lod_first_load: false,
             far_beacons: HashMap::new(),
             lod_observe: Default::default(),
             lod_level: None,

@@ -276,7 +276,7 @@ impl Game<'_> {
         self.set_screen(Screen::Playing);
         self.hide_title();
         self.dim = Dim::Overworld;
-        self.clear_lod();
+        self.clear_lod_for_world_entry();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections(self.world.layout());
@@ -542,7 +542,7 @@ impl Game<'_> {
         self.set_screen(Screen::Playing);
         self.title = None;
         self.dim = Dim::Overworld;
-        self.clear_lod();
+        self.clear_lod_for_world_entry();
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections(self.world.layout());
@@ -850,6 +850,7 @@ impl Game<'_> {
         self.set_screen(Screen::Playing);
         self.container = None;
         self.clear_lod();
+        self.lod_first_load = false;
         self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections(self.world.layout());

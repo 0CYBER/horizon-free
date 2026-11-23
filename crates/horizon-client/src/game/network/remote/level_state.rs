@@ -183,7 +183,7 @@ impl Game<'_> {
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
-            self.clear_lod();
+            self.clear_lod_for_world_entry();
             self.pending_uploads.clear();
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_sections(self.world.layout());

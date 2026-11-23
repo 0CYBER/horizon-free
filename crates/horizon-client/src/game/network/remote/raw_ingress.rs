@@ -215,7 +215,7 @@ impl Game<'_> {
                         remote.quiet_commands = false;
                         remote.custom_books = false;
                     }
-                    self.clear_lod();
+                    self.clear_lod_for_world_entry();
                     if let Some(remote) = &self.remote {
                         remote.session.reset_far_terrain();
                     }
