@@ -81,6 +81,9 @@ GUEST_HOOK_CALL = re.compile(r"\blet answer = receiver\.([a-zA-Z0-9_]+)\(")
 WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
 # A guest forwarder's host call: the import's name (with its signature hash) and the generator's position number for it.
 HOST_IMPORT = re.compile(r'host_import!\("([^"]+)", \d+u32')
+# A guest stub for a host call that has no wasm import (e.g. native-only methods guarded by cfg(not(wasm32))).
+GUEST_UNSUPPORTED = re.compile(r'^fn [a-zA-Z0-9_]+.*\{ crate::wire::guest::unsupported\("([^"]+)"\) \}\r?\n\Z')
+NATIVE_ONLY_CFG = '#[cfg(not(target_arch = "wasm32"))]'
 
 # The guest implementation of an area trait begins on its own line and each forwarder occupies one line.
 GUEST_HOST_IMPL = re.compile(r"^impl (?:\w+\s*::\s*)*\w+ for Guest \{\n", re.MULTILINE)
@@ -243,6 +246,11 @@ def guest_wire_without_calls(guest, base):
     with the game. An added call takes a position, so every later import's number moves by one. A changed or removed
     call loses its base name, and the base's forwarder for it is then missing from the head."""
     known = set(HOST_IMPORT.findall(base))
+    known_unsupported = {
+        match.group(1)
+        for line in base.splitlines(keepends=True)
+        if (match := GUEST_UNSUPPORTED.match(line))
+    }
     known_impls = set(GUEST_HOST_IMPL.findall(base))
     kept, added = [], set()
     new_impl, removed_forwarder = None, False
@@ -255,6 +263,13 @@ def guest_wire_without_calls(guest, base):
             if len(names) != 1:
                 return None, None, set()
             added.add(names[0])
+            if new_impl is not None:
+                removed_forwarder = True
+            continue
+        if not names and (stub := GUEST_UNSUPPORTED.match(line)) and stub.group(1) not in known_unsupported:
+            if kept and kept[-1].rstrip("\r\n") == NATIVE_ONLY_CFG:
+                kept.pop()
+            added.add(stub.group(1))
             if new_impl is not None:
                 removed_forwarder = True
             continue

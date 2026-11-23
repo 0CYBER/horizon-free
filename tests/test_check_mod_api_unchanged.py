@@ -453,6 +453,26 @@ class CompareTests(unittest.TestCase):
                 status, text = self.run_compare(base, {"hook-notes.md": NOTES, **files}, allow_added=True)
                 self.assertEqual(status, 1, text)
 
+    def test_an_added_native_only_unsupported_stub_passes_with_the_flag(self):
+        stub = ('#[cfg(not(target_arch = "wasm32"))]\n'
+                'fn tool_break_block(&mut self, p0: u32) -> bool '
+                '{ crate::wire::guest::unsupported("BackendMut::tool_break_block") }\n')
+        existing_stub = ('#[cfg(not(target_arch = "wasm32"))]\n'
+                         'fn existing_native(&self) -> bool '
+                         '{ crate::wire::guest::unsupported("BackendMut::existing_native") }\n')
+        base_wire = self.forwarders(self.BASE_CALLS).replace("\n}\n", "\n" + existing_stub + "}\n", 1)
+        head_wire = base_wire.replace("\n}\n", "\n" + stub + "}\n", 1)
+        status, text = self.run_compare({"wire_guest_generated.rs": base_wire},
+                                        {"wire_guest_generated.rs": head_wire}, allow_added=True)
+        self.assertEqual(status, 0, text)
+        self.assertIn("Host calls added (accepted): BackendMut::tool_break_block", text)
+        self.assertEqual(self.run_compare({"wire_guest_generated.rs": base_wire},
+                                          {"wire_guest_generated.rs": head_wire}, allow_added=False)[0], 1)
+        # Editing an existing unsupported stub still fails.
+        edited = head_wire.replace("fn existing_native(&self) -> bool", "fn existing_native(&self) -> u32")
+        self.assertEqual(self.run_compare({"wire_guest_generated.rs": base_wire},
+                                          {"wire_guest_generated.rs": edited}, allow_added=True)[0], 1)
+
     def test_a_loops_json_difference_fails_with_the_flag(self):
         status, _ = self.run_compare({"loops.json": NO_LOOPS}, {"loops.json": json.dumps({"loops": [], "x": 1})}, allow_added=True)
         self.assertEqual(status, 1)
