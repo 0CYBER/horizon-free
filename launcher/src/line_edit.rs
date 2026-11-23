@@ -437,11 +437,28 @@ fn pasted(clipboard: &str) -> &str {
     clipboard.lines().next().unwrap_or_default()
 }
 
+/// Windows reports AltGr as Ctrl plus Alt: the system presses a left Control in front of the
+/// right Alt.
+pub(super) const ALTGR_IS_CTRL_ALT: bool = cfg!(windows);
+
+/// Whether a key press is AltGr typing a character where AltGr is Ctrl plus Alt: `@`, `{` or `€`
+/// on a German layout, `ą` or `ł` on a Polish one. It is text, not a Ctrl shortcut; the game's
+/// text fields read it the same way (`types_text` in horizon-client-input). Ctrl+Alt on a key
+/// that gives no character (an English layout) stays a shortcut.
+pub(super) fn altgr_text(
+    modifiers: &gpui::Modifiers,
+    key_char: Option<&str>,
+    altgr_is_ctrl_alt: bool,
+) -> bool {
+    altgr_is_ctrl_alt && modifiers.control && modifiers.alt && key_char.is_some()
+}
+
 /// The keyboard in a field: moves the caret, edits, copies and pastes. Never returns Paste, Copy
 /// or Cut (they are done); Enter, Escape and Pass are the page's.
 pub(super) fn handle(edit: &mut LineEdit, ev: &KeyDownEvent, cx: &mut App) -> Key {
     let k = &ev.keystroke;
-    let command = k.modifiers.control || k.modifiers.platform;
+    let command = (k.modifiers.control || k.modifiers.platform)
+        && !altgr_text(&k.modifiers, k.key_char.as_deref(), ALTGR_IS_CTRL_ALT);
     match edit.key(&k.key, k.key_char.as_deref(), command, k.modifiers.shift) {
         Key::Paste => {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
@@ -730,5 +747,31 @@ mod tests {
         e.key("home", None, false, false);
         assert_eq!(e.view(false).2.chars().count(), 38);
         assert_eq!(e.view(true).1.chars().count(), 38);
+    }
+
+    /// Windows reports AltGr as Ctrl plus Alt. A key that gives a character with it types that
+    /// character: Polish AltGr+A is `ą`, not Select All, and German AltGr+Q is `@`.
+    #[test]
+    fn altgr_types_its_character_instead_of_running_a_shortcut() {
+        let altgr = gpui::Modifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        };
+        let ctrl = gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        // Ctrl+Alt with no character, Ctrl alone, and Ctrl+Alt where AltGr is a key of its own
+        // stay shortcuts.
+        assert!(!altgr_text(&altgr, None, true));
+        assert!(!altgr_text(&ctrl, Some("c"), true));
+        assert!(!altgr_text(&altgr, Some("ą"), false));
+        let mut e = edit("ab");
+        for (key, ch) in [("a", "ą"), ("c", "ć"), ("x", "ź"), ("z", "ż"), ("q", "@")] {
+            let command = !altgr_text(&altgr, Some(ch), true);
+            assert_eq!(e.key(key, Some(ch), command, false), Key::Edited, "{ch}");
+        }
+        assert_eq!(e.text(), "abąćźż@");
     }
 }

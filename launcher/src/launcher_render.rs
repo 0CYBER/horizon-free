@@ -251,6 +251,11 @@ impl Render for Launcher {
                     k.modifiers.platform
                 } else {
                     k.modifiers.control
+                        && !line_edit::altgr_text(
+                            &k.modifiers,
+                            k.key_char.as_deref(),
+                            line_edit::ALTGR_IS_CTRL_ALT,
+                        )
                 };
                 if this.theme.glass && command && !k.modifiers.shift && k.key == "k" {
                     this.palette_toggle(window, cx);
