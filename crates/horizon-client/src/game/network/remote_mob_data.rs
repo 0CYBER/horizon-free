@@ -171,6 +171,11 @@ pub(super) fn apply(
                 m.extra.sitting_pose = flags & 1 != 0;
                 m.extra.tame = flags & 4 != 0;
             }
+            // TamableAnimal.DATA_OWNERUUID_ID: the owner follows its flags.
+            // An empty value clears the cached owner on the client.
+            (Species::Wolf | Species::Cat | Species::Parrot, 19, Value::OptUuid(owner)) => {
+                m.extra.owner = owner.map(horizon_client::lan::playerdata::uuid_ints);
+            }
             // Cat.IS_LYING and RELAX_STATE_ONE.
             (Species::Cat, 21, Value::Bool(lying)) => m.extra.flag = *lying,
             (Species::Cat, 22, Value::Bool(relaxing)) => m.extra.relax_one = *relaxing,
@@ -551,6 +556,9 @@ mod tests {
             "minecraft:ravager" => Species::Ravager,
             "minecraft:zombie" => Species::Zombie,
             "minecraft:enderman" => Species::Enderman,
+            "minecraft:wolf" => Species::Wolf,
+            "minecraft:cat" => Species::Cat,
+            "minecraft:parrot" => Species::Parrot,
             _ => panic!("unknown fixture species"),
         };
         // Metadata needs no AI or model. Avoid the resource loader, which also
@@ -1265,6 +1273,26 @@ mod tests {
         );
         assert!(m.extra.tame && m.extra.sitting_pose);
         assert_eq!(m.extra.color, 11);
+    }
+
+    #[test]
+    fn tame_owner_metadata_sets_and_clears_the_client_owner() {
+        let uuid = 0x0000_0001_0000_0002_0000_0003_0000_0004;
+        let expected = Some(horizon_client::lan::playerdata::uuid_ints(uuid));
+        for kind in ["minecraft:wolf", "minecraft:cat", "minecraft:parrot"] {
+            let mut mob = fixture_mob(kind);
+            apply(
+                &mut mob,
+                &[(19, s::OPTIONAL_LIVING_ENTITY_REFERENCE, Value::OptUuid(Some(uuid)))],
+            );
+            assert_eq!(mob.extra.owner, expected, "{kind} receives its owner");
+
+            apply(
+                &mut mob,
+                &[(19, s::OPTIONAL_LIVING_ENTITY_REFERENCE, Value::OptUuid(None))],
+            );
+            assert_eq!(mob.extra.owner, None, "{kind} clears a removed owner");
+        }
     }
 
     /// Wolf.DATA_INTERESTED_ID: the begging flag reaches the client, whose

@@ -531,6 +531,7 @@ pub(super) fn mob_meta_sync(
             defaults.push((19, serializer::BYTE, Value::Byte(0)));
         }
         "minecraft:parrot" => {
+            tame_owner_meta(e.owner, meta, defaults);
             // TamableAnimal.DATA_FLAGS_ID: in the sitting pose 1, tame 4.
             let flags = i8::from(e.sitting_pose) | if e.tame { 4 } else { 0 };
             if flags != 0 {
@@ -538,6 +539,7 @@ pub(super) fn mob_meta_sync(
             }
         }
         "minecraft:cat" | "minecraft:wolf" => {
+            tame_owner_meta(e.owner, meta, defaults);
             // TamableAnimal.DATA_FLAGS_ID: in the sitting pose 1, tame 4.
             let flags = i8::from(e.sitting_pose) | if e.tame { 4 } else { 0 };
             if flags != 0 {
@@ -988,6 +990,27 @@ pub(super) fn mob_meta_sync(
         }
         defaults.push((20, serializer::LONG, Value::Long(0)));
     }
+}
+
+/// `TamableAnimal.DATA_OWNERUUID_ID`: the owner reference follows the flags
+/// for parrots, cats and wolves and defaults to an empty optional value.
+fn tame_owner_meta(
+    owner: Option<[i32; 4]>,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if let Some(owner) = owner {
+        meta.push((
+            19,
+            serializer::OPTIONAL_LIVING_ENTITY_REFERENCE,
+            Value::OptUuid(Some(playerdata::ints_uuid(owner))),
+        ));
+    }
+    defaults.push((
+        19,
+        serializer::OPTIONAL_LIVING_ENTITY_REFERENCE,
+        Value::OptUuid(None),
+    ));
 }
 
 /// AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two): the head
@@ -4395,6 +4418,49 @@ mod tests {
             meta.contains(&(13, serializer::INT, Value::Int(2))),
             "{meta:?}"
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn tamable_owner_is_sent_and_can_be_cleared() {
+        let hub = meta_hub("TamableOwnerMetaTest");
+        let owner = [1, 2, 3, 4];
+        let expected = Value::OptUuid(Some(0x00000001000000020000000300000004));
+        for kind in ["minecraft:parrot", "minecraft:cat", "minecraft:wolf"] {
+            let mut mob = mob_of(kind)
+                .unwrap_or_else(|| panic!("prepared mob data missing for {kind}"));
+            mob.extra.tame = true;
+            mob.extra.owner = Some(owner);
+            let metadata = |mob: &Mob| {
+                let (mut meta, mut defaults) = (Vec::new(), Vec::new());
+                super::mob_meta(mob, &hub, None, 0, &mut meta, &mut defaults);
+                (meta, defaults)
+            };
+
+            let (meta, defaults) = metadata(&mob);
+            assert!(
+                meta.contains(&(
+                    19,
+                    serializer::OPTIONAL_LIVING_ENTITY_REFERENCE,
+                    expected.clone(),
+                )),
+                "{kind}: {meta:?}"
+            );
+            assert!(defaults.contains(&(
+                19,
+                serializer::OPTIONAL_LIVING_ENTITY_REFERENCE,
+                Value::OptUuid(None)
+            )));
+
+            mob.extra.owner = None;
+            let (meta, defaults) = metadata(&mob);
+            assert!(meta.iter().all(|entry| entry.0 != 19), "{kind}: {meta:?}");
+            assert!(defaults.contains(&(
+                19,
+                serializer::OPTIONAL_LIVING_ENTITY_REFERENCE,
+                Value::OptUuid(None)
+            )));
+        }
     }
 
     /// A mod's custom name and its visibility reach the tracking players
