@@ -13,7 +13,15 @@ use crate::{
     zip::Zip,
 };
 use ab_glyph::{Font as _, ScaleFont as _};
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 
 /// `FontDescription.DEFAULT`.
 pub const DEFAULT: &str = "minecraft:default";
@@ -65,9 +73,142 @@ impl Filter {
         self.uniform.is_none_or(|v| v == uniform) && self.jp.is_none_or(|v| v == japanese)
     }
 }
+/// Target raw byte ceiling and max cell count per off-atlas bitmap strip chunk:
+/// large cells (e.g. 64×64 = 16 KiB) sit in single-cell strips so cold lookups never
+/// decompress a whole row, while smaller cells batch up to 8 cells (<= 8 KiB) for
+/// LZ4 ratio and are reused through [`StripCache`].
+const SHEET_CHUNK_RAW_BYTES: usize = 8 * 1024;
+const SHEET_CHUNK_MAX_CELLS: usize = 8;
+/// Strips at or below this size stay uncompressed: LZ4 decode overhead does not pay
+/// off for tiny strips.
+const SHEET_STRIP_MIN_COMPRESS_BYTES: usize = 512;
+
+fn next_strip_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+/// Shared metadata for all strips cut from one off-atlas bitmap sheet so a decode
+/// failure names the sheet and warns at most once.
+struct SheetInfo {
+    file: Box<str>,
+    decode_warned: AtomicBool,
+}
+impl SheetInfo {
+    fn new(file: &str) -> Self {
+        Self {
+            file: Box::from(file),
+            decode_warned: AtomicBool::new(false),
+        }
+    }
+    fn warn_decode_once(&self, detail: impl std::fmt::Display) {
+        if !self.decode_warned.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                "font sheet {} strip could not be decompressed ({detail})",
+                self.file
+            );
+        }
+    }
+}
+enum StripPixels {
+    Raw(Vec<u8>),
+    Lz4 { len: usize, compressed: Vec<u8> },
+}
+impl StripPixels {
+    fn from_raw(raw: Cow<'_, [u8]>) -> Self {
+        let len = raw.len();
+        if len > SHEET_STRIP_MIN_COMPRESS_BYTES {
+            let mut compressed = lz4_flex::block::compress(raw.as_ref());
+            if compressed.len() < len {
+                compressed.shrink_to_fit();
+                return Self::Lz4 { len, compressed };
+            }
+        }
+        Self::Raw(raw.into_owned())
+    }
+}
+/// One horizontal cell chunk of an off-atlas bitmap font sheet, LZ4-compressed when
+/// compression shrinks it so custom HUD/font packs do not keep megabytes of raw RGBA
+/// sheets in RAM.
+struct SheetStrip {
+    id: u64,
+    info: Arc<SheetInfo>,
+    stride: u32,
+    cacheable: bool,
+    pixels: StripPixels,
+}
+impl SheetStrip {
+    fn new(info: Arc<SheetInfo>, stride: u32, raw: Cow<'_, [u8]>, cacheable: bool) -> Self {
+        Self {
+            id: next_strip_id(),
+            info,
+            stride,
+            cacheable,
+            pixels: StripPixels::from_raw(raw),
+        }
+    }
+    fn decompress(&self) -> Vec<u8> {
+        match &self.pixels {
+            StripPixels::Raw(raw) => raw.clone(),
+            StripPixels::Lz4 { len, compressed } => {
+                let expected = *len;
+                #[cfg(test)]
+                tests::record_strip_decoded(expected);
+                let mut out = vec![0; expected];
+                match lz4_flex::block::decompress_into(compressed, &mut out) {
+                    Ok(decoded) if decoded == expected => out,
+                    Ok(decoded) => {
+                        self.info.warn_decode_once(format_args!(
+                            "decoded {decoded} bytes, expected {expected}"
+                        ));
+                        out.fill(0);
+                        out
+                    }
+                    Err(err) => {
+                        self.info.warn_decode_once(err);
+                        out.fill(0);
+                        out
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(test)]
+    fn stored_bytes(&self) -> usize {
+        match &self.pixels {
+            StripPixels::Raw(raw) => raw.len(),
+            StripPixels::Lz4 { compressed, .. } => compressed.len(),
+        }
+    }
+}
+/// Bounded MRU cache of recently decompressed multi-cell off-atlas bitmap strips so
+/// resolving neighboring cells in the same chunk avoids repeated LZ4 decompression.
+#[derive(Default)]
+struct StripCache {
+    entries: Vec<(u64, Vec<u8>)>,
+}
+impl StripCache {
+    const MAX_ENTRIES: usize = 8;
+    fn get_or_decode(&mut self, strip: &SheetStrip) -> &[u8] {
+        if let Some(pos) = self.entries.iter().position(|(id, _)| *id == strip.id) {
+            if pos != 0 {
+                self.entries[..=pos].rotate_right(1);
+            }
+            return &self.entries[0].1;
+        }
+        let raw = strip.decompress();
+        if self.entries.len() == Self::MAX_ENTRIES {
+            self.entries.pop();
+        }
+        self.entries.insert(0, (strip.id, raw));
+        &self.entries[0].1
+    }
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
 /// A bitmap glyph whose sheet is not in the atlas: the cell to copy.
 struct SheetCell {
-    sheet: Arc<(u32, Vec<u8>)>,
+    sheet: Arc<SheetStrip>,
     x: u32,
     y: u32,
     w: u32,
@@ -75,17 +216,40 @@ struct SheetCell {
     glyph: Glyph,
 }
 impl SheetCell {
-    /// The cell's RGBA rows, or `None` where the cell reaches past the sheet.
-    fn pixels(&self) -> Option<Vec<u8>> {
-        let (stride, pixels) = (self.sheet.0 as usize, &self.sheet.1);
-        let (x, w) = (self.x as usize, self.w as usize);
-        if x + w > stride {
+    /// The cell's RGBA rows, or `None` where the cell reaches past the strip,
+    /// reusing recently decompressed multi-cell strips via `strips`.
+    fn pixels(&self, strips: &mut StripCache) -> Option<Vec<u8>> {
+        match &self.sheet.pixels {
+            StripPixels::Raw(raw) => self.extract_pixels(raw),
+            StripPixels::Lz4 { .. } => {
+                if self.sheet.cacheable {
+                    let raw = strips.get_or_decode(&self.sheet);
+                    self.extract_pixels(raw)
+                } else {
+                    let raw = self.sheet.decompress();
+                    self.extract_pixels(&raw)
+                }
+            }
+        }
+    }
+    fn extract_pixels(&self, pixels: &[u8]) -> Option<Vec<u8>> {
+        let stride = self.sheet.stride as usize;
+        let x = self.x as usize;
+        let y = self.y as usize;
+        let w = self.w as usize;
+        let h = self.h as usize;
+        if x.checked_add(w)? > stride {
             return None;
         }
-        let mut rgba = Vec::with_capacity(w * self.h as usize * 4);
-        for y in self.y as usize..(self.y + self.h) as usize {
-            let at = (y * stride + x) * 4;
-            rgba.extend_from_slice(pixels.get(at..at + w * 4)?);
+        let row_bytes = w.checked_mul(4)?;
+        let mut rgba = Vec::with_capacity(row_bytes.checked_mul(h)?);
+        for dy in 0..h {
+            let at = y
+                .checked_add(dy)?
+                .checked_mul(stride)?
+                .checked_add(x)?
+                .checked_mul(4)?;
+            rgba.extend_from_slice(pixels.get(at..at.checked_add(row_bytes)?)?);
         }
         Some(rgba)
     }
@@ -134,6 +298,7 @@ struct Cache {
     /// Every font by id, the default one first (the common lookup).
     sets: Vec<(String, FontSet)>,
     region: Region,
+    strips: StripCache,
     /// `Font.random`: picks obfuscated glyphs.
     random: horizon_core::random::LegacyRandom,
 }
@@ -407,7 +572,7 @@ fn load_bitmap(
             .map_err(Into::into)
             .and_then(|bytes| crate::hud::decode_bytes(&bytes))
         {
-            Ok((w, h, rgba)) => (w, h, Some(Arc::new((w, rgba)))),
+            Ok((w, h, rgba)) => (w, h, Some((w, rgba))),
             Err(_) => {
                 log::warn!("font sheet {file} could not be read");
                 return out;
@@ -444,7 +609,16 @@ fn load_bitmap(
             (rect.v0 * atlas.1 as f32).round() as u32,
         )
     });
+    let cell_bytes = (cell_w as usize)
+        .saturating_mul(cell_h as usize)
+        .saturating_mul(4);
+    let chunk_cols = (SHEET_CHUNK_RAW_BYTES / cell_bytes.max(1)).clamp(1, SHEET_CHUNK_MAX_CELLS);
+    let mut sheet_info: Option<Arc<SheetInfo>> = None;
     for (r, row) in rows.iter().enumerate() {
+        // Horizontal cell chunks per row: large cells stay single-cell strips so
+        // cold lookups never decompress a whole row, while smaller cells batch up
+        // to `SHEET_CHUNK_MAX_CELLS` (<= `SHEET_CHUNK_RAW_BYTES`) for LZ4 ratio.
+        let mut row_strip: Option<(usize, Arc<SheetStrip>)> = None;
         for (c, ch) in row.iter().enumerate() {
             // Character 0 pads the grid. A character listed twice keeps its
             // last cell, as vanilla's `Map.put` does.
@@ -453,7 +627,7 @@ fn load_bitmap(
             }
             let (x, y) = (c as u32 * cell_w, r as u32 * cell_h);
             let used = match &sheet {
-                Some(s) => used_width(&s.1, s.0, (x, y, cell_w, cell_h)),
+                Some((stride, rgba)) => used_width(rgba, *stride, (x, y, cell_w, cell_h)),
                 None => used_width(
                     pixels,
                     atlas.0,
@@ -486,14 +660,57 @@ fn load_bitmap(
                     )),
                     ..glyph
                 }),
-                Some(s) => BitmapGlyph::Sheet(SheetCell {
-                    sheet: s.clone(),
-                    x,
-                    y,
-                    w: cell_w,
-                    h: cell_h,
-                    glyph,
-                }),
+                Some((stride, rgba)) => {
+                    let chunk_start_col = (c / chunk_cols) * chunk_cols;
+                    let cached = row_strip
+                        .as_ref()
+                        .filter(|(start, _)| *start == chunk_start_col)
+                        .map(|(_, strip)| Arc::clone(strip));
+                    let strip = cached.unwrap_or_else(|| {
+                        let chunk_end_col = (chunk_start_col + chunk_cols).min(row.len());
+                        let chunk_x = chunk_start_col as u32 * cell_w;
+                        let chunk_stride = (chunk_end_col - chunk_start_col) as u32 * cell_w;
+                        let raw = if chunk_start_col == 0 && chunk_stride == *stride {
+                            let start = (y as usize) * (*stride as usize) * 4;
+                            let end = ((y + cell_h) as usize) * (*stride as usize) * 4;
+                            Cow::Borrowed(rgba.get(start..end).unwrap_or_default())
+                        } else {
+                            let row_bytes = chunk_stride as usize * 4;
+                            let mut buf = Vec::with_capacity(row_bytes * cell_h as usize);
+                            for dy in 0..cell_h {
+                                let src = (((y + dy) as usize) * (*stride as usize)
+                                    + chunk_x as usize)
+                                    * 4;
+                                if let Some(line) = src
+                                    .checked_add(row_bytes)
+                                    .and_then(|end| rgba.get(src..end))
+                                {
+                                    buf.extend_from_slice(line);
+                                }
+                            }
+                            Cow::Owned(buf)
+                        };
+                        let active_cells = row[chunk_start_col..chunk_end_col]
+                            .iter()
+                            .filter(|&&cell_ch| cell_ch != '\0')
+                            .count();
+                        let info = Arc::clone(
+                            sheet_info.get_or_insert_with(|| Arc::new(SheetInfo::new(file))),
+                        );
+                        let strip =
+                            Arc::new(SheetStrip::new(info, chunk_stride, raw, active_cells > 1));
+                        row_strip = Some((chunk_start_col, Arc::clone(&strip)));
+                        strip
+                    });
+                    BitmapGlyph::Sheet(SheetCell {
+                        sheet: strip,
+                        x: (c - chunk_start_col) as u32 * cell_w,
+                        y: 0,
+                        w: cell_w,
+                        h: cell_h,
+                        glyph,
+                    })
+                }
             };
             out.insert(*ch, glyph);
         }
@@ -804,6 +1021,7 @@ impl Font {
                     pending: Vec::new(),
                     full: false,
                 },
+                strips: StripCache::default(),
                 // `Font.random`: `RandomSource.create()`.
                 random: crate::random_source::create(),
             }),
@@ -881,6 +1099,7 @@ impl Font {
         cache.region.cursor = (0, 0);
         cache.region.row = 0;
         cache.region.full = false;
+        cache.strips.clear();
         self.generation.set(next_generation());
     }
     /// Call once per frame before any text is laid out. When the dynamic
@@ -919,7 +1138,12 @@ impl Font {
     /// The first active provider's glyph, else the missing glyph.
     fn glyph_of(&self, id: &str, c: char) -> Glyph {
         let mut cache = self.cache.borrow_mut();
-        let Cache { sets, region, .. } = &mut *cache;
+        let Cache {
+            sets,
+            region,
+            strips,
+            ..
+        } = &mut *cache;
         // FontManager.getFontSetRaw: a font that doesn't exist draws every
         // character as the missing glyph.
         let Some((_, set)) = sets.iter_mut().find(|(k, _)| k == id) else {
@@ -929,7 +1153,7 @@ impl Font {
             return *g;
         }
         let was_full = std::mem::replace(&mut region.full, false);
-        let found = self.resolve(set, region, c, false);
+        let found = self.resolve(set, region, strips, c, false);
         // No room: the missing glyph for now, not remembered, so the
         // character is tried again once `begin_frame` cleared the region.
         let overflowed = std::mem::replace(&mut region.full, was_full);
@@ -950,7 +1174,12 @@ impl Font {
             return any;
         }
         let mut cache = self.cache.borrow_mut();
-        let Cache { sets, region, .. } = &mut *cache;
+        let Cache {
+            sets,
+            region,
+            strips,
+            ..
+        } = &mut *cache;
         let Some((_, set)) = sets.iter_mut().find(|(k, _)| k == id) else {
             return self.missing;
         };
@@ -958,7 +1187,7 @@ impl Font {
             return *g;
         }
         let was_full = std::mem::replace(&mut region.full, false);
-        let found = self.resolve(set, region, c, true);
+        let found = self.resolve(set, region, strips, c, true);
         let overflowed = std::mem::replace(&mut region.full, was_full);
         region.full |= overflowed;
         if overflowed {
@@ -972,6 +1201,7 @@ impl Font {
         &self,
         set: &mut FontSet,
         region: &mut Region,
+        strips: &mut StripCache,
         c: char,
         non_fishy: bool,
     ) -> Option<Glyph> {
@@ -1001,7 +1231,7 @@ impl Font {
                         Some(BitmapGlyph::Sheet(cell))
                             if !(non_fishy && fishy_advance(cell.glyph.advance)) =>
                         {
-                            let Some(rgba) = cell.pixels() else {
+                            let Some(rgba) = cell.pixels(strips) else {
                                 continue;
                             };
                             let (x, y) =
@@ -1490,6 +1720,19 @@ fn split_at(parts: &mut Vec<(Vec<char>, Span)>, at: usize, skip: usize, style: &
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    thread_local! {
+        static STRIP_DECODED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    pub(super) fn record_strip_decoded(bytes: usize) {
+        STRIP_DECODED_BYTES.with(|total| total.set(total.get().saturating_add(bytes)));
+    }
+    fn measure_decoded_bytes<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        STRIP_DECODED_BYTES.with(|total| total.set(0));
+        let out = f();
+        let decoded = STRIP_DECODED_BYTES.with(std::cell::Cell::get);
+        (out, decoded)
+    }
     #[test]
     fn unihex_rows_and_widths() {
         let mut out = HashMap::new();
@@ -2230,5 +2473,463 @@ mod tests {
         assert!(font.glyph('z').rect.is_none());
         font.begin_frame();
         assert_eq!(font.epoch(), epoch);
+    }
+
+    fn rgba_png(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(pixels)
+            .unwrap();
+        out
+    }
+
+    fn cell_rgba(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for dy in 0..h {
+            let start = (((y + dy) * stride + x) * 4) as usize;
+            out.extend_from_slice(&pixels[start..start + (w * 4) as usize]);
+        }
+        out
+    }
+
+    fn off_atlas_strip_bytes(font: &Font) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        let mut total = 0;
+        for (_, set) in &font.cache.borrow().sets {
+            for provider in &set.providers {
+                if let Provider::Bitmap(_, glyphs) = provider {
+                    for glyph in glyphs.values() {
+                        if let BitmapGlyph::Sheet(cell) = glyph
+                            && seen.insert(cell.sheet.id)
+                        {
+                            total += cell.sheet.stored_bytes();
+                        }
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn off_atlas_bitmap_strips_upload_exact_pixels_and_bound_decoded_work() {
+        // Large-cell sheet: 8x2 grid of 64x64 cells (512x128 = 256 KiB raw).
+        let (large_w, large_h) = (512u32, 128u32);
+        let mut large_pixels = vec![0u8; (large_w * large_h * 4) as usize];
+        for y in 0..large_h {
+            for x in 0..large_w {
+                let col = x / 64;
+                let row = y / 64;
+                let lx = x % 64;
+                let ly = y % 64;
+                let px = if (4..60).contains(&lx) && (4..60).contains(&ly) {
+                    [
+                        (col * 29 + 17) as u8,
+                        (row * 71 + 43) as u8,
+                        ((row * 8 + col) * 13 + 9) as u8,
+                        255,
+                    ]
+                } else if (lx, ly) == (0, 0) {
+                    [row as u8, col as u8, 1, 255]
+                } else if (lx, ly) == (63, 63) {
+                    [row as u8, col as u8, 2, 255]
+                } else {
+                    [0, 0, 0, 0]
+                };
+                let at = ((y * large_w + x) * 4) as usize;
+                large_pixels[at..at + 4].copy_from_slice(&px);
+            }
+        }
+        let large_png = rgba_png(large_w, large_h, &large_pixels);
+        let large_def = br#"{"providers":[{"type":"bitmap","file":"pack:font/large.png","height":64,"ascent":7,"chars":["abcdefgh","ijklmnop"]}]}"#;
+        let large_root = root(
+            "strips-large",
+            &[
+                ("assets/minecraft/font/default.json", large_def),
+                ("assets/pack/textures/font/large.png", &large_png),
+            ],
+        );
+        let font = load(&large_root);
+        let _ = std::fs::remove_dir_all(&large_root);
+
+        let raw_large_bytes = (large_w * large_h * 4) as usize;
+        let stored_large = off_atlas_strip_bytes(&font);
+        assert!(
+            stored_large < raw_large_bytes / 2,
+            "expected LZ4-compressed strips to shrink large sheet ({stored_large} vs {raw_large_bytes})"
+        );
+
+        let (patches, decoded_pass1) = measure_decoded_bytes(|| {
+            for ch in "abcdefghijklmnop".chars() {
+                assert!(font.glyph(ch).rect.is_some(), "glyph {ch} missing");
+            }
+            font.take_patches()
+        });
+        assert_eq!(patches.len(), 16);
+        for (idx, patch) in patches.iter().enumerate() {
+            let row = (idx / 8) as u32;
+            let col = (idx % 8) as u32;
+            assert_eq!((patch.width, patch.height), (64, 64));
+            assert_eq!(
+                patch.rgba,
+                cell_rgba(&large_pixels, large_w, col * 64, row * 64, 64, 64),
+                "large cell ({row}, {col}) mismatch on pass 1"
+            );
+        }
+        assert!(
+            decoded_pass1 <= raw_large_bytes,
+            "resolving all 16 large cells decoded {decoded_pass1} bytes > {raw_large_bytes}"
+        );
+
+        // Cache reset re-uploads identical pixels with bounded decoded work.
+        font.reset_cache();
+        let (patches2, decoded_pass2) = measure_decoded_bytes(|| {
+            for ch in "abcdefghijklmnop".chars() {
+                assert!(font.glyph(ch).rect.is_some(), "glyph {ch} missing");
+            }
+            font.take_patches()
+        });
+        assert_eq!(patches2.len(), 16);
+        for (idx, patch) in patches2.iter().enumerate() {
+            let row = (idx / 8) as u32;
+            let col = (idx % 8) as u32;
+            assert_eq!((patch.width, patch.height), (64, 64));
+            assert_eq!(
+                patch.rgba,
+                cell_rgba(&large_pixels, large_w, col * 64, row * 64, 64, 64),
+                "large cell ({row}, {col}) mismatch on pass 2"
+            );
+        }
+        assert!(
+            decoded_pass2 <= raw_large_bytes,
+            "re-resolving all 16 large cells decoded {decoded_pass2} bytes > {raw_large_bytes}"
+        );
+
+        // A single cold large-cell lookup must not decompress the whole row.
+        font.reset_cache();
+        let (single_patches, decoded_single) = measure_decoded_bytes(|| {
+            assert!(font.glyph('d').rect.is_some());
+            font.take_patches()
+        });
+        assert_eq!(single_patches.len(), 1);
+        assert_eq!(
+            single_patches[0].rgba,
+            cell_rgba(&large_pixels, large_w, 3 * 64, 0, 64, 64)
+        );
+        assert!(
+            decoded_single <= 64 * 64 * 4,
+            "single large cell decoded {decoded_single} bytes > {}",
+            64 * 64 * 4
+        );
+
+        // Small-cell sheet: 8x10 grid of 16x16 cells (128x160 = 80 KiB raw).
+        // Interleaving two rows exercises MRU promotion; walking 10 rows exercises eviction.
+        let (small_w, small_h) = (128u32, 160u32);
+        let mut small_pixels = vec![0u8; (small_w * small_h * 4) as usize];
+        for y in 0..small_h {
+            for x in 0..small_w {
+                let col = x / 16;
+                let row = y / 16;
+                let lx = x % 16;
+                let ly = y % 16;
+                let px = if (2..14).contains(&lx) && (2..14).contains(&ly) {
+                    [
+                        (row * 23 + 11) as u8,
+                        (col * 31 + 5) as u8,
+                        ((row * 8 + col) * 7 + 3) as u8,
+                        255,
+                    ]
+                } else if (lx, ly) == (0, 0) {
+                    [row as u8, col as u8, 3, 255]
+                } else if (lx, ly) == (15, 15) {
+                    [row as u8, col as u8, 4, 255]
+                } else {
+                    [0, 0, 0, 0]
+                };
+                let at = ((y * small_w + x) * 4) as usize;
+                small_pixels[at..at + 4].copy_from_slice(&px);
+            }
+        }
+        let small_png = rgba_png(small_w, small_h, &small_pixels);
+        let small_rows: Vec<String> = (0..10u32)
+            .map(|row| {
+                (0..8u32)
+                    .map(|col| char::from_u32(0xE000 + row * 8 + col).unwrap())
+                    .collect()
+            })
+            .collect();
+        let small_def = serde_json::json!({
+            "providers": [{
+                "type": "bitmap",
+                "file": "pack:font/small.png",
+                "height": 16,
+                "ascent": 7,
+                "chars": small_rows,
+            }]
+        })
+        .to_string();
+        let small_root = root(
+            "strips-small",
+            &[
+                ("assets/minecraft/font/default.json", small_def.as_bytes()),
+                ("assets/pack/textures/font/small.png", &small_png),
+            ],
+        );
+        let small_font = load(&small_root);
+        let _ = std::fs::remove_dir_all(&small_root);
+
+        let mut order: Vec<(u32, u32)> = Vec::with_capacity(80);
+        for col in 0..8 {
+            order.push((0, col));
+            order.push((1, col));
+        }
+        for row in 2..10 {
+            for col in 0..8 {
+                order.push((row, col));
+            }
+        }
+        let (small_patches, decoded_small) = measure_decoded_bytes(|| {
+            for &(row, col) in &order {
+                let ch = char::from_u32(0xE000 + row * 8 + col).unwrap();
+                assert!(
+                    small_font.glyph(ch).rect.is_some(),
+                    "small glyph ({row}, {col}) missing"
+                );
+            }
+            small_font.take_patches()
+        });
+        assert_eq!(small_patches.len(), 80);
+        for (&(row, col), patch) in order.iter().zip(&small_patches) {
+            assert_eq!((patch.width, patch.height), (16, 16));
+            assert_eq!(
+                patch.rgba,
+                cell_rgba(&small_pixels, small_w, col * 16, row * 16, 16, 16),
+                "small cell ({row}, {col}) mismatch"
+            );
+        }
+        let raw_small_bytes = (small_w * small_h * 4) as usize;
+        assert!(
+            decoded_small <= raw_small_bytes,
+            "resolving all 80 small cells decoded {decoded_small} bytes > {raw_small_bytes}"
+        );
+    }
+
+    #[test]
+    fn incompressible_off_atlas_strip_stays_raw_without_decompressing() {
+        let (w, h) = (64u32, 64u32);
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut noise = vec![0u8; (w * h * 4) as usize];
+        for chunk in noise.as_chunks_mut::<8>().0 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            chunk.copy_from_slice(&state.to_le_bytes());
+        }
+        let sheet = rgba_png(w, h, &noise);
+        let def = br#"{"providers":[{"type":"bitmap","file":"pack:font/noise.png","height":64,"ascent":7,"chars":["a"]}]}"#;
+        let noise_root = root(
+            "strips-incompressible",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                ("assets/pack/textures/font/noise.png", &sheet),
+            ],
+        );
+        let font = load(&noise_root);
+        let _ = std::fs::remove_dir_all(&noise_root);
+
+        assert_eq!(
+            off_atlas_strip_bytes(&font),
+            noise.len(),
+            "incompressible strip should store exact raw bytes with no LZ4 bloat"
+        );
+        for pass in 0..2 {
+            let (patches, decoded) = measure_decoded_bytes(|| {
+                assert!(font.glyph('a').rect.is_some());
+                font.take_patches()
+            });
+            assert_eq!(patches.len(), 1, "pass {pass}");
+            assert_eq!((patches[0].width, patches[0].height), (w, h));
+            assert_eq!(patches[0].rgba, noise, "pass {pass}");
+            assert_eq!(
+                decoded, 0,
+                "pass {pass}: incompressible strip should not waste CPU decompressing"
+            );
+            font.reset_cache();
+        }
+    }
+
+    #[test]
+    fn corrupted_compressed_strip_warns_once_with_file_name_and_draws_empty_cell() {
+        let info = Arc::new(SheetInfo::new("pack:font/broken.png"));
+        let bad_stream = Arc::new(SheetStrip {
+            id: next_strip_id(),
+            info: Arc::clone(&info),
+            stride: 4,
+            cacheable: false,
+            pixels: StripPixels::Lz4 {
+                len: 64,
+                compressed: vec![0xFF; 16],
+            },
+        });
+        let sibling_short = Arc::new(SheetStrip {
+            id: next_strip_id(),
+            info,
+            stride: 4,
+            cacheable: false,
+            pixels: StripPixels::Lz4 {
+                len: 64,
+                compressed: lz4_flex::block::compress(&[0xAA; 16]),
+            },
+        });
+        let make_cell = |sheet: Arc<SheetStrip>| SheetCell {
+            sheet,
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+            glyph: Glyph::default(),
+        };
+        let cell_bad = make_cell(bad_stream);
+        let cell_sibling = make_cell(sibling_short);
+        let mut strips = StripCache::default();
+
+        let (rgba1, logs1) = crate::test_log::capture(|| cell_bad.pixels(&mut strips));
+        assert_eq!(rgba1, Some(vec![0; 64]));
+        assert_eq!(logs1.len(), 1, "expected a single warning, got {logs1:?}");
+        assert!(
+            logs1[0].contains("pack:font/broken.png"),
+            "warning must name the sheet file: {}",
+            logs1[0]
+        );
+
+        let (rgba2, logs2) = crate::test_log::capture(|| cell_bad.pixels(&mut strips));
+        assert_eq!(rgba2, Some(vec![0; 64]));
+        assert!(
+            logs2.is_empty(),
+            "same strip must not warn twice: {logs2:?}"
+        );
+
+        let (rgba3, logs3) = crate::test_log::capture(|| cell_sibling.pixels(&mut strips));
+        assert_eq!(rgba3, Some(vec![0; 64]));
+        assert!(
+            logs3.is_empty(),
+            "sibling strip of the same sheet must not warn again: {logs3:?}"
+        );
+
+        // Wrong decoded length on another sheet warns once and clears any partial bytes.
+        let short_strip = Arc::new(SheetStrip {
+            id: next_strip_id(),
+            info: Arc::new(SheetInfo::new("pack:font/short_decode.png")),
+            stride: 4,
+            cacheable: false,
+            pixels: StripPixels::Lz4 {
+                len: 64,
+                compressed: lz4_flex::block::compress(&[0xAA; 16]),
+            },
+        });
+        let cell_short = make_cell(short_strip);
+        let (rgba4, logs4) = crate::test_log::capture(|| cell_short.pixels(&mut strips));
+        assert_eq!(rgba4, Some(vec![0; 64]));
+        assert_eq!(logs4.len(), 1, "expected a single warning, got {logs4:?}");
+        assert!(
+            logs4[0].contains("pack:font/short_decode.png"),
+            "warning must name the sheet file: {}",
+            logs4[0]
+        );
+
+        let (rgba5, logs5) = crate::test_log::capture(|| cell_short.pixels(&mut strips));
+        assert_eq!(rgba5, Some(vec![0; 64]));
+        assert!(logs5.is_empty(), "must not warn twice: {logs5:?}");
+    }
+
+    #[test]
+    fn off_atlas_sheet_with_non_multiple_width_and_padding_extracts_exact_cells() {
+        // 19x8 sheet with 2 columns -> cell_w = 9, chunk_stride = 18 != sheet stride 19.
+        let (odd_w, odd_h) = (19u32, 8u32);
+        let mut odd_pixels = vec![0u8; (odd_w * odd_h * 4) as usize];
+        for y in 0..odd_h {
+            for x in 0..odd_w {
+                let at = ((y * odd_w + x) * 4) as usize;
+                odd_pixels[at..at + 4].copy_from_slice(&[
+                    (x * 13 + 7) as u8,
+                    (y * 29 + 3) as u8,
+                    ((x + y) * 11) as u8,
+                    255,
+                ]);
+            }
+        }
+        let odd_png = rgba_png(odd_w, odd_h, &odd_pixels);
+        let odd_def = br#"{"providers":[{"type":"bitmap","file":"pack:font/odd.png","height":8,"ascent":7,"chars":["ab"]}]}"#;
+        let odd_root = root(
+            "strips-odd-width",
+            &[
+                ("assets/minecraft/font/default.json", odd_def),
+                ("assets/pack/textures/font/odd.png", &odd_png),
+            ],
+        );
+        let odd_font = load(&odd_root);
+        let _ = std::fs::remove_dir_all(&odd_root);
+        assert!(odd_font.glyph('a').rect.is_some());
+        assert!(odd_font.glyph('b').rect.is_some());
+        let odd_patches = odd_font.take_patches();
+        assert_eq!(odd_patches.len(), 2);
+        assert_eq!((odd_patches[0].width, odd_patches[0].height), (9, 8));
+        assert_eq!(
+            odd_patches[0].rgba,
+            cell_rgba(&odd_pixels, odd_w, 0, 0, 9, 8)
+        );
+        assert_eq!((odd_patches[1].width, odd_patches[1].height), (9, 8));
+        assert_eq!(
+            odd_patches[1].rgba,
+            cell_rgba(&odd_pixels, odd_w, 9, 0, 9, 8)
+        );
+
+        // 10 cols of 32x32 with all-zero padding chunks, single-active chunks, and multi-active chunks.
+        let (pad_w, pad_h) = (320u32, 32u32);
+        let mut pad_pixels = vec![0u8; (pad_w * pad_h * 4) as usize];
+        for y in 0..pad_h {
+            for x in 0..pad_w {
+                let col = x / 32;
+                let lx = x % 32;
+                let ly = y % 32;
+                let px = if (4..28).contains(&lx) && (4..28).contains(&ly) {
+                    [(col * 25 + 10) as u8, (lx * 7) as u8, (ly * 7) as u8, 255]
+                } else {
+                    [0, 0, 0, 0]
+                };
+                let at = ((y * pad_w + x) * 4) as usize;
+                pad_pixels[at..at + 4].copy_from_slice(&px);
+            }
+        }
+        let pad_png = rgba_png(pad_w, pad_h, &pad_pixels);
+        let pad_def = br#"{"providers":[{"type":"bitmap","file":"pack:font/pad.png","height":32,"ascent":7,"chars":["\u0000\u0000\u0000ab\u0000cd\u0000\u0000"]}]}"#;
+        let pad_root = root(
+            "strips-padding",
+            &[
+                ("assets/minecraft/font/default.json", pad_def),
+                ("assets/pack/textures/font/pad.png", &pad_png),
+            ],
+        );
+        let pad_font = load(&pad_root);
+        let _ = std::fs::remove_dir_all(&pad_root);
+        let expected_cols = [('a', 3u32), ('b', 4), ('c', 6), ('d', 7)];
+        for &(ch, _) in &expected_cols {
+            assert!(pad_font.glyph(ch).rect.is_some(), "glyph {ch} missing");
+        }
+        let pad_patches = pad_font.take_patches();
+        assert_eq!(pad_patches.len(), expected_cols.len());
+        for (&(ch, col), patch) in expected_cols.iter().zip(&pad_patches) {
+            assert_eq!((patch.width, patch.height), (32, 32));
+            assert_eq!(
+                patch.rgba,
+                cell_rgba(&pad_pixels, pad_w, col * 32, 0, 32, 32),
+                "padded glyph {ch} at col {col} mismatch"
+            );
+        }
     }
 }
