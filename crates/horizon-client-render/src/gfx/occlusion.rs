@@ -46,13 +46,159 @@ const SEES: u8 = u8::MAX;
 /// Edits kept before a full resend.
 const EDIT_CAP: usize = 1 << 16;
 
+/// Sentinel slab slot index meaning no column is stored.
+const EMPTY_SLOT: u32 = u32::MAX;
+/// Initial toroidal grid shift (16x16 = 256 cells, 4 KiB).
+const MIN_GRID_SHIFT: u8 = 4;
+/// Largest toroidal grid kept across `clear` (128x128 = 16,384 cells, 256 KiB;
+/// covers render distance 32+ with zero collisions).
+const KEEP_GRID_MAX_LEN: usize = 1 << (7 * 2);
+
+#[derive(Clone, Copy)]
+struct GridSlot {
+    key_packed: u64,
+    /// Slab slot index of the cached resident column, or `EMPTY_SLOT`.
+    slot: u32,
+    /// Number of other resident columns in `Columns::map` hashing to this
+    /// toroidal cell. When 0, this cell is authoritative: a miss proves the
+    /// column is absent without probing `map`.
+    overflow: u32,
+}
+
+impl GridSlot {
+    const EMPTY: Self = Self {
+        key_packed: 0,
+        slot: EMPTY_SLOT,
+        overflow: 0,
+    };
+}
+
+#[inline(always)]
+fn pack_key(wx: i32, wz: i32) -> u64 {
+    u64::from(wx as u32) | (u64::from(wz as u32) << 32)
+}
+
+#[inline(always)]
+fn grid_index(wx: i32, wz: i32, mask: i32, shift: u8) -> usize {
+    (((wz & mask) as usize) << shift) | ((wx & mask) as usize)
+}
+
+#[inline]
+fn desired_grid_shift(count: usize) -> u8 {
+    if count > 8192 {
+        8
+    } else if count > 2048 {
+        7
+    } else if count > 512 {
+        6
+    } else if count > 128 {
+        5
+    } else {
+        MIN_GRID_SHIFT
+    }
+}
+
+/// Contiguous slab storing per-column section visibility masks (`rows`) and
+/// each column's highest non-air section index (`max_non_air`), eliminating
+/// one `Box<[u64]>` allocation per loaded column.
+struct ColumnSlab {
+    /// Sections per column (`sections.max(0) as usize`).
+    stride: usize,
+    /// Contiguous `[slot * stride + y]` visibility masks.
+    rows: Vec<u64>,
+    /// Per-slot highest `y` whose visibility mask is not `ALL_VISIBLE`,
+    /// saturated at `u8::MAX` when `stride > 256`.
+    max_non_air: Vec<u8>,
+    /// Recycled slot indices freed when columns become fully open or unload.
+    free_slots: Vec<u32>,
+}
+
+impl ColumnSlab {
+    fn new(sections: i32) -> Self {
+        Self {
+            stride: sections.max(0) as usize,
+            rows: Vec::new(),
+            max_non_air: Vec::new(),
+            free_slots: Vec::new(),
+        }
+    }
+
+    fn alloc(&mut self) -> u32 {
+        if let Some(slot) = self.free_slots.pop() {
+            let base = slot as usize * self.stride;
+            self.rows[base..base + self.stride].fill(ALL_VISIBLE);
+            self.max_non_air[slot as usize] = 0;
+            slot
+        } else {
+            let slot =
+                u32::try_from(self.max_non_air.len()).expect("occlusion column slab overflow");
+            assert!(slot != EMPTY_SLOT, "occlusion column slab overflow");
+            self.rows.resize(self.rows.len() + self.stride, ALL_VISIBLE);
+            self.max_non_air.push(0);
+            slot
+        }
+    }
+
+    #[inline]
+    fn free(&mut self, slot: u32) {
+        self.free_slots.push(slot);
+    }
+
+    #[inline]
+    fn column(&self, slot: u32) -> &[u64] {
+        let base = slot as usize * self.stride;
+        &self.rows[base..base + self.stride]
+    }
+
+    /// Number of bottom sections that may differ from `ALL_VISIBLE`.
+    #[inline]
+    fn scan_len(&self, slot: u32) -> usize {
+        let m = usize::from(self.max_non_air[slot as usize]);
+        if m == usize::from(u8::MAX) && self.stride > 256 {
+            self.stride
+        } else {
+            m + 1
+        }
+    }
+
+    /// Exact highest non-air section `y` for `slot` when `stride > 256` and
+    /// `max_non_air[slot]` saturated at `u8::MAX`.
+    #[cold]
+    fn exact_max_non_air_y(&self, slot: u32) -> i32 {
+        self.column(slot)
+            .iter()
+            .rposition(|&v| v != ALL_VISIBLE)
+            .unwrap_or(0) as i32
+    }
+
+    fn clear(&mut self) {
+        let shrink = self.max_non_air.capacity() > KEEP_GRID_MAX_LEN;
+        self.rows.clear();
+        self.max_non_air.clear();
+        self.free_slots.clear();
+        if shrink {
+            self.rows.shrink_to_fit();
+            self.max_non_air.shrink_to_fit();
+            self.free_slots.shrink_to_fit();
+        }
+    }
+}
+
 /// VisGraph connectivity per column, one entry per section (bottom first).
 /// A missing column or section connects every face.
 struct Columns {
     /// The lowest block y of section 0 (`Level.getMinY`).
     min_y: i32,
     sections: i32,
-    map: FxHashMap<(i32, i32), Box<[u64]>>,
+    slab: ColumnSlab,
+    /// Toroidal power-of-two direct-mapped cache for O(1) hash-free column
+    /// lookups (`(wz & grid_mask) << grid_shift | (wx & grid_mask)`).
+    grid: Box<[GridSlot]>,
+    grid_mask: i32,
+    grid_shift: u8,
+    /// Authoritative `(wx, wz) -> slab slot` index for toroidal collisions
+    /// (`overflow > 0`) and full scans/resyncs.
+    map: FxHashMap<(i32, i32), u32>,
 }
 
 impl Columns {
@@ -60,6 +206,10 @@ impl Columns {
         Self {
             min_y,
             sections,
+            slab: ColumnSlab::new(sections),
+            grid: Box::new([]),
+            grid_mask: 0,
+            grid_shift: 0,
             map: FxHashMap::default(),
         }
     }
@@ -71,44 +221,262 @@ impl Columns {
             (pos.z.floor() as i32) >> 4,
         )
     }
+    fn rebuild_grid(&mut self, shift: u8) {
+        let side = 1usize << shift;
+        let len = side * side;
+        if self.grid.len() != len {
+            self.grid = vec![GridSlot::EMPTY; len].into_boxed_slice();
+        } else {
+            self.grid.fill(GridSlot::EMPTY);
+        }
+        self.grid_shift = shift;
+        self.grid_mask = (side - 1) as i32;
+        for (&(wx, wz), &slot) in &self.map {
+            let idx = grid_index(wx, wz, self.grid_mask, self.grid_shift);
+            let cell = &mut self.grid[idx];
+            if cell.slot != EMPTY_SLOT {
+                cell.overflow += 1;
+            }
+            cell.key_packed = pack_key(wx, wz);
+            cell.slot = slot;
+        }
+    }
+    fn insert_grid_new(&mut self, wx: i32, wz: i32, slot: u32) {
+        let target = desired_grid_shift(self.map.len());
+        if self.grid_mask == 0 || target > self.grid_shift {
+            self.rebuild_grid(target);
+            return;
+        }
+        let idx = grid_index(wx, wz, self.grid_mask, self.grid_shift);
+        let cell = &mut self.grid[idx];
+        if cell.slot != EMPTY_SLOT {
+            cell.overflow += 1;
+        }
+        cell.key_packed = pack_key(wx, wz);
+        cell.slot = slot;
+    }
+    #[inline(always)]
+    fn get_slot(&self, wx: i32, wz: i32) -> u32 {
+        let mask = self.grid_mask;
+        if mask == 0 {
+            debug_assert!(self.map.is_empty());
+            return EMPTY_SLOT;
+        }
+        let cell = self.grid[grid_index(wx, wz, mask, self.grid_shift)];
+        if cell.slot != EMPTY_SLOT && cell.key_packed == pack_key(wx, wz) {
+            return cell.slot;
+        }
+        if cell.overflow == 0 {
+            return EMPTY_SLOT;
+        }
+        self.map.get(&(wx, wz)).copied().unwrap_or(EMPTY_SLOT)
+    }
+    fn detach(&mut self, wx: i32, wz: i32) -> Option<u32> {
+        let slot = self.map.remove(&(wx, wz))?;
+        if self.grid_mask != 0 {
+            let idx = grid_index(wx, wz, self.grid_mask, self.grid_shift);
+            let cell = &mut self.grid[idx];
+            if cell.slot != EMPTY_SLOT && cell.key_packed == pack_key(wx, wz) {
+                cell.slot = EMPTY_SLOT;
+            } else {
+                debug_assert!(cell.overflow > 0);
+                cell.overflow -= 1;
+            }
+        }
+        Some(slot)
+    }
     /// Whether the section's connectivity changed.
     fn set(&mut self, key: SectionKey, vis: u64) -> bool {
         if !(0..self.sections).contains(&key.1) {
             return false;
         }
-        let column = match self.map.get_mut(&(key.0, key.2)) {
-            Some(column) => column,
-            None if vis == ALL_VISIBLE => return false,
-            None => self
-                .map
-                .entry((key.0, key.2))
-                .or_insert_with(|| vec![ALL_VISIBLE; self.sections as usize].into()),
-        };
-        let slot = &mut column[key.1 as usize];
-        if *slot == vis {
+        let y = key.1 as usize;
+        let slot = self.get_slot(key.0, key.2);
+        if slot == EMPTY_SLOT {
+            if vis == ALL_VISIBLE {
+                return false;
+            }
+            let new_slot = self.slab.alloc();
+            let base = new_slot as usize * self.slab.stride;
+            self.slab.rows[base + y] = vis;
+            self.slab.max_non_air[new_slot as usize] = y.min(usize::from(u8::MAX)) as u8;
+            self.map.insert((key.0, key.2), new_slot);
+            self.insert_grid_new(key.0, key.2, new_slot);
+            return true;
+        }
+        let base = slot as usize * self.slab.stride;
+        let entry = &mut self.slab.rows[base + y];
+        if *entry == vis {
             return false;
         }
-        *slot = vis;
-        if vis == ALL_VISIBLE && column.iter().all(|&v| v == ALL_VISIBLE) {
-            self.map.remove(&(key.0, key.2));
+        *entry = vis;
+        if vis != ALL_VISIBLE {
+            let max_y = &mut self.slab.max_non_air[slot as usize];
+            if y > usize::from(*max_y) {
+                *max_y = y.min(usize::from(u8::MAX)) as u8;
+            }
+            // Opportunistically promote an overflowed column into an empty
+            // toroidal cell so future lookups avoid `map`.
+            if self.grid_mask != 0 {
+                let idx = grid_index(key.0, key.2, self.grid_mask, self.grid_shift);
+                let cell = &mut self.grid[idx];
+                if cell.slot == EMPTY_SLOT {
+                    debug_assert!(cell.overflow > 0);
+                    cell.key_packed = pack_key(key.0, key.2);
+                    cell.slot = slot;
+                    cell.overflow -= 1;
+                }
+            }
+            return true;
+        }
+        let cur_max = usize::from(self.slab.max_non_air[slot as usize]);
+        if y < cur_max {
+            return true;
+        }
+        let scan_end = if cur_max == usize::from(u8::MAX) && self.slab.stride > 256 {
+            self.slab.stride
+        } else {
+            y
+        };
+        match self.slab.rows[base..base + scan_end]
+            .iter()
+            .rposition(|&v| v != ALL_VISIBLE)
+        {
+            Some(new_max) => {
+                self.slab.max_non_air[slot as usize] = new_max.min(usize::from(u8::MAX)) as u8;
+            }
+            None => {
+                debug_assert!(
+                    self.slab.rows[base..base + self.slab.stride]
+                        .iter()
+                        .all(|&v| v == ALL_VISIBLE)
+                );
+                let detached = self.detach(key.0, key.2);
+                debug_assert_eq!(detached, Some(slot));
+                self.slab.free(slot);
+            }
         }
         true
     }
+    #[inline]
     fn get(&self, key: SectionKey) -> u64 {
-        self.map
-            .get(&(key.0, key.2))
-            .and_then(|column| column.get(usize::try_from(key.1).ok()?))
-            .copied()
-            .unwrap_or(ALL_VISIBLE)
+        let Ok(y) = usize::try_from(key.1) else {
+            return ALL_VISIBLE;
+        };
+        if y >= self.slab.stride {
+            return ALL_VISIBLE;
+        }
+        let slot = self.get_slot(key.0, key.2);
+        if slot == EMPTY_SLOT {
+            return ALL_VISIBLE;
+        }
+        self.slab.rows[slot as usize * self.slab.stride + y]
+    }
+    fn clear(&mut self) {
+        let had_columns = !self.map.is_empty();
+        self.map.clear();
+        self.slab.clear();
+        if self.grid.len() > KEEP_GRID_MAX_LEN {
+            self.grid = Box::new([]);
+            self.grid_mask = 0;
+            self.grid_shift = 0;
+        } else if had_columns && self.grid_mask != 0 {
+            self.grid.fill(GridSlot::EMPTY);
+        }
     }
     fn apply(&mut self, edit: Edit) {
         match edit {
             Edit::Set(key, vis) => {
                 self.set(key, vis);
             }
-            Edit::Clear => self.map.clear(),
+            Edit::Clear => self.clear(),
         }
     }
+    #[cfg(test)]
+    fn assert_invariants(&self) {
+        assert_eq!(
+            self.slab.rows.len(),
+            self.slab.max_non_air.len() * self.slab.stride,
+            "slab rows length matches slot count * stride"
+        );
+        assert_eq!(
+            self.map.len() + self.slab.free_slots.len(),
+            self.slab.max_non_air.len(),
+            "live + free slots equals allocated slots"
+        );
+        let free: FxHashSet<u32> = self.slab.free_slots.iter().copied().collect();
+        assert_eq!(
+            free.len(),
+            self.slab.free_slots.len(),
+            "no duplicate free slots"
+        );
+        for (&(wx, wz), &slot) in &self.map {
+            assert!((slot as usize) < self.slab.max_non_air.len());
+            assert!(!free.contains(&slot), "live slot {slot} in free list");
+            let col = self.slab.column(slot);
+            let exact_max = col
+                .iter()
+                .rposition(|&v| v != ALL_VISIBLE)
+                .expect("live column has at least one non-air section");
+            assert_eq!(
+                usize::from(self.slab.max_non_air[slot as usize]),
+                exact_max.min(usize::from(u8::MAX)),
+                "max_non_air mismatch for ({wx}, {wz})"
+            );
+            if self.slab.max_non_air[slot as usize] == u8::MAX && self.slab.stride > 256 {
+                assert_eq!(self.slab.exact_max_non_air_y(slot), exact_max as i32);
+            }
+            assert_eq!(self.get_slot(wx, wz), slot);
+        }
+        if self.grid_mask == 0 {
+            assert!(self.map.is_empty(), "empty grid mask with live columns");
+        } else {
+            let side = 1usize << self.grid_shift;
+            assert_eq!(self.grid.len(), side * side);
+            assert_eq!(self.grid_mask, (side - 1) as i32);
+            let mut counts = vec![0usize; self.grid.len()];
+            for &(wx, wz) in self.map.keys() {
+                counts[grid_index(wx, wz, self.grid_mask, self.grid_shift)] += 1;
+            }
+            for (idx, (&cell, &expected)) in self.grid.iter().zip(&counts).enumerate() {
+                let present = usize::from(cell.slot != EMPTY_SLOT);
+                assert_eq!(
+                    present + cell.overflow as usize,
+                    expected,
+                    "toroidal cell {idx} accounting mismatch"
+                );
+                if cell.slot != EMPTY_SLOT {
+                    let wx = cell.key_packed as u32 as i32;
+                    let wz = (cell.key_packed >> 32) as u32 as i32;
+                    assert_eq!(
+                        grid_index(wx, wz, self.grid_mask, self.grid_shift),
+                        idx,
+                        "cached key in wrong toroidal cell"
+                    );
+                    assert_eq!(
+                        self.map.get(&(wx, wz)).copied(),
+                        Some(cell.slot),
+                        "cached slot disagrees with authoritative map"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Reusable per-search scratch buffers held by the worker thread (and
+/// `Occlusion` for render-thread partial updates and fallback searches),
+/// avoiding per-search heap allocations.
+#[derive(Default)]
+struct SearchScratch {
+    /// Per `(dz * side + dx)` column in the searched box: slab slot index in
+    /// `ColumnSlab::rows`, or `EMPTY_SLOT` when the column is absent.
+    col_slots: Vec<u32>,
+    /// Reusable buffer for `Graph::seed_outside` when the camera is above or
+    /// below the world.
+    seeds: Vec<(i64, i32, i32, u8)>,
+    /// Reusable BFS frontier queue.
+    queue: VecDeque<QueueNode>,
 }
 
 #[derive(Clone, Copy)]
@@ -188,30 +556,15 @@ impl Graph {
     fn index(&self, key: SectionKey) -> Option<usize> {
         self.node(key).map(|n| n.index as usize)
     }
-    #[inline]
-    fn contains(&self, key: SectionKey) -> bool {
-        let ux = key.0.wrapping_sub(self.origin_x) as u32;
-        let uz = key.2.wrapping_sub(self.origin_z) as u32;
-        if ux >= self.side || uz >= self.side {
-            return false;
-        }
-        let uy = key.1.wrapping_sub(self.y0) as u32;
-        if uy < self.height_u {
-            let i = ((uz * self.side + ux) * self.height_u + uy) as usize;
-            self.directions[i] & REACHED != 0
-        } else {
-            // Everything above the highest non-air section is open sky. A
-            // full search can reach that layer from a neighbouring column,
-            // so checking only this column's top cell can hide an upper
-            // section that is visible through the open layer. Once any top
-            // cell is reached, conservatively keep the whole sky band visible.
-            self.sky_reached
-                && key.1 >= self.y0 + self.height
-                && (0..=self.sections).contains(&key.1)
-        }
-    }
-    /// Same answer as `contains`, reading the 8x denser L1-resident `bits`
+    /// Whether cell `i` was reached, reading the 8x denser L1-resident `bits`
     /// array kept in lockstep with `directions` by `set_reached`.
+    #[inline(always)]
+    fn is_reached(&self, i: usize) -> bool {
+        (self.bits[i >> 5] >> (i & 31)) & 1 != 0
+    }
+    /// Whether `key` is reached by this graph, reading the 8x denser
+    /// L1-resident `bits` array kept in lockstep with `directions` by
+    /// `set_reached`.
     #[inline]
     fn contains_bit(&self, key: SectionKey) -> bool {
         let ux = key.0.wrapping_sub(self.origin_x) as u32;
@@ -222,8 +575,13 @@ impl Graph {
         let uy = key.1.wrapping_sub(self.y0) as u32;
         if uy < self.height_u {
             let i = ((uz * self.side + ux) * self.height_u + uy) as usize;
-            (self.bits[i >> 5] >> (i & 31)) & 1 != 0
+            self.is_reached(i)
         } else {
+            // Everything above the highest non-air section is open sky. A
+            // full search can reach that layer from a neighbouring column,
+            // so checking only this column's top cell can hide an upper
+            // section that is visible through the open layer. Once any top
+            // cell is reached, conservatively keep the whole sky band visible.
             self.sky_reached
                 && key.1 >= self.y0 + self.height
                 && (0..=self.sections).contains(&key.1)
@@ -243,8 +601,7 @@ impl Graph {
         columns: &Columns,
         camera: DVec3,
         radius: i32,
-        vis: &mut Vec<u64>,
-        queue: &mut VecDeque<QueueNode>,
+        scratch: &mut SearchScratch,
     ) {
         let from = columns.section_of(camera);
         let origin_x = from.0 - radius;
@@ -259,34 +616,55 @@ impl Graph {
         self.sections = columns.sections;
         self.y0 = -1;
 
-        let mut present: Vec<(usize, &[u64])> = Vec::new();
-        if from.1 >= columns.sections {
-            self.height = columns.sections + 2;
+        let area = side * side;
+        scratch.col_slots.resize(area, EMPTY_SLOT);
+        let compute_clamp = from.1 < columns.sections;
+        let mut max_non_air_y = 0;
+        if columns.map.is_empty() {
+            scratch.col_slots.fill(EMPTY_SLOT);
         } else {
-            let mut max_non_air_y = 0;
+            debug_assert_ne!(columns.grid_mask, 0);
+            let grid = &columns.grid;
+            let mask = columns.grid_mask;
+            let shift = columns.grid_shift;
+            let wide_sections = columns.sections > 256;
             for dz in 0..side {
                 let wz = origin_z + dz as i32;
-                let row = dz * side;
-                for dx in 0..side {
+                let z_base = ((wz & mask) as usize) << shift;
+                let wz_hi = u64::from(wz as u32) << 32;
+                let row_out = &mut scratch.col_slots[dz * side..(dz + 1) * side];
+                for (dx, slot_out) in row_out.iter_mut().enumerate() {
                     let wx = origin_x + dx as i32;
-                    let Some(column) = columns.map.get(&(wx, wz)) else {
-                        continue;
+                    let cell = grid[z_base | ((wx & mask) as usize)];
+                    let slot = if cell.slot != EMPTY_SLOT
+                        && cell.key_packed == (u64::from(wx as u32) | wz_hi)
+                    {
+                        cell.slot
+                    } else if cell.overflow == 0 {
+                        EMPTY_SLOT
+                    } else {
+                        columns.map.get(&(wx, wz)).copied().unwrap_or(EMPTY_SLOT)
                     };
-                    present.push((row + dx, column));
-                    for (y, &v) in column.iter().enumerate().rev() {
-                        let y = y as i32;
-                        if y <= max_non_air_y {
-                            break;
-                        }
-                        if v != ALL_VISIBLE {
-                            max_non_air_y = y;
-                            break;
+                    *slot_out = slot;
+                    if compute_clamp && slot != EMPTY_SLOT {
+                        let m = columns.slab.max_non_air[slot as usize];
+                        let col_max = if wide_sections && m == u8::MAX {
+                            columns.slab.exact_max_non_air_y(slot)
+                        } else {
+                            i32::from(m)
+                        };
+                        if col_max > max_non_air_y {
+                            max_non_air_y = col_max;
                         }
                     }
                 }
             }
+        }
+        if compute_clamp {
             let top_y = max_non_air_y.max(from.1);
             self.height = (top_y + 3).max(3).min(columns.sections + 2);
+        } else {
+            self.height = columns.sections + 2;
         }
         self.height_u = self.height as u32;
         let h = self.height as usize;
@@ -301,38 +679,30 @@ impl Graph {
         self.rays.clear();
         self.rays
             .resize((side + 1) * (side + 1) * (self.height + 1) as usize, 0);
-        vis.clear();
-        vis.resize(size, ALL_VISIBLE);
-        if from.1 >= columns.sections {
-            for dz in 0..side {
-                let wz = origin_z + dz as i32;
-                let row = dz * side;
-                for dx in 0..side {
-                    let wx = origin_x + dx as i32;
-                    let Some(column) = columns.map.get(&(wx, wz)) else {
-                        continue;
-                    };
-                    let base = (row + dx) * h + 1;
-                    let len = (column.len() as i32).min(self.height - 1) as usize;
-                    vis[base..base + len].copy_from_slice(&column[..len]);
-                }
-            }
-        } else {
-            for (col_idx, column) in present {
-                let base = col_idx * h + 1;
-                let len = (column.len() as i32).min(self.height - 1) as usize;
-                vis[base..base + len].copy_from_slice(&column[..len]);
-            }
-        }
-        queue.clear();
+        scratch.queue.clear();
         if (0..columns.sections).contains(&from.1) {
             let start = self.node(from).expect("camera inside the searched box");
             self.set_reached(start.index as usize, REACHED);
-            queue.push_back(start);
+            scratch.queue.push_back(start);
         } else {
-            self.seed_outside(camera, queue);
+            self.seed_outside(camera, scratch);
         }
-        self.propagate(queue, camera, true, |i, _| vis[i]);
+        let col_slots = &scratch.col_slots;
+        let rows = &columns.slab.rows;
+        let stride = columns.slab.stride;
+        self.propagate(&mut scratch.queue, camera, true, |node, key| {
+            let slot = col_slots[usize::from(node.uz) * side + usize::from(node.ux)];
+            if slot == EMPTY_SLOT {
+                return ALL_VISIBLE;
+            }
+            let Ok(y) = usize::try_from(key.1) else {
+                return ALL_VISIBLE;
+            };
+            if y >= stride {
+                return ALL_VISIBLE;
+            }
+            rows[slot as usize * stride + y]
+        });
     }
     /// `initializeQueueForFullUpdate` with the camera above or below the
     /// world (no render section there): every section of the world's top
@@ -342,7 +712,7 @@ impl Graph {
     /// centre (a stable sort over vanilla's x-then-z loop). Vanilla seeds only
     /// columns in view distance; this search covers its whole box, as it does
     /// from inside the world.
-    fn seed_outside(&mut self, camera: DVec3, queue: &mut VecDeque<QueueNode>) {
+    fn seed_outside(&mut self, camera: DVec3, scratch: &mut SearchScratch) {
         // Direction order: down, up, north, south, west, east.
         let (y, travel) = if self.from.1 < 0 {
             (0, 1)
@@ -350,7 +720,9 @@ impl Graph {
             (self.sections - 1, 0)
         };
         let block = (camera.x.floor() as i64, camera.z.floor() as i64);
-        let mut seeds = Vec::with_capacity(((2 * self.radius + 1) as usize).pow(2));
+        let side = (2 * self.radius + 1) as usize;
+        scratch.seeds.clear();
+        scratch.seeds.reserve(side * side);
         for dx in -self.radius..=self.radius {
             for dz in -self.radius..=self.radius {
                 let mut directions = REACHED | 1 << travel;
@@ -370,11 +742,16 @@ impl Graph {
                     block.0 - centre(self.from.0 + dx),
                     block.1 - centre(self.from.2 + dz),
                 );
-                seeds.push((ox * ox + oz * oz, dx, dz, directions));
+                scratch.seeds.push((ox * ox + oz * oz, dx, dz, directions));
             }
         }
-        seeds.sort_by_key(|seed| seed.0);
-        for (_, dx, dz, directions) in seeds {
+        // `(dx, dz)` increases strictly in the outer/inner loops above, so
+        // sorting by `(dist_sq, dx, dz)` is an exact total order matching
+        // vanilla's stable sort by `dist_sq` without heap scratch allocation.
+        scratch
+            .seeds
+            .sort_unstable_by_key(|&(dist, dx, dz, _)| (dist, dx, dz));
+        for &(_, dx, dz, directions) in &scratch.seeds {
             let node = self
                 .node((self.from.0 + dx, y, self.from.2 + dz))
                 .expect("seed inside the searched box");
@@ -382,7 +759,7 @@ impl Graph {
             self.set_reached(i, directions);
             // Entered through the face opposite the travel (`sourceDirection`).
             self.entered[i] = 1 << (travel ^ 1);
-            queue.push_back(node);
+            scratch.queue.push_back(node);
         }
     }
     /// Vanilla's `runUpdates`: take nodes from the queue and step through
@@ -395,7 +772,7 @@ impl Graph {
         queue: &mut VecDeque<QueueNode>,
         camera: DVec3,
         full: bool,
-        vis: impl Fn(usize, SectionKey) -> u64,
+        vis: impl Fn(QueueNode, SectionKey) -> u64,
     ) -> bool {
         let mut grew = false;
         let eye = (
@@ -422,12 +799,11 @@ impl Graph {
                 self.y0 + i32::from(uy),
                 self.origin_z + i32::from(uz),
             );
-            let directions = self.directions[i];
             let entered = self.entered[i];
             let exits = if entered == 0 {
                 0x3f
             } else {
-                let v = vis(i, key);
+                let v = vis(node, key);
                 if v == ALL_VISIBLE {
                     0x3f
                 } else if v == 0 {
@@ -443,6 +819,10 @@ impl Graph {
                     out & 0x3f
                 }
             };
+            if exits == 0 {
+                continue;
+            }
+            let directions = self.directions[i];
             // Block steps opposite any already-travelled direction (`d ^ 1`).
             let blocked = ((directions & 0x15) << 1) | ((directions & 0x2a) >> 1);
             let mut mask = exits & !blocked;
@@ -509,7 +889,7 @@ impl Graph {
                         continue;
                     }
                 }
-                if self.directions[n] & REACHED == 0 {
+                if !self.is_reached(n) {
                     self.set_reached(n, directions | 1 << d);
                     self.entered[n] = 1 << (d ^ 1);
                     queue.push_back(QueueNode {
@@ -615,7 +995,7 @@ impl Graph {
                 (floor(check[1]) - self.min_y) >> 4,
                 floor(check[2]) >> 4,
             );
-            if !self.contains(section) {
+            if !self.contains_bit(section) {
                 // A count too long to keep (`SEES`) starts over next time.
                 return Some(if sample == SEES { 0 } else { sample });
             }
@@ -645,7 +1025,7 @@ pub struct Reach<'a> {
 #[cfg(test)]
 impl Reach<'_> {
     /// gpu_culling.wgsl's `reached`, statement for statement: what
-    /// `Graph::contains` answers.
+    /// `Graph::contains_bit` answers.
     #[inline]
     pub fn contains(&self, key: SectionKey) -> bool {
         let r = self.radius;
@@ -701,13 +1081,13 @@ impl Worker {
             .name("occlusion".into())
             .spawn(move || {
                 let mut columns = Columns::new(min_y, sections);
-                let (mut vis, mut queue) = (Vec::new(), VecDeque::new());
+                let mut scratch = SearchScratch::default();
                 while let Ok(mut job) = job_rx.recv() {
                     for edit in job.edits.drain(..) {
                         columns.apply(edit);
                     }
                     job.graph
-                        .search(&columns, job.camera, job.radius, &mut vis, &mut queue);
+                        .search(&columns, job.camera, job.radius, &mut scratch);
                     if done_tx.send((job.graph, job.edits)).is_err() {
                         break;
                     }
@@ -751,8 +1131,7 @@ pub struct Occlusion {
     /// Sections changed since the running search started: they propagate into
     /// its graph when it lands.
     changed_late: Vec<SectionKey>,
-    vis: Vec<u64>,
-    queue: VecDeque<QueueNode>,
+    scratch: SearchScratch,
     /// Changes whenever `contains` may answer differently (`generation`).
     generation: u64,
     /// Set when edits were dropped; the next search resends every column.
@@ -774,8 +1153,7 @@ impl Occlusion {
             searched: None,
             changed: Vec::new(),
             changed_late: Vec::new(),
-            vis: Vec::new(),
-            queue: VecDeque::new(),
+            scratch: SearchScratch::default(),
             generation: next_generation(),
             resync: false,
         }
@@ -807,8 +1185,10 @@ impl Occlusion {
         self.resync = false;
         self.edits.clear();
         self.edits.push(Edit::Clear);
-        for (&(x, z), column) in &self.columns.map {
-            for (y, &vis) in column.iter().enumerate() {
+        for (&(x, z), &slot) in &self.columns.map {
+            let col = self.columns.slab.column(slot);
+            let top = self.columns.slab.scan_len(slot);
+            for (y, &vis) in col[..top].iter().enumerate() {
                 if vis != ALL_VISIBLE {
                     self.edits.push(Edit::Set((x, y as i32, z), vis));
                 }
@@ -817,14 +1197,17 @@ impl Occlusion {
     }
     /// Every section of the column `x`, `z` goes (sees through every face).
     pub fn remove_column(&mut self, x: i32, z: i32) {
-        let Some(column) = self.columns.map.remove(&(x, z)) else {
+        let Some(slot) = self.columns.detach(x, z) else {
             return;
         };
-        for (y, &vis) in column.iter().enumerate() {
-            if vis != ALL_VISIBLE {
+        let base = slot as usize * self.columns.slab.stride;
+        let top = self.columns.slab.scan_len(slot);
+        for y in 0..top {
+            if self.columns.slab.rows[base + y] != ALL_VISIBLE {
                 self.changed((x, y as i32, z), ALL_VISIBLE);
             }
         }
+        self.columns.slab.free(slot);
     }
     /// `remove_column` for each of `gone`. When they are every column it holds (a
     /// teleport drops the whole view), the old graph says nothing about what arrives
@@ -840,7 +1223,7 @@ impl Occlusion {
         }
     }
     pub fn clear(&mut self) {
-        self.columns.map.clear();
+        self.columns.clear();
         self.edits.clear();
         self.edits.push(Edit::Clear);
         self.resync = false;
@@ -943,7 +1326,7 @@ impl Occlusion {
         if self.resync {
             self.resync_edits();
         }
-        let graph = std::mem::take(&mut self.spare);
+        let mut graph = std::mem::take(&mut self.spare);
         if let Some(worker) = &self.worker {
             let job = Job {
                 edits: std::mem::take(&mut self.edits),
@@ -951,23 +1334,23 @@ impl Occlusion {
                 radius,
                 graph,
             };
-            if worker.jobs.send(job).is_ok() {
-                self.running = Some((from, radius));
-                self.changed_late.clear();
-                return;
+            match worker.jobs.send(job) {
+                Ok(()) => {
+                    self.running = Some((from, radius));
+                    self.changed_late.clear();
+                    return;
+                }
+                Err(mpsc::SendError(job)) => {
+                    graph = job.graph;
+                    log::warn!(
+                        "Horizon: the occlusion worker stopped; culling on the render thread"
+                    );
+                    self.worker = None;
+                }
             }
-            log::warn!("Horizon: the occlusion worker stopped; culling on the render thread");
-            self.worker = None;
         }
         self.edits.clear();
-        let mut graph = Graph::default();
-        graph.search(
-            &self.columns,
-            camera,
-            radius,
-            &mut self.vis,
-            &mut self.queue,
-        );
+        graph.search(&self.columns, camera, radius, &mut self.scratch);
         self.land(graph);
     }
     fn collect(&mut self, wait: bool) {
@@ -1016,16 +1399,24 @@ impl Occlusion {
             self.changed.clear();
             return;
         };
-        self.queue.clear();
+        if self.changed.is_empty() {
+            return;
+        }
+        self.scratch.queue.clear();
         for key in self.changed.drain(..) {
             if let Some(node) = graph.node(key)
-                && graph.directions[node.index as usize] & REACHED != 0
+                && graph.is_reached(node.index as usize)
             {
-                self.queue.push_back(node);
+                self.scratch.queue.push_back(node);
             }
         }
+        if self.scratch.queue.is_empty() {
+            return;
+        }
         let columns = &self.columns;
-        if graph.propagate(&mut self.queue, camera, false, |_, key| columns.get(key)) {
+        if graph.propagate(&mut self.scratch.queue, camera, false, |_, key| {
+            columns.get(key)
+        }) {
             self.generation = next_generation();
         }
     }
@@ -1584,7 +1975,7 @@ mod tests {
         };
         let columns = Columns::new(-64, 24);
         let mut graph = Graph::default();
-        let (mut vis, mut queue) = (Vec::new(), VecDeque::new());
+        let mut scratch = SearchScratch::default();
         let (mut resumed, mut seen) = (0, 0);
         for _ in 0..40 {
             let camera = DVec3::new(
@@ -1593,10 +1984,11 @@ mod tests {
                 (next() % 3000) as f64 / 100.0 - 15.0,
             );
             // Open air: every section reached; then holes along the lines.
-            graph.search(&columns, camera, 12, &mut vis, &mut queue);
-            for cell in graph.directions.iter_mut() {
-                if next() % 4 == 0 {
+            graph.search(&columns, camera, 12, &mut scratch);
+            for (i, cell) in graph.directions.iter_mut().enumerate() {
+                if next().is_multiple_of(4) {
                     *cell = 0;
+                    graph.bits[i >> 5] &= !(1 << (i & 31));
                 }
             }
             let from = graph.from;
@@ -1614,9 +2006,10 @@ mod tests {
                     known = failed;
                     resumed += 1;
                     // More sections reached, as the search goes on.
-                    for cell in graph.directions.iter_mut() {
-                        if next() % 3 == 0 {
+                    for (i, cell) in graph.directions.iter_mut().enumerate() {
+                        if next().is_multiple_of(3) {
                             *cell |= REACHED;
+                            graph.bits[i >> 5] |= 1 << (i & 31);
                         }
                     }
                     assert_eq!(
@@ -1673,7 +2066,7 @@ mod tests {
                 for y in 0..24 {
                     let vis = if y >= 8 {
                         ALL_VISIBLE
-                    } else if next() % 5 == 0 {
+                    } else if next().is_multiple_of(5) {
                         next() & ALL_VISIBLE
                     } else {
                         0
@@ -1683,12 +2076,12 @@ mod tests {
             }
         }
         let camera = DVec3::new(3.3, 70.2, -5.6);
-        let (mut vis, mut queue) = (Vec::new(), VecDeque::new());
+        let mut scratch = SearchScratch::default();
         let mut graph = Graph::default();
         let mut best = f64::MAX;
         for _ in 0..12 {
             let started = std::time::Instant::now();
-            graph.search(&o.columns, camera, 34, &mut vis, &mut queue);
+            graph.search(&o.columns, camera, 34, &mut scratch);
             best = best.min(started.elapsed().as_secs_f64() * 1000.0);
         }
         let reached = graph
@@ -1705,9 +2098,9 @@ mod tests {
     fn removed_columns_leave_the_graph_of_a_world_without_them() {
         fn without(o: &Occlusion, gone: &FxHashSet<(i32, i32)>) -> Occlusion {
             let mut fresh = Occlusion::new(0, 6);
-            for (&(x, z), column) in &o.columns.map {
+            for (&(x, z), &slot) in &o.columns.map {
                 if !gone.contains(&(x, z)) {
-                    for (y, &vis) in column.iter().enumerate() {
+                    for (y, &vis) in o.columns.slab.column(slot).iter().enumerate() {
                         fresh.set((x, y as i32, z), vis);
                     }
                 }
@@ -1749,7 +2142,7 @@ mod tests {
             o.settle(camera, 6);
             o.settle(camera, 6);
             let mut local = Graph::default();
-            local.search(&o.columns, camera, 6, &mut Vec::new(), &mut VecDeque::new());
+            local.search(&o.columns, camera, 6, &mut SearchScratch::default());
             let graph = o.graph.as_ref().expect("searched");
             assert_eq!(graph.directions, local.directions);
             assert_eq!(graph.entered, local.entered);
@@ -1988,8 +2381,8 @@ mod tests {
         );
 
         let mut fresh = Occlusion::new(0, 4);
-        for (&(x, z), column) in &o.columns.map {
-            for (y, &vis) in column.iter().enumerate() {
+        for (&(x, z), &slot) in &o.columns.map {
+            for (y, &vis) in o.columns.slab.column(slot).iter().enumerate() {
                 // Missing sections in the fresh world already connect every face.
                 if vis != ALL_VISIBLE {
                     fresh.set((x, y as i32, z), vis);
@@ -2005,6 +2398,884 @@ mod tests {
             reached(&o),
             reached(&fresh),
             "the worker saw the same world"
+        );
+    }
+
+    /// Exercises `ColumnSlab` and the toroidal `GridSlot` direct-mapped cache
+    /// across negative coordinates, extreme `i32` bounds, deliberate toroidal
+    /// collisions, grid growth (`shift` 4 -> 7), `max_non_air` saturation
+    /// (`stride` 0, 4, 24, 256, 270), slot recycling, promotion, and `clear`.
+    #[test]
+    fn column_slab_toroidal_invariants_and_collisions() {
+        for sections in [0, 4, 24, 256, 270] {
+            let mut cols = Columns::new(-64, sections);
+            let mut oracle: HashMap<(i32, i32), Vec<u64>> = HashMap::new();
+            let mut seed = 0x517c_c1b7_2722_0a95_u64 ^ (sections as u64);
+            let mut next = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed
+            };
+            // Deliberately mix negative coords, i32 extremes, toroidal
+            // multiples (16, 32, 64, 128, 256), and a dense 20x20 patch to
+            // exercise shift 4 -> 5 -> 6 growth and overflow chains.
+            let mut coords = Vec::new();
+            for bx in [
+                i32::MIN,
+                -256,
+                -128,
+                -64,
+                -32,
+                -16,
+                -1,
+                0,
+                1,
+                16,
+                32,
+                64,
+                128,
+                256,
+                i32::MAX,
+            ] {
+                for bz in [-128, -16, -1, 0, 1, 16, 128] {
+                    coords.push((bx, bz));
+                }
+            }
+            for x in -10..10 {
+                for z in -10..10 {
+                    coords.push((x, z));
+                }
+            }
+
+            let oracle_set =
+                |oracle: &mut HashMap<(i32, i32), Vec<u64>>, key: SectionKey, vis: u64| -> bool {
+                    if !(0..sections).contains(&key.1) {
+                        return false;
+                    }
+                    let col = match oracle.get_mut(&(key.0, key.2)) {
+                        Some(col) => col,
+                        None if vis == ALL_VISIBLE => return false,
+                        None => oracle
+                            .entry((key.0, key.2))
+                            .or_insert_with(|| vec![ALL_VISIBLE; sections as usize]),
+                    };
+                    let slot = &mut col[key.1 as usize];
+                    if *slot == vis {
+                        return false;
+                    }
+                    *slot = vis;
+                    if vis == ALL_VISIBLE && col.iter().all(|&v| v == ALL_VISIBLE) {
+                        oracle.remove(&(key.0, key.2));
+                    }
+                    true
+                };
+            let oracle_get = |oracle: &HashMap<(i32, i32), Vec<u64>>, key: SectionKey| -> u64 {
+                if !(0..sections).contains(&key.1) {
+                    return ALL_VISIBLE;
+                }
+                oracle
+                    .get(&(key.0, key.2))
+                    .map_or(ALL_VISIBLE, |col| col[key.1 as usize])
+            };
+
+            let ops: usize = if sections <= 24 { 2500 } else { 1200 };
+            for step in 0..ops {
+                let r = next();
+                let (wx, wz) = coords[(r as usize) % coords.len()];
+                match (r >> 16) % 20 {
+                    0..=13 => {
+                        let y = match (r >> 24) % 8 {
+                            0 => -1,
+                            1 => sections,
+                            2 => 0,
+                            3 if sections > 0 => sections - 1,
+                            4 if sections > 256 => 255,
+                            5 if sections > 256 => 256,
+                            _ if sections > 0 => ((r >> 32) % sections as u64) as i32,
+                            _ => 0,
+                        };
+                        let vis = match (r >> 40) % 4 {
+                            0 => ALL_VISIBLE,
+                            1 => 0,
+                            2 => 1,
+                            _ => next() & ALL_VISIBLE,
+                        };
+                        let expected = oracle_set(&mut oracle, (wx, y, wz), vis);
+                        let actual = cols.set((wx, y, wz), vis);
+                        assert_eq!(actual, expected, "sections={sections} step={step}");
+                    }
+                    14..=16 => {
+                        let detached = cols.detach(wx, wz);
+                        let expected = oracle.remove(&(wx, wz));
+                        assert_eq!(detached.is_some(), expected.is_some());
+                        if let Some(slot) = detached {
+                            assert_eq!(cols.slab.column(slot), expected.unwrap().as_slice());
+                            cols.slab.free(slot);
+                        }
+                    }
+                    17 | 18 => {
+                        let y = if sections > 0 {
+                            ((r >> 24) % (sections as u64 + 2)) as i32 - 1
+                        } else {
+                            0
+                        };
+                        assert_eq!(cols.get((wx, y, wz)), oracle_get(&oracle, (wx, y, wz)));
+                    }
+                    _ => {
+                        cols.clear();
+                        oracle.clear();
+                        // Second clear on an already-empty slab must remain valid.
+                        cols.clear();
+                    }
+                }
+                if step.is_multiple_of(200) || step + 1 == ops {
+                    cols.assert_invariants();
+                    assert_eq!(cols.map.len(), oracle.len());
+                    for (&(cx, cz), exp_col) in &oracle {
+                        let slot = cols.get_slot(cx, cz);
+                        assert_ne!(slot, EMPTY_SLOT);
+                        assert_eq!(cols.slab.column(slot), exp_col.as_slice());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Differential check of `Graph::search` + `ColumnSlab` + `col_slots` +
+    /// `seed_outside` zero-alloc sort against `reference()` across negative
+    /// coordinates, sparse and dense worlds, inside/above/below-world cameras,
+    /// and clamped vs unclamped vertical boxes.
+    #[test]
+    fn differential_search_negative_coords_sparse_and_dense() {
+        let mut seed = 0xa5a5_5a5a_dead_beef_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut scratch = SearchScratch::default();
+        let mut graph = Graph::default();
+
+        // Unclamped (sections = 6) exact cell-for-cell differential across
+        // negative coordinates, sparse and dense layouts, and colliding keys.
+        for &(origin_x, origin_z, sparse) in &[
+            (-1024, -2048, true),
+            (-1024, -2048, false),
+            (-65, 127, true),
+            (-130, -130, false),
+        ] {
+            let mut o = Occlusion::new(-64, 6);
+            let radius = 6;
+            for dx in -radius - 1..=radius + 1 {
+                for dz in -radius - 1..=radius + 1 {
+                    if sparse && !next().is_multiple_of(9) {
+                        continue;
+                    }
+                    for y in 0..6 {
+                        let vis = match next() & 3 {
+                            0 => 0,
+                            1 => next() & ALL_VISIBLE,
+                            2 => (next() | next()) & ALL_VISIBLE,
+                            _ => ALL_VISIBLE,
+                        };
+                        o.set((origin_x + dx, y, origin_z + dz), vis);
+                    }
+                }
+            }
+            // Also plant distant toroidal-colliding columns (offset by +/- 16/32/64).
+            for offset in [16, -32, 64] {
+                o.set((origin_x + offset, 2, origin_z), 0);
+                o.set((origin_x, 3, origin_z + offset), connects(0, 1));
+            }
+            o.columns.assert_invariants();
+
+            for &(dy, off) in &[
+                (2, DVec3::new(3.3, -5.7, 1.9)),
+                (0, DVec3::new(11.2, 2.4, 14.8)),
+                (5, DVec3::new(0.5, 15.1, 0.2)),
+                // Above the world -> exercises `seed_outside` (top layer).
+                (9, DVec3::new(7.4, 4.0, 12.1)),
+                // Below the world -> exercises `seed_outside` (bottom layer).
+                (-3, DVec3::new(2.1, -1.5, 9.6)),
+            ] {
+                let cam_sec = (origin_x, dy, origin_z);
+                let camera = DVec3::new(
+                    f64::from(cam_sec.0 * 16) + off.x,
+                    f64::from(cam_sec.1 * 16 - 64) + off.y,
+                    f64::from(cam_sec.2 * 16) + off.z,
+                );
+                // Settle twice in case first settle finishes prior edits.
+                o.settle(camera, radius);
+                o.settle(camera, radius);
+                assert!(o.reach_is_exact());
+                let g = o.graph.as_ref().expect("searched");
+                graph.search(&o.columns, camera, radius, &mut scratch);
+                assert_eq!(g.directions, graph.directions);
+                assert_eq!(g.entered, graph.entered);
+                assert_eq!(g.bits, graph.bits);
+                assert_eq!(g.sky_reached, graph.sky_reached);
+
+                let full = reference(&o.columns, camera, radius, true);
+                let from = o.columns.section_of(camera);
+                let side = 2 * radius + 1;
+                let full_h = o.columns.sections + 2;
+                for x in from.0 - radius..=from.0 + radius {
+                    for z in from.2 - radius..=from.2 + radius {
+                        for y in -1..=o.columns.sections {
+                            let expected =
+                                full[(((z - from.2 + radius) * side + x - from.0 + radius) * full_h
+                                    + y
+                                    + 1) as usize];
+                            let actual = o.contains((x, y, z));
+                            if g.height == full_h {
+                                assert_eq!(
+                                    actual, expected,
+                                    "origin=({origin_x},{origin_z}) sparse={sparse} dy={dy} key=({x},{y},{z})"
+                                );
+                            } else {
+                                assert!(
+                                    !expected || actual,
+                                    "clamped search hid reachable ({x},{y},{z})"
+                                );
+                                if actual && !expected {
+                                    assert!(y >= g.y0 + g.height);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clamped 24-section world at negative coords: verify max_non_air clamp
+        // matches full reference conservatively only in the sky band.
+        let mut o = Occlusion::new(-64, 24);
+        for x in -206..=-194 {
+            for z in -106..=-94 {
+                for y in 0..5 {
+                    let vis = if next().is_multiple_of(3) {
+                        0
+                    } else {
+                        next() & ALL_VISIBLE
+                    };
+                    o.set((x, y, z), vis);
+                }
+            }
+        }
+        o.columns.assert_invariants();
+        let camera = DVec3::new(
+            f64::from(-200 * 16) + 5.2,
+            f64::from(2 * 16 - 64) + 6.4,
+            f64::from(-100 * 16) + 11.7,
+        );
+        o.settle(camera, 6);
+        let g = o.graph.as_ref().expect("searched");
+        assert!(g.height < o.columns.sections + 2, "expected vertical clamp");
+        assert!(o.reach_is_exact());
+        let full = reference(&o.columns, camera, 6, true);
+        let from = o.columns.section_of(camera);
+        let side = 13;
+        let full_h = 26;
+        for x in from.0 - 6..=from.0 + 6 {
+            for z in from.2 - 6..=from.2 + 6 {
+                for y in -1..=24 {
+                    let expected = full
+                        [(((z - from.2 + 6) * side + x - from.0 + 6) * full_h + y + 1) as usize];
+                    let actual = o.contains((x, y, z));
+                    assert!(!expected || actual, "hid ({x},{y},{z})");
+                    if actual && !expected {
+                        assert!(y >= g.y0 + g.height);
+                    }
+                    assert_eq!(o.reach().unwrap().contains((x, y, z)), actual);
+                }
+            }
+        }
+    }
+
+    /// Differential verification of render-thread `propagate_changes` (partial
+    /// updates) at negative coordinates, near and distant (>60 blocks) rays,
+    /// toroidal collisions, and column removals against an independent
+    /// `HashMap`-based partial BFS.
+    #[test]
+    fn differential_propagate_changes_matches_reference_partial_update() {
+        #[derive(Clone, Copy)]
+        struct RefNode {
+            directions: u8,
+            entered: u8,
+        }
+        #[derive(Clone, Copy)]
+        struct RefBox {
+            from: SectionKey,
+            radius: i32,
+            y0: i32,
+            height: i32,
+            min_y: i32,
+            sections: i32,
+        }
+
+        fn set_both(
+            o: &mut Occlusion,
+            vis_map: &mut HashMap<SectionKey, u64>,
+            k: SectionKey,
+            v: u64,
+        ) {
+            o.set(k, v);
+            if v == ALL_VISIBLE {
+                vis_map.remove(&k);
+            } else {
+                vis_map.insert(k, v);
+            }
+        }
+
+        fn ref_partial(
+            nodes: &mut HashMap<SectionKey, RefNode>,
+            sky_reached: &mut bool,
+            vis_map: &HashMap<SectionKey, u64>,
+            b: RefBox,
+            camera: DVec3,
+            seeds: &[SectionKey],
+        ) -> bool {
+            let in_box = |k: SectionKey| {
+                (k.0 - b.from.0).abs() <= b.radius
+                    && (k.2 - b.from.2).abs() <= b.radius
+                    && (b.y0..b.y0 + b.height).contains(&k.1)
+            };
+            let eye = (
+                (camera.x.floor() as i32) >> 4,
+                (camera.y.floor() as i32 - b.min_y) >> 4,
+                (camera.z.floor() as i32) >> 4,
+            );
+            let centre = [eye.0 * 16 + 8, eye.1 * 16 + b.min_y + 8, eye.2 * 16 + 8];
+            let axis = |d: usize| [1, 2, 0][d / 2];
+            let mut queue = VecDeque::new();
+            for &k in seeds {
+                if in_box(k) && nodes.contains_key(&k) {
+                    queue.push_back(k);
+                }
+            }
+            let mut grew = false;
+            while let Some(key) = queue.pop_front() {
+                if key.1 == b.y0 + b.height - 1 {
+                    *sky_reached = true;
+                }
+                let node = nodes[&key];
+                let vis = vis_map.get(&key).copied().unwrap_or(ALL_VISIBLE);
+                let exits = if node.entered == 0 || vis == ALL_VISIBLE {
+                    0x3f
+                } else {
+                    let mut out = 0u8;
+                    for f in 0..6 {
+                        if node.entered & (1 << f) != 0 {
+                            out |= (vis >> (f * 6)) as u8;
+                        }
+                    }
+                    out & 0x3f
+                };
+                let distant = (key.0 - eye.0).abs() > DISTANT_SECTIONS
+                    || (key.1 - eye.1).abs() > DISTANT_SECTIONS
+                    || (key.2 - eye.2).abs() > DISTANT_SECTIONS;
+                for (d, step) in STEPS.iter().enumerate() {
+                    if exits & (1 << d) == 0 || node.directions & (1 << (d ^ 1)) != 0 {
+                        continue;
+                    }
+                    let next = (key.0 + step.0, key.1 + step.1, key.2 + step.2);
+                    if !in_box(next) {
+                        continue;
+                    }
+                    if distant {
+                        let origin = [key.0 * 16, key.1 * 16 + b.min_y, key.2 * 16];
+                        let far = |c: usize| {
+                            if c == axis(d) {
+                                centre[c] > origin[c]
+                            } else {
+                                centre[c] < origin[c]
+                            }
+                        };
+                        let mut check = DVec3::new(
+                            f64::from(origin[0] + if far(0) { 16 } else { 0 }),
+                            f64::from(origin[1] + if far(1) { 16 } else { 0 }),
+                            f64::from(origin[2] + if far(2) { 16 } else { 0 }),
+                        );
+                        let len = |v: DVec3| (v.x * v.x + (v.y * v.y + v.z * v.z)).sqrt();
+                        let to = camera - check;
+                        let step_v = to * (1.0 / len(to)) * SECTION_DIAGONAL;
+                        let mut visible = true;
+                        let max_y = f64::from(b.min_y + b.sections * 16 - 1);
+                        let min_yf = f64::from(b.min_y);
+                        while {
+                            let d = check - camera;
+                            d.x * d.x + (d.y * d.y + d.z * d.z) > DISTANT_SQR
+                        } {
+                            check += step_v;
+                            if check.y > max_y || check.y < min_yf {
+                                break;
+                            }
+                            let sec = (
+                                floor(check.x) >> 4,
+                                (floor(check.y) - b.min_y) >> 4,
+                                floor(check.z) >> 4,
+                            );
+                            let hit = if in_box(sec) {
+                                nodes.contains_key(&sec)
+                            } else {
+                                *sky_reached
+                                    && (sec.0 - b.from.0).abs() <= b.radius
+                                    && (sec.2 - b.from.2).abs() <= b.radius
+                                    && sec.1 >= b.y0 + b.height
+                                    && (0..=b.sections).contains(&sec.1)
+                            };
+                            if !hit {
+                                visible = false;
+                                break;
+                            }
+                        }
+                        if !visible {
+                            continue;
+                        }
+                    }
+                    if let Some(existing) = nodes.get_mut(&next) {
+                        existing.entered |= 1 << (d ^ 1);
+                    } else {
+                        nodes.insert(
+                            next,
+                            RefNode {
+                                directions: node.directions | (1 << d),
+                                entered: 1 << (d ^ 1),
+                            },
+                        );
+                        queue.push_back(next);
+                        grew = true;
+                    }
+                }
+            }
+            grew
+        }
+
+        let (ox, oz) = (-512, -256);
+        let radius = 8;
+        let mut o = Occlusion::new(-64, 6);
+        let mut vis_map: HashMap<SectionKey, u64> = HashMap::new();
+
+        // Seal a box around camera and build a distant wall at dx = +4 (> 60 blocks).
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                for y in 0..6 {
+                    if dx == 1 || dx == 4 || dz == -2 {
+                        set_both(&mut o, &mut vis_map, (ox + dx, y, oz + dz), 0);
+                    }
+                }
+            }
+        }
+        // Add toroidal-colliding columns outside the box.
+        for shift in [16, 64, 128] {
+            set_both(&mut o, &mut vis_map, (ox + 1 + shift, 2, oz), 0);
+            set_both(&mut o, &mut vis_map, (ox + 4 + shift, 2, oz), 0);
+        }
+        let camera = DVec3::new(
+            f64::from(ox * 16) + 6.5,
+            f64::from(2 * 16 - 64) + 8.0,
+            f64::from(oz * 16) + 9.2,
+        );
+        o.settle(camera, radius);
+        o.settle(camera, radius);
+
+        // Snapshot initial reached state into reference map.
+        let (mut ref_nodes, mut ref_sky, graph_box) = {
+            let g = o.graph.as_ref().expect("searched");
+            let mut m = HashMap::new();
+            for x in g.from.0 - g.radius..=g.from.0 + g.radius {
+                for z in g.from.2 - g.radius..=g.from.2 + g.radius {
+                    for y in g.y0..g.y0 + g.height {
+                        let i = g.index((x, y, z)).unwrap();
+                        if g.directions[i] & REACHED != 0 {
+                            m.insert(
+                                (x, y, z),
+                                RefNode {
+                                    directions: g.directions[i] & !REACHED,
+                                    entered: g.entered[i],
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            (
+                m,
+                g.sky_reached,
+                RefBox {
+                    from: g.from,
+                    radius: g.radius,
+                    y0: g.y0,
+                    height: g.height,
+                    min_y: g.min_y,
+                    sections: g.sections,
+                },
+            )
+        };
+
+        // Phase 1: punch a doorway in the near wall (dx = 1) -> propagates up to distant wall.
+        // Phase 2: punch a doorway in the distant wall (dx = 4) -> exercises distant ray walk.
+        // Phase 3: remove a whole column on dz = -2 -> exercises remove_column + partial update.
+        // Phase 4: unreachable edit behind walls -> generation must NOT move.
+        let phases: [&[(SectionKey, Option<u64>)]; 4] = [
+            &[
+                ((ox + 1, 2, oz), Some(connects(4, 5))),
+                ((ox + 1, 2, oz + 1), Some(ALL_VISIBLE)),
+            ],
+            &[((ox + 4, 2, oz), Some(ALL_VISIBLE))],
+            &[((ox, 0, oz - 2), None)], // None => remove_column(ox, oz - 2)
+            &[((ox + 7, 3, oz - 7), Some(0))],
+        ];
+        let mut grew_count = 0;
+        for edits in phases {
+            let mut seeds = Vec::new();
+            for &(k, op) in edits {
+                match op {
+                    Some(v) => {
+                        let before = vis_map.get(&k).copied().unwrap_or(ALL_VISIBLE);
+                        set_both(&mut o, &mut vis_map, k, v);
+                        if before != v {
+                            seeds.push(k);
+                        }
+                    }
+                    None => {
+                        o.remove_column(k.0, k.2);
+                        for y in 0..6 {
+                            if vis_map.remove(&(k.0, y, k.2)).is_some() {
+                                seeds.push((k.0, y, k.2));
+                            }
+                        }
+                    }
+                }
+            }
+            let gen_before = o.generation();
+            o.propagate_changes(camera);
+            let expected_grew = ref_partial(
+                &mut ref_nodes,
+                &mut ref_sky,
+                &vis_map,
+                graph_box,
+                camera,
+                &seeds,
+            );
+            assert_eq!(o.generation() != gen_before, expected_grew);
+            grew_count += usize::from(expected_grew);
+            assert!(o.reach_is_exact());
+            o.columns.assert_invariants();
+
+            let g = o.graph.as_ref().expect("graph present");
+            assert_eq!(g.sky_reached, ref_sky);
+            for x in g.from.0 - g.radius..=g.from.0 + g.radius {
+                for z in g.from.2 - g.radius..=g.from.2 + g.radius {
+                    for y in g.y0..g.y0 + g.height {
+                        let i = g.index((x, y, z)).unwrap();
+                        match ref_nodes.get(&(x, y, z)) {
+                            Some(rn) => {
+                                assert_eq!(g.directions[i], rn.directions | REACHED, "{x},{y},{z}");
+                                assert_eq!(g.entered[i], rn.entered, "{x},{y},{z}");
+                                assert!(g.is_reached(i));
+                            }
+                            None => {
+                                assert_eq!(g.directions[i], 0, "{x},{y},{z}");
+                                assert!(!g.is_reached(i));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(grew_count >= 2, "expected multiple growing partial updates");
+
+        // Follow-up full search must match vanilla reference bit-for-bit.
+        o.settle(camera, radius);
+        o.settle(camera, radius);
+        assert_eq!(reached(&o), reference(&o.columns, camera, radius, true));
+    }
+
+    /// Exercises full RD 32 column count (4,761 columns -> 128x128 toroidal grid
+    /// with 0 collisions), +140-chunk east & south flight wraparound across
+    /// toroidal boundaries, differential search at the wrapped coordinates, and
+    /// zero-allocation steady-state `SearchScratch` / `Graph` buffer reuse for
+    /// both inside-world and above-world (`seed_outside`) RD 32 searches.
+    #[test]
+    fn rd32_toroidal_wraparound_and_zero_alloc_scratch_reuse() {
+        let mut o = Occlusion::new(-64, 24);
+        // Populate full 69x69 RD 32 column window (4,761 columns) with solid
+        // top layer y=23 and varied cave sections so height=26 and BFS is fast.
+        for x in -34..=34 {
+            for z in -34..=34 {
+                o.set((x, 23, z), 0);
+                if (x + z).rem_euclid(3) == 0 {
+                    o.set((x, 2, z), 0);
+                }
+            }
+        }
+        o.columns.assert_invariants();
+        assert_eq!(o.columns.map.len(), 69 * 69);
+        assert_eq!(o.columns.grid_shift, 7, "RD 32 promotes to 128x128 grid");
+        assert!(
+            o.columns.grid.iter().all(|c| c.overflow == 0),
+            "RD 32 window must have zero toroidal collisions"
+        );
+
+        // Seal a small room at y=2 around (-3..=3, -3..=3) so inside-world RD 32
+        // search runs full 4,225-column setup while visiting a small pocket.
+        for x in -4..=4 {
+            for z in -4..=4 {
+                for y in 1..=3 {
+                    o.set((x, y, z), 0);
+                }
+            }
+        }
+        let mut graph = Graph::default();
+        let mut scratch = SearchScratch::default();
+        let inside_cam = |cx: i32, cz: i32| {
+            DVec3::new(
+                f64::from(cx * 16) + 8.0,
+                f64::from(2 * 16 - 64) + 8.0,
+                f64::from(cz * 16) + 8.0,
+            )
+        };
+        let above_cam = |cx: i32, cz: i32| {
+            DVec3::new(
+                f64::from(cx * 16) + 5.3,
+                f64::from(26 * 16 - 64) + 4.0,
+                f64::from(cz * 16) + 11.7,
+            )
+        };
+
+        // Warm up buffers at RD 32 (radius = 32, side = 65, 4,225 columns) for
+        // both inside-world and above-world (`seed_outside`) searches.
+        graph.search(&o.columns, inside_cam(0, 0), 32, &mut scratch);
+        graph.search(&o.columns, above_cam(0, 0), 32, &mut scratch);
+        assert_eq!(scratch.col_slots.len(), 65 * 65);
+        assert_eq!(scratch.seeds.len(), 65 * 65);
+
+        let col_slots_buf = (scratch.col_slots.as_ptr(), scratch.col_slots.capacity());
+        let seeds_buf = (scratch.seeds.as_ptr(), scratch.seeds.capacity());
+        let queue_cap = scratch.queue.capacity();
+        let dir_buf = (graph.directions.as_ptr(), graph.directions.capacity());
+        let bits_buf = (graph.bits.as_ptr(), graph.bits.capacity());
+        let entered_buf = (graph.entered.as_ptr(), graph.entered.capacity());
+        let rays_buf = (graph.rays.as_ptr(), graph.rays.capacity());
+
+        for &(cx, cz) in &[(1, -1), (-2, 2), (2, 1), (-1, -2)] {
+            graph.search(&o.columns, inside_cam(cx, cz), 32, &mut scratch);
+            assert_eq!(
+                (scratch.col_slots.as_ptr(), scratch.col_slots.capacity()),
+                col_slots_buf
+            );
+            assert_eq!(
+                (scratch.seeds.as_ptr(), scratch.seeds.capacity()),
+                seeds_buf
+            );
+            assert_eq!(scratch.queue.capacity(), queue_cap);
+            assert_eq!(
+                (graph.directions.as_ptr(), graph.directions.capacity()),
+                dir_buf
+            );
+            assert_eq!((graph.bits.as_ptr(), graph.bits.capacity()), bits_buf);
+            assert_eq!(
+                (graph.entered.as_ptr(), graph.entered.capacity()),
+                entered_buf
+            );
+            assert_eq!((graph.rays.as_ptr(), graph.rays.capacity()), rays_buf);
+
+            graph.search(&o.columns, above_cam(cx, cz), 32, &mut scratch);
+            assert_eq!(
+                (scratch.col_slots.as_ptr(), scratch.col_slots.capacity()),
+                col_slots_buf
+            );
+            assert_eq!(
+                (scratch.seeds.as_ptr(), scratch.seeds.capacity()),
+                seeds_buf
+            );
+            assert_eq!(scratch.queue.capacity(), queue_cap);
+            assert_eq!(
+                (graph.directions.as_ptr(), graph.directions.capacity()),
+                dir_buf
+            );
+            assert_eq!((graph.bits.as_ptr(), graph.bits.capacity()), bits_buf);
+            assert_eq!(
+                (graph.entered.as_ptr(), graph.entered.capacity()),
+                entered_buf
+            );
+            assert_eq!((graph.rays.as_ptr(), graph.rays.capacity()), rays_buf);
+        }
+
+        // Simulate flying +140 chunks east and +140 chunks south across the
+        // 128-chunk toroidal wraparound boundary while unloading behind.
+        let mut min_x = -34;
+        let mut min_z = -34;
+        for _ in 0..140 {
+            let new_x = min_x + 69;
+            for z in min_z..min_z + 69 {
+                o.remove_column(min_x, z);
+                let vis = if (new_x ^ z) & 3 == 0 {
+                    0
+                } else {
+                    connects(new_x.rem_euclid(6) as usize, z.rem_euclid(6) as usize)
+                };
+                o.set((new_x, (new_x + z).rem_euclid(6), z), vis);
+            }
+            min_x += 1;
+        }
+        for _ in 0..140 {
+            let new_z = min_z + 69;
+            for x in min_x..min_x + 69 {
+                o.remove_column(x, min_z);
+                let vis = if (x ^ new_z) & 3 == 0 {
+                    0
+                } else {
+                    connects(x.rem_euclid(6) as usize, new_z.rem_euclid(6) as usize)
+                };
+                o.set((x, (x + new_z).rem_euclid(6), new_z), vis);
+            }
+            min_z += 1;
+        }
+        o.columns.assert_invariants();
+        assert_eq!(o.columns.map.len(), 69 * 69);
+        assert_eq!(o.columns.grid_shift, 7);
+        assert!(
+            o.columns.grid.iter().all(|c| c.overflow == 0),
+            "wrapped RD 32 window must retain zero toroidal collisions"
+        );
+
+        // Differential check centered directly on (128, 2, 128) inside the
+        // wrapped window (106..175), so the radius-6 box straddles both x=128
+        // and z=128 toroidal wraparound seams.
+        let wrapped_cam = DVec3::new(
+            f64::from(128 * 16) + 3.7,
+            f64::from(2 * 16 - 64) + 9.1,
+            f64::from(128 * 16) + 12.4,
+        );
+        o.settle(wrapped_cam, 6);
+        o.settle(wrapped_cam, 6);
+        assert!(o.reach_is_exact());
+        let g = o.graph.as_ref().expect("searched");
+        let full = reference(&o.columns, wrapped_cam, 6, true);
+        let from = o.columns.section_of(wrapped_cam);
+        let side = 13;
+        let full_h = o.columns.sections + 2;
+        for x in from.0 - 6..=from.0 + 6 {
+            for z in from.2 - 6..=from.2 + 6 {
+                for y in -1..=o.columns.sections {
+                    let expected = full
+                        [(((z - from.2 + 6) * side + x - from.0 + 6) * full_h + y + 1) as usize];
+                    let actual = o.contains((x, y, z));
+                    assert!(!expected || actual, "wrapped search hid ({x},{y},{z})");
+                    if actual && !expected {
+                        assert!(y >= g.y0 + g.height);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Verifies that the render-thread fallback (`worker = None`) reuses
+    /// `spare` and `scratch` buffers and produces bit-exact identical graphs
+    /// to the background worker path.
+    #[test]
+    fn render_thread_fallback_reuses_spare_and_matches_worker() {
+        let mut with_worker = Occlusion::new(0, 6);
+        let mut fallback = Occlusion::new(0, 6);
+        fallback.worker = None;
+        random_world(&mut with_worker, 0x1234_5678, 700, 6);
+        random_world(&mut fallback, 0x1234_5678, 700, 6);
+
+        // Warm up both `graph` and `spare` at full height (above-world searches
+        // always allocate `sections + 2` and populate `scratch.seeds`).
+        let warmup = [
+            at((0, 9, 0)) + DVec3::new(1.2, 0.0, 3.4),
+            at((2, 9, -2)) + DVec3::new(1.5, 0.0, -2.3),
+        ];
+        for &cam in &warmup {
+            with_worker.settle(cam, 6);
+            with_worker.settle(cam, 6);
+            fallback.update(cam, 6);
+            assert!(fallback.reach_is_exact());
+            let wg = with_worker.graph.as_ref().expect("worker searched");
+            let fg = fallback.graph.as_ref().expect("fallback searched");
+            assert_eq!(fg.directions, wg.directions);
+            assert_eq!(fg.entered, wg.entered);
+            assert_eq!(fg.bits, wg.bits);
+            assert_eq!(fg.sky_reached, wg.sky_reached);
+        }
+        let buf_a = fallback.graph.as_ref().unwrap().directions.as_ptr();
+        let buf_b = fallback.spare.directions.as_ptr();
+        let col_slots_ptr = fallback.scratch.col_slots.as_ptr();
+        let seeds_ptr = fallback.scratch.seeds.as_ptr();
+
+        let cameras = [
+            at((0, 2, 0)) + DVec3::new(2.1, -3.4, 4.7),
+            at((1, 10, -1)) + DVec3::new(-1.3, 0.0, 2.7),
+            at((-1, -2, 3)) + DVec3::new(-4.2, 0.0, 1.1),
+            at((-2, 4, 1)) + DVec3::new(3.0, 2.5, -1.8),
+        ];
+        for &cam in &cameras {
+            with_worker.settle(cam, 6);
+            with_worker.settle(cam, 6);
+            fallback.update(cam, 6);
+            assert!(fallback.reach_is_exact());
+            let wg = with_worker.graph.as_ref().expect("worker searched");
+            let fg = fallback.graph.as_ref().expect("fallback searched");
+            assert_eq!(fg.directions, wg.directions);
+            assert_eq!(fg.entered, wg.entered);
+            assert_eq!(fg.bits, wg.bits);
+            assert_eq!(fg.sky_reached, wg.sky_reached);
+            let cur_a = fg.directions.as_ptr();
+            let cur_b = fallback.spare.directions.as_ptr();
+            assert!(
+                (cur_a == buf_a && cur_b == buf_b) || (cur_a == buf_b && cur_b == buf_a),
+                "fallback must ping-pong warm graph/spare buffers without reallocating"
+            );
+            assert_eq!(fallback.scratch.col_slots.as_ptr(), col_slots_ptr);
+            assert_eq!(fallback.scratch.seeds.as_ptr(), seeds_ptr);
+        }
+    }
+
+    /// Verifies `walk()` using L1-resident `contains_bit()` matches `reference`
+    /// bit-for-bit on distant (> 60 block) rays across walls, pinholes, and
+    /// overhangs at negative coordinates.
+    #[test]
+    fn walk_contains_bit_matches_directions_in_distant_rays() {
+        let mut o = Occlusion::new(-64, 6);
+        let (ox, oz) = (-300, -150);
+        // Wall at dx = +2 with a pinhole at (y=2, dz=0) and overhang at y=4.
+        for dz in -4..=4 {
+            for y in 0..6 {
+                if !(dz == 0 && y == 2) {
+                    o.set((ox + 2, y, oz + dz), 0);
+                }
+            }
+        }
+        for dx in 3..=7 {
+            for dz in -3..=3 {
+                o.set((ox + dx, 4, oz + dz), 0);
+            }
+        }
+        let camera = DVec3::new(
+            f64::from(ox * 16) + 11.3,
+            f64::from(2 * 16 - 64) + 5.7,
+            f64::from(oz * 16) + 3.9,
+        );
+        o.settle(camera, 12);
+        o.settle(camera, 12);
+        assert!(o.reach_is_exact());
+        let actual = reached(&o);
+        let with_rays = reference(&o.columns, camera, 12, true);
+        let without_rays = reference(&o.columns, camera, 12, false);
+        assert_eq!(actual, with_rays);
+        let culled_by_rays = without_rays
+            .iter()
+            .zip(&actual)
+            .filter(|(a, b)| **a && !**b)
+            .count();
+        assert!(
+            culled_by_rays >= 10,
+            "distant rays must actively cull behind wall ({culled_by_rays})"
         );
     }
 }
