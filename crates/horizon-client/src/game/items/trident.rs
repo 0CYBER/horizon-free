@@ -219,6 +219,15 @@ impl Game<'_> {
                 if let Some(p) = self.player.as_mut() {
                     p.position.y += moved.y;
                 }
+                // `ServerPlayer.move` sends its client nothing: the client lifted
+                // itself. The acting player's record moves with its body, or the
+                // turn's end would send the lift back as a teleport that stops
+                // the spin (#19797).
+                if let Some(conn) = self.lan_acting
+                    && let Some(host) = self.lan.as_mut()
+                {
+                    host.hub.update_guest(conn, |g| g.position[1] += moved.y);
+                }
             }
             if !server_client {
                 let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));
@@ -1252,5 +1261,52 @@ mod tests {
         game.release_trident(10);
         assert_eq!(game.tridents[1].pickup, super::Pickup::CreativeOnly);
         assert!(game.held().is_some());
+    }
+
+    /// #19797: a player standing on the ground who lets go of a Riptide trident
+    /// keeps the launch its client made. The server lifts its own copy of the
+    /// player too (`move(SELF, (0, 1.1999999, 0))`), as vanilla does, and sends
+    /// the player nothing for it: a teleport there would stop the spin's motion.
+    #[test]
+    #[ignore = "daily"]
+    fn a_guests_riptide_from_the_ground_lifts_its_server_copy_without_a_teleport() {
+        use crate::game::native_sound_refs::tests::packets;
+        use horizon_client::lan::PlayerSender;
+        use horizon_protocol::packets::play::Clientbound as C;
+        use std::sync::Arc;
+
+        crate::game::native_guest_turn_tests::with_guests(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(horizon_client::chunk::Chunk::empty(0, 0)));
+            let (tx, rx) = std::sync::mpsc::channel();
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .update_guest(13, |g| {
+                    g.sender = PlayerSender::new(tx, Arc::default());
+                    g.on_ground = true;
+                })
+                .unwrap();
+            let mut riptide = super::ItemStack::new("minecraft:trident", 1);
+            riptide.enchant("minecraft:riptide", 1);
+            game.as_guest(13, |game| {
+                game.player.as_mut().unwrap().fluids.was_touching_water = true;
+                *game.held_mut() = Some(riptide);
+                game.release_trident(10);
+            })
+            .unwrap();
+            let guest = game.lan.as_ref().unwrap().hub.guest(13).unwrap();
+            assert_eq!(
+                guest.position,
+                [3.0, 64.0 + f64::from(1.1999999_f32), 5.0]
+            );
+            let teleports = packets(&rx)
+                .into_iter()
+                .filter(|p| matches!(p, C::PlayerPosition(_)))
+                .count();
+            assert_eq!(teleports, 0, "the lift was sent back as a teleport");
+        });
     }
 }
