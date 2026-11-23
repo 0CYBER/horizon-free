@@ -1863,14 +1863,28 @@ mod tests {
         bytes
     }
 
-    /// Decodes `bytes` as a slot on a thread with the 2 MiB stack network threads get.
-    fn read_on_network_stack(bytes: Vec<u8>) -> Result<Option<Stack>> {
+    /// The stack network threads get: 2 MiB. A Windows debug build's frames are larger than that
+    /// budget allows for `MAX_NESTING` levels (its release build fits, as Linux's builds do), so
+    /// there it gets 4 MiB.
+    const NETWORK_STACK: usize = if cfg!(all(windows, debug_assertions)) {
+        4
+    } else {
+        2
+    } << 20;
+
+    /// Runs `f` on a thread with the network threads' stack.
+    fn on_network_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         std::thread::Builder::new()
-            .stack_size(2 << 20)
-            .spawn(move || Slot::read(&mut Reader::new(&bytes)))
+            .stack_size(NETWORK_STACK)
+            .spawn(f)
             .unwrap()
             .join()
             .unwrap()
+    }
+
+    /// Decodes `bytes` as a slot on a thread with the network threads' stack.
+    fn read_on_network_stack(bytes: Vec<u8>) -> Result<Option<Stack>> {
+        on_network_stack(move || Slot::read(&mut Reader::new(&bytes)))
     }
 
     #[test]
@@ -1900,8 +1914,12 @@ mod tests {
         }
         assert_eq!(depth, MAX_NESTING);
         // A refused stack leaves nothing counted behind on its thread.
-        assert!(Slot::read(&mut Reader::new(&nested_bundles(MAX_NESTING as usize + 1))).is_err());
-        assert!(Slot::read(&mut Reader::new(&bytes)).unwrap().is_some());
+        on_network_stack(move || {
+            assert!(
+                Slot::read(&mut Reader::new(&nested_bundles(MAX_NESTING as usize + 1))).is_err()
+            );
+            assert!(Slot::read(&mut Reader::new(&bytes)).unwrap().is_some());
+        });
     }
 
     #[test]
