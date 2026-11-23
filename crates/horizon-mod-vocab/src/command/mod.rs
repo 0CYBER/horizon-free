@@ -208,6 +208,43 @@ impl CommandResult {
     }
 }
 
+/// What `Commands::command_info` says about one command: a native mod's registered usages, or
+/// vanilla's root command with its aliases resolved (`tp` gives `teleport`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct CommandInfo {
+    /// The root word, without a slash. For an alias, its target's name.
+    pub name: String,
+    /// Vanilla's root commands that redirect to this one (`tp` for `teleport`). Empty for a mod's command.
+    pub aliases: Vec<String>,
+    /// The usages: a mod's `Command::usage` as it was registered, or vanilla's usages as it prints them.
+    pub usages: Vec<String>,
+    /// The operator level needed to run it: the lowest of a mod's usages, or vanilla's permission.
+    pub level: u8,
+    /// True for vanilla's command, false for one a native mod registered.
+    pub vanilla: bool,
+}
+
+impl CommandInfo {
+    /// A command's description, as `Commands::command_info` answers it.
+    pub fn new(
+        name: String,
+        aliases: Vec<String>,
+        usages: Vec<String>,
+        level: u8,
+        vanilla: bool,
+    ) -> Self {
+        Self {
+            name,
+            aliases,
+            usages,
+            level,
+            vanilla,
+        }
+    }
+}
+
 pub(crate) mod command_argument;
 pub(crate) mod entity_selector;
 pub(crate) mod suggestion;

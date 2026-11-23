@@ -190,6 +190,30 @@ pub trait Commands {
             crate::world::phase::LoadAccess::WorldOnly,
         )
     }
+    /// Side: server.
+    /// The command `label` names (Paper's `Server.getCommandMap().getCommand(label)`), a leading
+    /// slash dropped: a usage a native mod registered (`register_commands`), else vanilla's root
+    /// command, an alias resolved to its target (`tp` gives `teleport`, with `aliases` naming
+    /// `tp`). `level` is the lowest a mod's usages ask, or vanilla's permission for the root.
+    /// None when neither has the name. Reads only; it runs nothing. Horizon has no permission
+    /// nodes: the level is the answer.
+    fn command_info(&mut self, label: &str) -> Option<CommandInfo> {
+        crate::world::phase::unprovided(
+            "Commands::command_info",
+            "command_info",
+            crate::world::phase::LoadAccess::WorldOnly,
+        )
+    }
+    /// Side: server.
+    /// The root names of every command the server answers, mods' and vanilla's (aliases
+    /// included), sorted, each once. Empty without a server world.
+    fn command_names(&mut self) -> Vec<String> {
+        crate::world::phase::unprovided(
+            "Commands::command_names",
+            "command_names",
+            crate::world::phase::LoadAccess::WorldOnly,
+        )
+    }
 }
 /// The levels service, reached through its host.
 pub trait Levels {
