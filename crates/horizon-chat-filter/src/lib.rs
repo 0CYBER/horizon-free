@@ -550,6 +550,33 @@ pub fn install() {
     chat_guard::install(load);
 }
 
+/// How much of a refused text the log keeps: a chat line (256) whole, with room for a sign (4 lines)
+/// or a title; a book page is cut.
+const LOG_TEXT_CHARS: usize = 1024;
+/// A player name is 16 characters; the rest is cut.
+const LOG_NAME_CHARS: usize = 64;
+
+/// `text` on one line: every control and line-separator character (`\r`, U+0085, U+2028/2029...)
+/// becomes a space, so that a text can't start a log line of its own, and what is past `max`
+/// characters is cut, with a marker.
+fn one_line(text: &str, max: usize) -> String {
+    let mut out: String = text
+        .chars()
+        .take(max)
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    if text.chars().nth(max).is_some() {
+        out.push_str("...[cut]");
+    }
+    out
+}
+
 /// One line of `logs/chat-filter.log`, without its newline.
 pub fn log_line(
     now: i64,
@@ -560,10 +587,8 @@ pub fn log_line(
     action: Action,
     text: &str,
 ) -> String {
-    let text: String = text
-        .chars()
-        .map(|c| if c == '\n' { ' ' } else { c })
-        .collect();
+    let text = one_line(text, LOG_TEXT_CHARS);
+    let name = one_line(name, LOG_NAME_CHARS);
     format!(
         "{} {name} {} {place} hit {count} {}: {text}",
         utc(now),

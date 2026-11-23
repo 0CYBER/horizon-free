@@ -320,6 +320,28 @@ fn log_lines_have_the_time_the_player_and_the_text() {
 }
 
 #[test]
+fn a_logged_text_or_name_cannot_forge_a_line() {
+    let line = log_line(
+        NOW,
+        "Ann\r\nBob",
+        1,
+        "chat",
+        1,
+        Action::Refused,
+        "a\rb\u{85}c\u{2028}d\u{2029}e\u{b}f\u{c}g",
+    );
+    assert!(!line.contains(|c: char| c.is_control() || c == '\u{2028}' || c == '\u{2029}'));
+    assert!(line.contains(" Ann  Bob "));
+    assert!(line.ends_with(": a b c d e f g"));
+    // A long text is cut, with a marker.
+    let long = log_line(NOW, "Ann", 1, "book", 1, Action::Refused, &"x".repeat(5000));
+    assert!(long.len() < 1200 && long.ends_with("...[cut]"));
+    // A chat line (256) is kept whole.
+    let chat = "y".repeat(256);
+    assert!(log_line(NOW, "Ann", 1, "chat", 1, Action::Refused, &chat).ends_with(&chat));
+}
+
+#[test]
 fn a_message_costs_little() {
     // A long message through the whole list stays far below a tick (debug builds included).
     let f = filter();
