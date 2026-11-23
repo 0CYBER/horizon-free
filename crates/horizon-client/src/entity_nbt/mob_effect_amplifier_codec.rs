@@ -132,3 +132,45 @@ fn modeled_amplifier_mutation_overrides_stale_raw_and_omits_zero() {
         }
     }
 }
+
+/// `MobEffectInstance.Details.CODEC`: a `hidden_effect` is another `Details`, so the weaker
+/// instance's amplifier is the same unsigned byte as the active one's, and 200 (`-56b`)
+/// loads back as 200, not as 0 (level I).
+#[test]
+fn a_hidden_effects_amplifier_roundtrips_as_an_unsigned_byte() {
+    let types = types();
+    let cases = [
+        (Tag::Byte(3), 3),
+        (Tag::Byte(-128), 128),
+        (Tag::Byte(-56), 200),
+        (Tag::Byte(-1), 255),
+        (Tag::Int(256), 0),
+    ];
+    for (value, expected) in cases {
+        let mut raw = input(None);
+        let effect = Tag::compound([
+            ("id", string("minecraft:night_vision")),
+            ("amplifier", Tag::Byte(-1)),
+            ("duration", Tag::Int(200)),
+            (
+                "hidden_effect",
+                Tag::compound([("duration", Tag::Int(400)), ("amplifier", value.clone())]),
+            ),
+        ]);
+        put(&mut raw, "active_effects", Tag::List(vec![effect]));
+        let mob = mob_from_nbt(&raw, &types, 7, None).unwrap();
+        assert_eq!(mob.extra.effect_chains.len(), 1, "{value:?}");
+        assert_eq!(mob.extra.effect_chains[0].amplifier, expected, "{value:?}");
+        for source in [None, Some(&raw)] {
+            let saved = mob_to_nbt(&mob, [158, 0, 0, 1], source, None, |_| None);
+            let hidden = saved_effect(&saved).get("hidden_effect").unwrap();
+            let expected_tag = (expected != 0).then_some(Tag::Byte(expected as u8 as i8));
+            assert_eq!(hidden.get("amplifier"), expected_tag.as_ref(), "{value:?}");
+            let back = mob_from_nbt(&saved, &types, 8, None).unwrap();
+            assert_eq!(
+                back.extra.effect_chains, mob.extra.effect_chains,
+                "{value:?}"
+            );
+        }
+    }
+}
