@@ -79,11 +79,17 @@ pub fn currencies(c: &Catalogue) -> Vec<String> {
 /// dollars (or the first one on offer).
 pub fn guess_currency(available: &[String], locale: Option<&str>) -> Option<String> {
     const EURO: &[&str] = &[
-        "AT", "BE", "CY", "DE", "EE", "ES", "FI", "FR", "GR", "HR", "IE", "IT", "LT", "LU", "LV",
-        "MT", "NL", "PT", "SI", "SK", "AD", "MC", "SM", "VA", "ME", "XK",
+        "AT", "BE", "BG", "CY", "DE", "EE", "ES", "FI", "FR", "GR", "HR", "IE", "IT", "LT", "LU",
+        "LV", "MT", "NL", "PT", "SI", "SK", "AD", "MC", "SM", "VA", "ME", "XK",
     ];
+    // The region is the first two-letter part after the language: Windows names some locales
+    // with their script first (`sr-Latn-ME` is Montenegro).
     let region = locale
-        .and_then(|l| l.split(['-', '_', '.']).nth(1))
+        .and_then(|l| {
+            l.split(['-', '_', '.'])
+                .skip(1)
+                .find(|part| part.len() == 2 && part.bytes().all(|b| b.is_ascii_alphabetic()))
+        })
         .map(str::to_ascii_uppercase)
         .unwrap_or_default();
     let wanted = match region.as_str() {

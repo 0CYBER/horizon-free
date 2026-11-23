@@ -184,6 +184,12 @@ fn the_currency_follows_the_system_locale() {
     assert_eq!(guess(Some("fr-CH")), "CHF");
     assert_eq!(guess(Some("en_GB.UTF-8")), "GBP");
     assert_eq!(guess(Some("de-AT")), "EUR");
+    // Bulgaria uses the euro since 1 January 2026.
+    assert_eq!(guess(Some("bg-BG")), "EUR");
+    assert_eq!(guess(Some("bg_BG.UTF-8")), "EUR");
+    // Windows names some locales with a script: the region comes after it.
+    assert_eq!(guess(Some("sr-Latn-ME")), "EUR");
+    assert_eq!(guess(Some("sr-Latn-RS")), "USD");
     assert_eq!(guess(Some("en-US")), "USD");
     assert_eq!(guess(Some("fr")), "USD");
     assert_eq!(guess(None), "USD");
