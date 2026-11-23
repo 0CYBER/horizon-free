@@ -181,6 +181,63 @@ pub struct Extras<'a> {
     pub features: Option<&'a dyn Fn(&mut wgpu::RenderPass<'_>, Stage)>,
 }
 
+/// Counts of the translucent "Features, World Border, Weather" draws in a frame,
+/// used to skip `Extras::features` completely when a frame emits none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct FeatureCounts {
+    pub(super) text_quads: u32,
+    pub(super) crumbling_quads: u32,
+    pub(super) swirl_quads: u32,
+    pub(super) shadow_quads: u32,
+    pub(super) particle_quads: u32,
+    pub(super) item_quads: u32,
+    pub(super) entity_quads: u32,
+    pub(super) additive_quads: u32,
+    pub(super) weather_quads: u32,
+    pub(super) lightning_bolts: bool,
+    pub(super) world_border: bool,
+}
+
+impl FeatureCounts {
+    /// Whether at least one OIT feature draw exists this frame.
+    pub(super) fn any(self) -> bool {
+        self.text_quads > 0
+            || self.crumbling_quads > 0
+            || self.swirl_quads > 0
+            || self.shadow_quads > 0
+            || self.particle_quads > 0
+            || self.item_quads > 0
+            || self.entity_quads > 0
+            || self.additive_quads > 0
+            || self.weather_quads > 0
+            || self.lightning_bolts
+            || self.world_border
+    }
+}
+
+/// How `Extras::features` executes within each OIT stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FeaturesPass {
+    /// Zero translucent feature draws this frame: omit feature recording.
+    Skip,
+    /// No active water mask (`terrain_depth` is `depth`): draw features in the
+    /// same render pass as terrain, avoiding a full-screen store+load per stage.
+    Coalesced,
+    /// A water mask patched `terrain_depth`: features must run in a separate
+    /// pass against the unmasked world `depth`.
+    Separate,
+}
+
+fn features_pass(has_features: bool, has_water_mask: bool) -> FeaturesPass {
+    if !has_features {
+        FeaturesPass::Skip
+    } else if has_water_mask {
+        FeaturesPass::Separate
+    } else {
+        FeaturesPass::Coalesced
+    }
+}
+
 struct Views {
     bounds: wgpu::TextureView,
     culled: wgpu::TextureView,
@@ -748,66 +805,80 @@ impl Oit {
             self.execute_water_mask(encoder, t, color, depth, mask, timing.as_deref_mut());
         }
         let terrain_depth = water_mask.map_or(depth, |(_, d)| &d.view);
+        let features_mode = features_pass(extras.features.is_some(), water_mask.is_some());
         let [c0, c1] = &t.views.coefficients;
         let culled = &t.views.culled;
-        for (stage, label, group, first, then) in [
+        let bounds_first = [attachment(
+            &t.views.bounds,
+            wgpu::LoadOp::Clear(BOUNDS_CLEAR),
+        )];
+        let bounds_features = [attachment(&t.views.bounds, load)];
+        // The clouds' bounds join the culled ones.
+        let bounds_clouds = [attachment(culled, load)];
+        let transmittance_first = [attachment(c0, clear), attachment(c1, clear)];
+        let transmittance_load = [attachment(c0, load), attachment(c1, load)];
+        let accumulate_first = [attachment(&t.views.accumulated, clear)];
+        let accumulate_load = [attachment(&t.views.accumulated, load)];
+        for (stage, label, group, first, features_targets, cloud_targets) in [
             (
                 Stage::DepthBounds,
                 "OIT depth bounds",
                 &t.alone,
-                vec![attachment(
-                    &t.views.bounds,
-                    wgpu::LoadOp::Clear(BOUNDS_CLEAR),
-                )],
-                // The clouds' bounds join the culled ones.
-                vec![attachment(culled, load)],
+                bounds_first.as_slice(),
+                bounds_features.as_slice(),
+                bounds_clouds.as_slice(),
             ),
             (
                 Stage::Transmittance,
                 "OIT transmittance",
                 &t.sampled,
-                vec![attachment(c0, clear), attachment(c1, clear)],
-                vec![attachment(c0, load), attachment(c1, load)],
+                transmittance_first.as_slice(),
+                transmittance_load.as_slice(),
+                transmittance_load.as_slice(),
             ),
             (
                 Stage::Accumulate,
                 "OIT accumulate",
                 &t.accumulate,
-                vec![attachment(&t.views.accumulated, clear)],
-                vec![attachment(&t.views.accumulated, load)],
+                accumulate_first.as_slice(),
+                accumulate_load.as_slice(),
+                accumulate_load.as_slice(),
             ),
         ] {
             {
                 let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(label),
                     timestamp_writes: timing.as_deref_mut().and_then(|t| t.writes(label)),
-                    color_attachments: &first,
+                    color_attachments: first,
                     depth_stencil_attachment: read_only(terrain_depth),
                     ..Default::default()
                 });
                 let pixels = super::pixel_count(terrain_depth);
                 let mut pass =
                     super::pack_timing::counted(timing.as_deref_mut(), pass, pixels, label);
+                if features_mode == FeaturesPass::Coalesced {
+                    pass.stage(timing.as_deref_mut(), "OIT terrain");
+                }
                 pass.set_bind_group(GROUP, group, &[]);
                 draw(&mut pass, stage);
+                if features_mode == FeaturesPass::Coalesced
+                    && let Some(features) = extras.features
+                {
+                    pass.split(timing.as_deref_mut(), "OIT features");
+                    pass.stage(timing.as_deref_mut(), "OIT features");
+                    pass.set_bind_group(GROUP, group, &[]);
+                    features(&mut pass, stage);
+                }
             }
-            if let Some(features) = extras.features {
+            if features_mode == FeaturesPass::Separate
+                && let Some(features) = extras.features
+            {
                 // Over the world's own depth, even where a water mask patched
                 // the terrain's: the masks only hide water.
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(label),
                     timestamp_writes: timing.as_deref_mut().and_then(|t| t.writes("OIT features")),
-                    color_attachments: &[attachment(
-                        match stage {
-                            Stage::DepthBounds => &t.views.bounds,
-                            Stage::Transmittance => c0,
-                            Stage::Accumulate => &t.views.accumulated,
-                        },
-                        load,
-                    )]
-                    .into_iter()
-                    .chain((stage == Stage::Transmittance).then(|| attachment(c1, load)))
-                    .collect::<Vec<_>>(),
+                    color_attachments: features_targets,
                     depth_stencil_attachment: read_only(depth),
                     ..Default::default()
                 });
@@ -823,7 +894,7 @@ impl Oit {
                     t,
                     stage,
                     depth,
-                    (label, group, &then),
+                    (label, group, cloud_targets),
                     (clouds, cloud_depth),
                     timing.as_deref_mut(),
                 );
@@ -1105,6 +1176,376 @@ mod tests {
                 (linear - distance).abs() < distance * 2e-3,
                 "{distance}: {linear}"
             );
+        }
+    }
+
+    #[test]
+    fn features_pass_coalesces_without_water_mask_and_splits_with_one() {
+        assert_eq!(features_pass(false, false), FeaturesPass::Skip);
+        assert_eq!(features_pass(false, true), FeaturesPass::Skip);
+        assert_eq!(features_pass(true, false), FeaturesPass::Coalesced);
+        assert_eq!(features_pass(true, true), FeaturesPass::Separate);
+    }
+
+    #[test]
+    fn empty_feature_counts_skip_and_each_source_enables_features() {
+        assert!(!FeatureCounts::default().any());
+        let cases = [
+            FeatureCounts {
+                text_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                crumbling_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                swirl_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                shadow_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                particle_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                item_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                entity_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                additive_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                weather_quads: 1,
+                ..Default::default()
+            },
+            FeatureCounts {
+                lightning_bolts: true,
+                ..Default::default()
+            },
+            FeatureCounts {
+                world_border: true,
+                ..Default::default()
+            },
+        ];
+        for counts in cases {
+            assert!(counts.any(), "{counts:?}");
+        }
+    }
+
+    #[test]
+    fn oit_shader_unrolls_haar_wavelets_without_exp2_or_local_arrays() {
+        fn has_loop(block: &naga::Block) -> bool {
+            block.iter().any(|stmt| match stmt {
+                naga::Statement::Loop { .. } => true,
+                naga::Statement::Block(inner) => has_loop(inner),
+                naga::Statement::If { accept, reject, .. } => has_loop(accept) || has_loop(reject),
+                _ => false,
+            })
+        }
+
+        let wgsl = include_str!("../oit.wgsl");
+        let height_line = wgsl
+            .lines()
+            .find(|line| line.starts_with("const OIT_WAVELET_HEIGHT_1: f32 = "))
+            .expect("OIT_WAVELET_HEIGHT_1 constant");
+        let parsed: f32 = height_line
+            .trim_start_matches("const OIT_WAVELET_HEIGHT_1: f32 = ")
+            .trim_end_matches(';')
+            .parse()
+            .expect("valid f32 literal");
+        assert_eq!(parsed.to_bits(), std::f32::consts::SQRT_2.to_bits());
+        assert_eq!(parsed.to_bits(), 0.5_f32.exp2().to_bits());
+
+        let source = crate::gfx::terrain_shader() + wgsl + include_str!("../oit_world.wgsl");
+        let module = naga::front::wgsl::parse_str(&source).unwrap();
+        for name in ["oit_add_transmittance", "oit_sample_absorbance"] {
+            let (_, function) = module
+                .functions
+                .iter()
+                .find(|(_, f)| f.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("missing WGSL function {name}"));
+            assert!(
+                !function.expressions.iter().any(|(_, expr)| matches!(
+                    expr,
+                    naga::Expression::Math {
+                        fun: naga::MathFunction::Exp2,
+                        ..
+                    }
+                )),
+                "{name} must not emit runtime exp2"
+            );
+            assert!(
+                !function.local_variables.iter().any(|(_, local)| matches!(
+                    module.types[local.ty].inner,
+                    naga::TypeInner::Array { .. }
+                )),
+                "{name} must not spill a local array"
+            );
+            assert!(!has_loop(&function.body), "{name} must be unrolled");
+        }
+    }
+
+    #[test]
+    fn unrolled_haar_wavelet_matches_looped_reference_bit_for_bit() {
+        const BINS: i32 = 8;
+
+        fn ref_add(absorbance: f32, original: f32) -> [f32; 8] {
+            let mut c = [0.0_f32; 8];
+            let depth = original * ((BINS - 1) as f32) / (BINS as f32);
+            c[0] = absorbance * (1.0 - depth);
+            let mut tree = (original * ((BINS - 1) as f32)).floor() as i32 + BINS;
+            for level in 0..=2 {
+                let power = 2 - level;
+                let parent = tree >> 1;
+                let index_at_parent = (parent & ((1 << power) - 1)) as f32;
+                let right = tree & 1;
+                let side = 1 - (right << 1);
+                let width = (-(power as f32)).exp2();
+                let height = ((power as f32) * 0.5).exp2();
+                let offset = depth - width * index_at_parent;
+                c[parent as usize] =
+                    ((right as f32) * width + (side as f32) * offset) * height * absorbance;
+                tree = parent;
+            }
+            c
+        }
+
+        fn unrolled_add(absorbance: f32, original: f32) -> [f32; 8] {
+            let in_bins = original * ((BINS - 1) as f32);
+            let depth = in_bins / (BINS as f32);
+            let c0 = absorbance * (1.0 - depth);
+            let bin = (in_bins.floor() as i32).clamp(0, BINS - 1);
+
+            let p0 = bin >> 1;
+            let r0 = (bin & 1) != 0;
+            let offset0 = depth - 0.25 * (p0 as f32);
+            let v0 = if r0 { 0.25 - offset0 } else { offset0 } * 2.0 * absorbance;
+
+            let p1 = bin >> 2;
+            let r1 = (p0 & 1) != 0;
+            let offset1 = depth - if p1 != 0 { 0.5 } else { 0.0 };
+            let v1 =
+                if r1 { 0.5 - offset1 } else { offset1 } * std::f32::consts::SQRT_2 * absorbance;
+
+            let r2 = p1 != 0;
+            let v2 = if r2 { 1.0 - depth } else { depth } * absorbance;
+
+            [
+                c0,
+                v2,
+                if r2 { 0.0 } else { v1 },
+                if r2 { v1 } else { 0.0 },
+                if p0 == 0 { v0 } else { 0.0 },
+                if p0 == 1 { v0 } else { 0.0 },
+                if p0 == 2 { v0 } else { 0.0 },
+                if p0 == 3 { v0 } else { 0.0 },
+            ]
+        }
+
+        fn lane(v: [f32; 4], index: i32) -> f32 {
+            let lo = if (index & 1) != 0 { v[1] } else { v[0] };
+            let hi = if (index & 1) != 0 { v[3] } else { v[2] };
+            if (index & 2) != 0 { hi } else { lo }
+        }
+
+        fn wgsl_fract(x: f32) -> f32 {
+            x - x.floor()
+        }
+
+        fn wgsl_mix(a: f32, b: f32, t: f32) -> f32 {
+            a * (1.0 - t) + b * t
+        }
+
+        fn ref_sample(c: [f32; 8], original: f32, current: f32) -> f32 {
+            let mut average = c[0];
+            if average == 0.0 {
+                return 0.0;
+            }
+            let in_bins = original * ((BINS - 1) as f32);
+            let depth = in_bins / (BINS as f32);
+            average -= current * (1.0 - depth);
+            let mut tree_b = (in_bins.floor() as i32).clamp(0, BINS - 1);
+            let sample_a_too = tree_b >= 1;
+            let mut tree_a = if sample_a_too { tree_b - 1 } else { tree_b };
+            tree_b += BINS;
+            tree_a += BINS;
+            let mut sample_b = average;
+            let mut sample_a = if sample_a_too { average } else { 0.0 };
+            for level in 0..=2 {
+                let power = 2 - level;
+                let width = (-(power as f32)).exp2();
+                let height = ((power as f32) * 0.5).exp2();
+                let parent_b = tree_b >> 1;
+                let right_b = tree_b & 1;
+                let side_b = 1 - (right_b << 1);
+                let index_at_parent = (parent_b & ((1 << power) - 1)) as f32;
+                let offset = depth - width * index_at_parent;
+                let own = ((right_b as f32) * width + (side_b as f32) * offset) * height * current;
+                let difference_b = c[parent_b as usize] - own;
+                sample_b -= height * difference_b * (side_b as f32);
+                tree_b = parent_b;
+                if sample_a_too {
+                    let parent_a = tree_a >> 1;
+                    let difference_a = if parent_a == parent_b {
+                        difference_b
+                    } else {
+                        c[parent_a as usize]
+                    };
+                    let side_a = 1 - ((tree_a & 1) << 1);
+                    sample_a -= height * difference_a * (side_a as f32);
+                    tree_a = parent_a;
+                }
+            }
+            let blend = if in_bins >= BINS as f32 {
+                1.0
+            } else {
+                wgsl_fract(in_bins)
+            };
+            wgsl_mix(sample_a, sample_b, blend)
+        }
+
+        fn unrolled_sample(c0: [f32; 4], c1: [f32; 4], original: f32, current: f32) -> f32 {
+            let mut average = c0[0];
+            if average == 0.0 {
+                return 0.0;
+            }
+            let in_bins = original * ((BINS - 1) as f32);
+            let depth = in_bins / (BINS as f32);
+            average -= current * (1.0 - depth);
+            let bin_b = (in_bins.floor() as i32).clamp(0, BINS - 1);
+            let sample_a_too = bin_b >= 1;
+            let bin_a = if sample_a_too { bin_b - 1 } else { bin_b };
+            let mut sample_b = average;
+            let mut sample_a = if sample_a_too { average } else { 0.0 };
+
+            let p0_b = bin_b >> 1;
+            let r0_b = (bin_b & 1) != 0;
+            let offset0 = depth - 0.25 * (p0_b as f32);
+            let own0 = if r0_b { 0.25 - offset0 } else { offset0 } * 2.0 * current;
+            let diff0_b = lane(c1, p0_b) - own0;
+            let step0_b = 2.0 * diff0_b;
+            sample_b -= if r0_b { -step0_b } else { step0_b };
+            if sample_a_too {
+                let p0_a = bin_a >> 1;
+                let diff0_a = if p0_a == p0_b {
+                    diff0_b
+                } else {
+                    lane(c1, p0_a)
+                };
+                let step0_a = 2.0 * diff0_a;
+                sample_a -= if (bin_a & 1) != 0 { -step0_a } else { step0_a };
+            }
+
+            let p1_b = bin_b >> 2;
+            let r1_b = (p0_b & 1) != 0;
+            let offset1 = depth - if p1_b != 0 { 0.5 } else { 0.0 };
+            let own1 =
+                if r1_b { 0.5 - offset1 } else { offset1 } * std::f32::consts::SQRT_2 * current;
+            let diff1_b = if p1_b != 0 { c0[3] } else { c0[2] } - own1;
+            let step1_b = std::f32::consts::SQRT_2 * diff1_b;
+            sample_b -= if r1_b { -step1_b } else { step1_b };
+            if sample_a_too {
+                let p1_a = bin_a >> 2;
+                let diff1_a = if p1_a == p1_b {
+                    diff1_b
+                } else if p1_a != 0 {
+                    c0[3]
+                } else {
+                    c0[2]
+                };
+                let step1_a = std::f32::consts::SQRT_2 * diff1_a;
+                sample_a -= if ((bin_a >> 1) & 1) != 0 {
+                    -step1_a
+                } else {
+                    step1_a
+                };
+            }
+
+            let r2_b = p1_b != 0;
+            let own2 = if r2_b { 1.0 - depth } else { depth } * current;
+            let diff2_b = c0[1] - own2;
+            sample_b -= if r2_b { -diff2_b } else { diff2_b };
+            if sample_a_too {
+                sample_a -= if (bin_a >> 2) != 0 { -diff2_b } else { diff2_b };
+            }
+
+            let blend = if in_bins >= BINS as f32 {
+                1.0
+            } else {
+                wgsl_fract(in_bins)
+            };
+            wgsl_mix(sample_a, sample_b, blend)
+        }
+
+        let mut originals = vec![0.0_f32, 1e-6, 1.0 - 1e-6, 1.0];
+        for k in 1..7 {
+            let edge = k as f32 / 7.0;
+            originals.extend([edge - 1e-6, edge, edge + 1e-6, (k as f32 - 0.5) / 7.0]);
+        }
+        let absorbances = [0.0_f32, 1e-4, 0.35, 1.25, 4.0];
+        for &orig in &originals {
+            for abs in absorbances {
+                let expected = ref_add(abs, orig);
+                let actual = unrolled_add(abs, orig);
+                assert_eq!(
+                    expected.map(f32::to_bits),
+                    actual.map(f32::to_bits),
+                    "add mismatch at orig={orig} abs={abs}"
+                );
+            }
+        }
+
+        // Zero average early-out matches bit-for-bit.
+        assert_eq!(
+            ref_sample([0.0; 8], 0.5, 1.0).to_bits(),
+            unrolled_sample([0.0; 4], [0.0; 4], 0.5, 1.0).to_bits()
+        );
+
+        // Multi-fragment sums across all bins plus composite far depth (100000.0).
+        let layers: &[&[(f32, f32)]] = &[
+            &[(0.8, 0.0)],
+            &[(0.4, 0.05), (1.1, 0.42), (0.7, 0.95)],
+            &[
+                (0.2, 0.14),
+                (0.6, 0.29),
+                (1.3, 0.57),
+                (0.9, 0.72),
+                (2.4, 1.0),
+            ],
+            &[(4.0, 0.5), (0.01, 0.5)],
+        ];
+        let mut query_depths = originals.clone();
+        query_depths.extend([-0.5_f32, 8.0 / 7.0, 100_000.0]);
+        for fragments in layers {
+            let mut sum = [0.0_f32; 8];
+            for &(abs, orig) in *fragments {
+                let contrib = ref_add(abs, orig);
+                for (dst, src) in sum.iter_mut().zip(contrib) {
+                    *dst += src;
+                }
+            }
+            let c0 = [sum[0], sum[1], sum[2], sum[3]];
+            let c1 = [sum[4], sum[5], sum[6], sum[7]];
+            for &orig in &query_depths {
+                for current in [0.0_f32, fragments[0].0, 1.75] {
+                    let expected = ref_sample(sum, orig, current);
+                    let actual = unrolled_sample(c0, c1, orig, current);
+                    assert_eq!(
+                        expected.to_bits(),
+                        actual.to_bits(),
+                        "sample mismatch at orig={orig} current={current}"
+                    );
+                }
+            }
         }
     }
 }

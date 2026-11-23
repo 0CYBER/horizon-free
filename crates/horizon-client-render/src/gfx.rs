@@ -11635,7 +11635,11 @@ impl Renderer {
                         quads(pass, &f.additive[s], additive_quads, world_quads);
                         self.weather
                             .draw_with(pass, &f.weather[s], &self.entity_group);
-                        if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
+                        if let Some(b) = frame
+                            .border
+                            .as_ref()
+                            .filter(|b| !frame.title && !b.sides.is_empty())
+                        {
                             pass.set_pipeline(&f.border[s]);
                             pass.set_bind_group(0, &self.border_group, &[]);
                             pass.set_vertex_buffer(0, self.border_vertices.slice(..));
@@ -11645,10 +11649,31 @@ impl Renderer {
                             }
                         }
                     };
+                    let has_oit_features = oit::FeatureCounts {
+                        text_quads,
+                        crumbling_quads: if hdr_gain {
+                            0
+                        } else {
+                            translucent_crumbling_quads
+                        },
+                        swirl_quads,
+                        shadow_quads,
+                        particle_quads: translucent_particle_quads,
+                        item_quads: translucent_item_quads,
+                        entity_quads: oit_entity_quads,
+                        additive_quads,
+                        weather_quads,
+                        lightning_bolts: !frame.lightning.bolts.is_empty(),
+                        world_border: frame
+                            .border
+                            .as_ref()
+                            .is_some_and(|b| !frame.title && !b.sides.is_empty()),
+                    }
+                    .any();
                     let extras = oit::Extras {
                         water_mask: (water_mask_quads > 0).then_some(&mask as _),
                         clouds: (cloud_quads > 0).then_some(&clouds as _),
-                        features: Some(&features),
+                        features: has_oit_features.then_some(&features as _),
                     };
                     // The draw closure below borrows all of `self`, so the timer is taken out.
                     let mut own_timing = self.own_timing.take();
