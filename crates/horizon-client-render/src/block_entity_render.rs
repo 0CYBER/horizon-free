@@ -3557,7 +3557,7 @@ pub fn beam(base: Mat4, b: BeamShape, s: Rect, out: &mut Vec<Vertex>) {
         s,
         wrap,
     };
-    part.emit(out, corners, [v1, v2], abgr(255));
+    part.emit(out, corners, [v1, v2], abgr(255), 6);
     // Glow, translucent.
     let g = b.glow_radius;
     let corners = [
@@ -3567,7 +3567,9 @@ pub fn beam(base: Mat4, b: BeamShape, s: Rect, out: &mut Vec<Vertex>) {
         Vec3::new(g, 0.0, g),
     ];
     let v1 = b.height as f32 * b.scale + v2;
-    part.emit(out, corners, [v1, v2], abgr(32));
+    // RenderTypes.beaconBeam only supplies OIT_BEACON_BEAM for the glow.
+    // Leave the core in the ordinary depth-writing pass.
+    part.emit(out, corners, [v1, v2], abgr(32), 6 | crate::gfx::OIT_ENTITY);
 }
 struct BeamPart {
     base: Mat4,
@@ -3584,6 +3586,7 @@ impl BeamPart {
         [wn, en, ws, es]: [Vec3; 4],
         [v1, v2]: [f32; 2],
         color: u32,
+        layer: u32,
     ) {
         let s = self.s;
         for (a, b) in [(wn, en), (es, ws), (en, es), (ws, wn)] {
@@ -3603,7 +3606,7 @@ impl BeamPart {
                     normal: CULL_BACK,
                     pos: p.to_array(),
                     uv,
-                    layer: 6,
+                    layer,
                     color,
                     light: self.wrap,
 
