@@ -51,7 +51,10 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
 
 #[test]
 fn a_capability_this_build_does_not_know_blocks_only_its_version() {
-    let text = std::fs::read_to_string(fixtures().join("index-v1.json")).unwrap();
+    // LF whatever the checkout made of it (Git for Windows' core.autocrlf), for the edit below.
+    let text = std::fs::read_to_string(fixtures().join("index-v1.json"))
+        .unwrap()
+        .replace("\r\n", "\n");
     let old = text.replacen(
         "\"registries\"\n          ],",
         "\"registries\", \"game-read\"\n          ],",
