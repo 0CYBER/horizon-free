@@ -195,7 +195,7 @@ fn create_junction(path: &Path, target: &Path) {
 
     let target = target.canonicalize().unwrap();
     let target: Vec<_> = target.as_os_str().encode_wide().collect();
-    let verbatim = [b'\\', b'\\', b'?', b'\\'].map(u16::from);
+    let verbatim = b"\\\\?\\".map(u16::from);
     let print_name = target.strip_prefix(&verbatim).unwrap();
     assert_eq!(print_name.get(1), Some(&u16::from(b':')));
     let substitute_name: Vec<_> = OsStr::new(r"\??\")
