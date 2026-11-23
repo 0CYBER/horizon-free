@@ -832,6 +832,22 @@ impl Config {
                 range.end()
             ));
         }
+        // The game reads these properties as Java ints; a larger number fails to parse and is silently
+        // replaced by the default (20, 10). Smaller or larger values it clamps itself, so only these are refused.
+        let server = &self.server;
+        for (name, value) in [
+            ("max_players", server.max_players),
+            ("view_distance", server.view_distance),
+            ("simulation_distance", server.simulation_distance),
+            ("max_view_distance", server.max_view_distance),
+        ] {
+            if i32::try_from(value).is_err() {
+                return Err(format!(
+                    "server.{name} is {value}: use at most {}",
+                    i32::MAX
+                ));
+            }
+        }
         if let Some((section, field, key)) =
             TYPED.iter().find(|t| self.properties.contains_key(t.2))
         {
@@ -1223,6 +1239,27 @@ keep = {keep}
         assert!(with(1001).is_err());
         assert!(with(1).is_ok() && with(1000).is_ok());
         assert_eq!(Config::default().backups.keep, 12);
+    }
+
+    /// The game parses these as Java ints and replaces what does not fit with its default, unannounced.
+    #[test]
+    fn server_numbers_the_game_cannot_read_are_refused() {
+        let with = |key: &str, n: u32| Config::parse(&format!("[server]\n{key} = {n}\n"));
+        for key in [
+            "max_players",
+            "view_distance",
+            "simulation_distance",
+            "max_view_distance",
+        ] {
+            let err = with(key, 3_000_000_000).unwrap_err();
+            assert!(
+                err.contains(&format!("server.{key} is 3000000000")),
+                "{err}"
+            );
+            assert!(with(key, i32::MAX as u32).is_ok());
+        }
+        // The game clamps these itself, so a file that worked keeps working.
+        assert!(with("view_distance", 64).is_ok() && with("max_players", 5000).is_ok());
     }
 
     #[test]
