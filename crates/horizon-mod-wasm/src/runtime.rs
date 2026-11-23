@@ -43,6 +43,9 @@ pub enum CallClass {
 
 /// A group's linear memory when none of its mods declares one (`wasm_memory_mib`): 1 GiB.
 pub(crate) const DEFAULT_GROUP_MEMORY_MIB: u32 = 1024;
+/// What the host copies of a guest's log line, length prefix included: the rest is dropped, so a
+/// guest cannot make the host copy and log its whole memory.
+const MAX_LOG_INPUT: usize = 4 + 4096;
 /// The function table's ceiling: references, a pointer each.
 const TABLE_ELEMENTS: usize = 1 << 20;
 
@@ -784,12 +787,16 @@ fn host(
     }
     let mut input = std::mem::take(&mut caller.data_mut().imports[depth]);
     input.clear();
-    input.extend_from_slice(
-        memory
-            .data(&caller)
-            .get(ptr as usize..end)
-            .ok_or_else(|| wasmtime::Error::msg("input outside memory"))?,
-    );
+    let whole = memory
+        .data(&caller)
+        .get(ptr as usize..end)
+        .ok_or_else(|| wasmtime::Error::msg("input outside memory"))?;
+    let truncated = id == mod_api::wire::HOST_LOG && whole.len() > MAX_LOG_INPUT;
+    input.extend_from_slice(if truncated {
+        &whole[..MAX_LOG_INPUT]
+    } else {
+        whole
+    });
     #[cfg(feature = "test-copy-probe")]
     crate::copy_probe::record(false, input.len());
     let mut reply = std::mem::take(&mut caller.data_mut().replies[depth]);
@@ -820,11 +827,19 @@ fn host(
             .map(|_| ())
             .map_err(|e| wasmtime::Error::msg(format!("{e:?}")))
     } else if id == mod_api::wire::HOST_LOG {
-        let mut reader = Reader::new(&input);
-        let message: String = reader.take()?;
-        if !reader.rest().is_empty() {
-            return Err(WireError::Trailing.into());
-        }
+        let message = if truncated {
+            // Only the head was copied: keep what of it is text, as the line is best-effort.
+            let text = input.get(4..).unwrap_or_default();
+            let text = String::from_utf8_lossy(text);
+            format!("{} ... (truncated)", text.trim_end_matches('\u{FFFD}'))
+        } else {
+            let mut reader = Reader::new(&input);
+            let message: String = reader.take()?;
+            if !reader.rest().is_empty() {
+                return Err(WireError::Trailing.into());
+            }
+            message
+        };
         // Release the Cx borrow before entering a possibly reentrant logger.
         let module = unsafe { (&*cx).module.as_ref().map(|module| module.id.clone()) }
             .ok_or_else(|| wasmtime::Error::msg("no calling module"))?;

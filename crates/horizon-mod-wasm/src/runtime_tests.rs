@@ -331,6 +331,34 @@ fn guest_panic_text_is_logged_with_mod_id_and_no_reply() {
 }
 
 #[test]
+fn an_oversized_guest_log_line_is_cut_before_it_is_copied() {
+    crate::test_stack::on_guest_stack(|| {
+        capture_logs();
+        let module = module(&format!(
+            "i32.const {} local.get 1 local.get 2 i32.const -1 i32.const 0 call $host i32.const 0 i32.ne if unreachable end i64.const 0",
+            mod_api::wire::HOST_LOG
+        ));
+        let long = "x".repeat(50_000);
+        let answer = module.call(
+            CallClass::Hook,
+            Frame::default(),
+            0,
+            None,
+            |w| w.put(&format!("oversized-log-line {long}")),
+            |r| r.take::<()>(),
+        );
+        assert_eq!(answer, Some(()));
+        let messages = CAPTURE.0.lock().unwrap();
+        let line = messages
+            .iter()
+            .find(|message| message.starts_with("wasm mod test: oversized-log-line "))
+            .expect("the line is still logged");
+        assert!(line.len() < 5000, "{} bytes", line.len());
+        assert!(line.ends_with("(truncated)"));
+    })
+}
+
+#[test]
 fn calls_do_not_leave_an_active_module_ownership_cycle() {
     crate::test_stack::on_guest_stack(|| {
         let module = module("i64.const 2199023255556");
