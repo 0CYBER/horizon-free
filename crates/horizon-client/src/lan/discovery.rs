@@ -52,22 +52,20 @@ pub fn parse_address(s: &str) -> Option<String> {
     Some(s[start + "[AD]".len()..end].to_owned())
 }
 /// The most games the list keeps: any host on the network can announce, and the
-/// multiplayer screen copies the list every frame.
+/// multiplayer screen copies the list every frame. Vanilla's list has no bound;
+/// this one only matters past 64 distinct announcements.
 pub const MAX_GAMES: usize = 64;
 /// LanServerDetection.LanServerList.addServer: an announcement from `ip`.
 /// A new address joins the list; a known one keeps its first MOTD. True
-/// when the list changed. An announced address that is no port is dropped (it
-/// is joined as `ip:address`), and a full list takes no more.
+/// when the list changed. The address is joined as `ip:address` as announced,
+/// even when it is empty or no port (vanilla lists it; joining it fails).
+/// A full list takes no more.
 pub fn add_server(games: &mut Vec<LanGame>, ping: &str, ip: &str) -> bool {
     let motd = parse_motd(ping);
     let Some(address) = parse_address(ping) else {
         return false;
     };
-    if games.len() >= MAX_GAMES
-        || address.is_empty()
-        || !address.bytes().all(|b| b.is_ascii_digit())
-        || address.parse::<u16>().is_err()
-    {
+    if games.len() >= MAX_GAMES {
         return false;
     }
     let address = format!("{ip}:{address}");
@@ -243,27 +241,10 @@ mod tests {
         assert_eq!(scanner.take_found()[0].1.motd, "C");
     }
 
-    /// Announcements from one host or many cannot grow the list past [`MAX_GAMES`], nor add an
-    /// address that is no port.
+    /// Announcements from one host or many cannot grow the list past [`MAX_GAMES`].
     #[test]
-    fn the_list_is_bounded_and_takes_ports_only() {
+    fn the_list_is_bounded() {
         let mut games = Vec::new();
-        for junk in [
-            "",
-            "x",
-            "-1",
-            "+80",
-            "65536",
-            "25565/evil",
-            "1".repeat(900).as_str(),
-        ] {
-            assert!(!add_server(
-                &mut games,
-                &ping_string_text("A", junk),
-                "10.0.0.2"
-            ));
-        }
-        assert!(games.is_empty());
         for i in 0..MAX_GAMES {
             assert!(add_server(
                 &mut games,
@@ -277,6 +258,27 @@ mod tests {
             "10.0.0.2"
         ));
         assert_eq!(games.len(), MAX_GAMES);
+    }
+
+    /// LanServerList.addServer lists an announced address that is empty or no
+    /// port as `ip:address`, like any other (the lan parity harness hears these).
+    #[test]
+    fn an_address_that_is_no_port_is_listed_as_announced() {
+        let mut games = Vec::new();
+        for (address, ip) in [
+            ("", "192.168.1.10"),
+            ("x", "10.0.0.2"),
+            ("25565", "10.0.0.2"),
+        ] {
+            assert!(add_server(&mut games, &ping_string_text("A", address), ip));
+        }
+        let listed: Vec<&str> = games.iter().map(|g| g.address.as_str()).collect();
+        assert_eq!(listed, ["192.168.1.10:", "10.0.0.2:x", "10.0.0.2:25565"]);
+        assert!(!add_server(
+            &mut games,
+            &ping_string_text("B", ""),
+            "192.168.1.10"
+        ));
     }
 
     #[test]
