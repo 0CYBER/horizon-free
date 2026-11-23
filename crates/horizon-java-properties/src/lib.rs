@@ -435,6 +435,24 @@ mod tests {
         assert_eq!(p.get("cr"), Some("1"));
         assert_eq!(p.get("next"), Some("2"));
     }
+    /// `LineReader.readLine` (run on JDK 25.0.3) treats `#` and `!` as a comment when the logical line
+    /// is still empty, so after a continuation that left it empty the line is a comment, while on a
+    /// line that has content the `#` is a value character.
+    #[test]
+    fn a_hash_on_an_empty_continued_line_is_a_comment() {
+        let p = load("\\\n#x=1\n");
+        assert_eq!(p.get("#x"), None);
+        let p = load("  \\\r\n  !y=2\nz=3\n");
+        assert_eq!((p.get("!y"), p.get("z")), (None, Some("3")));
+        let p = load("\\\n\n#c=1\nk=v\n");
+        assert_eq!((p.get("#c"), p.get("k")), (None, Some("v")));
+        let p = load("k=\\\n#v\n");
+        assert_eq!(p.get("k"), Some("#v"));
+        // The comment is skipped whole: its bad escape is never read.
+        let p = load("\\\n#note=\\uZZZZ\nk=v\n");
+        assert_eq!(p.get("k"), Some("v"));
+    }
+
     #[test]
     fn stores_sorted_and_escaped() {
         let mut p = Properties::default();
