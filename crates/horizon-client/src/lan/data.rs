@@ -105,12 +105,13 @@ pub const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", horizon_protocol
 /// Synchronized registries a world's data packs add entries to (or replace
 /// them in). The others stay the game's own: Horizon's gameplay reads them
 /// from the prepared resources only.
-/// Enchantments are among them: the items' enchantment catalog reads a
-/// world's pack definitions too, so their ids must reach clients.
+/// Item stacks carry enchantments and trim holders by the ids in these registries.
 const PACK_REGISTRIES: &[&str] = &[
     "minecraft:dialog",
     "minecraft:dimension_type",
     "minecraft:enchantment",
+    "minecraft:trim_material",
+    "minecraft:trim_pattern",
 ];
 
 /// A registry's entries from the resource root's namespaces other than

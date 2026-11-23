@@ -902,6 +902,14 @@ enchantment of the same id. What an enchantment does beyond vanilla's effect com
 hook reads the held stack's enchantments, or claims a `post_attack` effect of its own kind
 ([enchantment effect kinds](items/enchantment-effect-kinds.md)).
 
+Armor trims use vanilla's `data/<namespace>/trim_material/<name>.json` and
+`data/<namespace>/trim_pattern/<name>.json`. World data packs can replace those entries
+on the server, which sends their registry IDs when players join. For rendering, install
+the content mod on the client too. Its `palette_id` names a PNG in `textures/palettes/`
+and its `asset_id` names a pattern in `textures/trims/entity/<equipment-layer>/`. To
+color an item icon, add a `paletted_permutations` source to `assets/minecraft/atlases/items.json`
+and a `minecraft:trim_material` select case for the full material ID in the armor's item definition.
+
 A mod adds to structure sets, template pools and processor lists that are not its own (vanilla's villages, another
 mod's houses) with a set, pool or processor list file in its own namespace holding `horizon:add_to`, a key vanilla data
 never has. Its entries are appended to each set, pool or list named, after every mod's own files, by

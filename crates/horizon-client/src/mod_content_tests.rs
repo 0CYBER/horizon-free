@@ -2296,6 +2296,217 @@ fn folder_mod(dir: &Path, files: &[(&str, &str)]) -> ContentMod {
     }
 }
 
+#[test]
+fn content_mod_trims_keep_their_wire_ids_and_resolve_both_draw_paths() {
+    use crate::datapack::{DataPack, DataStore};
+    use crate::item_render::{ItemRenderer, LayerGeometry, stack_view};
+    use crate::trims::{TrimRegistry, TrimTexture};
+    use horizon_assets::item_model::{DisplayContext, NoEnv};
+    use horizon_assets::resource_source::{Resource, ResourceSource};
+    use horizon_core::nbt::Tag;
+    use horizon_protocol::{
+        buf::{Codec, Reader, Writer},
+        item::Slot,
+        packets::configuration::RegistryData,
+        registry::Dynamic,
+    };
+
+    let scratch = tempfile::tempdir().unwrap();
+    let base = scratch.path().join("base");
+    let registry_report = serde_json::json!({
+        "minecraft:item": {"entries": {"minecraft:diamond_chestplate": {"protocol_id": 0}}},
+        "minecraft:block": {"entries": {"minecraft:stone": {"protocol_id": 0}}},
+        "minecraft:data_component_type": {"entries": {
+            "minecraft:trim": {"protocol_id": horizon_protocol::item::component::TRIM}
+        }}
+    })
+    .to_string();
+    for (name, text) in [
+        ("horizon-resources.json", "{}"),
+        (
+            "facts.json",
+            r#"{"states":[["minecraft:stone"]],"defaults":{"minecraft:stone":0}}"#,
+        ),
+        (
+            "gameplay-facts.json",
+            r#"{"states":[{"item":"minecraft:stone"}]}"#,
+        ),
+        ("registries.json", registry_report.as_str()),
+        (
+            "items.json",
+            r#"{"minecraft:diamond_chestplate":{"minecraft:item_model":"trim_assets:chestplate"}}"#,
+        ),
+        (
+            "assets/minecraft/models/item/generated.json",
+            r#"{"parent":"minecraft:builtin/generated"}"#,
+        ),
+    ] {
+        let file = base.join(name);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+    let folder = scratch.path().join("trimmer");
+    let base_color = [180, 180, 180, 255];
+    let ruby_color = [230, 6, 42, 255];
+    for (name, color) in [
+        ("palettes/base", base_color),
+        ("palettes/trim/ruby", ruby_color),
+        ("trims/entity/humanoid/coast", base_color),
+        ("trims/items/chestplate", base_color),
+    ] {
+        let path = folder.join(format!("assets/trim_assets/textures/{name}.png"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut png = png::Encoder::new(fs::File::create(path).unwrap(), 1, 1);
+        png.set_color(png::ColorType::Rgba);
+        png.set_depth(png::BitDepth::Eight);
+        png.write_header()
+            .unwrap()
+            .write_image_data(&color)
+            .unwrap();
+    }
+    let mods = [folder_mod(
+        &folder,
+        &[
+            ("horizon-mod.toml", &manifest("trimmer", "\"trim_assets\"")),
+            (
+                "data/trim_assets/trim_material/gems/ruby.json",
+                r#"{"palette_id":"trim_assets:trim/ruby","description":"Ruby"}"#,
+            ),
+            (
+                "data/trim_assets/trim_pattern/coast.json",
+                r#"{"asset_id":"trim_assets:coast","description":"Coast","decal":false}"#,
+            ),
+            (
+                "data/trim_assets/loot_table/not_a_trim.json",
+                r#"{"type":"minecraft:empty","palette_id":"trim_assets:trim/ruby","asset_id":"trim_assets:coast"}"#,
+            ),
+            (
+                "assets/trim_assets/textures/trims/entity/humanoid/coast.png.mcmeta",
+                r#"{"palette":{"base_palette":"trim_assets:base"}}"#,
+            ),
+            (
+                "assets/minecraft/atlases/items.json",
+                r#"{"sources":[{"type":"minecraft:paletted_permutations","textures":["trim_assets:trims/items/chestplate"],"palette_key":"trim_assets:base","permutations":{"ruby":"trim_assets:trim/ruby"}}]}"#,
+            ),
+            (
+                "assets/trim_assets/items/chestplate.json",
+                r#"{"model":{"type":"minecraft:select","property":"minecraft:trim_material","cases":[{"when":"trim_assets:gems/ruby","model":{"type":"minecraft:model","model":"trim_assets:item/ruby_chestplate"}}],"fallback":{"type":"minecraft:empty"}}}"#,
+            ),
+            (
+                "assets/trim_assets/models/item/ruby_chestplate.json",
+                r#"{"parent":"minecraft:item/generated","textures":{"layer0":"trim_assets:trims/items/chestplate_ruby"}}"#,
+            ),
+        ],
+    )];
+    let cache = scratch.path().join("cache");
+    let prepared = resource_root_fixture(&base, Path::new(""), &mods, &cache).unwrap();
+    let root = resolved_resources(&base, prepared, Path::new(""), &mods, cache).unwrap();
+
+    let material = "trim_assets:gems/ruby";
+    let pattern = "trim_assets:coast";
+    let content = DataPack::from_source("horizon-content".into(), root.data_changes().clone());
+    let world = DataPack::from_source(
+        "world".into(),
+        ResourceSource::indexed(BTreeMap::from([(
+            "data/trim_assets/trim_material/gems/ruby.json".into(),
+            Resource::bytes(
+                br#"{"palette_id":"trim_assets:trim/ruby","description":"World Ruby"}"#.to_vec(),
+            ),
+        )])),
+    );
+    let files = DataStore::load(&[&content, &world]).files;
+    assert_eq!(files["trim_material/trim_assets:gems/ruby"].len(), 2);
+    assert!(files.contains_key("loot_table/trim_assets:not_a_trim"));
+    let files: Vec<_> = files.into_iter().collect();
+    let overlay = horizon_world::loot::PackOverlay::new(&files);
+    let item_data =
+        crate::test_resources::item_data(root.prepared(), DataLoadOrigin::ClientPreload).unwrap();
+    let sync = crate::lan::data::SyncData::load(
+        root.prepared(),
+        &overlay,
+        item_data.defaults(),
+        &crate::crafting::ResolvedSources::default(),
+    )
+    .unwrap();
+    let mut client = Dynamic::default();
+    for packet in sync.registry_packets(true, &crate::chunk::LevelShapes::VANILLA) {
+        let mut bytes = Writer::new();
+        RegistryData::write(&packet, &mut bytes);
+        client.add(RegistryData::read(&mut Reader::new(&bytes.data)).unwrap());
+    }
+    let ruby_id = client.id("minecraft:trim_material", material).unwrap();
+    assert_eq!(
+        client
+            .data("minecraft:trim_material", ruby_id)
+            .unwrap()
+            .get("description"),
+        Some(&Tag::String("World Ruby".into())),
+    );
+
+    let mut chestplate = crate::items::ItemStack::new("minecraft:diamond_chestplate", 1);
+    chestplate.data_mut().trim = Some((material.into(), pattern.into()));
+    let wire = crate::lan::guest::stack_to_network(|_| 0, |r, n| sync.id(r, n), &Some(chestplate));
+    let mut bytes = Writer::new();
+    Slot::write(&wire, &mut bytes);
+    let wire = Slot::read(&mut Reader::new(&bytes.data)).unwrap().unwrap();
+    let chestplate = crate::item_sync::from_network(&wire, &sync.builtin, &client);
+    let (material, pattern) =
+        crate::item_data::trim::named(chestplate.data().unwrap().trim.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        (material, pattern),
+        ("trim_assets:gems/ruby", "trim_assets:coast")
+    );
+
+    let source = root.source();
+    let registry = TrimRegistry::load(source);
+    let texture = TrimTexture::resolve(&registry, &[], material, pattern, "humanoid").unwrap();
+    assert_eq!(texture.generate(source), Some((1, 1, ruby_color.to_vec())));
+    assert!(
+        TrimTexture::resolve(
+            &registry,
+            &[],
+            "trim_assets:not_a_trim",
+            pattern,
+            "humanoid"
+        )
+        .is_none()
+    );
+
+    let renderer = ItemRenderer::load(&root, &item_data).unwrap();
+    let icon = renderer.resolve(
+        &stack_view(&chestplate),
+        DisplayContext::Gui,
+        None,
+        None,
+        0,
+        &NoEnv,
+    );
+    let [layer] = icon.layers.as_slice() else {
+        panic!("expected the ruby icon model");
+    };
+    let LayerGeometry::Quads(model) = &layer.geometry else {
+        panic!("expected baked item geometry");
+    };
+    let sprite = "trim_assets:trims/items/chestplate_ruby";
+    assert!(
+        model
+            .quads
+            .iter()
+            .any(|quad| quad.material.sprite == sprite)
+    );
+    let atlases = crate::atlas_sources::atlases(source);
+    let origins = crate::atlas_sources::list(
+        &atlases["minecraft:items"],
+        &crate::atlas_sources::list_textures(source),
+        &mut crate::atlas_sources::unasked,
+    );
+    let pixels = crate::atlas_sources::generate(&origins[sprite], &|texture, dir| {
+        let file = crate::atlas_sources::texture_resource(texture, dir);
+        crate::hud::decode_bytes(&source.read(&file).ok()?).ok()
+    });
+    assert_eq!(pixels, Some((1, 1, ruby_color.to_vec())));
+}
+
 /// The game mounts a flat package's entries as its checks read them: by the END record's
 /// count. One it lists past that count, outside the mod's namespaces, is never loaded.
 #[test]
