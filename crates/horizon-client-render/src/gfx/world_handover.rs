@@ -51,6 +51,7 @@ impl Renderer {
             lod_retiring,
             lod_leaving,
             lod_pending,
+            lod_tracker,
             detail_columns,
             detail_revision,
             upload_retries,

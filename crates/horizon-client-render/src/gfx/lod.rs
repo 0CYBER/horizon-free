@@ -50,6 +50,263 @@ impl Pending {
     }
 }
 
+/// Tracks resident tiles needing per-frame or end-of-batch work so calm frames
+/// (`Renderer::upload_lods`) run in O(1) instead of scanning every resident tile.
+#[derive(Default)]
+pub(super) struct LodTracker {
+    /// Resident tiles with `tile.dying.is_some()`.
+    dying: FxHashSet<TileKey>,
+    /// Resident tiles with `tile.previous.is_some()`.
+    previous: FxHashSet<TileKey>,
+    /// Resident tiles with `tile.shown.is_none()`.
+    unshown: FxHashSet<TileKey>,
+}
+
+trait LodTileState {
+    fn set_shown(&mut self, shown: Instant);
+    fn dying(&self) -> Option<Instant>;
+    fn set_dying(&mut self, since: Instant, alone: bool);
+    fn start_previous(&mut self, since: Instant);
+}
+
+fn ancestors_of<'a>(keys: impl IntoIterator<Item = &'a TileKey>) -> FxHashSet<TileKey> {
+    let mut above = FxHashSet::default();
+    for &key in keys {
+        let mut key = key;
+        while key.level < MAX_LEVEL && above.insert(key.parent()) {
+            key = key.parent();
+        }
+    }
+    above
+}
+
+/// Whether `key` equals, is an ancestor of, or descends from any tile in `set`
+/// (where `above` holds every strict ancestor of every tile in `set`).
+fn overlaps_set(key: TileKey, set: &FxHashSet<TileKey>, above: &FxHashSet<TileKey>) -> bool {
+    if set.contains(&key) || above.contains(&key) {
+        return true;
+    }
+    let mut ancestor = key;
+    (key.level..MAX_LEVEL).any(|_| {
+        ancestor = ancestor.parent();
+        set.contains(&ancestor)
+    })
+}
+
+/// Chunk columns newly taken by near terrain in a pending batch, with a tight
+/// block bounding box to reject non-overlapping far tiles in O(1).
+#[derive(Default)]
+struct TakenColumns {
+    columns: Vec<(i32, i32)>,
+    bounds: Option<[i32; 4]>,
+}
+
+impl TakenColumns {
+    fn new(cutout: Option<&FxHashSet<(i32, i32)>>, current: &FxHashSet<(i32, i32)>) -> Self {
+        let mut columns = Vec::new();
+        let mut bounds: Option<[i32; 4]> = None;
+        if let Some(cutout) = cutout {
+            for &(cx, cz) in cutout {
+                if !current.contains(&(cx, cz)) {
+                    columns.push((cx, cz));
+                    let x = cx * 16;
+                    let z = cz * 16;
+                    bounds = Some(match bounds {
+                        None => [x, z, x, z],
+                        Some([x0, z0, x1, z1]) => [x0.min(x), z0.min(z), x1.max(x), z1.max(z)],
+                    });
+                }
+            }
+        }
+        Self { columns, bounds }
+    }
+
+    fn overlaps(
+        &self,
+        key: TileKey,
+        cutout: Option<&FxHashSet<(i32, i32)>>,
+        current: &FxHashSet<(i32, i32)>,
+    ) -> bool {
+        let Some([bx0, bz0, bx1, bz1]) = self.bounds else {
+            return false;
+        };
+        let [x, _, z] = key.origin();
+        let size = key.size();
+        if bx1 < x || bx0 >= x + size || bz1 < z || bz0 >= z + size {
+            return false;
+        }
+        if key.level == 0 {
+            return cutout.is_some_and(|c| c.contains(&(key.x, key.z)))
+                && !current.contains(&(key.x, key.z));
+        }
+        self.columns.iter().any(|&(cx, cz)| {
+            (x..x + size).contains(&(cx * 16)) && (z..z + size).contains(&(cz * 16))
+        })
+    }
+}
+
+impl LodTracker {
+    pub(super) fn clear(&mut self) {
+        self.dying.clear();
+        self.previous.clear();
+        self.unshown.clear();
+    }
+
+    fn remove(&mut self, key: &TileKey) {
+        self.dying.remove(key);
+        self.previous.remove(key);
+        self.unshown.remove(key);
+    }
+
+    fn record_uploaded(&mut self, key: TileKey, shown: bool, has_previous: bool) {
+        self.dying.remove(&key);
+        if shown {
+            self.unshown.remove(&key);
+        } else {
+            self.unshown.insert(key);
+        }
+        if has_previous {
+            self.previous.insert(key);
+        } else {
+            self.previous.remove(&key);
+        }
+    }
+
+    fn mark_dying(&mut self, key: TileKey) {
+        self.dying.insert(key);
+    }
+
+    fn collect_faded<T: LodTileState>(
+        &self,
+        lods: &FxHashMap<TileKey, T>,
+        start: Instant,
+    ) -> Vec<TileKey> {
+        if self.dying.is_empty() {
+            return Vec::new();
+        }
+        self.dying
+            .iter()
+            .copied()
+            .filter(|key| {
+                lods.get(key).is_some_and(|tile| {
+                    tile.dying()
+                        .is_some_and(|d| start.saturating_duration_since(d) >= FADE)
+                })
+            })
+            .collect()
+    }
+
+    fn expire_previous<T, M>(
+        &mut self,
+        lods: &mut FxHashMap<TileKey, T>,
+        start: Instant,
+        mut take_expired: impl FnMut(&mut T, Instant) -> Option<Option<M>>,
+    ) -> Vec<M> {
+        if self.previous.is_empty() {
+            return Vec::new();
+        }
+        let mut expired = Vec::new();
+        self.previous.retain(|key| {
+            let Some(tile) = lods.get_mut(key) else {
+                return false;
+            };
+            match take_expired(tile, start) {
+                Some(Some(mesh)) => {
+                    expired.push(mesh);
+                    false
+                }
+                Some(None) => true,
+                None => false,
+            }
+        });
+        expired
+    }
+
+    /// Completes a drained `Pending` batch using only the tracked sets and
+    /// `removed`, skipping all full-map scans of `lods` and skipping
+    /// `replaced`/`kept`/`above` construction whenever `removed` is empty.
+    fn finish_batch<T: LodTileState>(
+        &mut self,
+        lods: &mut FxHashMap<TileKey, T>,
+        removed: FxHashSet<TileKey>,
+        pending_cutout: Option<&FxHashSet<(i32, i32)>>,
+        current_cutout: &FxHashSet<(i32, i32)>,
+        start: Instant,
+    ) {
+        let unshown = std::mem::take(&mut self.unshown);
+        let whole = start.checked_sub(FADE).unwrap_or(start);
+
+        if !unshown.is_empty() {
+            // A tile fades in over the ones it replaces. One over nothing
+            // shows whole: its hidden chunks would open holes to the sky
+            // or the sea bed (dark patches, as far terrain first loads).
+            let replaced: FxHashSet<TileKey> = if removed.is_empty() {
+                FxHashSet::default()
+            } else {
+                removed
+                    .iter()
+                    .copied()
+                    .filter(|key| lods.contains_key(key))
+                    .collect()
+            };
+            if replaced.is_empty() {
+                for &key in &unshown {
+                    if let Some(tile) = lods.get_mut(&key) {
+                        tile.set_shown(whole);
+                    }
+                }
+            } else {
+                let above_replaced = ancestors_of(&replaced);
+                for &key in &unshown {
+                    if let Some(tile) = lods.get_mut(&key) {
+                        let shown = if overlaps_set(key, &replaced, &above_replaced) {
+                            start
+                        } else {
+                            whole
+                        };
+                        tile.set_shown(shown);
+                    }
+                }
+            }
+        }
+
+        for &key in &self.previous {
+            if let Some(tile) = lods.get_mut(&key) {
+                tile.start_previous(start);
+            }
+        }
+
+        if !removed.is_empty() {
+            let newly_dying: Vec<TileKey> = removed
+                .into_iter()
+                .filter(|key| lods.get(key).is_some_and(|tile| tile.dying().is_none()))
+                .collect();
+            if !newly_dying.is_empty() {
+                // A removed tile no new tile overlaps, and no near chunk takes
+                // a column of, leaves the plan (out of range): it fades out.
+                // Over near chunks fading in it stays whole: two patterns
+                // fading at once left holes between them.
+                // Two tiles overlap when one is the other or its ancestor:
+                // `kept` holds the new tiles and the near chunks' columns
+                // (level 0), `above` their ancestors.
+                let mut kept = unshown;
+                let cut = pending_cutout.unwrap_or(current_cutout);
+                kept.extend(cut.iter().map(|&(x, z)| TileKey { x, z, level: 0 }));
+                let above = ancestors_of(&kept);
+                for key in newly_dying {
+                    let alone = !overlaps_set(key, &kept, &above);
+                    if let Some(tile) = lods.get_mut(&key)
+                        && tile.dying().is_none()
+                    {
+                        tile.set_dying(start, alone);
+                        self.mark_dying(key);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Small, its meshes boxed: `draw_frame` walks every tile each frame (thousands at long far
 /// distances), and that walk is bound by the memory it reads.
 pub(super) struct Tile {
@@ -210,6 +467,24 @@ impl Tile {
     }
 }
 
+impl LodTileState for Tile {
+    fn set_shown(&mut self, shown: Instant) {
+        self.shown = Some(shown);
+    }
+    fn dying(&self) -> Option<Instant> {
+        self.dying
+    }
+    fn set_dying(&mut self, since: Instant, alone: bool) {
+        self.dying = Some(since);
+        self.alone = alone;
+    }
+    fn start_previous(&mut self, since: Instant) {
+        if let Some((_, started)) = self.previous.as_deref_mut() {
+            started.get_or_insert(since);
+        }
+    }
+}
+
 impl Renderer {
     /// A tile meshed again (finer detail) takes its place at once, but for
     /// one meshed around near chunks or finer tiles that are new (`keep`):
@@ -246,6 +521,8 @@ impl Renderer {
                         self.lod_cull_next - 1
                     })
                 });
+                self.lod_tracker
+                    .record_uploaded(key, shown.is_some(), previous.is_some());
                 self.lods.insert(
                     key,
                     Tile {
@@ -260,6 +537,7 @@ impl Renderer {
                 );
             }
             None => {
+                self.lod_tracker.remove(&key);
                 if let Some((previous, _)) = previous.map(|p| *p) {
                     self.release_mesh(previous);
                 }
@@ -279,6 +557,7 @@ impl Renderer {
         if let Some(copies) = &mut self.capture_copies {
             copies.forget_tile(key);
         }
+        self.lod_tracker.remove(&key);
         if let Some(tile) = self.lods.remove(&key) {
             self.lod_cull_free.push(tile.cull_slot);
             self.release_tile(tile);
@@ -290,6 +569,7 @@ impl Renderer {
             copies.clear_tiles();
         }
         self.lod_pending = None;
+        self.lod_tracker.clear();
         for (_, tile) in std::mem::take(&mut self.lods) {
             self.release_tile(tile);
         }
@@ -338,149 +618,63 @@ impl Renderer {
             self.shrink_gate.wait(start, super::SHRINK_SETTLE);
         }
         self.release_left(start);
-        let faded: Vec<_> = self
-            .lods
-            .iter()
-            .filter(|(_, tile)| tile.dying.is_some_and(|d| start - d >= FADE))
-            .map(|(&key, _)| key)
-            .collect();
-        for key in faded {
+        for key in self.lod_tracker.collect_faded(&self.lods, start) {
             self.remove_lod(key);
         }
-        let stood_in: Vec<_> = self
-            .lods
-            .values_mut()
-            .filter_map(|tile| match tile.previous.as_deref() {
-                Some((_, Some(since))) if start - *since >= FADE => {
-                    tile.previous.take().map(|p| *p)
+        let stood_in = self
+            .lod_tracker
+            .expire_previous(&mut self.lods, start, |tile, now| {
+                match tile.previous.as_deref() {
+                    Some((_, Some(since))) if now.saturating_duration_since(*since) >= FADE => {
+                        Some(tile.previous.take().map(|p| *p))
+                    }
+                    Some(_) => Some(None),
+                    None => None,
                 }
-                _ => None,
-            })
-            .collect();
+            });
         for (previous, _) in stood_in {
             self.release_mesh(previous);
         }
+        let Some(pending) = self.lod_pending.as_ref() else {
+            return;
+        };
         // The columns near chunks take in this job, and the tiles holding the
         // job's new finer ones: a tile meshed again around them keeps its
         // old mesh until they are in, so no hole shows through them.
-        let mut around_new = FxHashSet::default();
-        let new = self
-            .lod_pending
-            .iter()
-            .flat_map(|pending| pending.meshes.keys())
-            .filter(|key| !self.lods.contains_key(key))
-            .chain(
-                self.lods
-                    .iter()
-                    .filter(|(_, tile)| tile.shown.is_none())
-                    .map(|(key, _)| key),
-            );
-        for &key in new {
-            let mut key = key;
-            while key.level < MAX_LEVEL && around_new.insert(key.parent()) {
-                key = key.parent();
-            }
-        }
-        let taken: Vec<_> = self
-            .lod_pending
-            .iter()
-            .flat_map(|pending| pending.cutout.iter().flatten())
-            .filter(|column| !self.lod_cutout.contains(column))
-            .copied()
-            .collect();
+        let (around_new, taken) = if pending.meshes.is_empty() {
+            (FxHashSet::default(), TakenColumns::default())
+        } else {
+            let new = pending
+                .meshes
+                .keys()
+                .filter(|key| !self.lods.contains_key(key))
+                .chain(self.lod_tracker.unshown.iter());
+            let around_new = ancestors_of(new);
+            let taken = TakenColumns::new(pending.cutout.as_ref(), &self.lod_cutout);
+            (around_new, taken)
+        };
         while let Some(pending) = &mut self.lod_pending {
             // Keys meshed again keep their place; removed ones are skipped.
             let next = std::iter::from_fn(|| pending.order.pop_front())
                 .find(|key| pending.meshes.contains_key(key));
             let Some(key) = next else {
                 let pending = self.lod_pending.take().expect("pending tiles");
-                // A tile fades in over the ones it replaces. One over nothing
-                // shows whole: its hidden chunks would open holes to the sky
-                // or the sea bed (dark patches, as far terrain first loads).
-                let replaced: FxHashSet<TileKey> = pending
-                    .removed
-                    .iter()
-                    .copied()
-                    .filter(|key| self.lods.contains_key(key))
-                    .collect();
-                let mut above_replaced = FxHashSet::default();
-                for &key in &replaced {
-                    let mut key = key;
-                    while key.level < MAX_LEVEL && above_replaced.insert(key.parent()) {
-                        key = key.parent();
-                    }
-                }
-                let over_replaced = |key: TileKey| {
-                    let mut ancestor = key;
-                    replaced.contains(&key)
-                        || above_replaced.contains(&key)
-                        || (key.level..MAX_LEVEL).any(|_| {
-                            ancestor = ancestor.parent();
-                            replaced.contains(&ancestor)
-                        })
-                };
-                // A removed tile no new tile overlaps, and no near chunk takes
-                // a column of, leaves the plan (out of range): it fades out.
-                // Over near chunks fading in it stays whole: two patterns
-                // fading at once left holes between them.
-                // Two tiles overlap when one is the other or its ancestor:
-                // `kept` holds the new tiles and the near chunks' columns
-                // (level 0), `above` their ancestors.
-                let mut kept: FxHashSet<TileKey> = self
-                    .lods
-                    .iter()
-                    .filter(|(_, tile)| tile.shown.is_none())
-                    .map(|(&key, _)| key)
-                    .collect();
-                let cut = pending.cutout.as_ref().unwrap_or(&self.lod_cutout);
-                kept.extend(cut.iter().map(|&(x, z)| TileKey { x, z, level: 0 }));
-                let mut above = FxHashSet::default();
-                for &key in &kept {
-                    let mut key = key;
-                    while key.level < MAX_LEVEL && above.insert(key.parent()) {
-                        key = key.parent();
-                    }
-                }
-                let alone = |key: TileKey| {
-                    let mut ancestor = key;
-                    !kept.contains(&key)
-                        && !above.contains(&key)
-                        && !(key.level..MAX_LEVEL).any(|_| {
-                            ancestor = ancestor.parent();
-                            kept.contains(&ancestor)
-                        })
-                };
-                let whole = start.checked_sub(FADE).unwrap_or(start);
-                for (&key, tile) in &mut self.lods {
-                    if tile.shown.is_none() {
-                        tile.shown = Some(if over_replaced(key) { start } else { whole });
-                    }
-                    if let Some((_, since)) = tile.previous.as_deref_mut() {
-                        since.get_or_insert(start);
-                    }
-                }
-                for key in pending.removed {
-                    let alone = alone(key);
-                    if let Some(tile) = self.lods.get_mut(&key)
-                        && tile.dying.is_none()
-                    {
-                        tile.dying = Some(start);
-                        tile.alone = alone;
-                    }
-                }
+                self.lod_tracker.finish_batch(
+                    &mut self.lods,
+                    pending.removed,
+                    pending.cutout.as_ref(),
+                    &self.lod_cutout,
+                    start,
+                );
                 if let Some(cutout) = pending.cutout {
                     self.set_lod_cutout(cutout);
                 }
                 return;
             };
             let mesh = pending.meshes.remove(&key).expect("pending tile");
-            let [x, _, z] = key.origin();
-            let size = key.size();
             let keep = mesh.keep
                 || around_new.contains(&key)
-                || taken.iter().any(|&(cx, cz)| {
-                    (x..x + size).contains(&(cx * 16)) && (z..z + size).contains(&(cz * 16))
-                });
+                || taken.overlaps(key, pending.cutout.as_ref(), &self.lod_cutout);
             self.upload_lod(key, &mesh, keep);
             if start.elapsed() >= budget {
                 return;
@@ -613,5 +807,379 @@ mod tests {
                 .is_none()
         );
         assert!(Bounds::mesh(&SectionMesh::default()).is_none());
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct MockTile {
+        shown: Option<Instant>,
+        dying: Option<Instant>,
+        alone: bool,
+        previous: Option<(u32, Option<Instant>)>,
+    }
+
+    impl LodTileState for MockTile {
+        fn set_shown(&mut self, shown: Instant) {
+            self.shown = Some(shown);
+        }
+        fn dying(&self) -> Option<Instant> {
+            self.dying
+        }
+        fn set_dying(&mut self, since: Instant, alone: bool) {
+            self.dying = Some(since);
+            self.alone = alone;
+        }
+        fn start_previous(&mut self, since: Instant) {
+            if let Some((_, started)) = &mut self.previous {
+                started.get_or_insert(since);
+            }
+        }
+    }
+
+    fn reference_finish_batch(
+        lods: &mut FxHashMap<TileKey, MockTile>,
+        removed: &FxHashSet<TileKey>,
+        pending_cutout: Option<&FxHashSet<(i32, i32)>>,
+        current_cutout: &FxHashSet<(i32, i32)>,
+        start: Instant,
+    ) {
+        let replaced: FxHashSet<TileKey> = removed
+            .iter()
+            .copied()
+            .filter(|key| lods.contains_key(key))
+            .collect();
+        let above_replaced = ancestors_of(&replaced);
+        let mut kept: FxHashSet<TileKey> = lods
+            .iter()
+            .filter(|(_, tile)| tile.shown.is_none())
+            .map(|(&key, _)| key)
+            .collect();
+        let cut = pending_cutout.unwrap_or(current_cutout);
+        kept.extend(cut.iter().map(|&(x, z)| TileKey { x, z, level: 0 }));
+        let above = ancestors_of(&kept);
+        let whole = start.checked_sub(FADE).unwrap_or(start);
+        for (&key, tile) in lods.iter_mut() {
+            if tile.shown.is_none() {
+                tile.shown = Some(if overlaps_set(key, &replaced, &above_replaced) {
+                    start
+                } else {
+                    whole
+                });
+            }
+            if let Some((_, since)) = &mut tile.previous {
+                since.get_or_insert(start);
+            }
+        }
+        for &key in removed {
+            let alone = !overlaps_set(key, &kept, &above);
+            if let Some(tile) = lods.get_mut(&key)
+                && tile.dying.is_none()
+            {
+                tile.dying = Some(start);
+                tile.alone = alone;
+            }
+        }
+    }
+
+    fn assert_tracker_matches(tracker: &LodTracker, lods: &FxHashMap<TileKey, MockTile>) {
+        let dying: FxHashSet<_> = lods
+            .iter()
+            .filter(|(_, t)| t.dying.is_some())
+            .map(|(&k, _)| k)
+            .collect();
+        let previous: FxHashSet<_> = lods
+            .iter()
+            .filter(|(_, t)| t.previous.is_some())
+            .map(|(&k, _)| k)
+            .collect();
+        let unshown: FxHashSet<_> = lods
+            .iter()
+            .filter(|(_, t)| t.shown.is_none())
+            .map(|(&k, _)| k)
+            .collect();
+        assert_eq!(tracker.dying, dying);
+        assert_eq!(tracker.previous, previous);
+        assert_eq!(tracker.unshown, unshown);
+    }
+
+    #[test]
+    fn tracker_calm_frame_is_o1_and_expires_only_tracked_fades() {
+        let base = Instant::now();
+        let whole = base.checked_sub(FADE).unwrap_or(base);
+        let mut lods = FxHashMap::default();
+        let mut tracker = LodTracker::default();
+        for x in 0..50 {
+            for z in 0..50 {
+                let key = TileKey { x, z, level: 0 };
+                lods.insert(
+                    key,
+                    MockTile {
+                        shown: Some(whole),
+                        dying: None,
+                        alone: false,
+                        previous: None,
+                    },
+                );
+                tracker.record_uploaded(key, true, false);
+            }
+        }
+        assert!(tracker.dying.is_empty());
+        assert!(tracker.previous.is_empty());
+        assert!(tracker.unshown.is_empty());
+        assert_tracker_matches(&tracker, &lods);
+
+        // Calm frame: empty tracking sets return immediately with no allocations.
+        let faded = tracker.collect_faded(&lods, base);
+        assert!(faded.is_empty());
+        assert_eq!(faded.capacity(), 0);
+        let expired = tracker.expire_previous(&mut lods, base, |tile, now| match tile.previous {
+            Some((id, Some(since))) if now.saturating_duration_since(since) >= FADE => {
+                tile.previous = None;
+                Some(Some(id))
+            }
+            Some(_) => Some(None),
+            None => None,
+        });
+        assert!(expired.is_empty());
+        assert_eq!(expired.capacity(), 0);
+
+        // Mark one tile dying and another holding a stand-in previous mesh.
+        let dying_key = TileKey {
+            x: 3,
+            z: 4,
+            level: 0,
+        };
+        let standin_key = TileKey {
+            x: 7,
+            z: 8,
+            level: 0,
+        };
+        lods.get_mut(&dying_key).unwrap().set_dying(base, true);
+        tracker.mark_dying(dying_key);
+        lods.get_mut(&standin_key).unwrap().previous = Some((42, Some(base)));
+        tracker.record_uploaded(standin_key, true, true);
+        assert_tracker_matches(&tracker, &lods);
+
+        // Before FADE elapses, neither expires.
+        let before = base + FADE - Duration::from_millis(1);
+        assert!(tracker.collect_faded(&lods, before).is_empty());
+        let still = tracker.expire_previous(&mut lods, before, |tile, now| match tile.previous {
+            Some((id, Some(since))) if now.saturating_duration_since(since) >= FADE => {
+                tile.previous = None;
+                Some(Some(id))
+            }
+            Some(_) => Some(None),
+            None => None,
+        });
+        assert!(still.is_empty());
+        assert_tracker_matches(&tracker, &lods);
+
+        // At FADE, both expire and tracker returns to empty calm state.
+        let after = base + FADE;
+        let faded = tracker.collect_faded(&lods, after);
+        assert_eq!(faded, vec![dying_key]);
+        for key in faded {
+            lods.remove(&key);
+            tracker.remove(&key);
+        }
+        let released = tracker.expire_previous(&mut lods, after, |tile, now| match tile.previous {
+            Some((id, Some(since))) if now.saturating_duration_since(since) >= FADE => {
+                tile.previous = None;
+                Some(Some(id))
+            }
+            Some(_) => Some(None),
+            None => None,
+        });
+        assert_eq!(released, vec![42]);
+        assert!(tracker.dying.is_empty());
+        assert!(tracker.previous.is_empty());
+        assert!(tracker.unshown.is_empty());
+        assert_tracker_matches(&tracker, &lods);
+    }
+
+    #[test]
+    fn finish_batch_matches_full_scan_for_empty_and_non_empty_removals() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(100);
+        let t2 = t0 + Duration::from_millis(200);
+        let parent = TileKey {
+            x: 0,
+            z: 0,
+            level: 1,
+        };
+        let child0 = TileKey {
+            x: 0,
+            z: 0,
+            level: 0,
+        };
+        let child1 = TileKey {
+            x: 1,
+            z: 0,
+            level: 0,
+        };
+        let distant = TileKey {
+            x: 10,
+            z: 10,
+            level: 1,
+        };
+        let cutout_tile = TileKey {
+            x: -3,
+            z: -4,
+            level: 0,
+        };
+        let both_unshown_and_removed = TileKey {
+            x: 5,
+            z: 5,
+            level: 0,
+        };
+
+        let mut fast = FxHashMap::default();
+        let mut tracker = LodTracker::default();
+        let upload = |lods: &mut FxHashMap<TileKey, MockTile>,
+                      tracker: &mut LodTracker,
+                      key: TileKey,
+                      keep: bool,
+                      mesh_id: u32| {
+            let (shown, previous) = match lods.remove(&key) {
+                Some(old) if old.dying.is_none() => match old.previous {
+                    Some(prev) => (old.shown, Some(prev)),
+                    None if keep => (old.shown, Some((mesh_id, None))),
+                    None => (old.shown, None),
+                },
+                _ => (None, None),
+            };
+            tracker.record_uploaded(key, shown.is_some(), previous.is_some());
+            lods.insert(
+                key,
+                MockTile {
+                    shown,
+                    dying: None,
+                    alone: false,
+                    previous,
+                },
+            );
+        };
+
+        // Batch 1: pending.removed is empty (fast path) with unshown tiles + stand-in + large cutout.
+        upload(&mut fast, &mut tracker, parent, false, 1);
+        upload(&mut fast, &mut tracker, distant, false, 2);
+        upload(&mut fast, &mut tracker, cutout_tile, false, 3);
+        upload(&mut fast, &mut tracker, parent, true, 10);
+        let mut ref_lods = fast.clone();
+
+        let empty_removed = FxHashSet::default();
+        let cutout_a: FxHashSet<(i32, i32)> = [(-3, -4), (0, 1)].into_iter().collect();
+        let current_cutout = FxHashSet::default();
+        tracker.finish_batch(
+            &mut fast,
+            empty_removed.clone(),
+            Some(&cutout_a),
+            &current_cutout,
+            t0,
+        );
+        reference_finish_batch(
+            &mut ref_lods,
+            &empty_removed,
+            Some(&cutout_a),
+            &current_cutout,
+            t0,
+        );
+        assert_eq!(fast, ref_lods);
+        assert_tracker_matches(&tracker, &fast);
+        // Empty removal shows new tiles whole immediately and arms stand-ins.
+        let whole_t0 = t0.checked_sub(FADE).unwrap_or(t0);
+        assert_eq!(fast[&parent].shown, Some(whole_t0));
+        assert_eq!(fast[&parent].previous, Some((10, Some(t0))));
+
+        // Batch 2: non-empty removed covering:
+        // - `parent` replaced by finer `child0` & `child1` (over_replaced=true, alone=false)
+        // - `distant` removed with nothing replacing it (alone=true)
+        // - `cutout_tile` removed under near-chunk cutout (alone=false)
+        // - `both_unshown_and_removed` uploaded then removed in the same batch
+        // - absent key not in `lods`
+        upload(&mut fast, &mut tracker, child0, false, 20);
+        upload(&mut fast, &mut tracker, child1, false, 21);
+        upload(&mut fast, &mut tracker, both_unshown_and_removed, false, 22);
+        let mut ref_lods = fast.clone();
+        let removed: FxHashSet<TileKey> = [
+            parent,
+            distant,
+            cutout_tile,
+            both_unshown_and_removed,
+            TileKey {
+                x: 99,
+                z: 99,
+                level: 2,
+            },
+        ]
+        .into_iter()
+        .collect();
+        tracker.finish_batch(&mut fast, removed.clone(), None, &cutout_a, t1);
+        reference_finish_batch(&mut ref_lods, &removed, None, &cutout_a, t1);
+        assert_eq!(fast, ref_lods);
+        assert_tracker_matches(&tracker, &fast);
+        assert_eq!(
+            fast[&child0].shown,
+            Some(t1),
+            "fades in over replaced parent"
+        );
+        assert_eq!(fast[&parent].dying, Some(t1));
+        assert!(!fast[&parent].alone, "replaced by child0/child1");
+        assert_eq!(fast[&distant].dying, Some(t1));
+        assert!(fast[&distant].alone, "out of range with no replacement");
+        assert_eq!(fast[&cutout_tile].dying, Some(t1));
+        assert!(!fast[&cutout_tile].alone, "covered by cutout column");
+        assert_eq!(fast[&both_unshown_and_removed].shown, Some(t1));
+        assert_eq!(fast[&both_unshown_and_removed].dying, Some(t1));
+        assert!(!fast[&both_unshown_and_removed].alone);
+
+        // Batch 3: re-removing already-dying keys must not overwrite dying timestamps.
+        let mut ref_lods = fast.clone();
+        tracker.finish_batch(&mut fast, removed.clone(), None, &cutout_a, t2);
+        reference_finish_batch(&mut ref_lods, &removed, None, &cutout_a, t2);
+        assert_eq!(fast, ref_lods);
+        assert_tracker_matches(&tracker, &fast);
+        assert_eq!(fast[&distant].dying, Some(t1));
+    }
+
+    #[test]
+    fn taken_columns_matches_linear_scan_across_levels_and_signs() {
+        let current: FxHashSet<(i32, i32)> = [(-2, -2), (0, 0), (1, 1)].into_iter().collect();
+        let cutout: FxHashSet<(i32, i32)> = [(-5, -3), (-2, -2), (0, 0), (3, -1), (4, 5)]
+            .into_iter()
+            .collect();
+        let taken = TakenColumns::new(Some(&cutout), &current);
+        let naive_list: Vec<_> = cutout
+            .iter()
+            .filter(|c| !current.contains(c))
+            .copied()
+            .collect();
+
+        for level in 0..=4u8 {
+            for x in -8..=8 {
+                for z in -8..=8 {
+                    let key = TileKey { x, z, level };
+                    let [ox, _, oz] = key.origin();
+                    let size = key.size();
+                    let expected = naive_list.iter().any(|&(cx, cz)| {
+                        (ox..ox + size).contains(&(cx * 16)) && (oz..oz + size).contains(&(cz * 16))
+                    });
+                    assert_eq!(
+                        taken.overlaps(key, Some(&cutout), &current),
+                        expected,
+                        "mismatch for {key:?}"
+                    );
+                }
+            }
+        }
+        let empty = TakenColumns::new(None, &current);
+        assert!(!empty.overlaps(
+            TileKey {
+                x: 0,
+                z: 0,
+                level: 0,
+            },
+            None,
+            &current,
+        ));
     }
 }

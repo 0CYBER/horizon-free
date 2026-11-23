@@ -387,6 +387,119 @@ mod section_mesh_tests {
             ])
         );
     }
+
+    #[test]
+    fn sort_solid_for_lod_matches_sort_solid_without_meshlets() {
+        let quad = |positions: [[f32; 3]; 4], layer: u16, color: u32| {
+            positions.map(|pos| TerrainVertex::tiled(pos, [0.0, 0.0], layer, color, 0xF0F0))
+        };
+        let mut solid = Vec::new();
+        // +Y opaque face at y = 10
+        solid.extend(quad(
+            [
+                [0.0, 10.0, 0.0],
+                [0.0, 10.0, 4.0],
+                [4.0, 10.0, 4.0],
+                [4.0, 10.0, 0.0],
+            ],
+            OPAQUE_LAYER | 1,
+            0xFF11_2233,
+        ));
+        // +X cutout face at x = 8
+        solid.extend(quad(
+            [
+                [8.0, 0.0, 0.0],
+                [8.0, 4.0, 0.0],
+                [8.0, 4.0, 4.0],
+                [8.0, 0.0, 4.0],
+            ],
+            2,
+            0xFF44_5566,
+        ));
+        // -Z opaque face at z = 0
+        solid.extend(quad(
+            [
+                [4.0, 0.0, 0.0],
+                [4.0, 4.0, 0.0],
+                [0.0, 4.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            OPAQUE_LAYER | 3,
+            0xFF77_8899,
+        ));
+        let translucent = quad(
+            [
+                [0.0, 12.0, 0.0],
+                [0.0, 12.0, 4.0],
+                [4.0, 12.0, 4.0],
+                [4.0, 12.0, 0.0],
+            ],
+            4,
+            0x80AA_BBCC,
+        )
+        .to_vec();
+        let solid_sources = vec![
+            TerrainSource::new(1, [0, 10, 0], 0, false),
+            TerrainSource::new(2, [8, 0, 0], 0, false),
+            TerrainSource::new(3, [0, 0, 0], 0, false),
+        ];
+        let solid_looks = vec![QuadLook([1, 2]), QuadLook([3, 4]), QuadLook([5, 6])];
+
+        let mut expected = SectionMesh {
+            solid: solid.clone(),
+            solid_sources: solid_sources.clone(),
+            translucent: translucent.clone(),
+            solid_looks: solid_looks.clone(),
+            ..Default::default()
+        };
+        expected.sort_solid();
+
+        let mut lod = SectionMesh {
+            solid: solid.clone(),
+            solid_sources,
+            translucent,
+            solid_looks,
+            ..Default::default()
+        };
+        lod.sort_solid_for_lod();
+
+        assert_eq!(
+            bytemuck::cast_slice::<TerrainVertex, u32>(&lod.solid),
+            bytemuck::cast_slice::<TerrainVertex, u32>(&expected.solid),
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<TerrainVertex, u32>(&lod.translucent),
+            bytemuck::cast_slice::<TerrainVertex, u32>(&expected.translucent),
+        );
+        assert_eq!(lod.sides, expected.sides);
+        assert_eq!(lod.bounds, expected.bounds);
+        assert_eq!(lod.solid_sources, expected.solid_sources);
+        assert_eq!(lod.solid_looks, expected.solid_looks);
+        assert!(lod.packed.is_empty());
+        assert!(!lod.packed_far);
+        assert!(lod.solid_tints.is_empty());
+        assert!(lod.meshlets.is_empty());
+        assert_eq!(lod.meshlets.capacity(), 0);
+
+        // Pre-populated stale meshlets, packed records, and tints are cleared.
+        let mut recycled = SectionMesh {
+            solid,
+            translucent: expected.translucent.clone(),
+            packed: vec![[1; 6]],
+            packed_far: true,
+            solid_tints: vec![0xFF_FFFF; 3],
+            meshlets: meshlet::build_section_meshlets(&expected.sides, &expected.solid, &[]),
+            ..Default::default()
+        };
+        assert!(!recycled.meshlets.is_empty());
+        recycled.sort_solid_for_lod();
+        assert!(recycled.meshlets.is_empty());
+        assert!(recycled.packed.is_empty());
+        assert!(!recycled.packed_far);
+        assert!(recycled.solid_tints.is_empty());
+        assert_eq!(recycled.sides, expected.sides);
+        assert_eq!(recycled.bounds, expected.bounds);
+    }
 }
 /// A shader terrain quad's unmodified source state and owning section cell. Two words
 /// per quad, kept beside (not in) the native 24-byte vertex format. Word 1 has cell XYZ
@@ -617,6 +730,25 @@ impl SectionMesh {
                 &mut self.meshlets,
             );
         }
+    }
+
+    /// Sorts the solid quads by the side they face for far-terrain (LOD) tiles,
+    /// without building near-section compact records or sub-section meshlets:
+    /// `Renderer::upload_lod` never registers LOD tiles in the mesh-shader
+    /// section store, and `lod::packed::lay_out` lays out the far-terrain
+    /// compact layout immediately after.
+    pub fn sort_solid_for_lod(&mut self) {
+        self.solid_tints.clear();
+        self.sides = sides::sort_sourced(
+            &mut self.solid,
+            &mut self.solid_tints,
+            &mut self.solid_sources,
+            &mut self.solid_looks,
+        );
+        self.bounds = self.compute_bounds();
+        self.packed.clear();
+        self.meshlets.clear();
+        self.packed_far = false;
     }
 
     /// Every face emitted since `start` belongs to this block, including multipart,
