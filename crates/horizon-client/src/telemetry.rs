@@ -25,6 +25,17 @@ static REST_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The screen the window opened on.
 static DISPLAY: Mutex<Option<Display>> = Mutex::new(None);
 
+/// The names this run plays under (the signed-in account, `--name`), for the crash scrubber.
+static PLAYER_NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Remembers the player's name so a crash report hides it wherever the error text holds it.
+pub fn note_player(name: &str) {
+    let mut names = PLAYER_NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if !names.iter().any(|n| n == name) {
+        names.push(name.to_owned());
+    }
+}
+
 /// When the game started, for the time to the title screen. Call first thing in `main`.
 pub fn mark_start() {
     STARTED.get_or_init(Instant::now);
@@ -98,10 +109,21 @@ pub fn version() -> String {
 }
 
 /// What a crash report becomes when it may leave: the error and stack, the thread, and the
-/// details in [`CRASH_DETAILS`], with the world's name and folder and the server's address
-/// scrubbed wherever they appear. No log lines.
+/// details in [`CRASH_DETAILS`], with the world's name and folder, the server's address and the
+/// player's name scrubbed wherever they appear. No log lines.
 pub fn crash_item(report: &crate::crash::Report) -> Item {
     let mut scrubber = Scrubber::new();
+    for name in PLAYER_NAMES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+    {
+        scrubber = scrubber.term(name.as_str());
+    }
+    // The offline name kept next to options.txt, when no account or `--name` gave one.
+    if let Some(name) = crate::offline_name::kept(&crate::logging::player_dir()) {
+        scrubber = scrubber.term(name);
+    }
     for (key, value) in &report.details {
         match key.as_str() {
             // `Name (saves/folder)`, as game.rs sets it.
@@ -383,6 +405,28 @@ mod tests {
             assert!(!json.contains(private), "{private} in {json}");
         }
         assert!(item.validate().is_ok());
+    }
+
+    #[test]
+    fn the_players_name_is_scrubbed_from_a_crash() {
+        note_player("Zed_Tester");
+        // The game accepts one- and two-character offline names.
+        note_player("Zq");
+        let mut report = report();
+        report.error = "panicked at src/net.rs:1:1:\nplayer Zed_Tester not found; Zq quit".into();
+        report.stack = "horizon_client::net::join (Zed_Tester, Zq, Zqueue)\n".into();
+        let json = serde_json::to_string(&crash_item(&report)).unwrap();
+        assert!(!json.contains("Zed_Tester"), "{json}");
+        assert!(
+            !json.contains("Zq quit") && !json.contains("(Zed_Tester, Zq,"),
+            "{json}"
+        );
+        assert!(
+            json.contains("player <private> not found; <private> quit"),
+            "{json}"
+        );
+        // A word that merely holds the short name stays.
+        assert!(json.contains("Zqueue"), "{json}");
     }
 
     #[test]

@@ -23,6 +23,13 @@ pub fn generate(seed: u64) -> String {
     format!("Player{:05}", seed % 100_000)
 }
 
+/// The name kept in `dir`, if there is one; nothing is created.
+pub fn kept(dir: &Path) -> Option<String> {
+    fs::read_to_string(dir.join(FILE))
+        .ok()
+        .and_then(|text| parse(&text))
+}
+
 /// The name kept in `dir`, created on first use. A file that can't be written
 /// still yields a name for this run.
 pub fn load_or_create(dir: &Path) -> String {

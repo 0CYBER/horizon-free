@@ -38,11 +38,12 @@ impl Scrubber {
         self
     }
 
-    /// Hides `term` wherever it appears. Terms under 3 characters are ignored: they would
-    /// blank out ordinary words.
+    /// Hides `term` wherever it appears. A term of 1 or 2 characters (the game accepts such
+    /// player names) would blank out ordinary words, so it is hidden only as a whole word, in any
+    /// case: not inside a longer run of letters, digits and `_`, the characters of a player name.
     pub fn term(mut self, term: impl Into<String>) -> Self {
         let term = term.into();
-        if term.trim().len() >= 3 && !self.terms.contains(&term) {
+        if !term.trim().is_empty() && !self.terms.contains(&term) {
             self.terms.push(term);
             self.terms.sort_by_key(|t| std::cmp::Reverse(t.len()));
         }
@@ -52,7 +53,11 @@ impl Scrubber {
     pub fn scrub(&self, text: &str) -> String {
         let mut out = text.to_owned();
         for term in &self.terms {
-            out = out.replace(term.as_str(), PRIVATE);
+            out = if term.trim().len() >= 3 {
+                out.replace(term.as_str(), PRIVATE)
+            } else {
+                replace_word(&out, term, PRIVATE)
+            };
         }
         out = user_folders(&out);
         out = replace_tokens(&out, email_at);
@@ -288,42 +293,47 @@ fn uuid_at(bytes: &[u8], i: usize) -> Option<(usize, &'static str)> {
 
 /// Whole-word occurrences of `word`, in any case.
 fn replace_word(text: &str, word: &str, label: &str) -> String {
-    let lower = text.to_lowercase();
-    let needle = word.to_lowercase();
-    // Lowercasing can change byte lengths outside ASCII: then match exactly instead. Equal total
-    // lengths aren't enough to stand one in for the other: a character can grow (`İ` is 2 bytes and
-    // lowercases to 3) while another shrinks (`K`, U+212A, is 3 and lowercases to 1), so the text
-    // keeps its length while its boundaries move, and a match's offsets in `lower` would slice the
-    // text mid-character.
-    let aligned = lower.len() == text.len()
-        && lower
-            .char_indices()
-            .map(|(at, _)| at)
-            .eq(text.char_indices().map(|(at, _)| at));
-    let (hay, needle) = if aligned && needle.len() == word.len() {
-        (lower.as_str(), needle.as_str())
-    } else {
-        (text, word)
-    };
+    // Compared on the text as it is, a character at a time: lowercasing the whole text would
+    // change byte lengths outside ASCII (`İ` is 2 bytes and lowercases to 3), and its offsets
+    // would no longer point into the text.
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
-    let mut from = 0;
-    while let Some(found) = hay[from..].find(needle) {
-        let start = from + found;
-        let end = start + needle.len();
-        let alone = (start == 0 || !word_byte(bytes[start - 1])) && ends_token(bytes, end);
-        // A label put in earlier (`<user>` for a user named "user") stays as it is.
-        let label_inside = start > 0 && bytes[start - 1] == b'<' && bytes.get(end) == Some(&b'>');
-        if alone && !label_inside {
+    let mut start = 0;
+    while start < text.len() {
+        let end = matches_at(text, start, word);
+        let replaced = end.filter(|&end| {
+            let alone = (start == 0 || !word_byte(bytes[start - 1])) && ends_token(bytes, end);
+            // A label put in earlier (`<user>` for a user named "user") stays as it is.
+            let label_inside =
+                start > 0 && bytes[start - 1] == b'<' && bytes.get(end) == Some(&b'>');
+            alone && !label_inside
+        });
+        if let Some(end) = replaced {
             out.push_str(&text[copied..start]);
             out.push_str(label);
             copied = end;
+            start = end;
+        } else {
+            start += text[start..].chars().next().map_or(1, char::len_utf8);
         }
-        from = end;
     }
     out.push_str(&text[copied..]);
     out
+}
+
+/// Where `word` ends when it starts at byte `at` of `text`, each character compared in any case.
+fn matches_at(text: &str, at: usize, word: &str) -> Option<usize> {
+    let mut hay = text[at..].chars();
+    let mut end = at;
+    for w in word.chars() {
+        let h = hay.next()?;
+        if h != w && !h.to_lowercase().eq(w.to_lowercase()) {
+            return None;
+        }
+        end += h.len_utf8();
+    }
+    Some(end)
 }
 
 #[cfg(test)]
@@ -345,6 +355,17 @@ mod tests {
         assert_eq!(
             Scrubber::bare().with_user("ana").scrub("aNa here"),
             "<user> here"
+        );
+    }
+
+    /// Unicode elsewhere in the text, whose lowercase has another byte length, leaves the
+    /// matching of a name in any case as it is.
+    #[test]
+    fn a_name_in_another_case_is_hidden_beside_unicode() {
+        let s = Scrubber::bare().term("Zq").with_user("ana");
+        assert_eq!(
+            s.scrub("\u{130}stanbul \u{212A}: zQ quit, ZQ (Zqueue) ANA ok"),
+            "\u{130}stanbul \u{212A}: <private> quit, <private> (Zqueue) <user> ok"
         );
     }
 
@@ -444,7 +465,18 @@ mod tests {
             .term("ab");
         assert_eq!(
             s.scrub("Saving My World; joined play.example.net:25565, ab"),
-            "Saving <private>; joined <private>:25565, ab"
+            "Saving <private>; joined <private>:25565, <private>"
         );
+    }
+
+    #[test]
+    fn a_short_term_is_hidden_only_as_a_whole_word() {
+        let s = Scrubber::bare().term("ab").term("Z");
+        assert_eq!(
+            s.scrub("about ab_c cab ab, (AB) z: Zed a_z 1ab ab1 ab"),
+            "about ab_c cab <private>, (<private>) <private>: Zed a_z 1ab ab1 <private>"
+        );
+        // Longer terms still match inside words.
+        assert_eq!(Scrubber::bare().term("abc").scrub("xabcx"), "x<private>x");
     }
 }
