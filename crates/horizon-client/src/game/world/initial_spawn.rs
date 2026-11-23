@@ -7,7 +7,6 @@ use horizon_client::{
     Result,
     assets::Properties,
     collisions::{SceneCollisions, no_collision_or_liquid},
-    random_source,
     world::World,
     world_spawn::{
         PlayerSpawnFinder, SpawnCandidate, SpawnLevel, level_respawn_pos, spawn_pos_in_chunk,
@@ -288,7 +287,7 @@ impl Game<'_> {
     /// which the caller must have loaded (the finder tries at most 1024
     /// columns).
     pub(super) fn search_spawn(
-        &self,
+        &mut self,
         suggestion: [i32; 3],
         state: &mut Option<PlayerSpawnFinder>,
     ) -> std::result::Result<Vec3, (i32, i32)> {
@@ -335,8 +334,10 @@ impl Game<'_> {
         }
     }
     /// A new PlayerSpawnFinder around `suggestion`: the respawn radius, cut
-    /// by the world border; the suggestion itself in adventure mode.
-    fn spawn_finder(&self, suggestion: [i32; 3]) -> PlayerSpawnFinder {
+    /// by the world border; the suggestion itself in adventure mode. Vanilla
+    /// draws the walk's start offset from `Level.random`, so two searches in
+    /// one world walk the same columns.
+    fn spawn_finder(&mut self, suggestion: [i32; 3]) -> PlayerSpawnFinder {
         if self.level.game_mode == 2 {
             let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
             finder.next_candidate();
@@ -358,7 +359,7 @@ impl Game<'_> {
             radius = 1;
         }
         PlayerSpawnFinder::new(suggestion, radius, |n| {
-            random_source::entity().next_int_bound(n).unwrap_or(0)
+            self.world.random.next_int_bound(n).unwrap_or(0)
         })
     }
     /// ServerPlayer.adjustSpawnLocation for a server's new player: where
@@ -367,7 +368,7 @@ impl Game<'_> {
     /// stand in one spot. Vanilla waits for each candidate's chunk; a server
     /// tick can't, so a candidate in a chunk not loaded yet is passed over,
     /// and `spawn` stays when the search never reaches a loaded column.
-    pub(super) fn server_player_spawn(&self, spawn: [f64; 3]) -> [f64; 3] {
+    pub(super) fn server_player_spawn(&mut self, spawn: [f64; 3]) -> [f64; 3] {
         let suggestion = spawn.map(|v| v.floor() as i32);
         let mut finder = self.spawn_finder(suggestion);
         while let Some(candidate) = finder.next_candidate() {

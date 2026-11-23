@@ -47,6 +47,7 @@ horizon-client game::game_mode::tests::leaving_creative_keeps_the_carried_stack 
 horizon-client game::game_mode::tests::the_tick_swap_out_of_creative_keeps_the_carried_stack lib daily resources
 horizon-client game::gui_clips::dispatch_tests::a_hook_call_clips_what_its_mod_draws_and_closes_what_it_leaves_open lib daily resources
 horizon-client game::gui_entity::tests::a_screen_draws_a_mob_by_type_once_and_refuses_what_it_cant_draw lib daily game-boot
+horizon-client game::initial_spawn_tests::a_spawn_search_follows_the_level_seed lib daily resources
 horizon-client game::item_entities::orb_pickup_tests::a_player_picks_a_random_orb_not_the_first lib daily resources
 horizon-client game::lan_actions::pickup_xp_tests::a_guest_picks_an_orb_with_their_own_random lib daily resources
 horizon-client game::lan_entities::tests::glowing_display_metadata_reaches_the_model_silhouettes lib daily resources
@@ -145,9 +146,9 @@ horizon-client game::native_passages::tests::a_destination_level_must_be_open_an
 horizon-client game::native_passages::tests::a_passage_into_another_level_is_not_sent_to_the_clients lib daily resources
 horizon-client game::native_player_ender_chest_tests::a_write_while_the_local_ender_chest_is_open_survives_closing_it lib daily resources
 horizon-client game::native_player_ender_chest_tests::a_written_slot_is_what_the_open_ender_chest_menu_shows_and_clicks lib daily resources
+horizon-client game::native_player_ender_chest_tests::an_ender_chest_open_is_heard_and_a_chest_open_is_not lib daily resources
 horizon-client game::native_player_ender_chest_tests::each_ender_chest_refusal_has_its_own_name_and_writes_nothing lib daily resources
 horizon-client game::native_player_ender_chest_tests::ender_chest_slots_are_read_and_written lib daily resources
-horizon-client game::native_player_ender_chest_tests::an_ender_chest_open_is_heard_and_a_chest_open_is_not lib daily resources
 horizon-client game::native_player_inventory_tests::a_written_slot_is_what_the_open_inventory_menu_shows_and_clicks lib daily resources
 horizon-client game::native_player_inventory_tests::data_write_aborts lib daily resources
 horizon-client game::native_player_inventory_tests::each_inventory_refusal_has_its_own_name_and_writes_nothing lib daily resources
