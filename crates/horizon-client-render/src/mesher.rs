@@ -28,7 +28,7 @@ use crate::{
     blocks::{BlockFacts, RenderShape},
     chunk::{Chunk, MIN_Y},
     graphics::LeafCullingMode,
-    models::catalog::BakedFace,
+    models::catalog::{BakedFace, CullFlags},
 };
 use horizon_assets::model::Direction as ModelDirection;
 use horizon_core::{biome::BiomeZoom, geometry::Direction, position::BlockPos};
@@ -1001,6 +1001,10 @@ pub struct MeshTables {
     /// By state, bit `d` set where its occlusion face toward direction `d` is the
     /// full block (`Info::face` 1): a face looking at it never shows.
     full_faces: Vec<u8>,
+    /// Per-state AO and light facts packed into one byte each (`lighting::AoInfo`),
+    /// keeping `lighting::ambient_occlusion`'s random neighbour lookups in L1D cache.
+    /// Empty if any state cannot be represented losslessly (falls back to `info`).
+    ao_info: Vec<lighting::AoInfo>,
     pub visibility: FaceVisibility,
     water_still: u16,
     water_flow: u16,
@@ -1303,6 +1307,7 @@ impl MeshTables {
                 .iter()
                 .map(|i| (0..6).fold(0, |bits, d| bits | u8::from(i.face[d] == 1) << d))
                 .collect(),
+            ao_info: lighting::AoInfo::build_table(&info),
             info,
             visibility,
             water_still: layer("minecraft:block/water_still")?,
@@ -1760,6 +1765,14 @@ const DIRECTIONS: [(Direction, [i32; 3], u8); 6] = [
 const fn direction_info(d: Direction) -> (Direction, [i32; 3], u8) {
     (d, d.normal(), d.opposite() as u8)
 }
+const _: () = {
+    assert!(Direction::Down as u8 == ModelDirection::Down as u8);
+    assert!(Direction::Up as u8 == ModelDirection::Up as u8);
+    assert!(Direction::North as u8 == ModelDirection::North as u8);
+    assert!(Direction::South as u8 == ModelDirection::South as u8);
+    assert!(Direction::West as u8 == ModelDirection::West as u8);
+    assert!(Direction::East as u8 == ModelDirection::East as u8);
+};
 /// `step_index` of each direction's normal, indexed like `DIRECTIONS`: the
 /// padded index of a block's neighbour is its own plus one of these.
 const OFFSETS: [isize; 6] = {
@@ -2589,7 +2602,8 @@ impl Mesher<'_> {
         let info = &self.tables.info;
         let full_faces = &self.tables.full_faces;
         let catalog = &self.render.model_catalog;
-        let mut models = Vec::new();
+        let cull_flags = catalog.cull_flags();
+        let mut model_slots: smallvec::SmallVec<[u32; 8]> = smallvec::SmallVec::new();
         for y in 0..16 {
             for z in 0..16 {
                 // The padded index of the row's x = 0 cell: `pi(x, y, z)` is
@@ -2655,43 +2669,31 @@ impl Mesher<'_> {
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
                     if catalog
-                        .models_at(BlockStateId(id), world, &mut models)
+                        .model_slots_at_small(BlockStateId(id), world, &mut model_slots)
                         .is_err()
                     {
                         continue;
                     }
-                    // ModelBlockRenderer: the first part decides smooth lighting
-                    // for all; light-emitting blocks are always lit flat.
-                    let Some(first) = models.first() else {
+                    let Some(&first_slot) = model_slots.first() else {
                         continue;
                     };
-                    let ao = self.smooth_lighting && state.emission == 0 && first.ambient_occlusion;
-                    let origin = match offset(state, world.x, world.z) {
-                        Some(o) => [
-                            x as f32 + o[0] as f32,
-                            y as f32 + o[1] as f32,
-                            z as f32 + o[2] as f32,
-                        ],
-                        None => [x as f32, y as f32, z as f32],
-                    };
-                    let mut cull_mask = 0u8;
-                    for model in &models {
-                        for face in &model.faces {
-                            if let Some(d) = face.quad.cull {
-                                cull_mask |= 1 << (d as u8);
-                            }
-                        }
+                    let mut combined_flags = CullFlags::EMPTY;
+                    for &slot in &model_slots {
+                        combined_flags = combined_flags.union(cull_flags[slot as usize]);
                     }
-                    let mut visible = [false; 6];
+                    let cull_mask = combined_flags.cull_mask();
+                    let has_uncullable = combined_flags.has_uncullable();
+                    let mut visible_mask = 0u8;
                     if cull_mask != 0 {
                         for (d, [dx, dy, dz], opposite) in DIRECTIONS {
-                            if cull_mask & (1 << (d as u8)) == 0 {
+                            let bit = 1u8 << (d as u8);
+                            if cull_mask & bit == 0 {
                                 continue;
                             }
                             let neighbor =
                                 pad.blocks[(cell as isize + OFFSETS[d as usize]) as usize];
                             if neighbor == 0 {
-                                visible[d as usize] = true;
+                                visible_mask |= bit;
                                 continue;
                             }
                             // `should_render_face`'s first test, without its lookups: a
@@ -2725,7 +2727,7 @@ impl Mesher<'_> {
                             if opaque_leaves || opaque_ice || culled_leaf {
                                 continue;
                             }
-                            visible[d as usize] = (state.leaves && state.face[d as usize] == 0)
+                            let show = (state.leaves && state.face[d as usize] == 0)
                                 || self
                                     .visibility
                                     .should_render_face(
@@ -2735,17 +2737,48 @@ impl Mesher<'_> {
                                         true,
                                     )
                                     .unwrap_or(true);
+                            if show {
+                                visible_mask |= bit;
+                            }
                         }
                     }
+                    if visible_mask == 0 && !has_uncullable {
+                        continue;
+                    }
+                    // ModelBlockRenderer: the first part decides smooth lighting
+                    // for all; light-emitting blocks are always lit flat.
+                    let Some(first) = catalog.model_by_slot(first_slot) else {
+                        continue;
+                    };
+                    let ao = self.smooth_lighting && state.emission == 0 && first.ambient_occlusion;
+                    let origin = match offset(state, world.x, world.z) {
+                        Some(o) => [
+                            x as f32 + o[0] as f32,
+                            y as f32 + o[1] as f32,
+                            z as f32 + o[2] as f32,
+                        ],
+                        None => [x as f32, y as f32, z as f32],
+                    };
                     let interior_leaf = state.leaves
                         && self.leaf_culling.is_interior()
                         && leaf.interior(self.leaf_culling, x, y, z);
                     let connected = &self.render.connected;
                     let start = [out.solid.len(), out.translucent.len()];
                     let mut tint0: Option<Option<u32>> = None;
-                    for model in &models {
+                    for &slot in &model_slots {
+                        let flags = cull_flags[slot as usize];
+                        if (flags.cull_mask() & visible_mask) == 0 && !flags.has_uncullable() {
+                            continue;
+                        }
+                        let Some(model) = catalog.model_by_slot(slot) else {
+                            continue;
+                        };
                         for face in &model.faces {
-                            if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
+                            if face
+                                .quad
+                                .cull
+                                .is_some_and(|d| visible_mask & (1u8 << (d as u8)) == 0)
+                            {
                                 continue;
                             }
                             // A pane's top and bottom strips between stacked panes, with
@@ -2871,9 +2904,25 @@ impl Mesher<'_> {
         let shape = &face.shapes[usize::from(state.full)];
         // Grey level per vertex before tinting, vanilla light coords, and ambient occlusion factor.
         let (gray, coords, ao_factor) = if ao {
-            let info = &self.tables.info;
-            let (brightness, coords) =
-                lighting::ambient_occlusion(pad, info, state, pos, shape, q.facing);
+            let (brightness, coords) = if self.tables.ao_info.len() == self.tables.info.len() {
+                lighting::ambient_occlusion(
+                    pad,
+                    &self.tables.ao_info,
+                    self.tables.ao_info[id as usize],
+                    pos,
+                    shape,
+                    q.facing,
+                )
+            } else {
+                lighting::ambient_occlusion_full(
+                    pad,
+                    &self.tables.info,
+                    state,
+                    pos,
+                    shape,
+                    q.facing,
+                )
+            };
             let gray = if self.separate_ao {
                 [lighting::gray(directional); 4]
             } else {
@@ -3167,13 +3216,18 @@ impl Mesher<'_> {
                 true => (&mut out.translucent_looks, out.translucent.len() / 4),
                 false => (&mut out.solid_looks, out.solid.len() / 4),
             };
-            looks.resize(quads - 1, QuadLook::default());
+            let prior = quads - 1;
+            if looks.len() != prior {
+                looks.resize(prior, QuadLook::default());
+            }
             looks.push(look);
         }
         if !translucent {
             // Quads other code put in `solid` (lava) have no tint known.
             let quad = out.solid.len() / 4 - 1;
-            out.solid_tints.resize(quad, packed::UNKNOWN_TINT);
+            if out.solid_tints.len() != quad {
+                out.solid_tints.resize(quad, packed::UNKNOWN_TINT);
+            }
             out.solid_tints.push(tint.unwrap_or(packed::WHITE));
         }
     }

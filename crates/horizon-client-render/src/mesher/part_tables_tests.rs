@@ -56,6 +56,7 @@ pub(super) fn tables(overlay: bool) -> MeshTables {
         info: vec![air(), water, Info { overlay, ..air() }],
         solid: vec![],
         full_faces: vec![],
+        ao_info: vec![],
         visibility: horizon_world::block_render::FaceVisibility::empty(),
         water_still: 11,
         water_flow: WATER_FLOW,

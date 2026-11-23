@@ -131,6 +131,58 @@ pub struct BakedModel {
     pub faces: Vec<BakedFace>,
     pub cube: Option<[super::cube::CubeStyle; 6]>,
 }
+/// Compact 1-byte summary of a [`BakedModel`]'s face cull directions.
+///
+/// Bit layout:
+/// - bits `0..6`: `cull_mask`, bit `d` set if any face has `quad.cull == Some(d)`
+/// - bit `6`: `has_uncullable`, set if any face has `quad.cull.is_none()`
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CullFlags(u8);
+impl CullFlags {
+    const CULL_MASK_BITS: u8 = 0b0011_1111;
+    const HAS_UNCULLABLE_BIT: u8 = 1 << 6;
+
+    /// Empty model flags (no culled faces and no uncullable faces).
+    pub const EMPTY: Self = Self(0);
+
+    /// Computes the cull flags for a slice of baked faces.
+    pub fn from_faces(faces: &[BakedFace]) -> Self {
+        let mut bits = 0u8;
+        for face in faces {
+            match face.quad.cull {
+                Some(d) => bits |= 1u8 << (d as u8),
+                None => bits |= Self::HAS_UNCULLABLE_BIT,
+            }
+        }
+        Self(bits)
+    }
+
+    /// Bitmask of `face.quad.cull` directions present (`1 << (d as u8)`).
+    #[inline]
+    pub const fn cull_mask(self) -> u8 {
+        self.0 & Self::CULL_MASK_BITS
+    }
+
+    /// Whether any face has `face.quad.cull.is_none()`.
+    #[inline]
+    pub const fn has_uncullable(self) -> bool {
+        self.0 & Self::HAS_UNCULLABLE_BIT != 0
+    }
+
+    /// Combines the cull flags of two models (e.g. multipart parts).
+    #[inline]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+const _: () = {
+    assert!((Direction::Down as u8) < 6);
+    assert!((Direction::Up as u8) < 6);
+    assert!((Direction::North as u8) < 6);
+    assert!((Direction::South as u8) < 6);
+    assert!((Direction::West as u8) < 6);
+    assert!((Direction::East as u8) < 6);
+};
 type VariantKey = (String, [u8; 3], bool);
 /// Empty by default: no state has a model (a dedicated server, which draws
 /// nothing).
@@ -140,6 +192,8 @@ pub struct StateModels {
     choices: Vec<CompiledChoices<u32>>,
     /// All baked alternatives per definition, invalidated before mutable model access.
     bounds: OnceLock<Vec<Option<[[f32; 3]; 2]>>>,
+    /// Precomputed cull flags per `baked` slot, invalidated before mutable model access.
+    cull_flags: OnceLock<Vec<CullFlags>>,
     /// By state id: its definition in `choices` and the models it selects.
     states: Vec<Option<(usize, SelectedModels)>>,
     single_models: Vec<Option<u32>>,
@@ -497,6 +551,7 @@ impl StateModels {
         Ok(Self {
             choices,
             bounds: OnceLock::new(),
+            cull_flags: OnceLock::new(),
             states,
             single_models,
             baked,
@@ -540,6 +595,7 @@ impl StateModels {
                         rotations: [0; 3],
                         uv_lock: false,
                     };
+                    self.cull_flags.take();
                     self.baked.push((variant, model));
                 }
                 Err(e) => log::warn!("Horizon: standalone model {name} not loaded: {e}"),
@@ -565,6 +621,7 @@ impl StateModels {
                 Ok(model) => {
                     self.standalone
                         .insert(id.to_owned(), self.baked.len() as u32);
+                    self.cull_flags.take();
                     self.baked.push((
                         Variant {
                             model: id.to_owned(),
@@ -584,9 +641,22 @@ impl StateModels {
     /// Every baked model with the variant it was baked from, to change its faces.
     pub fn models_mut(&mut self) -> impl Iterator<Item = (&Variant, &mut BakedModel)> {
         self.bounds.take();
+        self.cull_flags.take();
         self.baked
             .iter_mut()
             .map(|(variant, model)| (&*variant, model))
+    }
+    /// Precomputed cull flags for every slot in this catalog's baked store,
+    /// lazily built and invalidated before mutable access via [`Self::models_mut`].
+    pub fn cull_flags(&self) -> &[CullFlags] {
+        self.cull_flags
+            .get_or_init(|| {
+                self.baked
+                    .iter()
+                    .map(|(_, model)| CullFlags::from_faces(&model.faces))
+                    .collect()
+            })
+            .as_slice()
     }
     /// A model baked by [`Self::bake_standalone`], by id (`mymod:block/shaft_half`).
     pub fn standalone(&self, name: &str) -> Option<&BakedModel> {
@@ -676,18 +746,42 @@ impl StateModels {
         }
         self.each_seeded(state, position_seed(position), |(_, model)| out.push(model))
     }
+    /// Like [`Self::models_at`], writing baked-model slot indices into a stack-backed
+    /// `SmallVec` so single-variant and small multipart blocks avoid heap allocation
+    /// and can inspect [`Self::cull_flags`] before reading [`BakedModel`] geometry.
+    pub fn model_slots_at_small<A: smallvec::Array<Item = u32>>(
+        &self,
+        state: BlockStateId,
+        position: BlockPos,
+        out: &mut smallvec::SmallVec<A>,
+    ) -> Result<()> {
+        out.clear();
+        if let Some(Some(model)) = self.single_models.get(state.0 as usize) {
+            out.push(*model);
+            return Ok(());
+        }
+        self.each_slot_seeded(state, position_seed(position), |model| out.push(model))
+    }
+    fn each_slot_seeded(
+        &self,
+        state: BlockStateId,
+        seed: i64,
+        mut f: impl FnMut(u32),
+    ) -> Result<()> {
+        let (choice, selected) = self.state(state).ok_or("unbound gallery block state")?;
+        let mut random = LegacyRandom::new(seed);
+        self.choices[*choice].for_each(selected, &mut random, |&model| {
+            f(model);
+        })?;
+        Ok(())
+    }
     fn each_seeded<'a>(
         &'a self,
         state: BlockStateId,
         seed: i64,
         mut f: impl FnMut(&'a (Variant, BakedModel)),
     ) -> Result<()> {
-        let (choice, selected) = self.state(state).ok_or("unbound gallery block state")?;
-        let mut random = LegacyRandom::new(seed);
-        self.choices[*choice].for_each(selected, &mut random, |&model| {
-            f(&self.baked[model as usize]);
-        })?;
-        Ok(())
+        self.each_slot_seeded(state, seed, |model| f(&self.baked[model as usize]))
     }
     fn state(&self, state: BlockStateId) -> Option<&(usize, SelectedModels)> {
         self.states.get(state.0 as usize)?.as_ref()
@@ -992,6 +1086,376 @@ mod tests {
         assert_eq!(models.baked.len(), 2);
         assert_eq!(models.standalone.get("lanef:block/shared"), Some(&1));
         Ok(())
+    }
+
+    #[test]
+    fn cull_flags_tracks_culled_uncullable_and_rotations() {
+        assert_eq!(std::mem::size_of::<CullFlags>(), 1);
+        let bake = |json: &str, turns: [u8; 3]| {
+            let model = horizon_assets::model::CuboidModel::from_json(json).unwrap();
+            let library = horizon_assets::resolve::ModelLibrary::new(BTreeMap::from([(
+                "horizon:test".to_owned(),
+                model,
+            )]))
+            .unwrap();
+            bake_resolved(
+                &mut Sprites::default(),
+                &library.resolve("horizon:test").unwrap(),
+                turns,
+                false,
+            )
+            .unwrap()
+        };
+
+        // All six faces culled, none uncullable.
+        let all_culled = serde_json::json!({
+            "textures": {"all": "horizon:block/test"},
+            "elements": [{
+                "from": [0, 0, 0], "to": [16, 16, 16],
+                "faces": {
+                    "down": {"texture": "#all", "cullface": "down"},
+                    "up": {"texture": "#all", "cullface": "up"},
+                    "north": {"texture": "#all", "cullface": "north"},
+                    "south": {"texture": "#all", "cullface": "south"},
+                    "west": {"texture": "#all", "cullface": "west"},
+                    "east": {"texture": "#all", "cullface": "east"}
+                }
+            }]
+        })
+        .to_string();
+        let baked = bake(&all_culled, [0, 0, 0]);
+        let flags = CullFlags::from_faces(&baked.faces);
+        assert_eq!(flags.cull_mask(), 0b0011_1111);
+        assert!(!flags.has_uncullable());
+
+        // Subset of culled faces under rotations: flags track rotated cull directions.
+        let subset_culled = serde_json::json!({
+            "textures": {"all": "horizon:block/test"},
+            "elements": [{
+                "from": [0, 0, 0], "to": [16, 16, 16],
+                "faces": {
+                    "down": {"texture": "#all", "cullface": "down"},
+                    "north": {"texture": "#all", "cullface": "north"},
+                    "east": {"texture": "#all", "cullface": "east"}
+                }
+            }]
+        })
+        .to_string();
+        let unrotated = bake(&subset_culled, [0, 0, 0]);
+        let unrotated_flags = CullFlags::from_faces(&unrotated.faces);
+        assert_eq!(
+            unrotated_flags.cull_mask(),
+            (1u8 << Direction::Down as u8)
+                | (1u8 << Direction::North as u8)
+                | (1u8 << Direction::East as u8)
+        );
+        assert!(!unrotated_flags.has_uncullable());
+        for turns in [[0, 90, 0], [90, 0, 0], [90, 180, 0]] {
+            let rotated = bake(&subset_culled, turns);
+            let rotated_flags = CullFlags::from_faces(&rotated.faces);
+            assert!(!rotated_flags.has_uncullable(), "turns={turns:?}");
+            let expected_mask = rotated.faces.iter().fold(0u8, |mask, f| {
+                mask | f.quad.cull.map_or(0, |d| 1u8 << (d as u8))
+            });
+            assert_eq!(rotated_flags.cull_mask(), expected_mask, "turns={turns:?}");
+        }
+
+        // Uncullable only.
+        let uncullable_only = serde_json::json!({
+            "textures": {"all": "horizon:block/test"},
+            "elements": [{
+                "from": [2, 2, 2], "to": [14, 14, 14],
+                "faces": {"up": {"texture": "#all"}, "north": {"texture": "#all"}}
+            }]
+        })
+        .to_string();
+        let baked = bake(&uncullable_only, [0, 0, 0]);
+        let uncullable_flags = CullFlags::from_faces(&baked.faces);
+        assert_eq!(uncullable_flags.cull_mask(), 0);
+        assert!(uncullable_flags.has_uncullable());
+
+        // Mixed culled and uncullable faces.
+        let mixed = serde_json::json!({
+            "textures": {"all": "horizon:block/test"},
+            "elements": [{
+                "from": [0, 0, 0], "to": [16, 8, 16],
+                "faces": {
+                    "down": {"texture": "#all", "cullface": "down"},
+                    "up": {"texture": "#all"}
+                }
+            }]
+        })
+        .to_string();
+        let baked = bake(&mixed, [0, 0, 0]);
+        let mixed_flags = CullFlags::from_faces(&baked.faces);
+        assert_eq!(mixed_flags.cull_mask(), 1u8 << Direction::Down as u8);
+        assert!(mixed_flags.has_uncullable());
+
+        // Union combines cull masks and uncullable bit.
+        let union = unrotated_flags.union(uncullable_flags);
+        assert_eq!(union.cull_mask(), unrotated_flags.cull_mask());
+        assert!(union.has_uncullable());
+
+        // Empty model (no faces).
+        let empty = serde_json::json!({
+            "textures": {"all": "horizon:block/test"},
+            "elements": []
+        })
+        .to_string();
+        let baked = bake(&empty, [0, 0, 0]);
+        assert_eq!(CullFlags::from_faces(&baked.faces), CullFlags::EMPTY);
+    }
+
+    #[test]
+    fn combined_standalone_model_refreshes_cull_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, value: Value| {
+            let path = dir.path().join(format!("assets/merge/models/{name}.json"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, value.to_string()).unwrap();
+        };
+        write(
+            "culled",
+            serde_json::json!({
+                "textures": {"all": "merge:block/a"},
+                "elements": [{
+                    "from": [0, 0, 0], "to": [16, 16, 16],
+                    "faces": {
+                        "north": {"texture": "#all", "cullface": "north"},
+                        "west": {"texture": "#all", "cullface": "west"}
+                    }
+                }]
+            }),
+        );
+        write(
+            "uncullable",
+            serde_json::json!({
+                "textures": {"all": "merge:block/a"},
+                "elements": [{
+                    "from": [2, 2, 2], "to": [14, 14, 14],
+                    "faces": {
+                        "up": {"texture": "#all"},
+                        "south": {"texture": "#all", "cullface": "south"}
+                    }
+                }]
+            }),
+        );
+        let source = crate::resource_source::ResourceSource::directory(dir.path().to_path_buf());
+        let parsed = ParsedModels::load(&source);
+        let mut catalog = StateModels::default();
+        // Warm cache before standalone baking to verify bake_standalone_forms invalidates it.
+        assert!(catalog.cull_flags().is_empty());
+        catalog.bake_standalone_forms(
+            &source,
+            &mut Sprites::default(),
+            &parsed,
+            &[crate::models::StandaloneFormRegistration {
+                owner: "test",
+                form: mod_api::StandaloneModelForm::Combined {
+                    id: "merge:combined".into(),
+                    parts: vec!["merge:culled".into(), "merge:uncullable".into()],
+                },
+            }],
+        );
+        let slot = catalog.standalone_slot("merge:combined").expect("baked");
+        let flags = catalog.cull_flags()[slot as usize];
+        assert_eq!(
+            flags.cull_mask(),
+            (1u8 << Direction::North as u8)
+                | (1u8 << Direction::West as u8)
+                | (1u8 << Direction::South as u8)
+        );
+        assert!(flags.has_uncullable());
+    }
+
+    #[test]
+    fn model_slots_at_small_matches_models_at_inline_and_spilled() {
+        let model_for = |name: &str, cull: Option<&str>| {
+            let mut face = serde_json::json!({"texture": "#all"});
+            if let Some(c) = cull {
+                face["cullface"] = Value::String(c.to_owned());
+            }
+            let json = serde_json::json!({
+                "textures": {"all": "horizon:block/test"},
+                "elements": [{"from": [0, 0, 0], "to": [16, 16, 16], "faces": {"up": face}}]
+            })
+            .to_string();
+            let model = horizon_assets::model::CuboidModel::from_json(&json).unwrap();
+            let library = horizon_assets::resolve::ModelLibrary::new(BTreeMap::from([(
+                name.to_owned(),
+                model,
+            )]))
+            .unwrap();
+            let baked = bake_resolved(
+                &mut Sprites::default(),
+                &library.resolve(name).unwrap(),
+                [0; 3],
+                false,
+            )
+            .unwrap();
+            (
+                Variant {
+                    model: name.to_owned(),
+                    rotations: [0; 3],
+                    uv_lock: false,
+                },
+                baked,
+            )
+        };
+        let baked = vec![
+            model_for("horizon:a", Some("up")),
+            model_for("horizon:b", Some("north")),
+            model_for("horizon:c", None),
+        ];
+        let map_index = |v: &Variant| match v.model.as_str() {
+            "horizon:a" => 0u32,
+            "horizon:b" => 1u32,
+            _ => 2u32,
+        };
+        let single_def =
+            BlockStateDefinition::from_json(r#"{"variants":{"":{"model":"horizon:a"}}}"#).unwrap();
+        let weighted_def = BlockStateDefinition::from_json(
+            r#"{"variants":{"":[{"model":"horizon:a","weight":1},{"model":"horizon:b","weight":3}]}}"#,
+        )
+        .unwrap();
+        let multi_def = BlockStateDefinition::from_json(
+            r#"{"multipart":[{"apply":{"model":"horizon:a"}},{"apply":{"model":"horizon:b"}},{"apply":{"model":"horizon:c"}}]}"#,
+        )
+        .unwrap();
+        let catalog = StateModels {
+            choices: vec![
+                CompiledChoices::new(&single_def).unwrap().map(map_index),
+                CompiledChoices::new(&weighted_def).unwrap().map(map_index),
+                CompiledChoices::new(&multi_def).unwrap().map(map_index),
+            ],
+            bounds: OnceLock::new(),
+            cull_flags: OnceLock::new(),
+            states: vec![
+                Some((0, SelectedModels::Variant(0))),
+                Some((1, SelectedModels::Variant(0))),
+                Some((2, SelectedModels::Multipart(vec![0, 1, 2]))),
+            ],
+            single_models: vec![Some(0), None, None],
+            baked,
+            standalone: BTreeMap::new(),
+        };
+
+        let first_flags = catalog.cull_flags();
+        let second_flags = catalog.cull_flags();
+        assert!(std::ptr::eq(first_flags.as_ptr(), second_flags.as_ptr()));
+        assert_eq!(first_flags[0].cull_mask(), 1u8 << Direction::Up as u8);
+        assert!(!first_flags[0].has_uncullable());
+        assert_eq!(first_flags[1].cull_mask(), 1u8 << Direction::North as u8);
+        assert!(!first_flags[1].has_uncullable());
+        assert_eq!(first_flags[2].cull_mask(), 0);
+        assert!(first_flags[2].has_uncullable());
+
+        let mut vec_buf = Vec::new();
+        let mut inline_buf: smallvec::SmallVec<[u32; 8]> = smallvec::SmallVec::new();
+        let mut spill_buf: smallvec::SmallVec<[u32; 2]> = smallvec::SmallVec::new();
+
+        for i in 0..32 {
+            let pos = BlockPos::new(i * 7 - 5, i % 16, -i * 11);
+            for state_id in [0u32, 1, 2] {
+                let id = BlockStateId(state_id);
+                catalog.models_at(id, pos, &mut vec_buf).unwrap();
+                catalog
+                    .model_slots_at_small(id, pos, &mut inline_buf)
+                    .unwrap();
+                catalog
+                    .model_slots_at_small(id, pos, &mut spill_buf)
+                    .unwrap();
+
+                assert!(
+                    !inline_buf.spilled(),
+                    "8-slot buffer must stay on the stack"
+                );
+                if state_id == 2 {
+                    assert!(
+                        spill_buf.spilled(),
+                        "2-slot buffer must spill for 3-part multipart"
+                    );
+                }
+                let expected: Vec<*const BakedModel> =
+                    vec_buf.iter().map(|&m| m as *const BakedModel).collect();
+                let got_inline: Vec<*const BakedModel> = inline_buf
+                    .iter()
+                    .map(|&slot| catalog.model_by_slot(slot).unwrap() as *const BakedModel)
+                    .collect();
+                let got_spill: Vec<*const BakedModel> = spill_buf
+                    .iter()
+                    .map(|&slot| catalog.model_by_slot(slot).unwrap() as *const BakedModel)
+                    .collect();
+                assert_eq!(got_inline, expected);
+                assert_eq!(got_spill, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn models_mut_invalidates_cull_flags_for_face_cull_edits() {
+        let json = serde_json::json!({
+            "textures": {"all": "horizon:block/test"},
+            "elements": [{
+                "from": [0, 0, 0], "to": [16, 16, 16],
+                "faces": {"north": {"texture": "#all", "cullface": "north"}}
+            }]
+        })
+        .to_string();
+        let model = horizon_assets::model::CuboidModel::from_json(&json).unwrap();
+        let library = horizon_assets::resolve::ModelLibrary::new(BTreeMap::from([(
+            "horizon:panel".to_owned(),
+            model,
+        )]))
+        .unwrap();
+        let baked = bake_resolved(
+            &mut Sprites::default(),
+            &library.resolve("horizon:panel").unwrap(),
+            [0; 3],
+            false,
+        )
+        .unwrap();
+        let mut catalog = StateModels {
+            baked: vec![(
+                Variant {
+                    model: "horizon:panel".to_owned(),
+                    rotations: [0; 3],
+                    uv_lock: false,
+                },
+                baked,
+            )],
+            ..StateModels::default()
+        };
+
+        // Warm cache: single north-culled face.
+        let initial = catalog.cull_flags();
+        assert_eq!(initial[0].cull_mask(), 1u8 << Direction::North as u8);
+        assert!(!initial[0].has_uncullable());
+        assert!(std::ptr::eq(
+            initial.as_ptr(),
+            catalog.cull_flags().as_ptr()
+        ));
+
+        // Mutate the yielded `&mut BakedModel` even after the iterator itself has been dropped.
+        let (_, model) = catalog.models_mut().next().unwrap();
+        model.faces[0].quad.cull = None;
+        let uncullable = catalog.cull_flags()[0];
+        assert_eq!(uncullable.cull_mask(), 0);
+        assert!(uncullable.has_uncullable());
+
+        // Change cull direction from uncullable to south-culled.
+        for (_, model) in catalog.models_mut() {
+            model.faces[0].quad.cull = Some(Direction::South);
+        }
+        let south_culled = catalog.cull_flags()[0];
+        assert_eq!(south_culled.cull_mask(), 1u8 << Direction::South as u8);
+        assert!(!south_culled.has_uncullable());
+
+        // Removing all faces resets flags to empty.
+        for (_, model) in catalog.models_mut() {
+            model.faces.clear();
+        }
+        assert_eq!(catalog.cull_flags()[0], CullFlags::EMPTY);
     }
 }
 

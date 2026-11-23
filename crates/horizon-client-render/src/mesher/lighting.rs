@@ -9,6 +9,101 @@ use horizon_assets::model::Direction as D;
 /// `LightCoordsUtil.FULL_BRIGHT`.
 pub(super) const FULL_BRIGHT: u32 = 0x00F0_00F0;
 
+/// Per-state AO and light facts read on every neighbour sample inside
+/// [`ambient_occlusion`], packed into a single byte so the full block-state
+/// table (~28 KiB) fits in L1D cache instead of striding across `Info` (~3 MiB).
+///
+/// Bit layout:
+/// - bits 0..4: `emission` (`0..=15`)
+/// - bit 4: `shade_is_dark` (`0.2` when set, `1.0` when clear)
+/// - bit 5: `permeable` (`isLightPermeable`)
+/// - bit 6: `solid` (`isSolidRender`)
+/// - bit 7: `emissive` (`emissiveRendering`)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AoInfo(u8);
+
+impl AoInfo {
+    const EMISSION_MASK: u8 = 0x0F;
+    const SHADE_DARK: u8 = 1 << 4;
+    const PERMEABLE: u8 = 1 << 5;
+    const SOLID: u8 = 1 << 6;
+    const EMISSIVE: u8 = 1 << 7;
+
+    /// Packs `info` into one byte when `emission <= 15` and `shade` is one of
+    /// vanilla's two `getShadeBrightness` values (`0.2` or `1.0`). Returns
+    /// `None` otherwise so the caller falls back to reading full `Info`.
+    pub(super) fn from_info(info: &Info) -> Option<Self> {
+        if info.emission > 15 {
+            return None;
+        }
+        let shade_dark = if info.shade.to_bits() == 0.2f32.to_bits() {
+            Self::SHADE_DARK
+        } else if info.shade.to_bits() == 1.0f32.to_bits() {
+            0
+        } else {
+            return None;
+        };
+        let bits = info.emission
+            | shade_dark
+            | if info.permeable { Self::PERMEABLE } else { 0 }
+            | if info.solid { Self::SOLID } else { 0 }
+            | if info.emissive { Self::EMISSIVE } else { 0 };
+        Some(Self(bits))
+    }
+
+    /// Builds the compact AO table for all states in `info`, or returns an empty
+    /// vector if any state cannot be represented losslessly in one byte.
+    pub(super) fn build_table(info: &[Info]) -> Vec<Self> {
+        let mut table = Vec::with_capacity(info.len());
+        for state in info {
+            let Some(packed) = Self::from_info(state) else {
+                return Vec::new();
+            };
+            table.push(packed);
+        }
+        table
+    }
+
+    #[inline]
+    pub(super) const fn emission(self) -> u8 {
+        self.0 & Self::EMISSION_MASK
+    }
+
+    #[inline]
+    pub(super) const fn shade(self) -> f32 {
+        if self.0 & Self::SHADE_DARK != 0 {
+            0.2
+        } else {
+            1.0
+        }
+    }
+
+    #[inline]
+    pub(super) const fn permeable(self) -> bool {
+        self.0 & Self::PERMEABLE != 0
+    }
+
+    #[inline]
+    pub(super) const fn solid(self) -> bool {
+        self.0 & Self::SOLID != 0
+    }
+
+    #[inline]
+    pub(super) const fn emissive(self) -> bool {
+        self.0 & Self::EMISSIVE != 0
+    }
+
+    /// `LightCoordsUtil.getLightCoords` from a stored light byte (`sky << 4 | block`).
+    #[inline]
+    pub(super) fn packed_coords(self, packed: u8) -> u32 {
+        if self.emissive() {
+            return FULL_BRIGHT;
+        }
+        let block = u32::from((packed & 15).max(self.emission()));
+        block << 4 | u32::from(packed >> 4) << 20
+    }
+}
+
 /// `CardinalLighting.DEFAULT`/`NETHER` by face.
 pub(super) fn cardinal(nether: bool, face: D) -> f32 {
     match face {
@@ -326,12 +421,78 @@ const SAMPLES: [Samples; 6] = [
     samples(D::West),
     samples(D::East),
 ];
-/// `prepareQuadAmbientOcclusion`: per-vertex AO brightness (before `ARGB.gray`)
-/// and smooth light coords, by vertex index.
-pub(super) fn ambient_occlusion(
+trait AoTable: Copy {
+    type Entry: Copy;
+    fn state_at(self, pad: &Padded, i: usize) -> Self::Entry;
+    fn shade(entry: Self::Entry) -> f32;
+    fn permeable(entry: Self::Entry) -> bool;
+    fn solid(entry: Self::Entry) -> bool;
+    fn coords(entry: Self::Entry, packed: u8) -> u32;
+}
+
+impl AoTable for &[AoInfo] {
+    type Entry = AoInfo;
+
+    #[inline]
+    fn state_at(self, pad: &Padded, i: usize) -> AoInfo {
+        self[pad.blocks[i] as usize]
+    }
+
+    #[inline]
+    fn shade(entry: AoInfo) -> f32 {
+        entry.shade()
+    }
+
+    #[inline]
+    fn permeable(entry: AoInfo) -> bool {
+        entry.permeable()
+    }
+
+    #[inline]
+    fn solid(entry: AoInfo) -> bool {
+        entry.solid()
+    }
+
+    #[inline]
+    fn coords(entry: AoInfo, packed: u8) -> u32 {
+        entry.packed_coords(packed)
+    }
+}
+
+impl<'a> AoTable for &'a [Info] {
+    type Entry = &'a Info;
+
+    #[inline]
+    fn state_at(self, pad: &Padded, i: usize) -> &'a Info {
+        state_at(pad, self, i)
+    }
+
+    #[inline]
+    fn shade(entry: &'a Info) -> f32 {
+        entry.shade
+    }
+
+    #[inline]
+    fn permeable(entry: &'a Info) -> bool {
+        entry.permeable
+    }
+
+    #[inline]
+    fn solid(entry: &'a Info) -> bool {
+        entry.solid
+    }
+
+    #[inline]
+    fn coords(entry: &'a Info, packed: u8) -> u32 {
+        packed_coords(entry, packed)
+    }
+}
+
+#[inline]
+fn compute_ao<T: AoTable>(
     pad: &Padded,
-    info: &[Info],
-    own: &Info,
+    table: T,
+    own: T::Entry,
     pos: [i32; 3],
     shape: &QuadShape,
     face: D,
@@ -349,14 +510,14 @@ pub(super) fn ambient_occlusion(
     let corner = |i: usize| base + samples.corners[i];
     let sample = |i: isize| {
         let i = i as usize;
-        let s = state_at(pad, info, i);
-        (coords_at(pad, s, i), s.shade)
+        let s = table.state_at(pad, i);
+        (T::coords(s, pad.light[i]), T::shade(s))
     };
     let (light0, shade0) = sample(corner(0));
     let (light1, shade1) = sample(corner(1));
     let (light2, shade2) = sample(corner(2));
     let (light3, shade3) = sample(corner(3));
-    let permeable = |i: usize| state_at(pad, info, (base + samples.out[i]) as usize).permeable;
+    let permeable = |i: usize| T::permeable(table.state_at(pad, (base + samples.out[i]) as usize));
     let (p0, p1, p2, p3) = (permeable(0), permeable(1), permeable(2), permeable(3));
     let diagonal = |a: usize, b: usize, open: bool| {
         if open {
@@ -370,16 +531,18 @@ pub(super) fn ambient_occlusion(
     let (light12, shade12) = diagonal(1, 2, p2 || p1);
     let (light13, shade13) = diagonal(1, 3, p3 || p1);
     let next = (cell + samples.step) as usize;
-    let next_state = state_at(pad, info, next);
-    let light_center = if shape.cubic || !next_state.solid {
-        coords_at(pad, next_state, next)
+    let next_state = table.state_at(pad, next);
+    let light_center = if shape.cubic || !T::solid(next_state) {
+        T::coords(next_state, pad.light[next])
     } else {
-        coords_at(pad, own, cell as usize)
+        T::coords(own, pad.light[cell as usize])
     };
+    // When `shape.cubic` is true, `base == cell + samples.step == next`, so
+    // `next_state` is already the state at `base`.
     let shade_center = if shape.cubic {
-        state_at(pad, info, base as usize).shade
+        T::shade(next_state)
     } else {
-        own.shade
+        T::shade(own)
     };
     let ao = [
         (shade3 + shade0 + shade03 + shade_center) * 0.25,
@@ -408,6 +571,33 @@ pub(super) fn ambient_occlusion(
         }
     }
     (brightness, light)
+}
+
+/// `prepareQuadAmbientOcclusion`: per-vertex AO brightness (before `ARGB.gray`)
+/// and smooth light coords, by vertex index, reading the L1-resident 1-byte
+/// [`AoInfo`] table.
+pub(super) fn ambient_occlusion(
+    pad: &Padded,
+    ao_info: &[AoInfo],
+    own: AoInfo,
+    pos: [i32; 3],
+    shape: &QuadShape,
+    face: D,
+) -> ([f32; 4], [u32; 4]) {
+    compute_ao(pad, ao_info, own, pos, shape, face)
+}
+
+/// Fallback [`ambient_occlusion`] reading full [`Info`] when any block state
+/// has a `shade` outside `{0.2, 1.0}` or `emission > 15`.
+pub(super) fn ambient_occlusion_full(
+    pad: &Padded,
+    info: &[Info],
+    own: &Info,
+    pos: [i32; 3],
+    shape: &QuadShape,
+    face: D,
+) -> ([f32; 4], [u32; 4]) {
+    compute_ao(pad, info, own, pos, shape, face)
 }
 
 #[cfg(test)]
@@ -585,5 +775,296 @@ mod tests {
         assert!(s.partial);
         assert_eq!(s.bounds[EAST as usize], 0.5);
         assert_eq!(s.bounds[FLIP_EAST as usize], 0.5);
+    }
+
+    fn test_info(emission: u8, shade: f32, permeable: bool, solid: bool, emissive: bool) -> Info {
+        Info {
+            solid,
+            full: false,
+            permeable,
+            shade,
+            emission,
+            tier: 0,
+            emissive,
+            fluid: horizon_world::fluid::FluidState::EMPTY,
+            model: false,
+            block_entity: false,
+            tints: [super::super::Tint::None; 2],
+            tint_count: 0,
+            colormap: None,
+            offset: None,
+            legacy_solid: false,
+            overlay: false,
+            leaves: false,
+            pane: false,
+            opaque_cube: false,
+            blocks_flow: false,
+            ice: false,
+            opaque_ice: false,
+            sturdy: 0,
+            face: [0; 6],
+            cover: [0.0; 6],
+        }
+    }
+
+    #[test]
+    fn ao_info_round_trips_every_valid_bit_combination() {
+        assert_eq!(std::mem::size_of::<AoInfo>(), 1);
+        let mut seen = [false; 256];
+        for emission in 0..=15u8 {
+            for shade in [0.2f32, 1.0f32] {
+                for permeable in [false, true] {
+                    for solid in [false, true] {
+                        for emissive in [false, true] {
+                            let info = test_info(emission, shade, permeable, solid, emissive);
+                            let ao = AoInfo::from_info(&info).expect("representable");
+                            assert!(!seen[ao.0 as usize], "duplicate AoInfo byte {}", ao.0);
+                            seen[ao.0 as usize] = true;
+                            assert_eq!(ao.emission(), emission);
+                            assert_eq!(ao.shade().to_bits(), shade.to_bits());
+                            assert_eq!(ao.permeable(), permeable);
+                            assert_eq!(ao.solid(), solid);
+                            assert_eq!(ao.emissive(), emissive);
+                            for light in 0..=255u8 {
+                                assert_eq!(
+                                    ao.packed_coords(light),
+                                    packed_coords(&info, light),
+                                    "emission={emission} emissive={emissive} light={light:#x}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(seen.iter().all(|&s| s), "all 256 bit patterns covered");
+    }
+
+    #[test]
+    fn ao_info_rejects_unrepresentable_shade_and_emission_for_fallback() {
+        for shade in [
+            0.0f32,
+            -0.0,
+            0.5,
+            0.8,
+            f32::from_bits(0.2f32.to_bits() + 1),
+            f32::NAN,
+            f32::INFINITY,
+        ] {
+            let info = test_info(0, shade, true, false, false);
+            assert_eq!(AoInfo::from_info(&info), None, "shade={shade:?}");
+            let table = AoInfo::build_table(&[test_info(0, 1.0, true, false, false), info]);
+            assert!(table.is_empty(), "non-binary shade must trigger fallback");
+        }
+        for emission in [16u8, 17, 255] {
+            let info = test_info(emission, 1.0, true, false, false);
+            assert_eq!(AoInfo::from_info(&info), None, "emission={emission}");
+            let table = AoInfo::build_table(&[test_info(0, 0.2, false, true, false), info]);
+            assert!(table.is_empty(), "emission > 15 must trigger fallback");
+        }
+        let valid = [
+            test_info(0, 1.0, true, false, false),
+            test_info(15, 0.2, false, true, true),
+        ];
+        assert_eq!(AoInfo::build_table(&valid).len(), valid.len());
+    }
+
+    #[test]
+    fn ambient_occlusion_compact_table_matches_full_info_bit_for_bit() {
+        let mut infos = Vec::new();
+        for emission in [0u8, 1, 7, 15] {
+            for shade in [0.2f32, 1.0f32] {
+                for permeable in [false, true] {
+                    for solid in [false, true] {
+                        for emissive in [false, true] {
+                            infos.push(test_info(emission, shade, permeable, solid, emissive));
+                        }
+                    }
+                }
+            }
+        }
+        let ao_table = AoInfo::build_table(&infos);
+        assert_eq!(ao_table.len(), infos.len());
+
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let cells = super::super::P.pow(3);
+        let pad = Padded {
+            blocks: (0..cells)
+                .map(|_| (next() as usize % infos.len()) as u32)
+                .collect(),
+            light: (0..cells)
+                .map(|i| match i % 11 {
+                    0 => 0x00,
+                    1 => 0xF0,
+                    2 => 0x0F,
+                    3 => 0xFF,
+                    _ => next() as u8,
+                })
+                .collect(),
+        };
+
+        let face_quads = [
+            (
+                D::Down,
+                [
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                ],
+                [
+                    [0.2, 0.5, 0.1],
+                    [0.2, 0.5, 0.8],
+                    [0.7, 0.5, 0.8],
+                    [0.7, 0.5, 0.1],
+                ],
+            ),
+            (
+                D::Up,
+                [
+                    [0.0, 1.0, 0.0],
+                    [0.0, 1.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 1.0, 0.0],
+                ],
+                [
+                    [0.1, 0.5, 0.2],
+                    [0.1, 0.5, 0.9],
+                    [0.8, 0.5, 0.9],
+                    [0.8, 0.5, 0.2],
+                ],
+            ),
+            (
+                D::North,
+                [
+                    [0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                ],
+                [
+                    [0.2, 0.2, 0.4],
+                    [0.2, 0.9, 0.4],
+                    [0.7, 0.9, 0.4],
+                    [0.7, 0.2, 0.4],
+                ],
+            ),
+            (
+                D::South,
+                [
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                ],
+                [
+                    [0.1, 0.1, 0.6],
+                    [0.1, 0.8, 0.6],
+                    [0.8, 0.8, 0.6],
+                    [0.8, 0.1, 0.6],
+                ],
+            ),
+            (
+                D::West,
+                [
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                    [0.0, 1.0, 0.0],
+                ],
+                [
+                    [0.3, 0.1, 0.2],
+                    [0.3, 0.1, 0.9],
+                    [0.3, 0.7, 0.9],
+                    [0.3, 0.7, 0.2],
+                ],
+            ),
+            (
+                D::East,
+                [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 1.0, 0.0],
+                ],
+                [
+                    [0.7, 0.2, 0.1],
+                    [0.7, 0.2, 0.8],
+                    [0.7, 0.8, 0.8],
+                    [0.7, 0.8, 0.1],
+                ],
+            ),
+        ];
+
+        for pos in [[0, 0, 0], [7, 8, 9], [15, 15, 15], [0, 15, 7]] {
+            let own_id = pad.blocks[pi(pos[0], pos[1], pos[2])] as usize;
+            for (face, full_quad, partial_quad) in face_quads {
+                for quad in [full_quad, partial_quad] {
+                    for full in [false, true] {
+                        let quad_shape = shape(&quad, face, full);
+                        let (fast_b, fast_l) = ambient_occlusion(
+                            &pad,
+                            &ao_table,
+                            ao_table[own_id],
+                            pos,
+                            &quad_shape,
+                            face,
+                        );
+                        let (full_b, full_l) = ambient_occlusion_full(
+                            &pad,
+                            &infos,
+                            &infos[own_id],
+                            pos,
+                            &quad_shape,
+                            face,
+                        );
+                        assert_eq!(
+                            fast_b.map(f32::to_bits),
+                            full_b.map(f32::to_bits),
+                            "brightness mismatch at {pos:?} {face:?} full={full}"
+                        );
+                        assert_eq!(
+                            fast_l, full_l,
+                            "light mismatch at {pos:?} {face:?} full={full}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ambient_occlusion_full_handles_non_binary_shade_values() {
+        let infos = [
+            test_info(0, 1.0, true, false, false),
+            test_info(0, 0.5, false, true, false),
+        ];
+        assert!(AoInfo::build_table(&infos).is_empty());
+        let cells = super::super::P.pow(3);
+        let mut pad = Padded {
+            blocks: vec![0; cells],
+            light: vec![0xF0; cells],
+        };
+        // Place the custom-shade neighbour at one corner above the top face at (4, 4, 4):
+        // Up face has base (4, 5, 4); East corner is (5, 5, 4).
+        pad.blocks[pi(5, 5, 4)] = 1;
+        let full_top = [
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ];
+        let quad_shape = shape(&full_top, D::Up, true);
+        let (brightness, _) =
+            ambient_occlusion_full(&pad, &infos, &infos[0], [4, 4, 4], &quad_shape, D::Up);
+        // The two East vertices average (1.0 + 0.5 + 1.0 + 1.0) * 0.25 = 0.875;
+        // the two West vertices stay 1.0.
+        assert_eq!(brightness, [1.0, 1.0, 0.875, 0.875]);
     }
 }

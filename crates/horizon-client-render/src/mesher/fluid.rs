@@ -628,6 +628,7 @@ mod tests {
             ],
             solid: vec![],
             full_faces: vec![],
+            ao_info: vec![],
             visibility: horizon_world::block_render::FaceVisibility::empty(),
             water_still: 11,
             water_flow: 12,
