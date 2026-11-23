@@ -49,9 +49,14 @@ Every preset also turns on the optimizations that leave the picture as it is: as
 | | sky, fog, weather, animated textures, distant plant dither (`ditherCutoutMips`, off by default: cutouts from 64 texels up), resolution scale, dynamic resolution and its target FPS, anti-aliasing (FXAA or TAA), TAA upscaling, screenshot quality, frame generation | `horizon-graphics.txt` |
 | Performance | chunk builder | `options.txt` |
 | | chunk updates and upload budget per frame, worker threads, parallel tick, cave culling, GPU culling, entity and particle culling modes, leaf culling, battery mode, and the block-entity caches (shulker boxes, signs, decorated pots, bells, chests, banners, copper golem statues) | `horizon-graphics.txt` |
-| Shaders | **Shader Packs...**: the list of shader packs, Horizon's `.hshader` ones and `shaders/` folder ones ([shaders.md](shaders.md)), and the picked pack's options; shadow cache | `horizon-graphics.txt`, the pack's own options file |
+| Shaders | **Shader Packs...**: the list of shader packs, [Horizon's `.hshader` ones](shaders.md) and classic `shaders/` folder ones, and the picked pack's options; shadow cache | `horizon-graphics.txt`, the pack's own options file |
 | Advanced | present mode, frame pacing, graphics API, translucent batching, performance overlay (FPS, frame/CPU/GPU times, the render thread's wait on the GPU and the display, frame-time graph) | `horizon-graphics.txt` |
 | HDR | HDR, calibration, black level, peak brightness, paper white, UI brightness, look | `horizon-graphics.txt` |
+
+Classic `shaders/` packs use GLSL. The translator allows up to 32 active nesting steps while parsing
+after macro expansion and while lowering expressions and composite types. If it needs to go deeper, it
+reports a source diagnostic. This is a depth limit, not a limit on the size or number of statements
+in the shader.
 
 `options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, GPU, entity, particle and leaf culling off, no upload budgets, sky, fog and weather on, 100% resolution, no anti-aliasing, HDR off, the present mode following VSync. VSync on always waits for the display (Fifo), in a window and in fullscreen, as in vanilla; the present mode setting chooses how frames are shown only while VSync is off. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, and paces frames on a fixed grid of slots (vanilla starts each slot when the thread wakes up, so every late wake-up lengthens a frame), which changes timing, not pixels.
 

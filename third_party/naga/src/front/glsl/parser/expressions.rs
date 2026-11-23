@@ -53,7 +53,9 @@ impl ParsingContext<'_> {
             }
             TokenValue::BoolConstant(value) => Literal::Bool(value),
             TokenValue::LeftParen => {
-                let expr = self.parse_expression(frontend, ctx, stmt)?;
+                let expr = frontend.with_nesting(token.meta, |frontend| {
+                    self.parse_expression(frontend, ctx, stmt)
+                })?;
                 let meta = self.expect(frontend, TokenValue::RightParen)?.meta;
 
                 token.meta.subsume(meta);
@@ -97,7 +99,11 @@ impl ParsingContext<'_> {
             meta.subsume(token.meta);
         } else {
             loop {
-                args.push(self.parse_assignment(frontend, ctx, stmt)?);
+                args.push(
+                    frontend.with_nesting(*meta, |frontend| {
+                        self.parse_assignment(frontend, ctx, stmt)
+                    })?,
+                );
 
                 let token = self.bump(frontend)?;
                 match token.value {
@@ -221,7 +227,9 @@ impl ParsingContext<'_> {
 
             match value {
                 TokenValue::LeftBracket => {
-                    let index = self.parse_expression(frontend, ctx, stmt)?;
+                    let index = frontend.with_nesting(meta, |frontend| {
+                        self.parse_expression(frontend, ctx, stmt)
+                    })?;
                     let end_meta = self.expect(frontend, TokenValue::RightBracket)?.meta;
 
                     meta.subsume(end_meta);
@@ -295,7 +303,8 @@ impl ParsingContext<'_> {
             TokenValue::Plus | TokenValue::Dash | TokenValue::Bang | TokenValue::Tilde => {
                 let Token { value, mut meta } = self.bump(frontend)?;
 
-                let expr = self.parse_unary(frontend, ctx, stmt)?;
+                let expr = frontend
+                    .with_nesting(meta, |frontend| self.parse_unary(frontend, ctx, stmt))?;
                 let end_meta = stmt.hir_exprs[expr].meta;
 
                 let kind = match value {
@@ -321,7 +330,8 @@ impl ParsingContext<'_> {
             TokenValue::Increment | TokenValue::Decrement => {
                 let Token { value, meta } = self.bump(frontend)?;
 
-                let expr = self.parse_unary(frontend, ctx, stmt)?;
+                let expr = frontend
+                    .with_nesting(meta, |frontend| self.parse_unary(frontend, ctx, stmt))?;
 
                 stmt.hir_exprs.append(
                     HirExpr {
@@ -360,9 +370,14 @@ impl ParsingContext<'_> {
                 break;
             }
 
-            let Token { value, .. } = self.bump(frontend)?;
+            let Token {
+                value,
+                meta: op_meta,
+            } = self.bump(frontend)?;
 
-            let right = self.parse_binary(frontend, ctx, stmt, None, r_bp)?;
+            let right = frontend.with_nesting(op_meta, |frontend| {
+                self.parse_binary(frontend, ctx, stmt, None, r_bp)
+            })?;
             let end_meta = stmt.hir_exprs[right].meta;
 
             meta.subsume(end_meta);
@@ -413,10 +428,14 @@ impl ParsingContext<'_> {
         let mut condition = self.parse_binary(frontend, ctx, stmt, passthrough, 0)?;
         let mut meta = stmt.hir_exprs[condition].meta;
 
-        if self.bump_if(frontend, TokenValue::Question).is_some() {
-            let accept = self.parse_expression(frontend, ctx, stmt)?;
-            self.expect(frontend, TokenValue::Colon)?;
-            let reject = self.parse_assignment(frontend, ctx, stmt)?;
+        if let Some(question) = self.bump_if(frontend, TokenValue::Question) {
+            let accept = frontend.with_nesting(question.meta, |frontend| {
+                self.parse_expression(frontend, ctx, stmt)
+            })?;
+            let colon = self.expect(frontend, TokenValue::Colon)?;
+            let reject = frontend.with_nesting(colon.meta, |frontend| {
+                self.parse_assignment(frontend, ctx, stmt)
+            })?;
             let end_meta = stmt.hir_exprs[reject].meta;
 
             meta.subsume(end_meta);
@@ -447,8 +466,10 @@ impl ParsingContext<'_> {
 
         Ok(match self.expect_peek(frontend)?.value {
             TokenValue::Assign => {
-                self.bump(frontend)?;
-                let value = self.parse_assignment(frontend, ctx, stmt)?;
+                let token = self.bump(frontend)?;
+                let value = frontend.with_nesting(token.meta, |frontend| {
+                    self.parse_assignment(frontend, ctx, stmt)
+                })?;
                 let end_meta = stmt.hir_exprs[value].meta;
 
                 meta.subsume(end_meta);
@@ -471,7 +492,9 @@ impl ParsingContext<'_> {
             | TokenValue::RightShiftAssign
             | TokenValue::XorAssign => {
                 let token = self.bump(frontend)?;
-                let right = self.parse_assignment(frontend, ctx, stmt)?;
+                let right = frontend.with_nesting(token.meta, |frontend| {
+                    self.parse_assignment(frontend, ctx, stmt)
+                })?;
                 let end_meta = stmt.hir_exprs[right].meta;
 
                 meta.subsume(end_meta);

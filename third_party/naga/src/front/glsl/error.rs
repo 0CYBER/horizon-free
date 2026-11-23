@@ -74,6 +74,9 @@ pub enum ErrorKind {
     /// Whilst parsing as encountered an unexpected EOF.
     #[error("Unexpected end of file")]
     EndOfFile,
+    /// The GLSL frontend's limit on nested parsing and lowering was reached.
+    #[error("GLSL nesting limit exceeded")]
+    NestingLimitExceeded,
     /// The shader specified an unsupported or invalid profile.
     #[error("Invalid profile: {0}")]
     InvalidProfile(String),

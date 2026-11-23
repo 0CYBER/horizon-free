@@ -15,6 +15,96 @@ use crate::ShaderStage;
 use std::println;
 
 #[test]
+fn nesting_limit_reports_source_and_frontend_is_reusable() {
+    let options = Options::from(ShaderStage::Vertex);
+    let mut frontend = Frontend::default();
+    let cases = [
+        // Macro replacement tokens, rather than the invocation's delimiters.
+        (
+            2,
+            "#version 450\n#define DOUBLE(x) ((x) * 2)\nvoid main() { int n = DOUBLE(4); }",
+            ("(", 2),
+        ),
+        (
+            1,
+            "#version 450\nvoid main() { bool visible = !false; }",
+            ("!", 2),
+        ),
+        (
+            2,
+            "#version 450\nvoid main() { int x; int y; x = y = 1; }",
+            ("=", 2),
+        ),
+        (
+            1,
+            "#version 450\nvoid main() { int n = true ? 1 : 0; }",
+            ("?", 2),
+        ),
+        (
+            2,
+            "#version 450\nvoid main() { int n = 1 + 2 * 3; }",
+            ("*", 2),
+        ),
+        (
+            2,
+            "#version 450\nvoid main() { if (true) { int n = 1; } }",
+            ("int", 2),
+        ),
+        (
+            2,
+            "#version 450\nint values[2][2] = {{1, 2}, {3, 4}};\nvoid main() {}",
+            ("1", 2),
+        ),
+        // The grammar parses this chain in a loop, but the HIR is left-deep.
+        (
+            3,
+            "#version 450\nvoid main() { int n = 1 + 2 + 3; }",
+            ("1", 2),
+        ),
+        // Ordinary named types can accumulate nesting without nested declarations.
+        (
+            3,
+            "\
+#version 450
+struct Sample { int value; };
+struct Point { Sample position; };
+struct Line { Point start; };
+struct Shape { Line edge; };
+void main() {}
+",
+            ("Line edge", 5),
+        ),
+    ];
+
+    for (limit, source, (highlighted, line)) in cases {
+        let errors = frontend
+            .parse_with_nesting_limit(&options, source, limit)
+            .unwrap_err();
+        let [error] = errors.errors.as_slice() else {
+            panic!("{errors:?}");
+        };
+        assert_eq!(error.kind, ErrorKind::NestingLimitExceeded, "{source}");
+        let range = error.meta.to_range().unwrap();
+        assert_eq!(source.get(range), Some(highlighted), "{source}");
+        assert_eq!(
+            error.location(source).unwrap().line_number,
+            line,
+            "{source}"
+        );
+        frontend.parse(&options, source).unwrap();
+    }
+
+    // Sibling statements and subsequent shaders do not consume a global quota.
+    frontend
+        .parse_with_nesting_limit(
+            &options,
+            "#version 450\nvoid main() { int a = 1; int b = 2; int c = 3; }",
+            2,
+        )
+        .unwrap();
+}
+
+#[test]
 fn version() {
     let mut frontend = Frontend::default();
 

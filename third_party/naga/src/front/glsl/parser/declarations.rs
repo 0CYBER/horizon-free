@@ -115,7 +115,10 @@ impl ParsingContext<'_> {
                 // The type expected to be parsed inside the initializer list
                 let new_ty = element_or_member_type(ty, components.len(), &mut ctx.module.types);
 
-                components.push(self.parse_initializer(frontend, new_ty, ctx)?.0);
+                let (component, _) = frontend.with_nesting(meta, |frontend| {
+                    self.parse_initializer(frontend, new_ty, ctx)
+                })?;
+                components.push(component);
 
                 let token = self.bump(frontend)?;
                 match token.value {
@@ -657,7 +660,8 @@ impl ParsingContext<'_> {
                     layout,
                     &mut ctx.module.types,
                     &mut frontend.errors,
-                );
+                    frontend.nesting,
+                )?;
 
                 let member_alignment = info.align;
                 span = member_alignment.round_up(span);

@@ -38,6 +38,27 @@ mod variables;
 
 type Result<T> = core::result::Result<T, Error>;
 
+// The limit covers active recursive parse and lowering steps, not the number of
+// tokens, statements, or arguments in a shader. Leave room on ordinary Rust
+// loader/test thread stacks for the large debug-build lowering frames and the
+// uncounted calls between guarded steps.
+const NESTING_LIMIT: u8 = 32;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Nesting(u8);
+
+impl Nesting {
+    fn descend(self, meta: Span) -> Result<Self> {
+        match self.0.checked_sub(1) {
+            Some(remaining) => Ok(Self(remaining)),
+            None => Err(Error {
+                kind: ErrorKind::NestingLimitExceeded,
+                meta,
+            }),
+        }
+    }
+}
+
 /// Per-shader options passed to [`parse`](Frontend::parse).
 ///
 /// The [`From`] trait is implemented for [`ShaderStage`] to provide a quick way
@@ -177,6 +198,7 @@ pub struct Frontend {
     layouter: Layouter,
 
     errors: Vec<Error>,
+    nesting: Nesting,
 
     /// Globals and struct fields accessed by atomic functions, whose types become atomic.
     atomic_upgrades: crate::front::atomic_upgrade::Upgrades,
@@ -203,7 +225,17 @@ impl Frontend {
         options: &Options,
         source: &str,
     ) -> core::result::Result<Module, ParseErrors> {
+        self.parse_with_nesting_limit(options, source, NESTING_LIMIT)
+    }
+
+    fn parse_with_nesting_limit(
+        &mut self,
+        options: &Options,
+        source: &str,
+        nesting_limit: u8,
+    ) -> core::result::Result<Module, ParseErrors> {
         self.reset(options.stage);
+        self.nesting = Nesting(nesting_limit);
 
         let lexer = lex::Lexer::new(source, &options.defines);
         let mut ctx = ParsingContext::new(lexer);
@@ -231,6 +263,18 @@ impl Frontend {
                 Err(core::mem::take(&mut self.errors).into())
             }
         }
+    }
+
+    fn with_nesting<T>(
+        &mut self,
+        meta: Span,
+        parse_or_lower: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let previous = self.nesting;
+        self.nesting = previous.descend(meta)?;
+        let result = parse_or_lower(self);
+        self.nesting = previous;
+        result
     }
 
     /// Returns additional information about the parsed shader which might not

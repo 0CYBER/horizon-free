@@ -35,14 +35,16 @@ impl ParsingContext<'_> {
         span: &mut Span,
         ty: &mut Handle<Type>,
     ) -> Result<bool> {
-        if self.bump_if(frontend, TokenValue::LeftBracket).is_some() {
+        if let Some(open) = self.bump_if(frontend, TokenValue::LeftBracket) {
             let size = if let Some(Token { meta, .. }) =
                 self.bump_if(frontend, TokenValue::RightBracket)
             {
                 span.subsume(meta);
                 ArraySize::Dynamic
             } else {
-                let (value, constant_span) = self.parse_uint_constant(frontend, ctx)?;
+                let (value, constant_span) = frontend.with_nesting(open.meta, |frontend| {
+                    self.parse_uint_constant(frontend, ctx)
+                })?;
                 let size = NonZeroU32::new(value).ok_or(Error {
                     kind: ErrorKind::SemanticError("Array size must be greater than zero".into()),
                     meta: constant_span,
@@ -88,12 +90,14 @@ impl ParsingContext<'_> {
                 let mut members = Vec::new();
                 // Std430 strides match those of array types declared outside a struct, so
                 // `S(float[2](a, b))` composes; uniform blocks lay out their own members.
-                let span = self.parse_struct_declaration_list(
-                    frontend,
-                    ctx,
-                    &mut members,
-                    StructLayout::Std430,
-                )?;
+                let span = frontend.with_nesting(meta, |frontend| {
+                    self.parse_struct_declaration_list(
+                        frontend,
+                        ctx,
+                        &mut members,
+                        StructLayout::Std430,
+                    )
+                })?;
                 let end_meta = self.expect(frontend, TokenValue::RightBrace)?.meta;
                 meta.subsume(end_meta);
                 let ty = ctx.module.types.insert(

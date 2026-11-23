@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use super::{
     ast::StructLayout,
     error::{Error, ErrorKind},
-    Span,
+    Nesting, Result, Span,
 };
 use crate::{proc::Alignment, Handle, Scalar, Type, TypeInner, UniqueArena};
 
@@ -40,13 +40,14 @@ pub struct TypeAlignSpan {
 /// The functions returns a [`TypeAlignSpan`] which has a `ty` member this
 /// should be used as the struct member type because for example arrays may have
 /// to change the stride and as such need to have a different type.
-pub fn calculate_offset(
+pub(super) fn calculate_offset(
     mut ty: Handle<Type>,
     meta: Span,
     layout: StructLayout,
     types: &mut UniqueArena<Type>,
     errors: &mut Vec<Error>,
-) -> TypeAlignSpan {
+    nesting: Nesting,
+) -> Result<TypeAlignSpan> {
     // When using the std430 storage layout, shader storage blocks will be laid out in buffer storage
     // identically to uniform and shader storage blocks using the std140 layout, except
     // that the base alignment and stride of arrays of scalars and vectors in rule 4 and of
@@ -72,7 +73,8 @@ pub fn calculate_offset(
         // to rules (1), (2), and (3), and rounded up to the base alignment of a vec4.
         // TODO: Matrices array
         TypeInner::Array { base, size, .. } => {
-            let info = calculate_offset(base, meta, layout, types, errors);
+            let nesting = nesting.descend(meta)?;
+            let info = calculate_offset(base, meta, layout, types, errors, nesting)?;
 
             let name = types[ty].name.clone();
 
@@ -146,13 +148,14 @@ pub fn calculate_offset(
             (align, align * columns as u32)
         }
         TypeInner::Struct { ref members, .. } => {
+            let nesting = nesting.descend(meta)?;
             let mut span = 0;
             let mut align = Alignment::ONE;
             let mut members = members.clone();
             let name = types[ty].name.clone();
 
             for member in members.iter_mut() {
-                let info = calculate_offset(member.ty, meta, layout, types, errors);
+                let info = calculate_offset(member.ty, meta, layout, types, errors, nesting)?;
 
                 let member_alignment = info.align;
                 span = member_alignment.round_up(span);
@@ -186,5 +189,5 @@ pub fn calculate_offset(
         }
     };
 
-    TypeAlignSpan { ty, align, span }
+    Ok(TypeAlignSpan { ty, align, span })
 }

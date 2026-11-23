@@ -45,6 +45,19 @@ impl ParsingContext<'_> {
         terminator: &mut Option<usize>,
         is_inside_loop: bool,
     ) -> Result<Option<Span>> {
+        let meta = self.expect_peek(frontend)?.meta;
+        frontend.with_nesting(meta, |frontend| {
+            self.parse_statement_inner(frontend, ctx, terminator, is_inside_loop)
+        })
+    }
+
+    fn parse_statement_inner(
+        &mut self,
+        frontend: &mut Frontend,
+        ctx: &mut Context,
+        terminator: &mut Option<usize>,
+        is_inside_loop: bool,
+    ) -> Result<Option<Span>> {
         // Type qualifiers always identify a declaration statement
         if self.peek_type_qualifier(frontend) {
             return self.parse_declaration(frontend, ctx, false, is_inside_loop);
