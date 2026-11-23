@@ -32,7 +32,7 @@ import tempfile
 import time
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 # Beside this file: a module of the `tools` package when imported, a plain module when run as a script.
 if __package__:
@@ -307,7 +307,7 @@ def dep_info(path: Path) -> list[str]:
     return [file.replace("\x00", " ") for file in files.replace("\\ ", "\x00").split()]
 
 
-def root_forms(roots: list[Path], crate: Crate) -> list[str]:
+def root_forms(roots: list[PurePath], crate: Crate) -> list[str]:
     """How the in-tree build script names the checkout: through the crate (`<root>/<crate>/../..`) or directly."""
     forms = {f"{root}/{crate.directory}/../.." for root in roots} | {str(root) for root in roots}
     return sorted(forms, key=len, reverse=True)

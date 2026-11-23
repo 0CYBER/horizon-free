@@ -2,7 +2,7 @@ import os
 import tempfile
 import tomllib
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from tools import sdk_api_source as api_source
@@ -325,7 +325,8 @@ class ScratchTests(unittest.TestCase):
 class RelocationTests(unittest.TestCase):
     def test_both_ways_the_build_script_names_the_checkout_become_the_token(self):
         crate = Crate("vocab", "crates/vocab", True)
-        forms = api_source.root_forms([Path("/w")], crate)
+        # The published archive is generated on Linux, even when this test runs elsewhere.
+        forms = api_source.root_forms([PurePosixPath("/w")], crate)
         code = '#[path = "/w/crates/vocab/../../crates/vocab/src/a.rs"] mod a; include!("/w/crates/vocab/src/b.rs");'
         self.assertEqual(api_source.relocate(code, forms),
                          '#[path = "{horizon-api-source-root}/crates/vocab/src/a.rs"] mod a; '
