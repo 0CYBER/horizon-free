@@ -3,9 +3,13 @@
 Small items Horizon players wear: a hat, something on the back, a shirt, a pet on the shoulder, a
 style for their name tag. They are drawn by Horizon clients only and change nothing in the game.
 **On by default** (Ludovic, 2026-11-04: on when the shop opens), your own shown. Other players'
-show by default only if your account owns a cosmetic: a player who owns none sees a vanilla game,
-and the game asks the service nothing about other players (CONTRIBUTING.md: Horizon-only features
-that change the look are off by default). The settings below change both.
+show by default only if your account owns a cosmetic: a player who owns none sees no cosmetics
+(CONTRIBUTING.md: Horizon-only features that change the look are off by default). The settings
+below change both. The game sends the UUIDs of the players it draws or lists to the cosmetics
+service unless both *Horizon logos* and *Other players' cosmetics* are off (*Hidden*): the logos
+setting looks them up to learn who plays Horizon ([Horizon players' mark](#horizon-players-mark)),
+and *Shown* or *Name tags* looks them up for what they wear. *Horizon logos* is on by default, so by
+default the game asks, whether or not your account owns a cosmetic.
 
 ## Rules
 

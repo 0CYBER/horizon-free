@@ -72,7 +72,8 @@ impl Others {
     }
 
     /// What the player sees: what they `chose`, else everything when the account `owns` a
-    /// cosmetic and nothing when it doesn't (a vanilla game, no request about other players).
+    /// cosmetic and nothing when it doesn't (no cosmetics drawn, none asked for; the Horizon logos
+    /// setting is separate and still asks the service about the players the mark is drawn for).
     pub fn effective(chose: Option<Self>, owns: bool) -> Self {
         chose.unwrap_or(if owns { Self::Shown } else { Self::Hidden })
     }
