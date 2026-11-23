@@ -291,8 +291,9 @@ pub fn properties(blockstate: &Value) -> BTreeSet<String> {
 }
 
 /// A 1.21.1 ingredient (`{"item": id}`, `{"tag": t}` or a list of those) as
-/// 26.3's (`"id"`, `"#t"`, `["id", ...]`); `None` for what has no 26.3 form
-/// (custom ingredient types, tags inside lists).
+/// 26.3's (`"id"`, `"#t"`, `["id", ...]`); one already in 26.3's form as it
+/// is. `None` for what has no 26.3 form (custom ingredient types, tags inside
+/// lists).
 pub fn ingredient(v: &Value) -> Option<Value> {
     match v {
         Value::String(_) => Some(v.clone()),
@@ -308,10 +309,13 @@ pub fn ingredient(v: &Value) -> Option<Value> {
         Value::Array(list) => {
             let ids: Option<Vec<Value>> = list
                 .iter()
-                .map(|x| {
-                    x.get("item")
+                .map(|x| match x {
+                    // 26.3's own list: item ids (a tag can't be in one).
+                    Value::String(id) if !id.starts_with('#') => Some(x.clone()),
+                    _ => x
+                        .get("item")
                         .filter(|_| x.as_object().is_some_and(|o| o.len() == 1))
-                        .cloned()
+                        .cloned(),
                 })
                 .collect();
             match ids? {
@@ -2922,6 +2926,22 @@ mod tests {
         let mut tag_list = json!({"type": "minecraft:smelting",
             "ingredient": [{"tag": "c:ores"}, {"item": "gem:gem"}]});
         assert!(!upgrade_recipe(&mut tag_list));
+    }
+
+    /// A recipe already in 26.3's form, as a mod made for 26.3 writes it, is
+    /// kept as it is and counted as one that loads: its list of items too.
+    #[test]
+    fn a_recipe_already_in_26_3_form_is_kept() {
+        let list = json!(["minecraft:coal", "minecraft:charcoal"]);
+        assert_eq!(ingredient(&list), Some(list.clone()));
+        let mut torch = json!({"type": "minecraft:crafting_shaped", "pattern": ["X", "#"],
+            "key": {"#": "minecraft:stick", "X": ["minecraft:coal", "minecraft:charcoal"]},
+            "result": {"id": "m:torch", "count": 4}});
+        let before = torch.clone();
+        assert!(upgrade_recipe(&mut torch));
+        assert_eq!(torch, before);
+        // A tag still can't be in a list.
+        assert_eq!(ingredient(&json!(["#c:coal", "minecraft:charcoal"])), None);
     }
 
     /// A nested reference to 1.21.1's built-in empty table becomes an empty
