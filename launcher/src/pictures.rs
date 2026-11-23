@@ -83,6 +83,24 @@ pub fn fitted(w: u32, h: u32, max: u32) -> (u32, u32) {
     (side(w), side(h))
 }
 
+/// The side a list's small picture is made at (a pack's `pack.png`, a world's `icon.png`, a
+/// listed server's icon): drawn 36 to 48 points across, so sharp up to a scale of about 3, as
+/// the mod browser's project icons ([`crate::browser::images::ICON`]).
+pub const LIST_PICTURE: u32 = crate::browser::images::ICON;
+/// The largest side such a picture is decoded at, and what decoding it may allocate: a mod jar's
+/// icon's bounds. Vanilla's world and server icons are 64 × 64, a pack's picture is a few hundred
+/// pixels.
+const LIST_PICTURE_READ: u32 = 4096;
+const LIST_PICTURE_ALLOC: u64 = 64 << 20;
+
+/// A list's small picture from a file's `bytes`: decoded within [`LIST_PICTURE_READ`] pixels a
+/// side, scaled to fit [`LIST_PICTURE`], as PNG. None when they aren't a picture within those
+/// limits, so GPUI never gets one: a picture wider than the GPU's limit (a 20000 × 1 PNG is under
+/// a kilobyte) made GPUI's atlas add a max-size texture on every frame it was drawn.
+pub fn list_picture(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    crate::browser::images::fit_png(bytes, LIST_PICTURE, LIST_PICTURE_READ, LIST_PICTURE_ALLOC)
+}
+
 /// The picture at `path` fitted inside `max` × `max` (see [`fitted`]), as straight RGBA.
 pub fn load_fitted(path: &Path, max: u32) -> Result<image::RgbaImage, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;

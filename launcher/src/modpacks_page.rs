@@ -35,8 +35,9 @@ pub(super) fn folder_busy(
     }
 }
 
-/// The imported packs' read on a thread (#18074): only the window's latest read applies, and
-/// only when the window changed no pack since asking for it.
+/// A list read on a thread: the imported packs (#18074), an instance's game packs, its server
+/// list. Only the window's latest read applies, and only when the window changed nothing since
+/// asking for it.
 #[derive(Default)]
 pub(super) struct PackReads {
     asked: u64,
@@ -45,24 +46,24 @@ pub(super) struct PackReads {
 
 impl PackReads {
     /// A new read: its number, which its packs come back with.
-    fn ask(&mut self) -> u64 {
+    pub(super) fn ask(&mut self) -> u64 {
         self.asked += 1;
         self.running = Some(self.asked);
         self.asked
     }
 
-    fn running(&self) -> bool {
+    pub(super) fn running(&self) -> bool {
         self.running.is_some()
     }
 
     /// The window changed its packs (a step ended, a pack was removed): a read running began
     /// before and is out of date. True when one was, so a fresh one is to be asked for.
-    fn changed(&mut self) -> bool {
+    pub(super) fn changed(&mut self) -> bool {
         self.running.take().is_some()
     }
 
     /// Whether the packs of read `read` apply: the latest, with no change since.
-    fn arrived(&mut self, read: u64) -> bool {
+    pub(super) fn arrived(&mut self, read: u64) -> bool {
         let applies = self.running == Some(read);
         if applies {
             self.running = None;

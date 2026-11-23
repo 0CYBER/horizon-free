@@ -13,6 +13,11 @@ pub(super) struct Packs {
     pub(super) resource: Vec<(Pack, Option<Arc<Image>>)>,
     pub(super) shader: Vec<Pack>,
     fresh: bool,
+    /// Whether a read of `home` has arrived: until then the list is empty, not read.
+    arrived: bool,
+    /// The list's read on a thread: decoding and shrinking each `pack.png` is too slow to do
+    /// while drawing.
+    reads: modpacks_page::PackReads,
     /// The pack waiting for its removal to be confirmed: its kind and file.
     pub(super) confirm_remove: Option<(PackKind, String)>,
     /// What the last action did, or why it failed.
@@ -22,33 +27,54 @@ pub(super) struct Packs {
 impl Packs {
     pub(super) fn stale(&mut self) {
         self.fresh = false;
+        self.reads.changed();
     }
 }
 
 impl Launcher {
-    pub(super) fn load_packs_list(&mut self, home: PathBuf) {
+    /// Reads the packs of `home` in the background when the list is missing, out of date or of
+    /// another instance: each pack's picture is decoded and made small (`pictures::list_picture`).
+    pub(super) fn load_packs_list(&mut self, home: PathBuf, cx: &mut Context<Self>) {
         if self.game_packs.home.as_ref() != Some(&home) {
+            // The read numbers go on, so a read of the instance picked before never applies.
+            let mut reads = std::mem::take(&mut self.game_packs.reads);
+            reads.changed();
             self.game_packs = Packs {
                 home: Some(home.clone()),
+                reads,
                 ..Packs::default()
             };
         }
-        if self.game_packs.fresh {
+        if self.game_packs.fresh || self.game_packs.reads.running() {
             return;
         }
-        // A few small reads per pack (pack.mcmeta, pack.png): fine while drawing.
-        self.game_packs.resource = packs::list(&home, PackKind::Resource)
-            .into_iter()
-            .map(|p| {
-                let icon = p
-                    .icon
-                    .clone()
-                    .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
-                (p, icon)
-            })
-            .collect();
-        self.game_packs.shader = packs::list(&home, PackKind::Shader);
-        self.game_packs.fresh = true;
+        let read = self.game_packs.reads.ask();
+        let task = cx.background_executor().spawn(async move {
+            let resource: Vec<(Pack, Option<Arc<Image>>)> = packs::list(&home, PackKind::Resource)
+                .into_iter()
+                .map(|p| {
+                    let icon = p
+                        .icon
+                        .clone()
+                        .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
+                    (p, icon)
+                })
+                .collect();
+            (resource, packs::list(&home, PackKind::Shader))
+        });
+        cx.spawn(async move |this, cx| {
+            let (resource, shader) = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.game_packs.reads.arrived(read) {
+                    this.game_packs.resource = resource;
+                    this.game_packs.shader = shader;
+                    this.game_packs.fresh = true;
+                    this.game_packs.arrived = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn pack_action(
@@ -95,21 +121,21 @@ impl Launcher {
         .detach();
     }
 
-    /// How many resource and shader packs the selected instance has.
-    /// How many resource packs and shader packs the selected instance has.
-    pub(super) fn pack_counts(&mut self) -> (usize, usize) {
-        let Some(home) = self.selected_instance().map(|i| i.home.clone()) else {
-            return (0, 0);
-        };
-        self.load_packs_list(home);
-        (self.game_packs.resource.len(), self.game_packs.shader.len())
+    /// How many resource packs and shader packs the selected instance has; none until the first
+    /// read of its packs has arrived.
+    pub(super) fn pack_counts(&mut self, cx: &mut Context<Self>) -> Option<(usize, usize)> {
+        let home = self.selected_instance()?.home.clone();
+        self.load_packs_list(home, cx);
+        self.game_packs
+            .arrived
+            .then_some((self.game_packs.resource.len(), self.game_packs.shader.len()))
     }
 
     /// Home's Packs tab, for the selected instance: its buttons (beside the tabs) and its list.
     pub(super) fn packs_section(&mut self, cx: &mut Context<Self>) -> Option<(Div, Stateful<Div>)> {
         let t = self.theme;
         let home = self.selected_instance()?.home.clone();
-        self.load_packs_list(home.clone());
+        self.load_packs_list(home.clone(), cx);
         let actions = div()
             .flex()
             .items_center()

@@ -25,7 +25,8 @@ const OFFICIAL_MARKER: &str = "horizon_official_server.txt";
 pub struct Server {
     pub name: String,
     pub ip: String,
-    /// The server's picture, as the game last saw it (PNG).
+    /// The server's picture, as the game last saw it, as PNG made small
+    /// ([`crate::pictures::list_picture`]).
     pub icon: Option<Vec<u8>>,
 }
 
@@ -118,14 +119,16 @@ impl List {
         self.entries
             .iter()
             .filter(|e| !hidden(e))
-            .map(|e| Server {
-                name: text(e, "name"),
-                ip: text(e, "ip"),
-                icon: Some(text(e, "icon"))
-                    .filter(|s| !s.is_empty())
-                    .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()),
-            })
+            .map(server)
             .collect()
+    }
+
+    /// Whether a shown server has `address`; without making the pictures [`List::servers`] makes.
+    fn lists(&self, address: &str) -> bool {
+        self.entries
+            .iter()
+            .filter(|e| !hidden(e))
+            .any(|e| same_address(&text(e, "ip"), address))
     }
 
     /// Adds a server at the end of the shown ones, as the game's Add Server does.
@@ -150,17 +153,31 @@ impl List {
 
     /// Removes the `index`th shown server.
     pub fn remove(&mut self, index: usize) -> Result<Server, String> {
-        let server = self
-            .servers()
-            .into_iter()
-            .nth(index)
-            .ok_or_else(|| format!("There is no server {}.", index + 1))?;
+        // Only the removed server's picture is made, not every one's.
         let at = (0..self.entries.len())
             .filter(|&i| !hidden(&self.entries[i]))
             .nth(index)
-            .unwrap();
+            .ok_or_else(|| format!("There is no server {}.", index + 1))?;
+        let server = server(&self.entries[at]);
         self.entries.remove(at);
         Ok(server)
+    }
+
+    /// Removes the shown server named `name` at `ip`, the one a row showed at `index` when the
+    /// player confirmed. The list may have changed since that row was drawn (the game saved,
+    /// another removal), so the server is found by what it is, its position only choosing
+    /// between equal entries. Whether it was there: when it is gone nothing is removed, so a
+    /// row read before a change never removes another server. Makes no picture.
+    pub fn remove_confirmed(&mut self, index: usize, name: &str, ip: &str) -> bool {
+        let at = (0..self.entries.len())
+            .filter(|&i| !hidden(&self.entries[i]))
+            .enumerate()
+            .filter(|&(_, i)| {
+                text(&self.entries[i], "name") == name && text(&self.entries[i], "ip") == ip
+            })
+            .min_by_key(|&(shown, _)| shown.abs_diff(index))
+            .map(|(_, i)| i);
+        at.map(|i| self.entries.remove(i)).is_some()
     }
 
     /// The list as a servers.dat holding only the shown entries, each with all its fields: what
@@ -199,7 +216,7 @@ impl List {
                     .iter()
                     .any(|p| !p.trim().is_empty() && same_address(ip, p))
         };
-        let mut shown = self.servers().iter().any(|s| same_address(&s.ip, address));
+        let mut shown = self.lists(address);
         let mut changed = false;
         self.entries.retain_mut(|e| {
             if !old(&text(e, "ip")) {
@@ -253,7 +270,7 @@ pub fn add_official(home: &Path, address: &str, previous: &[String]) -> Result<(
     }
     let mut list = List::read(home).ok_or("The server list can't be read.")?;
     let mut changed = list.move_official(address, previous);
-    if offered.is_none() && !list.servers().iter().any(|s| same_address(&s.ip, address)) {
+    if offered.is_none() && !list.lists(address) {
         list.entries.insert(0, entry(OFFICIAL_NAME, address));
         changed = true;
     }
@@ -261,6 +278,18 @@ pub fn add_official(home: &Path, address: &str, previous: &[String]) -> Result<(
         list.save(home)?;
     }
     fs::write(marker, format!("{address}\n")).map_err(|e| e.to_string())
+}
+
+/// A shown entry as a [`Server`], its picture made small.
+fn server(e: &Compound) -> Server {
+    Server {
+        name: text(e, "name"),
+        ip: text(e, "ip"),
+        icon: Some(text(e, "icon"))
+            .filter(|s| !s.is_empty())
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+            .and_then(crate::pictures::list_picture),
+    }
 }
 
 /// The shown server a command names: its position from 1, its name (any case) or its address.

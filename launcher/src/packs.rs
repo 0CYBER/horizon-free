@@ -44,7 +44,7 @@ pub struct Pack {
     pub title: String,
     /// `pack.mcmeta`'s description as plain text; a shader pack's format.
     pub description: String,
-    /// `pack.png`, a resource pack's picture.
+    /// `pack.png`, a resource pack's picture, as PNG made small ([`crate::pictures::list_picture`]).
     pub icon: Option<Vec<u8>>,
     pub enabled: bool,
     /// Why the game can't run it: a Horizon shader pack made for another shader API.
@@ -126,7 +126,7 @@ pub fn list(home: &Path, kind: Kind) -> Vec<Pack> {
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|e| read(&e.path(), kind, &on))
+        .filter_map(|e| read(&e.path(), kind, &on, true))
         .collect();
     packs.sort_by(|a, b| a.file.cmp(&b.file));
     let mut keys = std::collections::HashSet::new();
@@ -181,7 +181,9 @@ fn enabled(home: &Path, kind: Kind) -> Vec<String> {
     }
 }
 
-fn read(path: &Path, kind: Kind, on: &[String]) -> Option<Pack> {
+/// The pack at `path`; its picture made only when `picture` is set (a list draws it, an add
+/// doesn't, and decoding one is slow).
+fn read(path: &Path, kind: Kind, on: &[String], picture: bool) -> Option<Pack> {
     let file = path.file_name()?.to_str()?.to_string();
     if file.starts_with('.') {
         return None;
@@ -196,7 +198,10 @@ fn read(path: &Path, kind: Kind, on: &[String]) -> Option<Pack> {
             (
                 file.clone(),
                 plain(&meta["pack"]["description"]),
-                entry(path, "pack.png"),
+                picture
+                    .then(|| entry(path, "pack.png"))
+                    .flatten()
+                    .and_then(crate::pictures::list_picture),
             )
         }
         Kind::Shader if path.join(SHADER_MANIFEST).is_file() || ext(SHADER_PACKAGE) => {
@@ -432,7 +437,7 @@ pub fn kind_of(file: &Path) -> Result<Kind, String> {
 }
 
 /// Copies a pack file into the right folder of `home`, under a name not taken yet. Returns it,
-/// turned off.
+/// turned off, without its picture: the list read after it makes that.
 pub fn add(home: &Path, file: &Path) -> Result<Pack, String> {
     let kind = kind_of(file)?;
     let dir = home.join(kind.folder());
@@ -454,7 +459,7 @@ pub fn add(home: &Path, file: &Path) -> Result<Pack, String> {
         .find(|p| !p.exists())
         .unwrap();
     fs::copy(file, &target).map_err(|e| format!("Could not copy {}: {e}", file.display()))?;
-    read(&target, kind, &[])
+    read(&target, kind, &[], false)
         .ok_or_else(|| format!("{} is not a pack the game reads", target.display()))
 }
 

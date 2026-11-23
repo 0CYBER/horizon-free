@@ -75,7 +75,7 @@ impl Launcher {
             );
         }
         // Pictures line up: a world without one gets a plain tile when another has one.
-        let pictures = list.iter().any(|w| w.icon.is_some());
+        let pictures = list.iter().any(|w| self.worlds.icons.contains_key(&w.path));
         // A long saves folder: only the rows near the view are built (`cull`). The world being
         // worked on and the one whose ⋯ menu is open stay built, wherever the page is scrolled.
         let kept: Vec<bool> = list
@@ -139,7 +139,11 @@ impl Launcher {
             }));
         if pictures {
             row = row.child(picture(
-                w.icon.clone().map(gpui::ImageSource::from),
+                self.worlds
+                    .icons
+                    .get(&w.path)
+                    .cloned()
+                    .map(gpui::ImageSource::from),
                 "earth",
             ));
         }
@@ -278,7 +282,7 @@ impl Launcher {
         let t = self.theme;
         let instance = self.selected_instance()?;
         let (home, name) = (instance.home.clone(), instance.name.clone());
-        self.load_servers(home);
+        self.load_servers(home, cx);
         self.ping_servers(cx);
         let list = self.multiplayer.list.clone();
         let adding = self.multiplayer.adding;
@@ -357,7 +361,9 @@ impl Launcher {
         let t = self.theme;
         let key = SharedString::from(format!("server-{i}"));
         let hovered = self.list_hover.as_ref() == Some(&key);
-        let confirming = self.multiplayer.confirm_remove == Some(i);
+        // After a change, until the list is read again, a row's place may name another server.
+        let current = self.multiplayer.current();
+        let confirming = current && self.multiplayer.confirm_remove == Some(i);
         let hover = self.list_hover_listener(key.clone(), cx);
         let ip = server.ip.clone();
         // The mockup's dot and "address · 3 of 10", or "Offline" with Join off.
@@ -414,14 +420,15 @@ impl Launcher {
                     "Wait for the game to finish starting or installing"
                 })))
         };
-        let remove = (hovered || confirming).then(|| {
+        let gone = server.clone();
+        let remove = (current && (hovered || confirming)).then(|| {
             if confirming {
                 danger_button(
                     SharedString::from(format!("{key}-remove")),
                     tr("Click again to remove").into(),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.edit_servers(|list| list.remove(i).map(|_| ()));
+                    this.remove_server(i, &gone);
                     cx.notify();
                 }))
                 .into_any_element()

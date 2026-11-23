@@ -144,10 +144,7 @@ impl Launcher {
             (None, true) => tr("A new world with a random seed").to_string(),
         };
         // A copied world shows its own icon, else the mode's picture.
-        let cover = match copy
-            .map(|(_, p)| p.join("icon.png"))
-            .filter(|p| p.is_file())
-        {
+        let cover = match copy.and_then(|(_, p)| c.icons.get(p)).cloned() {
             Some(icon) => img(icon)
                 .size_full()
                 .object_fit(gpui::ObjectFit::Cover)
@@ -221,6 +218,7 @@ impl Launcher {
         };
         let (new_world, copy, worlds) = (c.new_world, c.copy.clone(), c.worlds.clone());
         let details = c.details.clone();
+        let icons = c.icons.clone();
         let (mode, difficulty, max) = (c.mode, c.difficulty, c.max_players);
         let (friends_only, check, friends) = (c.friends_only, c.check_accounts, c.friends.clone());
         let creating = self.servers.creating;
@@ -328,7 +326,7 @@ impl Launcher {
             let mut list = list_box("create-worlds", 232.);
             for (i, (name, path)) in worlds.into_iter().enumerate() {
                 let on = copy.as_ref() == Some(&path);
-                let icon = path.join("icon.png");
+                let icon = icons.get(&path).cloned();
                 let thumb = div()
                     .flex_none()
                     .w(px(64.))
@@ -336,9 +334,9 @@ impl Launcher {
                     .overflow_hidden()
                     .rounded(px(8.))
                     .bg(white(fill::BUTTON))
-                    .when(icon.is_file(), |d| {
-                        d.child(img(icon).size_full().object_fit(gpui::ObjectFit::Cover))
-                    });
+                    .children(
+                        icon.map(|icon| img(icon).size_full().object_fit(gpui::ObjectFit::Cover)),
+                    );
                 list = list.child(
                     list_choice(SharedString::from(format!("create-copy-{i}")), on, &t)
                         .p(px(8.))

@@ -19,7 +19,7 @@ impl Launcher {
         let t = self.theme;
         let instance = self.selected_instance()?;
         let (home, name) = (instance.home.clone(), instance.name.clone());
-        self.load_packs_list(home.clone());
+        self.load_packs_list(home.clone(), cx);
         let (resource, shader) = match kind {
             PackKind::Resource => (self.game_packs.resource.clone(), Vec::new()),
             PackKind::Shader => (Vec::new(), self.game_packs.shader.clone()),

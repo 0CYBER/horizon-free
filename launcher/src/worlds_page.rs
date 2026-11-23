@@ -3,7 +3,9 @@
 //! trash, after a confirmation) and Open folder. Reading sizes and copying run in the background.
 use super::*;
 use horizon_launcher::worlds::{self, World};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub(super) struct Worlds {
@@ -11,6 +13,9 @@ pub(super) struct Worlds {
     /// read again, so the page doesn't jump.
     pub(super) home: Option<PathBuf>,
     pub(super) list: Vec<World>,
+    /// The worlds' pictures by their folder, made small when the list is read
+    /// (`worlds::icon_picture`): GPUI never gets a file's picture as it is.
+    pub(super) icons: HashMap<PathBuf, Arc<gpui::Image>>,
     /// Which of the list's rows Home's glass Worlds tab has built and measured (`cull`).
     pub(super) cull: cull::Cull,
     fresh: bool,
@@ -45,6 +50,20 @@ pub(super) fn ago(when: std::time::SystemTime) -> String {
     }
 }
 
+/// The pictures of the worlds in the folders `worlds`, made small (`worlds::icon_picture`), by
+/// folder; a world without a picture that can be drawn has none.
+pub(super) fn icons<'a>(
+    worlds: impl Iterator<Item = &'a Path>,
+) -> HashMap<PathBuf, Arc<gpui::Image>> {
+    worlds
+        .filter_map(|world| {
+            let png = worlds::icon_picture(world)?;
+            let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
+            Some((world.to_path_buf(), Arc::new(image)))
+        })
+        .collect()
+}
+
 pub(super) enum Action {
     Backup,
     Copy,
@@ -66,15 +85,18 @@ impl Launcher {
         }
         self.worlds.reading = true;
         let read = home.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { worlds::list(&read) });
+        let task = cx.background_executor().spawn(async move {
+            let list = worlds::list(&read);
+            let icons = icons(list.iter().map(|w| w.path.as_path()));
+            (list, icons)
+        });
         cx.spawn(async move |this, cx| {
-            let list = task.await;
+            let (list, icons) = task.await;
             let _ = this.update(cx, |this, cx| {
                 // Another instance may have been picked meanwhile.
                 if this.worlds.home.as_ref() == Some(&home) {
                     this.worlds.list = list;
+                    this.worlds.icons = icons;
                     this.worlds.cull.reset();
                     this.worlds.fresh = true;
                     this.worlds.reading = false;
@@ -196,7 +218,7 @@ impl Launcher {
         let busy = self.worlds.busy.is_some();
         let this_busy = self.worlds.busy.as_ref() == Some(&w.folder);
         let confirming = self.worlds.confirm_delete.as_ref() == Some(&w.folder);
-        let picture = match &w.icon {
+        let picture = match self.worlds.icons.get(&w.path) {
             Some(icon) => div()
                 .flex_none()
                 .size(px(48.))

@@ -238,6 +238,63 @@ fn official_version(root: &Path, id: &str) -> (String, Option<Loader>) {
 
 /// The official launcher's profiles in its folder `root`.
 pub fn official_profiles(root: &Path) -> Vec<Found> {
+    official_profiles_in(root, dirs::home_dir().as_deref())
+}
+
+/// What a game folder holds once the game has started in it: vanilla makes `saves/` and
+/// `resourcepacks/` and writes `options.txt` on its first start.
+fn looks_like_a_game_folder(dir: &Path) -> bool {
+    ["saves", "mods", "resourcepacks"]
+        .iter()
+        .any(|d| dir.join(d).is_dir())
+        || dir.join("options.txt").is_file()
+}
+
+/// A profile's `gameDir` as the folder to copy and whether it is a launcher's own folder
+/// ([`Found::shared`]); relative to the launcher's folder `root` when it is relative.
+///
+/// The field may name any folder, and a real profile often names one outside `root`; but the
+/// folder may come from an archive, and copying the folder a profile names carries all of it into
+/// an instance (and from there into an export). So a profile is left out when its folder climbs
+/// with `..`, or is there but is a filesystem root, the user's `home` or a folder above it, a
+/// folder above `root`, or a folder holding files but none the game makes
+/// ([`looks_like_a_game_folder`]). One that isn't there or is empty stays: there is nothing to
+/// copy. A folder holding a `launcher_profiles.json` is a launcher's own, whose files hold its
+/// sign-in: only what an instance holds is copied from it.
+fn profile_game(root: &Path, dir: &str, home: Option<&Path>) -> Option<(PathBuf, bool)> {
+    let named = Path::new(dir);
+    if named
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return None;
+    }
+    let game = root.join(named);
+    let Ok(real) = fs::canonicalize(&game) else {
+        return Some((game, false));
+    };
+    let real_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if real == real_root {
+        return Some((game, true));
+    }
+    let above_home = home
+        .and_then(|h| fs::canonicalize(h).ok())
+        .is_some_and(|h| h.starts_with(&real));
+    let empty = fs::read_dir(&real)
+        .ok()
+        .is_none_or(|mut d| d.next().is_none());
+    if real.parent().is_none()
+        || above_home
+        || real_root.starts_with(&real)
+        || !(empty || looks_like_a_game_folder(&real))
+    {
+        return None;
+    }
+    let shared = real.join("launcher_profiles.json").is_file();
+    Some((game, shared))
+}
+
+fn official_profiles_in(root: &Path, home: Option<&Path>) -> Vec<Found> {
     let Some(text) = fs::read_to_string(root.join("launcher_profiles.json")).ok() else {
         return Vec::new();
     };
@@ -264,17 +321,17 @@ pub fn official_profiles(root: &Path) -> Vec<Found> {
                 ("", _) => id.to_string(),
                 (n, _) => n.to_string(),
             };
-            let game = p["gameDir"]
-                .as_str()
-                .filter(|d| !d.is_empty())
-                .map(PathBuf::from);
+            let (game, shared) = match p["gameDir"].as_str().filter(|d| !d.is_empty()) {
+                Some(dir) => profile_game(root, dir, home)?,
+                None => (root.to_path_buf(), true),
+            };
             Some(Found {
                 launcher: OFFICIAL,
                 name,
                 minecraft: Some(minecraft),
                 loader,
-                shared: game.as_ref().is_none_or(|g| g == root),
-                game: game.unwrap_or_else(|| root.to_path_buf()),
+                shared,
+                game,
             })
         })
         .collect();
@@ -535,6 +592,7 @@ pub fn copy_game(found: &Found, to: &Path) -> std::io::Result<()> {
     let Ok(entries) = fs::read_dir(&found.game) else {
         return Ok(());
     };
+    let target = fs::canonicalize(to)?;
     for entry in entries {
         let entry = entry?;
         let name = entry.file_name();
@@ -547,19 +605,28 @@ pub fn copy_game(found: &Found, to: &Path) -> std::io::Result<()> {
         if !wanted {
             continue;
         }
-        copy_entry(&entry.path(), &to.join(name.as_ref()), entry.file_type()?)?;
+        copy_entry(
+            &entry.path(),
+            &to.join(name.as_ref()),
+            entry.file_type()?,
+            &target,
+        )?;
     }
     Ok(())
 }
 
 /// Copies one file or folder of another launcher's instance. A link is left out: the folder may
 /// come from an archive, and a link in it could carry a file of the player's from elsewhere
-/// into the new instance (and from there into an export).
-fn copy_entry(from: &Path, to: &Path, kind: fs::FileType) -> std::io::Result<()> {
+/// into the new instance (and from there into an export). A folder holding `target`, the new
+/// instance's folder, is left out too: copying it would copy what it copies, without end.
+fn copy_entry(from: &Path, to: &Path, kind: fs::FileType, target: &Path) -> std::io::Result<()> {
     if kind.is_symlink() {
         return Ok(());
     }
     if kind.is_dir() {
+        if fs::canonicalize(from).is_ok_and(|from| target.starts_with(from)) {
+            return Ok(());
+        }
         fs::create_dir_all(to)?;
         for entry in fs::read_dir(from)? {
             let entry = entry?;
@@ -567,6 +634,7 @@ fn copy_entry(from: &Path, to: &Path, kind: fs::FileType) -> std::io::Result<()>
                 &entry.path(),
                 &to.join(entry.file_name()),
                 entry.file_type()?,
+                target,
             )?;
         }
     } else {

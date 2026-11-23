@@ -152,6 +152,91 @@ fn official_launcher_profiles() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// A profile may name any game folder, but one from an archive must not carry the player's
+/// home, a folder above the launcher's, or a folder the game never ran in into an instance.
+#[test]
+fn a_profile_naming_a_folder_that_is_no_game_folder_is_left_out() {
+    let base = scratch("game-dirs");
+    let home = base.join("home");
+    let root = home.join("Downloads/pack");
+    let elsewhere = base.join("Games/modded");
+    write(&elsewhere.join("saves/World/level.dat"), "level");
+    let relative = root.join("instances/a");
+    write(&relative.join("options.txt"), "version:4786");
+    let other_launcher = base.join("Other/.minecraft");
+    write(&other_launcher.join("launcher_profiles.json"), "{}");
+    write(&other_launcher.join("saves/W/level.dat"), "level");
+    let empty = base.join("Empty");
+    fs::create_dir_all(&empty).unwrap();
+    let secrets = home.join(".ssh");
+    write(&secrets.join("config"), "Host *");
+    let at = |p: &Path| p.to_string_lossy().into_owned();
+    let new = base.join("New");
+    let dirs = [
+        ("Elsewhere", at(&elsewhere)),
+        ("Relative", "instances/a".into()),
+        ("Other launcher", at(&other_launcher)),
+        ("Not yet played", at(&new)),
+        ("Picked, empty", at(&empty)),
+        ("Home", at(&home)),
+        ("Above home", at(&base)),
+        ("Above the launcher", at(&home.join("Downloads"))),
+        ("Climbing", "../../.ssh".into()),
+        ("Root", "/".into()),
+        ("No game", at(&secrets)),
+    ];
+    let profiles: serde_json::Map<String, Value> = dirs
+        .iter()
+        .map(|(name, dir)| {
+            let profile = json!({"type": "custom", "name": name, "lastVersionId": "1.21.1",
+                "gameDir": dir});
+            (name.to_string(), profile)
+        })
+        .collect();
+    write(
+        &root.join("launcher_profiles.json"),
+        &json!({ "profiles": profiles }).to_string(),
+    );
+    let found = official_profiles_in(&root, Some(&home));
+    let listed: Vec<(&str, &Path, bool)> = found
+        .iter()
+        .map(|f| (f.name.as_str(), f.game.as_path(), f.shared))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("Elsewhere", elsewhere.as_path(), false),
+            ("Not yet played", new.as_path(), false),
+            ("Other launcher", other_launcher.as_path(), true),
+            ("Picked, empty", empty.as_path(), false),
+            ("Relative", relative.as_path(), false),
+        ]
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A game folder that holds the new instance's folder (a profile naming the folder Horizon keeps
+/// its instances in) copies everything but that: copying it would never end.
+#[test]
+fn copying_leaves_out_the_folder_it_copies_into() {
+    let root = scratch("into-itself");
+    let game = root.join("game");
+    write(&game.join("saves/World/level.dat"), "level");
+    let to = game.join("horizon/instances/new");
+    let found = Found {
+        launcher: OFFICIAL,
+        name: "x".into(),
+        minecraft: Some("1.21.1".into()),
+        loader: None,
+        game: game.clone(),
+        shared: false,
+    };
+    copy_game(&found, &to).unwrap();
+    assert!(to.join("saves/World/level.dat").is_file());
+    assert!(!to.join("horizon").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn copies_an_instance_but_only_what_a_shared_folder_holds_for_one() {
     let root = scratch("copy");

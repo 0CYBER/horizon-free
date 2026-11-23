@@ -16,7 +16,14 @@ pub(super) struct Multiplayer {
     home: Option<PathBuf>,
     pub(super) list: Vec<(Server, Option<Arc<Image>>)>,
     fresh: bool,
+    /// Whether a read of `home` has arrived: until then the list is empty, not read.
+    arrived: bool,
+    /// The list's read on a thread: decoding and shrinking each server's picture is too slow
+    /// to do while drawing.
+    reads: modpacks_page::PackReads,
     pub(super) adding: bool,
+    /// The row whose Remove waits for its confirmation, by its place in `list`. Any change to
+    /// the list drops it (`stale`).
     pub(super) confirm_remove: Option<usize>,
     pub(super) error: Option<String>,
     /// What each address answered to the status ping, asked once per list.
@@ -35,6 +42,14 @@ impl Multiplayer {
     /// Read again on the next frame: the game may have changed its list.
     pub(super) fn stale(&mut self) {
         self.fresh = false;
+        self.confirm_remove = None;
+        self.reads.changed();
+    }
+
+    /// Whether the rows show the file as it is: after a change, until the new read arrives,
+    /// their places may name other servers, so they offer no Remove.
+    pub(super) fn current(&self) -> bool {
+        self.fresh
     }
 }
 
@@ -73,55 +88,88 @@ impl Launcher {
         }
     }
 
-    pub(super) fn load_servers(&mut self, home: PathBuf) {
+    /// Reads the server list of `home` in the background when it is missing, out of date or of
+    /// another instance: each server's picture is decoded and made small
+    /// (`pictures::list_picture`).
+    pub(super) fn load_servers(&mut self, home: PathBuf, cx: &mut Context<Self>) {
         if self.multiplayer.home.as_ref() != Some(&home) {
+            // The read numbers go on, so a read of the instance picked before never applies.
+            let mut reads = std::mem::take(&mut self.multiplayer.reads);
+            reads.changed();
             self.multiplayer = Multiplayer {
                 home: Some(home.clone()),
+                reads,
                 ..Multiplayer::default()
             };
         }
-        if self.multiplayer.fresh {
+        if self.multiplayer.fresh || self.multiplayer.reads.running() {
             return;
         }
-        // A list that can't be read is the game's to report: the page shows it empty.
+        // On this thread, as every other edit of the list: it reads no picture. A list that
+        // can't be read is the game's to report: the page shows it empty.
         let _ = server_list::add_official(
             &home,
             &self.links.official_server,
             &self.links.official_server_previous,
         );
-        // A few servers and their 64×64 pictures: small enough to read while drawing.
-        self.multiplayer.list = server_list::List::load(&home)
-            .servers()
-            .into_iter()
-            .map(|s| {
-                let icon = s
-                    .icon
-                    .clone()
-                    .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
-                (s, icon)
-            })
-            .collect();
-        self.multiplayer.fresh = true;
+        let read = self.multiplayer.reads.ask();
+        let task = cx.background_executor().spawn(async move {
+            server_list::List::load(&home)
+                .servers()
+                .into_iter()
+                .map(|s| {
+                    let icon = s
+                        .icon
+                        .clone()
+                        .map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)));
+                    (s, icon)
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let list = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.multiplayer.reads.arrived(read) {
+                    this.multiplayer.list = list;
+                    this.multiplayer.fresh = true;
+                    this.multiplayer.arrived = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
+    /// Edits the list as the file holds it now, and saves it when `edit` says it changed. Reads
+    /// no picture.
     pub(super) fn edit_servers(
         &mut self,
-        edit: impl FnOnce(&mut server_list::List) -> Result<(), String>,
+        edit: impl FnOnce(&mut server_list::List) -> Result<bool, String>,
     ) {
         let Some(home) = self.multiplayer.home.clone() else {
             return;
         };
         let mut list = server_list::List::load(&home);
-        self.multiplayer.error = edit(&mut list).and_then(|()| list.save(&home)).err();
-        self.multiplayer.confirm_remove = None;
+        self.multiplayer.error = edit(&mut list)
+            .and_then(|changed| match changed {
+                true => list.save(&home),
+                false => Ok(()),
+            })
+            .err();
         self.multiplayer.stale();
+    }
+
+    /// The confirmed Remove of the server a row showed at `index`: removed from the file as it
+    /// is now only when it is still there (`List::remove_confirmed`).
+    pub(super) fn remove_server(&mut self, index: usize, server: &Server) {
+        self.edit_servers(|list| Ok(list.remove_confirmed(index, &server.name, &server.ip)));
     }
 
     /// Enter in the address field, or Add.
     pub(super) fn add_server(&mut self) {
         let name = self.servers.value(Field::ServerName).to_string();
         let address = self.servers.value(Field::ServerAddress).to_string();
-        self.edit_servers(|list| list.add(&name, &address));
+        self.edit_servers(|list| list.add(&name, &address).map(|()| true));
         if self.multiplayer.error.is_none() {
             self.servers.text(Field::ServerName).set(String::new());
             self.servers.text(Field::ServerAddress).set(String::new());
@@ -129,13 +177,14 @@ impl Launcher {
         }
     }
 
-    /// How many servers the selected instance's list has.
-    pub(super) fn servers_count(&mut self) -> usize {
-        let Some(home) = self.selected_instance().map(|i| i.home.clone()) else {
-            return 0;
-        };
-        self.load_servers(home);
-        self.multiplayer.list.len()
+    /// How many servers the selected instance's list has; none until the first read of its list
+    /// has arrived.
+    pub(super) fn servers_count(&mut self, cx: &mut Context<Self>) -> Option<usize> {
+        let home = self.selected_instance()?.home.clone();
+        self.load_servers(home, cx);
+        self.multiplayer
+            .arrived
+            .then_some(self.multiplayer.list.len())
     }
 
     /// Home's Multiplayer tab, for the selected instance: its button (beside the tabs) and its
@@ -143,7 +192,7 @@ impl Launcher {
     pub(super) fn multiplayer_section(&mut self, cx: &mut Context<Self>) -> Option<(Div, Div)> {
         let t = self.theme;
         let home = self.selected_instance()?.home.clone();
-        self.load_servers(home);
+        self.load_servers(home, cx);
         let actions = div().child(tab_action("server-add", "Add server", &t).on_click(
             cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.multiplayer.adding = !this.multiplayer.adding;
@@ -210,7 +259,9 @@ impl Launcher {
             None => picture.child(blocks::icon("server", 22., t.muted)),
         };
         let mut actions = div().flex().items_center().gap(px(6.));
-        if self.multiplayer.confirm_remove == Some(i) {
+        let current = self.multiplayer.current();
+        if current && self.multiplayer.confirm_remove == Some(i) {
+            let gone = server.clone();
             actions = actions
                 .child(
                     text(theme::CAPTION)
@@ -238,7 +289,7 @@ impl Launcher {
                     )
                     .on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
-                            this.edit_servers(|list| list.remove(i).map(|_| ()));
+                            this.remove_server(i, &gone);
                             cx.notify();
                         },
                     )),
@@ -253,6 +304,19 @@ impl Launcher {
                 &t,
             );
             let join = if busy { disabled(join) } else { join };
+            let delete = button(
+                SharedString::from(format!("server-delete-{i}")),
+                "Remove",
+                Kind::Ghost,
+                &t,
+            );
+            let delete = match current {
+                true => delete.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.multiplayer.confirm_remove = Some(i);
+                    cx.notify();
+                })),
+                false => disabled(delete),
+            };
             actions = actions
                 .child(
                     join.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -260,20 +324,7 @@ impl Launcher {
                         cx.notify();
                     })),
                 )
-                .child(
-                    button(
-                        SharedString::from(format!("server-delete-{i}")),
-                        "Remove",
-                        Kind::Ghost,
-                        &t,
-                    )
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            this.multiplayer.confirm_remove = Some(i);
-                            cx.notify();
-                        },
-                    )),
-                );
+                .child(delete);
         }
         plate(&t)
             .flex()

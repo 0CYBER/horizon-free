@@ -19,8 +19,7 @@ fn s(v: &str) -> Tag {
 /// A servers.dat as the game writes it: one shown server with a picture and the fields the
 /// launcher doesn't use, then one joined through Direct Connection.
 fn vanilla_file(home: &Path) -> Vec<u8> {
-    let png = [0x89, b'P', b'N', b'G', 1, 2, 3];
-    let icon = base64::engine::general_purpose::STANDARD.encode(png);
+    let icon = base64::engine::general_purpose::STANDARD.encode(crate::test_support::png(64, 64));
     let root = NamedTag {
         name: "".into(),
         tag: Tag::compound([(
@@ -65,20 +64,38 @@ fn reads_the_shown_servers_with_their_pictures() {
     let home = scratch("reads");
     vanilla_file(home.as_path());
     let list = List::load(home.as_path());
-    assert_eq!(
-        list.servers(),
-        vec![Server {
-            name: "Friends".into(),
-            ip: "friends.example:25570".into(),
-            icon: Some(vec![0x89, b'P', b'N', b'G', 1, 2, 3]),
-        }]
-    );
+    let servers = list.servers();
+    let shown: Vec<(&str, &str)> = servers
+        .iter()
+        .map(|s| (s.name.as_str(), s.ip.as_str()))
+        .collect();
+    assert_eq!(shown, [("Friends", "friends.example:25570")]);
+    let icon = servers[0].icon.as_deref().unwrap();
+    assert_eq!(crate::test_support::dimensions(icon), (64, 64));
     // No file, or one that isn't NBT: an empty list, as in the game.
     assert!(List::load(&home.as_path().join("none"))
         .servers()
         .is_empty());
     fs::write(home.as_path().join(FILE), b"not nbt").unwrap();
     assert!(List::load(home.as_path()).servers().is_empty());
+}
+
+/// A servers.dat a modpack ships can hold any picture: one wider than any GPU's texture limit
+/// (20000 × 1, under a kilobyte) is left out, never handed to GPUI, and a big one comes small.
+#[test]
+fn a_server_picture_is_listed_small_or_not_at_all() {
+    let home = scratch("pictures");
+    vanilla_file(home.as_path());
+    let mut list = List::load(home.as_path());
+    let base64 = |png: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(png);
+    let wide = base64(crate::test_support::png(20000, 1));
+    list.entries[0].insert(key("icon"), s(&wide));
+    assert_eq!(list.servers()[0].icon, None);
+    let big = base64(crate::test_support::png(512, 512));
+    list.entries[0].insert(key("icon"), s(&big));
+    let icon = list.servers()[0].icon.clone().unwrap();
+    assert_eq!(crate::test_support::dimensions(&icon), (128, 128));
+    fs::remove_dir_all(&home).unwrap();
 }
 
 #[test]
@@ -128,6 +145,20 @@ fn adding_and_removing_keeps_every_other_field_and_the_hidden_servers() {
         entries(home.as_path()),
         vec![after[1].clone(), before[1].clone()]
     );
+}
+
+#[test]
+fn a_confirmed_removal_never_removes_another_server() {
+    let mut list = List {
+        entries: vec![entry("A", "a.example"), entry("C", "c.example")],
+    };
+    // The row showed B second; B was removed since, and C is second now.
+    assert!(!list.remove_confirmed(1, "B", "b.example"));
+    let names = |l: &List| l.servers().into_iter().map(|s| s.name).collect::<Vec<_>>();
+    assert_eq!(names(&list), ["A", "C"]);
+    // C, confirmed third before a server above it went, is still removed.
+    assert!(list.remove_confirmed(2, "C", "c.example"));
+    assert_eq!(names(&list), ["A"]);
 }
 
 #[test]

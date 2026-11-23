@@ -51,10 +51,10 @@ impl Launcher {
             tabs.push((HomeTab::Mods, self.instance_mods_count(cx)));
         }
         tabs.push((HomeTab::Worlds, self.worlds_count(cx)));
-        tabs.push((HomeTab::Multiplayer, Some(self.servers_count())));
-        let (resource, shader) = self.pack_counts();
-        tabs.push((HomeTab::Packs, Some(resource)));
-        tabs.push((HomeTab::Shaders, Some(shader)));
+        tabs.push((HomeTab::Multiplayer, self.servers_count(cx)));
+        let counts = self.pack_counts(cx);
+        tabs.push((HomeTab::Packs, counts.map(|(resource, _)| resource)));
+        tabs.push((HomeTab::Shaders, counts.map(|(_, shader)| shader)));
         let every = self.theme.glass;
         let shots = self.screenshots_count();
         if every || shots > 0 {

@@ -150,6 +150,9 @@ pub(super) struct Create {
     /// The glass dialog's line under each world: its name and "Horizon · mode · size", read
     /// once when the dialog opens.
     details: HashMap<PathBuf, (String, String)>,
+    /// The glass dialog's world pictures by folder, made small in the background once it
+    /// opens (`worlds_page::icons`); empty until then.
+    icons: HashMap<PathBuf, std::sync::Arc<gpui::Image>>,
     mode: &'static str,
     difficulty: &'static str,
     max_players: u32,
@@ -940,6 +943,35 @@ impl Launcher {
         } else {
             Default::default()
         };
+        // Decoding and shrinking each world's picture reads a file of up to 4096 px a side, so a
+        // long saves folder is done off the UI thread; the rows show their pictures when it ends.
+        if glass {
+            let folders: Vec<PathBuf> = worlds.iter().map(|(_, path)| path.clone()).collect();
+            let task = cx.background_executor().spawn(async move {
+                let icons = worlds_page::icons(folders.iter().map(PathBuf::as_path));
+                (folders, icons)
+            });
+            cx.spawn(async move |this, cx| {
+                let (folders, icons) = task.await;
+                let _ = this.update(cx, |this, cx| {
+                    // A dialog opened again meanwhile takes these pictures only when it lists
+                    // the same worlds, whose pictures they are.
+                    let Some(create) = &mut this.servers.create else {
+                        return;
+                    };
+                    if create
+                        .worlds
+                        .iter()
+                        .map(|(_, path)| path)
+                        .eq(folders.iter())
+                    {
+                        create.icons = icons;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         self.servers.problem = None;
         self.servers.create_scroll = Scrollbar::default();
         self.servers.create = Some(Create {
@@ -955,6 +987,7 @@ impl Launcher {
             eula_missing: false,
             friends,
             details,
+            icons: HashMap::new(),
         });
     }
 
