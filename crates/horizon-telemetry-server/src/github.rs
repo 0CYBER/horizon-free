@@ -52,7 +52,26 @@ pub fn neutralise(text: &str) -> String {
         i += 1;
     }
     // github.com/owner/repo/issues/12 links cross-reference the issue: shown, not linked.
-    out.replace("github.com/", "github.com\u{200b}/")
+    let out = out.replace("github.com/", "github.com\u{200b}/");
+    break_links(&out)
+}
+
+/// Markdown links and images (`[t](url)`, `![t](url)`, `[t][ref]` with `[ref]: url`, `[t]` with `[t]: url`) all
+/// need `](`, `][` or `]:` right after the label. A zero-width space there keeps the text readable but makes it
+/// plain text, so an anonymous report can't carry a link with a hidden target or an image that loads when a
+/// maintainer opens the issue. (GitHub proxies images, so it would not leak the maintainer's IP; the point is
+/// the content.) Bare URLs stay: they are shown as written and a server address is a normal thing to report.
+/// Idempotent, as the title is neutralised twice.
+fn break_links(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == ']' && matches!(chars.peek(), Some('(' | '[' | ':')) {
+            out.push('\u{200b}');
+        }
+    }
+    out
 }
 
 /// Whether `rest` starts with `GH-` and a digit, as GitHub's issue autolink reads it.
@@ -138,4 +157,42 @@ pub fn github(repo: String, token: String) -> Box<Filer> {
             Err(ureq::Error::Transport(e)) => Err(format!("could not reach GitHub: {}", e.kind())),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn links_and_images_are_not_live_markdown() {
+        for text in [
+            "[click](https://evil.example/login)",
+            "![x](https://evil.example/p.png)",
+            "[a][b]\n\n[b]: https://evil.example",
+            "![a][b]\n\n[b]: https://evil.example",
+            "[a]\n\n[a]: https://evil.example",
+        ] {
+            let out = neutralise(text);
+            assert!(
+                !out.contains("](") && !out.contains("][") && !out.contains("]:"),
+                "{out:?}"
+            );
+            assert_eq!(neutralise(&out), out, "idempotent");
+            assert_eq!(out.replace('\u{200b}', ""), text, "text stays readable");
+        }
+    }
+
+    #[test]
+    fn issue_body_has_no_live_link_and_keeps_bare_urls() {
+        let mut fields = Map::new();
+        fields.insert(
+            "did".into(),
+            json!("![x](https://evil.example/p.png) join play.example.org:25565"),
+        );
+        fields.insert("title".into(), json!("[t](https://evil.example)"));
+        let issue = issue(&fields);
+        assert!(!issue.body.contains("]("), "{}", issue.body);
+        assert!(!issue.title.contains("]("), "{}", issue.title);
+        assert!(issue.body.contains("play.example.org:25565"));
+    }
 }
