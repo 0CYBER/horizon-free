@@ -406,7 +406,13 @@ impl Game<'_> {
                 .map_or(eye, |pl| [pl.position.x, pl.position.y, pl.position.z]);
             self.audio
                 .play("minecraft:item.crossbow.shoot", Some(feet), 1.0, pitch);
+            // ProjectileWeaponItem.shoot: stop the volley when durability
+            // breaks the held crossbow, as release_bow already does.
+            let was_held = self.held().is_some();
             self.damage_held(if rocket { 3 } else { 1 });
+            if was_held && self.held().is_none() {
+                break;
+            }
         }
         // CrossbowItem.performShooting: SHOT_CROSSBOW with the crossbow, which
         // is an empty stack (no match) when the shots broke it.
