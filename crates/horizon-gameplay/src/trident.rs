@@ -96,7 +96,9 @@ impl ThrownTrident {
         self.previous = n.position;
         self.yaw = n.yaw;
         self.pitch = n.pitch;
-        self.loyalty = n.item.enchantment_level("minecraft:loyalty");
+        // Callers with the enchantment registry replace this with
+        // `read_loyalty`, as `readAdditionalSaveData` reads it from the item.
+        self.loyalty = n.item.enchantment_level("minecraft:loyalty").min(127);
         self.stack = n.item;
         self.velocity = n.motion;
         self.in_ground = n.in_ground;
@@ -297,6 +299,15 @@ impl ThrownTrident {
         self.in_ground_time = 0;
         self.needs_sync = true;
     }
+    /// `ThrownTrident.getLoyaltyFromItem` of its item, as its constructor and
+    /// `readAdditionalSaveData` set the synced loyalty.
+    pub fn read_loyalty(
+        &mut self,
+        enchantments: &horizon_client::enchant::Enchantments,
+        random: &mut horizon_core::random::LegacyRandom,
+    ) {
+        self.loyalty = loyalty_from_item(enchantments, &self.stack, random);
+    }
     /// `ThrownTrident.tick`'s Loyalty return: pulled up and towards the
     /// owner's eye.
     pub fn loyalty_pull(&mut self, owner_eye: Vec3) {
@@ -364,6 +375,29 @@ impl ThrownTrident {
             self.velocity.y -= 0.05;
         }
     }
+}
+/// `ThrownTrident.getLoyaltyFromItem`: `EnchantmentHelper.getTridentReturnToOwnerAcceleration`
+/// (the stack's `minecraft:trident_return_acceleration` effects from 0, cut to
+/// an int, at least 0), clamped to the synced byte's 0..=127.
+pub fn loyalty_from_item(
+    enchantments: &horizon_client::enchant::Enchantments,
+    stack: &ItemStack,
+    random: &mut horizon_core::random::LegacyRandom,
+) -> u32 {
+    // `Enchantment.entityContext`: the trident is `this`.
+    let ctx = horizon_client::enchant::EffectContext {
+        this: Some("minecraft:trident"),
+        ..Default::default()
+    };
+    let acceleration = enchantments.modify_value(
+        Some(stack),
+        "minecraft:trident_return_acceleration",
+        &ctx,
+        random,
+        0.0,
+    );
+    // `MutableFloat.intValue()` truncates like `as i32` (NaN to 0).
+    (acceleration as i32).clamp(0, 127) as u32
 }
 pub const HALF: f64 = 0.25;
 /// `Breeze.PROJECTILE_DEFLECTION`: `ProjectileDeflection.REVERSE` at power

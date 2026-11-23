@@ -805,11 +805,13 @@ impl Game<'_> {
             Target::Trident(id) => {
                 let loaded = entity_nbt::trident_from_nbt(&tag).ok_or_else(stale)?;
                 let uuid = self.uuid_for(id);
-                self.tridents
+                let trident = self
+                    .tridents
                     .iter_mut()
                     .find(|trident| trident.id == id)
-                    .ok_or_else(stale)?
-                    .load_nbt(loaded, &tag, self.pack.assets.registry);
+                    .ok_or_else(stale)?;
+                trident.load_nbt(loaded, &tag, self.pack.assets.registry);
+                trident.read_loyalty(&world_stations!(self).enchantments, &mut self.world.random);
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
             Target::Rocket(id) => {

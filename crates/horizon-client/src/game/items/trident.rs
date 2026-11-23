@@ -21,7 +21,7 @@ use horizon_core::{
 use mod_api::SoundSource;
 
 pub(super) use horizon_gameplay::trident::ThrownTrident;
-use horizon_gameplay::trident::{HALF, breeze_deflect, segment_box};
+use horizon_gameplay::trident::{HALF, breeze_deflect, loyalty_from_item, segment_box};
 
 /// A player a trident can return to (its owner) or that can pick it up: this
 /// game's own, or a server's guest in this level, which is all a server has.
@@ -273,11 +273,16 @@ impl Game<'_> {
             self.persist.uuids.insert(id, uuid);
         }
         let owner_uuid = self.acting_player_uuid();
+        let loyalty = loyalty_from_item(
+            &world_stations!(self).enchantments,
+            &thrown,
+            &mut self.world.random,
+        );
         self.tridents.push(ThrownTrident {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id,
-            loyalty: thrown.enchantment_level("minecraft:loyalty"),
+            loyalty,
             stack: thrown,
             position: start,
             previous: start,
@@ -624,6 +629,9 @@ impl Game<'_> {
                     t.position.y + t.velocity.y,
                     t.position.z + t.velocity.z,
                 );
+                // AbstractArrow.tick drags a noPhysics flight too (0.99 in air
+                // and water alike), with no gravity.
+                t.velocity = t.velocity.scale(f64::from(0.99f32));
             } else {
                 t.turn_towards_movement();
                 // Mobs on the path, then blocks.

@@ -282,6 +282,7 @@ impl Game<'_> {
         if let Some(n) = entity_nbt::trident_from_nbt(&tag) {
             let mut t =
                 crate::game::trident::ThrownTrident::from_nbt(n, &tag, self.pack.assets.registry);
+            t.read_loyalty(&world_stations!(self).enchantments, &mut self.world.random);
             t.id = self.take_entity_id();
             // One that came through a portal keeps its cooldown.
             let id = t.id;

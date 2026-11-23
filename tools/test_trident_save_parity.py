@@ -93,8 +93,25 @@ def groups():
             command(f'/kill {entity}', False),
             command(f'/forceload remove {x} 4096', False),
         ])
+    # `ThrownTrident.getLoyaltyFromItem`: the item's trident_return_acceleration,
+    # clamped to 0..127; the first returning tick shows it in Motion and Pos.
+    loyalty = [
+        command('/fill 32 229 32 35 229 35 stone', False),
+        command('/gamemode survival', False),
+        command('/tp @s 33.5 230 33.5 0 0', False),
+    ]
+    for level in [3, 127, 128, 200, 255]:
+        loyalty.extend([
+            command('/kill @e[type=trident]', False),
+            command('/summon trident 46.5 236 46.5 {NoGravity:1b,DealtDamage:1b,item:{id:"minecraft:trident",'
+                    f'count:1,components:{{"minecraft:enchantments":{{"minecraft:loyalty":{level}}}}}}}}}', False),
+            command(f'/data modify entity {trident} Owner set from entity @s UUID', False),
+            {'op': 'tick', 'n': 1},
+            *fields(trident, ['Motion', 'Pos']),
+        ])
+    loyalty.append(command('/kill @e[type=trident]', False))
     return [('trident saved flags', saves), ('trident flight and owner', lifecycle),
-            ('trident pickup modes', pickup),
+            ('trident pickup modes', pickup), ('trident loyalty from its item', loyalty),
             ('projectile chunk reload', reloads)]
 
 
