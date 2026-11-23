@@ -37,6 +37,9 @@ pub fn parse_uuid(text: &str) -> Option<u128> {
 }
 
 /// The 8 by 8 face, row by row as RGBA, with the hat layer over it: what the tab list draws.
+/// The skin is read as the game reads it (`SkinTextureDownloader.processLegacySkin`,
+/// `process_legacy_skin` in horizon-client-render): the head has no transparency, and an old
+/// 64x32 skin whose hat layer is fully opaque has no hat.
 pub fn face(skin_png: &[u8]) -> Option<Vec<[u8; 4]>> {
     let skin = image::load_from_memory_with_format(skin_png, image::ImageFormat::Png)
         .ok()?
@@ -44,12 +47,16 @@ pub fn face(skin_png: &[u8]) -> Option<Vec<[u8; 4]>> {
     if skin.width() < 64 || skin.height() < 32 {
         return None;
     }
+    // `doNotchTransparencyHack`, for 64x32 skins only.
+    let no_hat =
+        skin.height() == 32 && (32..64).all(|x| (0..32).all(|y| skin.get_pixel(x, y).0[3] >= 128));
     let mut out = Vec::with_capacity(64);
     for y in 0..8 {
         for x in 0..8 {
-            let base = skin.get_pixel(8 + x, 8 + y).0;
+            let mut base = skin.get_pixel(8 + x, 8 + y).0;
+            base[3] = 255;
             let hat = skin.get_pixel(40 + x, 8 + y).0;
-            out.push(if hat[3] > 0 { hat } else { base });
+            out.push(if hat[3] > 0 && !no_hat { hat } else { base });
         }
     }
     Some(out)
@@ -242,6 +249,38 @@ mod tests {
         assert_eq!(face.len(), 64);
         assert_eq!(face[0], [1, 2, 3, 255]);
         assert_eq!(face[1], [7, 8, 9, 255]);
+    }
+
+    /// The face as the game reads the skin (`SkinTextureDownloader.processLegacySkin`): the head
+    /// has no transparency, and an old 64x32 skin whose hat layer is fully opaque wears no hat.
+    #[test]
+    fn the_face_is_read_as_the_game_reads_the_skin() {
+        let png = |skin: &image::RgbaImage| {
+            let mut png = Vec::new();
+            skin.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            png
+        };
+        let opaque_hat = |height: u32| {
+            let mut skin = image::RgbaImage::new(64, height);
+            for x in 32..64 {
+                for y in 0..32 {
+                    skin.put_pixel(x, y, image::Rgba([9, 9, 9, 255]));
+                }
+            }
+            skin.put_pixel(8, 8, image::Rgba([1, 2, 3, 255]));
+            skin.put_pixel(9, 8, image::Rgba([4, 5, 6, 0]));
+            skin
+        };
+        let mut old = opaque_hat(32);
+        let read = face(&png(&old)).unwrap();
+        assert_eq!(read[0], [1, 2, 3, 255]);
+        assert_eq!(read[1], [4, 5, 6, 255]);
+        // One see-through pixel in the hat layer keeps the hat.
+        old.put_pixel(63, 31, image::Rgba([0, 0, 0, 0]));
+        assert_eq!(face(&png(&old)).unwrap()[0], [9, 9, 9, 255]);
+        // A 64x64 skin keeps an opaque hat.
+        assert_eq!(face(&png(&opaque_hat(64))).unwrap()[0], [9, 9, 9, 255]);
     }
 
     #[test]
