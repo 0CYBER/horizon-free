@@ -534,22 +534,29 @@ impl Chat {
         };
         let width = self.max_width() - icon;
         let content = self.message_text(message);
+        // Only the last 100 wrapped lines can survive the trim, so keep just those
+        // instead of shifting the whole list once per line.
+        let before = self.lines.len();
+        let mut kept = std::collections::VecDeque::with_capacity(101);
         for line in font.wrap_components(&content, width) {
             count += 1;
             if focused && self.scroll > 0 {
                 self.new_since_scroll = true;
-                self.scroll_by(1, focused);
+                // The list is `before + count - 1` long when this line is added.
+                self.scroll_by_len(1, before + count - 1, focused);
             }
-            self.lines.insert(
-                0,
-                Line {
-                    added: message.added,
-                    content: line,
-                    tag: message.tag.clone(),
-                    message: whole.clone(),
-                },
-            );
+            if kept.len() == 100 {
+                kept.pop_front();
+            }
+            kept.push_back(Line {
+                added: message.added,
+                content: line,
+                tag: message.tag.clone(),
+                message: whole.clone(),
+            });
         }
+        // Newest first, as if each had been inserted at the front.
+        self.lines.splice(0..0, kept.into_iter().rev());
         self.lines.truncate(100);
         count
     }
@@ -770,10 +777,11 @@ impl Chat {
         self.new_since_scroll = false;
     }
     pub fn scroll_by(&mut self, dir: i32, focused: bool) {
-        let max = self
-            .lines
-            .len()
-            .saturating_sub(self.lines_per_page(focused)) as i32;
+        self.scroll_by_len(dir, self.lines.len(), focused);
+    }
+    /// [`Chat::scroll_by`] for a list of `len` lines.
+    fn scroll_by_len(&mut self, dir: i32, len: usize, focused: bool) {
+        let max = len.saturating_sub(self.lines_per_page(focused)) as i32;
         let pos = (self.scroll as i32 + dir).min(max);
         if pos <= 0 {
             self.scroll = 0;

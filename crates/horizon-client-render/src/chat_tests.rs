@@ -1247,3 +1247,44 @@ fn the_suggestion_list_asks_for_the_pointing_hand() {
     screen.draw(&m, (rect[0] - 1, rect[1] + 2), 0, 0);
     assert_eq!(crate::widgets::take_cursor(), crate::widgets::Cursor::Arrow);
 }
+
+/// The lines a message adds, as the loop did before only the survivors were kept:
+/// every wrapped line inserted at the front, the trim to 100 after the last.
+fn reference_lines(chat: &Chat, font: &Font, content: &Text, previous: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> = previous.to_vec();
+    let shown = chat.displayed(content);
+    for line in font.wrap_components(&shown, chat.max_width()) {
+        lines.insert(0, line.plain());
+    }
+    lines.truncate(100);
+    lines
+}
+
+fn stored(chat: &Chat) -> Vec<String> {
+    chat.lines.iter().map(|l| l.content.plain()).collect()
+}
+
+#[test]
+fn a_long_message_keeps_the_newest_hundred_lines_newest_first() {
+    let font = font();
+    let mut chat = Chat::default();
+    let mut expected: Vec<String> = Vec::new();
+    // Short messages, one of a few lines, then ones past the 100-line cap.
+    let long = "abc ".repeat(40_000);
+    let few = "abc ".repeat(chat.max_width() as usize / 2);
+    let mut over_100 = false;
+    let mut few_lines = 0;
+    for text in ["first", &few, &long, "last", &long] {
+        let content = Text::literal(text);
+        expected = reference_lines(&chat, &font, &content, &expected);
+        chat.add_message(&font, content, None, ChatSource::Server, 0, false);
+        assert_eq!(stored(&chat), expected);
+        assert!(chat.lines.len() <= 100);
+        over_100 |= chat.messages[0].wrapped > 100;
+        if text == few {
+            few_lines = chat.messages[0].wrapped;
+        }
+    }
+    assert!(over_100, "one message must wrap into more than 100 lines");
+    assert!((2..100).contains(&few_lines), "got {few_lines}");
+}
