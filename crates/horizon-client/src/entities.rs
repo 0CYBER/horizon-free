@@ -793,7 +793,7 @@ impl ItemEntity {
 /// `LavaCauldronBlock.getEntityInsideCollisionShape`: the cauldron's solid
 /// shape plus its contents (12 pixels wide, from 4 through 15 pixels high).
 /// In particular, the rim and feet count too, but air above the contents does not.
-fn lava_cauldron_contacts(
+pub(crate) fn lava_cauldron_contacts(
     world: &World,
     registry: &horizon_world::registry::BlockRegistry,
     bounds: Aabb,

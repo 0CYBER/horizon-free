@@ -2164,6 +2164,8 @@ fn base_tick(
             touches_lava(m, w),
         )
     };
+    // LavaCauldronBlock.entityInside: LAVA_IGNITE and lavaHurt, as in lava.
+    let lava = lava || crate::entities::lava_cauldron_contacts(w.world, w.registry, m.bounds()) > 0;
     block_contact_damage(m, w, level, fire, lava);
     // Enderman.hurtServer and Shulker.hurtServer teleport inside the hurt
     // (fire, lava, a block, an effect).
@@ -6508,6 +6510,25 @@ mod burn_and_rose_tests {
                 assert_eq!(m.fire_ticks, 300);
             },
         );
+        assert!(ran, "the vanilla test resources must be available");
+    }
+
+    /// `LavaCauldronBlock.entityInside` ignites and hurts a mob standing in a
+    /// lava cauldron as lava does (#13100: a chicken farm's cauldron).
+    #[test]
+    #[ignore = "daily"]
+    fn a_lava_cauldron_burns_the_mob_inside_it() {
+        let build = build_with("minecraft:lava_cauldron");
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
+        let ran = crate::mobs::world::with_built_test_world(&[], build, |w, types| {
+            let mut m = golem(types);
+            let mut events = Vec::new();
+            let start = m.health;
+            base_tick(&mut m, w, level, &mut events);
+            assert_eq!(m.health, start - 4.0, "one lava hit");
+            assert_eq!(m.fire_ticks, 300, "ignited to the full time");
+        });
         assert!(ran, "the vanilla test resources must be available");
     }
 }

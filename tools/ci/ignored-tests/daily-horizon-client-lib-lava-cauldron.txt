@@ -1,0 +1,1 @@
+horizon-client-lib mobs::ai::burn_and_rose_tests::a_lava_cauldron_burns_the_mob_inside_it lib daily resources
