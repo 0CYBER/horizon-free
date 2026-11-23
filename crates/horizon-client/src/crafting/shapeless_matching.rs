@@ -39,18 +39,21 @@ pub(super) fn matches_all(
         return false;
     }
     let simple = ingredients.iter().all(Ingredient::is_simple);
-    let mut owner = vec![None; stacks.len()];
+    let n = stacks.len();
+    let mut inline_owner = [None; 9];
+    let mut inline_seen = [false; 9];
+    let mut heap_owner;
+    let mut heap_seen;
+    let (owner, seen): (&mut [Option<usize>], &mut [bool]) = if n <= 9 {
+        (&mut inline_owner[..n], &mut inline_seen[..n])
+    } else {
+        heap_owner = vec![None; n];
+        heap_seen = vec![false; n];
+        (&mut heap_owner, &mut heap_seen)
+    };
     (0..ingredients.len()).all(|i| {
-        let mut seen = vec![false; stacks.len()];
-        augment(
-            context,
-            i,
-            ingredients,
-            stacks,
-            &mut owner,
-            &mut seen,
-            simple,
-        )
+        seen.fill(false);
+        augment(context, i, ingredients, stacks, owner, seen, simple)
     })
 }
 

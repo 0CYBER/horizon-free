@@ -567,44 +567,118 @@ pub struct Input<'a> {
     /// Position of the box in the grid.
     pub left: usize,
     pub top: usize,
-    cells: Vec<Option<&'a ItemStack>>,
+    stride: usize,
+    count: usize,
+    grid: &'a [Option<ItemStack>],
 }
 impl<'a> Input<'a> {
     /// `CraftingInput.ofPositioned`; None for an empty grid.
     pub fn of(grid: &'a [Option<ItemStack>], size: usize) -> Option<Self> {
-        let occupied: Vec<(usize, usize)> = (0..size * size)
-            .filter(|&i| grid.get(i).is_some_and(|c| c.is_some()))
-            .map(|i| (i % size, i / size))
-            .collect();
-        let (x0, x1) = (
-            occupied.iter().map(|p| p.0).min()?,
-            occupied.iter().map(|p| p.0).max()?,
-        );
-        let (y0, y1) = (
-            occupied.iter().map(|p| p.1).min()?,
-            occupied.iter().map(|p| p.1).max()?,
-        );
-        let (width, height) = (x1 - x0 + 1, y1 - y0 + 1);
-        let cells = (0..width * height)
-            .map(|i| grid[(y0 + i / width) * size + x0 + i % width].as_ref())
-            .collect();
+        Self::of_rect(grid, size, size, size)
+    }
+    /// `CraftingInput.ofPositioned` over a `width`x`height` region with row
+    /// stride `stride`; None for an empty grid.
+    pub fn of_rect(
+        grid: &'a [Option<ItemStack>],
+        stride: usize,
+        width: usize,
+        height: usize,
+    ) -> Option<Self> {
+        if stride == 0 || width == 0 || height == 0 || width > stride {
+            return None;
+        }
+        let mut x0 = usize::MAX;
+        let mut x1 = 0;
+        let mut y0 = usize::MAX;
+        let mut y1 = 0;
+        let mut count = 0;
+        for y in 0..height {
+            let Some(row) = y.checked_mul(stride).filter(|&r| r < grid.len()) else {
+                break;
+            };
+            let row_end = row.saturating_add(width).min(grid.len());
+            for (x, cell) in grid[row..row_end].iter().enumerate() {
+                if cell.is_some() {
+                    x0 = x0.min(x);
+                    x1 = x1.max(x);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y);
+                    count += 1;
+                }
+            }
+        }
+        if count == 0 {
+            return None;
+        }
         Some(Self {
-            width,
-            height,
+            width: x1 - x0 + 1,
+            height: y1 - y0 + 1,
             left: x0,
             top: y0,
-            cells,
+            stride,
+            count,
+            grid,
         })
     }
     pub fn get(&self, x: usize, y: usize) -> Option<&'a ItemStack> {
-        self.cells.get(y * self.width + x).copied().flatten()
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        self.grid
+            .get((self.top + y) * self.stride + self.left + x)
+            .and_then(Option::as_ref)
+    }
+    /// The non-empty stacks in slot order without allocating.
+    pub fn iter_stacks(&self) -> impl Iterator<Item = &'a ItemStack> + '_ {
+        (0..self.height).flat_map(move |y| {
+            let row = (self.top + y) * self.stride + self.left;
+            let end = row.saturating_add(self.width).min(self.grid.len());
+            self.grid
+                .get(row..end)
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(Option::as_ref)
+        })
     }
     /// The non-empty stacks in slot order.
     pub fn stacks(&self) -> Vec<&'a ItemStack> {
-        self.cells.iter().flatten().copied().collect()
+        let mut out = Vec::with_capacity(self.count);
+        out.extend(self.iter_stacks());
+        out
     }
     pub fn count(&self) -> usize {
-        self.cells.iter().flatten().count()
+        self.count
+    }
+}
+/// Non-empty stack references collected once per recipe lookup so shapeless
+/// and special recipes share a slice without allocating per recipe.
+enum InputStacks<'a> {
+    Inline { buf: [&'a ItemStack; 9], len: usize },
+    Heap(Vec<&'a ItemStack>),
+}
+impl<'a> InputStacks<'a> {
+    fn from_input(input: &Input<'a>) -> Self {
+        if input.count() <= 9 {
+            let mut iter = input.iter_stacks();
+            if let Some(first) = iter.next() {
+                let mut buf = [first; 9];
+                let mut len = 1;
+                for stack in iter {
+                    buf[len] = stack;
+                    len += 1;
+                }
+                debug_assert_eq!(len, input.count());
+                return Self::Inline { buf, len };
+            }
+            return Self::Heap(Vec::new());
+        }
+        Self::Heap(input.stacks())
+    }
+    fn as_slice(&self) -> &[&'a ItemStack] {
+        match self {
+            Self::Inline { buf, len } => &buf[..*len],
+            Self::Heap(vec) => vec.as_slice(),
+        }
     }
 }
 /// What recipes need to know about an item.
@@ -638,9 +712,8 @@ impl Context<'_> {
 }
 impl Special {
     /// `Recipe.matches`.
-    fn matches(&self, ctx: &Context, input: &Input) -> bool {
+    fn matches(&self, ctx: &Context, input: &Input, stacks: &[&ItemStack]) -> bool {
         use crate::banner;
-        let stacks = input.stacks();
         match self {
             Self::BannerDuplicate { banner: ing, .. } => {
                 if stacks.len() != 2 {
@@ -648,7 +721,7 @@ impl Special {
                 }
                 let mut color = None;
                 let (mut target, mut source) = (false, false);
-                for s in &stacks {
+                for s in stacks {
                     let Some(this) =
                         banner::banner_color(&s.item).filter(|_| ing.test_in(ctx.context, s))
                     else {
@@ -680,7 +753,7 @@ impl Special {
                     return false;
                 }
                 let (mut patterned, mut clear) = (false, false);
-                for s in &stacks {
+                for s in stacks {
                     if ing.test_in(ctx.context, s) && banner::banner_color(&s.item).is_some() {
                         if patterned {
                             return false;
@@ -709,7 +782,7 @@ impl Special {
                 }
                 let mut found: Option<&ItemStack> = None;
                 let mut materials = 0;
-                for s in &stacks {
+                for s in stacks {
                     if base.test_in(ctx.context, s) {
                         if found.is_some() {
                             return false;
@@ -747,7 +820,7 @@ impl Special {
                     return false;
                 }
                 let (mut has_target, mut has_dyes) = (false, false);
-                for s in &stacks {
+                for s in stacks {
                     if target.test_in(ctx.context, s) {
                         if has_target {
                             return false;
@@ -786,7 +859,7 @@ impl Special {
                     return false;
                 }
                 let (mut has_material, mut has_source) = (false, false);
-                for s in &stacks {
+                for s in stacks {
                     if source.test_in(ctx.context, s) {
                         let Some(book) = s.data().and_then(|d| d.written.as_ref()) else {
                             return false;
@@ -813,7 +886,7 @@ impl Special {
                 }
                 let mut has_shell = false;
                 let mut fuels = 0;
-                for s in &stacks {
+                for s in stacks {
                     if shell.test_in(ctx.context, s) {
                         if has_shell {
                             return false;
@@ -843,7 +916,7 @@ impl Special {
                 }
                 let (mut has_fuel, mut has_dye, mut has_shape) = (false, false, false);
                 let (mut has_trail, mut has_twinkle) = (false, false);
-                for s in &stacks {
+                for s in stacks {
                     if twinkle.test_in(ctx.context, s) {
                         if has_twinkle {
                             return false;
@@ -875,7 +948,7 @@ impl Special {
                     return false;
                 }
                 let (mut has_dye, mut has_target) = (false, false);
-                for s in &stacks {
+                for s in stacks {
                     if dye.test_in(ctx.context, s) && ctx.dye(s).is_some() {
                         has_dye = true;
                     } else {
@@ -929,13 +1002,12 @@ impl Special {
                         .get(1, 2)
                         .is_some_and(|s| front.test_in(ctx.context, s))
             }
-            Self::RepairItem => repair_item::pair(ctx, &stacks).is_some(),
+            Self::RepairItem => repair_item::pair(ctx, stacks).is_some(),
         }
     }
     /// `Recipe.assemble`; None is the empty stack.
-    fn assemble(&self, ctx: &Context, input: &Input) -> Option<ItemStack> {
+    fn assemble(&self, ctx: &Context, input: &Input, stacks: &[&ItemStack]) -> Option<ItemStack> {
         use crate::banner;
-        let stacks = input.stacks();
         let made = match self {
             Self::BannerDuplicate { result, .. } => {
                 let source = stacks
@@ -950,7 +1022,7 @@ impl Special {
                 result,
             } => {
                 let (mut banner_stack, mut shield) = (None, None);
-                for s in &stacks {
+                for s in stacks {
                     if ing.test_in(ctx.context, s) && banner::banner_color(&s.item).is_some() {
                         banner_stack = Some(*s);
                     } else if target.test_in(ctx.context, s) {
@@ -977,7 +1049,7 @@ impl Special {
                 if *add_count {
                     let mut materials = 0;
                     let mut found = None;
-                    for s in &stacks {
+                    for s in stacks {
                         if base.test_in(ctx.context, s) {
                             found = Some(*s);
                         } else if material.test_in(ctx.context, s) {
@@ -997,7 +1069,7 @@ impl Special {
             } => {
                 let mut dyes = Vec::new();
                 let mut target_stack: Option<&ItemStack> = None;
-                for s in &stacks {
+                for s in stacks {
                     if target.test_in(ctx.context, s) {
                         if target_stack.is_some() {
                             return None;
@@ -1034,7 +1106,7 @@ impl Special {
             } => {
                 let mut copies = 0u32;
                 let mut book: Option<&ItemStack> = None;
-                for s in &stacks {
+                for s in stacks {
                     if source.test_in(ctx.context, s)
                         && s.data().is_some_and(|d| d.written.is_some())
                     {
@@ -1062,7 +1134,7 @@ impl Special {
             } => {
                 let mut explosions = Vec::new();
                 let mut fuels = 0u8;
-                for s in &stacks {
+                for s in stacks {
                     if fuel.test_in(ctx.context, s) {
                         fuels += 1;
                     } else if star.test_in(ctx.context, s)
@@ -1089,7 +1161,7 @@ impl Special {
                 let mut shape = FireworkShape::SmallBall;
                 let (mut has_twinkle, mut has_trail) = (false, false);
                 let mut colors = Vec::new();
-                for s in &stacks {
+                for s in stacks {
                     if let Some((found, _)) =
                         shapes.iter().find(|(_, ing)| ing.test_in(ctx.context, s))
                     {
@@ -1119,7 +1191,7 @@ impl Special {
             } => {
                 let mut colors = Vec::new();
                 let mut target_stack = None;
-                for s in &stacks {
+                for s in stacks {
                     if dye.test_in(ctx.context, s) {
                         colors.push(DYE_FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)].1);
                     } else if target.test_in(ctx.context, s) {
@@ -1160,7 +1232,7 @@ impl Special {
                 }
                 out
             }
-            Self::RepairItem => repair_item::assemble(ctx, &stacks)?,
+            Self::RepairItem => repair_item::assemble(ctx, stacks)?,
         };
         let mut made = made;
         // The result is built with `set`, which keeps no value equal to the prototype.
@@ -1994,13 +2066,14 @@ impl Recipes {
     fn assemble_if_matches(
         ctx: &Context,
         input: &Input,
+        stacks: &[&ItemStack],
         recipe: &Recipe,
     ) -> Option<Option<ItemStack>> {
         match recipe {
             Recipe::Mod(_) => None,
             Recipe::Special(special) => special
-                .matches(ctx, input)
-                .then(|| special.assemble(ctx, input)),
+                .matches(ctx, input, stacks)
+                .then(|| special.assemble(ctx, input, stacks)),
             Recipe::Shaped {
                 width,
                 height,
@@ -2030,8 +2103,7 @@ impl Recipes {
             Recipe::Shapeless {
                 ingredients,
                 result,
-            } => matches_all(ctx.context, ingredients, &input.stacks())
-                .then(|| Some(result.create())),
+            } => matches_all(ctx.context, ingredients, stacks).then(|| Some(result.create())),
         }
     }
     /// `recipe.matches(craftSlots.asCraftInput())` for one recipe by id
@@ -2053,12 +2125,13 @@ impl Recipes {
         let Some(input) = Input::of(grid, size) else {
             return false;
         };
+        let stacks = InputStacks::from_input(&input);
         let ctx = Context {
             recipes: self,
             context,
             map_scale: &|_| None,
         };
-        Self::assemble_if_matches(&ctx, &input, recipe).is_some()
+        Self::assemble_if_matches(&ctx, &input, stacks.as_slice(), recipe).is_some()
     }
     /// `Recipe.placementInfo` of a crafting or cooking recipe by id; None for
     /// an unknown id, an empty placement when it is impossible to place.
@@ -3251,9 +3324,10 @@ mod tests {
         let mut grid: Vec<Option<ItemStack>> = cells.iter().cloned().map(Some).collect();
         grid.resize(9, None);
         let input = Input::of(&grid, 3)?;
+        let stacks = InputStacks::from_input(&input);
         special
-            .matches(&ctx, &input)
-            .then(|| special.assemble(&ctx, &input))
+            .matches(&ctx, &input, stacks.as_slice())
+            .then(|| special.assemble(&ctx, &input, stacks.as_slice()))
             .flatten()
     }
     #[test]
@@ -3327,6 +3401,53 @@ mod tests {
     fn dyes_blend_like_dyed_item_color() {
         // One red dye on an undyed item gives the dye's own colour.
         assert_eq!(apply_dyes(None, &[14]), 0xB02E26);
+    }
+    #[test]
+    fn borrowed_input_trims_bounds_and_supports_rectangular_and_large_grids() {
+        let s = |id: &str| ItemStack::new(id, 1);
+        // 3x3 grid with items at (2, 1) and (1, 2): bounding box is left=1, top=1, 2x2.
+        let mut grid = vec![None; 9];
+        grid[5] = Some(s("a"));
+        grid[7] = Some(s("b"));
+        let input = Input::of(&grid, 3).unwrap();
+        assert_eq!(
+            (input.left, input.top, input.width, input.height),
+            (1, 1, 2, 2)
+        );
+        assert_eq!(input.count(), 2);
+        assert!(input.get(0, 0).is_none());
+        assert_eq!(input.get(1, 0).map(|x| &*x.item), Some("a"));
+        assert_eq!(input.get(0, 1).map(|x| &*x.item), Some("b"));
+        assert!(input.get(1, 1).is_none());
+        // Out-of-bounds coordinates return None rather than wrapping into another row.
+        assert!(input.get(2, 0).is_none());
+        assert!(input.get(0, 2).is_none());
+        let order: Vec<&str> = input.iter_stacks().map(|x| &*x.item).collect();
+        assert_eq!(order, ["a", "b"]);
+        assert_eq!(
+            input.stacks().iter().map(|x| &*x.item).collect::<Vec<_>>(),
+            order
+        );
+
+        // Rectangular 2x3 view inside a stride-3 grid ignores items outside the 2-wide region.
+        let rect = Input::of_rect(&grid, 3, 2, 3).unwrap();
+        assert_eq!((rect.left, rect.top, rect.width, rect.height), (1, 2, 1, 1));
+        assert_eq!(rect.count(), 1);
+        assert_eq!(rect.get(0, 0).map(|x| &*x.item), Some("b"));
+
+        // Large 4x4 grid (>9 occupied slots) uses the heap fallback cleanly.
+        let large: Vec<Option<ItemStack>> = (0..16)
+            .map(|i| (i < 12).then(|| s(&format!("item_{i}"))))
+            .collect();
+        let big = Input::of(&large, 4).unwrap();
+        assert_eq!(big.count(), 12);
+        let big_stacks = InputStacks::from_input(&big);
+        assert_eq!(big_stacks.as_slice().len(), 12);
+        let ings: Vec<Ingredient> = (0..12)
+            .rev()
+            .map(|i| ingredient(&[&format!("item_{i}")]))
+            .collect();
+        assert!(matches_all(lc(), &ings, big_stacks.as_slice()));
     }
 }
 

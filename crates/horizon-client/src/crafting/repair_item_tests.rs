@@ -35,10 +35,11 @@ fn run(item: &str, maxes: [Option<i32>; 2], damages: [u32; 2], remove: bool) -> 
         );
     }
     let input = Input::of(&cells, 2).unwrap();
-    if !Special::RepairItem.matches(&ctx, &input) {
+    let stacks = InputStacks::from_input(&input);
+    if !Special::RepairItem.matches(&ctx, &input, stacks.as_slice()) {
         return None;
     }
-    Special::RepairItem.assemble(&ctx, &input)
+    Special::RepairItem.assemble(&ctx, &input, stacks.as_slice())
 }
 
 #[test]

@@ -25,32 +25,34 @@ impl Recipes {
         let Some(input) = Input::of(grid, size) else {
             return out;
         };
-        for (i, cell) in input.cells.iter().enumerate() {
-            let Some(s) = cell else { continue };
-            let at = (input.top + i / input.width) * size + input.left + i % input.width;
-            let rest = remainder(s);
-            if rest.is_some() {
-                out[at] = rest;
-                continue;
-            }
-            let copy = ItemStack {
-                count: 1,
-                ..(*s).clone()
-            };
-            match kind {
-                Some(Recipe::Special(Special::BannerDuplicate { .. }))
-                    if !crate::banner::layers(s).is_empty() =>
-                {
-                    out[at] = Some(copy);
+        'cells: for y in 0..input.height {
+            for x in 0..input.width {
+                let Some(s) = input.get(x, y) else { continue };
+                let at = (input.top + y) * size + input.left + x;
+                let rest = remainder(s);
+                if rest.is_some() {
+                    out[at] = rest;
+                    continue;
                 }
-                // BookCloningRecipe stops at the first copied book.
-                Some(Recipe::Special(Special::BookCloning { .. }))
-                    if s.data().is_some_and(|d| d.written.is_some()) =>
-                {
-                    out[at] = Some(copy);
-                    break;
+                let copy = ItemStack {
+                    count: 1,
+                    ..s.clone()
+                };
+                match kind {
+                    Some(Recipe::Special(Special::BannerDuplicate { .. }))
+                        if !crate::banner::layers(s).is_empty() =>
+                    {
+                        out[at] = Some(copy);
+                    }
+                    // BookCloningRecipe stops at the first copied book.
+                    Some(Recipe::Special(Special::BookCloning { .. }))
+                        if s.data().is_some_and(|d| d.written.is_some()) =>
+                    {
+                        out[at] = Some(copy);
+                        break 'cells;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         out
