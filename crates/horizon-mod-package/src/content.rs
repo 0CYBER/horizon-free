@@ -1430,9 +1430,12 @@ impl Content {
                 items: file.items,
             });
         }
+        let mut fluid_names = BTreeSet::new();
+        let mut block_ids: BTreeSet<String> = self.blocks.iter().map(|b| b.id.clone()).collect();
+        let mut item_ids: BTreeSet<String> = self.items.iter().map(|i| i.id.clone()).collect();
         for (fluid, name) in fluids {
             let file: FluidFile =
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
             if file.sprite.as_deref().is_some_and(|s| !namespaced_id(s)) {
                 return Err(format!(
                     "{name}: sprite is an atlas sprite id (namespace:path)"
@@ -1447,26 +1450,27 @@ impl Content {
                 tint: file.tint,
                 world: file.world,
             };
-            if self.fluids.iter().any(|known| {
-                known.id == look.id
-                    || (known.world.is_some() && known.flowing_id() == look.id)
-                    || (look.world.is_some()
-                        && (look.flowing_id() == known.id
-                            || (known.world.is_some() && look.flowing_id() == known.flowing_id())))
-            }) {
+            // Every registry name a fluid takes: its id, and its flowing form if it flows.
+            if fluid_names.contains(&look.id)
+                || (look.world.is_some() && fluid_names.contains(&look.flowing_id()))
+            {
                 return Err(format!("{name}: fluid name declared twice"));
             }
             if let Some(block) = look.world_block() {
-                if self.blocks.iter().any(|known| known.id == block.id) {
+                if !block_ids.insert(block.id.clone()) {
                     return Err(format!("{name}: block {} is declared twice", block.id));
                 }
                 self.blocks.push(block);
             }
             if let Some(item) = look.world_bucket() {
-                if self.items.iter().any(|known| known.id == item.id) {
+                if !item_ids.insert(item.id.clone()) {
                     return Err(format!("{name}: item {} is declared twice", item.id));
                 }
                 self.items.push(item);
+            }
+            fluid_names.insert(look.id.clone());
+            if look.world.is_some() {
+                fluid_names.insert(look.flowing_id());
             }
             self.fluids.push(look);
         }
@@ -3478,6 +3482,40 @@ capabilities = ["registries"]
         ];
         assert!(
             hmod("clashing-world-fluid", MANIFEST_TEXT, files)
+                .unwrap_err()
+                .contains("declared twice")
+        );
+    }
+
+    #[test]
+    fn many_fluids_load_and_a_flowing_name_taken_by_an_earlier_fluid_is_refused() {
+        let names: Vec<String> = (0..300)
+            .map(|i| format!("data/ruby/horizon/fluid/f{i}.json"))
+            .collect();
+        let files: Vec<(&str, &[u8])> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                (
+                    n.as_str(),
+                    if i % 2 == 0 {
+                        &b"{}"[..]
+                    } else {
+                        br#"{"world":{}}"#
+                    },
+                )
+            })
+            .collect();
+        let content = hmod("many-fluids", MANIFEST_TEXT, &files).unwrap();
+        assert_eq!(content.fluids.len(), 300);
+        assert_eq!(content.blocks.len(), 150);
+        // `a` flows into `flowing_a`, which a later file may not declare.
+        let files: &[(&str, &[u8])] = &[
+            ("data/ruby/horizon/fluid/a.json", br#"{"world":{}}"#),
+            ("data/ruby/horizon/fluid/flowing_a.json", b"{}"),
+        ];
+        assert!(
+            hmod("flowing-taken", MANIFEST_TEXT, files)
                 .unwrap_err()
                 .contains("declared twice")
         );
