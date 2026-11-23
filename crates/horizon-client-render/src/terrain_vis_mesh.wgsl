@@ -38,7 +38,7 @@ fn ms_vis_opaque(
     }
     if lane < vert_count {
         let s = section_corner(base_vertex + lane);
-        let origin = slot_origins[block_slots[s.slot >> 8u]];
+        let origin = slot_origins[block_slots[s.slot >> 6u]];
         let page = (mesh_cull.counts.z >> 8u) & 0x3fu;
         let position = bitcast<vec3<f32>>(s.c.p);
         vis_opaque_out.vertices[lane] = VisMeshIdOut(
@@ -94,7 +94,7 @@ fn ms_vis_cutout(
     }
     if lane < vert_count {
         let s = section_corner(base_vertex + lane);
-        let origin = slot_origins[block_slots[s.slot >> 8u]];
+        let origin = slot_origins[block_slots[s.slot >> 6u]];
         let page = (mesh_cull.counts.z >> 8u) & 0x3fu;
         let layer = corner_layer(s.c);
         let position = bitcast<vec3<f32>>(s.c.p);

@@ -19,6 +19,15 @@
 //! start, and the run is drawn indirectly with the count the copy reached.
 use super::SolidPipeline;
 use super::arena::GRAIN;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic process-wide counter so block table generations never collide across `clear`,
+/// `trim`, or `take_tables`.
+static NEXT_BLOCK_TABLE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_block_table_generation() -> u64 {
+    NEXT_BLOCK_TABLE_GENERATION.fetch_add(1, Ordering::Relaxed)
+}
 
 #[path = "binding_cache.rs"]
 mod binding_cache;
@@ -69,6 +78,8 @@ pub const ARENA_BINDING: u32 = 19;
 struct PageTable {
     /// Section id of every block of the page.
     blocks: wgpu::Buffer,
+    /// Monotonic generation bumped on every write to `blocks` (`Flat::place`).
+    generation: u64,
     group: Option<wgpu::BindGroup>,
     /// The section arena's page `group` binds at `ARENA_BINDING` (`bind_pages`).
     arena: Option<wgpu::Buffer>,
@@ -682,9 +693,11 @@ impl Flat {
                 blocks * 4,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
+            generation: 0,
             group: None,
             arena: None,
         });
+        table.generation = next_block_table_generation();
         let first = start / GRAIN;
         let ids = vec![id; vertices.div_ceil(GRAIN) as usize];
         uploads.buffer(
@@ -1207,6 +1220,10 @@ impl Flat {
     /// the visibility buffer copies into its table of every page.
     pub(super) fn block_table(&self, page: u32) -> Option<&wgpu::Buffer> {
         Some(&self.pages.get(page as usize)?.as_ref()?.blocks)
+    }
+    /// Monotonic generation counter for `page`'s block table, bumped on every `Flat::place`.
+    pub(super) fn block_table_generation(&self, page: u32) -> Option<u64> {
+        Some(self.pages.get(page as usize)?.as_ref()?.generation)
     }
     pub(super) fn blocks_per_page(&self) -> u64 {
         self.blocks_per_page
@@ -1772,5 +1789,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn block_table_generations_are_nonzero_and_unique_across_threads() {
+        let mut all: Vec<u64> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        (0..256)
+                            .map(|_| next_block_table_generation())
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().unwrap())
+                .collect()
+        });
+        assert!(all.iter().all(|&g| g > 0));
+        all.sort_unstable();
+        let before = all.len();
+        all.dedup();
+        assert_eq!(all.len(), before);
     }
 }

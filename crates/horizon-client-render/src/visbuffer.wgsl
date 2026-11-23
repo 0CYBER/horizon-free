@@ -272,14 +272,42 @@ fn vis_rows(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> mat3x3<f32> {
     return mat3x3(cross(b, c), cross(c, a), cross(a, b));
 }
 
-// A corner's `terrain_vertex` from its six words: position, UV, layer and light, colour (the
-// vertex attributes `TERRAIN_ATTRIBUTES` in gfx.rs give: Float32x3, Uint16x2, Uint16, Uint8x2
-// with sky in the low byte, Unorm8x4).
-fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> TerrainOut {
-    let uv = vec2(rest.x & 0xffffu, rest.x >> 16u);
+struct VisCorner {
+    uv: vec2<f32>,
+    color: vec4<f32>,
+    spherical: f32,
+    cylindrical: f32,
+}
+
+fn vis_emissive_layer(sprite_layer: u32) -> u32 {
+    for (var i = 0u; i < min(globals.emissive_count.x, 128u); i++) {
+        let pair = globals.emissive_layers[i];
+        if pair.x == sprite_layer {
+            return pair.y;
+        }
+        if pair.x > sprite_layer {
+            break;
+        }
+    }
+    return 0xffffffffu;
+}
+
+// Per-corner shading terms for `fs_vis_resolve` (position already shifted by `origin.xyz`):
+// matches `terrain_vertex` while skipping the redundant clip transform, `fade_depth`, emissive
+// layer lookup, and pass-1-only outputs.
+fn vis_corner(pos: vec3<f32>, rest: vec3<u32>, uv_step: f32) -> VisCorner {
+    let uv = vec2<f32>(vec2(rest.x & 0xffffu, rest.x >> 16u)) * uv_step;
     let light = vec2((rest.y >> 16u) & 0xffu, rest.y >> 24u);
-    return terrain_vertex(bitcast<vec3<f32>>(position), terrain_uv(uv, origin.w),
-        rest.y & 0xffffu, unpack4x8unorm(rest.z), light, origin.xyz, origin.w);
+    let raw_color = unpack4x8unorm(rest.z);
+    let block = max(f32(light.y), dynamic_block_light(pos));
+    var color = vec4(raw_color.rgb, 1.0) * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
+    if globals.colored_count.x > 0u {
+        color = vec4(min(color.rgb + raw_color.rgb * native_colored_light(pos), vec3(1.0)), color.a);
+    }
+    let eye = pos - globals.view_origin.xyz;
+    let spherical = length(eye);
+    let cylindrical = max(length(eye.xz), abs(eye.y));
+    return VisCorner(uv, color, spherical, cylindrical);
 }
 
 @fragment fn fs_vis_resolve(in: VisResolveOut) -> @location(0) vec4<f32> {
@@ -353,10 +381,13 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
         p3 = vec3(q4.z, q4.w, q5.x);
         r3 = q5.yzw;
     }
-    let c0 = (globals.view_proj * vec4(bitcast<vec3<f32>>(p0) + origin.xyz, 1.0)).xyw;
-    let c1 = (globals.view_proj * vec4(bitcast<vec3<f32>>(p1) + origin.xyz, 1.0)).xyw;
-    let c2 = (globals.view_proj * vec4(bitcast<vec3<f32>>(p2) + origin.xyz, 1.0)).xyw;
-    let c3 = (globals.view_proj * vec4(bitcast<vec3<f32>>(p3) + origin.xyz, 1.0)).xyw;
+    let pos0 = bitcast<vec3<f32>>(p0) + origin.xyz;
+    let pos1 = bitcast<vec3<f32>>(p1) + origin.xyz;
+    let pos2 = bitcast<vec3<f32>>(p2) + origin.xyz;
+    let pos3 = bitcast<vec3<f32>>(p3) + origin.xyz;
+    let c0 = (globals.view_proj * vec4(pos0, 1.0)).xyw;
+    let c1 = (globals.view_proj * vec4(pos1, 1.0)).xyw;
+    let c2 = (globals.view_proj * vec4(pos2, 1.0)).xyw;
     // The quad's triangles are 0 1 2 and 0 2 3 (`Renderer::quad_indices`, flatten.wgsl),
     // either side of the diagonal 0 2. Corner 1's weight in 0 1 2 is `vis_bary`'s row
     // cross(c2, c0) over the sum of the rows, whose sign is that of the triangle's determinant
@@ -368,7 +399,21 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
     let diagonal = cross(c2, c0);
     let det = dot(c1, diagonal);
     let second = dot(vec3(p, 1.0), diagonal) * det < 0.0 || det == 0.0;
-    let rows = vis_rows(c0, select(c1, c2, second), select(c2, c3, second));
+    var c_a = c1;
+    var c_b = c2;
+    var pos_a = pos1;
+    var r_a = r1;
+    var pos_b = pos2;
+    var r_b = r2;
+    if second {
+        c_a = c2;
+        c_b = (globals.view_proj * vec4(pos3, 1.0)).xyw;
+        pos_a = pos2;
+        r_a = r2;
+        pos_b = pos3;
+        r_b = r3;
+    }
+    let rows = vis_rows(c0, c_a, c_b);
     let b = vis_bary(rows, p);
     // dpdxFine and dpdyFine: the difference to the other pixel of this one's 2x2 quad in its
     // row and column, odd minus even, over the same triangle's plane.
@@ -376,34 +421,46 @@ fn vis_corner(position: vec3<u32>, rest: vec3<u32>, origin: vec4<f32>) -> Terrai
     let toward = vec2(1.0) - 2.0 * odd;
     let bx = vis_bary(rows, vis_ndc(centre + vec2(toward.x, 0.0), size));
     let by = vis_bary(rows, vis_ndc(centre + vec2(0.0, toward.y), size));
-    // `terrain_vertex` on the triangle's corners, one at a time into the sums, so that only
-    // one corner's outputs are held at once; the first is the provoking one, whose flat
-    // outputs (layer, emission, fade, emissive layer) the rasteriser keeps.
-    var t = vis_corner(p0, r0, origin);
-    let uv0 = t.uv;
-    t.uv = b.x * uv0;
-    var uv_x = bx.x * uv0;
-    var uv_y = by.x * uv0;
-    t.color = b.x * t.color;
-    t.spherical = b.x * t.spherical;
-    t.cylindrical = b.x * t.cylindrical;
-    t.visibility = b.x * t.visibility;
-    let t1 = vis_corner(select(p1, p2, second), select(r1, r2, second), origin);
-    t.uv += b.y * t1.uv;
-    uv_x += bx.y * t1.uv;
-    uv_y += by.y * t1.uv;
-    t.color += b.y * t1.color;
-    t.spherical += b.y * t1.spherical;
-    t.cylindrical += b.y * t1.cylindrical;
-    t.visibility += b.y * t1.visibility;
-    let t2 = vis_corner(select(p2, p3, second), select(r2, r3, second), origin);
-    t.uv += b.z * t2.uv;
-    uv_x += bx.z * t2.uv;
-    uv_y += by.z * t2.uv;
-    t.color += b.z * t2.color;
-    t.spherical += b.z * t2.spherical;
-    t.cylindrical += b.z * t2.cylindrical;
-    t.visibility += b.z * t2.visibility;
+    // Hoist quad-constant and provoking-corner values out of the 3-corner evaluation:
+    // layer, emission and emissive_layer belong to the provoking corner (0), and UV step /
+    // instance visibility are constant across the whole section.
+    let uv_step = instance_step(origin.w);
+    let inst_vis = instance_visibility(origin.w);
+    let layer = r0.y & 0xffffu;
+    var t: TerrainOut;
+    t.layer = layer;
+    t.emission = 7u - ((r0.z >> 24u) & 7u);
+    t.emissive_layer = vis_emissive_layer(layer & 0x7fffu);
+    let v0 = vis_corner(pos0, r0, uv_step);
+    t.uv = b.x * v0.uv;
+    var uv_x = bx.x * v0.uv;
+    var uv_y = by.x * v0.uv;
+    t.color = b.x * v0.color;
+    t.spherical = b.x * v0.spherical;
+    t.cylindrical = b.x * v0.cylindrical;
+    let v1 = vis_corner(pos_a, r_a, uv_step);
+    t.uv += b.y * v1.uv;
+    uv_x += bx.y * v1.uv;
+    uv_y += by.y * v1.uv;
+    t.color += b.y * v1.color;
+    t.spherical += b.y * v1.spherical;
+    t.cylindrical += b.y * v1.cylindrical;
+    let v2 = vis_corner(pos_b, r_b, uv_step);
+    t.uv += b.z * v2.uv;
+    uv_x += bx.z * v2.uv;
+    uv_y += by.z * v2.uv;
+    t.color += b.z * v2.color;
+    t.spherical += b.z * v2.spherical;
+    t.cylindrical += b.z * v2.cylindrical;
+    if inst_vis < 1.0 {
+        let full_range = 16.0;
+        let vis0 = mix(1.0, inst_vis, clamp((length(pos0) - full_range) / full_range, 0.0, 1.0));
+        let vis1 = mix(1.0, inst_vis, clamp((length(pos_a) - full_range) / full_range, 0.0, 1.0));
+        let vis2 = mix(1.0, inst_vis, clamp((length(pos_b) - full_range) / full_range, 0.0, 1.0));
+        t.visibility = b.x * vis0 + b.y * vis1 + b.z * vis2;
+    } else {
+        t.visibility = b.x + b.y + b.z;
+    }
     let du = (uv_x - t.uv) * toward.x;
     let dv = (uv_y - t.uv) * toward.y;
     // `fs_opaque` and `solid_color` past their discards, which pass 1 already made.

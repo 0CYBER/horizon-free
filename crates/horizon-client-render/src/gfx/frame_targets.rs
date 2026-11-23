@@ -207,6 +207,17 @@ impl super::Renderer {
             frame_lost(memory, validation)
         });
         let encoder = frame.encoder.filter(|_| !lost);
+        if encoder.is_none() {
+            // The dropped encoder's visibility block-table copies and staged meshlet uploads
+            // never ran on the GPU: invalidate both caches immediately in addition to flagging
+            // `frame_lost` for `upload_again` on the next frame.
+            if let Some(vis) = &mut self.visbuf {
+                vis.forget();
+            }
+            if let Some(mesh_terrain) = &mut self.mesh_terrain {
+                mesh_terrain.forget_uploads();
+            }
+        }
         self.frame_lost |= encoder.is_none();
         let mut encoder = encoder.unwrap_or_else(|| {
             self.device
