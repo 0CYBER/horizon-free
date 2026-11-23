@@ -1200,9 +1200,7 @@ fn write_chunk_back(
     )
     .map_err(|e| RecoveryRefused::Chunk(e.to_string()))?;
     let path = region_dir.join(format!("r.{}.{}.mca", position.x >> 5, position.z >> 5));
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| RecoveryRefused::Io(e.to_string()))?;
-    }
+    // The folders the region goes in are made, and synced at the sync below.
     let mut region = horizon_world::region::RegionFile::open_writable(&path, true)
         .map_err(|e| RecoveryRefused::Io(e.to_string()))?;
     region

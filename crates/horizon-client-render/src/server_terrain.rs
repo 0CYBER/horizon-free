@@ -383,9 +383,15 @@ impl ServerTerrain {
         }
         let region = region(&mut state.regions, &self.dir, key).expect("region just opened");
         region.file.write(ChunkPos::new(x, z), &record)?;
+        // The handle reads the chunk from here on, whether or not the flush
+        // below gets its header into the file: a later flush of the region
+        // writes it with the next chunk's.
         region.present[slot(x, z)] = true;
+        // A cache: the header reaches the file now, not at a sync, so the
+        // chunk is there after a quit that skips the drop.
+        let flushed = region.file.flush();
         remember(&mut state, (x, z), Some(columns.clone()));
-        Ok(())
+        flushed
     }
 }
 

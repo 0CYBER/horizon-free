@@ -1924,6 +1924,33 @@ fn region_files_kept_open_stay_under_vanillas_cache_size() {
     )
     .unwrap()
     .unwrap();
+    // A region whose write a failed sync left staged, held by no one, is
+    // not closed for room either: the next write finishes that commit.
+    let staged = super::cached_region(
+        &save.regions,
+        (-1, 0),
+        &save.region_path("region", -1, 0),
+        true,
+    )
+    .unwrap()
+    .unwrap();
+    staged
+        .lock()
+        .unwrap()
+        .write(
+            ChunkPos::new(-32, 0),
+            &horizon_world::region::ChunkRecord {
+                compression: horizon_world::compression::Compression::None,
+                compressed: vec![1; 10],
+                timestamp: 1,
+            },
+        )
+        .unwrap();
+    let staged = {
+        let weak = Arc::downgrade(&staged);
+        drop(staged);
+        weak
+    };
     for x in 1..=600 {
         super::cached_region(
             &save.regions,
@@ -1951,6 +1978,10 @@ fn region_files_kept_open_stay_under_vanillas_cache_size() {
         &cache.regions[&(0, 0)].0.clone().unwrap(),
         &held
     ));
+    let kept = cache.regions[&(-1, 0)].0.clone().unwrap();
+    assert!(std::ptr::eq(Arc::as_ptr(&kept), staged.as_ptr()));
+    assert!(kept.lock().unwrap().has_staged_changes());
+    drop(kept);
     drop(cache);
     // What was written to regions since closed reads back from the disk.
     let entity = |x: i32| Tag::compound([("x", Tag::Int(x))]);

@@ -13,6 +13,8 @@ pub fn sync_dir(folder: &Path) -> io::Result<()> {
     } else {
         folder
     };
+    #[cfg(test)]
+    SYNCED.with(|synced| synced.borrow_mut().push(folder.to_owned()));
     #[cfg(unix)]
     match std::fs::File::open(folder)?.sync_all() {
         // Some filesystems (network and FUSE ones among them) refuse to sync
@@ -28,4 +30,11 @@ pub fn sync_dir(folder: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     let _ = folder;
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The folders this thread synced, for tests that check which.
+    pub(crate) static SYNCED: std::cell::RefCell<Vec<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }

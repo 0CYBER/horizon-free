@@ -285,7 +285,7 @@ impl RegionStorageUpgrader {
             // converted the rest of the file is not looked at.
             converted = converted && self.process_one_position(&mut open, &file.path, pos);
         }
-        if let Some((path, writer)) = &open.writer
+        if let Some((path, writer)) = &mut open.writer
             && let Err(e) = writer.sync()
         {
             eprintln!("Failed to write region file {}: {e}", path.display());

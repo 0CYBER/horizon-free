@@ -90,16 +90,23 @@ fn in_place_writes_reuse_freed_sectors_and_keep_other_chunks() {
     region.write(b, &record(100)).unwrap();
     let sectors = |path: &Path| fs::metadata(path).unwrap().len() / 4096;
     assert_eq!(sectors(&dir.region()), 5);
-    // a grows: it moves past b, and its two old sectors are free again.
+    // a grows: it moves past b, and its two old sectors are free again once
+    // the header that no longer points to them is synced.
     region.write(a, &record(3 * 4096 - 5)).unwrap();
     assert_eq!(sectors(&dir.region()), 8);
+    region.sync().unwrap();
     // c fits in a's old sectors; then an oversized c goes to its .mcc file
     // (a one-sector stub, at the end: sector 8) and back inline (sector 2).
     region.write(c, &record(2 * 4096 - 5)).unwrap();
     assert_eq!(sectors(&dir.region()), 8);
     region.write(c, &record(256 * 4096)).unwrap();
     assert!(dir.0.join("c.-1.31.mcc").exists());
+    region.sync().unwrap();
     region.write(c, &record(10)).unwrap();
+    // The synced header still names the stub, so its .mcc stays until the
+    // next sync.
+    assert!(dir.0.join("c.-1.31.mcc").exists());
+    region.sync().unwrap();
     assert!(!dir.0.join("c.-1.31.mcc").exists());
     assert!(region.clear(b, 7).unwrap());
     assert!(!region.clear(b, 7).unwrap());
