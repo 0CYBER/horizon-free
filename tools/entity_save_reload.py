@@ -129,9 +129,16 @@ def horizon_binary(args, build):
     if args.binary:
         # Each server runs with its world as the working directory, so a relative path must be the caller's.
         return Path(os.path.abspath(args.binary))
-    with (build / 'cargo-build.log').open('w') as log:
-        subprocess.run(fast_bins.command('horizon-client'),
-                       cwd=lab.ROOT, check=True, stdout=log, stderr=subprocess.STDOUT)
+    log_path = build / 'cargo-build.log'
+    with log_path.open('w') as log:
+        run = subprocess.run(fast_bins.command('horizon-client'),
+                             cwd=lab.ROOT, stdout=log, stderr=subprocess.STDOUT)
+    if run.returncode:
+        output = log_path.read_text(errors='replace')
+        print(f'cargo build failed (exit {run.returncode}); log: {log_path}', file=sys.stderr)
+        if output:
+            print(output, file=sys.stderr, end='' if output.endswith('\n') else '\n')
+        run.check_returncode()
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
     return Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
