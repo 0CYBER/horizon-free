@@ -70,6 +70,7 @@ impl Behaviours {
                 sim: &mut sim,
                 features: &features,
                 entities: Vec::new(),
+                placed: Vec::new(),
             };
             let unbounded =
                 horizon_core::bounding_box::BoundingBox::new([i32::MIN; 3], [i32::MAX; 3]);
@@ -131,6 +132,7 @@ impl Behaviours {
                 sim: &mut sim,
                 features: &features,
                 entities: Vec::new(),
+                placed: Vec::new(),
             };
             let mut place_feature =
                 |w: &mut LevelFeatureWorld<'_, '_, L>,
@@ -296,15 +298,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         };
         let mut random = self.random().clone();
-        let placed = {
+        let (placed, cells) = {
             let mut world = LevelFeatureWorld {
                 sim: self,
                 features: &features,
                 entities: Vec::new(),
+                placed: Vec::new(),
             };
-            features.place_configured(name, &mut world, &mut random, [pos.x, pos.y, pos.z])
+            let placed =
+                features.place_configured(name, &mut world, &mut random, [pos.x, pos.y, pos.z]);
+            (placed, std::mem::take(&mut world.placed))
         };
         *self.random() = random;
+        self.structure_grew(pos, placed, &cells);
         placed
     }
     /// `Feature.place(level, generator, level.random, pos)` for an inline
@@ -319,21 +325,24 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         };
         let mut random = self.random().clone();
-        let placed = {
+        let (placed, cells) = {
             let mut world = LevelFeatureWorld {
                 sim: self,
                 features: &features,
                 entities: Vec::new(),
+                placed: Vec::new(),
             };
-            features.place_definition(
+            let placed = features.place_definition(
                 feature,
                 "an inline feature",
                 &mut world,
                 &mut random,
                 [pos.x, pos.y, pos.z],
-            )
+            );
+            (placed, std::mem::take(&mut world.placed))
         };
         *self.random() = random;
+        self.structure_grew(pos, placed, &cells);
         placed
     }
     /// `PlacedFeature.place(level, generator, level.random, pos)`.
@@ -343,15 +352,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             return false;
         };
         let mut random = self.random().clone();
-        let placed = {
+        let (placed, cells) = {
             let mut world = LevelFeatureWorld {
                 sim: self,
                 features: &features,
                 entities: Vec::new(),
+                placed: Vec::new(),
             };
-            features.place_placed(name, &mut world, &mut random, [pos.x, pos.y, pos.z])
+            let placed =
+                features.place_placed(name, &mut world, &mut random, [pos.x, pos.y, pos.z]);
+            (placed, std::mem::take(&mut world.placed))
         };
         *self.random() = random;
+        self.structure_grew(pos, placed, &cells);
         placed
     }
     pub(crate) fn feature_exists(&self, name: &str) -> bool {
@@ -372,6 +385,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.level
             .block_grow_feature(pos, feature)
             .filter(|name| self.feature_exists(name))
+    }
+
+    /// `StructureGrowEvent`: a feature grew from `source` and placed `cells` (the blocks it
+    /// changed, in order). Asked once the blocks are in the world, and only when it placed.
+    fn structure_grew(&mut self, source: BlockPos, placed: bool, cells: &[[i32; 3]]) {
+        if placed && !cells.is_empty() {
+            self.level.structure_grow(source, cells);
+        }
     }
 
     /// `TreeGrower.hasFlowers`: a flower within 2 blocks horizontally, 1 vertically.

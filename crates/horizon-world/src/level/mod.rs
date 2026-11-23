@@ -558,6 +558,9 @@ pub trait LevelAccess: BlockEntityNeighbors {
         true
     }
     fn observe_sponge_absorb(&self, _pos: BlockPos) {}
+    /// A feature grew from `source` (a sapling or a fungus) and changed `placed`, in order. The
+    /// blocks are already in the world; nothing is answered. Asked only when the feature placed.
+    fn structure_grow(&self, _source: BlockPos, _placed: &[[i32; 3]]) {}
     fn allow_block_fade(&self, _pos: BlockPos, _from: BlockStateId, _to: BlockStateId) -> bool {
         true
     }

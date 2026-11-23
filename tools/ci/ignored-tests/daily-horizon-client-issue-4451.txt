@@ -1260,6 +1260,8 @@ horizon-client game::native_entity_refs::tests::a_client_refuses_a_box_with_a_bo
 horizon-client game::native_entity_refs::tests::a_fresh_case_whose_name_matches_no_test_fails lib daily child-process
 horizon-client game::native_entity_refs::tests::a_level_bone_meals_a_block_and_sets_a_biome_cell lib daily resources
 horizon-client game::native_entity_refs::tests::a_level_can_survive_asks_the_blocks_own_rule lib daily resources
+horizon-client game::native_entity_refs::tests::a_level_fills_a_box_of_biome_cells_and_refuses_whole lib daily resources
+horizon-client game::native_entity_refs::tests::a_level_generates_an_oak_tree_and_refuses_an_unknown_feature lib daily resources
 horizon-client game::native_entity_refs::tests::a_level_handle_reads_redstone_as_signal_getter_does lib daily resources
 horizon-client game::native_entity_refs::tests::a_level_handle_reads_redstone_through_should_check_weak_power lib daily resources
 horizon-client game::native_entity_refs::tests::a_level_handle_updates_neighbours_as_vanillas_writes_do lib daily resources
@@ -1349,6 +1351,7 @@ horizon-client game::native_fishing_hook_refs::tests::a_live_hook_keeps_its_uuid
 horizon-client game::native_fishing_hook_refs::tests::real_hook_lifetime_survives_a_body_loan_and_retires_only_at_physical_sweep lib daily resources
 horizon-client game::native_game_event_context::tests::contextual_game_event_keeps_guest_cause_until_emission lib daily resources
 horizon-client game::native_game_event_context::tests::sensor_receives_context_source_and_affected_state_at_requested_position lib daily resources
+horizon-client game::native_game_rules_read::tests::game_rule_default_is_vanilla_and_ignores_the_current_value lib daily resources
 horizon-client game::native_goal_ticks::behavior_tests::a_behavior_writes_the_walk_target_and_the_refusals_hold lib daily resources
 horizon-client game::native_goal_ticks::behavior_tests::a_breeze_behavior_starts_in_fight_and_writes_its_target lib daily resources
 horizon-client game::native_goal_ticks::behavior_tests::a_failed_entry_condition_draws_nothing_and_calls_nothing lib daily resources

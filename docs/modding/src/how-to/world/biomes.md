@@ -11,6 +11,7 @@ Use biome content, region declarations and level handles to control biome genera
 | Know the biome at a position | `LevelRef::biome_at` on a server level, `LevelRef::client_biome` on a client | Server, client |
 | Find the nearest biome or tag | `LevelRef::find_closest_biome` with a `BiomeSearch` | Server |
 | Change a biome | `LevelRef::set_biome`, one 4x4x4 cell, as `/fillbiome` does | Server |
+| Change the biomes of a box | `LevelRef::fill_biome` with a min and max position: every 4x4x4 cell that holds a block of the box, as `/fillbiome` does, at most 16,384 cells a call | Server |
 | Run bone meal at a position | `LevelRef::bone_meal` | Server |
 | Tint foliage, grass or water by biome | The `register_color_resolvers` hook for new colour resolvers, and the `biome_colors` hook to change a biome's own colours | Client |
 

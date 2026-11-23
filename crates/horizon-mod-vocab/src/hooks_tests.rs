@@ -884,6 +884,8 @@ fn spawn_policy_writes_take_a_server_host(
     let _: Option<SpawnFlags> = level.spawn_flags(read);
     let _: Option<bool> = level.can_spawn_entities_in_chunk(read, [0, 0]);
     let _: bool = level.set_spawn_limits(server, SpawnLimits::VANILLA);
+    let _: bool = level.set_spawn_limit(server, MobCategory::Creature, 3);
+    let _: bool = level.set_ticks_per_spawn(server, MobCategory::Creature, 400);
     let _: bool = level.set_spawn_flags(server, SpawnFlags::default());
     let _: Option<EntityRef> = level.spawn_mob(
         server,
@@ -898,4 +900,26 @@ fn spawn_policy_writes_take_a_server_host(
 fn passages_take_a_server_host(server: &mut dyn ServerHost, level: LevelRef, passage: Passage) {
     let id: Result<PassageId, PassageRegistrationError> = level.register_passage(server, passage);
     let _: bool = level.remove_passage(server, id.unwrap());
+}
+
+/// Literal values: one category's limit changes, the others stay vanilla's, and Misc is refused.
+#[test]
+fn set_spawn_limit_changes_one_category_and_refuses_misc() {
+    let mut limits = SpawnLimits::VANILLA;
+    assert!(limits.set(MobCategory::Creature, 3));
+    assert_eq!(
+        limits,
+        SpawnLimits {
+            creature: 3,
+            ..SpawnLimits::VANILLA
+        }
+    );
+    assert!(!limits.set(MobCategory::Misc, 1));
+    assert_eq!(
+        limits,
+        SpawnLimits {
+            creature: 3,
+            ..SpawnLimits::VANILLA
+        }
+    );
 }

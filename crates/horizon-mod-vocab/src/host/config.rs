@@ -190,6 +190,12 @@ pub trait ConfigServerHost {
     #[access(WorldOnly)]
     fn game_rule(&self, id: &str) -> Result<GameRuleValue, GameRuleReadError>;
     /// Side: server.
+    /// The default value of rule `id` in the server-wide store (`GameRule.getDefault`), the value
+    /// the rule has before `/gamerule` or a mod changes it. None for an unknown id, so a rule
+    /// that was never registered reads as absent, not as a default.
+    #[access(WorldOnly)]
+    fn game_rule_default(&self, id: &str) -> Option<GameRuleValue>;
+    /// Side: server.
     /// The retained server reload listeners of the last successful reload.
     #[access(WorldOnly)]
     fn reload_resources(&self) -> &dyn ServerReloadResources;

@@ -46,3 +46,10 @@ nothing in it.
     own included, could take back. Nothing is returned, so split or trim the data at its source.
 - There is no size limit and no node cap, as saved data has none: nothing a world the game accepts could carry is
   refused for its size.
+
+## Place a vanilla tree or mushroom
+
+`LevelRef::generate_tree` places a configured feature by its id at a position, with the level's random, as `/place feature`
+does: `minecraft:oak`, `minecraft:birch`, `minecraft:huge_red_mushroom` and the other vanilla or data-pack features. It returns
+`Ok(false)` when the feature placed nothing, and a `FeatureRefusal` (`Stale`, `Client`, `NotInPlace`, `UnknownFeature`) otherwise.
+Server only.

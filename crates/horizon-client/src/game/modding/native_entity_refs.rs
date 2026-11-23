@@ -631,6 +631,35 @@ impl Game<'_> {
         let name = &self.res.facts().get(state).name;
         Some(self.items().mining_speed(tool, name))
     }
+    /// Place the configured feature `feature` at `pos` as `/place feature` does (Paper's
+    /// `World#generateTree`). Refusals are checked in order and named by [`FeatureRefusal`]; an
+    /// unloaded, out-of-world or locked position places nothing and is `Ok(false)`.
+    pub(super) fn level_generate_tree(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        feature: &str,
+    ) -> Result<bool, mod_api::FeatureRefusal> {
+        use mod_api::FeatureRefusal;
+        if !self.is_logical_server() {
+            return Err(FeatureRefusal::Client);
+        }
+        if !self.level_handle_current(level) {
+            return Err(FeatureRefusal::Stale);
+        }
+        if self.dim.key() != level.dimension() {
+            return Err(FeatureRefusal::NotInPlace);
+        }
+        if !self.native_level_write_allowed(level, pos) {
+            return Ok(false);
+        }
+        let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+        let placed = self
+            .with_level(|b, level, ticks| b.place_feature(level, ticks, feature, at))
+            .ok_or(FeatureRefusal::UnknownFeature)?;
+        let _ = self.process_level_events();
+        Ok(placed)
+    }
     /// Apply bone meal to the block at `pos` as a dispenser does (`BoneMealItem.growCrop`, then
     /// `growWaterPlant`): the mods' `bonemeal` hook first, level event 1505 when something grew.
     /// False for a refused write, a stale or parked handle, a client, and a block that did not
@@ -666,6 +695,92 @@ impl Game<'_> {
             return false;
         }
         self.set_biome_at(pos, biome)
+    }
+    /// Set the biome of every 4x4x4 cell holding a block of `min <= pos < max` to `biome`, cell by
+    /// cell through `set_biome_at` (so each changed column is resent, and a transaction journals
+    /// it). Refusals are checked whole, before any cell changes, and named by [`BiomeFillRefusal`].
+    pub(super) fn level_fill_biome(
+        &mut self,
+        level: LevelRef,
+        min: [i32; 3],
+        max: [i32; 3],
+        biome: &str,
+    ) -> Result<u32, mod_api::BiomeFillRefusal> {
+        use mod_api::BiomeFillRefusal;
+        const MAX_CELLS: u64 = 16_384;
+        if !self.is_logical_server() {
+            return Err(BiomeFillRefusal::Client);
+        }
+        if !self.level_handle_current(level) {
+            return Err(BiomeFillRefusal::Stale);
+        }
+        if self.dim.key() != level.dimension() {
+            return Err(BiomeFillRefusal::NotInPlace);
+        }
+        if !world_biomes!(self).list.iter().any(|b| b.name == biome) {
+            return Err(BiomeFillRefusal::UnknownBiome);
+        }
+        if (0..3).any(|axis| min[axis] >= max[axis]) {
+            return Ok(0);
+        }
+        let (cx0, cx1) = (min[0] >> 2, (max[0] - 1) >> 2);
+        let (cy0, cy1) = (min[1] >> 2, (max[1] - 1) >> 2);
+        let (cz0, cz1) = (min[2] >> 2, (max[2] - 1) >> 2);
+        // Widened and checked: the three spans can each reach 2^30 cells.
+        let span = |lo: i32, hi: i32| (i64::from(hi) - i64::from(lo) + 1) as u64;
+        let cells = span(cx0, cx1)
+            .checked_mul(span(cy0, cy1))
+            .and_then(|n| n.checked_mul(span(cz0, cz1)))
+            .unwrap_or(u64::MAX);
+        if cells > MAX_CELLS {
+            return Err(BiomeFillRefusal::TooManyCells {
+                asked: u32::try_from(cells).unwrap_or(u32::MAX),
+                max: MAX_CELLS as u32,
+            });
+        }
+        let in_height =
+            self.world.shape.contains_y(min[1]) && self.world.shape.contains_y(max[1] - 1);
+        let columns_loaded = (min[0] >> 4..=(max[0] - 1) >> 4).all(|cx| {
+            (min[2] >> 4..=(max[2] - 1) >> 4).all(|cz| self.world.chunks.contains_key(&(cx, cz)))
+        });
+        if !in_height || !columns_loaded {
+            return Err(BiomeFillRefusal::NotLoaded);
+        }
+        // A carrier transfer fence on any block of a cell refuses the whole box, before any write.
+        for cy in cy0..=cy1 {
+            for cz in cz0..=cz1 {
+                for cx in cx0..=cx1 {
+                    for (dx, dy, dz) in (0..64).map(|i| (i & 3, (i >> 2) & 3, i >> 4)) {
+                        if self.world.carrier_fences.locks_cell(&[
+                            cx * 4 + dx,
+                            cy * 4 + dy,
+                            cz * 4 + dz,
+                        ]) {
+                            return Err(BiomeFillRefusal::NotLoaded);
+                        }
+                    }
+                }
+            }
+        }
+        let mut changed = 0u32;
+        let mut columns: Vec<(i32, i32)> = Vec::new();
+        for cy in cy0..=cy1 {
+            for cz in cz0..=cz1 {
+                for cx in cx0..=cx1 {
+                    if let Some(key) = self.write_biome_at([cx * 4, cy * 4, cz * 4], biome) {
+                        changed += 1;
+                        if !columns.contains(&key) {
+                            columns.push(key);
+                        }
+                    }
+                }
+            }
+        }
+        // One resend for each changed column, however many of its cells changed.
+        for key in columns {
+            self.after_commit(crate::game::transactions::After::Biome(key));
+        }
+        Ok(changed)
     }
     /// One residency boundary for state-bearing block writes; position refusal is vanilla.
     fn native_level_write_position(
@@ -1631,6 +1746,91 @@ pub(super) mod tests {
             let level = game.level(game.dim.id()).unwrap();
             assert_eq!(level.best_neighbor_signal(game, [4, 64, 5]), Some(0));
             assert_eq!(level.signal(game, [5, 64, 5], West), Some(0));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_fills_a_box_of_biome_cells_and_refuses_whole() {
+        use horizon_client::chunk::Chunk;
+        use mod_api::BiomeFillRefusal;
+        use std::sync::Arc;
+
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = game.level(game.dim.id()).unwrap();
+            let target = usize::from(game.world.chunks[&(0, 0)].biome(0, 64, 0) == 0);
+            let name = world_biomes!(game).list[target].name.clone();
+            // Two cells in x, one in y (64..68), two in z: four 4x4x4 cells.
+            assert_eq!(
+                game.level_fill_biome(level, [0, 64, 0], [8, 68, 8], &name),
+                Ok(4)
+            );
+            assert_eq!(
+                usize::from(game.world.chunks[&(0, 0)].biome(7, 67, 7)),
+                target,
+                "the last cell of the box changed"
+            );
+            assert_eq!(
+                game.level_fill_biome(level, [0, 64, 0], [8, 68, 8], &name),
+                Ok(0),
+                "already set"
+            );
+            assert_eq!(
+                game.level_fill_biome(level, [0, 64, 0], [8, 68, 8], "minecraft:nope"),
+                Err(BiomeFillRefusal::UnknownBiome)
+            );
+            assert_eq!(
+                game.level_fill_biome(level, [100_000, 64, 0], [100_008, 68, 8], &name),
+                Err(BiomeFillRefusal::NotLoaded),
+                "unloaded columns refuse the whole box"
+            );
+            assert_eq!(
+                game.level_fill_biome(level, [4, 64, 4], [4, 68, 8], &name),
+                Ok(0),
+                "an empty box"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_generates_an_oak_tree_and_refuses_an_unknown_feature() {
+        use horizon_client::chunk::Chunk;
+        use mod_api::FeatureRefusal;
+        use std::sync::Arc;
+
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let registry = game.pack.assets.registry;
+            let grass = registry.default_state("minecraft:grass_block").unwrap();
+            game.world.set(0, 63, 0, grass).unwrap();
+            let level = game.level(game.dim.id()).unwrap();
+            assert_eq!(
+                game.level_generate_tree(level, [0, 64, 0], "minecraft:oak"),
+                Ok(true)
+            );
+            let trunk = game.world.block(0, 64, 0);
+            assert_eq!(
+                &*game.res.facts().get(trunk).name,
+                "minecraft:oak_log",
+                "the trunk starts at the given position"
+            );
+            assert_eq!(
+                game.level_generate_tree(level, [0, 64, 0], "minecraft:nope"),
+                Err(FeatureRefusal::UnknownFeature)
+            );
+            assert_eq!(
+                game.level_generate_tree(level, [100_000, 64, 0], "minecraft:oak"),
+                Ok(false),
+                "unloaded"
+            );
         });
     }
 

@@ -50,6 +50,36 @@ impl Game<'_> {
     pub(super) fn level_set_spawn_limits(&mut self, level: LevelRef, limits: SpawnLimits) -> bool {
         self.native_set_spawn_policy(level, |policy| policy.limits = limits)
     }
+    /// Sets one category's natural spawning limit for the rest of the open. False for
+    /// `MobCategory::Misc`, a stale handle or a client, with nothing set.
+    pub(super) fn level_set_spawn_limit(
+        &mut self,
+        level: LevelRef,
+        category: mod_api::MobCategory,
+        limit: u32,
+    ) -> bool {
+        if category == mod_api::MobCategory::Misc {
+            return false;
+        }
+        self.native_set_spawn_policy(level, |policy| {
+            let _ = policy.limits.set(category, limit);
+        })
+    }
+
+    /// Sets one category's ticks between natural spawn passes for the rest of the open.
+    /// False for `MobCategory::Misc`, zero ticks, a stale handle or a client, with nothing set.
+    pub(super) fn level_set_ticks_per_spawn(
+        &mut self,
+        level: LevelRef,
+        category: mod_api::MobCategory,
+        ticks: u32,
+    ) -> bool {
+        let mut accepted = false;
+        let set = self.native_set_spawn_policy(level, |policy| {
+            accepted = policy.ticks.set(category, ticks);
+        });
+        set && accepted
+    }
     /// Sets the level's natural spawning flags for the rest of the open. False as for
     /// `level_set_spawn_limits`.
     pub(super) fn level_set_spawn_flags(&mut self, level: LevelRef, flags: SpawnFlags) -> bool {

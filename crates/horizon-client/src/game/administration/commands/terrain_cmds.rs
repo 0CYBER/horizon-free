@@ -162,21 +162,30 @@ impl Game<'_> {
     /// without publishing. Saving, remeshing and resending wait for the outermost commit,
     /// once per column. Outside a transaction they run immediately.
     pub(in crate::game) fn set_biome_at(&mut self, pos: [i32; 3], biome: &str) -> bool {
-        let Some(target) = world_biomes!(self)
+        match self.write_biome_at(pos, biome) {
+            Some(key) => {
+                self.after_commit(super::super::transactions::After::Biome(key));
+                true
+            }
+            None => false,
+        }
+    }
+    /// `set_biome_at` without the column resend: the changed cell's column, None when nothing changed.
+    pub(in crate::game) fn write_biome_at(
+        &mut self,
+        pos: [i32; 3],
+        biome: &str,
+    ) -> Option<(i32, i32)> {
+        let target = world_biomes!(self)
             .list
             .iter()
-            .position(|b| b.name == biome)
-        else {
-            return false;
-        };
+            .position(|b| b.name == biome)?;
         let key = (pos[0] >> 4, pos[2] >> 4);
-        let Some(chunk) = self.world.chunks.get(&key) else {
-            return false;
-        };
+        let chunk = self.world.chunks.get(&key)?;
         if !self.world.shape.contains_y(pos[1])
             || usize::from(chunk.biome(pos[0], pos[1], pos[2])) == target
         {
-            return false;
+            return None;
         }
         let old = chunk.biome(pos[0], pos[1], pos[2]);
         self.journal_biome(pos, old);
@@ -186,8 +195,7 @@ impl Game<'_> {
             let chunk = std::sync::Arc::make_mut(chunk);
             chunk.set_biome_cell((pos[0] & 15) >> 2, qy, (pos[2] & 15) >> 2, target as u16);
         });
-        self.after_commit(super::super::transactions::After::Biome(key));
-        true
+        Some(key)
     }
 
     // ---- /worldborder -----------------------------------------------------------------------

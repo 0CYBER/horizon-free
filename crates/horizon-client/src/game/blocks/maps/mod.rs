@@ -198,6 +198,10 @@ pub(super) struct MapData {
     dirty: bool,
     texture_dirty: bool,
 }
+/// Narrow to `i32`, clipping at its ends.
+fn clip_i32(v: i64) -> i32 {
+    v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
 impl MapData {
     /// `MapItemSavedData.createFresh`: centred on the scale's grid cell.
     pub(super) fn fresh(x: f64, z: f64, scale: u8, dimension: &str) -> Self {
@@ -217,6 +221,14 @@ impl MapData {
             holders: Vec::new(),
             dirty: true,
             texture_dirty: true,
+        }
+    }
+    /// `MapItemSavedData.setLocked`: the flag changes and the map is marked to save. Nothing is
+    /// repainted and no holder is sent anything, as vanilla.
+    pub(super) fn set_locked(&mut self, locked: bool) {
+        if self.locked != locked {
+            self.locked = locked;
+            self.dirty = true;
         }
     }
     /// `MapItemSavedData.setColor` for every pixel of `colors` (128 by 128, row by row): each
@@ -1094,16 +1106,16 @@ impl Game<'_> {
             return;
         }
         let scale = 1i32 << m.scale;
-        let start_x = m.center[0] / scale - 64;
-        let start_z = m.center[1] / scale - 64;
+        let start_x = i64::from(m.center[0] / scale) - 64;
+        let start_z = i64::from(m.center[1] / scale) - 64;
         let sea_level = crate::game::Dim::sea_level_of_id(dim);
-        let quarts: Vec<[i32; 3]> = (0..128)
+        let quarts: Vec<[i32; 3]> = (0..128i32)
             .flat_map(|row| {
-                (0..128).map(move |column| {
+                (0..128i32).map(move |column| {
                     zoom.quart_at_block(horizon_core::position::BlockPos::new(
-                        (start_x + column) * scale,
+                        clip_i32((start_x + i64::from(column)) * i64::from(scale)),
                         sea_level,
-                        (start_z + row) * scale,
+                        clip_i32((start_z + i64::from(row)) * i64::from(scale)),
                     ))
                 })
             })
@@ -1549,8 +1561,16 @@ impl Game<'_> {
                 }
                 let d2 = (img_x - px).pow(2) + (img_y - pz).pow(2);
                 let dither_black = d2 > (radius - 2) * (radius - 2);
-                let min_x = (cx / scale + img_x - 64) * scale;
-                let min_z = (cz / scale + img_y - 64) * scale;
+                // Widened: a mod may centre a map where the i32 block coordinate overflows.
+                let wide_x = (i64::from(cx / scale) + i64::from(img_x) - 64) * i64::from(scale);
+                let wide_z = (i64::from(cz / scale) + i64::from(img_y) - 64) * i64::from(scale);
+                let fits = |v: i64| {
+                    i32::try_from(v).is_ok() && i32::try_from(v + i64::from(scale)).is_ok()
+                };
+                if !fits(wide_x) || !fits(wide_z) {
+                    continue;
+                }
+                let (min_x, min_z) = (wide_x as i32, wide_z as i32);
                 if !self.world.chunks.contains_key(&(min_x >> 4, min_z >> 4)) {
                     continue;
                 }

@@ -210,6 +210,10 @@ rule and its current value by namespaced id. Both native and wasm mods can use
 these reads. Saved values and a new world's create-screen choices are installed
 before the first server hook, without firing `game_rule_changed` for loading.
 Level reads use the same store once the requested level exists.
+`ServerHost::game_rule_default(id)` returns the rule's default (what Bukkit calls
+`GameRule#getDefault`) as `Option<GameRuleValue>`, `None` for an unknown id. It ignores
+the current value, so a mod can tell whether a rule was changed. It is not per level:
+there is one server-wide rule store.
 
 `mod_api::GameRuleValue` owns the `Bool(bool)` and `Int(i32)` cases, in that order.
 `level.game_rule(host, id)` returns `Result<Option<GameRuleValue>, LevelReadError>`:
