@@ -507,6 +507,21 @@ impl Post {
         [j[0] * size[0] as f32 * 0.5, -j[1] * size[1] as f32 * 0.5]
     }
 
+    /// Whether the next `prepare` call with these inputs will drop or replace
+    /// the current scaled target, so callers holding its depth view (such as
+    /// occlusion culling's Hi-Z pyramid) can release it before allocation.
+    pub(super) fn will_replace_target(&self, window: [u32; 2], always: bool, pack: bool) -> bool {
+        let Some(target) = &self.target else {
+            return false;
+        };
+        if self.scale == 1.0 && !self.antialias && !self.taa_on && !always {
+            return true;
+        }
+        let (size, output) = self.sizes(window, pack);
+        let history_size = self.taa_on.then_some(output);
+        target.size != size || target.taa.as_ref().map(|h| h.size) != history_size
+    }
+
     /// The world's colour and depth targets this frame, or `None` to draw
     /// it straight to the screen.
     /// `always`: a target even at scale 1 without anti-aliasing (a shader pack reads it).
@@ -1213,5 +1228,32 @@ mod tests {
         let post = Post::new(&device, wgpu::TextureFormat::Rgba8Unorm);
         // Copy and FXAA pipelines always compile; TAA compiles if supported by backend.
         let _ = post.supports_taa();
+    }
+
+    #[test]
+    fn will_replace_target_tracks_scale_and_target_changes() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, _)) = test_device() else {
+            return;
+        };
+        let mut post = Post::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let window = [64, 36];
+        // No allocated target yet.
+        assert!(!post.will_replace_target(window, false, false));
+        post.scale = 1.5;
+        assert!(!post.will_replace_target(window, false, false));
+        assert!(post.prepare(&device, window, false, false).is_some());
+        // Unchanged inputs keep the existing target and its Hi-Z depth binding.
+        assert!(!post.will_replace_target(window, false, false));
+        // Changing resolution scale will drop and recreate the target.
+        post.scale = 2.0;
+        assert!(post.will_replace_target(window, false, false));
+        assert!(post.prepare(&device, window, false, false).is_some());
+        assert!(!post.will_replace_target(window, false, false));
+        // Turning scaling off drops the existing target.
+        post.scale = 1.0;
+        assert!(post.will_replace_target(window, false, false));
+        assert!(post.prepare(&device, window, false, false).is_none());
+        assert!(!post.will_replace_target(window, false, false));
     }
 }

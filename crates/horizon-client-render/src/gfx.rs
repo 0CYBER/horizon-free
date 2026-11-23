@@ -4669,17 +4669,25 @@ impl Renderer {
         });
         // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
         // frame however few its draws and little it hides, `shader` tests in
-        // the shader as on Metal (A/B checks).
+        // the fragment shader (`InShader`), `early` forces early-depth box
+        // rasterization (`Early`) where supported (A/B checks).
         let cull_env = std::env::var("HORIZON_GPU_CULL");
         let adapter_info = adapter.get_info();
         let cull = cull::Cull::supported(&adapter, &device)
             .filter(|_| occlusion_culling_requested(&adapter_info, cull_env.as_deref().ok()))
             .map(|depth_test| match cull_env.as_deref() {
                 Ok("shader") => cull::DepthTest::InShader,
+                Ok("early")
+                    if device
+                        .features()
+                        .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST) =>
+                {
+                    cull::DepthTest::Early
+                }
                 _ => depth_test,
             })
             .and_then(|depth_test| {
-                let mut cull = cull::Cull::new(&device, frame_format, depth_test)?;
+                let mut cull = cull::Cull::pick(&adapter, &device, frame_format, depth_test)?;
                 cull.always = cull_env.as_deref() == Ok("all");
                 if !cull.always && tiled_solid_gpu(&adapter_info) {
                     cull.min_sections = cull::TILED_MIN_SECTIONS;
@@ -5487,12 +5495,18 @@ impl Renderer {
         if let Some(why) = self.gpu_culling_offer.reason() {
             return Err(why.into());
         }
-        let test = self
-            .cull
-            .as_ref()
-            .filter(|c| c.early())
-            .map(|_| self.output.frame.format);
-        let Some(mut gpu) = gpu_culling::GpuCulling::new(&self.device, test) else {
+        let gpu = match self.cull.as_ref().and_then(|c| c.hiz_read_layout()) {
+            Some(hiz_layout) => gpu_culling::GpuCulling::new_hiz(&self.device, hiz_layout),
+            None => {
+                let test = self
+                    .cull
+                    .as_ref()
+                    .filter(|c| c.early())
+                    .map(|_| self.output.frame.format);
+                gpu_culling::GpuCulling::new(&self.device, test)
+            }
+        };
+        let Some(mut gpu) = gpu else {
             // Not offered from now on: its switch greys out.
             self.offer_gpu_culling(crate::graphics::GpuCullingOffer::Unsupported);
             return Err("GPU culling could not be set up on this device".into());
@@ -9468,12 +9482,21 @@ impl Renderer {
         let pack_reads_world = pack_post || native_post;
         // Before the frame chooses how it draws translucent things: the world's size decides
         // whether improved transparency has the room for its targets.
-        let scaled = self.world_post.prepare(
-            &self.device,
-            [self.config.width, self.config.height],
-            pack_reads_world || fg || msaa_on,
-            pack_post,
-        );
+        let world_window = [self.config.width, self.config.height];
+        let world_always = pack_reads_world || fg || msaa_on;
+        // Release occlusion culling's retained depth view and Hi-Z pyramid before
+        // `world_post.prepare` drops and replaces a scaled target so the old
+        // depth texture's memory is freed before allocating the replacement.
+        if self
+            .world_post
+            .will_replace_target(world_window, world_always, pack_post)
+            && let Some(cull) = &mut self.cull
+        {
+            cull.forget_depth();
+        }
+        let scaled = self
+            .world_post
+            .prepare(&self.device, world_window, world_always, pack_post);
         // GameRenderer.useImprovedTransparency. A shader pack keeps its own
         // path. Without the room for its targets (#13624) this frame draws translucent things
         // the ordinary way.
@@ -10289,7 +10312,11 @@ impl Renderer {
             Some((color, depth)) => (color, depth),
             None => (&view_target, self.depth.as_ref().expect(WINDOW_DEPTH)),
         };
-        if culling && let Some(cull) = &mut self.cull {
+        // GPU culling's occlusion test splits the world pass and shares `cull`'s Hi-Z pyramid.
+        let gpu_occluding = gpu_frame && self.gpu_culling.as_ref().is_some_and(|g| g.occluding());
+        if (culling || gpu_occluding)
+            && let Some(cull) = &mut self.cull
+        {
             cull.bind_depth(&self.device, world_depth);
         }
         // The hand draws at the end of the world pass, after a depth reset, when nothing runs
@@ -10588,8 +10615,6 @@ impl Renderer {
         // A material stage's translucent pass reads a copy of the depth the solid terrain
         // left: it is stored across the pass that ends before the copy.
         let keep_depth = keep_depth || material.is_some() || msaa_on;
-        // GPU culling's occlusion test splits the world pass as cull.rs's does.
-        let gpu_occluding = gpu_frame && self.gpu_culling.as_ref().is_some_and(|g| g.occluding());
         let pack_frame = |pass: &mut wgpu::RenderPass<'_>| {
             if let Some(m) = material {
                 m.bind(pass);
@@ -10824,10 +10849,11 @@ impl Renderer {
                     };
                     drop(ids);
                     if let Some(cull) = cull {
-                        // The test's pipeline draws into the world's colour.
-                        let mut test = plain_pass(&mut encoder);
-                        cull.test(&mut test);
-                        drop(test);
+                        if cull.early() {
+                            // The test's pipeline draws into the world's colour.
+                            let mut test = plain_pass(&mut encoder);
+                            cull.test(&mut test);
+                        }
                         cull.test_pass(&mut encoder, self.own_timing.as_mut());
                         if !mesh_frame {
                             let vertices =
@@ -10921,13 +10947,15 @@ impl Renderer {
                     pass.stage(self.own_timing.as_mut(), "solid terrain");
                     mesh_terrain.draw_solid(&mut pass, flat, hdr);
                     if let Some(cull) = cull {
-                        if surface.is_some() {
-                            drop(pass);
-                            pass = plain_pass(&mut encoder);
+                        if cull.early() {
+                            if surface.is_some() {
+                                drop(pass);
+                                pass = plain_pass(&mut encoder);
+                            }
+                            pass.split(self.own_timing.as_mut(), "occlusion boxes");
+                            pass.stage(self.own_timing.as_mut(), "occlusion boxes");
+                            cull.test(&mut pass);
                         }
-                        pass.split(self.own_timing.as_mut(), "occlusion boxes");
-                        pass.stage(self.own_timing.as_mut(), "occlusion boxes");
-                        cull.test(&mut pass);
                         drop(pass);
                         cull.test_pass(&mut encoder, self.own_timing.as_mut());
                         pass = match &surface {
@@ -11027,13 +11055,15 @@ impl Renderer {
                         // that the test saw, copied after it.
                         Some(cull) => {
                             draw(&mut pass);
-                            if surface.is_some() {
-                                drop(pass);
-                                pass = plain_pass(&mut encoder);
+                            if cull.early() {
+                                if surface.is_some() {
+                                    drop(pass);
+                                    pass = plain_pass(&mut encoder);
+                                }
+                                pass.split(self.own_timing.as_mut(), "occlusion boxes");
+                                pass.stage(self.own_timing.as_mut(), "occlusion boxes");
+                                cull.test(&mut pass);
                             }
-                            pass.split(self.own_timing.as_mut(), "occlusion boxes");
-                            pass.stage(self.own_timing.as_mut(), "occlusion boxes");
-                            cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder, self.own_timing.as_mut());
                             flat.flatten_phase2(&mut encoder, self.own_timing.as_mut());
@@ -11106,13 +11136,15 @@ impl Renderer {
                                     pulled,
                                 );
                             }
-                            if surface.is_some() {
-                                drop(pass);
-                                pass = plain_pass(&mut encoder);
+                            if cull.early() {
+                                if surface.is_some() {
+                                    drop(pass);
+                                    pass = plain_pass(&mut encoder);
+                                }
+                                pass.split(self.own_timing.as_mut(), "occlusion boxes");
+                                pass.stage(self.own_timing.as_mut(), "occlusion boxes");
+                                cull.test(&mut pass);
                             }
-                            pass.split(self.own_timing.as_mut(), "occlusion boxes");
-                            pass.stage(self.own_timing.as_mut(), "occlusion boxes");
-                            cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder, self.own_timing.as_mut());
                             pass = match &surface {
@@ -11184,14 +11216,28 @@ impl Renderer {
                             // As cull.rs's arm: the boxes against phase 1's depth, then
                             // phase 2 and the CPU's draws in a pass that loads both targets.
                             if let Some(gpu) = gpu.filter(|_| occluding) {
-                                if surface.is_some() {
+                                if gpu.uses_hiz() {
                                     drop(pass);
-                                    pass = plain_pass(&mut encoder);
+                                    if let Some(cull) = self.cull.as_ref() {
+                                        cull.build_hiz(&mut encoder, self.own_timing.as_mut());
+                                        if let Some(hiz) = cull.hiz_read_group() {
+                                            gpu.test_hiz(
+                                                &mut encoder,
+                                                hiz,
+                                                self.own_timing.as_mut(),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    if surface.is_some() {
+                                        drop(pass);
+                                        pass = plain_pass(&mut encoder);
+                                    }
+                                    pass.split(self.own_timing.as_mut(), "occlusion boxes");
+                                    pass.stage(self.own_timing.as_mut(), "occlusion boxes");
+                                    gpu.test(&mut pass);
+                                    drop(pass);
                                 }
-                                pass.split(self.own_timing.as_mut(), "occlusion boxes");
-                                pass.stage(self.own_timing.as_mut(), "occlusion boxes");
-                                gpu.test(&mut pass);
-                                drop(pass);
                                 gpu.compact(&mut encoder, self.own_timing.as_mut());
                                 pass = match &surface {
                                     Some(surface) => terrain_pass(&mut encoder, surface, false),

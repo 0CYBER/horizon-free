@@ -1,12 +1,15 @@
 // GPU culling's occlusion test (gpu_culling.rs `BoxTest`), after
-// gpu_culling.wgsl in one module, made only where the depth test can be forced
-// before the fragment shader (Vulkan, cull.rs `DepthTest::Early`): one instance
-// per box `cull` listed, its section's box drawn front faces only against phase
-// 1's depth; then `count2`, `scan2` and `scatter2` write phase 2's draws.
+// gpu_culling.wgsl in one module. On compute Hi-Z backends (`prepare_boxes` +
+// `test_boxes`), one compute thread per queued box tests its 8 corners against
+// the reversed-Z min-depth Hi-Z pyramid (`hiz_depth`); on the `Early` raster
+// fallback (`vs_box` + `EARLY_FS_BOX` in gpu_culling.rs), boxes are drawn front
+// faces only against phase 1's depth. Then `count2`, `scan2` and `scatter2`
+// write phase 2's draws.
 @group(0) @binding(9) var<storage, read> box_list: array<u32>;
 @group(0) @binding(10) var<storage, read> box_origins: array<vec4<u32>>;
 @group(0) @binding(11) var<storage, read_write> box_runs: array<u32>;
 @group(0) @binding(12) var<storage, read> box_sections: array<Section>;
+@group(1) @binding(0) var hiz_depth: texture_2d<f32>;
 
 // The corners (bit 0: x, bit 1: y, bit 2: z) of the box's 12 triangles,
 // counter-clockwise seen from outside (cull.wgsl's `box_triangle_corner`).
@@ -39,17 +42,100 @@ fn vs_box(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box
     return out;
 }
 
-// Seen at this fragment, which runs only where the depth test passes (forced
-// before it: a fragment that failed would still write). Every writer stores
-// the same stamp.
-@fragment
-@early_depth_test(force)
-fn fs_box(in: BoxOut) -> @location(0) vec4<f32> {
-    let at = in.id * RUN_WORDS + SEEN_WORD;
-    if box_runs[at] != params.occl.x {
-        box_runs[at] = params.occl.x;
+// Compute the indirect dispatch dimensions for `test_boxes` from `counts[BOX + 1u]`
+// (queued box count), storing (x, y, z) into `counts[BOX + 2u..5u]`.
+@compute @workgroup_size(1)
+fn prepare_boxes() {
+    let n = atomicLoad(&counts[BOX + 1u]);
+    let wg = (n + BLOCK - 1u) / BLOCK;
+    let x = min(wg, ROW);
+    let y = select(0u, (wg + ROW - 1u) / ROW, wg > 0u);
+    atomicStore(&counts[BOX + 2u], x);
+    atomicStore(&counts[BOX + 3u], y);
+    atomicStore(&counts[BOX + 4u], select(0u, 1u, wg > 0u));
+}
+
+// Conservative Hi-Z compute occlusion test for GPU culling: 1 thread per queued box,
+// reading `box_list` (`counts`, read-only) while dispatched indirectly from `counts[BOX + 2u]`.
+@compute @workgroup_size(64)
+fn test_boxes(
+    @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32,
+) {
+    let t = (group.y * ROW + group.x) * BLOCK + lane;
+    let n = box_list[BOX + 1u];
+    if t >= n {
+        return;
     }
-    return vec4(0.0);
+    let id = box_list[params.occl.y + t];
+    let o = bitcast<vec3<f32>>(box_origins[id].xyz);
+    let b = box_sections[id].a.z;
+
+    var lo = vec2(1e30);
+    var hi = vec2(-1e30);
+    var max_z = -1e30;
+    for (var c = 0u; c < 8u; c++) {
+        let p = params.view_proj * vec4(box_corner(o, b, c), 1.0);
+        if !(p.w > 1e-6 && p.z < p.w) {
+            box_runs[id * RUN_WORDS + SEEN_WORD] = params.occl.x;
+            return;
+        }
+        let inv_w = 1.0 / p.w;
+        let ndc = p.xy * inv_w;
+        let z = p.z * inv_w;
+        lo = min(lo, ndc);
+        hi = max(hi, ndc);
+        max_z = max(max_z, z);
+    }
+
+    if hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0 || max_z < 0.0 {
+        return;
+    }
+
+    let ndc_lo = max(lo, vec2(-1.0));
+    let ndc_hi = min(hi, vec2(1.0));
+    let uv_min = vec2(ndc_lo.x * 0.5 + 0.5, 0.5 - ndc_hi.y * 0.5);
+    let uv_max = vec2(ndc_hi.x * 0.5 + 0.5, 0.5 - ndc_lo.y * 0.5);
+
+    let max_mip = i32(textureNumLevels(hiz_depth)) - 1;
+    let hiz_base = textureDimensions(hiz_depth, 0);
+    let hiz_size = vec2<f32>(hiz_base);
+    let rect = max((uv_max - uv_min) * hiz_size, vec2(0.0));
+    let max_extent = max(rect.x, rect.y);
+    var mip = clamp(i32(ceil(log2(max(max_extent, 1.0)))), 0, max_mip);
+
+    // Derive mip dimensions from mip 0 by integer shift rather than dynamic
+    // textureDimensions(hiz_depth, mip) to avoid extra descriptor queries and
+    // non-uniform OpImageQuerySizeLod lane miscompiles on Mesa llvmpipe.
+    if mip > 0 {
+        let fine = mip - 1;
+        let fine_size = vec2<i32>(max(hiz_base >> vec2<u32>(u32(fine)), vec2<u32>(1u)));
+        let f_lo = clamp(vec2<i32>(floor(uv_min * vec2<f32>(fine_size))), vec2(0), fine_size - vec2(1));
+        let f_hi = clamp(vec2<i32>(floor(uv_max * vec2<f32>(fine_size))), vec2(0), fine_size - vec2(1));
+        if (f_hi.x - f_lo.x <= 1) && (f_hi.y - f_lo.y <= 1) {
+            mip = fine;
+        }
+    }
+
+    var mip_size = vec2<i32>(max(hiz_base >> vec2<u32>(u32(mip)), vec2<u32>(1u)));
+    var lo_px = clamp(vec2<i32>(floor(uv_min * vec2<f32>(mip_size))), vec2(0), mip_size - vec2(1));
+    var hi_px = clamp(vec2<i32>(floor(uv_max * vec2<f32>(mip_size))), vec2(0), mip_size - vec2(1));
+    if ((hi_px.x - lo_px.x > 1) || (hi_px.y - lo_px.y > 1)) && mip < max_mip {
+        mip += 1;
+        mip_size = vec2<i32>(max(hiz_base >> vec2<u32>(u32(mip)), vec2<u32>(1u)));
+        lo_px = clamp(vec2<i32>(floor(uv_min * vec2<f32>(mip_size))), vec2(0), mip_size - vec2(1));
+        hi_px = clamp(vec2<i32>(floor(uv_max * vec2<f32>(mip_size))), vec2(0), mip_size - vec2(1));
+    }
+
+    let d00 = textureLoad(hiz_depth, vec2<i32>(lo_px.x, lo_px.y), mip).r;
+    let d10 = textureLoad(hiz_depth, vec2<i32>(hi_px.x, lo_px.y), mip).r;
+    let d01 = textureLoad(hiz_depth, vec2<i32>(lo_px.x, hi_px.y), mip).r;
+    let d11 = textureLoad(hiz_depth, vec2<i32>(hi_px.x, hi_px.y), mip).r;
+    let occluder_min_z = min(min(d00, d10), min(d01, d11));
+
+    if !(max_z < occluder_min_z) {
+        box_runs[id * RUN_WORDS + SEEN_WORD] = params.occl.x;
+    }
 }
 
 var<workgroup> tally: array<atomic<u32>, 3>;

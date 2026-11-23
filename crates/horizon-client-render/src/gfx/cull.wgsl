@@ -3,8 +3,11 @@
 struct Params {
     // This frame's test: a test that sees its box stores the number.
     stamp: u32,
-    // Boxes covering more than this share of the screen count as seen.
+    // Boxes covering more than this share of the screen count as seen (raster fallback).
     big: f32,
+    // Number of boxes to test this frame (compute Hi-Z pass).
+    count: u32,
+    pad: u32,
 }
 // The leading member of terrain.wgsl's Globals.
 struct Globals {
