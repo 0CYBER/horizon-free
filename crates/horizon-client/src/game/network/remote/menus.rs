@@ -23,7 +23,6 @@ impl Game<'_> {
         if let [(Some(slot), button, input)] = ops {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
-        let split = self.split_click(ops);
         let (container, menu) = self.remote_menu();
         let mut clicks = Vec::with_capacity(ops.len());
         for &(slot, button, input) in ops {
@@ -36,6 +35,8 @@ impl Game<'_> {
             };
             clicks.push((slot, button, input));
         }
+        // After the check: only a slot of the menu is read.
+        let split = self.split_click(ops);
         // Unpredicted: nothing changed, the carried stack as it is.
         let mut sent: Vec<Predicted> = clicks
             .iter()

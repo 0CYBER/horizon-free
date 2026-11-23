@@ -129,6 +129,8 @@ impl Game<'_> {
     /// Bedrock's tick when a stack splits: a right-click with an empty hand on a stack of more
     /// than one, which the menu halves. Returns the clicked slot and the counts that confirm
     /// the click actually did it (the stack before, and the half the hand should hold after).
+    /// Read through `slot_view`: a crafting result slot is computed, not stored. `&mut self`
+    /// stays, as for `split_done`: a mod point's signature hash covers the receiver.
     pub(super) fn split_click(
         &mut self,
         ops: &[(Option<usize>, i32, horizon_client::menu::Input)],
@@ -139,7 +141,7 @@ impl Game<'_> {
         if self.carried.is_some() {
             return None;
         }
-        let stack = self.slot_mut(*slot).clone()?;
+        let stack = self.slot_view(*slot)?;
         (stack.count > 1).then(|| (*slot, stack.count, stack.count.div_ceil(2)))
     }
     /// Whether the menu did the split `split_click` described: the hand took the upper half and
@@ -149,8 +151,7 @@ impl Game<'_> {
         let carried = self.carried.as_ref().is_some_and(|c| c.count == half);
         carried
             && self
-                .slot_mut(slot)
-                .clone()
+                .slot_view(slot)
                 .is_some_and(|s| s.count.saturating_add(half) == before)
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
