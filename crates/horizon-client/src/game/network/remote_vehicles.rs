@@ -321,6 +321,9 @@ impl Game<'_> {
             }
         }
         self.remote_seat_passengers(vehicle_id, passengers);
+        // One set for the loops over every mob, display, armor stand and
+        // interaction below: the server's list can hold many ids.
+        let riders = super::remote::passenger_set(passengers);
         let player_controls = passengers.first().is_some_and(|&id| {
             self.remote
                 .as_ref()
@@ -353,42 +356,43 @@ impl Game<'_> {
             if m.id == vehicle_id {
                 m.extra.rider = passengers.first().map(|&p| p as u32);
             }
-            if m.extra.mount == Some(vehicle_id) && !passengers.contains(&(m.id as i32)) {
+            if m.extra.mount == Some(vehicle_id) && !riders.contains(&(m.id as i32)) {
                 m.extra.mount = None;
                 m.extra.passenger = false;
-            } else if passengers.contains(&(m.id as i32)) {
+            } else if riders.contains(&(m.id as i32)) {
                 m.extra.mount = Some(vehicle_id);
                 m.extra.passenger = true;
             }
         }
         for (id, display) in &mut self.text_displays {
-            if passengers.contains(id) {
+            if riders.contains(id) {
                 display.vehicle = Some(vehicle_id);
             } else if display.vehicle == Some(vehicle_id) {
                 display.vehicle = None;
             }
         }
         for a in &mut self.armor_stands {
-            if passengers.contains(&(a.id as i32)) {
+            if riders.contains(&(a.id as i32)) {
                 a.vehicle = Some(vehicle_id);
             } else if a.vehicle == Some(vehicle_id) {
                 a.vehicle = None;
             }
         }
         for (&id, i) in &mut self.interactions {
-            if passengers.contains(&id) {
+            if riders.contains(&id) {
                 i.vehicle = Some(vehicle_id);
             } else if i.vehicle == Some(vehicle_id) {
                 i.vehicle = None;
             }
         }
-        if passengers.contains(&me)
+        let aboard = riders.contains(&me);
+        if aboard
             && let Some(r) = self.remote.as_mut()
         {
             r.first_passenger = passengers.first() == Some(&me);
             r.passenger_index = passengers.iter().position(|&p| p == me).unwrap_or(0);
         }
-        if passengers.contains(&me) {
+        if aboard {
             if self.riding != Some(vehicle_id) {
                 self.riding = Some(vehicle_id);
                 // ClientPacketListener.handleSetEntityPassengersPacket: boarding says how to get off,

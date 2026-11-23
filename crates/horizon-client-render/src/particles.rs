@@ -1192,8 +1192,9 @@ pub struct ParticleEngine {
 /// `ElderGuardianParticle.lifetime`.
 pub const ELDER_GUARDIAN_LIFETIME: i32 = 30;
 
-/// `ParticleGroup.MAX_PARTICLES` (per render group).
-const MAX_PARTICLES: usize = 16384;
+/// `ParticleGroup.MAX_PARTICLES` (per render group): no more of a group live
+/// at once, however many a tick adds.
+pub const MAX_PARTICLES: usize = 16384;
 /// `ParticleLimit.SPORE_BLOSSOM`, the only limited particle.
 const SPORE_BLOSSOM_LIMIT: usize = 1000;
 const PARTICLE_LIGHT_CACHE_SIZE: usize = 64;

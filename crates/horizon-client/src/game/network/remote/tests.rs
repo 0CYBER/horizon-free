@@ -4215,6 +4215,63 @@ fn any_tracked_passenger_makes_its_vehicle_a_vehicle() {
     super::seat_passengers(&mut entities, 43, &[]);
     assert!(vehicles(&entities).is_empty());
 }
+/// A `SetPassengers` list is looked up as a set: the seats come out as the
+/// scan of the list once per entity had them, duplicates, ids this client
+/// doesn't track and entities on another vehicle included.
+#[test]
+fn a_passenger_set_seats_as_the_list_scan_did() {
+    use std::collections::HashMap;
+    // The seating before the set: `contains` on the list for every entity.
+    fn scan(entities: &mut HashMap<i32, super::Tracked>, vehicle: u32, passengers: &[i32]) {
+        for (id, t) in entities.iter_mut() {
+            if passengers.contains(id) {
+                t.vehicle = Some(vehicle);
+            } else if t.vehicle == Some(vehicle) {
+                t.vehicle = None;
+            }
+        }
+    }
+    let tracked = |vehicle: Option<u32>| super::Tracked {
+        kind: "minecraft:item_display".to_owned(),
+        position: [0.0, 64.0, 0.0],
+        codec_base: [0.0, 64.0, 0.0],
+        silent: false,
+        vehicle,
+    };
+    // 1 rides 40 and stays listed, 2 rides 40 and is no longer listed, 3
+    // rides 41, 4 and -5 ride nothing; 99 is not tracked.
+    let start = || {
+        HashMap::from([
+            (1, tracked(Some(40))),
+            (2, tracked(Some(40))),
+            (3, tracked(Some(41))),
+            (4, tracked(None)),
+            (-5, tracked(None)),
+        ])
+    };
+    for list in [
+        &[1, 4, 4, 99, -5, 3][..],
+        &[][..],
+        &[2, 2, 2][..],
+        &[99, -1, 0][..],
+    ] {
+        let mut by_set = start();
+        let mut by_scan = start();
+        super::seat_passengers(&mut by_set, 40, list);
+        scan(&mut by_scan, 40, list);
+        let seats = |e: &HashMap<i32, super::Tracked>| {
+            let mut seats: Vec<_> = e.iter().map(|(id, t)| (*id, t.vehicle)).collect();
+            seats.sort_unstable();
+            seats
+        };
+        assert_eq!(seats(&by_set), seats(&by_scan), "list {list:?}");
+    }
+    // The first list, by hand: 3 left 41 for 40, 2 got off.
+    let mut seated = start();
+    super::seat_passengers(&mut seated, 40, &[1, 4, 4, 99, -5, 3]);
+    assert_eq!(seated[&2].vehicle, None);
+    assert!([1, 3, 4, -5].iter().all(|id| seated[id].vehicle == Some(40)));
+}
 /// `ClientboundSoundEntityPacket`: the sound is heard where the entity it
 /// names is — the local player included, which is no tracked entity — and
 /// an id this level doesn't have plays nothing at all.

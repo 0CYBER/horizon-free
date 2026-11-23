@@ -1700,6 +1700,53 @@ fn snap_to_face(value: f32) -> f32 {
     if value > 0.5 { 1.0 } else { 0.5 }
 }
 
+/// The most arrows or stingers drawn stuck in one body. Vanilla draws the
+/// whole count, which only grows by one per hit and drains over time, so a
+/// player rarely carries more than a few dozen; past that more copies look
+/// alike, while a count a server or mod sets (up to 2^31) would cost a frame
+/// that many models.
+pub const MAX_STUCK_DRAWN: i32 = 128;
+
+/// One copy `StuckInBodyLayer.submit` places: an index into `BODY_PARTS`, a
+/// cube of that part and the point in it (`snapToFace`d on the surface).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StuckPlacement {
+    part: usize,
+    cube: usize,
+    mid: [f32; 3],
+}
+
+/// `StuckInBodyLayer.submit`'s random draws for the first `count` copies
+/// (at most `MAX_STUCK_DRAWN`), from a random seeded by the entity id `id`:
+/// a body part, one of its `cubes(part)` cubes, a point in it. A part with no
+/// cube ends the copies.
+fn stuck_placements(
+    id: i32,
+    count: i32,
+    on_surface: bool,
+    cubes: impl Fn(usize) -> usize,
+) -> impl Iterator<Item = StuckPlacement> {
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    let mut random = LegacyRandom::new(i64::from(id));
+    std::iter::from_fn(move || {
+        let part = random.next_int_bound(BODY_PARTS.len() as i32).unwrap_or(0) as usize;
+        let cube = random.next_int_bound(cubes(part) as i32).ok()? as usize;
+        let mut mid = [
+            random.next_float(),
+            random.next_float(),
+            random.next_float(),
+        ];
+        if on_surface {
+            let plane = random.next_int_bound(3).unwrap_or(0) as usize;
+            if plane < 3 {
+                mid[plane] = snap_to_face(mid[plane]);
+            }
+        }
+        Some(StuckPlacement { part, cube, mid })
+    })
+    .take(count.clamp(0, MAX_STUCK_DRAWN) as usize)
+}
+
 /// `StuckInBodyLayer.submit` (with `submitStuckItem`) for a player: `count`
 /// copies of `item` (`ArrowLayer`'s arrow model, `BeeStingerLayer`'s stinger)
 /// stuck in random cubes of the posed body, placed from a random source
@@ -1718,7 +1765,6 @@ pub fn stuck_in_body(
     light: u32,
     out: &mut Vec<Vertex>,
 ) {
-    use horizon_core::random::{LegacyRandom, RandomSource};
     if count <= 0 {
         return;
     }
@@ -1732,31 +1778,15 @@ pub fn stuck_in_body(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    let mut random = LegacyRandom::new(i64::from(id));
-    for _ in 0..count {
-        let name = BODY_PARTS[random.next_int_bound(BODY_PARTS.len() as i32).unwrap_or(0) as usize];
-        let Some(part) = find_part(&model, name) else {
-            return;
-        };
-        let cubes = cube_bounds(part);
-        let Ok(index) = random.next_int_bound(cubes.len() as i32) else {
-            return;
-        };
-        let cube = cubes[index as usize];
+    // A part the model lacks has no cubes, which ends the copies as before.
+    let cubes = BODY_PARTS.map(|name| find_part(&model, name).map(cube_bounds).unwrap_or_default());
+    for stuck in stuck_placements(id, count, on_surface, |part| cubes[part].len()) {
+        let name = BODY_PARTS[stuck.part];
+        let cube = cubes[stuck.part][stuck.cube];
         let Some(mut t) = part_matrix(&model, base, &poses, name, 0.0) else {
             return;
         };
-        let mut mid = [
-            random.next_float(),
-            random.next_float(),
-            random.next_float(),
-        ];
-        if on_surface {
-            let plane = random.next_int_bound(3).unwrap_or(0) as usize;
-            if plane < 3 {
-                mid[plane] = snap_to_face(mid[plane]);
-            }
-        }
+        let mid = stuck.mid;
         let lerp = |k: usize| cube[k] + mid[k] * (cube[3 + k] - cube[k]);
         t *= glam::Mat4::from_translation(glam::Vec3::new(lerp(0), lerp(1), lerp(2)) / 16.0);
         let (dx, dy, dz) = (
@@ -3149,6 +3179,51 @@ mod tests {
                 cull_back: false,
             })
             .collect()
+    }
+
+    /// `StuckInBodyLayer.submit`: the copies drawn are the old loop's first
+    /// ones, in its random order, and no more than `MAX_STUCK_DRAWN` however
+    /// large the count a server sends.
+    #[test]
+    fn stuck_arrows_draw_the_first_copies_up_to_a_bound() {
+        use horizon_core::random::{LegacyRandom, RandomSource};
+        // Cubes per part of `BODY_PARTS`; the legs' second cube is a test's.
+        let cubes = |part: usize| [1, 1, 1, 1, 2, 2][part];
+        // The draws as the loop over the whole count made them.
+        let unbounded = |id: i32, count: i32, on_surface: bool| {
+            let mut random = LegacyRandom::new(i64::from(id));
+            let mut out = Vec::new();
+            for _ in 0..count {
+                let part = random.next_int_bound(6).unwrap() as usize;
+                let cube = random.next_int_bound(cubes(part) as i32).unwrap() as usize;
+                let mut mid = [
+                    random.next_float(),
+                    random.next_float(),
+                    random.next_float(),
+                ];
+                if on_surface {
+                    let plane = random.next_int_bound(3).unwrap() as usize;
+                    mid[plane] = snap_to_face(mid[plane]);
+                }
+                out.push(StuckPlacement { part, cube, mid });
+            }
+            out
+        };
+        for (id, on_surface) in [(7, false), (7, true), (-123_456, false)] {
+            for count in [0, 1, 5, 40, MAX_STUCK_DRAWN] {
+                let drawn: Vec<_> = stuck_placements(id, count, on_surface, cubes).collect();
+                assert_eq!(drawn, unbounded(id, count, on_surface), "{id} {count}");
+            }
+            let at_most = unbounded(id, MAX_STUCK_DRAWN, on_surface);
+            for count in [MAX_STUCK_DRAWN + 1, i32::MAX] {
+                let drawn: Vec<_> = stuck_placements(id, count, on_surface, cubes).collect();
+                assert_eq!(drawn, at_most, "{id} {count}");
+            }
+        }
+        // A part with no cube ends the copies there.
+        let headless = stuck_placements(7, 40, false, |part| usize::from(part != 0)).count();
+        let first_head = unbounded(7, 40, false).iter().position(|s| s.part == 0);
+        assert_eq!(Some(headless), first_head);
     }
 
     /// `ModelPart.cubes`: the corners of each cube of a part, six faces apiece.

@@ -560,7 +560,7 @@ impl Game<'_> {
             );
             return;
         }
-        for _ in 0..p.count {
+        for _ in 0..packet_particle_count(p.count) {
             let (at, v) = spread(self.particles.random(), p.randomization, p.pos, d, s);
             add(&mut self.particles, at, v);
         }
@@ -928,6 +928,16 @@ fn explosion_packet(
     })
 }
 
+/// How many particles `handleParticleEvent` makes of a packet's `count`. Its
+/// particles share one group, which keeps no more than
+/// `ParticleGroup.MAX_PARTICLES` alive, so a larger count from a server only
+/// costs the client time (a loop of up to 2^31 draws); none below 1.
+fn packet_particle_count(count: i32) -> usize {
+    usize::try_from(count)
+        .unwrap_or(0)
+        .min(horizon_client::particles::MAX_PARTICLES)
+}
+
 #[cfg(test)]
 pub(in crate::game) mod tests {
     use super::*;
@@ -941,6 +951,16 @@ pub(in crate::game) mod tests {
     use horizon_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
     use horizon_core::random::LegacyRandom;
     use horizon_protocol::packets::play;
+
+    /// A packet's count makes at most as many particles as one group keeps
+    /// alive (16384); a negative one makes none.
+    #[test]
+    fn a_particle_packet_makes_at_most_a_group_of_particles() {
+        assert_eq!(packet_particle_count(40), 40);
+        assert_eq!(packet_particle_count(16_384), 16_384);
+        assert_eq!(packet_particle_count(i32::MAX), 16_384);
+        assert_eq!(packet_particle_count(-7), 0);
+    }
 
     #[test]
     fn legacy_effect_markers_select_providers_without_a_registry_lookup() {

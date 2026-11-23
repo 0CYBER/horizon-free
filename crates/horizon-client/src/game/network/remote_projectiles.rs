@@ -27,6 +27,24 @@ fn default_cloud_particle() -> ParticleOptions {
     ParticleOptions::colored(ParticleType::EntityEffect, [1.0; 4])
 }
 
+/// `AreaEffectCloud.setRadius`: the server keeps a cloud's radius between 0
+/// and 32 (`MAX_RADIUS`). A client keeps a server's value in that range too,
+/// NaN as 0: the radius counts the particles of every tick.
+pub(super) fn cloud_radius(radius: f32) -> f32 {
+    if radius.is_nan() {
+        0.0
+    } else {
+        radius.clamp(0.0, 32.0)
+    }
+}
+
+/// `AreaEffectCloud.clientTick`'s particles of a tick once it stopped
+/// waiting: about one per square block of the disc, `ceil(PI * r * r)`.
+fn cloud_particle_count(radius: f32) -> i32 {
+    let radius = cloud_radius(radius);
+    (std::f32::consts::PI * radius * radius).ceil() as i32
+}
+
 /// `AreaEffectCloud.clientTick`: while waiting, now and then two particles
 /// near the middle; then about one per square block of the disc, drifting
 /// (an entity effect stays still).
@@ -43,10 +61,7 @@ pub(super) fn cloud_client_tick(
     let (count, spread) = if waiting {
         (2, 0.2)
     } else {
-        (
-            (std::f32::consts::PI * radius * radius).ceil() as i32,
-            radius,
-        )
+        (cloud_particle_count(radius), cloud_radius(radius))
     };
     for _ in 0..count {
         let r = particles.random();
@@ -498,7 +513,7 @@ impl Game<'_> {
                     return;
                 };
                 match (index, value) {
-                    (8, Value::Float(r)) => c.radius = *r,
+                    (8, Value::Float(r)) => c.radius = cloud_radius(*r),
                     (9, Value::Bool(w)) => c.waiting = *w,
                     (10, _) => c.particle = particle.unwrap_or_else(default_cloud_particle),
                     _ => {}
@@ -971,6 +986,21 @@ mod tests {
     use super::*;
     use horizon_client::mobs::Who;
     use horizon_core::geometry::Aabb;
+
+    /// `AreaEffectCloud.setRadius` keeps a radius between 0 and 32, so a
+    /// tick draws at most ceil(1024 * PI) = 3217 particles, whatever radius
+    /// a server sends.
+    #[test]
+    fn a_cloud_counts_its_particles_from_a_radius_of_at_most_32() {
+        // ceil(9 * PI) = ceil(28.27) = 29.
+        assert_eq!(cloud_particle_count(3.0), 29);
+        assert_eq!(cloud_particle_count(1.0e6), 3217);
+        assert_eq!(cloud_particle_count(f32::INFINITY), 3217);
+        assert_eq!(cloud_particle_count(f32::NAN), 0);
+        assert_eq!(cloud_particle_count(-3.0), 0);
+        assert_eq!(cloud_radius(f32::NAN), 0.0);
+        assert_eq!(cloud_radius(1.0e6), 32.0);
+    }
 
     /// A world with nothing in it: the client tick of a projectile only
     /// needs the blocks around it.
