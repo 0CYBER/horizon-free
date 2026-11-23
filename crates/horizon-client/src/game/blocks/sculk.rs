@@ -1039,6 +1039,16 @@ impl Game<'_> {
 
     /// `Warden.VibrationUser`: accept a vibration for the warden at `index`.
     fn warden_listen(&mut self, index: usize, event: &'static str, pos: [f64; 3], ctx: &Context) {
+        // Warden.VibrationUser.canReceiveVibration: ignore a vibration whose
+        // source block is outside the world border.
+        let src = [pos[0].floor() as i32, pos[2].floor() as i32];
+        if !self
+            .border
+            .geometry()
+            .is_within_bounds(f64::from(src[0]), f64::from(src[1]), 0.0)
+        {
+            return;
+        }
         let now = self.world.game_time;
         let ctx = warden::heard_by(*ctx, &self.mob_teams(), self.mobs[index].id);
         let (occludes, world) = (&self.sculk.tables.occludes, &self.world);
