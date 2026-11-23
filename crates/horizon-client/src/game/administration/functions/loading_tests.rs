@@ -34,22 +34,15 @@ fn failed_pack_selection_keeps_the_live_library_and_saved_selection() {
             .unwrap();
         game.build_registries();
         game.set_allow_commands(true);
-        let scheduled = Scheduled {
-            id: "prg:later".into(),
-            time: 100,
-            seq: 1,
-        };
-        game.fns.schedule.push(scheduled.clone());
+        game.fns.schedule.schedule("prg:later", 100);
+        let expected = vec![("prg:later", 100, 1)];
 
         assert!(!game.run_command("datapack enable \"file/extra\""));
         assert_eq!(game.fns.enabled, ["file/base"]);
         assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), settings);
         assert!(game.fns.store.predicates.contains_key("prg:base"));
         assert!(!game.fns.store.predicates.contains_key("prg:extra"));
-        assert_eq!(
-            game.fns.schedule.as_slice(),
-            std::slice::from_ref(&scheduled)
-        );
+        assert_eq!(game.fns.schedule.iter().collect::<Vec<_>>(), expected);
 
         // Repair the available pack. Enabling now commits both its library and selected id.
         write_pack("extra", json!({"type":"all_of", "terms":["prg:base"]}));
@@ -64,7 +57,7 @@ fn failed_pack_selection_keeps_the_live_library_and_saved_selection() {
         assert_eq!(game.fns.enabled, ["file/base", "file/extra"]);
         assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), committed);
         assert!(game.fns.store.predicates.contains_key("prg:base"));
-        assert_eq!(game.fns.schedule, [scheduled]);
+        assert_eq!(game.fns.schedule.iter().collect::<Vec<_>>(), expected);
         std::fs::remove_dir_all(dir).unwrap();
     });
 }

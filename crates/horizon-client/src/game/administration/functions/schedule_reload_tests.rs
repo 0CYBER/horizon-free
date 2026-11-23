@@ -116,7 +116,7 @@ fn a_pending_event_survives_a_save_and_a_reload() {
         .fns
         .schedule
         .iter()
-        .map(|e| (e.id.clone(), e.time))
+        .map(|(id, time, _)| (id.to_owned(), time))
         .collect();
     assert_eq!(loaded, vec![("hs:hello".to_owned(), due)]);
     game.world.game_time = due;

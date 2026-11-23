@@ -20,16 +20,115 @@ use horizon_client::{
 };
 use horizon_core::nbt::Tag;
 use mod_api::__private::reload::ReloadStageError;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-/// A `TimerQueue` event.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct Scheduled {
-    /// `ns:function`, or `#ns:tag` for a function tag.
-    pub id: String,
-    pub time: i64,
-    pub seq: u64,
+/// Vanilla `TimerQueue`: scheduled function/tag events ordered by `(time, seq)`
+/// with an `(id, time)` index so non-due ticks inspect only the earliest entry,
+/// due-event bursts pop in `O(log n)`, duplicate `(id, time)` scheduling is
+/// suppressed in `O(1)`, and `remove(id)` clears only that id's entries.
+#[derive(Clone, Debug, Default)]
+pub(super) struct TimerQueue {
+    /// Pending events ordered by `(trigger_time, seq)`.
+    queue: BTreeMap<(i64, u64), Arc<str>>,
+    /// Maps each scheduled `id` (`ns:function` or `#ns:tag`) to `trigger_time -> seq`.
+    by_id: HashMap<Arc<str>, HashMap<i64, u64>>,
+    next_seq: u64,
 }
+
+impl TimerQueue {
+    pub(super) fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear(&mut self) {
+        self.queue.clear();
+        self.by_id.clear();
+    }
+
+    /// Schedule `id` at `time`, ignoring an existing `(id, time)` entry as in
+    /// vanilla `TimerQueue.schedule`.
+    pub(super) fn schedule(&mut self, id: &str, time: i64) -> bool {
+        if let Some((existing, times)) = self.by_id.get_key_value(id) {
+            if times.contains_key(&time) {
+                return false;
+            }
+            let key = Arc::clone(existing);
+            self.next_seq = self.next_seq.wrapping_add(1);
+            let seq = self.next_seq;
+            self.by_id
+                .get_mut(id)
+                .expect("id checked present")
+                .insert(time, seq);
+            self.queue.insert((time, seq), key);
+            return true;
+        }
+        self.next_seq = self.next_seq.wrapping_add(1);
+        let seq = self.next_seq;
+        let key: Arc<str> = Arc::from(id);
+        let mut times = HashMap::with_capacity(1);
+        times.insert(time, seq);
+        self.by_id.insert(Arc::clone(&key), times);
+        self.queue.insert((time, seq), key);
+        true
+    }
+
+    /// Remove every pending entry for `id` (`TimerQueue.remove`), returning how
+    /// many were removed.
+    pub(super) fn remove(&mut self, id: &str) -> usize {
+        let Some(times) = self.by_id.remove(id) else {
+            return 0;
+        };
+        let count = times.len();
+        for (time, seq) in times {
+            self.queue.remove(&(time, seq));
+        }
+        count
+    }
+
+    /// Whether at least one event is due at or before `now`.
+    pub(super) fn has_due(&self, now: i64) -> bool {
+        self.queue
+            .first_key_value()
+            .is_some_and(|(&(time, _), _)| time <= now)
+    }
+
+    /// Pop the earliest event due at or before `now` in `(time, seq)` order.
+    pub(super) fn pop_due(&mut self, now: i64) -> Option<Arc<str>> {
+        let entry = self.queue.first_entry()?;
+        let (time, _) = *entry.key();
+        if time > now {
+            return None;
+        }
+        let id = entry.remove();
+        if let Some(times) = self.by_id.get_mut(&id) {
+            times.remove(&time);
+            if times.is_empty() {
+                self.by_id.remove(&id);
+            }
+        }
+        Some(id)
+    }
+
+    /// Pending events in `(time, seq)` order: `(id, time, seq)`.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&str, i64, u64)> {
+        self.queue
+            .iter()
+            .map(|(&(time, seq), id)| (id.as_ref(), time, seq))
+    }
+
+    /// Distinct scheduled event ids (`TimerQueue.getEventsIds`).
+    pub(super) fn event_ids(&self) -> impl Iterator<Item = &str> {
+        self.by_id.keys().map(Arc::as_ref)
+    }
+}
+
 #[derive(Default)]
 pub(super) struct FnState {
     pub store: DataStore,
@@ -39,11 +138,10 @@ pub(super) struct FnState {
     loaded: bool,
     /// Run the `minecraft:load` tag on the next tick.
     load_pending: bool,
-    pub schedule: Vec<Scheduled>,
+    pub schedule: TimerQueue,
     /// The world's saved queue has been read once: it is the live
     /// `TimerQueue` `SavedData`, so a later reload keeps it as it is.
     schedule_loaded: bool,
-    next_seq: u64,
     /// A dedicated server's `function-permission-level`.
     pub permission: Option<u8>,
 }
@@ -495,7 +593,6 @@ impl Game<'_> {
             .filter(|id| self.fns.store.slot_source_tag(id).is_ok())
             .cloned()
             .collect();
-        reg.schedules = self.fns.schedule.iter().map(|s| s.id.clone()).collect();
 
         reg.datapacks_enabled = std::iter::once("vanilla".to_owned())
             .chain(self.fns.enabled.iter().cloned())
@@ -551,7 +648,7 @@ impl Game<'_> {
     }
 
     fn sync_schedule_registry(&mut self) {
-        self.ui.registries.schedules = self.fns.schedule.iter().map(|s| s.id.clone()).collect();
+        self.ui.registries.schedules = self.fns.schedule.event_ids().map(str::to_owned).collect();
     }
 
     // ---- scheduled events ------------------------------------------------------
@@ -573,30 +670,28 @@ impl Game<'_> {
                 continue;
             };
             let _ = cb;
-            self.fns.next_seq += 1;
-            self.fns.schedule.push(Scheduled {
-                id: id.to_string_lossy(),
-                time: *time,
-                seq: self.fns.next_seq,
-            });
+            self.fns.schedule.schedule(&id.to_string_lossy(), *time);
         }
     }
     pub(super) fn save_schedule(&self) {
         if !self.fns.loaded || self.remote.is_some() {
             return;
         }
-        let mut events = self.fns.schedule.clone();
-        events.sort_by_key(|e| (e.time, e.seq));
-        let list = events
+        if self.fns.schedule.is_empty() && !self.schedule_path().exists() {
+            return;
+        }
+        let list = self
+            .fns
+            .schedule
             .iter()
-            .map(|e| {
-                let (kind, name) = match e.id.strip_prefix('#') {
+            .map(|(id, time, _)| {
+                let (kind, name) = match id.strip_prefix('#') {
                     Some(tag) => ("minecraft:function_tag", tag),
-                    None => ("minecraft:function", e.id.as_str()),
+                    None => ("minecraft:function", id),
                 };
                 Tag::compound([
-                    ("trigger_time", Tag::Long(e.time)),
-                    ("id", Tag::String(e.id.as_str().into())),
+                    ("trigger_time", Tag::Long(time)),
+                    ("id", Tag::String(id.into())),
                     (
                         "callback",
                         Tag::compound([
@@ -607,9 +702,6 @@ impl Game<'_> {
                 ])
             })
             .collect();
-        if events.is_empty() && !self.schedule_path().exists() {
-            return;
-        }
         let _ = save::write_dat(
             &self.schedule_path(),
             Tag::compound([
@@ -648,26 +740,19 @@ impl Game<'_> {
             return;
         }
         self.exec = ExecState::default();
-        let source = self.server_source();
         let now = self.world.game_time;
-        loop {
-            let due = self
-                .fns
-                .schedule
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.time <= now)
-                .min_by_key(|(_, e)| (e.time, e.seq))
-                .map(|(i, _)| i);
-            let Some(i) = due else { break };
-            let event = self.fns.schedule.remove(i);
-            match event.id.strip_prefix('#') {
+        if !self.fns.schedule.has_due(now) {
+            return;
+        }
+        let source = self.server_source();
+        while let Some(id) = self.fns.schedule.pop_due(now) {
+            match id.strip_prefix('#') {
                 Some(tag) => {
                     for f in self.fns.store.tag_functions(tag) {
                         self.run_function_by_id(&f, None, source);
                     }
                 }
-                None => self.run_function_by_id(&event.id, None, source),
+                None => self.run_function_by_id(&id, None, source),
             }
         }
     }
@@ -1048,9 +1133,7 @@ impl Game<'_> {
             let Some(Arg::Resource(name)) = ctx.get("function").cloned() else {
                 return Ok(0);
             };
-            let before = self.fns.schedule.len();
-            self.fns.schedule.retain(|e| e.id != name);
-            let count = before - self.fns.schedule.len();
+            let count = self.fns.schedule.remove(&name);
             if count == 0 {
                 return Err(err("commands.schedule.cleared.failure", &[&name]));
             }
@@ -1087,22 +1170,9 @@ impl Game<'_> {
             }
         };
         if replace {
-            self.fns.schedule.retain(|e| e.id != schedule_id);
+            self.fns.schedule.remove(&schedule_id);
         }
-        if !self
-            .fns
-            .schedule
-            .iter()
-            .any(|e| e.id == schedule_id && e.time == tick_time)
-        {
-            self.fns.next_seq += 1;
-            let seq = self.fns.next_seq;
-            self.fns.schedule.push(Scheduled {
-                id: schedule_id,
-                time: tick_time,
-                seq,
-            });
-        }
+        self.fns.schedule.schedule(&schedule_id, tick_time);
         let key = if name.starts_with('#') {
             "commands.schedule.created.tag"
         } else {
@@ -2501,11 +2571,7 @@ mod tests {
             assert!(game.stations().recipe_index.contains("test:sample"));
 
             // Changing packs must not reload an old timer from disk.
-            game.fns.schedule.push(Scheduled {
-                id: "test:start".into(),
-                time: 1000,
-                seq: 1,
-            });
+            game.fns.schedule.schedule("test:start", 1000);
             game.save_schedule();
             game.fns.schedule.clear();
             assert!(game.run_command("datapack disable \"file/test\""));
@@ -3755,6 +3821,62 @@ mod required_tag_tests {
             assert_eq!(game.world.game_time, clock);
             std::fs::remove_dir_all(dir).unwrap();
         });
+    }
+
+    #[test]
+    fn timer_queue_orders_dedups_removes_and_handles_reentrant_bursts() {
+        let mut q = TimerQueue::default();
+        assert!(!q.has_due(0));
+        assert_eq!(q.pop_due(0), None);
+
+        // Out-of-order trigger times and same-tick FIFO tie-breaking.
+        assert!(q.schedule("ns:later", 20));
+        assert!(q.schedule("ns:first", 10));
+        assert!(q.schedule("ns:second", 10));
+        assert!(q.schedule("ns:overdue", 5));
+        // Duplicate (id, time) is ignored without changing its sequence position.
+        assert!(!q.schedule("ns:first", 10));
+        // Append: same id at a different time is kept alongside the earlier one.
+        assert!(q.schedule("ns:first", 15));
+        assert_eq!(q.len(), 5);
+
+        // Before the earliest due tick, nothing pops.
+        assert!(!q.has_due(4));
+        assert_eq!(q.pop_due(4), None);
+
+        // Due burst at tick 10 drains (5, overdue), then (10, first), then (10, second).
+        // Simulate re-entrant `/schedule clear` + self-reschedule mid-burst.
+        assert!(q.has_due(10));
+        assert_eq!(q.pop_due(10).as_deref(), Some("ns:overdue"));
+        assert_eq!(q.pop_due(10).as_deref(), Some("ns:first"));
+        // Re-entrantly cancel `ns:second` (also due at 10) and reschedule `ns:first` at 10.
+        assert_eq!(q.remove("ns:second"), 1);
+        assert_eq!(q.remove("ns:missing"), 0);
+        // `ns:first` still has its tick-15 entry, and tick-10 was popped so it can be scheduled again.
+        assert!(q.schedule("ns:first", 10));
+        assert_eq!(q.pop_due(10).as_deref(), Some("ns:first"));
+        assert_eq!(q.pop_due(10), None);
+
+        // Remaining entries iterate in `(time, seq)` order and clear by id removes all of them.
+        assert!(q.schedule("ns:first", 25));
+        let remaining: Vec<_> = q
+            .iter()
+            .map(|(id, time, _)| (id.to_owned(), time))
+            .collect();
+        assert_eq!(
+            remaining,
+            vec![
+                ("ns:first".to_owned(), 15),
+                ("ns:later".to_owned(), 20),
+                ("ns:first".to_owned(), 25),
+            ]
+        );
+        assert_eq!(q.remove("ns:first"), 2);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q.event_ids().collect::<Vec<_>>(), vec!["ns:later"]);
+        assert_eq!(q.pop_due(20).as_deref(), Some("ns:later"));
+        assert!(q.is_empty());
+        assert!(q.event_ids().next().is_none());
     }
 }
 

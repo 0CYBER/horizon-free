@@ -42,3 +42,8 @@ horizon_client::game::Game<'_>::hud  #20196
 horizon_client::game::Game<'_>::hud_layers  #20196
 horizon_client::game::reused_hud_vertices  #20196
 horizon_client::game::store_hud_vertices  #20196
+horizon_client::game::functions::FnState::next_seq  kind=field  #20401
+horizon_client::game::functions::Scheduled  kind=struct  #20401
+horizon_client::game::functions::Scheduled::id  kind=field  #20401
+horizon_client::game::functions::Scheduled::seq  kind=field  #20401
+horizon_client::game::functions::Scheduled::time  kind=field  #20401
