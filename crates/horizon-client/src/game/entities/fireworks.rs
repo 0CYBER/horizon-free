@@ -185,6 +185,7 @@ impl Game<'_> {
             item: stack.clone(),
             random: horizon_core::random::EntityRandom::own(own.clone()),
             on_ground: false,
+            horizontal_collision: false,
             has_been_shot: false,
             silent: false,
             fall_distance: 0.0,

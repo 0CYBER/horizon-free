@@ -48,6 +48,9 @@ pub struct Rocket {
     /// `Entity.onGround`: whether its last move was stopped going down (or
     /// the one it was loaded with, until it moves).
     pub on_ground: bool,
+    /// `Entity.horizontalCollision`: whether the last move was stopped on X
+    /// or Z. `FireworkRocketEntity.tick` uses it to drop horizontal thrust.
+    pub horizontal_collision: bool,
     /// `Projectile.hasBeenShot`: its first tick posts `projectile_shoot`.
     pub has_been_shot: bool,
     /// `Entity.isSilent`: no launch sound.
@@ -88,6 +91,7 @@ impl Rocket {
             item,
             random: horizon_client::projectiles::unique_random(position),
             on_ground: false,
+            horizontal_collision: false,
             // The server posts the shot.
             has_been_shot: true,
             silent: false,
@@ -160,6 +164,7 @@ impl Rocket {
             item,
             random: horizon_client::projectiles::unique_random(r.position),
             on_ground: r.on_ground,
+            horizontal_collision: false,
             has_been_shot: r.has_been_shot,
             silent: r.silent,
             fall_distance: r.fall_distance,
@@ -222,6 +227,11 @@ impl Rocket {
             horizon_client::arrows::lerp_rotation(old[1], atan2(v.y, horizontal)),
         ];
     }
+    /// `FireworkRocketEntity.tick`: horizontal thrust is 1.0 while the
+    /// previous move hit a wall, otherwise 1.15.
+    pub fn horizontal_acceleration(&self) -> f64 {
+        if self.horizontal_collision { 1.0 } else { 1.15 }
+    }
     /// The move of a rocket attached to no entity: sped up and rising, or an
     /// angled one's own motion.
     pub fn next_motion(&self) -> Vec3 {
@@ -229,9 +239,9 @@ impl Rocket {
             self.velocity
         } else {
             Vec3::new(
-                self.velocity.x * 1.15,
+                self.velocity.x * self.horizontal_acceleration(),
                 self.velocity.y + 0.04,
-                self.velocity.z * 1.15,
+                self.velocity.z * self.horizontal_acceleration(),
             )
         }
     }
@@ -284,6 +294,7 @@ impl Rocket {
         let horizontal = (moved.x - wanted.x).abs() > 1e-7 || (moved.z - wanted.z).abs() > 1e-7;
         // Entity.move: on the ground when a move down was stopped.
         self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
+        self.horizontal_collision = horizontal;
         self.position = Vec3::new(
             self.position.x + moved.x,
             self.position.y + moved.y,
