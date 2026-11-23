@@ -1822,6 +1822,10 @@ fn a_chunk_is_written_with_the_selected_region_version() {
     });
     let records = [((3, 4), Record::Tag(Arc::clone(&tag)))];
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
+    // Every other reader of the setting waits until the default is back.
+    let _codec = super::compression_pool::SELECTED_CODEC
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for name in ["none", "lz4", "gzip", "deflate"] {
         assert!(Compression::configure(name), "{name}");
         let written = compress_records(&refs, 99)
@@ -1859,6 +1863,7 @@ fn records_compressed_on_helpers_match_one_thread_in_order() {
         })
         .collect();
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
+    let _codec = super::compression_pool::holding_selected_codec();
     let compressed = compress_records(&refs, 1234);
     assert_eq!(compressed.len(), records.len());
     for ((_, record), got) in records.iter().zip(compressed) {

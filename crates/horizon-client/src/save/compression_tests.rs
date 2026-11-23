@@ -8,7 +8,9 @@ use horizon_world::region::RegionFile;
 
 use super::{
     Record,
-    compression_pool::{CompressionPool, compress_records, compress_records_with_pool},
+    compression_pool::{
+        CompressionPool, compress_records, compress_records_with_pool, holding_selected_codec,
+    },
 };
 
 fn sample_tag(i: i32) -> NamedTag {
@@ -53,6 +55,7 @@ fn parallel_compression_matches_single_threaded_fidelity() {
         })
         .collect();
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
+    let _codec = holding_selected_codec();
     let pool_compressed = compress_records(&refs, 9999);
     assert_eq!(pool_compressed.len(), records.len());
 
@@ -88,6 +91,7 @@ fn custom_worker_pool_sizes_all_produce_identical_output() {
         .collect();
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
 
+    let _codec = holding_selected_codec();
     let pool_1 = CompressionPool::new(1);
     let pool_2 = CompressionPool::new(2);
     let pool_4 = CompressionPool::new(4);
