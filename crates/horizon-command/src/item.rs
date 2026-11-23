@@ -346,13 +346,7 @@ pub fn decode_component(id: &str, t: &Tag, reg: &Registries) -> Result<(), Strin
             }
             Ok(())
         }
-        "minecraft:max_stack_size" => {
-            let v = int_of(t).ok_or("Not a number")?;
-            if !(1..=99).contains(&v) {
-                return Err(format!("Value must be within range [1;99]: {v}"));
-            }
-            Ok(())
-        }
+        "minecraft:max_stack_size" => component_values::max_stack_size(t).map(|_| ()),
         // Enchantable.CODEC: a record with one required positive integer.
         "minecraft:enchantable" => {
             let Tag::Compound(_) = t else {

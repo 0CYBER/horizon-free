@@ -119,6 +119,26 @@ fn contents_weight(items: &Items, inside: &[ItemStack]) -> Weight {
     })
 }
 
+/// `BundleContents.computeContentWeight` returns an error when its fraction
+/// arithmetic exceeds Java's integer bounds. The weight may exceed one.
+pub(crate) fn valid_contents_weight(items: &Items, inside: &[ItemStack]) -> bool {
+    fn checked(weight: Weight) -> Option<Weight> {
+        (i32::try_from(weight.n).is_ok() && i32::try_from(weight.d).is_ok()).then_some(weight)
+    }
+    fn weigh(items: &Items, inside: &[ItemStack]) -> Option<Weight> {
+        inside.iter().try_fold(Weight::ZERO, |total, stack| {
+            let weight = if let Some(nested) = contents_of(items, stack) {
+                checked(weigh(items, nested)?.add(Weight::new(1, 16)))?
+            } else {
+                item_weight(items, stack)
+            };
+            let weight = checked(weight.times(stack.count))?;
+            checked(total.add(weight))
+        })
+    }
+    weigh(items, inside).is_some()
+}
+
 /// `BundleItem.onDestroyed` (`ItemStack.onDestroyed` for a bundle): the stack
 /// is emptied and every stack it held comes back as its own item copy, which
 /// `ItemUtils.onContainerDestroyed` drops where the entity lay.

@@ -59,6 +59,38 @@ pub(in crate::game) enum Owner {
     Block([i32; 3]),
 }
 
+#[derive(Clone, Copy)]
+struct ItemModifier<'a> {
+    json: &'a serde_json::Value,
+    /// The original typed component payloads of an inline modifier.
+    snbt: Option<&'a Tag>,
+}
+
+impl<'a> ItemModifier<'a> {
+    fn field(self, key: &str) -> Self {
+        Self {
+            json: &self.json[key],
+            snbt: self.snbt.and_then(|tag| tag.get(key)),
+        }
+    }
+
+    fn elements(self) -> impl Iterator<Item = Self> {
+        let tags = match self.snbt {
+            Some(Tag::List(tags)) => tags.as_slice(),
+            _ => &[],
+        };
+        self.json
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(move |(i, json)| Self {
+                json,
+                snbt: tags.get(i),
+            })
+    }
+}
+
 fn mob_slot(name: &str) -> Option<usize> {
     Some(match name {
         "mainhand" => 0,
@@ -978,7 +1010,7 @@ impl Game<'_> {
     /// applied to a stack; `None` when the stack ends up empty.
     fn apply_item_modifier(
         &mut self,
-        m: &serde_json::Value,
+        modifier: ItemModifier<'_>,
         stack: Option<ItemStack>,
         rng: &mut horizon_core::random::LegacyRandom,
         this: Option<&horizon_client::advancements::EntityView>,
@@ -1003,12 +1035,20 @@ impl Game<'_> {
                 _ => v["value"].as_f64().unwrap_or(0.) as i32,
             }
         };
+        let m = modifier.json;
         match m {
-            Value::Array(list) => list.iter().fold(stack, |s, f| {
+            Value::Array(_) => modifier.elements().fold(stack, |s, f| {
                 self.apply_item_modifier(f, s, rng, this, origin, depth + 1)
             }),
             Value::String(id) => match self.fns.store.item_modifiers.get(id).cloned() {
-                Some(f) => self.apply_item_modifier(&f, stack, rng, this, origin, depth + 1),
+                Some(f) => self.apply_item_modifier(
+                    ItemModifier { json: &f, snbt: None },
+                    stack,
+                    rng,
+                    this,
+                    origin,
+                    depth + 1,
+                ),
                 None => stack,
             },
             Value::Object(_) => {
@@ -1019,12 +1059,9 @@ impl Game<'_> {
                     return Some(stack);
                 }
                 match m["type"].as_str().unwrap_or("") {
-                    "minecraft:sequence" => {
+                    "minecraft:sequence" | "sequence" => {
                         #[allow(clippy::manual_try_fold)]
-                        return m["functions"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
+                        return modifier.field("functions").elements()
                             .fold(Some(stack), |s, f| {
                                 self.apply_item_modifier(f, s, rng, this, origin, depth + 1)
                             });
@@ -1154,29 +1191,22 @@ impl Game<'_> {
                         };
                         set_custom_data(&mut stack, &tag);
                     }
-                    "minecraft:set_components" => {
-                        let patch = m["components"].clone();
-                        edit_components(&mut stack, |c| {
-                            for (k, v) in patch.as_object().into_iter().flatten() {
-                                let (remove, key) = match k.strip_prefix('!') {
-                                    Some(rest) => (true, rest),
-                                    None => (false, k.as_str()),
-                                };
-                                let key = if key.contains(':') {
-                                    key.to_owned()
-                                } else {
-                                    format!("minecraft:{key}")
-                                };
-                                if remove {
-                                    c.remove(&key.as_str().into());
-                                } else {
-                                    c.insert(
-                                        key.as_str().into(),
-                                        horizon_client::scoreboard::json_to_tag(v),
-                                    );
-                                }
-                            }
-                        });
+                    "minecraft:set_components" | "set_components" => {
+                        // SetComponentsFunction.run validates before ItemCommands limits the count.
+                        let components = modifier.field("components");
+                        let patch = components.snbt.map_or_else(
+                            || std::borrow::Cow::Owned(
+                                horizon_client::scoreboard::json_to_tag(components.json)
+                            ),
+                            std::borrow::Cow::Borrowed,
+                        );
+                        if let Tag::Compound(patch) = patch.as_ref() {
+                            horizon_client::item_data::apply_components_and_validate(
+                                &mut stack,
+                                patch,
+                                self.items(),
+                            );
+                        }
                     }
                     "minecraft:toggle_tooltips" => {
                         let toggles = m["toggles"].clone();
@@ -1229,10 +1259,10 @@ impl Game<'_> {
                             c.insert("minecraft:tooltip_display".into(), Tag::compound(display));
                         });
                     }
-                    "minecraft:filtered" => {
+                    "minecraft:filtered" | "filtered" => {
                         let pass = self.loot_item_filter(&m["item_filter"], &stack);
-                        let branch = if pass { &m["on_pass"] } else { &m["on_fail"] };
-                        if branch.is_null() {
+                        let branch = modifier.field(if pass { "on_pass" } else { "on_fail" });
+                        if branch.json.is_null() {
                             return Some(stack);
                         }
                         return self.apply_item_modifier(
@@ -1259,7 +1289,7 @@ impl Game<'_> {
     }
     /// `ResourceOrIdArgument.getLootModifier`: an inline modifier (SNBT) or
     /// a registered one.
-    pub(super) fn item_modifier_arg(&mut self, ctx: &Context, name: &str) -> R<serde_json::Value> {
+    fn item_modifier_arg(&self, ctx: &Context, name: &str) -> R<(serde_json::Value, Option<Tag>)> {
         let raw = match ctx.get(name) {
             Some(Arg::Resource(s) | Arg::Str(s)) => s.clone(),
             _ => return Err(err("command.failed", &[])),
@@ -1267,7 +1297,7 @@ impl Game<'_> {
         if raw.starts_with('{') || raw.starts_with('[') {
             let (tag, _) = horizon_core::nbt::parse_snbt(&raw)
                 .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
-            return Ok(horizon_client::scoreboard::tag_to_json(&tag));
+            return Ok((horizon_client::scoreboard::tag_to_json(&tag), Some(tag)));
         }
         let id = if raw.contains(':') {
             raw
@@ -1279,6 +1309,7 @@ impl Game<'_> {
             .item_modifiers
             .get(&id)
             .cloned()
+            .map(|json| (json, None))
             .ok_or_else(|| {
                 err(
                     "argument.resource_or_id.no_such_element",
@@ -1292,9 +1323,10 @@ impl Game<'_> {
         let Some(Arg::Str(slot_name)) = ctx.get("slot").cloned() else {
             return Ok(0);
         };
-        let modifier = self.item_modifier_arg(ctx, "modifier")?;
+        let (json, snbt) = self.item_modifier_arg(ctx, "modifier")?;
+        let modifier = ItemModifier { json: &json, snbt: snbt.as_ref() };
         let source = self.command_source.unwrap_or_else(|| self.player_source());
-        let view = source.entity.map(|t| self.entity_view_asked(t, &modifier));
+        let view = source.entity.map(|t| self.entity_view_asked(t, &json));
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as i64);
@@ -1324,7 +1356,7 @@ impl Game<'_> {
                         &mut selected,
                         |g, current| {
                             g.apply_item_modifier(
-                                &modifier,
+                                modifier,
                                 Some(current),
                                 &mut rng,
                                 view.as_ref(),
@@ -1348,7 +1380,7 @@ impl Game<'_> {
                     continue;
                 };
                 let new = self.apply_item_modifier(
-                    &modifier,
+                    modifier,
                     Some(current.clone()),
                     &mut rng,
                     view.as_ref(),
@@ -1456,16 +1488,17 @@ impl Game<'_> {
             }
             // ItemCommands.applyModifier on each source stack.
             if ctx.get("modifier").is_some() {
-                let modifier = self.item_modifier_arg(ctx, "modifier")?;
+                let (json, snbt) = self.item_modifier_arg(ctx, "modifier")?;
+                let modifier = ItemModifier { json: &json, snbt: snbt.as_ref() };
                 let source = self.command_source.unwrap_or_else(|| self.player_source());
-                let view = source.entity.map(|t| self.entity_view_asked(t, &modifier));
+                let view = source.entity.map(|t| self.entity_view_asked(t, &json));
                 let mut rng = horizon_core::random::LegacyRandom::new(0);
                 found = found
                     .into_iter()
                     .map(|s| {
                         s.and_then(|s| {
                             self.apply_item_modifier(
-                                &modifier,
+                                modifier,
                                 Some(s),
                                 &mut rng,
                                 view.as_ref(),

@@ -92,7 +92,7 @@ Item.Properties.delayedHolderComponent	skip:data		registration builder
 Item.Properties.loweredMobVisibility	missing		the `mob_visibility` component is parsed (it is in `item_model.rs`'s component table and the protocol's item hash), but no mob targeting reads it
 Item.Properties.finalizeInitializer	skip:data		registration builder
 Item.TooltipContext.of	skip:java		tooltip context factory; Horizon passes the level and player to the tooltip functions
-ItemStack.validateStrict	skip:java		codec-side validation of components and stack size
+ItemStack.validateStrict	port	crates/horizon-items/src/item_data.rs::validate_strict	validates the resulting stack before committing a set_components modifier
 ItemStack.hasNonDefault	skip:other		component presence query; Horizon reads stack fields directly
 ItemStack.validateComponents	skip:java		codec-side validation
 ItemStack.validateContainedItemSizes	skip:java		codec-side validation
@@ -116,7 +116,7 @@ ItemStack.hashStackList	skip:java		hash for collections
 ItemStack.onCraftedBy	inline	crates/horizon-client/src/game/menu_clicks.rs::Game::click_inventory	gap: minor: other station result takes still omit crafted counts; the inventory grid and merchant result callbacks award through Game::award_stat
 ItemStack.set	skip:other		component write; Horizon stores component data in typed fields
 ItemStack.update	skip:java		functional update helper
-ItemStack.applyComponentsAndValidate	missing		a validated component patch has no single counterpart: `/item modify` goes through its own path
+ItemStack.applyComponentsAndValidate	port	crates/horizon-items/src/item_data.rs::apply_components_and_validate	/item modify keeps the original stack when the patched stack fails strict validation
 ItemStack.getStyledHoverName	port	crates/horizon-client/src/game/blocks/stations.rs::Game::stack_hover_name	gap: minor: plain text; the rarity colour and italic style are not applied here
 ItemStack.addToTooltip	port	crates/horizon-client/src/item_tooltip.rs::lines
 ItemStack.addUnitComponentToTooltip	inline	crates/horizon-client/src/game/blocks/stations.rs::Game::stack_tooltip_lines	unit lines such as unbreakable, gated by the tooltip display
