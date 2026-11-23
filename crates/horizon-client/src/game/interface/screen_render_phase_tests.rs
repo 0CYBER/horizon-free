@@ -48,6 +48,90 @@ impl Hooks for PaintPhases {
     }
 }
 
+#[test]
+#[ignore = "daily"]
+fn title_post_hook_draws_a_packaged_wide_gui_sprite_before_world_open() {
+    use crate::game::{UiResources, client_reload::fixture_png};
+    use horizon_client::packs::{Pack, Source, resources};
+    use mod_api::ScreenRenderPostEvent;
+    use std::io::Write;
+
+    const SPRITE: &str = "title_fixture:gui/title/panorama";
+    const TINT: u32 = 0xFF1379D3;
+    struct PaintTitle(Arc<AtomicU8>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for PaintTitle {
+        fn screen_render_post(&self, _: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+            if event.screen.id == "title" {
+                assert!(event.draw.sprite(
+                    SPRITE,
+                    [0.0, 0.0, 1230.0, 216.0],
+                    [7.0, 11.0, 41.0, 23.0],
+                    Some(TINT),
+                ));
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("title_fixture.hmod");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+    zip.start_file(
+        "assets/title_fixture/textures/gui/title/panorama.png",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(&fixture_png(1230, 216, 77)).unwrap();
+    zip.finish().unwrap();
+    let pack = Pack::mod_layer("title_fixture".into(), Source::Zip(archive));
+    let calls = Arc::new(AtomicU8::new(0));
+
+    with_mods(
+        vec![ModEntry::new(
+            "title_fixture",
+            Box::new(PaintTitle(calls.clone())),
+        )]
+        .into(),
+        || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                let source = resources(game.pack.source.clone(), &[pack]).unwrap();
+                game.gui = UiResources::load(&source).unwrap();
+                let rect = game.gui.atlas.sprites[SPRITE];
+                assert_eq!((rect.w, rect.h), (1230, 216));
+
+                let mut title = game.new_title(game.save.root.clone());
+                title.mode = horizon_client::title::Mode::Main;
+                game.title = Some(title);
+                game.screen = Screen::Playing;
+                let batch = game.hud_layers(SIZE);
+                assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+                let tinted = batch
+                    .vertices
+                    .iter()
+                    .filter(|v| v.color == rgba(19, 121, 211, 255));
+                let quad: Vec<_> = tinted.collect();
+                assert_eq!(quad.len(), 6);
+                for (vertex, (pos, uv)) in quad.into_iter().zip([
+                    ([7.0, 11.0], [rect.u0, rect.v0]),
+                    ([48.0, 11.0], [rect.u1, rect.v0]),
+                    ([48.0, 34.0], [rect.u1, rect.v1]),
+                    ([7.0, 11.0], [rect.u0, rect.v0]),
+                    ([48.0, 34.0], [rect.u1, rect.v1]),
+                    ([7.0, 34.0], [rect.u0, rect.v1]),
+                ]) {
+                    assert_eq!(vertex.pos, pos);
+                    for (actual, expected) in vertex.uv.into_iter().zip(uv) {
+                        assert!((actual - expected).abs() <= f32::EPSILON);
+                    }
+                }
+            });
+        },
+    );
+}
+
 fn chest(game: &mut Game<'_>) -> (u32, u32) {
     game.title = None;
     game.screen = Screen::Inventory;

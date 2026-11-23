@@ -203,6 +203,7 @@ horizon-client game::remote::tests::predicted_block_notice_tests::pre_ack_server
 horizon-client game::remote::tests::predicted_block_notice_tests::unapplied_guesses_are_unheard lib daily game-boot
 horizon-client game::runtime_levels_tests::a_level_the_player_left_in_single_player_still_unloads_and_deletes lib daily resources
 horizon-client game::screen_render_phase_tests::chest_render_phases_cover_panel_but_preserve_items_tooltips_and_carried_stack lib daily resources # HORIZON_TEST_RESOURCES and software Vulkan required.
+horizon-client game::screen_render_phase_tests::title_post_hook_draws_a_packaged_wide_gui_sprite_before_world_open lib daily resources
 horizon-client game::server_reload::tests::datapack_publication_tests::data_map_first_open_uses_staged_membership lib daily game-boot
 horizon-client game::server_reload::tests::datapack_publication_tests::data_map_later_enabled_layer_uses_staged_membership lib daily game-boot
 horizon-client game::server_reload::tests::datapack_publication_tests::data_map_reload_add_uses_staged_membership lib daily game-boot

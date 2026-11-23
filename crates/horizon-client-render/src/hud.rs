@@ -455,6 +455,20 @@ fn walk(source: &ResourceSource, directory: &str, out: &mut Vec<String>) {
 fn decode_resource(source: &ResourceSource, name: &str) -> Result<(u32, u32, Vec<u8>)> {
     decode_bytes(&source.read(name)?)
 }
+fn is_gui_sprite(name: &str) -> bool {
+    name.split_once(':')
+        .map_or(name, |(_, path)| path)
+        .starts_with("gui/")
+}
+
+/// A shelf needs a trailing column and row. Blurred sprites also have a
+/// wrapped texel on each edge, and glyphs occupy the rows after the shelves.
+fn gui_sprite_fits_atlas(w: u32, h: u32, blur: bool) -> bool {
+    let border = if blur { 2 } else { 0 };
+    u64::from(w) + border < u64::from(MAX_ATLAS_SIZE)
+        && u64::from(h) + border + u64::from(GLYPH_ROWS) < u64::from(MAX_ATLAS_SIZE)
+}
+
 /// A packed atlas image: sprite name, size and RGBA pixels.
 type PackedImage = (String, u32, u32, Vec<u8>);
 /// A frame of an animated strip at `x, y`, nearest-resampled to the longer
@@ -771,7 +785,14 @@ fn atlas_sprites(root: &ResourceSource, packed: &[PackedImage]) -> (Vec<PackedIm
                 }
                 generated => atlas_sources::generate(generated, &load),
             };
-            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels), animated))
+            let (w, h, pixels) = image?;
+            let gui = is_gui_sprite(name)
+                || matches!(origin, SpriteOrigin::File(texture) if is_gui_sprite(texture));
+            if gui && !gui_sprite_fits_atlas(w, h, false) {
+                log::warn!("skipped GUI atlas sprite {name}: {w}x{h} cannot fit the shared atlas");
+                return None;
+            }
+            Some((*order, (name.clone(), w, h, pixels), animated))
         })
     };
     let mut out: Vec<_> = crate::par::par_map(&names, first)
@@ -1353,7 +1374,13 @@ impl HudAtlas {
             Option<(u32, u32)>,
             bool,
             Option<Box<Maps>>,
+            bool,
         );
+        let shadow = if defaults.same_generation(root) {
+            root.underlay()
+        } else {
+            Some(defaults)
+        };
         let decode_one = |path: &String| -> Option<Decoded> {
             let name = if let Some(name) = named.get(path) {
                 name.clone()
@@ -1380,37 +1407,43 @@ impl HudAtlas {
             // own resources passes the resolved overlay as its own `defaults`, as both
             // production call sites do: the default is then the layer that overlay was
             // resolved over (`ResourceSource::underlay`), not the broken file again.
-            let shadow = if defaults.same_generation(root) {
-                root.underlay()
-            } else {
-                Some(defaults)
+            let gui = is_gui_sprite(&name);
+            let decode = |source: &ResourceSource, path: &str| -> Result<_> {
+                let image = decode_resource(source, path)?;
+                let mcmeta = source.read_to_string(&format!("{path}.mcmeta")).ok();
+                let animation = animation_of(mcmeta.as_deref());
+                // A still sprite keeps its whole image, whatever its folder or shape.
+                let frames = animation.is_some();
+                let (w, h, pixels) = if frames {
+                    first_frame(image, animation.as_ref())
+                } else {
+                    image
+                };
+                let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
+                if gui && !gui_sprite_fits_atlas(w, h, flags.as_ref().is_some_and(|f| f.blur)) {
+                    return Err(format!("{w}x{h} cannot fit the shared atlas").into());
+                }
+                Ok(((w, h, pixels), flags, frames, animation.is_some()))
             };
-            let (source, path, image, defaulted) = match decode_resource(root, path) {
-                Ok(image) => (root, path.clone(), image, false),
+            let (source, path, decoded, defaulted) = match decode(root, path) {
+                Ok(decoded) => (root, path.clone(), decoded, false),
                 Err(e) => {
                     let shadowed = crate::atlas_sources::texture_resource(&name, "textures");
-                    match shadow.map(|shadow| (shadow, decode_resource(shadow, &shadowed))) {
-                        Some((shadow, Ok(image))) => {
+                    match shadow
+                        .and_then(|source| decode(source, &shadowed).ok().map(|d| (source, d)))
+                    {
+                        Some((source, decoded)) => {
                             log::warn!("GUI texture {path}: {e}; used the default's {name}");
-                            (shadow, shadowed, image, true)
+                            (source, shadowed, decoded, true)
                         }
-                        _ => {
+                        None => {
                             log::warn!("skipped GUI texture {path}: {e}");
                             return None;
                         }
                     }
                 }
             };
-            let mcmeta = source.read_to_string(&format!("{path}.mcmeta")).ok();
-            let animation = animation_of(mcmeta.as_deref());
-            // An animated strip keeps its first frame; a still texture is the whole image
-            // (`SpriteResourceLoader`), whatever its folder or shape.
-            let frames = animation.is_some();
-            let (w, h, pixels) = if frames {
-                first_frame(image, animation.as_ref())
-            } else {
-                image
-            };
+            let ((w, h, pixels), flags, frames, animated) = decoded;
             // The default texture's size, when a pack's differs from it. A sprite
             // that fell back to the default is at that size already: the broken
             // file's header must not give it another one. Read the layer the
@@ -1431,8 +1464,6 @@ impl HudAtlas {
                 if frames { (side, side) } else { (dw, dh) }
             })
             .filter(|&size| size != (w, h));
-            let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
-            let animated = frames && animation.is_some();
             // Vanilla particle atlases accept sprites of any size.
             let particle = name.starts_with("particle/") || name.contains(":particle/");
             let (gw, gh) = if particle {
@@ -1448,17 +1479,14 @@ impl HudAtlas {
                     maps.iter().any(Option::is_some).then(|| Box::new(maps))
                 })
                 .flatten();
-            (gw <= 1024
-                && (gh <= 512
-                    || matches!(
-                        name.as_str(),
-                        "gui/title/background/panorama_0"
-                            | "gui/title/background/panorama_2"
-                            | "gui/title/background/panorama_3"
-                            | "gui/presets/isles"
-                    )
-                    || name.starts_with("font/")))
-            .then_some(((name, w, h, pixels), flags, gui_size, animated, maps))
+            (gui || (gw <= 1024 && (gh <= 512 || name.starts_with("font/")))).then_some((
+                (name, w, h, pixels),
+                flags,
+                gui_size,
+                animated,
+                maps,
+                gui && defaulted,
+            ))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);
@@ -1479,7 +1507,8 @@ impl HudAtlas {
         let mut animated: Vec<String> = Vec::new();
         let mut images: Vec<PackedImage> = Vec::with_capacity(decoded.len());
         let mut maps: HashMap<String, Box<Maps>> = HashMap::new();
-        for (image, image_flags, gui_size, is_animated, image_maps) in decoded {
+        let mut default_gui_animations = HashSet::new();
+        for (image, image_flags, gui_size, is_animated, image_maps, default_gui) in decoded {
             if let Some(m) = image_maps {
                 maps.insert(image.0.clone(), m);
             }
@@ -1490,6 +1519,9 @@ impl HudAtlas {
                 gui_sizes.insert(image.0.clone(), size);
             }
             if is_animated {
+                if default_gui {
+                    default_gui_animations.insert(image.0.clone());
+                }
                 animated.push(image.0.clone());
             }
             images.push(image);
@@ -1672,6 +1704,7 @@ impl HudAtlas {
         // frame, while the mcmeta's frame list may start anywhere, so each
         // animation's frame(0) overwrites its atlas rect before drawing.
         let mut loaded = crate::sprites::Sprites::new(root.clone());
+        let mut default_sprites = None;
         let mut sprite_animations = Vec::new();
         animated.sort();
         for name in animated {
@@ -1684,10 +1717,16 @@ impl HudAtlas {
             } else {
                 format!("minecraft:{name}")
             };
-            let Ok(layer) = loaded.insert(&id) else {
+            let loader = if default_gui_animations.contains(&name) {
+                let Some(shadow) = shadow else { continue };
+                default_sprites.get_or_insert_with(|| crate::sprites::Sprites::new(shadow.clone()))
+            } else {
+                &mut loaded
+            };
+            let Ok(layer) = loader.insert(&id) else {
                 continue;
             };
-            let Some(animation) = loaded.animations.iter().find(|a| a.layer == layer).cloned()
+            let Some(animation) = loader.animations.iter().find(|a| a.layer == layer).cloned()
             else {
                 continue;
             };
@@ -4487,10 +4526,9 @@ mod tests {
         assert!(!atlas.sprites.contains_key("gems:item/ruby"));
         fs::remove_dir_all(&root).unwrap();
     }
-    /// A pack's particle sprite of any size packs whole, as vanilla's particle atlas stitches
-    /// it (a light shaft drawn from a 1024-wide texture); the cap on GUI textures stays.
+    /// Large particle and GUI sprites keep their full dimensions and pixels.
     #[test]
-    fn large_particle_sprites_pack_and_large_gui_textures_dont() {
+    fn large_particle_and_gui_sprites_pack_at_full_size() {
         let root =
             std::env::temp_dir().join(format!("horizon-atlas-big-particle-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -4510,9 +4548,75 @@ mod tests {
         let rect = atlas.sprites["mypack:particle/light_rays/02"];
         assert_eq!(rect.texels((atlas.width, atlas.height)), (1024, 1024));
         assert_eq!(texel_at(&atlas, rect, 512, 512), [250, 240, 200, 255]);
-        assert!(!atlas.sprites.contains_key("gui/huge"));
+        let rect = atlas.sprites["gui/huge"];
+        assert_eq!((rect.w, rect.h), (2048, 64));
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (2048, 64));
+        assert_eq!(texel_at(&atlas, rect, 2047, 63), [1, 2, 3, 255]);
         fs::remove_dir_all(&root).unwrap();
     }
+    #[test]
+    fn unfit_gui_sprites_fall_back_without_losing_other_large_sprites() {
+        let temp = tempfile::tempdir().unwrap();
+        let defaults = temp.path().join("defaults");
+        let pack = temp.path().join("pack");
+        let gui = pack.join("assets/minecraft/textures/gui");
+        fs::create_dir_all(&gui).unwrap();
+        write_png(&defaults, "gui/panel", 16, 16);
+        write_strip(
+            &gui.join("panel.png"),
+            MAX_ATLAS_SIZE,
+            1,
+            &[[9, 8, 7, 255]],
+            None,
+        );
+        write_strip(
+            &gui.join("blurred.png"),
+            MAX_ATLAS_SIZE - 2,
+            1,
+            &[[9, 8, 7, 255]],
+            None,
+        );
+        fs::write(
+            gui.join("blurred.png.mcmeta"),
+            r#"{"texture":{"blur":true}}"#,
+        )
+        .unwrap();
+        write_strip(&gui.join("wide.png"), 2048, 64, &[[1, 2, 3, 255]], None);
+        let atlases = pack.join("assets/minecraft/atlases");
+        fs::create_dir_all(&atlases).unwrap();
+        fs::write(
+            atlases.join("items.json"),
+            r#"{"sources":[{"type":"single","resource":"gui/panel","sprite":"item/panel_alias"}]}"#,
+        )
+        .unwrap();
+
+        let atlas = HudAtlas::build_over(
+            &ResourceSource::directory(pack),
+            &ResourceSource::directory(defaults),
+        )
+        .unwrap();
+        let panel = atlas.sprites["gui/panel"];
+        assert_eq!(panel.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, panel, 15, 15), [255; 4]);
+        assert!(!atlas.sprites.contains_key("gui/blurred"));
+        assert!(!atlas.sprites.contains_key("item/panel_alias"));
+        let wide = atlas.sprites["gui/wide"];
+        assert_eq!(wide.texels((atlas.width, atlas.height)), (2048, 64));
+        assert_eq!(texel_at(&atlas, wide, 2047, 63), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn gui_sprite_fit_accounts_for_shelves_glyphs_and_blur() {
+        let width = MAX_ATLAS_SIZE - 1;
+        let height = MAX_ATLAS_SIZE - GLYPH_ROWS - 1;
+        assert!(gui_sprite_fits_atlas(width, height, false));
+        assert!(!gui_sprite_fits_atlas(width + 1, 1, false));
+        assert!(!gui_sprite_fits_atlas(1, height + 1, false));
+        assert!(gui_sprite_fits_atlas(width - 2, height - 2, true));
+        assert!(!gui_sprite_fits_atlas(width - 1, 1, true));
+        assert!(!gui_sprite_fits_atlas(1, height - 1, true));
+    }
+
     /// OptiFine random entity variants outside `textures/` pack under the names
     /// `RandomTextures` gives them; one beside its texture packs once, under its own.
     #[test]
@@ -5491,6 +5595,60 @@ texture=wide",
         assert_eq!(atlas.sprites["mymod:gui/container/machine"].w, 176);
         assert!(atlas.sprites.contains_key("gui/container/furnace"));
         assert!(!atlas.sprites.contains_key("mymod:block/machine"));
+    }
+
+    #[test]
+    fn a_packaged_wide_gui_texture_survives_an_atlas_rebuild() {
+        use std::io::Write;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("example.hmod");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        let mut png = Vec::new();
+        let mut encoder = png::Encoder::new(&mut png, 1230, 216);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer
+            .write_image_data(&[19, 71, 131, 255].repeat(1230 * 216))
+            .unwrap();
+        writer.finish().unwrap();
+        zip.start_file(
+            "assets/example/textures/gui/title/panorama.png",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(&png).unwrap();
+        zip.finish().unwrap();
+
+        for _ in 0..2 {
+            let pack = crate::packs::Pack::mod_layer(
+                "example".into(),
+                crate::packs::Source::Zip(archive.clone()),
+            );
+            let source = crate::packs::resources(ResourceSource::default(), &[pack]).unwrap();
+            let atlas = HudAtlas::build(&source).unwrap();
+            let rect = atlas.sprites["example:gui/title/panorama"];
+            assert_eq!((rect.w, rect.h), (1230, 216));
+            assert_eq!(texel_at(&atlas, rect, 1229, 215), [19, 71, 131, 255]);
+            let mut batch = HudBatch::scratch([320, 240]);
+            batch.sprite_scaled(
+                &atlas,
+                "example:gui/title/panorama",
+                0.0,
+                0.0,
+                320.0,
+                240.0,
+                u32::MAX,
+            );
+            assert_eq!(batch.vertices.len(), 6);
+        }
+        let without_mod = HudAtlas::build(&ResourceSource::default()).unwrap();
+        assert!(
+            !without_mod
+                .sprites
+                .contains_key("example:gui/title/panorama")
+        );
     }
     #[test]
     fn the_default_textures_keep_a_4096_wide_atlas() {
