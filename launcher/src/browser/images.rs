@@ -215,11 +215,21 @@ pub fn jar_icon_name(
                     .strip_prefix("logoFile")?
                     .trim()
                     .strip_prefix('=')?;
-                Some(value.trim().trim_matches('"').trim_matches('\'').to_owned())
+                Some(toml_line_value(value).to_owned())
             })
         })?;
     let named = named.trim_start_matches('/').to_owned();
     (!named.is_empty() && !named.contains("..")).then_some(named)
+}
+
+/// A TOML value on one line, as text: a quoted string up to its closing quote, or a bare value up
+/// to a `#`, which starts a comment outside a string (`logoFile="logo.png" #optional`).
+fn toml_line_value(value: &str) -> &str {
+    let value = value.trim();
+    match value.chars().next() {
+        Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
+        _ => value.split('#').next().unwrap_or_default().trim(),
+    }
 }
 
 /// A mod jar's own icon, scaled to fit `side` pixels, as PNG bytes: read from the jar, never
@@ -296,6 +306,25 @@ mod tests {
             None
         );
         assert_eq!(jar_icon_name(Some("{}"), None, None), None);
+    }
+
+    /// TOML starts a comment at `#` outside a string, and mods ship
+    /// `logoFile="logo.png" #optional`: the icon is `logo.png`.
+    #[test]
+    fn a_comment_after_the_logo_file_is_not_part_of_its_name() {
+        for line in [
+            "logoFile=\"logo.png\" #optional",
+            "logoFile = 'logo.png' # the mod's logo",
+            "logoFile=\"logo.png\"#optional",
+            "logoFile = logo.png # not quoted",
+        ] {
+            let toml = format!("modLoader=\"javafml\"\n[[mods]]\nmodId=\"x\"\n{line}\n");
+            assert_eq!(
+                jar_icon_name(None, None, Some(&toml)).as_deref(),
+                Some("logo.png"),
+                "{line}"
+            );
+        }
     }
 
     #[test]
