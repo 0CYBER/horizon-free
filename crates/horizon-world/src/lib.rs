@@ -134,6 +134,8 @@ pub mod swimming;
 pub mod synced_floats;
 pub mod tag_layers;
 pub mod teleport_consume;
+#[cfg(test)]
+mod test_log;
 pub mod tick_data;
 pub mod use_remainder;
 pub mod view_direction;
