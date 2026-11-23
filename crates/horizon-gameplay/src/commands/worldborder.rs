@@ -126,7 +126,9 @@ pub fn worldborder(host: &mut dyn WorldborderHost, id: &str, ctx: &Context) -> R
         }
         "worldborder.center" => {
             let p = host.position_arg_or_source(ctx, "pos");
-            let (x, z) = (p[0], p[2]);
+            // `Vec2Argument.getVec2` narrows each coordinate to a float; `setCenter`
+            // compares, range-checks, stores (widened) and prints that float.
+            let (x, z) = (f64::from(p[0] as f32), f64::from(p[2] as f32));
             if host.border_center() == [x, z] {
                 return Err(host.error("commands.worldborder.center.failed", &[]));
             }
