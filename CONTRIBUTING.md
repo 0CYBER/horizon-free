@@ -195,6 +195,12 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; an in-game change waits for the proof
 above, and risky ones (saves, network, world generation, the launcher's updates) also for a local proof from us
 ([merging](docs/release-flow.md#merging)).
+Prefer `COMMENT` reviews for routine suggestions so fixed PRs are not stuck waiting on one person; reserve
+`REQUEST_CHANGES` for hard blockers. If a `CHANGES_REQUESTED` review predates the fixing commits and every point
+is verified fixed on the current head, another `@horizon-rust/horizon-team` reviewer may dismiss that stale review
+(citing the fixing commit SHA) after approving. When registering new `#[ignore = "daily"]` tests, prefer a focused
+`tools/ci/ignored-tests/<area>.txt` file over appending to a shared `daily-horizon-client*.txt` list so concurrent
+PRs do not collide.
 A bot, CodeRabbit, also comments when a pull request opens. Treat it like any reviewer: fix what's right, say why
 when it isn't, and resolve the thread. It can't block a merge; `@coderabbitai review` asks it to look again.
 

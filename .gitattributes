@@ -13,3 +13,7 @@ crates/horizon-client/assets/horizon/lang/*.json merge=horizon-lang
 
 # The carried horizon-mixins patch is hashed into its tool's release tag: the same bytes on every OS.
 tools/mixins/*.patch text eol=lf
+
+# Append-only inventory/ledger tables: independent rows merge without false conflicts (CI still checks syntax and duplicates).
+tools/ci/ignored-tests/*.txt merge=union
+docs/paper-ledger.md merge=union

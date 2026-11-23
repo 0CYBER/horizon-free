@@ -69,7 +69,9 @@ waiting in loops, and work someone else had already done. Tests were a small par
 - **Don't wait in loops.** Start a long command in the background and carry on, or wait for it once. No
   `sleep` or `until grep` polling of builds, harnesses or CI.
 - **One test per changed behaviour.** None for a refactor or a file move, none that reads source text, and no
-  harness where vanilla has nothing to compare (Horizon's own features, performance work).
+  harness where vanilla has nothing to compare (Horizon's own features, performance work). When registering new
+  `#[ignore = "daily"]` tests under `tools/ci/ignored-tests/`, prefer a focused file (`tools/ci/ignored-tests/<area>.txt`)
+  rather than appending to the giant shared lists.
 - **A red check isn't always yours.** When `verify` fails in a test your change can't reach, say so in the pull
   request and move on; don't hunt it.
 - **Bot reviews are advice.** CodeRabbit is often right and sometimes wrong. Check each finding against the code,
