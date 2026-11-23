@@ -712,7 +712,14 @@ impl Game<'_> {
             // Camel.getPassengerAttachmentPoint: the driver half a block
             // forward, at the body anchor (lower while sitting), turned with
             // the camel. Its point already carries the camel's own scale.
-            seat_of(m, horizon_client::mobs::camel::passenger_attachment(m))
+            // Camel.getPassengerAttachmentPoint uses the passenger's place
+            // in getPassengers(): the second rider sits behind the driver.
+            let seat = self.remote.as_ref().map_or(0, |r| r.passenger_index);
+            let count = self.seated_passengers(m.id).len().max(1);
+            seat_of(
+                m,
+                horizon_client::mobs::camel::passenger_attachment_at(m, seat, count, false),
+            )
         } else {
             seat_of(m, horizon_client::mobs::riders::type_attachment(m))
         };
