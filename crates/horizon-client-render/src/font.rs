@@ -261,7 +261,12 @@ enum BitmapGlyph {
 /// `TrueTypeGlyphProvider`.
 struct TrueType {
     font: ab_glyph::FontVec,
-    ids: HashMap<char, ab_glyph::GlyphId>,
+    /// Canonical codepoint per glyph ID from `ab_glyph::Font::codepoint_ids()`,
+    /// preserving the exact first-codepoint-per-glyph set without a per-char `HashMap`.
+    canonical: Box<[Option<char>]>,
+    /// Sorted `(char, GlyphId)` overrides for the rare multi-subtable case where
+    /// `codepoint_ids()` and `font.glyph_id()` map a character to different IDs.
+    overrides: Box<[(char, ab_glyph::GlyphId)]>,
     /// FT_Set_Pixel_Sizes: `size * oversample` pixels to the em.
     scale: ab_glyph::PxScale,
     oversample: f32,
@@ -739,7 +744,7 @@ fn load_true_type(source: &ResourceSource, p: &serde_json::Value) -> Option<True
         let f = |i: usize| s.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         (f(0), f(1))
     });
-    let skip: Vec<char> = match &p["skip"] {
+    let mut skip: Vec<char> = match &p["skip"] {
         serde_json::Value::String(s) => s.chars().collect(),
         serde_json::Value::Array(a) => a
             .iter()
@@ -748,28 +753,100 @@ fn load_true_type(source: &ResourceSource, p: &serde_json::Value) -> Option<True
             .collect(),
         _ => Vec::new(),
     };
-    let ids = font
-        .codepoint_ids()
-        .filter(|(id, c)| id.0 != 0 && !skip.contains(c))
-        .map(|(id, c)| (c, id))
-        .collect();
+    skip.sort_unstable();
+    skip.dedup();
+    let mut canonical = vec![None; font.glyph_count()];
+    let mut overrides: Vec<(char, ab_glyph::GlyphId)> = Vec::new();
+    for (id, c) in font.codepoint_ids() {
+        if id.0 == 0 || skip.binary_search(&c).is_ok() {
+            continue;
+        }
+        if font.glyph_id(c) == id {
+            let idx = usize::from(id.0);
+            if idx >= canonical.len() {
+                canonical.resize(idx + 1, None);
+            }
+            if canonical[idx].is_none_or(|prev| prev == c) {
+                canonical[idx] = Some(c);
+                if !overrides.is_empty() {
+                    overrides.retain(|(ch, _)| *ch != c);
+                }
+                continue;
+            }
+        }
+        if let Some((_, existing)) = overrides.iter_mut().find(|(ch, _)| *ch == c) {
+            *existing = id;
+        } else {
+            overrides.push((c, id));
+        }
+    }
+    let used_len = canonical
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |i| i + 1);
+    canonical.truncate(used_len);
+    overrides.sort_unstable_by_key(|(c, _)| *c);
     let pixels_per_em = (size * oversample).round();
     // ab_glyph scales by the font's height; FreeType by its em.
     let units = font.units_per_em().unwrap_or(1000.0);
     let scale = ab_glyph::PxScale::from(pixels_per_em * font.height_unscaled() / units);
     Some(TrueType {
         font,
-        ids,
+        canonical: canonical.into_boxed_slice(),
+        overrides: overrides.into_boxed_slice(),
         scale,
         oversample,
         shift: (shift.0 * oversample, shift.1 * oversample),
     })
 }
+/// Result of checking a TrueType glyph's scaled outline against the atlas bounds.
+enum TrueTypeOutline {
+    /// No drawable outline (e.g. spaces): still fits as an empty glyph.
+    Empty,
+    /// Non-empty outline whose pixel bounds fit within the atlas limit.
+    Drawable(ab_glyph::OutlinedGlyph, u32, u32),
+    /// Outline exceeds the atlas limit and must be refused so later providers can resolve it.
+    Oversized,
+}
 impl TrueType {
+    #[inline]
+    fn glyph_id(&self, c: char) -> Option<ab_glyph::GlyphId> {
+        if !self.overrides.is_empty()
+            && let Ok(idx) = self.overrides.binary_search_by_key(&c, |(ch, _)| *ch)
+        {
+            return Some(self.overrides[idx].1);
+        }
+        let id = self.font.glyph_id(c);
+        (id.0 != 0 && self.canonical.get(usize::from(id.0)).copied().flatten() == Some(c))
+            .then_some(id)
+    }
     /// The advance in GUI pixels: hinted FreeType advances are whole
     /// oversampled pixels.
     fn advance(&self, id: ab_glyph::GlyphId) -> f32 {
         self.font.as_scaled(self.scale).h_advance(id).round() / self.oversample
+    }
+    /// Checks whether `id`'s scaled outline fits within `max` atlas pixels without
+    /// allocating raster pixels. Shared by `glyph` (via `Font::resolve`) and
+    /// `Font::provider_advance` so oversized glyphs fall through identically in both.
+    fn outline_for_atlas(&self, id: ab_glyph::GlyphId, max: (u32, u32)) -> TrueTypeOutline {
+        let glyph =
+            id.with_scale_and_position(self.scale, ab_glyph::point(self.shift.0, self.shift.1));
+        let Some(outline) = self.font.outline_glyph(glyph) else {
+            return TrueTypeOutline::Empty;
+        };
+        let bounds = outline.px_bounds();
+        let (w, h) = (bounds.width() as u32, bounds.height() as u32);
+        if w == 0 || h == 0 {
+            return TrueTypeOutline::Empty;
+        }
+        if w > max.0 || h > max.1 {
+            return TrueTypeOutline::Oversized;
+        }
+        TrueTypeOutline::Drawable(outline, w, h)
+    }
+    /// Whether `id` fits within `max` atlas pixels (empty-outline glyphs such as spaces fit).
+    fn fits_atlas(&self, id: ab_glyph::GlyphId, max: (u32, u32)) -> bool {
+        !matches!(self.outline_for_atlas(id, max), TrueTypeOutline::Oversized)
     }
     /// `loadGlyph` and its bitmap: the grey coverage as `rrrr` texels
     /// (`text_intensity`), below 0.1 cut (its discard). A glyph wider or taller than `max`
@@ -781,8 +858,6 @@ impl TrueType {
         max: (u32, u32),
     ) -> Option<(Glyph, Option<(u32, u32, Vec<u8>)>)> {
         let advance = self.advance(id);
-        let glyph =
-            id.with_scale_and_position(self.scale, ab_glyph::point(self.shift.0, self.shift.1));
         let empty = Glyph {
             rect: None,
             left: 0.0,
@@ -792,17 +867,12 @@ impl TrueType {
             advance,
             offset: 1.0,
         };
-        let Some(outline) = self.font.outline_glyph(glyph) else {
-            return Some((empty, None));
+        let (outline, w, h) = match self.outline_for_atlas(id, max) {
+            TrueTypeOutline::Empty => return Some((empty, None)),
+            TrueTypeOutline::Oversized => return None,
+            TrueTypeOutline::Drawable(outline, w, h) => (outline, w, h),
         };
         let bounds = outline.px_bounds();
-        let (w, h) = (bounds.width() as u32, bounds.height() as u32);
-        if w == 0 || h == 0 {
-            return Some((empty, None));
-        }
-        if w > max.0 || h > max.1 {
-            return None;
-        }
         let mut rgba = vec![0u8; w as usize * h as usize * 4];
         outline.draw(|x, y, coverage| {
             let v = if coverage < 0.1 {
@@ -1253,18 +1323,21 @@ impl Font {
                     }
                 }
                 Provider::TrueType(filter, ttf) if filter.passes(uniform, japanese) => {
-                    if let Some(id) = ttf.ids.get(&c)
-                        && !(non_fishy && fishy_advance(ttf.advance(*id)))
+                    if let Some(id) = ttf.glyph_id(c)
+                        && !(non_fishy && fishy_advance(ttf.advance(id)))
                     {
                         if self.metrics_only {
                             return Some(Glyph {
                                 rect: None,
-                                advance: ttf.advance(*id),
+                                advance: ttf.advance(id),
                                 offset: 1.0,
                                 ..self.missing
                             });
                         }
-                        let (glyph, bitmap) = ttf.glyph(*id, (self.atlas.0, self.region.1))?;
+                        let Some((glyph, bitmap)) = ttf.glyph(id, (self.atlas.0, self.region.1))
+                        else {
+                            continue;
+                        };
                         return match bitmap {
                             Some((w, h, rgba)) => {
                                 let (x, y) = region.place(w, h, rgba, self.atlas, self.region)?;
@@ -1409,8 +1482,10 @@ impl Font {
                     }
                 }
                 Provider::TrueType(filter, ttf) if filter.passes(uniform, japanese) => {
-                    if let Some(id) = ttf.ids.get(&c) {
-                        return Some(ttf.advance(*id));
+                    if let Some(id) = ttf.glyph_id(c)
+                        && (self.metrics_only || ttf.fits_atlas(id, (self.atlas.0, self.region.1)))
+                    {
+                        return Some(ttf.advance(id));
                     }
                 }
                 _ => {}
@@ -2930,6 +3005,323 @@ mod tests {
                 cell_rgba(&pad_pixels, pad_w, col * 32, 0, 32, 32),
                 "padded glyph {ch} at col {col} mismatch"
             );
+        }
+    }
+
+    #[test]
+    fn true_type_shared_glyph_keeps_first_codepoint_only() {
+        let raw =
+            ab_glyph::FontVec::try_from_vec(horizon_theme::fonts::GEIST_MONO.to_vec()).unwrap();
+        // In GeistMono, U+00B5 ('µ') and U+03BC ('μ') share one GlyphId; `codepoint_ids()`
+        // yields only the first codepoint per GlyphId (U+00B5).
+        let shared = raw.glyph_id('\u{00b5}');
+        assert_ne!(shared.0, 0);
+        assert_eq!(raw.glyph_id('\u{03bc}'), shared);
+
+        let def = br#"{"providers":[{"type":"ttf","file":"minecraft:mono.ttf","size":11,"oversample":2},{"type":"space","advances":{"\u03bc":11}}]}"#;
+        let root_dir = root(
+            "ttf-shared-gid",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                (
+                    "assets/minecraft/font/mono.ttf",
+                    horizon_theme::fonts::GEIST_MONO,
+                ),
+            ],
+        );
+        let font = load(&root_dir);
+        let _ = std::fs::remove_dir_all(&root_dir);
+
+        let micro = font.glyph('\u{00b5}');
+        assert!(
+            micro.rect.is_some(),
+            "canonical codepoint resolves from TTF"
+        );
+        assert_ne!(micro.advance, 11.0);
+        let mu = font.glyph('\u{03bc}');
+        assert!(mu.rect.is_none(), "shared-GlyphId alias falls through");
+        assert_eq!(mu.advance, 11.0);
+
+        // Skipping the canonical codepoint drops it without promoting the alias.
+        let skipped_def = br#"{"providers":[{"type":"ttf","file":"minecraft:mono.ttf","size":11,"oversample":2,"skip":"\u00b5"},{"type":"space","advances":{"\u00b5":9,"\u03bc":11}}]}"#;
+        let skipped_root = root(
+            "ttf-shared-gid-skip",
+            &[
+                ("assets/minecraft/font/default.json", skipped_def),
+                (
+                    "assets/minecraft/font/mono.ttf",
+                    horizon_theme::fonts::GEIST_MONO,
+                ),
+            ],
+        );
+        let skipped = load(&skipped_root);
+        let _ = std::fs::remove_dir_all(&skipped_root);
+        assert_eq!(skipped.glyph('\u{00b5}').advance, 9.0);
+        assert_eq!(skipped.glyph('\u{03bc}').advance, 11.0);
+    }
+
+    #[test]
+    fn oversized_true_type_glyph_falls_through_to_following_bitmap_provider() {
+        let style = Style::default();
+        let sheet = png(16, 8, |x, _| x < 2 || (8..12).contains(&x));
+        let oversized_def = br#"{"providers":[{"type":"ttf","file":"minecraft:mono.ttf","size":100000},{"type":"bitmap","file":"minecraft:font/fallback.png","ascent":7,"chars":["AB"]}]}"#;
+        let oversized_root = root(
+            "ttf-oversized-fallback",
+            &[
+                ("assets/minecraft/font/default.json", oversized_def),
+                (
+                    "assets/minecraft/font/mono.ttf",
+                    horizon_theme::fonts::GEIST_MONO,
+                ),
+                ("assets/minecraft/textures/font/fallback.png", &sheet),
+            ],
+        );
+        let font = load(&oversized_root);
+        let _ = std::fs::remove_dir_all(&oversized_root);
+
+        // Advance lookup applies the same outline-size eligibility check as `resolve` without
+        // allocating/rasterizing atlas patches: 'A' falls through to bitmap advance 3.0, while
+        // empty-outline spaces still fit the TrueType provider.
+        {
+            let mut cache = font.cache.borrow_mut();
+            let by_width = font.glyphs_by_width(&mut cache.sets[0].1);
+            assert_eq!(
+                by_width.get(&3).map(Vec::as_slice),
+                Some(&['A'][..]),
+                "oversized TTF glyph is bucketed under fallback bitmap advance"
+            );
+            assert!(
+                by_width
+                    .iter()
+                    .all(|(&w, chars)| w == 3 || !chars.contains(&'A')),
+                "oversized TTF glyph is not indexed under rejected TTF advance"
+            );
+            assert!(
+                font.provider_advance(&mut cache.sets[0].1, ' ')
+                    .is_some_and(|adv| adv > 32.0),
+                "empty-outline space still fits the TrueType provider"
+            );
+        }
+        assert!(
+            font.take_patches().is_empty(),
+            "advance lookup does not rasterize glyphs"
+        );
+
+        let obf = font.random_glyph(&style, 3.0);
+        assert!(
+            obf.rect.is_some(),
+            "obfuscated lookup draws bitmap fallback"
+        );
+        assert_eq!(
+            obf.advance, 3.0,
+            "obfuscated lookup selects bitmap fallback under displayed width"
+        );
+        let a = font.glyph('A');
+        assert!(a.rect.is_some(), "bitmap fallback is drawn");
+        assert_eq!(a.advance, 3.0, "falls through to following bitmap provider");
+        assert_eq!(font.advance('A', &style), 3.0, "advance uses fallback");
+        assert_eq!(font.width("A"), 3.0, "width uses fallback");
+        let space = font.glyph(' ');
+        assert!(
+            space.rect.is_none() && space.advance > 32.0,
+            "empty-outline space resolves from TrueType"
+        );
+
+        // A fitting TrueType glyph still takes precedence over the following bitmap provider
+        // for drawing, measurement, and obfuscated width bucketing.
+        let fitting_def = br#"{"providers":[{"type":"ttf","file":"minecraft:mono.ttf","size":11,"oversample":2},{"type":"bitmap","file":"minecraft:font/fallback.png","ascent":7,"chars":["AB"]}]}"#;
+        let fitting_root = root(
+            "ttf-fitting-precedence",
+            &[
+                ("assets/minecraft/font/default.json", fitting_def),
+                (
+                    "assets/minecraft/font/mono.ttf",
+                    horizon_theme::fonts::GEIST_MONO,
+                ),
+                ("assets/minecraft/textures/font/fallback.png", &sheet),
+            ],
+        );
+        let fitting = load(&fitting_root);
+        let metrics = Font::metrics(&ResourceSource::directory(fitting_root.clone()));
+        let _ = std::fs::remove_dir_all(&fitting_root);
+        let a_fit = fitting.glyph('A');
+        assert!(a_fit.rect.is_some());
+        assert_ne!(
+            a_fit.advance, 3.0,
+            "fitting TrueType glyph takes precedence"
+        );
+        assert_eq!(fitting.advance('A', &style), a_fit.advance);
+        assert_eq!(fitting.width("A"), a_fit.advance.ceil());
+        let fit_bucket = a_fit.advance.ceil() as i32;
+        {
+            let mut cache = fitting.cache.borrow_mut();
+            let by_width = fitting.glyphs_by_width(&mut cache.sets[0].1);
+            assert!(
+                by_width
+                    .get(&fit_bucket)
+                    .is_some_and(|chars| chars.contains(&'A')),
+                "fitting TTF glyph is bucketed under TTF advance"
+            );
+            assert!(
+                by_width.get(&3).is_none_or(|chars| !chars.contains(&'A')),
+                "fitting TTF glyph is not bucketed under fallback bitmap advance"
+            );
+        }
+        assert_eq!(
+            fitting.random_glyph(&style, a_fit.advance).advance,
+            a_fit.advance
+        );
+        assert_eq!(
+            fitting.random_glyph(&style, 3.0).advance,
+            6.0,
+            "no width-3 glyph when fitting TTF shadows bitmap"
+        );
+        {
+            let mut cache = metrics.cache.borrow_mut();
+            assert_eq!(
+                metrics.provider_advance(&mut cache.sets[0].1, 'A'),
+                Some(a_fit.advance),
+                "metrics-only font keeps TTF advance without an atlas region"
+            );
+        }
+
+        // A fitting TrueType glyph with a fishy advance (> 32) preserves existing fishy-advance
+        // behavior: drawn and bucketed under the TTF advance, while obfuscated `nonFishy`
+        // falls through to the following bitmap provider.
+        let fishy_def = br#"{"providers":[{"type":"ttf","file":"minecraft:mono.ttf","size":64},{"type":"bitmap","file":"minecraft:font/fallback.png","ascent":7,"chars":["A"]}]}"#;
+        let fishy_root = root(
+            "ttf-fishy-fitting",
+            &[
+                ("assets/minecraft/font/default.json", fishy_def),
+                (
+                    "assets/minecraft/font/mono.ttf",
+                    horizon_theme::fonts::GEIST_MONO,
+                ),
+            ],
+        );
+        let mut atlas_pixels = vec![0u8; 128 * 128 * 4];
+        for y in 0..8usize {
+            for x in 0..2usize {
+                let i = (y * 128 + x) * 4;
+                atlas_pixels[i..i + 4].copy_from_slice(&[255; 4]);
+            }
+        }
+        let sprites = HashMap::from([(
+            "font/fallback".to_string(),
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 8.0 / 128.0,
+                v1: 8.0 / 128.0,
+                w: 8,
+                h: 8,
+            },
+        )]);
+        let fishy = Font::load(
+            &ResourceSource::directory(fishy_root.clone()),
+            &sprites,
+            &atlas_pixels,
+            (128, 128),
+            (8, 120),
+            white(),
+        );
+        let _ = std::fs::remove_dir_all(&fishy_root);
+        let a_fishy = fishy.glyph('A');
+        assert!(a_fishy.rect.is_some(), "fitting fishy TTF glyph is drawn");
+        assert!(
+            fishy_advance(a_fishy.advance),
+            "size-64 GeistMono advance ({}) is fishy",
+            a_fishy.advance
+        );
+        assert_eq!(fishy.advance('A', &style), a_fishy.advance);
+        assert_eq!(fishy.width("A"), a_fishy.advance.ceil());
+        assert_eq!(
+            fishy.random_glyph(&style, a_fishy.advance).advance,
+            3.0,
+            "fishy TTF stays indexed under TTF advance and draws nonFishy bitmap fallback"
+        );
+        assert_eq!(
+            fishy.random_glyph(&style, 3.0).advance,
+            6.0,
+            "fitting fishy TTF is not bucketed under fallback advance 3"
+        );
+    }
+
+    #[test]
+    fn true_type_canonical_table_matches_codepoint_ids_and_is_compact() {
+        // Option<char> uses char's niche, so each canonical slot is 4 bytes.
+        assert_eq!(
+            std::mem::size_of::<Option<char>>(),
+            std::mem::size_of::<char>()
+        );
+        let cases: [(&str, &[u8], &str, &[char]); 2] = [
+            (
+                "ttf-compact-mono",
+                horizon_theme::fonts::GEIST_MONO,
+                r#"{"type":"ttf","file":"minecraft:font.ttf","size":11}"#,
+                &[],
+            ),
+            (
+                "ttf-compact-bricolage",
+                horizon_theme::fonts::BRICOLAGE_REGULAR,
+                r#"{"type":"ttf","file":"minecraft:font.ttf","size":11,"skip":["A","z","\u00b5"]}"#,
+                &['A', 'z', '\u{00b5}'],
+            ),
+        ];
+        for (name, bytes, def_json, skip_chars) in cases {
+            let root_dir = root(name, &[("assets/minecraft/font/font.ttf", bytes)]);
+            let source = ResourceSource::directory(root_dir.clone());
+            let def: serde_json::Value = serde_json::from_str(def_json).unwrap();
+            let mut ttf = load_true_type(&source, &def).expect("TTF loads");
+            let _ = std::fs::remove_dir_all(&root_dir);
+
+            let raw = ab_glyph::FontVec::try_from_vec(bytes.to_vec()).unwrap();
+            let expected: HashMap<char, ab_glyph::GlyphId> = raw
+                .codepoint_ids()
+                .filter(|(id, c)| id.0 != 0 && !skip_chars.contains(c))
+                .map(|(id, c)| (c, id))
+                .collect();
+
+            // Exhaustive lookup equivalence across the entire BMP, every codepoint yielded
+            // by `codepoint_ids()`, and sample supplementary codepoints.
+            for c in (0..=0xFFFFu32)
+                .filter_map(char::from_u32)
+                .chain(['\u{1f600}', '\u{10ffff}'])
+                .chain(raw.codepoint_ids().map(|(_, c)| c))
+            {
+                assert_eq!(
+                    ttf.glyph_id(c),
+                    expected.get(&c).copied(),
+                    "{name}: glyph_id mismatch for U+{:04X}",
+                    u32::from(c)
+                );
+            }
+
+            assert!(ttf.overrides.is_empty(), "{name}: single-mapping cmap");
+            assert!(ttf.canonical.len() <= raw.glyph_count());
+            assert!(ttf.canonical.last().is_none_or(Option::is_some));
+
+            let table_bytes = ttf.canonical.len() * std::mem::size_of::<Option<char>>()
+                + ttf.overrides.len() * std::mem::size_of::<(char, ab_glyph::GlyphId)>();
+            let map_min_bytes =
+                expected.capacity() * (std::mem::size_of::<(char, ab_glyph::GlyphId)>() + 1);
+            assert!(
+                table_bytes < map_min_bytes,
+                "{name}: expected compact table ({table_bytes} B) < HashMap ({map_min_bytes} B)"
+            );
+
+            // Verify the sorted override lookup path takes precedence over canonical entries
+            // and handles characters unmapped by `font.glyph_id()`.
+            if skip_chars.is_empty() {
+                let orig_a = ttf.glyph_id('A').unwrap();
+                let orig_b = ttf.glyph_id('B').unwrap();
+                assert_ne!(orig_a, orig_b);
+                ttf.overrides = vec![('A', orig_b), ('\u{e000}', orig_a)].into_boxed_slice();
+                assert_eq!(ttf.glyph_id('A'), Some(orig_b));
+                assert_eq!(ttf.glyph_id('\u{e000}'), Some(orig_a));
+                assert_eq!(ttf.glyph_id('B'), Some(orig_b));
+                assert_eq!(ttf.glyph_id('\u{e001}'), None);
+            }
         }
     }
 }
