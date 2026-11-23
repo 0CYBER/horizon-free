@@ -124,9 +124,9 @@ pub fn translate_core_with(
     })
 }
 
-/// A bound on a pack's includes, which are pasted every time.
-const MAX_PASTES: u32 = 1024;
-const MAX_EXPANDED: usize = 1 << 20;
+/// A bound on a pack's includes, which are pasted every time (`post_glsl` keeps the same one).
+pub(crate) const MAX_PASTES: u32 = 1024;
+pub(crate) const MAX_EXPANDED: usize = 1 << 20;
 
 /// The file with its includes inlined (`#include <ns:path>`, `#include "relative"` and the same
 /// with `#moj_import`), `#version` and `#extension` lines dropped. An `#include` is pasted every

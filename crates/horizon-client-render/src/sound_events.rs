@@ -36,6 +36,21 @@ impl Sampled {
             }
         }
     }
+    /// `MultipliedFloats(self, other)`, kept flat: a product of products lists their factors
+    /// in the same order instead of nesting, so a long chain of references neither clones,
+    /// samples nor drops through one stack frame per level. `sample` multiplies left to right
+    /// from 1, so the flat list gives the same result as the nested one, bit for bit.
+    fn times(self, other: &Sampled) -> Sampled {
+        let mut factors = match self {
+            Self::Product(values) => values,
+            single => vec![single],
+        };
+        match other {
+            Self::Product(values) => factors.extend(values.iter().cloned()),
+            single => factors.push(single.clone()),
+        }
+        Self::Product(factors)
+    }
 }
 /// `Sound`.
 #[derive(Clone, Debug, PartialEq)]
@@ -309,8 +324,15 @@ impl SoundRegistry {
         self.events.keys()
     }
     /// `Weighted.getWeight` of one entry, with the sounds `refused` names left
-    /// out of every pool (the Music page's off tracks).
-    fn entry_weight(&self, sound: &Sound, depth: u32, refused: &dyn Fn(&str) -> bool) -> i32 {
+    /// out of every pool (the Music page's off tracks). A reference weighs what
+    /// its event weighs, and nothing when that event leads into a cycle; `weigh`
+    /// has worked the events out before.
+    fn entry_weight(
+        &self,
+        sound: &Sound,
+        lookup: &Lookup<'_>,
+        refused: &dyn Fn(&str) -> bool,
+    ) -> i32 {
         if !sound.event {
             return if refused(&sound.location) {
                 0
@@ -318,23 +340,95 @@ impl SoundRegistry {
                 sound.weight
             };
         }
-        if depth > 64 {
-            return 0;
+        match lookup.weights.get(sound.location.as_str()) {
+            Some(Weight::Done {
+                weight,
+                cyclic: false,
+            }) => *weight,
+            _ => 0,
         }
-        self.events
-            .get(&sound.location)
-            .map_or(0, |e| self.total(e, depth + 1, refused))
     }
-    fn total(&self, event: &WeighedSoundEvents, depth: u32, refused: &dyn Fn(&str) -> bool) -> i32 {
-        event.sounds.iter().fold(0i32, |sum, s| {
-            sum.wrapping_add(self.entry_weight(s, depth, refused))
-        })
+    /// `WeighedSoundEvents.getWeight` of `root` and of every event it references,
+    /// each worked out once, depth first without recursion. An event that can reach
+    /// itself again through references (vanilla overflows its stack on one) leads
+    /// into a cycle, and so does every event that references one: a reference to such
+    /// an event weighs nothing, wherever it is reached from.
+    fn weigh<'a>(&'a self, root: &str, lookup: &mut Lookup<'a>, refused: &dyn Fn(&str) -> bool) {
+        struct Frame<'a> {
+            location: &'a str,
+            event: &'a WeighedSoundEvents,
+            next: usize,
+            weight: i32,
+            cyclic: bool,
+        }
+        let Some((location, event)) = self.events.get_key_value(root) else {
+            return;
+        };
+        if lookup.weights.contains_key(location.as_str()) {
+            return;
+        }
+        lookup.weights.insert(location, Weight::Open);
+        let mut stack = vec![Frame {
+            location,
+            event,
+            next: 0,
+            weight: 0,
+            cyclic: false,
+        }];
+        while let Some(top) = stack.last_mut() {
+            let event: &'a WeighedSoundEvents = top.event;
+            let Some(sound) = event.sounds.get(top.next) else {
+                let done = stack.pop().expect("a frame on top");
+                lookup.weights.insert(
+                    done.location,
+                    Weight::Done {
+                        weight: done.weight,
+                        cyclic: done.cyclic,
+                    },
+                );
+                if let Some(parent) = stack.last_mut() {
+                    if done.cyclic {
+                        parent.cyclic = true;
+                    } else {
+                        parent.weight = parent.weight.wrapping_add(done.weight);
+                    }
+                }
+                continue;
+            };
+            top.next += 1;
+            if !sound.event {
+                if !refused(&sound.location) {
+                    top.weight = top.weight.wrapping_add(sound.weight);
+                }
+                continue;
+            }
+            match lookup.weights.get(sound.location.as_str()) {
+                Some(Weight::Open | Weight::Done { cyclic: true, .. }) => top.cyclic = true,
+                Some(Weight::Done { weight, .. }) => top.weight = top.weight.wrapping_add(*weight),
+                None => {
+                    // An unregistered event weighs nothing.
+                    if let Some((location, event)) = self.events.get_key_value(&sound.location) {
+                        lookup.weights.insert(location, Weight::Open);
+                        stack.push(Frame {
+                            location,
+                            event,
+                            next: 0,
+                            weight: 0,
+                            cyclic: false,
+                        });
+                    }
+                }
+            }
+        }
     }
     /// `WeighedSoundEvents.getWeight`.
     pub fn weight(&self, event: &str) -> i32 {
-        self.events
-            .get(event)
-            .map_or(0, |e| self.total(e, 0, &|_| false))
+        let mut lookup = Lookup::default();
+        self.weigh(event, &mut lookup, &|_| false);
+        match lookup.weights.get(event) {
+            Some(Weight::Done { weight, .. }) => *weight,
+            _ => 0,
+        }
     }
     /// `WeighedSoundEvents.getSound`: None when the event is not registered.
     pub fn sound(&self, event: &str, random: &mut impl RandomSource) -> Option<Sound> {
@@ -350,7 +444,9 @@ impl SoundRegistry {
         refused: &dyn Fn(&str) -> bool,
     ) -> Option<Sound> {
         let e = self.events.get(event)?;
-        Some(self.pick(e, random, 0, refused))
+        let mut lookup = Lookup::default();
+        self.weigh(event, &mut lookup, refused);
+        Some(self.pick(e, random, &lookup, refused))
     }
     /// The sound files an event names itself, in `sounds.json` order: the
     /// rows of the Music page. A `"type": "event"` reference is not followed
@@ -367,50 +463,81 @@ impl SoundRegistry {
         }
         tracks
     }
+    /// `WeighedSoundEvents.getSound`: a draw in `event`'s pool, and for a reference
+    /// a draw in the referenced event's, down to a sound file. A reference that leads
+    /// into a cycle weighs nothing, so the walk ends.
     fn pick(
         &self,
         event: &WeighedSoundEvents,
         random: &mut impl RandomSource,
-        depth: u32,
+        lookup: &Lookup<'_>,
         refused: &dyn Fn(&str) -> bool,
     ) -> Sound {
-        let weight = self.total(event, depth, refused);
-        if event.sounds.is_empty() || weight == 0 {
-            return Sound::empty();
-        }
-        let Ok(mut index) = random.next_int_bound(weight) else {
-            return Sound::empty();
-        };
-        for sound in &event.sounds {
-            index -= self.entry_weight(sound, depth, refused);
-            if index < 0 {
-                if !sound.event {
-                    return sound.clone();
-                }
-                // The anonymous reference Weighted: the referenced event's
-                // sound with this entry's volume, pitch and stream folded in.
-                let Some(inner) = self.events.get(&sound.location) else {
-                    return Sound::empty();
-                };
-                if depth > 64 {
-                    return Sound::empty();
-                }
-                let wrapped = self.pick(inner, random, depth + 1, refused);
-                return Sound {
-                    location: wrapped.location,
-                    volume: Sampled::Product(vec![wrapped.volume, sound.volume.clone()]),
-                    pitch: Sampled::Product(vec![wrapped.pitch, sound.pitch.clone()]),
-                    weight: sound.weight,
-                    event: false,
-                    stream: wrapped.stream || sound.stream,
-                    preload: wrapped.preload,
-                    attenuation_distance: wrapped.attenuation_distance,
-                    sentinel: Sentinel::None,
-                };
+        let mut references: Vec<&Sound> = Vec::new();
+        let mut event = event;
+        let mut picked = Sound::empty();
+        'pools: loop {
+            let weights: Vec<i32> = event
+                .sounds
+                .iter()
+                .map(|s| self.entry_weight(s, lookup, refused))
+                .collect();
+            let weight = weights.iter().fold(0i32, |sum, w| sum.wrapping_add(*w));
+            if event.sounds.is_empty() || weight == 0 {
+                break;
             }
+            let Ok(mut index) = random.next_int_bound(weight) else {
+                break;
+            };
+            for (sound, entry_weight) in event.sounds.iter().zip(weights) {
+                index -= entry_weight;
+                if index < 0 {
+                    if !sound.event {
+                        picked = sound.clone();
+                        break 'pools;
+                    }
+                    let Some(inner) = self.events.get(&sound.location) else {
+                        break 'pools;
+                    };
+                    references.push(sound);
+                    event = inner;
+                    continue 'pools;
+                }
+            }
+            break;
         }
-        Sound::empty()
+        // The anonymous reference Weighted, innermost first: the referenced event's
+        // sound with this entry's volume, pitch and stream folded in.
+        for sound in references.into_iter().rev() {
+            picked = Sound {
+                location: picked.location,
+                volume: picked.volume.times(&sound.volume),
+                pitch: picked.pitch.times(&sound.pitch),
+                weight: sound.weight,
+                event: false,
+                stream: picked.stream || sound.stream,
+                preload: picked.preload,
+                attenuation_distance: picked.attenuation_distance,
+                sentinel: Sentinel::None,
+            };
+        }
+        picked
     }
+}
+
+/// One sound lookup's memory: each event's weight, worked out once.
+#[derive(Default)]
+struct Lookup<'a> {
+    weights: HashMap<&'a str, Weight>,
+}
+
+enum Weight {
+    /// Being worked out: a reference to it closes a cycle.
+    Open,
+    Done {
+        weight: i32,
+        cyclic: bool,
+    },
 }
 
 #[cfg(test)]
@@ -481,6 +608,149 @@ mod tests {
             r.get("minecraft:b").unwrap().subtitle.as_deref(),
             Some("s.b")
         );
+    }
+
+    #[test]
+    fn a_nested_event_is_weighed_once_however_often_it_is_named() {
+        // Level k names level k + 1 three times; the last level holds one file.
+        let lookups = |levels: usize| {
+            let mut json = serde_json::Map::new();
+            for k in 0..levels {
+                let next = serde_json::json!({"name": format!("l{}", k + 1), "type": "event"});
+                json.insert(
+                    format!("l{k}"),
+                    serde_json::json!({"sounds": [next, next, next]}),
+                );
+            }
+            json.insert(format!("l{levels}"), serde_json::json!({"sounds": ["x"]}));
+            let mut r = SoundRegistry::default();
+            r.add_file(
+                "minecraft",
+                serde_json::Value::Object(json).to_string().as_bytes(),
+                &|_, _| true,
+            );
+            let asked = std::cell::Cell::new(0);
+            let sound = r.sound_except("minecraft:l0", &mut LegacyRandom::new(1), &|_| {
+                asked.set(asked.get() + 1);
+                false
+            });
+            (
+                r.weight("minecraft:l0"),
+                sound.unwrap().location,
+                asked.get(),
+            )
+        };
+        let (weight, location, three) = lookups(3);
+        assert_eq!((weight, location.as_str()), (27, "minecraft:x"));
+        let (weight, _, four) = lookups(4);
+        assert_eq!(weight, 81);
+        // The file is looked at once per pass over its event, not once per path to it.
+        assert_eq!(three, four);
+        assert!(four <= 2, "{four}");
+    }
+
+    #[test]
+    fn references_into_a_cycle_weigh_nothing_wherever_they_are_reached_from() {
+        let mut r = SoundRegistry::default();
+        // `a` names itself; `b` and `c` name each other; `d` reaches the `b`/`c` cycle; `e` is clean.
+        let json = br#"{
+            "a": {"sounds": [{"name": "a", "type": "event"}, {"name": "a", "type": "event"}, "x"]},
+            "b": {"sounds": [{"name": "c", "type": "event"}]},
+            "c": {"sounds": [{"name": "b", "type": "event"}, "y"]},
+            "d": {"sounds": [{"name": "c", "type": "event"}, "w"]},
+            "e": {"sounds": ["z"]},
+            "root": {"sounds": [{"name": "a", "type": "event"}, {"name": "b", "type": "event"}, {"name": "d", "type": "event"}, {"name": "e", "type": "event"}, "v"]}
+        }"#;
+        r.add_file("minecraft", json, &|_, _| true);
+        // An event in or before a cycle weighs its own files, whichever is asked for first.
+        assert_eq!(r.weight("minecraft:a"), 1);
+        assert_eq!(r.weight("minecraft:c"), 1);
+        assert_eq!(r.weight("minecraft:d"), 1);
+        // From outside, only the clean reference and the root's own file count.
+        assert_eq!(r.weight("minecraft:root"), 2);
+        let mut random = LegacyRandom::new(1);
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            seen.insert(r.sound("minecraft:root", &mut random).unwrap().location);
+        }
+        let seen: Vec<&str> = seen.iter().map(String::as_str).collect();
+        assert_eq!(seen, ["minecraft:v", "minecraft:z"]);
+        // Inside the cycle, a pick never descends into it again.
+        for _ in 0..64 {
+            assert_eq!(
+                r.sound("minecraft:c", &mut random).unwrap().location,
+                "minecraft:y"
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_reached_at_two_depths_weighs_the_same_at_both() {
+        // `root` names `s` directly and through a chain of 80 events; `s` names `t`, which holds `x`.
+        let mut json = serde_json::Map::new();
+        let reference = |name: &str| serde_json::json!({"name": name, "type": "event"});
+        json.insert(
+            "root".into(),
+            serde_json::json!({"sounds": [reference("c0"), reference("s")]}),
+        );
+        for k in 0..80 {
+            let next = if k == 79 {
+                "s".to_string()
+            } else {
+                format!("c{}", k + 1)
+            };
+            json.insert(
+                format!("c{k}"),
+                serde_json::json!({"sounds": [reference(&next)]}),
+            );
+        }
+        json.insert("s".into(), serde_json::json!({"sounds": [reference("t")]}));
+        json.insert("t".into(), serde_json::json!({"sounds": ["x"]}));
+        let mut r = SoundRegistry::default();
+        r.add_file(
+            "minecraft",
+            serde_json::Value::Object(json).to_string().as_bytes(),
+            &|_, _| true,
+        );
+        assert_eq!(r.weight("minecraft:root"), 2);
+        let mut random = LegacyRandom::new(1);
+        for _ in 0..16 {
+            assert_eq!(
+                r.sound("minecraft:root", &mut random).unwrap().location,
+                "minecraft:x"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sound_reached_through_a_long_chain_clones_samples_and_drops() {
+        // 100 000 events, each naming the next with its own volume and pitch. Nested
+        // products would recurse once per level to clone, sample and drop the sound.
+        let levels = 100_000;
+        let mut json = serde_json::Map::new();
+        for k in 0..levels {
+            let next = serde_json::json!(
+                {"name": format!("c{}", k + 1), "type": "event", "volume": 1.0, "pitch": 1.0}
+            );
+            json.insert(format!("c{k}"), serde_json::json!({"sounds": [next]}));
+        }
+        json.insert(
+            format!("c{levels}"),
+            serde_json::json!({"sounds": [{"name": "x", "volume": 0.5, "pitch": 2.0}]}),
+        );
+        let mut r = SoundRegistry::default();
+        r.add_file(
+            "minecraft",
+            serde_json::Value::Object(json).to_string().as_bytes(),
+            &|_, _| true,
+        );
+        let mut random = LegacyRandom::new(1);
+        let sound = r.sound("minecraft:c0", &mut random).unwrap();
+        assert_eq!(sound.location, "minecraft:x");
+        let copy = sound.clone();
+        drop(sound);
+        assert_eq!(copy.volume.sample(&mut random), 0.5);
+        assert_eq!(copy.pitch.sample(&mut random), 2.0);
     }
 
     #[test]

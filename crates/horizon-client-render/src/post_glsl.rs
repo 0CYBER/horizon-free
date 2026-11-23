@@ -69,34 +69,54 @@ fn read_source(root: &ResourceSource, id: &str, ext: &str) -> Result<String, Str
         .map_err(|e| format!("{file}: {e}"))
 }
 
-fn include(root: &ResourceSource, src: &str, depth: u32) -> Result<String, String> {
-    if depth > 8 {
-        return Err("#include nested too deep".into());
+/// The source with its `#include`s pasted, each every time it is named, within the same budget
+/// as core shaders' includes: at most `MAX_PASTES` files and `MAX_EXPANDED` bytes in all.
+fn include(root: &ResourceSource, src: &str) -> Result<String, String> {
+    use crate::core_shader::{MAX_EXPANDED, MAX_PASTES};
+    fn walk(
+        root: &ResourceSource,
+        src: &str,
+        depth: u32,
+        pastes: &mut u32,
+        out: &mut String,
+    ) -> Result<(), String> {
+        if depth > 8 {
+            return Err("#include nested too deep".into());
+        }
+        for line in src.lines() {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix("#include") {
+                let name = rest
+                    .trim()
+                    .trim_start_matches(['<', '"'])
+                    .trim_end_matches(['>', '"'])
+                    .trim();
+                *pastes += 1;
+                if *pastes > MAX_PASTES {
+                    return Err(format!("includes paste more than {MAX_PASTES} files"));
+                }
+                let (ns, path) = name.split_once(':').unwrap_or(("minecraft", name));
+                let file = format!("assets/{ns}/shaders/include/{path}");
+                let text = root
+                    .read_to_string(&file)
+                    .map_err(|e| format!("#include <{name}>: {file}: {e}"))?;
+                walk(root, &text, depth + 1, pastes, out)?;
+            } else if t.starts_with("#version") || t.starts_with("#extension") {
+                // Re-added below, for the translator.
+            } else {
+                out.push_str(line);
+            }
+            out.push('\n');
+            if out.len() > MAX_EXPANDED {
+                return Err(format!(
+                    "includes grow the shader past {MAX_EXPANDED} bytes"
+                ));
+            }
+        }
+        Ok(())
     }
     let mut out = String::new();
-    for line in src.lines() {
-        let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("#include") {
-            let name = rest
-                .trim()
-                .trim_start_matches(['<', '"'])
-                .trim_end_matches(['>', '"'])
-                .trim();
-            let (ns, path) = name.split_once(':').unwrap_or(("minecraft", name));
-            let file = format!("assets/{ns}/shaders/include/{path}");
-            let text = root
-                .read_to_string(&file)
-                .map_err(|e| format!("#include <{name}>: {file}: {e}"))?;
-            out.push_str(&include(root, &text, depth + 1)?);
-        } else if t.starts_with("#version") || t.starts_with("#extension") {
-            // Re-added below, for the translator.
-            out.push('\n');
-            continue;
-        } else {
-            out.push_str(line);
-        }
-        out.push('\n');
-    }
+    walk(root, src, 0, &mut 0, &mut out)?;
     Ok(out)
 }
 
@@ -223,8 +243,8 @@ fn parse(stage: ShaderStage, text: &str) -> Result<naga::Module, String> {
 
 /// Translates the vertex and fragment shader a pass names (`minecraft:post/invert`).
 pub fn translate(root: &ResourceSource, vertex: &str, fragment: &str) -> Result<Program, String> {
-    let vs = include(root, &read_source(root, vertex, "vsh")?, 0)?;
-    let fs = include(root, &read_source(root, fragment, "fsh")?, 0)?;
+    let vs = include(root, &read_source(root, vertex, "vsh")?)?;
+    let fs = include(root, &read_source(root, fragment, "fsh")?)?;
     // Blocks and samplers are shared by name across the stages, so both agree on a binding.
     let mut blocks: Vec<(String, u32)> = Vec::new();
     let mut names: Vec<String> = Vec::new();
@@ -280,6 +300,33 @@ mod tests {
         ]));
         translate(&source, "custom:post/test", "custom:post/test").unwrap();
         assert!(translate(&source, "custom:missing", "custom:post/test").is_err());
+    }
+
+    #[test]
+    fn includes_are_pasted_every_time_within_a_budget() {
+        use horizon_assets::resource_source::Resource;
+        // Include k names include k + 1 three times; the last one is a single line.
+        let fan_out = |levels: usize| {
+            let mut files = std::collections::BTreeMap::new();
+            for k in 0..levels {
+                let line = format!("#include <custom:l{}.glsl>\n", k + 1);
+                files.insert(
+                    format!("assets/custom/shaders/include/l{k}.glsl"),
+                    Resource::bytes(line.repeat(3).into_bytes()),
+                );
+            }
+            files.insert(
+                format!("assets/custom/shaders/include/l{levels}.glsl"),
+                Resource::bytes(b"float leaf;".to_vec()),
+            );
+            include(&ResourceSource::indexed(files), "#include <custom:l0.glsl>")
+        };
+        let leaves = |out: String| out.matches("float leaf;").count();
+        assert_eq!(fan_out(3).map(leaves), Ok(27));
+        assert_eq!(fan_out(4).map(leaves), Ok(81));
+        // 1 + 3 + ... + 3^6 = 1093 pastes: past the budget, refused before pasting them all.
+        let err = fan_out(6).map(leaves).unwrap_err();
+        assert!(err.contains("paste more than"), "{err}");
     }
 
     #[test]
