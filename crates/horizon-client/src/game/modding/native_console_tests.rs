@@ -1,8 +1,11 @@
 //! The console for native mods: logged lines reach `console_line`, and a command's feedback
 //! comes back from `run_command_with_output`.
+use super::native_console::console_log_text;
 use super::native_guest_turn_tests::with_guests;
 use horizon_client::logging;
-use mod_api::{CommandResult, ConsoleLineEvent, Hooks, ServerHost};
+use mod_api::{
+    CommandResult, ConsoleLevel, ConsoleLineEvent, ConsoleLogRefusal, Hooks, ServerHost,
+};
 use std::sync::{Arc, Mutex};
 
 /// Records the probe lines it hears and logs a line of its own for each.
@@ -169,5 +172,63 @@ fn a_nested_capture_leaves_the_outer_one_as_it_was() {
             .collect();
         assert_eq!(kept, ["outer line"]);
         game.chat_capture = outer;
+    });
+}
+
+/// The prefix, the empty and over-long mod id refusals and the 4096-byte cut, with literal values.
+#[test]
+fn console_log_text_prefixes_the_mod_and_refuses_bad_ids() {
+    assert_eq!(
+        console_log_text("coregen", "undo done"),
+        Ok("[coregen] undo done".to_owned())
+    );
+    assert_eq!(
+        console_log_text("", "undo done"),
+        Err(ConsoleLogRefusal::EmptyModId)
+    );
+    assert_eq!(
+        console_log_text(&"m".repeat(65), "x"),
+        Err(ConsoleLogRefusal::ModIdTooLong)
+    );
+    assert!(console_log_text(&"m".repeat(64), "x").is_ok());
+    // A control character in the id is refused; in the line it becomes a space (one log line).
+    assert_eq!(
+        console_log_text("a\n[server] x", "y"),
+        Err(ConsoleLogRefusal::InvalidModId)
+    );
+    assert_eq!(
+        console_log_text("a\r", "y"),
+        Err(ConsoleLogRefusal::InvalidModId)
+    );
+    assert_eq!(
+        console_log_text("m", "one\ntwo\r\nthree\u{1b}x"),
+        Ok("[m] one two  three x".to_owned())
+    );
+    // 4095 bytes of `a`, then `é` (2 bytes): the cut at 4096 falls inside `é`, so 4095 bytes stay.
+    let line = format!("{}é", "a".repeat(4095));
+    assert_eq!(
+        console_log_text("m", &line),
+        Ok(format!("[m] {}", "a".repeat(4095)))
+    );
+}
+
+/// A line logged through `console_log` reaches the log once, at its level, with the prefix.
+#[test]
+#[ignore = "daily"]
+fn console_log_writes_one_prefixed_line_at_its_level() {
+    with_guests(|game| {
+        logging::set_tap(true);
+        assert_eq!(
+            game.native_console_log("coregen", ConsoleLevel::Warn, "undo done"),
+            Ok(())
+        );
+        let lines = logging::take_tapped();
+        logging::set_tap(false);
+        let found: Vec<log::Level> = lines
+            .iter()
+            .filter(|line| line.message == "[coregen] undo done")
+            .map(|line| line.level)
+            .collect();
+        assert_eq!(found, [log::Level::Warn]);
     });
 }

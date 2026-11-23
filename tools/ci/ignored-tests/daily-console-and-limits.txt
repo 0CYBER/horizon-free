@@ -6,3 +6,4 @@ horizon-client game::native_console_tests::logged_lines_reach_a_listener_but_not
 horizon-client game::native_console_tests::the_dedicated_consoles_own_commands_are_not_reached lib daily resources
 horizon-client game::native_server_max_players_tests::a_mod_reads_and_sets_the_player_limit lib daily resources
 horizon-client game::native_server_max_players_tests::each_player_limit_refusal_has_its_own_name_and_changes_nothing lib daily resources
+horizon-client game::native_console_tests::console_log_writes_one_prefixed_line_at_its_level lib daily resources

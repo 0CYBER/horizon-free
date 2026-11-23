@@ -250,6 +250,29 @@ pub trait Messages {
             crate::world::phase::LoadAccess::WorldOnly,
         )
     }
+    /// Side: server.
+    /// Writes `line` to the server console and its log at `level` (`Logger.info`, `warning`,
+    /// `severe`), prefixed with `[mod_id] ` so the line names the mod that wrote it; `mod_id` is
+    /// the id the mod gives, as the other calls taking a mod id. The line is cut to its first
+    /// 4096 bytes at a character boundary; control characters in it (line breaks included) are
+    /// replaced by spaces, so one call is always one log line. Refuses with
+    /// `ConsoleLogRefusal::EmptyModId`, `ModIdTooLong` (over 64 bytes) or `InvalidModId` (a
+    /// control character in the id) and then logs nothing.
+    /// It is also the reply a mod gives a console command after the command has returned: the
+    /// console sender of `run_command_with_output` is the console itself, so a delayed answer
+    /// goes here. Other console listeners (`console_line`) hear the line too.
+    fn console_log(
+        &self,
+        mod_id: &str,
+        level: ConsoleLevel,
+        line: &str,
+    ) -> Result<(), ConsoleLogRefusal> {
+        crate::world::phase::unprovided(
+            "Messages::console_log",
+            "console_log",
+            crate::world::phase::LoadAccess::WorldOnly,
+        )
+    }
 }
 /// The players service, reached through its host.
 pub trait Players {

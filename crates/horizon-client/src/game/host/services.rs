@@ -93,6 +93,15 @@ impl Messages for Game<'_> {
         mod_api::__private::check_access("text_allowed", mod_api::__private::LoadAccess::WorldOnly);
         self.native_text_allowed(text)
     }
+    fn console_log(
+        &self,
+        mod_id: &str,
+        level: ConsoleLevel,
+        line: &str,
+    ) -> Result<(), ConsoleLogRefusal> {
+        mod_api::__private::check_access("console_log", mod_api::__private::LoadAccess::WorldOnly);
+        self.native_console_log(mod_id, level, line)
+    }
     fn broadcast(&self, line: Text) -> Result<(), mod_api::text::TextFormError> {
         mod_api::__private::check_access("broadcast", mod_api::__private::LoadAccess::WorldOnly);
         self.native_broadcast(line.try_into_engine(&())?);
