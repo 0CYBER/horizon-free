@@ -17,7 +17,7 @@ use horizon_launcher::native_status;
 use horizon_port_pack::check::Check;
 use java_instance::Target;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The kinds, as the Mods page's tabs: name and icon.
 const KINDS: [(PackKind, &str, &str); 5] = [
@@ -98,6 +98,35 @@ fn confirm_pack(tx: &Sender<Event>, title: String, reason: &str, action: &'stati
         && answer.recv().unwrap_or(false)
 }
 
+/// The save folder distinguishes worlds with the same in-game name.
+fn world_picker_folder(path: &Path) -> String {
+    let folder = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy();
+    trf("Folder: {folder}", &[("folder", &folder)])
+}
+
+fn world_picker_text(name: &str, folder: &str, t: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .child(
+            text(theme::LABEL)
+                .text_color(t.ink)
+                .truncate()
+                .child(name.to_owned()),
+        )
+        .child(
+            text(theme::CAPTION)
+                .text_color(t.muted)
+                .truncate()
+                .child(folder.to_owned()),
+        )
+}
+
 /// Where a Java mod's check is.
 pub(super) enum Checking {
     Running,
@@ -159,6 +188,7 @@ pub(super) struct Mods {
     /// Its worlds (folder, name), the last played first, and the one data packs go into.
     worlds: Vec<(PathBuf, String)>,
     world: Option<PathBuf>,
+    world_picker_open: bool,
     /// The project being installed, and the line and fraction of its download.
     pub(super) busy: Option<(String, String, f32)>,
     pub(super) message: Option<Result<String, String>>,
@@ -235,6 +265,11 @@ impl Mods {
         }
     }
 
+    fn selected_world(&self) -> Option<&(PathBuf, String)> {
+        let selected = self.world.as_ref()?;
+        self.worlds.iter().find(|(path, _)| path == selected)
+    }
+
     /// Whether the Modpacks tab is open (the sidebar marks the pack shown there).
     pub(super) fn on_modpacks(&self) -> bool {
         self.kind == PackKind::Modpack
@@ -278,6 +313,7 @@ impl Mods {
             java: None,
             worlds: Vec::new(),
             world: None,
+            world_picker_open: false,
             busy: None,
             message: None,
             native_state: Default::default(),
@@ -389,6 +425,7 @@ impl Mods {
         self.everything = false;
         self.browse.filters = Default::default();
         self.browse.open = None;
+        self.world_picker_open = false;
         self.picked = None;
         self.shown = None;
         self.search += 1;
@@ -1252,10 +1289,7 @@ impl Launcher {
         let instance = self
             .selected_instance()
             .map_or_else(|| "Horizon".to_string(), |i| i.name.clone());
-        let world = self.mods.world.clone().and_then(|path| {
-            let (_, name) = self.mods.worlds.iter().find(|(p, _)| *p == path)?;
-            Some((path, name.clone()))
-        });
+        let world = self.mods.selected_world().cloned();
         std::thread::spawn(move || {
             let last = std::cell::Cell::new(-1);
             let progress = |line: &str, f: f32| {
@@ -1727,7 +1761,7 @@ impl Launcher {
     fn mods_target_line(&self, cx: &mut Context<Self>) -> Option<Div> {
         let instance = self.selected_instance()?;
         if self.mods.kind == PackKind::DataPack {
-            return Some(self.mods_world_picker(&instance.name.clone(), cx));
+            return Some(self.mods_world_picker(&instance.name, cx));
         }
         // The glass page's heading already says where installs go.
         if self.mods.kind == PackKind::Modpack || self.theme.glass {
@@ -1750,39 +1784,100 @@ impl Launcher {
     fn mods_world_picker(&self, instance: &str, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let caption = |s: String| text(theme::CAPTION).text_color(t.muted).child(s);
-        if self.mods.worlds.is_empty() {
+        let Some((path, name)) = self.mods.selected_world() else {
             return div().child(caption(trf(
                 "A data pack goes into a world, and {instance} has none yet: create one in the game, then come back.",
                 &[("instance", instance)],
             )));
-        }
-        let mut chips = div().flex().flex_wrap().items_center().gap(px(6.));
-        for (i, (path, name)) in self.mods.worlds.iter().enumerate() {
-            let on = self.mods.world.as_ref() == Some(path);
-            let path = path.clone();
-            chips = chips.child(
-                button(
-                    SharedString::from(format!("mods-world-{i}")),
-                    name.clone(),
-                    if on { Kind::Secondary } else { Kind::Ghost },
-                    &t,
-                )
-                .when(on, |b| b.border_color(t.accent))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.mods.world = Some(path.clone());
-                    cx.notify();
-                })),
-            );
-        }
-        div()
+        };
+        let open = self.mods.world_picker_open;
+        let folder = world_picker_folder(path);
+        let rounding = if t.glass {
+            horizon_theme::glass::radius::ROW
+        } else {
+            theme::RADIUS
+        };
+        let trigger = keyboard(div().id("mods-world-picker"), &t)
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .h(px(48.))
+            .px(px(12.))
+            .rounded(px(rounding))
+            .bg(t.plate_soft)
+            .hover(move |s| s.bg(t.plate))
+            .cursor_pointer()
+            .child(world_picker_text(name, &folder, &t))
+            .tooltip(crate::glass_ui::tip(folder))
+            .child(
+                blocks::icon("chevron-down", 16., t.muted).with_transformation(
+                    gpui::Transformation::rotate(gpui::radians(if open {
+                        std::f32::consts::PI
+                    } else {
+                        0.
+                    })),
+                ),
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.mods.world_picker_open = !this.mods.world_picker_open;
+                cx.notify();
+            }));
+        let mut picker = div()
+            .id("mods-world-picker-wrap")
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .child(caption(trf(
-                "Installs into a world of {instance}; the game turns the pack on when the world opens.",
-                &[("instance", instance)],
-            )))
-            .child(chips)
+            .gap(px(6.))
+            .w_full()
+            .max_w(px(360.))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.mods.world_picker_open {
+                    this.mods.world_picker_open = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(caption(tr("Install data packs into this world").into()))
+            .child(trigger);
+        if open {
+            let mut choices = div()
+                .id("mods-world-choices")
+                .flex()
+                .flex_col()
+                .max_h(px(242.))
+                .overflow_y_scroll()
+                .on_scroll(|_, _, cx| cx.stop_propagation())
+                .p(px(4.))
+                .rounded(px(rounding))
+                .bg(t.plate_soft);
+            for (i, (path, name)) in self.mods.worlds.iter().enumerate() {
+                let selected = self.mods.world.as_ref() == Some(path);
+                let folder = world_picker_folder(path);
+                let row = keyboard(div().id(("mods-world", i)), &t)
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(12.))
+                    .h(px(46.))
+                    .px(px(8.))
+                    .rounded(px(rounding))
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(t.plate))
+                    .hover(move |s| s.bg(t.plate))
+                    .child(world_picker_text(name, &folder, &t))
+                    .tooltip(crate::glass_ui::tip(folder))
+                    .when(selected, |d| d.child(blocks::icon("check", 16., t.accent)));
+                let path = path.clone();
+                choices = choices.child(row.on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        this.mods.world = Some(path.clone());
+                        this.mods.world_picker_open = false;
+                        cx.notify();
+                    },
+                )));
+            }
+            picker = picker.child(choices);
+        }
+        div().child(picker)
     }
 
     /// The install under way and the last install's answer.
@@ -2417,6 +2512,26 @@ fn reviews_resource_pack(kind: PackKind, source: SourceId, java: Option<&Target>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn same_named_worlds_keep_distinct_data_pack_destinations(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let mut mods = Mods::new(cx);
+            let first = Path::new("saves").join("New World");
+            let second = Path::new("saves").join("New World (1)");
+            mods.worlds = vec![
+                (first.clone(), "New World".into()),
+                (second.clone(), "New World".into()),
+            ];
+
+            mods.world = Some(second.clone());
+            let (path, name) = mods.selected_world().expect("selected world");
+            assert_eq!(path, &second);
+            assert_eq!(name, "New World");
+            assert_ne!(world_picker_folder(&first), world_picker_folder(path));
+            assert!(world_picker_folder(path).contains("New World (1)"));
+        });
+    }
 
     #[test]
     fn stale_discovery_keeps_only_offers_for_the_still_installed_versions() {
