@@ -3,12 +3,13 @@
 //! cache location, valid only while the resource source's textures have the
 //! same identities/change stamps (or open archive contents) and format version; anything
 //! else (missing, corrupt, stale, unwritable) means the normal decoding path.
-use crate::{mipmap::Strategy, resource_source::ResourceRoot};
+use crate::{mipmap::Strategy, resource_source::ResourceRoot, sprites::MAX_SPRITE_FRAMES};
 use std::{collections::HashMap, fs, path::PathBuf};
 
 const MAGIC: &[u8; 4] = b"HSPR";
-/// Bump when `Decoded` or the decoding in `Sprites::decode` changes.
-const VERSION: u32 = 3;
+/// Bump when `Decoded` or the decoding in `Sprites::decode` changes. (4: a sprite of more than
+/// `MAX_SPRITE_FRAMES` frames is refused, so older files may hold entries decoding no longer takes.)
+const VERSION: u32 = 4;
 const FILE: &str = "horizon-sprites.cache";
 /// The most pixel bytes one entry's frames may hold: a full atlas, the most one decoded image
 /// may be (`hud::read_png`).
@@ -153,7 +154,11 @@ fn parse(bytes: &[u8], fingerprint: u64) -> Option<HashMap<String, Decoded>> {
         // file holds and against a full atlas (what one decoded image may be), counting the
         // frame table too, which for tiny frames outweighs their pixels. The table grows only
         // as each record's length checks out.
-        if frame_count == 0 || frame_size.contains(&0) || frame_size[0].max(frame_size[1]) != side {
+        if frame_count == 0
+            || frame_count > MAX_SPRITE_FRAMES
+            || frame_size.contains(&0)
+            || frame_size[0].max(frame_size[1]) != side
+        {
             return None;
         }
         let frame_len = u128::from(frame_size[0]) * u128::from(frame_size[1]) * 4;
@@ -301,6 +306,20 @@ mod tests {
         }
         put_bytes(&mut bytes, &[0; 16 * 16 * 4]);
         assert!(parse(&bytes, 7).is_none());
+    }
+    /// An entry with more frames than decoding allows is a miss, as `decode_file_data` would
+    /// refuse that sprite: the limit holds for what a cache restores too.
+    #[test]
+    fn an_entry_above_the_frame_limit_is_a_miss() {
+        let entry = |frames: u32| {
+            let mut d = sample(1, None);
+            (d.side, d.frame_size) = (1, [1, 1]);
+            d.frames = vec![vec![9; 4]; frames as usize];
+            serialize(7, &HashMap::from([("a:b".to_owned(), d)]))
+        };
+        let at_limit = parse(&entry(MAX_SPRITE_FRAMES), 7).unwrap();
+        assert_eq!(at_limit["a:b"].frames.len(), MAX_SPRITE_FRAMES as usize);
+        assert!(parse(&entry(MAX_SPRITE_FRAMES + 1), 7).is_none());
     }
     /// A frame size with a zero side is a miss: its texture is decoded again, never read
     /// from empty frames.

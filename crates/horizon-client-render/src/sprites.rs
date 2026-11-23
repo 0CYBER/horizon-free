@@ -1107,6 +1107,14 @@ impl Sprites {
         }
         let columns = png_width / width;
         let count = columns * (png_height / height);
+        // A frame size from `.mcmeta` can cut a valid image into millions of frames, each its
+        // own allocation (and a clip as long); refuse before any is made.
+        if count > MAX_SPRITE_FRAMES {
+            return Err(format!(
+                "sprite {name} has {count} frames, more than the {MAX_SPRITE_FRAMES} allowed"
+            )
+            .into());
+        }
         // Layers are square; a frame of another shape is nearest-resampled to
         // its longer side so UVs (normalized per layer) are unchanged. That square is
         // made only at the layers' size (`lay_out`).
@@ -1280,6 +1288,10 @@ impl Sprites {
         Ok(layer)
     }
 }
+
+/// Most frames one animated sprite may be cut into. Real sheets have a few hundred (the largest
+/// kept in tests has 16,448); the cap bounds the per-frame allocations, not the decoded pixels.
+pub(crate) const MAX_SPRITE_FRAMES: u32 = 1 << 17;
 
 /// Refuses `count` square frames of `side` before they are made: a frame of any shape becomes a
 /// square layer, so a 32768x1 image of a few hundred bytes squared at its own side would ask for
@@ -2460,6 +2472,19 @@ mod png_size_tests {
         });
         let source = super::ResourceSource::indexed(files.into_iter().collect());
         super::Sprites::decode_file_data(&source, path, "minecraft:block/test", Some(png))
+    }
+
+    /// A valid PNG with a 1x1 `.mcmeta` frame size would be cut into one allocation per
+    /// texel (67 million for 8192x8192); the frame count is refused before any is made.
+    #[test]
+    fn a_frame_size_that_splits_a_sprite_into_millions_of_frames_is_refused() {
+        let mcmeta = r#"{"animation":{"width":1,"height":1}}"#;
+        let Err(error) = decode_sprite(&grey_png(1024, 1024), Some(mcmeta)) else {
+            panic!("a million frames must be refused");
+        };
+        assert!(error.to_string().contains("frames"), "{error}");
+        let ok = decode_sprite(&grey_png(256, 256), Some(mcmeta)).unwrap();
+        assert_eq!(ok.frames.len(), 256 * 256);
     }
 
     /// A real 32768x1 (or 1x32768) PNG is a few hundred bytes and decodes to 128 KiB; its
