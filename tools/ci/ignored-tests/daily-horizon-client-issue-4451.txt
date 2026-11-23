@@ -1524,6 +1524,7 @@ horizon-client game::native_hooks::level_tick_tests::tests::server_hook_resolves
 horizon-client game::native_hooks::living_death_post::tests::living_death_post_fires_once_after_each_finished_death lib daily resources
 horizon-client game::native_hooks::living_death_post::tests::living_death_post_hears_a_player_death_after_the_message_and_loot lib daily resources
 horizon-client game::native_hooks::living_death_post::tests::living_drops_hears_a_killed_players_drops_with_generic_kill lib daily resources
+horizon-client game::native_hooks::living_death_post::tests::mob_died_is_heard_without_a_living_death_subscription lib daily resources
 horizon-client game::native_hooks::math::tests::game_host_math_profile_matches_platform_and_is_stable lib daily resources
 horizon-client game::native_hooks::mod_mismatch::tests::a_resolved_missing_mod_is_not_asked_about lib daily resources
 horizon-client game::native_hooks::mod_mismatch::tests::existing_lists_fire_on_client_and_dedicated_even_without_differences lib daily resources
@@ -1752,6 +1753,7 @@ horizon-client game::native_living_position::tests::pose_regression_sleeping_sta
 horizon-client game::native_living_position::tests::random_teleport_drops_to_the_ground_and_honours_the_avoid_tag lib daily resources
 horizon-client game::native_living_position::tests::villager_sleeping_answers_the_sleeping_box lib daily resources
 horizon-client game::native_living_position::tests::warden_digging_answers_low_in_every_pose lib daily resources
+horizon-client game::native_living_refs::set_tamed_tests::living_set_tamed_writes_a_tamable_mob_and_keeps_its_owner lib daily resources
 horizon-client game::native_living_refs::tests::a_guest_answers_the_one_portal_rule lib daily resources
 horizon-client game::native_living_refs::tests::a_handle_lists_its_attributes_and_reads_its_modifiers lib daily resources
 horizon-client game::native_living_refs::tests::a_mobs_last_attacker_names_a_mob_the_host_and_none_when_displaced lib daily resources
@@ -1782,6 +1784,7 @@ horizon-client game::native_living_renderers_tests::a_registered_living_type_dra
 horizon-client game::native_living_renderers_tests::a_sleeping_or_baby_frame_reads_as_the_model_lays_it lib daily resources
 horizon-client game::native_living_renderers_tests::extracted_living_signs_death_time_and_hurt_overlay_are_literal lib daily resources
 horizon-client game::native_living_renderers_tests::own_yaw_is_independent_of_body_rotation_across_a_wrap lib daily resources
+horizon-client game::native_living_writes::sprint_tests::living_set_sprinting_writes_a_mob_and_marks_it_for_sync lib daily resources
 horizon-client game::native_living_writes::tests::a_guests_waypoint_and_riptide_writes_reach_the_players_around lib daily resources
 horizon-client game::native_living_writes::tests::a_mob_swings_while_its_hand_and_loot_flags_live_on_the_mob_handle lib daily resources
 horizon-client game::native_living_writes::tests::a_mob_uses_either_hand_until_it_is_released lib daily resources
@@ -1812,6 +1815,7 @@ horizon-client game::native_merchant_refs::tests::unresolved_profession_preserve
 horizon-client game::native_minecart_refs::tests::a_carts_display_block_and_offset_round_trip_through_its_handle lib daily resources
 horizon-client game::native_minecart_refs::tests::a_furnace_carts_push_is_read_and_set_through_its_handle lib daily resources
 horizon-client game::native_minecart_refs::tests::minecart_handles_narrow_read_and_write_by_kind lib daily resources
+horizon-client game::native_mob_attack::tests::a_mob_blow_hits_the_target_with_its_own_attack_damage lib daily resources
 horizon-client game::native_mob_goals::tests::follow_mob_uses_the_mobs_actual_navigation lib daily resources
 horizon-client game::native_mob_goals::tests::goal_constructors_follow_vanilla_classes lib daily resources
 horizon-client game::native_mob_goals::tests::goals_read_add_remove_and_refuse_what_the_mob_does_not_hold lib daily resources
@@ -1833,6 +1837,9 @@ horizon-client game::native_mob_refs::tests::mob_flags_baby_setter_uses_species_
 horizon-client game::native_mob_refs::tests::mob_flags_custom_persistence_is_independent_of_stored_flags lib daily resources
 horizon-client game::native_mob_refs::tests::mob_handles_read_write_and_refuse_unavailable_entities lib daily resources
 horizon-client game::native_mob_refs::tests::mob_portal_eligibility_matches_gameplay lib daily resources
+horizon-client game::native_mob_refs::tests::mob_shear_sheds_a_sheeps_wool_once_and_refuses_a_baby lib daily resources
+horizon-client game::native_mob_refs::tests::mob_zombify_turns_a_piglin_into_a_zombified_piglin_once lib daily resources
+horizon-client game::native_mob_refs::tests::mob_zombify_drops_the_admired_item_and_inventory lib daily resources
 horizon-client game::native_mob_refs::tests::piglin_target_write_drives_anger_sound_and_alert lib daily resources
 horizon-client game::native_mob_refs::tests::player_target_round_trips_through_the_mob_binding lib daily resources
 horizon-client game::native_mob_refs::tests::redirected_fake_target_is_refused_with_the_original_target_intact lib daily resources

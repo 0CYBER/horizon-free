@@ -48,6 +48,21 @@ impl Game<'_> {
         }
     }
 
+    /// `Entity.setSprinting` for a mob: sets its shared sprinting flag and
+    /// marks it for sync, so tracking players see it. False for players and
+    /// guests (their own client reports the sprint), armor stands, the dragon
+    /// and a stale handle.
+    pub(super) fn living_set_sprinting(&mut self, living: LivingRef, sprinting: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_living_target(living) else {
+            return false;
+        };
+        self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+            m.extra.sprinting = sprinting;
+            m.needs_sync = true;
+            true
+        })
+    }
+
     /// `LivingEntity.swing(hand, DEFAULT, sendToSwingingEntity)`: starts the
     /// arm swing (shortened by haste, lengthened by mining fatigue) unless
     /// one is under way and past its first half, and tells the players
@@ -1060,6 +1075,30 @@ mod tests {
                 }
             }
             assert_eq!(sent, [1, 0, 0]);
+        });
+    }
+}
+
+#[cfg(test)]
+mod sprint_tests {
+    use super::super::native_entity_refs::tests::with_game;
+    use horizon_core::geometry::Vec3;
+    use horizon_client::mobs::Mob;
+
+    #[test]
+    #[ignore = "daily"]
+    fn living_set_sprinting_writes_a_mob_and_marks_it_for_sync() {
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            let kind = game.res.mob_types().get("minecraft:zombie").unwrap().clone();
+            game.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
+            let living = game.living(game.entity(42).unwrap()).unwrap();
+            game.mobs[0].needs_sync = false;
+            assert!(game.living_set_sprinting(living, true));
+            assert!(game.mobs[0].extra.sprinting);
+            assert!(game.mobs[0].needs_sync);
+            assert!(game.living_set_sprinting(living, false));
+            assert!(!game.mobs[0].extra.sprinting);
         });
     }
 }

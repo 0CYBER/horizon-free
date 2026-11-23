@@ -60,3 +60,55 @@ fn a_sulfur_cube_sends_its_fuse_at_19_and_from_bucket_at_20() {
         "{meta:?}"
     );
 }
+
+/// `TamableAnimal.DATA_FLAGS_ID` (18): clearing the tame flag must send the
+/// entry again, so it needs a default to go back to (wolf, cat and parrot).
+#[test]
+fn a_wolf_cat_and_parrot_register_the_tame_flags_default() {
+    use horizon_client::mobs::Mob;
+    use horizon_protocol::entity_data::{Value, serializer};
+    let root = std::env::temp_dir().join(format!("horizon-tame-meta-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let row = r#"{"width":0.6,"height":0.85,"eye_height":0.68,"category":"creature","fire_immune":false,"attributes":{"minecraft:max_health":8.0}}"#;
+    std::fs::write(
+        root.join("entity-types.json"),
+        format!(r#"{{"minecraft:wolf":{row},"minecraft:cat":{row},"minecraft:parrot":{row}}}"#),
+    )
+    .unwrap();
+    let attributes = &horizon_world::attributes::entity::Catalog::from_json(&serde_json::json!({
+        "data_version": horizon_world::DATA_VERSION,
+        "attributes": [],
+        "entities": {},
+    }))
+    .unwrap();
+    let types = horizon_client::mobs::MobTypes::load_for_server(&root, attributes).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    let hub = super::tests::meta_hub("TameFlagMetaTest");
+    let at = horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5);
+    for name in ["minecraft:wolf", "minecraft:cat", "minecraft:parrot"] {
+        let kind = std::sync::Arc::new(types.types[name].clone());
+        let mut mob = Mob::new(1, kind, at, 0.0);
+        let meta_of = |m: &Mob| {
+            let (mut meta, mut defaults) = (Vec::new(), Vec::new());
+            super::mob_meta(m, &hub, None, 0, &mut meta, &mut defaults);
+            (meta, defaults)
+        };
+        mob.extra.tame = true;
+        let (meta, defaults) = meta_of(&mob);
+        assert!(
+            meta.contains(&(18, serializer::BYTE, Value::Byte(4))),
+            "{name}: {meta:?}"
+        );
+        assert!(
+            defaults.contains(&(18, serializer::BYTE, Value::Byte(0))),
+            "{name}: tame flag has a default to return to: {defaults:?}"
+        );
+        mob.extra.tame = false;
+        let (meta, defaults) = meta_of(&mob);
+        assert!(meta.iter().all(|e| e.0 != 18), "{name}: {meta:?}");
+        assert!(
+            defaults.contains(&(18, serializer::BYTE, Value::Byte(0))),
+            "{name}: cleared flag is sent back to its default: {defaults:?}"
+        );
+    }
+}

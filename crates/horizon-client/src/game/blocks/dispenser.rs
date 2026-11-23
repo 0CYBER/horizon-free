@@ -2126,128 +2126,9 @@ impl Game<'_> {
                 return Ok(true);
             }
             let Target::Mob(i) = t else { continue };
-            let part = self.part_shearable(i, None, &shears);
-            let m = &self.mobs[i];
-            if !m.alive() || part.is_some_and(|(_, shearable)| !shearable) {
+            let (entity_id, kind) = (self.mobs[i].id, self.mobs[i].kind.id.clone());
+            if !self.shear_mob(i, &shears) {
                 continue;
-            }
-            let (at, entity_id, kind) = (m.position, m.id, m.kind.id.clone());
-            let sound_at = Some([at.x, at.y, at.z]);
-            // shear(level, BLOCKS, tool): level.playSound(null, this, sound, BLOCKS, 1, 1).
-            let shear_sound = |name: &'static str| {
-                LevelSound::new(name, [at.x, at.y, at.z], 1.0, 1.0).in_source(SoundSource::Blocks)
-            };
-            match m.species() {
-                _ if let Some((part, _)) = part => self.part_shear(i, part, None, &shears),
-                Species::SulfurCube if sulfur_cube::has_body(m) => {
-                    // SulfurCube.shear: the swallowed block comes out at the
-                    // passenger attachment, and nothing is swallowed for 5 s.
-                    let height = f64::from(m.height());
-                    let id = m.id;
-                    if let Some(body) = self.mobs[i].take_body_equipment() {
-                        self.spawn_at_location(at, height, body);
-                    }
-                    // setItemSlot(BODY, EMPTY): an unequip.
-                    let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
-                    self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
-                    self.mobs[i].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
-                    self.audio
-                        .play("minecraft:entity.sulfur_cube.eject", sound_at, 1.0, 1.0);
-                }
-                Species::Sheep if !m.extra.sheared && !m.is_baby() => {
-                    let color =
-                        horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
-                    self.play_bound_sound(
-                        shear_sound("minecraft:entity.sheep.shear"),
-                        entity_id,
-                        None,
-                    );
-                    let drops = self.sequence_loot(
-                        "minecraft:shearing/sheep",
-                        &format!("minecraft:shearing/sheep/{color}"),
-                        Some(&shears),
-                    );
-                    for stack in drops {
-                        for _ in 0..stack.count {
-                            let one = ItemStack {
-                                count: 1,
-                                ..stack.clone()
-                            };
-                            if let Some((id, _)) = self.spawn_at_location(at, 1.0, one) {
-                                // Sheep.shear nudges each item with the sheep's own random.
-                                let r = &mut self.mobs[i].random;
-                                let push = [
-                                    f64::from((r.next_float() - r.next_float()) * 0.1),
-                                    f64::from(r.next_float() * 0.05),
-                                    f64::from((r.next_float() - r.next_float()) * 0.1),
-                                ];
-                                if let Some(item) = self.dropped_item_mut(id) {
-                                    item.velocity = Vec3::new(
-                                        item.velocity.x + push[0],
-                                        item.velocity.y + push[1],
-                                        item.velocity.z + push[2],
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    self.mobs[i].extra.sheared = true;
-                }
-                Species::Bogged if !m.extra.sheared => {
-                    let height = f64::from(m.height());
-                    self.play_bound_sound(
-                        shear_sound("minecraft:entity.bogged.shear"),
-                        entity_id,
-                        None,
-                    );
-                    let drops = self.sequence_loot(
-                        "minecraft:shearing/bogged",
-                        "minecraft:shearing/bogged",
-                        Some(&shears),
-                    );
-                    for stack in drops {
-                        self.spawn_at_location(at, height, stack);
-                    }
-                    self.mobs[i].extra.sheared = true;
-                }
-                Species::SnowGolem if !m.extra.sheared => {
-                    let eye = m.eye_height();
-                    self.play_bound_sound(
-                        shear_sound("minecraft:entity.snow_golem.shear"),
-                        entity_id,
-                        None,
-                    );
-                    self.mobs[i].extra.sheared = true;
-                    let drops = self.sequence_loot(
-                        "minecraft:shearing/snow_golem",
-                        "minecraft:shearing/snow_golem",
-                        Some(&shears),
-                    );
-                    for stack in drops {
-                        self.spawn_at_location(at, eye, stack);
-                    }
-                }
-                // CopperGolem.shear: the antenna's flower drops 1.5 up.
-                Species::CopperGolem if self.golem_shearable(i) => {
-                    self.play_bound_sound(
-                        shear_sound("minecraft:entity.copper_golem.shear"),
-                        entity_id,
-                        None,
-                    );
-                    let antenna = self.mobs[i].saddle_item();
-                    let id = self.mobs[i].id;
-                    // setItemSlot(EQUIPMENT_SLOT_ANTENNA, EMPTY): an unequip.
-                    self.mobs[i].set_saddle(None);
-                    let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
-                    self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
-                    if let Some(antenna) = antenna {
-                        self.spawn_at_location(at, 1.5, antenna);
-                    }
-                }
-                Species::Mooshroom if !m.is_baby() => {
-                    self.shear_mooshroom(i, None, &shears);
-                }
-                _ => continue,
             }
             self.native_block_shear_entity(
                 self.dim.id(),
@@ -2265,6 +2146,136 @@ impl Game<'_> {
         }
         Ok(false)
     }
+    /// `ShearsDispenseItemBehavior.tryShearEntity` for one mob: the shearing of mob `i` with `shears`
+    /// (`Shearable.shear`, its sounds, drops and state). False when the mob cannot be sheared now: not alive,
+    /// a part that refuses, or a species or state that does not match.
+    pub(in crate::game) fn shear_mob(&mut self, i: usize, shears: &ItemStack) -> bool {
+        let part = self.part_shearable(i, None, shears);
+        let m = &self.mobs[i];
+        if !m.alive() || part.is_some_and(|(_, shearable)| !shearable) {
+            return false;
+        }
+        let (at, entity_id) = (m.position, m.id);
+        let sound_at = Some([at.x, at.y, at.z]);
+        // shear(level, BLOCKS, tool): level.playSound(null, this, sound, BLOCKS, 1, 1).
+        let shear_sound = |name: &'static str| {
+            LevelSound::new(name, [at.x, at.y, at.z], 1.0, 1.0).in_source(SoundSource::Blocks)
+        };
+        match m.species() {
+            _ if let Some((part, _)) = part => self.part_shear(i, part, None, shears),
+            Species::SulfurCube if sulfur_cube::has_body(m) => {
+                // SulfurCube.shear: the swallowed block comes out at the
+                // passenger attachment, and nothing is swallowed for 5 s.
+                let height = f64::from(m.height());
+                let id = m.id;
+                if let Some(body) = self.mobs[i].take_body_equipment() {
+                    self.spawn_at_location(at, height, body);
+                }
+                // setItemSlot(BODY, EMPTY): an unequip.
+                let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
+                self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
+                self.mobs[i].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
+                self.audio
+                    .play("minecraft:entity.sulfur_cube.eject", sound_at, 1.0, 1.0);
+            }
+            Species::Sheep if !m.extra.sheared && !m.is_baby() => {
+                let color =
+                    horizon_client::mobs::render::DYE_NAMES[m.extra.color as usize & 15];
+                self.play_bound_sound(
+                    shear_sound("minecraft:entity.sheep.shear"),
+                    entity_id,
+                    None,
+                );
+                let drops = self.sequence_loot(
+                    "minecraft:shearing/sheep",
+                    &format!("minecraft:shearing/sheep/{color}"),
+                    Some(shears),
+                );
+                for stack in drops {
+                    for _ in 0..stack.count {
+                        let one = ItemStack {
+                            count: 1,
+                            ..stack.clone()
+                        };
+                        if let Some((id, _)) = self.spawn_at_location(at, 1.0, one) {
+                            // Sheep.shear nudges each item with the sheep's own random.
+                            let r = &mut self.mobs[i].random;
+                            let push = [
+                                f64::from((r.next_float() - r.next_float()) * 0.1),
+                                f64::from(r.next_float() * 0.05),
+                                f64::from((r.next_float() - r.next_float()) * 0.1),
+                            ];
+                            if let Some(item) = self.dropped_item_mut(id) {
+                                item.velocity = Vec3::new(
+                                    item.velocity.x + push[0],
+                                    item.velocity.y + push[1],
+                                    item.velocity.z + push[2],
+                                );
+                            }
+                        }
+                    }
+                }
+                self.mobs[i].extra.sheared = true;
+            }
+            Species::Bogged if !m.extra.sheared => {
+                let height = f64::from(m.height());
+                self.play_bound_sound(
+                    shear_sound("minecraft:entity.bogged.shear"),
+                    entity_id,
+                    None,
+                );
+                let drops = self.sequence_loot(
+                    "minecraft:shearing/bogged",
+                    "minecraft:shearing/bogged",
+                    Some(shears),
+                );
+                for stack in drops {
+                    self.spawn_at_location(at, height, stack);
+                }
+                self.mobs[i].extra.sheared = true;
+            }
+            Species::SnowGolem if !m.extra.sheared => {
+                let eye = m.eye_height();
+                self.play_bound_sound(
+                    shear_sound("minecraft:entity.snow_golem.shear"),
+                    entity_id,
+                    None,
+                );
+                self.mobs[i].extra.sheared = true;
+                let drops = self.sequence_loot(
+                    "minecraft:shearing/snow_golem",
+                    "minecraft:shearing/snow_golem",
+                    Some(shears),
+                );
+                for stack in drops {
+                    self.spawn_at_location(at, eye, stack);
+                }
+            }
+            // CopperGolem.shear: the antenna's flower drops 1.5 up.
+            Species::CopperGolem if self.golem_shearable(i) => {
+                self.play_bound_sound(
+                    shear_sound("minecraft:entity.copper_golem.shear"),
+                    entity_id,
+                    None,
+                );
+                let antenna = self.mobs[i].saddle_item();
+                let id = self.mobs[i].id;
+                // setItemSlot(EQUIPMENT_SLOT_ANTENNA, EMPTY): an unequip.
+                self.mobs[i].set_saddle(None);
+                let ctx = self.who_context(Some(horizon_client::mobs::Who::Mob(id)), None);
+                self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
+                if let Some(antenna) = antenna {
+                    self.spawn_at_location(at, 1.5, antenna);
+                }
+            }
+            Species::Mooshroom if !m.is_baby() => {
+                self.shear_mooshroom(i, None, shears);
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// `Entity.shearOffAllLeashConnections(null)`: the entity's own lead and
     /// every lead held by it (within a 32 block box around its centre) drop;
     /// a shear game event at the entity and a snip at its block follow.

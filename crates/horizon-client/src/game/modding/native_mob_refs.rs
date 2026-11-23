@@ -1,5 +1,6 @@
 //! Mob handles for native server mods.
 use super::{Game, commands::Target};
+use horizon_client::items::ItemStack;
 use horizon_client::mobs::{self, Mob, Species, Who, ai::brain_target};
 use mod_api::{EntityRef, LivingRef, MobRef};
 
@@ -725,6 +726,51 @@ impl Game<'_> {
             .is_some()
     }
 
+    /// `Shearable.shear` with shears on mob `mob`, the dispenser's shearing without its block's events.
+    /// See the host declaration for what it refuses.
+    pub(super) fn mob_shear(&mut self, mob: MobRef) -> bool {
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let shears = ItemStack::new("minecraft:shears", 1);
+        match self.mobs.iter().position(|m| m.id == id && !m.removed) {
+            Some(i) => self.shear_mob(i, &shears),
+            None => false,
+        }
+    }
+
+    /// `AbstractPiglin.finishConversion` on mob `mob`: a piglin turns into a zombified piglin in its place
+    /// through the game's own conversion (equipment and loot pickup kept, the nausea after, the pre hook asked).
+    /// See the host declaration for what it refuses.
+    pub(super) fn mob_zombify(&mut self, mob: MobRef) -> bool {
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let mut events = Vec::new();
+        {
+            let Some(piglin) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
+                return false;
+            };
+            if !matches!(piglin.species(), Species::Piglin) {
+                return false;
+            }
+            // `Piglin.finishConversion`: cancel the admiring, drop the inventory.
+            mobs::piglin::finish_conversion_drops(piglin, &mut events);
+        }
+        let _ = self.handle_mob_events(events);
+        let Some(from) = self.mobs.iter().find(|m| m.id == id && !m.removed).cloned() else {
+            return false;
+        };
+        self.convert_to(
+            &from,
+            "minecraft:zombified_piglin",
+            mobs::conversion::Params::KEEP_ALL,
+            false,
+            |_, _| {},
+        )
+        .is_some()
+    }
+
     /// `Mob.canPickUpLoot`, with the overrides of an allay (holding
     /// something) and a sulfur cube (with no block). None for anything but
     /// a mob.
@@ -1372,7 +1418,8 @@ mod tests {
             let mut expected = LegacyRandom::new(2026);
             let sound_delay = expected.next_int_bound(21).unwrap();
             let alert_delay = 80 + expected.next_int_bound(41).unwrap();
-            game.mobs.iter_mut().find(|m| m.id == 14).unwrap().random = horizon_core::random::EntityRandom::own(LegacyRandom::new(2026));
+            game.mobs.iter_mut().find(|m| m.id == 14).unwrap().random =
+                horizon_core::random::EntityRandom::own(LegacyRandom::new(2026));
             assert!(piglin.set_target(game, Some(other)));
             assert_eq!(piglin.target(game), Some(other));
             let first = state(game, 14);
@@ -1757,6 +1804,101 @@ mod tests {
                 game.mob_is_within_restriction(mob, [46_340, 0, 0]),
                 Some(false)
             );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn mob_shear_sheds_a_sheeps_wool_once_and_refuses_a_baby() {
+        with_game(|game| {
+            let sheep = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
+            game.mobs.push(Mob::new(12, sheep.clone(), Vec3::ZERO, 0.0));
+            game.mobs.push(Mob::new(13, sheep, Vec3::ZERO, 0.0));
+            let mob = game.mob(game.entity(12).unwrap()).unwrap();
+            let baby = game.mob(game.entity(13).unwrap()).unwrap();
+            assert!(game.mob_set_baby(baby, true));
+            assert!(!game.mob_shear(baby), "a baby sheep has no wool to shed");
+            let before = game.dropped.len();
+            assert!(game.mob_shear(mob));
+            let wool = game.dropped.len() - before;
+            assert!((1..=3).contains(&wool), "{wool} wool items");
+            assert!(game.mobs[0].extra.sheared);
+            assert!(!game.mob_shear(mob), "a sheared sheep gives nothing again");
+            assert_eq!(game.dropped.len() - before, wool);
+            // A stale handle changes no other entity.
+            let stale = MobRef::new(EntityRef::new(
+                WorldEpoch::new(game.entity(12).unwrap().epoch().get() + 1),
+                12,
+            ));
+            assert!(!game.mob_shear(stale));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn mob_zombify_turns_a_piglin_into_a_zombified_piglin_once() {
+        with_game(|game| {
+            let piglin = game
+                .res
+                .mob_types()
+                .get("minecraft:piglin")
+                .unwrap()
+                .clone();
+            game.mobs.push(Mob::new(12, piglin, Vec3::ZERO, 0.0));
+            let mob = game.mob(game.entity(12).unwrap()).unwrap();
+            assert!(game.mob_zombify(mob));
+            assert!(
+                game.mobs.iter().all(|m| m.id != 12 || m.removed),
+                "the piglin is gone"
+            );
+            let zombie = game
+                .mobs
+                .iter()
+                .find(|m| !m.removed && matches!(m.species(), Species::ZombifiedPiglin))
+                .expect("a zombified piglin stands in its place");
+            assert_eq!(zombie.kind.id, "minecraft:zombified_piglin");
+            let zombie_id = zombie.id;
+            // The stale handle and a zombified piglin itself (not a piglin) change nothing.
+            assert!(!game.mob_zombify(mob));
+            let zombie_handle = game.mob(game.entity(zombie_id).unwrap()).unwrap();
+            assert!(!game.mob_zombify(zombie_handle));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn mob_zombify_drops_the_admired_item_and_inventory() {
+        with_game(|game| {
+            let piglin = game
+                .res
+                .mob_types()
+                .get("minecraft:piglin")
+                .unwrap()
+                .clone();
+            let mut m = Mob::new(12, piglin, Vec3::ZERO, 0.0);
+            m.extra.inventory = vec![ItemStack::new("minecraft:gold_nugget", 3)];
+            m.extra.set_slot_id(
+                horizon_items::equipment::OFFHAND,
+                Some("minecraft:gold_ingot".into()),
+            );
+            m.extra.using_item = 60;
+            game.mobs.push(m);
+            let mob = game.mob(game.entity(12).unwrap()).unwrap();
+            assert!(game.mob_zombify(mob));
+            let zombie = game
+                .mobs
+                .iter()
+                .find(|m| !m.removed && matches!(m.species(), Species::ZombifiedPiglin))
+                .expect("a zombified piglin stands in its place");
+            assert!(zombie.extra.off_hand_id().is_none(), "no admired ingot");
+            assert!(zombie.extra.inventory.is_empty());
+            let has = |item: &str, count: u32| {
+                game.dropped
+                    .iter()
+                    .any(|d| d.stack.item.as_ref() == item && d.stack.count == count)
+            };
+            assert!(has("minecraft:gold_ingot", 1), "the admired item drops");
+            assert!(has("minecraft:gold_nugget", 3), "the inventory drops");
         });
     }
 

@@ -14,6 +14,26 @@ impl Game<'_> {
         cancel: &mut bool,
     ) {
         self.fire_living_death(entity, kind, source, weapon, cancel);
+        if *cancel {
+            return;
+        }
+        // The death is decided; the loot and the message follow. `causing` is 0
+        // when the blow has no attacker.
+        let killer = u32::try_from(source.causing).unwrap_or(0);
+        let weapon = weapon
+            .and_then(|stack| mod_api::__private::item_key_id(stack.item()))
+            .unwrap_or("");
+        self.native_mob_died(mod_api::__private::MobDiedCall {
+            entity,
+            kind,
+            killer,
+            damage_type: source.damage_type,
+            weapon,
+        });
+    }
+    /// The `mob_died` hook point: a death that was not cancelled, once.
+    pub(in crate::game) fn native_mob_died(&mut self, call: mod_api::__private::MobDiedCall<'_>) {
+        self.fire_mob_died(call);
     }
 }
 /// `native_living_incoming_damage`'s entity, entity type and source for a hit.
@@ -34,11 +54,17 @@ pub(in crate::game) fn hurt_server_args<'a>(
     }
 }
 
+/// A death is observed by `living_death` and, once it is not cancelled, by `mob_died`.
+pub(in crate::game) fn death_listened() -> bool {
+    mod_api::__private::listened(mod_api::HookId::LivingDeath)
+        || mod_api::__private::listened(mod_api::HookId::MobDied)
+}
+
 pub(super) fn capture_hit(
     hurting: Hurting<'_>,
     attack: &Attack,
 ) -> Option<horizon_client::health::AcceptedHit> {
-    let death = mod_api::__private::listened(mod_api::HookId::LivingDeath);
+    let death = death_listened();
     let loot = mod_api::__private::listened(mod_api::HookId::LootDrops);
     if !death && !loot {
         return None;
@@ -62,7 +88,7 @@ impl Game<'_> {
         if mob.death_canceled {
             return true;
         }
-        if !mod_api::__private::listened(mod_api::HookId::LivingDeath) {
+        if !death_listened() {
             return false;
         }
         let accepted = mob

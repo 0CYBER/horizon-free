@@ -33,7 +33,7 @@ impl Game<'_> {
         {
             return true;
         }
-        if !mod_api::__private::listened(mod_api::HookId::LivingDeath) {
+        if !crate::game::native_hooks::death_listened() {
             return false;
         }
         let (damage_type, causing) = self.guest_damage_source(conn);

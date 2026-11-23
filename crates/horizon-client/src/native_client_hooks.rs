@@ -12,6 +12,8 @@ pub struct NativeClientHooks {
     pub menu_still_valid_listens: fn(&str) -> bool,
     pub item_stacked_on_other: fn(&LoopContext, &mut crate::menu::StackedOnOther<'_>, &mut bool),
     pub living_heal: fn(&LoopContext, u32, &mut f32, &mut bool),
+    /// `living_heal_cause`: the entity, the cause name and the amount applied.
+    pub living_heal_cause: fn(&LoopContext, u32, &str, f32),
     pub living_breathe: fn(&LoopContext, u32, &str, &mut bool, &mut i32, &mut i32),
     /// `player_login_profile`: a login's UUID, name and profile properties, before the login
     /// success sends them. The login thread calls it, so the callback has no host.
@@ -99,6 +101,12 @@ pub(crate) fn item_stacked_on_other(
 pub(crate) fn living_heal(context: &LoopContext, entity: u32, amount: &mut f32, cancel: &mut bool) {
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_heal)(context, entity, amount, cancel);
+    }
+}
+
+pub(crate) fn living_heal_cause(context: &LoopContext, entity: u32, cause: &str, amount: f32) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.living_heal_cause)(context, entity, cause, amount);
     }
 }
 

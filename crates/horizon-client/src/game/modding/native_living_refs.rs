@@ -1166,6 +1166,22 @@ impl Game<'_> {
     pub(super) fn living_is_tamed(&self, living: LivingRef) -> Option<bool> {
         self.native_tamable(living).map(|m| m.extra.tame)
     }
+    /// Sets the tame flag of a tamable mob (`TamableAnimal.setTame(tame, false)`):
+    /// the owner stays and the taming side effects do not run. Marks the mob for
+    /// sync. False for a kind that can't be tamed, a player, or a stale handle.
+    pub(super) fn living_set_tamed(&mut self, living: LivingRef, tamed: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_living_target(living) else {
+            return false;
+        };
+        self.mobs
+            .iter_mut()
+            .find(|m| m.id == id && m.is_tamable())
+            .is_some_and(|m| {
+                m.extra.tame = tamed;
+                m.needs_sync = true;
+                true
+            })
+    }
     /// The owner's UUID (`OwnableEntity.getOwnerReference`): None for a wild
     /// mob, a kind that can't be tamed, or a stale handle. API @API:living_refs@.
     pub(super) fn living_owner(&self, living: LivingRef) -> Option<u128> {
@@ -2992,3 +3008,35 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod set_tamed_tests {
+    use horizon_client::chunk::Chunk;
+
+    #[test]
+    #[ignore = "daily"]
+    fn living_set_tamed_writes_a_tamable_mob_and_keeps_its_owner() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+            let id = game
+                .spawn_mob(
+                    "minecraft:wolf",
+                    [2.5, 64.0, 2.5],
+                    true,
+                    super::super::creatures::SpawnSite::Finalizing(
+                        horizon_client::mobs::spawn_rules::Reason::Command,
+                    ),
+                )
+                .unwrap();
+            let wolf = game.living(game.entity(id).unwrap()).unwrap();
+            assert!(game.living_set_tamed(wolf, true));
+            assert_eq!(game.living_is_tamed(wolf), Some(true));
+            assert_eq!(game.living_owner(wolf), None);
+            assert!(game.living_set_tamed(wolf, false));
+            assert_eq!(game.living_is_tamed(wolf), Some(false));
+        });
+    }
+}
+

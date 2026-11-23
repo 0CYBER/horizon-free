@@ -271,6 +271,14 @@ pub(crate) fn install_client_hooks() {
             let context = reader.context();
             mod_api::dispatch_living_heal(&context, entity, amount, cancel);
         },
+        living_heal_cause: |context, entity, cause, amount| {
+            if !mod_api::__private::listened(mod_api::HookId::LivingHealCause) {
+                return;
+            }
+            let reader = horizon_client_render::api_context::LoopReader(context);
+            let context = reader.context();
+            mod_api::dispatch_living_heal_cause(&context, entity, cause, amount);
+        },
         living_breathe: |context, entity, kind, can_breathe, consume, refill| {
             if !mod_api::__private::listened(mod_api::HookId::LivingBreathe) {
                 return;

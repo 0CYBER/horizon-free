@@ -1970,24 +1970,7 @@ pub fn ai_step(
     if w.dimension_type.piglins_zombify && !m.extra.flag2 && m.alive() {
         m.extra.counter2 += 1;
         if m.extra.counter2 > CONVERSION {
-            // `Piglin.finishConversion` runs `PiglinAi.cancelAdmiring` first:
-            // the item the piglin is admiring leaves the off hand and lands
-            // where it stands, so the zombified piglin never carries it.
-            if m.species() == Species::Piglin {
-                let admiring = (m.extra.off_hand_id().is_some() && m.extra.using_item > 0)
-                    || m.extra.piglin.seen_admire > 0;
-                if admiring
-                    && let Some(item) = m.extra.take_slot_id(horizon_items::equipment::OFFHAND)
-                {
-                    events.push(MobEvent::DropItem {
-                        mob: m.id,
-                        item,
-                        count: 1,
-                        at: [m.position.x, m.position.y, m.position.z],
-                    });
-                    m.extra.using_item = 0;
-                }
-            }
+            finish_conversion_drops(m, events);
             // `Hoglin.finishConversion` is `ConversionParams.single(this, true,
             // false)`, `AbstractPiglin.finishConversion` `(this, true, true)`;
             // both leave the new mob nauseous (the game adds it).
@@ -2012,16 +1995,6 @@ pub fn ai_step(
                 ),
             };
             events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
-            // Conversion also drops the piglin's internal inventory.
-            if m.species() == Species::Piglin {
-                for stack in m.extra.inventory.drain(..).filter(|stack| stack.count > 0) {
-                    events.push(MobEvent::DropStack {
-                        mob: m.id,
-                        stack,
-                        at: [m.position.x, m.position.y, m.position.z],
-                    });
-                }
-            }
             // `Hoglin.finishConversion` is `ConversionParams.single(this, true,
             // false)`, `AbstractPiglin.finishConversion` `(this, true, true)`;
             // both leave the new mob nauseous.
@@ -2040,6 +2013,33 @@ pub fn ai_step(
     if m.species() == Species::Piglin && m.alive() && m.age.wrapping_add(m.id).is_multiple_of(20) {
         m.extra.repellent = find_piglin_repellent(m, w);
         piglin_sense(m, w);
+    }
+}
+/// What `Piglin.finishConversion` does before converting: `PiglinAi.cancelAdmiring`
+/// (the item being admired leaves the off hand and lands where the piglin stands)
+/// and dropping every stack of its inventory, so the zombified piglin carries neither.
+pub fn finish_conversion_drops(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.species() != Species::Piglin {
+        return;
+    }
+    let at = [m.position.x, m.position.y, m.position.z];
+    let admiring = (m.extra.off_hand_id().is_some() && m.extra.using_item > 0)
+        || m.extra.piglin.seen_admire > 0;
+    if admiring && let Some(item) = m.extra.take_slot_id(horizon_items::equipment::OFFHAND) {
+        events.push(MobEvent::DropItem {
+            mob: m.id,
+            item,
+            count: 1,
+            at,
+        });
+        m.extra.using_item = 0;
+    }
+    for stack in m.extra.inventory.drain(..).filter(|stack| stack.count > 0) {
+        events.push(MobEvent::DropStack {
+            mob: m.id,
+            stack,
+            at,
+        });
     }
 }
 /// `PiglinSpecificSensor.findNearestRepellent`: the nearest `#piglin_repellents`

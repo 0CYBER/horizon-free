@@ -83,6 +83,7 @@ pub(crate) fn install() {
                     *amount += 1.0;
                 }
             },
+            living_heal_cause: |_, _, _, _| {},
             living_breathe: |context, _, kind, can_breathe, consume, _| {
                 if context.setting("rules_mod", "stack").is_some() {
                     // A cod breathes on land; a salmon loses all its air at once.

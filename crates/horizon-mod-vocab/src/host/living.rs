@@ -428,6 +428,22 @@ pub trait LivingBackendMut {
     #[access(WorldOnly)]
     fn living_set_is_jumping(&mut self, living: LivingRef, jumping: bool) -> bool;
     /// Side: server.
+    /// `Entity.setSprinting` for a mob: sets its shared sprinting flag (the one a
+    /// cat or ocelot dashing after its target keeps) and sends it to the players
+    /// tracking it. Players are refused: their sprint is what their own client
+    /// reports, so the server could not hold it (Paper's `Player#setSprinting`
+    /// is not covered yet). False for a player, a guest, an armor stand, the
+    /// dragon or a stale handle.
+    #[access(WorldOnly)]
+    fn living_set_sprinting(&mut self, living: LivingRef, sprinting: bool) -> bool;
+    /// `TamableAnimal.setTame(tame, false)`: sets whether a tamable mob (a wolf,
+    /// cat, parrot or horse) is tame. The owner stays as it was, and the taming
+    /// side effects do not run: no advancement, no particles, no attribute
+    /// update. False for a kind that cannot be tamed, a player, an armor stand,
+    /// the dragon or a stale handle.
+    #[access(WorldOnly)]
+    fn living_set_tamed(&mut self, living: LivingRef, tamed: bool) -> bool;
+    /// Side: server.
     /// Sets the entity's health (`LivingEntity.setHealth`; Paper's
     /// `Damageable#setHealth`), cut to its maximum health. No heal or damage
     /// hook runs. False for a stale handle, a non-finite value, an armor stand

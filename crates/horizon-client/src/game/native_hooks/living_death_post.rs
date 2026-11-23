@@ -273,6 +273,37 @@ mod tests {
         });
     }
 
+    struct OnlyMobDied(Arc<Mutex<Vec<u32>>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for OnlyMobDied {
+        fn mob_died(&self, _: &mut dyn ServerHost, event: &mut mod_api::MobDiedEvent<'_>) {
+            self.0.lock().unwrap().push(event.entity);
+        }
+    }
+
+    /// A mod that subscribes to `mob_died` alone still hears a mob's death.
+    #[test]
+    #[ignore = "daily"]
+    fn mob_died_is_heard_without_a_living_death_subscription() {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![ModEntry::new("only", Box::new(OnlyMobDied(heard.clone())))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.load_server_loot();
+                let fall = Damage {
+                    kind: DamageKind::Fall,
+                    attacker: None,
+                    from: None,
+                    attacker_species: None,
+                };
+                let mob = sheep(game, fall);
+                game.mob_died(&mob);
+                assert_eq!(*heard.lock().unwrap(), [mob.id]);
+            });
+        });
+    }
+
     /// `/kill` on a player records no combat hit, yet `dropAllDeathLoot` still
     /// gets its generic_kill source: with mods loaded the drop list is heard
     /// with that source, the one `living_death_post` names too.

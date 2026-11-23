@@ -103,6 +103,9 @@ either flag. The separately modeled dragon has no such predicate and answers `No
 its persistence flag can be read and set. A `/summon` and a spawn egg set their flags before the entity-join hook
 runs, so a mod's own write in that hook is what stays.
 
+`living.set_sprinting(host, sprinting)` (`living_set_sprinting`) sets the shared sprinting flag of a mob, the one `Entity.setSprinting` writes (a cat or ocelot dashing after its target keeps it), and sends it to the players tracking the mob. It returns `false`, changing nothing, for a player, a guest, an armor stand, the dragon or a stale handle: a player's sprint is what their own client reports, so the server could not hold it.
+`living.set_tamed(host, tamed)` (`living_set_tamed`) sets whether a tamable mob (a wolf, cat, parrot or horse) is tame, as vanilla's `TamableAnimal.setTame(tame, false)` does: the owner stays as it was, and the taming side effects (the owner's advancement, the particles, the attribute update) do not run. It returns `false`, changing nothing, for a kind that cannot be tamed, a player, an armor stand, the dragon or a stale handle. `living_is_tamed` reads the flag back.
+
 ## Riding topology and resident handles
 
 `EntityRef` names only an entity resident in the current level. A rejected Mob

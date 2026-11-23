@@ -492,6 +492,20 @@ pub trait MobsBackendMut {
     #[access(WorldOnly)]
     fn mob_jump(&mut self, mob: MobRef) -> bool;
     /// Side: server.
+    /// `Mob.doHurtTarget` against `target`: the mob's own melee blow, the
+    /// one a melee goal deals, with the held weapon's damage and
+    /// enchantments, the knockback and the species' extra effects (a
+    /// cave spider's poison, a wither skeleton's wither). It goes through
+    /// the mob combat path the goal's blow takes, so a shield or armour can
+    /// take it. It does not swing the arm, start the attack cooldown or
+    /// check reach: those belong to the goal that calls it. True means the
+    /// blow was dealt, not that it landed. False for a stale or unavailable
+    /// mob or target, a client, the dragon, a target the mob may not attack
+    /// (the same rule `set_target` applies), a mob attacking itself, and a
+    /// guest target (refused for now).
+    #[access(WorldOnly)]
+    fn mob_attack(&mut self, mob: MobRef, target: LivingRef) -> bool;
+    /// Side: server.
     /// `Mob.restrictTo(pos, radius)`: the home area the mob keeps to — its
     /// own stroll and wander goals pick their positions inside it, as a
     /// lead's and a guardian's home do. Radius `-1` clears the restriction
@@ -512,6 +526,21 @@ pub trait MobsBackendMut {
     /// Saved with the mob as `LeftHanded`. False for anything but a mob.
     #[access(WorldOnly)]
     fn mob_set_left_handed(&mut self, mob: MobRef, left_handed: bool) -> bool;
+    /// Side: server.
+    /// `Shearable.shear` with shears, as a dispenser's shears shear a mob, without the block's
+    /// events: the mob's sounds, drops and sheared state (sheep wool, a bogged's mushrooms, a snow
+    /// golem's pumpkin, a mooshroom that becomes a cow, a copper golem's antenna). False for a stale
+    /// handle, a client, the dragon, or a mob that cannot be sheared now (a baby sheep, one already
+    /// sheared, another kind).
+    #[access(WorldOnly)]
+    fn mob_shear(&mut self, mob: MobRef) -> bool;
+    /// `AbstractPiglin.finishConversion`, as a mod starts it: the piglin turns into a zombified piglin in its
+    /// place, keeping its equipment and loot pickup (`ConversionParams` as vanilla's zombification), with the
+    /// nausea it leaves and `living_conversion_pre` as the game's own conversions. Only a piglin: other kinds
+    /// refuse. Immunity to zombification does not stop the call. False for a stale handle, a client, the dragon,
+    /// or a mob that is not a piglin.
+    #[access(WorldOnly)]
+    fn mob_zombify(&mut self, mob: MobRef) -> bool;
     /// Side: server.
     /// `Mob.setCanPickUpLoot`: whether the mob picks up the items it sees
     /// (saved with it as `CanPickUpLoot`; clients are not told, as in
