@@ -32,7 +32,7 @@ impl Game<'_> {
         self.shown_native_screen()?.screen.recipe_book_toggle
     }
     pub(in crate::game) fn native_screen_block(&self) -> Option<&str> {
-        Some(&self.shown_native_screen()?.block)
+        self.shown_native_screen()?.block.as_deref()
     }
     /// The explicitly assigned book; declarations bind it to the actual menu.
     pub(in crate::game) fn native_screen_book(&self) -> Option<&mod_api::RecipeBookTypeKey> {

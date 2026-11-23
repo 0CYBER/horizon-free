@@ -479,7 +479,19 @@ impl Game<'_> {
             let key = target.filter(holds).unwrap_or((i32::MIN, 0, 0));
             self.world.block_entities.insert(key, entity);
             self.container = Some(key);
-            self.open_native_screen(key, target, p.container, &menu, extra);
+            // A server that negotiated menu-extra sends the block's position
+            // when it opens a mod block's screen. Only legacy connections still
+            // infer a screen's block from a click when the payload is absent.
+            let uses_menu_origins = self
+                .remote
+                .as_ref()
+                .is_some_and(|r| r.registries.menu_extra_revision > 0);
+            let layout_target = if uses_menu_origins && extra.is_none() {
+                None
+            } else {
+                target
+            };
+            self.open_native_screen(key, layout_target, p.container, &menu, extra);
             // A mod menu type shows through its mod's screen only: without one
             // (`MenuScreens.create` finds no screen) the window closes again.
             if self.mod_screen.is_none() && mod_type.is_some() {

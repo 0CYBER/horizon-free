@@ -272,6 +272,13 @@ if let Some(window) = window {
 }
 ```
 
+For a blockless content menu, register a `MenuPart` with `Registrar::menu_part` using the menu's id
+and return a `Screen` from `MenuPart::menu_screen`. Provide a finite coordinate pair for every
+container slot declared by the menu type, in slot order. Choose positions that make the slots
+usable on the screen. Use the screen render and input hooks for custom controls, matching
+`ScreenView::menu` to the same menu id. A block's own menu still uses its block screen, including
+any registered recipe-book layout.
+
 A vanilla menu and a menu no mod backed never take this path: their slots keep the backing they had.
 
 ## A workstation with no block

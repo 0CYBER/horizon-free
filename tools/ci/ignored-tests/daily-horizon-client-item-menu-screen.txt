@@ -1,0 +1,2 @@
+# Block and held-item content menus through server open and client presentation.
+horizon-client game::remote::item_menu_screen_tests::item_menu_layout_keeps_held_slots_and_selects_the_matching_screen lib daily resources

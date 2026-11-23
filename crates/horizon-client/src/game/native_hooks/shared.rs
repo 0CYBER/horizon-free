@@ -504,7 +504,7 @@ fn shake_pose(shake: Shake) -> glam::Mat4 {
         * glam::Mat4::from_rotation_y(shake.yaw.to_radians())
 }
 
-/// The mod screen open on this client: the block it is for, the key its
+/// The mod screen open on this client: its block if it has one, the key its
 /// slots are under, the window id of its menu, the menu's data slots as
 /// the server sent them, and what the server sent before the menu opened
 /// (`horizon:menu_extra`), when it did.
@@ -512,7 +512,7 @@ pub(super) struct OpenNativeScreen {
     pub(super) layout_revision: u64,
     key: Pos,
     window: i32,
-    block: String,
+    block: Option<String>,
     screen: mod_api::Screen,
     data: Vec<i32>,
     extra: Option<horizon_protocol::menu_extra::Message>,
@@ -524,7 +524,9 @@ impl OpenNativeScreen {
     fn pos(&self) -> Option<[i32; 3]> {
         match &self.extra {
             Some(extra) => extra.pos,
-            None if self.key.0 != i32::MIN => Some([self.key.0, self.key.1, self.key.2]),
+            None if self.block.is_some() && self.key.0 != i32::MIN => {
+                Some([self.key.0, self.key.1, self.key.2])
+            }
             None => None,
         }
     }
@@ -3139,7 +3141,9 @@ impl Game<'_> {
                 );
             }
         }
-        self.native_screen_draw(&s.block, &s.data, batch, [ox, oy]);
+        if let Some(block) = &s.block {
+            self.native_screen_draw(block, &s.data, batch, [ox, oy]);
+        }
         self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
         if s.screen.own_labels {
             return true;
@@ -3202,6 +3206,7 @@ impl Game<'_> {
     /// data, for its press and tooltip hooks.
     fn native_screen_at(&self) -> Option<(String, Vec<i32>, [f32; 2])> {
         let s = self.shown_native_screen()?;
+        let block = s.block.as_ref()?;
         let r = self.renderer.as_ref()?;
         let batch = HudBatch::new(
             [r.config.width, r.config.height],
@@ -3209,7 +3214,7 @@ impl Game<'_> {
         );
         let (ox, oy) = self.inventory_origin(&batch);
         let at = [self.cursor.0 - ox, self.cursor.1 - oy];
-        Some((s.block.clone(), s.data.clone(), at))
+        Some((block.clone(), s.data.clone(), at))
     }
     /// A press on the open mod screen's own button (`native_screen_click`)
     /// goes to the server as a menu button click (true).
@@ -4774,7 +4779,7 @@ mod tests {
             layout_revision: 0,
             key: (0, 0, 0),
             window: 4,
-            block: "gtmod:machine".into(),
+            block: Some("gtmod:machine".into()),
             screen: mod_api::Screen::default(),
             data: Vec::new(),
             extra: None,

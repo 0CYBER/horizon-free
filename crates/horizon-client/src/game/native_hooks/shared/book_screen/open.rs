@@ -25,9 +25,56 @@ impl Game<'_> {
             .filter(|&i| screen.slots.get(i).is_none_or(Option::is_none))
             .collect()
     }
-    /// A menu opened on this client with its slots under `key`, on block
-    /// `target`: a book-enabled menu uses its startup-validated registered screen;
-    /// other mod menus obtain their screen through `native_screen`.
+    /// Resolve a mod block only if its container opens this exact menu type.
+    /// A clicked target may be left over from a previous interaction.
+    fn screen_block_for_menu(&self, target: Pos, menu: &str) -> Option<String> {
+        let block = &self
+            .res
+            .facts()
+            .get(self.world.block(target.0, target.1, target.2))
+            .name;
+        if block.starts_with("minecraft:") {
+            return None;
+        }
+        let mut container = None;
+        self.native_block_entity_container(block, &mut container);
+        let opens = container.and_then(|c| mod_menu(c.menu.as_deref()?).map(|(id, _)| id));
+        (opens == Some(menu)).then(|| block.to_string())
+    }
+
+    /// The client layout for a content menu that has no matching block
+    /// container. Every declared slot needs a finite coordinate pair.
+    /// The recipe-book layout's server placement is scoped to a block container.
+    fn blockless_menu_screen(&self, menu: &str) -> Option<mod_api::Screen> {
+        let menu_type = horizon_client::containers::mod_menu_type(menu)?;
+        let mut screen = None;
+        self.native_menu_screen(mod_api::__private::MenuScreenCall {
+            menu,
+            screen: &mut screen,
+        });
+        let screen = screen?;
+        if screen.slots.len() != menu_type.slots
+            || screen
+                .slots
+                .iter()
+                .any(|slot| slot.is_none_or(|pos| pos.into_iter().any(|coord| !coord.is_finite())))
+            || ![screen.width, screen.height]
+                .into_iter()
+                .all(|size| size.is_finite() && size > 0.0)
+            || ![screen.inventory_x, screen.inventory_y]
+                .into_iter()
+                .all(f32::is_finite)
+        {
+            log::warn!(
+                "Horizon: menu_screen for {menu} must have finite geometry and place all {} container slots",
+                menu_type.slots
+            );
+            return None;
+        }
+        Some(screen)
+    }
+
+    /// Open the matching block's screen or the content menu type's layout.
     /// `extra` is what the server sent for this window first.
     pub(in crate::game) fn open_native_screen(
         &mut self,
@@ -39,32 +86,17 @@ impl Game<'_> {
     ) {
         self.clear_mod_book_placement_screen();
         self.mod_screen = None;
-        let Some(t) = target else {
-            return;
+        let block = target.and_then(|pos| self.screen_block_for_menu(pos, menu));
+        let screen = match &block {
+            Some(block) => {
+                let mut screen = mod_api::RecipeBookLayout::registered_screen(menu);
+                if screen.is_none() {
+                    self.native_screen(block, &mut screen);
+                }
+                screen
+            }
+            None => self.blockless_menu_screen(menu),
         };
-        let block = self
-            .res
-            .facts()
-            .get(self.world.block(t.0, t.1, t.2))
-            .name
-            .to_string();
-        if block.starts_with("minecraft:") {
-            return;
-        }
-        // Only when this is the menu the clicked block opens: `target` outlives the
-        // use that set it, so another menu opened later (a command's, another
-        // mod's) would otherwise get the last clicked machine's screen. Asked
-        // here, as the window's world has no mod containers.
-        let mut container = None;
-        self.native_block_entity_container(&block, &mut container);
-        let opens = container.and_then(|c| mod_menu(c.menu.as_deref()?).map(|(m, _)| m));
-        if opens != Some(menu) {
-            return;
-        }
-        let mut screen = mod_api::RecipeBookLayout::registered_screen(menu);
-        if screen.is_none() {
-            self.native_screen(&block, &mut screen);
-        }
         if let Some(screen) = screen {
             self.mod_screen = Some(OpenNativeScreen {
                 layout_revision: {

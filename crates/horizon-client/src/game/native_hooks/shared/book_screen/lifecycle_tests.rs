@@ -78,7 +78,7 @@ fn entering_inventory_requests_catalogue_for_preinstalled_bound_screen() {
                 layout_revision: 4,
                 key: (i32::MIN, 0, 0),
                 window: 1,
-                block: "bound:block".into(),
+                block: Some("bound:block".into()),
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::RecipeBookLayout::registered_screen("bound:menu").unwrap(),
@@ -143,7 +143,7 @@ fn authoritative_custom_book_rebuilds_cached_geometry_without_observe_screen() {
                 layout_revision: 0,
                 key: (i32::MIN, 0, 0),
                 window: 1,
-                block: "minecraft:stone".into(),
+                block: Some("minecraft:stone".into()),
                 data: Vec::new(),
                 extra: None,
                 screen: mod_api::Screen {
