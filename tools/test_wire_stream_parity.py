@@ -63,6 +63,7 @@ RESET = [
     # Under the swim pool, and elytra's pillar above the air fill (a taller fill passes the 32768-block limit).
     f'fill -3 {FLOOR - 2} 2 3 {FLOOR - 1} 14 minecraft:dirt', f'setblock 0 {FLOOR + 30} 0 minecraft:air',
     'kill @e[type=!minecraft:player]', f'clear {PLAYER}', f'effect clear {PLAYER}', f'gamemode survival {PLAYER}',
+    f'attribute {PLAYER} minecraft:safe_fall_distance base reset',
     f'effect give {PLAYER} minecraft:saturation 1 20 true', f'effect give {PLAYER} minecraft:instant_health 1 5 true',
     f'tp {PLAYER} 0.5 {FLOOR + 1} 0.5 0 0',
 ]
@@ -211,9 +212,12 @@ SCENARIOS = {
     # dive to the ground. It must land before the scenario ends: a player still gliding when the next reset
     # takes the elytra and teleports it glides a tick more or not, by when the packets land (seen on the
     # vanilla client both ways), and the next scenario starts from another place.
+    # A safe fall distance avoids a separate, variably timed SetEntityMotion at landing:
+    # Resistance can prevent health loss without preventing the server's hurt impulse.
     'elytra': dict(
         setup=[f'item replace entity {PLAYER} armor.chest with minecraft:elytra',
-               f'effect give {PLAYER} minecraft:resistance 60 4 true', f'setblock 0 {FLOOR + 30} 0 minecraft:stone',
+               f'attribute {PLAYER} minecraft:safe_fall_distance base set 64',
+               f'setblock 0 {FLOOR + 30} 0 minecraft:stone',
                f'tp {PLAYER} 0.5 {FLOOR + 31} 0.5 0 0'],
         ticks=90, expect='start_fall_flying', lands=True,
         steps={0: ['key w down'], 8: ['key w up', 'key space down'], 10: ['key space up'], 12: ['look 0 20'],
