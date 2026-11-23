@@ -7,7 +7,6 @@
 //!
 //! Stored: an item id and the browser's random id per vote. Never an IP address: the rate limits key their
 //! buckets by a hash of it with a key drawn at start, in memory.
-use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,7 +31,7 @@ pub(crate) const MAX_BODY: usize = 24 * 1024;
 const VOTES_FOR: Duration = Duration::from_secs(60);
 
 /// The hub's buckets: keyed by a keyed hash of the address, never the address itself.
-pub type HashedBuckets = HashMap<u64, (f64, Instant)>;
+pub(crate) type HashedBuckets = crate::Bucketed<u64>;
 
 /// A roadmap item id's shape: lowercase words joined by dashes (tools/roadmap.py), at most 48 characters.
 pub fn item_id(id: &str) -> bool {
