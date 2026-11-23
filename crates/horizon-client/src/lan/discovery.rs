@@ -51,14 +51,25 @@ pub fn parse_address(s: &str) -> Option<String> {
     let end = index_of(s, "[/AD]", start + "[AD]".len())?;
     Some(s[start + "[AD]".len()..end].to_owned())
 }
+/// The most games the list keeps: any host on the network can announce, and the
+/// multiplayer screen copies the list every frame.
+pub const MAX_GAMES: usize = 64;
 /// LanServerDetection.LanServerList.addServer: an announcement from `ip`.
 /// A new address joins the list; a known one keeps its first MOTD. True
-/// when the list changed.
+/// when the list changed. An announced address that is no port is dropped (it
+/// is joined as `ip:address`), and a full list takes no more.
 pub fn add_server(games: &mut Vec<LanGame>, ping: &str, ip: &str) -> bool {
     let motd = parse_motd(ping);
     let Some(address) = parse_address(ping) else {
         return false;
     };
+    if games.len() >= MAX_GAMES
+        || address.is_empty()
+        || !address.bytes().all(|b| b.is_ascii_digit())
+        || address.parse::<u16>().is_err()
+    {
+        return false;
+    }
     let address = format!("{ip}:{address}");
     if games.iter().any(|g| g.address == address) {
         return false;
@@ -230,6 +241,42 @@ mod tests {
             "10.0.0.4",
         );
         assert_eq!(scanner.take_found()[0].1.motd, "C");
+    }
+
+    /// Announcements from one host or many cannot grow the list past [`MAX_GAMES`], nor add an
+    /// address that is no port.
+    #[test]
+    fn the_list_is_bounded_and_takes_ports_only() {
+        let mut games = Vec::new();
+        for junk in [
+            "",
+            "x",
+            "-1",
+            "+80",
+            "65536",
+            "25565/evil",
+            "1".repeat(900).as_str(),
+        ] {
+            assert!(!add_server(
+                &mut games,
+                &ping_string_text("A", junk),
+                "10.0.0.2"
+            ));
+        }
+        assert!(games.is_empty());
+        for i in 0..MAX_GAMES {
+            assert!(add_server(
+                &mut games,
+                &ping_string("A", 1000 + i as u16),
+                "10.0.0.2"
+            ));
+        }
+        assert!(!add_server(
+            &mut games,
+            &ping_string("A", 60000),
+            "10.0.0.2"
+        ));
+        assert_eq!(games.len(), MAX_GAMES);
     }
 
     #[test]
