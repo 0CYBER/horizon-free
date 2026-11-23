@@ -87,6 +87,8 @@ def scenario(m, out):
     result, texts, _ = m.call('settings', key='opening-animation', value='off')
     assert json.loads(texts[-1])['opening_animation'] is False, texts
     result, texts, _ = m.call('game_args')
+    assert result['isError'] and 'confirm' in texts[-1], texts
+    result, texts, _ = m.call('game_args', confirm=True)
     assert 'game_args' in json.loads(texts[-1]), texts
     result, texts, _ = m.call('remove', tag=TAG)
     assert result['isError'] and 'confirm' in texts[-1], texts

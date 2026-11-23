@@ -257,7 +257,7 @@ Show or set the extra arguments the game starts with (for example --server-threa
 
 - `ARGS`: Omit to show the current arguments
 
-MCP: `game_args`.
+MCP: `game_args`, needs `confirm: true`.
 
 ## `horizon-launcher share-log`
 
@@ -442,7 +442,7 @@ A Java instance's Java: its own Java home or the automatic pick, memory and JVM 
 - `--args`: Extra JVM arguments (one string; "" clears them)
 - `--window`: The game window's size, as 1280x720; "default" goes back to the game's own
 
-MCP: `instance_java`.
+MCP: `instance_java`, needs `confirm: true`.
 
 ## `horizon-launcher instance loader`
 

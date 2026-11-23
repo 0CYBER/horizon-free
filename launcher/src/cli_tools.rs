@@ -44,6 +44,10 @@ pub const DESTRUCTIVE: &[&str] = &[
     "unshare-log",
     // It sets shell commands the next Play runs: the player says yes first.
     "instance launch",
+    // They decide what the next Play runs or joins: --server HOST, --control, --smoke-report PATH
+    // as game arguments, and a Java home or JVM arguments (-javaagent) that run code.
+    "game-args",
+    "instance java",
 ];
 
 /// Commands that send something or reach other people: only when the player asks.
@@ -503,6 +507,26 @@ mod tests {
                 .argv(&json!({ "tag": "v1", "confirm": true }))
                 .unwrap(),
             ["remove", "v1"]
+        );
+        // What the next Play runs or joins is the player's to agree to, as `instance launch` is.
+        for name in ["game_args", "instance_java"] {
+            let t = tool(name);
+            assert_eq!(t.describe()["annotations"]["destructiveHint"], true);
+            assert!(
+                t.argv(&json!({ "instance": "x" }))
+                    .unwrap_err()
+                    .contains("confirm"),
+                "{name}"
+            );
+        }
+        assert!(tool("game_args")
+            .argv(&json!({ "args": "--server evil.example:25565" }))
+            .is_err());
+        assert_eq!(
+            tool("game_args")
+                .argv(&json!({ "args": "--server-thread", "confirm": true }))
+                .unwrap(),
+            ["game-args", "--server-thread"]
         );
         for words in DESTRUCTIVE.iter().chain(OPEN_WORLD) {
             assert!(

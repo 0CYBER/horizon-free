@@ -266,7 +266,8 @@ turn the switch off.
 - **Confirm what can't be undone.** A command that deletes the player's things requires
   `confirm` and carries the MCP `destructiveHint`. In the game these are `world-delete`, `fill`
   and `setblock` (the table's `DESTRUCTIVE`); in the launcher, `remove`, `modpack remove`,
-  `mods remove`, `servers forget` and `account sign-out` (`cli_tools::DESTRUCTIVE`).
+  `mods remove`, `servers forget` and `account sign-out` (`cli_tools::DESTRUCTIVE`), and what
+  decides what the next Play runs or joins: `instance launch`, `instance java` and `game-args`.
   Without `confirm: true` the call is refused and the message says to ask the player. In the game
   CLI the flag is `--confirm`. The launcher CLI asks nothing: a person typing `remove` meant it.
 - **Ask before reaching out.** A command that sends data or reaches other people carries
