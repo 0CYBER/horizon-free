@@ -196,13 +196,10 @@ pub fn draw(
     // take them instead of submitting, sorting and clipping its quads again.
     let key = DrawnKey::of(state, renderer, sprites, x, y);
     if let Some(key) = &key
-        && let Some(drawn) = renderer
-            .gui_drawn
-            .lock()
-            .ok()
-            .and_then(|d| d.get(key).cloned())
+        && let Ok(drawn) = renderer.gui_drawn.lock()
+        && let Some(verts) = drawn.get(key)
     {
-        batch.vertices.extend_from_slice(&drawn);
+        batch.vertices.extend_from_slice(verts);
         return;
     }
     let start = batch.vertices.len();
@@ -265,17 +262,95 @@ pub fn draw_scissored(
 /// Entries of `ItemRenderer::gui_drawn` before it starts over.
 const DRAWN_LIMIT: usize = 8192;
 
+/// Tint values for one cached GUI item layer: up to 2 tints inline without heap
+/// allocation (covering untinted, single-tint, and 2-tint items), spilling to a
+/// boxed slice only for 3+ tints.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum DrawnTints {
+    Inline { len: u8, values: [i32; 2] },
+    Heap(Box<[i32]>),
+}
+impl DrawnTints {
+    fn of(tints: &[i32]) -> Self {
+        match tints {
+            [] => Self::Inline {
+                len: 0,
+                values: [0, 0],
+            },
+            [a] => Self::Inline {
+                len: 1,
+                values: [*a, 0],
+            },
+            [a, b] => Self::Inline {
+                len: 2,
+                values: [*a, *b],
+            },
+            more => Self::Heap(more.into()),
+        }
+    }
+}
+
+/// One static baked layer in a [`DrawnKey`].
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct DrawnLayer {
+    baked: usize,
+    tints: DrawnTints,
+    matrix: [u32; 16],
+    uses_block_light: bool,
+}
+impl DrawnLayer {
+    fn of(layer: &super::LayerRender) -> Option<Self> {
+        match &layer.geometry {
+            super::LayerGeometry::Quads(baked) if layer.foil == super::FoilType::None => {
+                Some(Self {
+                    baked: Arc::as_ptr(baked) as usize,
+                    tints: DrawnTints::of(&layer.tints),
+                    matrix: layer.matrix.to_cols_array().map(f32::to_bits),
+                    uses_block_light: layer.uses_block_light,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Cached layer keys: 0, 1, or 2 layers inline (zero heap allocations for nearly every
+/// hotbar and inventory item), spilling to a boxed slice only for 3+ layers.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum DrawnLayers {
+    Empty,
+    One(DrawnLayer),
+    Two([DrawnLayer; 2]),
+    Many(Box<[DrawnLayer]>),
+}
+impl DrawnLayers {
+    fn of(layers: &[super::LayerRender]) -> Option<Self> {
+        match layers {
+            [] => Some(Self::Empty),
+            [a] => Some(Self::One(DrawnLayer::of(a)?)),
+            [a, b] => Some(Self::Two([DrawnLayer::of(a)?, DrawnLayer::of(b)?])),
+            many => {
+                let collected = many
+                    .iter()
+                    .map(DrawnLayer::of)
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Self::Many(collected.into_boxed_slice()))
+            }
+        }
+    }
+}
+
 /// What a GUI item's vertices depend on: its layers' baked models (kept for the
 /// renderer's life, so their addresses name them), tints and transforms, the
 /// atlas, and the exact position. None for items whose drawing changes with time
 /// or the host: a glint, or a special model renderer.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct DrawnKey {
     renderer: usize,
     sprites: (usize, usize),
     at: [u32; 2],
     oversized: bool,
-    layers: Vec<(usize, Vec<i32>, [u32; 16], bool)>,
+    layers: DrawnLayers,
 }
 impl DrawnKey {
     fn of(
@@ -288,21 +363,7 @@ impl DrawnKey {
         if state.animated || state.cit_glint.is_some() {
             return None;
         }
-        let layers = state
-            .layers
-            .iter()
-            .map(|layer| match &layer.geometry {
-                super::LayerGeometry::Quads(baked) if layer.foil == super::FoilType::None => {
-                    Some((
-                        Arc::as_ptr(baked) as usize,
-                        layer.tints.clone(),
-                        layer.matrix.to_cols_array().map(f32::to_bits),
-                        layer.uses_block_light,
-                    ))
-                }
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()?;
+        let layers = DrawnLayers::of(&state.layers)?;
         Some(Self {
             renderer: std::ptr::from_ref(renderer) as usize,
             sprites: (std::ptr::from_ref(sprites) as usize, sprites.len()),
@@ -785,5 +846,394 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    fn test_item_renderer() -> ItemRenderer {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("items.json"), "{}").unwrap();
+        let library = crate::model_library::ParsedModels::load(
+            &crate::resource_source::ResourceSource::directory(root.to_path_buf()),
+        )
+        .into_item_library();
+        let data = crate::test_resources::item_data(
+            root,
+            horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+        )
+        .unwrap();
+        ItemRenderer::load_with_library(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            library,
+            &data,
+        )
+        .unwrap()
+    }
+
+    fn test_baked_quad_model(
+        sprite: &str,
+        tint_index: i32,
+        z: f32,
+    ) -> Arc<horizon_assets::item_bake::BakedItemModel> {
+        use horizon_assets::{
+            bake::ModelQuad,
+            item_bake::BakedItemModel,
+            model::{Direction, Material},
+        };
+        let material = Material {
+            sprite: sprite.to_owned(),
+            force_translucent: false,
+        };
+        let quad = ModelQuad {
+            positions: [
+                [-0.5, -0.5, z],
+                [0.5, -0.5, z],
+                [0.5, 0.5, z],
+                [-0.5, 0.5, z],
+            ],
+            uv: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            facing: Direction::South,
+            cull: None,
+            material: material.clone(),
+            tint_index,
+            shade_direction_override: None,
+            light_emission: 0,
+            light: [0, 0],
+            color: None,
+            ambient_occlusion: None,
+            render_type: None,
+            shade: false,
+        };
+        Arc::new(BakedItemModel {
+            quads: vec![quad],
+            uses_block_light: false,
+            particle: material,
+            transforms: [const { None }; 9],
+        })
+    }
+
+    fn test_layer(
+        baked: Arc<horizon_assets::item_bake::BakedItemModel>,
+        tints: Vec<i32>,
+        matrix: Mat4,
+        uses_block_light: bool,
+    ) -> super::super::LayerRender {
+        super::super::LayerRender {
+            geometry: super::super::LayerGeometry::Quads(baked),
+            tints,
+            foil: super::super::FoilType::None,
+            matrix,
+            particle: String::new(),
+            uses_block_light,
+            extents: Arc::new(Vec::new()),
+        }
+    }
+
+    fn test_state(layers: Vec<super::super::LayerRender>) -> ItemRenderState {
+        ItemRenderState {
+            display: horizon_assets::item_model::DisplayContext::Gui,
+            layers,
+            oversized_in_gui: false,
+            animated: false,
+            cit_glint: None,
+            hdr_tier: 0,
+            hdr_light: 0,
+        }
+    }
+
+    fn hash_of(value: &impl std::hash::Hash) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut h);
+        h.finish()
+    }
+
+    #[test]
+    fn drawn_key_equality_hashing_and_bypass_cover_multi_layer_items() {
+        let renderer = test_item_renderer();
+        let sprites = HashMap::new();
+        let baked_a = test_baked_quad_model("minecraft:item/apple", 0, 0.0);
+        let baked_b = test_baked_quad_model("minecraft:item/stick", 1, 0.1);
+        let baked_c = test_baked_quad_model("minecraft:item/bow", 2, 0.2);
+
+        // DrawnTints equality, hash consistency, and length/value sensitivity across 0..=3+ tints.
+        assert_eq!(DrawnTints::of(&[]), DrawnTints::of(&[]));
+        assert_ne!(DrawnTints::of(&[]), DrawnTints::of(&[0]));
+        assert_ne!(DrawnTints::of(&[0]), DrawnTints::of(&[0, 0]));
+        assert_eq!(DrawnTints::of(&[1, 2]), DrawnTints::of(&[1, 2]));
+        assert_ne!(DrawnTints::of(&[1, 2]), DrawnTints::of(&[1, 3]));
+        assert_ne!(DrawnTints::of(&[1, 2]), DrawnTints::of(&[1, 2, 0]));
+        assert_eq!(DrawnTints::of(&[1, 2, 3]), DrawnTints::of(&[1, 2, 3]));
+        assert_ne!(DrawnTints::of(&[1, 2, 3]), DrawnTints::of(&[1, 2, 4]));
+        for tints in [&[][..], &[1], &[1, 2], &[1, 2, 3]] {
+            let a = DrawnTints::of(tints);
+            let b = DrawnTints::of(tints);
+            assert_eq!(a, b);
+            assert_eq!(hash_of(&a), hash_of(&b));
+        }
+
+        // 0-, 1-, 2-, and 3-layer states all produce distinct, repeatable keys.
+        let s0 = test_state(Vec::new());
+        let s1 = test_state(vec![test_layer(
+            baked_a.clone(),
+            vec![0x112233],
+            Mat4::IDENTITY,
+            false,
+        )]);
+        let s2 = test_state(vec![
+            test_layer(
+                baked_a.clone(),
+                vec![0x112233, 0x445566],
+                Mat4::IDENTITY,
+                false,
+            ),
+            test_layer(baked_b.clone(), vec![], Mat4::IDENTITY, true),
+        ]);
+        let s3 = test_state(vec![
+            test_layer(baked_a.clone(), vec![1, 2, 3], Mat4::IDENTITY, false),
+            test_layer(baked_b.clone(), vec![4], Mat4::IDENTITY, false),
+            test_layer(baked_c.clone(), vec![], Mat4::IDENTITY, true),
+        ]);
+        let k0 = DrawnKey::of(&s0, &renderer, &sprites, 10.0, 20.0).unwrap();
+        let k1 = DrawnKey::of(&s1, &renderer, &sprites, 10.0, 20.0).unwrap();
+        let k2 = DrawnKey::of(&s2, &renderer, &sprites, 10.0, 20.0).unwrap();
+        let k3 = DrawnKey::of(&s3, &renderer, &sprites, 10.0, 20.0).unwrap();
+
+        let keys = [&k0, &k1, &k2, &k3];
+        for (i, left) in keys.iter().enumerate() {
+            for right in &keys[i + 1..] {
+                assert_ne!(left, right);
+            }
+        }
+
+        // Recomputing the key produces identical equality and hash.
+        for (state, key) in [(&s0, &k0), (&s1, &k1), (&s2, &k2), (&s3, &k3)] {
+            let again = DrawnKey::of(state, &renderer, &sprites, 10.0, 20.0).unwrap();
+            assert_eq!(*key, again);
+            assert_eq!(hash_of(key), hash_of(&again));
+        }
+
+        // Position, oversized flag, tints (single- and multi-tint), lighting, and transform
+        // all differentiate keys.
+        assert_ne!(
+            k1,
+            DrawnKey::of(&s1, &renderer, &sprites, 11.0, 20.0).unwrap()
+        );
+        let mut s1_oversized = s1.clone();
+        s1_oversized.oversized_in_gui = true;
+        assert_ne!(
+            k1,
+            DrawnKey::of(&s1_oversized, &renderer, &sprites, 10.0, 20.0).unwrap()
+        );
+        let mut s1_tinted = s1.clone();
+        s1_tinted.layers[0].tints = vec![0x998877];
+        assert_ne!(
+            k1,
+            DrawnKey::of(&s1_tinted, &renderer, &sprites, 10.0, 20.0).unwrap()
+        );
+        let mut s3_tinted = s3.clone();
+        s3_tinted.layers[0].tints = vec![1, 2, 99];
+        assert_ne!(
+            k3,
+            DrawnKey::of(&s3_tinted, &renderer, &sprites, 10.0, 20.0).unwrap()
+        );
+        let mut s1_lit = s1.clone();
+        s1_lit.layers[0].uses_block_light = true;
+        assert_ne!(
+            k1,
+            DrawnKey::of(&s1_lit, &renderer, &sprites, 10.0, 20.0).unwrap()
+        );
+        let mut s1_moved = s1.clone();
+        s1_moved.layers[0].matrix = Mat4::from_translation(Vec3::X);
+        assert_ne!(
+            k1,
+            DrawnKey::of(&s1_moved, &renderer, &sprites, 10.0, 20.0).unwrap()
+        );
+
+        // Dynamic / animated / foil / special items return None (bypass cache).
+        let mut animated = s1.clone();
+        animated.animated = true;
+        assert!(DrawnKey::of(&animated, &renderer, &sprites, 10.0, 20.0).is_none());
+        let mut foiled = s1.clone();
+        foiled.layers[0].foil = super::super::FoilType::Standard;
+        assert!(DrawnKey::of(&foiled, &renderer, &sprites, 10.0, 20.0).is_none());
+        let mut special = s1;
+        special.layers[0].geometry = super::super::LayerGeometry::Special {
+            model: horizon_assets::item_model::SpecialModel {
+                kind: horizon_assets::item_model::SpecialKind::Shield,
+            },
+            argument: serde_json::Value::Null,
+        };
+        assert!(DrawnKey::of(&special, &renderer, &sprites, 10.0, 20.0).is_none());
+    }
+
+    #[test]
+    fn gui_draw_cache_hit_and_miss_match_uncached_draw_bit_for_bit() {
+        use crate::hud::HudVertex;
+        let renderer = test_item_renderer();
+        let mut sprites = HashMap::new();
+        let rect = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 0.5,
+            v1: 0.5,
+            w: 16,
+            h: 16,
+        };
+        sprites.insert("item/apple".to_owned(), rect);
+        sprites.insert("item/stick".to_owned(), rect);
+        sprites.insert("item/bow".to_owned(), rect);
+
+        let baked_a = test_baked_quad_model("minecraft:item/apple", 0, 0.0);
+        let baked_b = test_baked_quad_model("minecraft:item/stick", 1, 0.1);
+        let baked_c = test_baked_quad_model("minecraft:item/bow", 2, 0.2);
+
+        let states = [
+            // 1 layer, 1 tint
+            test_state(vec![test_layer(
+                baked_a.clone(),
+                vec![0xFF33_AA55_u32 as i32],
+                Mat4::IDENTITY,
+                false,
+            )]),
+            // 2 layers, 2 tints
+            test_state(vec![
+                test_layer(
+                    baked_a.clone(),
+                    vec![0xFF11_2233_u32 as i32, 0xFF44_5566_u32 as i32],
+                    Mat4::IDENTITY,
+                    false,
+                ),
+                test_layer(baked_b.clone(), vec![], Mat4::IDENTITY, false),
+            ]),
+            // 3 layers, 3 tints
+            test_state(vec![
+                test_layer(
+                    baked_a.clone(),
+                    vec![
+                        0xFFAA_0000_u32 as i32,
+                        0xFF00_AA00_u32 as i32,
+                        0xFF00_00AA_u32 as i32,
+                    ],
+                    Mat4::IDENTITY,
+                    false,
+                ),
+                test_layer(baked_b, vec![0xFFFF_FF00_u32 as i32], Mat4::IDENTITY, false),
+                test_layer(baked_c, vec![], Mat4::IDENTITY, false),
+            ]),
+        ];
+
+        for (idx, state) in states.iter().enumerate() {
+            let x = 16.0 + idx as f32 * 20.0;
+            let y = 32.0;
+            let mut reference = HudBatch::scratch([320, 240]);
+            draw_now(
+                state,
+                &renderer,
+                &sprites,
+                &super::super::NoHost,
+                &mut reference,
+                x,
+                y,
+                0.0,
+                1.0,
+                0.75,
+                None,
+            );
+            assert!(!reference.vertices.is_empty());
+
+            // Cache miss populates entry.
+            let mut miss_batch = HudBatch::scratch([320, 240]);
+            draw(
+                state,
+                &renderer,
+                &sprites,
+                &super::super::NoHost,
+                &mut miss_batch,
+                x,
+                y,
+                0.0,
+                1.0,
+                0.75,
+            );
+            assert_eq!(renderer.gui_drawn.lock().unwrap().len(), idx + 1);
+            assert_eq!(
+                bytemuck::cast_slice::<HudVertex, u8>(&miss_batch.vertices),
+                bytemuck::cast_slice::<HudVertex, u8>(&reference.vertices),
+            );
+
+            // Cache hit serves exact vertices without adding a new cache entry.
+            let mut hit_batch = HudBatch::scratch([320, 240]);
+            draw(
+                state,
+                &renderer,
+                &sprites,
+                &super::super::NoHost,
+                &mut hit_batch,
+                x,
+                y,
+                0.0,
+                1.0,
+                0.75,
+            );
+            assert_eq!(renderer.gui_drawn.lock().unwrap().len(), idx + 1);
+            assert_eq!(
+                bytemuck::cast_slice::<HudVertex, u8>(&hit_batch.vertices),
+                bytemuck::cast_slice::<HudVertex, u8>(&reference.vertices),
+            );
+        }
+
+        // Changing tint misses the cache and produces the new tinted vertices.
+        let mut retinted = states[0].clone();
+        retinted.layers[0].tints = vec![0xFF00_00FF_u32 as i32];
+        let mut retinted_batch = HudBatch::scratch([320, 240]);
+        let mut retinted_ref = HudBatch::scratch([320, 240]);
+        draw(
+            &retinted,
+            &renderer,
+            &sprites,
+            &super::super::NoHost,
+            &mut retinted_batch,
+            16.0,
+            32.0,
+            0.0,
+            1.0,
+            0.75,
+        );
+        draw_now(
+            &retinted,
+            &renderer,
+            &sprites,
+            &super::super::NoHost,
+            &mut retinted_ref,
+            16.0,
+            32.0,
+            0.0,
+            1.0,
+            0.75,
+            None,
+        );
+        assert_eq!(renderer.gui_drawn.lock().unwrap().len(), 4);
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&retinted_batch.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&retinted_ref.vertices),
+        );
+
+        // Animated items bypass the cache completely.
+        let mut animated = states[0].clone();
+        animated.animated = true;
+        let mut anim_batch = HudBatch::scratch([320, 240]);
+        draw(
+            &animated,
+            &renderer,
+            &sprites,
+            &super::super::NoHost,
+            &mut anim_batch,
+            16.0,
+            32.0,
+            0.0,
+            1.0,
+            0.75,
+        );
+        assert_eq!(renderer.gui_drawn.lock().unwrap().len(), 4);
     }
 }

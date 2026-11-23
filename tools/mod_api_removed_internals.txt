@@ -38,3 +38,7 @@ horizon_client_render::ui::draw_sprite  #13220
 horizon_client_render::ui::nine_slice_metadata  #13220
 horizon_client::game::interactions::Game<'_>::interaction_hit  #15412
 horizon_client_render::font::TrueType::ids  kind=field  #20187
+horizon_client::game::Game<'_>::hud  #20196
+horizon_client::game::Game<'_>::hud_layers  #20196
+horizon_client::game::reused_hud_vertices  #20196
+horizon_client::game::store_hud_vertices  #20196

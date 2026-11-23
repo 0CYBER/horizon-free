@@ -1843,6 +1843,52 @@ pub struct GuiScale {
     pub unicode: bool,
 }
 
+/// One positioned glyph prepared while drawing HUD text, held in [`HudGlyphScratch`]
+/// so text draws reuse one backing buffer across calls.
+struct PreparedGlyph {
+    x: f32,
+    glyph: crate::font::Glyph,
+    color: u32,
+    custom_shadow: Option<u32>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+    first: bool,
+    advance: f32,
+    object: Option<crate::text::InlineObject>,
+}
+
+/// Reusable scratch buffer for prepared glyphs across [`HudBatch`] text draws.
+///
+/// Store one in the HUD owner and pass it to [`HudBatch::text_with_scratch`],
+/// [`HudBatch::text_styled_with_scratch`], or [`crate::hud_layout::paint_with_scratch`]
+/// so text draws reuse one backing allocation while [`HudBatch`] keeps its public fields.
+#[derive(Default)]
+pub struct HudGlyphScratch(Vec<PreparedGlyph>);
+
+impl HudGlyphScratch {
+    /// Create an empty glyph scratch buffer.
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Clear any staged glyphs while retaining the backing allocation.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// Returns `true` when no prepared glyphs are currently staged.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Current backing capacity of the reusable glyph buffer.
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+}
+
 /// One frame of overlay geometry in GUI pixels.
 pub struct HudBatch {
     pub pictures: Vec<Arc<pictures::Picture>>,
@@ -2015,6 +2061,29 @@ impl HudBatch {
             blur_at: 0,
             inline_profiles: Vec::new(),
         }
+    }
+    /// Clear all geometry and per-frame state for reuse with `window` and `inputs`,
+    /// retaining the backing allocations of its buffers.
+    pub fn reset(&mut self, window: [u32; 2], inputs: GuiScale) {
+        let gui =
+            horizon_client_input::window::GuiSize::new(window, inputs.requested, inputs.unicode);
+        self.reset_with_gui_size(gui);
+    }
+    /// Clear all geometry and per-frame state for reuse with `gui`, retaining buffer capacity.
+    pub fn reset_with_gui_size(&mut self, gui: horizon_client_input::window::GuiSize) {
+        self.pictures.clear();
+        self.vertices.clear();
+        self.scale = gui.scale as f32;
+        self.width = gui.size[0] as f32;
+        self.height = gui.size[1] as f32;
+        self.patches.clear();
+        self.blends.clear();
+        self.end_portal = EndPortalFill::default();
+        self.glint_alpha = 0.75;
+        self.glint_colour = 0;
+        self.game_time = 0.0;
+        self.blur_at = 0;
+        self.inline_profiles.clear();
     }
     /// Draw the vertices added since `start` with the inverting blend.
     pub fn invert_since(&mut self, start: usize) {
@@ -2373,12 +2442,33 @@ impl HudBatch {
         color: u32,
         shadow: bool,
     ) -> f32 {
+        let mut scratch = HudGlyphScratch::new();
+        self.text_with_scratch(atlas, text, x, y, color, shadow, &mut scratch)
+    }
+    /// [`Self::text`], reusing `scratch` for staged glyphs across draws.
+    pub fn text_with_scratch(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &str,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+        scratch: &mut HudGlyphScratch,
+    ) -> f32 {
+        if !crate::lang::bidirectional() && text.is_ascii() {
+            scratch.0.clear();
+            let cursor = prepare_glyphs_plain_ascii(&atlas.font, text, x, color, &mut scratch.0);
+            self.emit_prepared_glyphs(atlas, &scratch.0, y, shadow, false, None);
+            scratch.0.clear();
+            return cursor - x;
+        }
         let t = if text.contains('§') {
             crate::text::Text::legacy(text)
         } else {
             crate::text::Text::literal(text)
         };
-        self.text_styled(atlas, &t, x, y, color, shadow)
+        self.text_styled_with_scratch(atlas, &t, x, y, color, shadow, scratch)
     }
     /// Font.drawInternal: styled glyphs, shadows first, with bold, italic,
     /// underline and strikethrough. `color` is the default colour and alpha.
@@ -2392,6 +2482,19 @@ impl HudBatch {
         shadow: bool,
     ) -> f32 {
         self.styled_text(atlas, text, x, y, color, shadow, false, None)
+    }
+    /// [`Self::text_styled`], reusing `scratch` for staged glyphs across draws.
+    pub fn text_styled_with_scratch(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+        scratch: &mut HudGlyphScratch,
+    ) -> f32 {
+        self.styled_text_into(atlas, text, x, y, color, shadow, false, None, scratch)
     }
     /// `text_styled` for text drawn in the world (`TextRenderable.render`
     /// with `flat` false): each quad's `depth` is its z in text units, the
@@ -2422,10 +2525,11 @@ impl HudBatch {
         color: u32,
         outline: u32,
     ) -> (f32, usize) {
+        let mut scratch = HudGlyphScratch::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
                 if dx != 0 || dy != 0 {
-                    self.styled_text(
+                    self.styled_text_into(
                         atlas,
                         text,
                         x,
@@ -2434,13 +2538,14 @@ impl HudBatch {
                         false,
                         true,
                         Some((outline, [dx as f32, dy as f32])),
+                        &mut scratch,
                     );
                 }
             }
         }
         let front = self.vertices.len();
         (
-            self.styled_text(atlas, text, x, y, color, false, true, None),
+            self.styled_text_into(atlas, text, x, y, color, false, true, None, &mut scratch),
             front,
         )
     }
@@ -2456,77 +2561,68 @@ impl HudBatch {
         world: bool,
         outline: Option<(u32, [f32; 2])>,
     ) -> f32 {
-        // StringDecomposer.iterateFormatted inside Font.drawInternal:
-        // `§` codes inside a span restyle what follows and are not drawn.
-        let text = text.resolved();
-        // Language.getVisualOrder: shaped and reordered for right-to-left text.
-        let text = crate::bidi::visual(&text);
+        let mut scratch = HudGlyphScratch::new();
+        self.styled_text_into(
+            atlas,
+            text,
+            x,
+            y,
+            color,
+            shadow,
+            world,
+            outline,
+            &mut scratch,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn styled_text_into(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        shadow: bool,
+        world: bool,
+        outline: Option<(u32, [f32; 2])>,
+        scratch: &mut HudGlyphScratch,
+    ) -> f32 {
+        scratch.0.clear();
+        let cursor = if is_plain_ltr_ascii(text) {
+            prepare_glyphs_ascii(&atlas.font, text, x, color, world, &mut scratch.0)
+        } else {
+            prepare_glyphs_general(
+                &atlas.font,
+                text,
+                x,
+                color,
+                world,
+                &mut scratch.0,
+                &mut self.inline_profiles,
+            )
+        };
+        self.emit_prepared_glyphs(atlas, &scratch.0, y, shadow, world, outline);
+        scratch.0.clear();
+        cursor - x
+    }
+
+    fn emit_prepared_glyphs(
+        &mut self,
+        atlas: &HudAtlas,
+        glyphs: &[PreparedGlyph],
+        y: f32,
+        shadow: bool,
+        world: bool,
+        outline: Option<(u32, [f32; 2])>,
+    ) {
         let font = &atlas.font;
-        let alpha = (color >> 24) as u8;
-        let mut glyphs = Vec::new();
-        let mut cursor = x;
-        let mut previous = None;
-        for (i, (ch, style)) in text.chars().enumerate() {
-            let object = (ch == '\u{fffc}')
-                .then_some(style.inline_object.as_ref())
-                .flatten();
-            if let Some(crate::text::InlineObject::Player { profile, .. }) = object
-                && self.inline_profiles.len() < 256
-                && !self.inline_profiles.contains(profile)
-            {
-                self.inline_profiles.push(profile.clone());
-            }
-            // Font.PreparedTextBuilder.accept: lines start 1 left of a
-            // sequence's first character. Language.getVisualOrder makes a
-            // sequence of each run of one style, which world text has.
-            let first = i == 0 || world && previous != Some(style);
-            previous = Some(style);
-            // The style's font (`Style.getFont`), the default one unless set.
-            let mut g = if object.is_some() {
-                crate::font::Glyph {
-                    rect: None,
-                    left: 0.0,
-                    top: 0.0,
-                    right: 0.0,
-                    bottom: 8.0,
-                    advance: 8.0,
-                    offset: 1.0,
-                }
-            } else {
-                font.glyph_styled(ch, style)
-            };
-            // Font.StringRenderOutput.accept: obfuscated characters draw a
-            // random glyph of the same width each frame.
-            if object.is_none() && style.obfuscated == Some(true) && ch != ' ' {
-                g = font.random_glyph(style, g.advance);
-            }
-            let c = style.color.map_or(color, |rgb| {
-                rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
-            });
-            let bold = object.is_none() && style.is_bold();
-            let advance = g.advance + if bold { g.offset } else { 0.0 };
-            glyphs.push((
-                cursor,
-                g,
-                c,
-                style.shadow_color,
-                bold,
-                style.is_italic(),
-                style.underlined == Some(true),
-                style.strikethrough == Some(true),
-                first,
-                advance,
-                object.cloned(),
-            ));
-            cursor += advance;
-        }
         self.patches.extend(font.take_patches());
         let white = font.white();
         let has_shadow = outline.is_none()
             && (shadow
                 || glyphs
                     .iter()
-                    .any(|glyph| glyph.3.is_some_and(|color| color != 0)));
+                    .any(|glyph| glyph.custom_shadow.is_some_and(|color| color != 0)));
         let passes: &[bool] = if has_shadow { &[true, false] } else { &[false] };
         // ARGB.scaleRGB(color, 0.25): the default shadow colour.
         let shade = |c: u32| {
@@ -2539,27 +2635,18 @@ impl HudBatch {
             )
         };
         for &is_shadow in passes {
-            for (
-                gx,
-                g,
-                c,
-                custom_shadow,
-                bold,
-                italic,
-                underline,
-                strike,
-                first,
-                advance,
-                object,
-            ) in &glyphs
-            {
+            for prepared in glyphs {
+                let gx = prepared.x;
+                let g = prepared.glyph;
+                let c = prepared.color;
+                let custom_shadow = prepared.custom_shadow;
                 let shadow_color = if let Some(argb) = custom_shadow {
                     let text_alpha = (c >> 24) as u8 as u16;
                     let shadow_alpha = (argb >> 24) as u8 as u16;
                     let alpha = (shadow_alpha * text_alpha / 255) as u8;
-                    rgba((argb >> 16) as u8, (argb >> 8) as u8, *argb as u8, alpha)
+                    rgba((argb >> 16) as u8, (argb >> 8) as u8, argb as u8, alpha)
                 } else {
-                    shade(*c)
+                    shade(c)
                 };
                 let has_shadow = outline.is_none()
                     && (custom_shadow.is_some_and(|argb| argb != 0)
@@ -2571,14 +2658,14 @@ impl HudBatch {
                 let (dx, col) = if is_shadow {
                     (g.offset, shadow_color)
                 } else {
-                    (0.0, *c)
+                    (0.0, c)
                 };
                 let (px, py, col) = if let Some((color, [dx, dy])) = outline {
-                    (*gx + dx * g.offset, y + dy * g.offset, color)
+                    (gx + dx * g.offset, y + dy * g.offset, color)
                 } else {
-                    (*gx + dx, y + dx, col)
+                    (gx + dx, y + dx, col)
                 };
-                if let Some(object) = object {
+                if let Some(object) = &prepared.object {
                     // `PlainTextRenderable.render`: sprite glyphs use the same
                     // shadow colour and offset as text, with the front at SHADOW_DEPTH.
                     let start = self.vertices.len();
@@ -2590,8 +2677,8 @@ impl HudBatch {
                     }
                     continue;
                 }
-                let shear = |v: f32| if *italic { 1.0 - 0.25 * v } else { 0.0 };
-                let thick = if *bold { 0.1 } else { 0.0 };
+                let shear = |v: f32| if prepared.italic { 1.0 - 0.25 * v } else { 0.0 };
+                let thick = if prepared.bold { 0.1 } else { 0.0 };
                 let draw = |batch: &mut Self, ox: f32| match g.rect {
                     Some(r) => {
                         let (x0, x1, y0, y1) = (
@@ -2637,18 +2724,18 @@ impl HudBatch {
                 let start = self.vertices.len();
                 draw(self, 0.0);
                 lift(self, start, base);
-                if *bold {
+                if prepared.bold {
                     let start = self.vertices.len();
                     draw(self, g.offset);
                     lift(self, start, base + 0.001);
                 }
-                let x0 = if *first { px - 1.0 } else { px };
+                let x0 = if prepared.first { px - 1.0 } else { px };
                 let start = self.vertices.len();
-                if *strike {
-                    self.rect_uv(x0, py + 3.5, px + *advance - x0, 1.0, white, col);
+                if prepared.strike {
+                    self.rect_uv(x0, py + 3.5, px + prepared.advance - x0, 1.0, white, col);
                 }
-                if *underline {
-                    self.rect_uv(x0, py + 8.0, px + *advance - x0, 1.0, white, col);
+                if prepared.underline {
+                    self.rect_uv(x0, py + 8.0, px + prepared.advance - x0, 1.0, white, col);
                 }
                 lift(self, start, base + 0.01);
                 if !world {
@@ -2658,7 +2745,6 @@ impl HudBatch {
                 }
             }
         }
-        cursor - x
     }
 
     fn draw_inline_object(
@@ -2747,6 +2833,169 @@ impl HudBatch {
         self.vertices.extend(glyphs);
         behind
     }
+}
+
+/// True when `text` is pure ASCII in a left-to-right language: no legacy `§` codes
+/// (U+00A7), no U+FFFC inline objects, and no directional/RTL characters (>= U+0590),
+/// so `Text::resolved()` and `bidi::visual()` are exact no-ops.
+fn is_plain_ltr_ascii(text: &crate::text::Text) -> bool {
+    !crate::lang::bidirectional() && text.spans.iter().all(|span| span.text.is_ascii())
+}
+
+fn prepare_glyphs_plain_ascii(
+    font: &crate::font::Font,
+    text: &str,
+    x: f32,
+    color: u32,
+    glyphs: &mut Vec<PreparedGlyph>,
+) -> f32 {
+    let mut cursor = x;
+    for byte in text.bytes() {
+        let g = font.glyph(char::from(byte));
+        let advance = g.advance;
+        glyphs.push(PreparedGlyph {
+            x: cursor,
+            glyph: g,
+            color,
+            custom_shadow: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+            first: glyphs.is_empty(),
+            advance,
+            object: None,
+        });
+        cursor += advance;
+    }
+    cursor
+}
+
+fn prepare_glyphs_ascii(
+    font: &crate::font::Font,
+    text: &crate::text::Text,
+    x: f32,
+    color: u32,
+    world: bool,
+    glyphs: &mut Vec<PreparedGlyph>,
+) -> f32 {
+    let alpha = (color >> 24) as u8;
+    let mut cursor = x;
+    let mut previous = None;
+    for span in &text.spans {
+        if span.text.is_empty() {
+            continue;
+        }
+        let style = &span.style;
+        let style_changed = world && previous != Some(style);
+        previous = Some(style);
+        let c = style.color.map_or(color, |rgb| {
+            rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
+        });
+        let bold = style.is_bold();
+        let italic = style.is_italic();
+        let underline = style.underlined == Some(true);
+        let strike = style.strikethrough == Some(true);
+        let obfuscated = style.obfuscated == Some(true);
+        for (j, byte) in span.text.bytes().enumerate() {
+            let ch = char::from(byte);
+            let first = glyphs.is_empty() || (j == 0 && style_changed);
+            let mut g = font.glyph_styled(ch, style);
+            if obfuscated && ch != ' ' {
+                g = font.random_glyph(style, g.advance);
+            }
+            let advance = g.advance + if bold { g.offset } else { 0.0 };
+            glyphs.push(PreparedGlyph {
+                x: cursor,
+                glyph: g,
+                color: c,
+                custom_shadow: style.shadow_color,
+                bold,
+                italic,
+                underline,
+                strike,
+                first,
+                advance,
+                object: None,
+            });
+            cursor += advance;
+        }
+    }
+    cursor
+}
+
+fn prepare_glyphs_general(
+    font: &crate::font::Font,
+    text: &crate::text::Text,
+    x: f32,
+    color: u32,
+    world: bool,
+    glyphs: &mut Vec<PreparedGlyph>,
+    inline_profiles: &mut Vec<std::sync::Arc<serde_json::Value>>,
+) -> f32 {
+    // StringDecomposer.iterateFormatted inside Font.drawInternal:
+    // `§` codes inside a span restyle what follows and are not drawn.
+    let text = text.resolved();
+    // Language.getVisualOrder: shaped and reordered for right-to-left text.
+    let text = crate::bidi::visual(&text);
+    let alpha = (color >> 24) as u8;
+    let mut cursor = x;
+    let mut previous = None;
+    for (i, (ch, style)) in text.chars().enumerate() {
+        let object = (ch == '\u{fffc}')
+            .then_some(style.inline_object.as_ref())
+            .flatten();
+        if let Some(crate::text::InlineObject::Player { profile, .. }) = object
+            && inline_profiles.len() < 256
+            && !inline_profiles.contains(profile)
+        {
+            inline_profiles.push(profile.clone());
+        }
+        // Font.PreparedTextBuilder.accept: lines start 1 left of a
+        // sequence's first character. Language.getVisualOrder makes a
+        // sequence of each run of one style, which world text has.
+        let first = i == 0 || world && previous != Some(style);
+        previous = Some(style);
+        // The style's font (`Style.getFont`), the default one unless set.
+        let mut g = if object.is_some() {
+            crate::font::Glyph {
+                rect: None,
+                left: 0.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 8.0,
+                advance: 8.0,
+                offset: 1.0,
+            }
+        } else {
+            font.glyph_styled(ch, style)
+        };
+        // Font.StringRenderOutput.accept: obfuscated characters draw a
+        // random glyph of the same width each frame.
+        if object.is_none() && style.obfuscated == Some(true) && ch != ' ' {
+            g = font.random_glyph(style, g.advance);
+        }
+        let c = style.color.map_or(color, |rgb| {
+            rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
+        });
+        let bold = object.is_none() && style.is_bold();
+        let advance = g.advance + if bold { g.offset } else { 0.0 };
+        glyphs.push(PreparedGlyph {
+            x: cursor,
+            glyph: g,
+            color: c,
+            custom_shadow: style.shadow_color,
+            bold,
+            italic: style.is_italic(),
+            underline: style.underlined == Some(true),
+            strike: style.strikethrough == Some(true),
+            first,
+            advance,
+            object: object.cloned(),
+        });
+        cursor += advance;
+    }
+    cursor
 }
 
 fn inline_profile_name(profile: &serde_json::Value) -> Option<&str> {
@@ -6083,5 +6332,380 @@ texture=wide",
                 );
             }
         }
+    }
+
+    #[test]
+    fn reset_matches_fresh_batch_and_retains_buffer_capacity() {
+        let root = two_glyph_font("reset-reuse");
+        let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        let scale_a = GuiScale {
+            requested: 2,
+            unicode: false,
+        };
+        let scale_b = GuiScale {
+            requested: 3,
+            unicode: true,
+        };
+        // Downstream callers can still construct `HudBatch` by struct literal using only
+        // its original public fields.
+        let literal = HudBatch {
+            pictures: Vec::new(),
+            vertices: Vec::new(),
+            scale: 1.0,
+            width: 320.0,
+            height: 240.0,
+            patches: Vec::new(),
+            blends: Vec::new(),
+            end_portal: EndPortalFill::default(),
+            glint_alpha: 0.75,
+            glint_colour: 0,
+            game_time: 0.0,
+            blur_at: 0,
+            inline_profiles: Vec::new(),
+        };
+        assert_eq!(literal.width, 320.0);
+
+        let mut reused = HudBatch::new([1280, 720], scale_a);
+        let mut glyph_scratch = HudGlyphScratch::new();
+        // Frame 1: populate every per-frame buffer and scalar field, including Blend::Depth,
+        // Blend::DepthGlint, Blend::Invert, patches, inline_profiles, and glyph_scratch.
+        reused.text_with_scratch(
+            &atlas,
+            "abbaabbaabba",
+            4.0,
+            6.0,
+            u32::MAX,
+            true,
+            &mut glyph_scratch,
+        );
+        let depth_start = reused.vertices.len();
+        let face = |z: f32| [[0.0, 0.0, z], [0.0, 4.0, z], [4.0, 4.0, z], [4.0, 0.0, z]];
+        let uv = [[0.25, 0.5]; 4];
+        reused.quad_3d(face(1.0), uv, u32::MAX);
+        let glint_start = reused.vertices.len();
+        reused.quad_3d_glint(face(2.0), uv, [[1.0, 2.0]; 4], false);
+        reused.depth_glint_since(depth_start, glint_start, [0.0, 0.0, 8.0, 8.0]);
+        let inv_start = reused.vertices.len();
+        reused.fill(&atlas, 2.0, 3.0, 10.0, 5.0, rgba(10, 20, 30, 255));
+        reused.invert_since(inv_start);
+        reused.patches.push(crate::font::Patch {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+        });
+        reused
+            .inline_profiles
+            .push(Arc::new(serde_json::json!({"name": "Alex"})));
+        reused.end_portal = EndPortalFill {
+            sprites: [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]],
+            game_time: 12.5,
+        };
+        reused.glint_alpha = 0.25;
+        reused.glint_colour = rgba(12, 34, 56, 255);
+        reused.game_time = 99.0;
+        reused.blur_at = 18;
+
+        let vert_cap = reused.vertices.capacity();
+        let blend_cap = reused.blends.capacity();
+        let patch_cap = reused.patches.capacity();
+        let profile_cap = reused.inline_profiles.capacity();
+        let glyph_cap = glyph_scratch.capacity();
+        let glyph_ptr = glyph_scratch.0.as_ptr();
+        assert!(vert_cap > 0 && blend_cap > 0 && patch_cap > 0 && profile_cap > 0 && glyph_cap > 0);
+        assert!(glyph_scratch.is_empty());
+
+        // Reset for frame 2 with a different window and GUI scale.
+        reused.reset([1920, 1080], scale_b);
+        let fresh = HudBatch::new([1920, 1080], scale_b);
+        assert!(reused.vertices.is_empty());
+        assert!(reused.blends.is_empty());
+        assert!(reused.patches.is_empty());
+        assert!(reused.pictures.is_empty());
+        assert!(reused.inline_profiles.is_empty());
+        assert_eq!(reused.scale, fresh.scale);
+        assert_eq!(reused.width, fresh.width);
+        assert_eq!(reused.height, fresh.height);
+        assert_eq!(reused.end_portal, fresh.end_portal);
+        assert_eq!(reused.glint_alpha, fresh.glint_alpha);
+        assert_eq!(reused.glint_colour, fresh.glint_colour);
+        assert_eq!(reused.game_time, fresh.game_time);
+        assert_eq!(reused.blur_at, fresh.blur_at);
+        assert!(reused.vertices.capacity() >= vert_cap);
+        assert!(reused.blends.capacity() >= blend_cap);
+        assert!(reused.patches.capacity() >= patch_cap);
+        assert!(reused.inline_profiles.capacity() >= profile_cap);
+
+        // Frame 2: draw identical geometry into both the reused (with external glyph scratch)
+        // and fresh batches.
+        let draw_frame = |b: &mut HudBatch, mut scratch: Option<&mut HudGlyphScratch>| {
+            b.fill_gradient(
+                &atlas,
+                (1.0, 2.0, 20.0, 10.0),
+                rgba(255, 0, 0, 255),
+                rgba(0, 0, 255, 128),
+            );
+            if let Some(s) = &mut scratch {
+                b.text_with_scratch(
+                    &atlas,
+                    "ab ba",
+                    8.0,
+                    12.0,
+                    rgba(250, 240, 230, 255),
+                    true,
+                    s,
+                );
+            } else {
+                b.text(&atlas, "ab ba", 8.0, 12.0, rgba(250, 240, 230, 255), true);
+            }
+            let start = b.vertices.len();
+            b.quad_3d(face(1.5), uv, u32::MAX);
+            b.depth_since(start, [1.0, 1.0, 10.0, 10.0]);
+            b.blur_at = b.vertices.len() as u32;
+            let colored = crate::text::Text::colored("ba", 0x00ff00);
+            if let Some(s) = scratch {
+                b.text_styled_with_scratch(&atlas, &colored, 3.0, 5.0, u32::MAX, false, s);
+            } else {
+                b.text_styled(&atlas, &colored, 3.0, 5.0, u32::MAX, false);
+            }
+        };
+        let mut expected = HudBatch::new([1920, 1080], scale_b);
+        draw_frame(&mut reused, Some(&mut glyph_scratch));
+        draw_frame(&mut expected, None);
+
+        assert!(glyph_scratch.is_empty());
+        assert_eq!(glyph_scratch.capacity(), glyph_cap);
+        assert_eq!(glyph_scratch.0.as_ptr(), glyph_ptr);
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&reused.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&expected.vertices),
+        );
+        assert_eq!(reused.blends, expected.blends);
+        assert_eq!(reused.blur_at, expected.blur_at);
+        assert_eq!(reused.runs(), expected.runs());
+    }
+
+    #[test]
+    fn ascii_fast_path_matches_general_bidi_path_bit_for_bit() {
+        let root = two_glyph_font("ascii-bidi-parity");
+        let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        let bold_italic = crate::text::Style {
+            color: Some(0x33aa55),
+            shadow_color: Some(0x8020_3040),
+            bold: Some(true),
+            italic: Some(true),
+            underlined: Some(true),
+            strikethrough: Some(true),
+            ..Default::default()
+        };
+        let plain_style = crate::text::Style::color(0xffcc00);
+        let multi_span = crate::text::Text::from_spans(vec![
+            crate::text::Span::new("", plain_style.clone()),
+            crate::text::Span::new("ab", plain_style.clone()),
+            crate::text::Span::new("", bold_italic.clone()),
+            crate::text::Span::new("ba", plain_style.clone()),
+            crate::text::Span::new("ab (12)", bold_italic),
+        ]);
+        let cases = [
+            crate::text::Text::empty(),
+            crate::text::Text::literal("abba"),
+            crate::text::Text::literal("ab (123) - [ba]"),
+            crate::text::Text::styled(
+                "aba",
+                crate::text::Style {
+                    bold: Some(true),
+                    underlined: Some(true),
+                    ..Default::default()
+                },
+            ),
+            multi_span,
+        ];
+
+        for text in &cases {
+            assert!(is_plain_ltr_ascii(text));
+            for world in [false, true] {
+                for shadow in [false, true] {
+                    for outline in [None, Some((rgba(1, 2, 3, 200), [1.0, -1.0]))] {
+                        let color = rgba(220, 210, 200, 240);
+                        let mut fast_batch = HudBatch::scratch([320, 240]);
+                        let mut fast_glyphs = Vec::new();
+                        let fast_cursor = prepare_glyphs_ascii(
+                            &atlas.font,
+                            text,
+                            10.0,
+                            color,
+                            world,
+                            &mut fast_glyphs,
+                        );
+                        fast_batch.emit_prepared_glyphs(
+                            &atlas,
+                            &fast_glyphs,
+                            20.0,
+                            shadow,
+                            world,
+                            outline,
+                        );
+
+                        let mut general_batch = HudBatch::scratch([320, 240]);
+                        let mut general_glyphs = Vec::new();
+                        let general_cursor = prepare_glyphs_general(
+                            &atlas.font,
+                            text,
+                            10.0,
+                            color,
+                            world,
+                            &mut general_glyphs,
+                            &mut general_batch.inline_profiles,
+                        );
+                        general_batch.emit_prepared_glyphs(
+                            &atlas,
+                            &general_glyphs,
+                            20.0,
+                            shadow,
+                            world,
+                            outline,
+                        );
+
+                        assert_eq!(fast_cursor.to_bits(), general_cursor.to_bits());
+                        assert_eq!(
+                            bytemuck::cast_slice::<HudVertex, u8>(&fast_batch.vertices),
+                            bytemuck::cast_slice::<HudVertex, u8>(&general_batch.vertices),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Plain `&str` `HudBatch::text_with_scratch` fast path matches
+        // `text_styled_with_scratch(&Text::literal(...))` and `text(...)` while reusing
+        // `HudGlyphScratch` capacity across calls.
+        let mut fast_str = HudBatch::scratch([320, 240]);
+        let mut styled_lit = HudBatch::scratch([320, 240]);
+        let mut plain_str = HudBatch::scratch([320, 240]);
+        let mut fast_scratch = HudGlyphScratch::new();
+        let mut styled_scratch = HudGlyphScratch::new();
+        for s in ["", "a", "abba", "ab (123) [ba]"] {
+            for shadow in [false, true] {
+                let adv_fast = fast_str.text_with_scratch(
+                    &atlas,
+                    s,
+                    5.0,
+                    7.0,
+                    rgba(200, 180, 160, 255),
+                    shadow,
+                    &mut fast_scratch,
+                );
+                let adv_styled = styled_lit.text_styled_with_scratch(
+                    &atlas,
+                    &crate::text::Text::literal(s),
+                    5.0,
+                    7.0,
+                    rgba(200, 180, 160, 255),
+                    shadow,
+                    &mut styled_scratch,
+                );
+                let adv_plain =
+                    plain_str.text(&atlas, s, 5.0, 7.0, rgba(200, 180, 160, 255), shadow);
+                assert_eq!(adv_fast.to_bits(), adv_styled.to_bits());
+                assert_eq!(adv_fast.to_bits(), adv_plain.to_bits());
+            }
+        }
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&fast_str.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&styled_lit.vertices),
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&fast_str.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&plain_str.vertices),
+        );
+        assert!(fast_scratch.is_empty());
+        assert!(styled_scratch.is_empty());
+        assert!(fast_scratch.capacity() >= "ab (123) [ba]".len());
+        assert!(styled_scratch.capacity() >= "ab (123) [ba]".len());
+    }
+
+    #[test]
+    fn non_ascii_legacy_and_rtl_text_bypass_ascii_fast_path() {
+        let root = two_glyph_font("rtl-legacy-bypass");
+        let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        let legacy_span = crate::text::Text::literal("§cab");
+        let rtl_text = crate::text::Text::literal("مرحبا ab");
+        let accented = crate::text::Text::literal("café");
+        let profile = Arc::new(serde_json::json!({"name": "Steve"}));
+        let object_text = crate::text::Text::styled(
+            "\u{fffc}",
+            crate::text::Style {
+                inline_object: Some(crate::text::InlineObject::Player {
+                    profile: Arc::clone(&profile),
+                    hat: false,
+                    fallback: String::new(),
+                }),
+                ..Default::default()
+            },
+        );
+        assert!(!is_plain_ltr_ascii(&legacy_span));
+        assert!(!is_plain_ltr_ascii(&rtl_text));
+        assert!(!is_plain_ltr_ascii(&accented));
+        assert!(!is_plain_ltr_ascii(&object_text));
+
+        // Legacy `§` through `HudBatch::text` still formats color and omits the `§c` code.
+        let mut via_text = HudBatch::scratch([320, 240]);
+        let mut via_legacy = HudBatch::scratch([320, 240]);
+        let adv_a = via_text.text(&atlas, "§cab", 4.0, 8.0, u32::MAX, false);
+        let adv_b = via_legacy.text_styled(
+            &atlas,
+            &crate::text::Text::legacy("§cab"),
+            4.0,
+            8.0,
+            u32::MAX,
+            false,
+        );
+        assert_eq!(adv_a.to_bits(), adv_b.to_bits());
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&via_text.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&via_legacy.vertices),
+        );
+
+        // RTL text takes the general bidi path and matches `text(&str)` identically.
+        assert_ne!(crate::bidi::visual(&rtl_text).as_ref(), &rtl_text);
+        let mut rtl_styled = HudBatch::scratch([320, 240]);
+        let mut rtl_str = HudBatch::scratch([320, 240]);
+        let adv_rtl = rtl_styled.text_styled(&atlas, &rtl_text, 4.0, 8.0, u32::MAX, true);
+        let adv_str = rtl_str.text(&atlas, "مرحبا ab", 4.0, 8.0, u32::MAX, true);
+        assert_eq!(adv_rtl.to_bits(), adv_str.to_bits());
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&rtl_styled.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&rtl_str.vertices),
+        );
+
+        // Inline player object still records its profile and clears `HudGlyphScratch` after draw
+        // so no `InlineObject` `Arc`s are retained between calls while capacity stays warm.
+        let mut obj_batch = HudBatch::scratch([320, 240]);
+        let mut obj_scratch = HudGlyphScratch::new();
+        obj_batch.text_styled_with_scratch(
+            &atlas,
+            &object_text,
+            0.0,
+            0.0,
+            u32::MAX,
+            false,
+            &mut obj_scratch,
+        );
+        assert_eq!(obj_batch.inline_profiles.len(), 1);
+        assert!(obj_scratch.is_empty());
+        assert!(obj_scratch.capacity() >= 1);
+        drop(object_text);
+        obj_batch.inline_profiles.clear();
+        assert_eq!(Arc::strong_count(&profile), 1);
+        obj_scratch.clear();
+        assert!(obj_scratch.is_empty());
+        assert!(obj_scratch.capacity() >= 1);
     }
 }

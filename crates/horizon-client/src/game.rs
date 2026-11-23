@@ -103,7 +103,7 @@ use horizon_client::{
     furnace::FurnaceCooking,
     gfx::{Frame, Renderer},
     graphics::EntityCullingMode,
-    hud::{HudAtlas, HudBatch, rgba},
+    hud::{HudAtlas, HudBatch, HudGlyphScratch, rgba},
     hud_layout, hud_overlays,
     items::{ItemStack, Items},
     keymapping::{KeyAction, SNEAK, SPRINT},
@@ -1191,6 +1191,12 @@ struct Game<'a> {
     /// runs normally, so `/tick freeze` holds it and `/tick step` moves it on.
     texture_ticks: u64,
     health_hud: hud_layout::HealthHud,
+    /// Reusable per-frame HUD geometry batch; reset each frame to retain buffer capacity.
+    hud_batch: HudBatch,
+    /// Reusable per-frame HUD layout draw list shared across crosshair/hotbar/health/xp passes.
+    hud_draws: Vec<hud_layout::GuiDraw>,
+    /// Reusable per-frame glyph scratch buffer shared across HUD text draws.
+    hud_glyph_scratch: HudGlyphScratch,
     /// What ends the game with an error; kept as it is, so main can tell a debug crash.
     error: Option<Box<dyn std::error::Error>>,
     message: Option<(String, Instant)>,
@@ -4738,47 +4744,65 @@ impl Game<'_> {
     fn title_input_active(&self) -> bool {
         self.title.is_some() && self.screen != Screen::DebugOptions
     }
+    fn gui_metrics(size: [u32; 2], inputs: horizon_client_render::hud::GuiScale) -> GuiMetrics {
+        let gui =
+            horizon_client_input::window::GuiSize::new(size, inputs.requested, inputs.unicode);
+        GuiMetrics {
+            gui,
+            scale: gui.scale as f32,
+            width: gui.size[0] as f32,
+            height: gui.size[1] as f32,
+        }
+    }
+    #[cfg(test)]
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
+        let mut batch = HudBatch::new(size, self.settings.gui_scale_inputs());
+        self.hud_into(size, &mut batch);
+        batch
+    }
+    fn hud_into(&mut self, size: [u32; 2], batch: &mut HudBatch) {
         // Off a world (title, options, Win, a prompt before joining) the HUD shows nothing to
-        // keep clear of; `hud_layers` fills it in once the world's HUD draws.
-        let gui = HudBatch::new(size, self.settings.gui_scale_inputs());
+        // keep clear of; `hud_layers_into` fills it in once the world's HUD draws.
+        let gui = Self::gui_metrics(size, self.settings.gui_scale_inputs());
         self.ui.room = horizon_client::hud_kit::room::Room::new(gui.width, gui.height);
         // The pack prompt replaces the connecting screen (setScreen), but
         // in game it opens over the world.
-        let mut batch = if (self.server_packs.prompt.is_some()
+        if (self.server_packs.prompt.is_some()
             || self.code_of_conduct.is_some()
             || self.dialog_open())
             && self.player.is_none()
         {
-            HudBatch::new(size, self.settings.gui_scale_inputs())
+            batch.reset_with_gui_size(gui.gui);
         } else {
-            self.hud_layers(size)
-        };
+            self.hud_layers_into(size, batch);
+        }
         // Vanilla's confirmation replaces the dialog as the screen.
         if self.command_prompt.is_none() {
-            self.draw_dialog(&mut batch);
+            self.draw_dialog(batch);
         }
-        self.draw_pack_prompt(&mut batch);
-        self.draw_code_of_conduct(&mut batch);
-        self.draw_link_prompt(&mut batch);
-        self.draw_command_prompt(&mut batch);
+        self.draw_pack_prompt(batch);
+        self.draw_code_of_conduct(batch);
+        self.draw_link_prompt(batch);
+        self.draw_command_prompt(batch);
         // The ToastManager draws over every screen, the title and the
         // options included: the narrator's toast follows the player there.
-        self.draw_narrator_toast(&mut batch);
+        self.draw_narrator_toast(batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
-        self.draw_debug_overlay(&mut batch, size);
+        self.draw_debug_overlay(batch, size);
         self.frame_graph
-            .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
-        self.draw_pad_over_hud(&mut batch);
+            .draw(self.settings.horizon.overlay, batch, &self.gui.atlas);
+        self.draw_pad_over_hud(batch);
+    }
+    #[cfg(test)]
+    fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
+        let mut batch = HudBatch::new(size, self.settings.gui_scale_inputs());
+        self.hud_layers_into(size, &mut batch);
         batch
     }
-    fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
+    fn hud_layers_into(&mut self, size: [u32; 2], batch: &mut HudBatch) {
         self.input_hud_begin();
-        let mut batch = HudBatch::new(size, self.settings.gui_scale_inputs());
-        // The last frame's vertex room, emptied. Grown from nothing each frame, a page's tens of
-        // thousands of vertices were copied over and over.
-        batch.vertices = reused_hud_vertices();
+        batch.reset(size, self.settings.gui_scale_inputs());
         batch.glint_colour = self.pvp_glint_texel();
         // GlobalSettingsUniform's GameTime, for a resource pack's text shader.
         batch.game_time = ((self.world.game_time.rem_euclid(24000)) as f32
@@ -4791,29 +4815,29 @@ impl Game<'_> {
             self.show_calibration((w, h));
         }
         if self.screen == Screen::Win {
-            let drawn = self.draw_screen_with_pre_hook(&mut batch);
+            let drawn = self.draw_screen_with_pre_hook(batch);
             if drawn {
-                self.draw_win_screen(&mut batch);
+                self.draw_win_screen(batch);
             }
             // The early return skips the match below: the hooks still see the
             // screen, after its own drawing.
-            self.draw_screen_with_post_hook(&mut batch);
-            return batch;
+            self.draw_screen_with_post_hook(batch);
+            return;
         }
         if self.screen == Screen::Options {
             if self.title.is_none() {
                 self.flush_skin_slots();
                 self.update_remote_skins();
             }
-            let drawn = self.draw_screen_with_pre_hook(&mut batch);
+            let drawn = self.draw_screen_with_pre_hook(batch);
             if drawn {
-                self.draw_options(&mut batch);
+                self.draw_options(batch);
             } else {
                 self.ui.options.discard_draw();
             }
-            self.draw_screen_with_post_hook(&mut batch);
-            self.draw_split_hud(&mut batch, true);
-            return batch;
+            self.draw_screen_with_post_hook(batch);
+            self.draw_split_hud(batch, true);
+            return;
         }
         self.settle_title_toasts();
         if let Some(title) = &mut self.title {
@@ -4836,27 +4860,27 @@ impl Game<'_> {
         }
         if self.screen == Screen::DebugOptions && self.title.is_some() {
             // DebugOptionsScreen replaces the title; no level HUD is behind it.
-            let drawn = self.draw_screen_with_pre_hook(&mut batch);
+            let drawn = self.draw_screen_with_pre_hook(batch);
             if drawn {
-                self.draw_debug_options(&mut batch);
+                self.draw_debug_options(batch);
             }
-            self.draw_screen_with_post_hook(&mut batch);
-            self.draw_toasts(&mut batch, false);
-            self.draw_tutorial_toasts(&mut batch, false);
-            self.draw_pack_toasts(&mut batch, false);
-            self.draw_music_toast(&mut batch, false);
-            return batch;
+            self.draw_screen_with_post_hook(batch);
+            self.draw_toasts(batch, false);
+            self.draw_tutorial_toasts(batch, false);
+            self.draw_pack_toasts(batch, false);
+            self.draw_music_toast(batch, false);
+            return;
         }
         if self.title.is_some() {
             // TitleScreen.extractRenderState, then ToastManager over it: vanilla
             // draws the toast manager on every screen, so a pack download or a
             // resource-reload failure still shows on the title (#4428).
-            let drawn = self.draw_title_screen_with_pre_hook(&mut batch);
+            let drawn = self.draw_title_screen_with_pre_hook(batch);
             if drawn && let Some(title) = &self.title {
                 title.draw_with_items(
                     &self.gui.atlas,
                     Some(&self.pack.item_renderer),
-                    &mut batch,
+                    batch,
                     self.cursor,
                     self.settings.file.bool("hideSplashTexts"),
                     self.settings.file.bool("hideServerAddress"),
@@ -4866,21 +4890,21 @@ impl Game<'_> {
             // ScreenEvent.Render.Post over the title's own screens: a mod draws
             // over them here (a pack browser over Create New World, say), and the
             // toasts still come after, as over any screen.
-            self.draw_title_screen_with_post_hook(&mut batch);
-            self.draw_toasts(&mut batch, false);
-            self.draw_tutorial_toasts(&mut batch, false);
-            self.draw_pack_toasts(&mut batch, false);
-            self.draw_music_toast(&mut batch, false);
-            return batch;
+            self.draw_title_screen_with_post_hook(batch);
+            self.draw_toasts(batch, false);
+            self.draw_tutorial_toasts(batch, false);
+            self.draw_pack_toasts(batch, false);
+            self.draw_music_toast(batch, false);
+            return;
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
         let _ = atlas_ptr;
         // The ToastManager draws over every screen: a server's packs
         // download while the connection screen shows.
-        if self.remote_overlay(&mut batch) {
-            self.draw_pack_toasts(&mut batch, false);
-            self.draw_music_toast(&mut batch, false);
-            return batch;
+        if self.remote_overlay(batch) {
+            self.draw_pack_toasts(batch, false);
+            self.draw_music_toast(batch, false);
+            return;
         }
         // Hud.extractRenderState: F1 (keyToggleGui) hides camera overlays, the
         // crosshair, hotbar, effects, bars, sidebar, action bar, titles and chat;
@@ -4904,8 +4928,10 @@ impl Game<'_> {
         self.hud_layer_next = show_hud.then_some(0);
         self.ui.room = self.hud_room(w, h, show_hud);
         let mut guide_from = 0;
+        let mut draws = std::mem::take(&mut self.hud_draws);
+        let mut glyph_scratch = std::mem::take(&mut self.hud_glyph_scratch);
         if show_hud {
-            self.draw_spyglass(&mut batch);
+            self.draw_spyglass(batch);
             guide_from = batch.vertices.len();
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
             // extractVehicleHealth and the experience bar, laid out by hud_layout.
@@ -4928,19 +4954,30 @@ impl Game<'_> {
                 let full = attack.is_some_and(|a| {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
                 });
-                let draws = hud_layout::crosshair(wi, hi, attack, full);
-                self.gui_layer("minecraft:crosshair", &mut batch, |g, batch| {
+                draws.clear();
+                hud_layout::crosshair_into(wi, hi, attack, full, &mut draws);
+                self.gui_layer("minecraft:crosshair", batch, |g, batch| {
                     // The custom crosshair takes the sprite's place (the first draw); the
                     // attack indicator stays.
                     if g.custom_crosshair() {
                         g.draw_custom_crosshair(batch, wi, hi);
-                        hud_layout::paint(batch, &g.gui.atlas, &draws[1..]);
+                        hud_layout::paint_with_scratch(
+                            batch,
+                            &g.gui.atlas,
+                            &draws[1..],
+                            &mut glyph_scratch,
+                        );
                     } else {
-                        hud_layout::paint(batch, &g.gui.atlas, &draws);
+                        hud_layout::paint_with_scratch(
+                            batch,
+                            &g.gui.atlas,
+                            &draws,
+                            &mut glyph_scratch,
+                        );
                     }
                 });
             }
-            self.gui_layer("minecraft:hotbar", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:hotbar", batch, |g, batch| {
                 if spectator {
                     g.draw_spectator_hotbar(batch);
                 } else {
@@ -4966,8 +5003,9 @@ impl Game<'_> {
                         offhand_pop: (f32::from(g.hotbar_pop[9]) - partial).max(0.0),
                         attack,
                     };
-                    let draws = hud_layout::hotbar(wi, hi, &inputs);
-                    hud_layout::paint(batch, &g.gui.atlas, &draws);
+                    draws.clear();
+                    hud_layout::hotbar_into(wi, hi, &inputs, &mut draws);
+                    hud_layout::paint_with_scratch(batch, &g.gui.atlas, &draws, &mut glyph_scratch);
                     for d in &draws {
                         if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
                             let stack = if slot == 40 {
@@ -4982,17 +5020,17 @@ impl Game<'_> {
                     }
                 }
             });
-            self.gui_layer("minecraft:effects", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:effects", batch, |g, batch| {
                 // The PvP & HUD effects widget takes the icons' place.
                 if !g.pvp_effects_shown() {
                     g.draw_effect_icons(batch);
                 }
             });
             // Hud: the action bar and titles draw over the hotbar (nextStratum).
-            self.gui_layer("minecraft:boss_overlay", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:boss_overlay", batch, |g, batch| {
                 g.draw_boss_bars(batch);
             });
-            self.draw_extras(&mut batch);
+            self.draw_extras(batch);
         }
         if show_hud {
             // Hud.nextContextualInfoState: the jump bar, the experience bar or
@@ -5010,7 +5048,7 @@ impl Game<'_> {
             let vehicle_hearts = if spectator {
                 0
             } else {
-                self.draw_mount_hud(&mut batch, wi, hi)
+                self.draw_mount_hud(batch, wi, hi)
             };
             let (visual_ticks, visual_millis) = (self.visual_ticks(), self.visual_millis());
             let kind = (!self.creative && !spectator)
@@ -5050,15 +5088,24 @@ impl Game<'_> {
                 // that answers draws every row instead.
                 let mut native_health_hud = None;
                 self.native_health_hud(&inputs, wi, hi, &mut native_health_hud);
-                let draws = match native_health_hud {
-                    Some(draws) => draws,
-                    None => self.health_hud.layout(&inputs, wi, hi),
+                let health_draws: &[hud_layout::GuiDraw] = match &native_health_hud {
+                    Some(native) => native.as_slice(),
+                    None => {
+                        draws.clear();
+                        self.health_hud.layout_into(&inputs, wi, hi, &mut draws);
+                        draws.as_slice()
+                    }
                 };
-                self.keep_status_rows(&draws, wi, hi);
+                self.keep_status_rows(health_draws, wi, hi);
                 // The rows draw in one pass here, so a mod's `player_health`
                 // layer stands for the armor, food and air rows too.
-                self.gui_layer("minecraft:player_health", &mut batch, |g, batch| {
-                    hud_layout::paint(batch, &g.gui.atlas, &draws);
+                self.gui_layer("minecraft:player_health", batch, |g, batch| {
+                    hud_layout::paint_with_scratch(
+                        batch,
+                        &g.gui.atlas,
+                        health_draws,
+                        &mut glyph_scratch,
+                    );
                 });
                 // Hud.playAirBubblePoppedSound: Player.playSound (PLAYERS), heard
                 // by this client only.
@@ -5074,7 +5121,7 @@ impl Game<'_> {
                 }
             }
             // After the health rows (Hud.extractHotbarAndDecorations): jump, locator or XP bar.
-            self.gui_layer("minecraft:contextual_info_bar", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:contextual_info_bar", batch, |g, batch| {
                 if contextual == ContextualBar::JumpableVehicle {
                     g.draw_jump_bar(batch, wi, hi);
                 }
@@ -5094,7 +5141,8 @@ impl Game<'_> {
                 if has_experience && g.player.is_some() {
                     let atlas = &g.gui.atlas;
                     let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
-                    let draws = hud_layout::experience_colored(
+                    draws.clear();
+                    hud_layout::experience_colored_into(
                         g.pack.polytone_colors.xp_bar,
                         wi,
                         hi,
@@ -5102,43 +5150,46 @@ impl Game<'_> {
                         g.experience.level,
                         contextual == ContextualBar::Experience,
                         &width,
+                        &mut draws,
                     );
-                    hud_layout::paint(batch, atlas, &draws);
+                    hud_layout::paint_with_scratch(batch, atlas, &draws, &mut glyph_scratch);
                 }
                 if contextual == ContextualBar::Locator {
                     let draws = g.locator_bar_draws(wi, hi);
-                    hud_layout::paint(batch, &g.gui.atlas, &draws);
+                    hud_layout::paint_with_scratch(batch, &g.gui.atlas, &draws, &mut glyph_scratch);
                 }
             });
             if !spectator {
-                self.gui_layer("minecraft:selected_item_name", &mut batch, |g, batch| {
+                self.gui_layer("minecraft:selected_item_name", batch, |g, batch| {
                     g.draw_selected_name(batch, !g.creative);
                 });
             }
         }
+        draws.clear();
+        self.hud_draws = draws;
         // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
         let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
-        self.gui_layer("minecraft:sleep_overlay", &mut batch, |g, batch| {
-            hud_layout::paint(batch, &g.gui.atlas, &draws);
+        self.gui_layer("minecraft:sleep_overlay", batch, |g, batch| {
+            hud_layout::paint_with_scratch(batch, &g.gui.atlas, &draws, &mut glyph_scratch);
         });
         if show_hud {
-            self.gui_layer("minecraft:overlay_message", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:overlay_message", batch, |g, batch| {
                 g.draw_overlay_message(batch);
             });
-            self.gui_layer("minecraft:title", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:title", batch, |g, batch| {
                 g.draw_title(batch);
             });
-            self.gui_layer("minecraft:scoreboard_sidebar", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:scoreboard_sidebar", batch, |g, batch| {
                 g.draw_scoreboard(batch);
             });
             if subtitles != Subtitles::Hidden {
-                self.gui_layer("minecraft:subtitle_overlay", &mut batch, |g, batch| {
+                self.gui_layer("minecraft:subtitle_overlay", batch, |g, batch| {
                     g.draw_subtitles(batch);
                 });
             }
         } else if subtitles == Subtitles::Deferred {
             // F1 hid the HUD, but an in-game screen still shows the subtitles.
-            self.gui_layer("minecraft:subtitle_overlay", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:subtitle_overlay", batch, |g, batch| {
                 g.draw_subtitles(batch);
             });
         }
@@ -5148,22 +5199,30 @@ impl Game<'_> {
             && at.elapsed() < Duration::from_secs(3)
         {
             let tw = HudBatch::text_width(atlas, text);
-            batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
+            batch.text_with_scratch(
+                atlas,
+                text,
+                (w - tw) / 2.0,
+                h - 59.0,
+                u32::MAX,
+                true,
+                &mut glyph_scratch,
+            );
         }
         // The chat screen draws the focused chat itself; F1 hides the rest.
         if self.screen == Screen::Chat {
             // The mod layers under the chat stay under the focused chat.
-            self.draw_mod_gui_layers(Some("minecraft:chat"), &mut batch);
+            self.draw_mod_gui_layers(Some("minecraft:chat"), batch);
         } else if show_hud {
             if !self.overlay_holds_view() {
-                self.gui_layer("minecraft:chat", &mut batch, |g, batch| g.draw_chat(batch));
+                self.gui_layer("minecraft:chat", batch, |g, batch| g.draw_chat(batch));
             }
-            self.gui_layer("minecraft:tab_list", &mut batch, |g, batch| {
+            self.gui_layer("minecraft:tab_list", batch, |g, batch| {
                 g.draw_tab_list(batch);
             });
         }
         // The mod layers above the last vanilla layer drawn.
-        self.draw_mod_gui_layers(None, &mut batch);
+        self.draw_mod_gui_layers(None, batch);
         self.hud_layer_next = None;
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
@@ -5175,99 +5234,83 @@ impl Game<'_> {
         } else {
             self.screen
         };
-        let drawn = self.draw_screen_with_pre_hook(&mut batch);
+        let drawn = self.draw_screen_with_pre_hook(batch);
         match screen {
             _ if !drawn => {}
-            Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
+            Screen::Paused if self.pause_menu => self.draw_pause_menu(batch),
             // PauseScreen(false): only its title, at the top.
             Screen::Paused => {
-                self.draw_screen_phase(
-                    &mut batch,
-                    horizon_client::screen_draw::RenderPhase::Background,
-                );
+                self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
                 let title = self.translate_with_fallback("menu.paused", "Game Paused");
                 horizon_client::widgets::begin_screen(|| {
                     horizon_client::widgets::ScreenInfo::new("paused", title.clone())
                 });
                 let tw = HudBatch::text_width(&self.gui.atlas, &title);
-                batch.text(
+                batch.text_with_scratch(
                     &self.gui.atlas,
                     &title,
                     ((batch.width / 2.0).floor() - (tw / 2.0).floor()).floor(),
                     10.0,
                     u32::MAX,
                     true,
+                    &mut glyph_scratch,
                 );
-                self.draw_screen_phase(
-                    &mut batch,
-                    horizon_client::screen_draw::RenderPhase::Foreground,
-                );
+                self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Foreground);
             }
-            Screen::GameModeSwitcher => self.draw_gamemode_switcher(&mut batch),
-            Screen::EmoteWheel => self.draw_emote_wheel(&mut batch),
-            Screen::Dead => self.draw_death_screen(&mut batch),
-            Screen::Stats => self.draw_stats(&mut batch),
-            Screen::Advancements => self.draw_advancements(&mut batch),
+            Screen::GameModeSwitcher => self.draw_gamemode_switcher(batch),
+            Screen::EmoteWheel => self.draw_emote_wheel(batch),
+            Screen::Dead => self.draw_death_screen(batch),
+            Screen::Stats => self.draw_stats(batch),
+            Screen::Advancements => self.draw_advancements(batch),
             Screen::Mod => {
-                self.draw_screen_phase(
-                    &mut batch,
-                    horizon_client::screen_draw::RenderPhase::Background,
-                );
-                self.draw_screen_phase(
-                    &mut batch,
-                    horizon_client::screen_draw::RenderPhase::Foreground,
-                );
+                self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
+                self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Foreground);
             }
-            Screen::WorldOptions => self.draw_world_options(&mut batch),
-            Screen::Friends => self.draw_friends_screen(&mut batch),
-            Screen::Social => self.draw_social_screen(&mut batch),
-            Screen::ServerLinks => self.draw_server_links(&mut batch),
-            Screen::ConfirmLink => self.draw_confirm_link(&mut batch),
-            Screen::DialogWarning => self.draw_dialog_warning(&mut batch),
-            Screen::CommandBlock => self.draw_command_block(&mut batch),
-            Screen::BlockEditor => self.draw_block_editor(&mut batch),
-            Screen::DebugOptions => self.draw_debug_options(&mut batch),
-            Screen::HudEditor => self.draw_hud_editor(&mut batch),
+            Screen::WorldOptions => self.draw_world_options(batch),
+            Screen::Friends => self.draw_friends_screen(batch),
+            Screen::Social => self.draw_social_screen(batch),
+            Screen::ServerLinks => self.draw_server_links(batch),
+            Screen::ConfirmLink => self.draw_confirm_link(batch),
+            Screen::DialogWarning => self.draw_dialog_warning(batch),
+            Screen::CommandBlock => self.draw_command_block(batch),
+            Screen::BlockEditor => self.draw_block_editor(batch),
+            Screen::DebugOptions => self.draw_debug_options(batch),
+            Screen::HudEditor => self.draw_hud_editor(batch),
             Screen::Studio => {
-                self.draw_screen_phase(
-                    &mut batch,
-                    horizon_client::screen_draw::RenderPhase::Background,
-                );
-                self.draw_screen_phase(
-                    &mut batch,
-                    horizon_client::screen_draw::RenderPhase::Foreground,
-                );
+                self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
+                self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Foreground);
             }
             Screen::Inventory => {
                 let from = batch.vertices.len();
-                self.draw_inventory(&mut batch);
-                self.draw_pad_menu_guide(&mut batch, from);
+                self.draw_inventory(batch);
+                self.draw_pad_menu_guide(batch, from);
             }
             Screen::Creative => {
                 let from = batch.vertices.len();
-                self.draw_creative(&mut batch);
-                self.draw_pad_menu_guide(&mut batch, from);
+                self.draw_creative(batch);
+                self.draw_pad_menu_guide(batch, from);
             }
-            Screen::Chat => self.draw_chat_screen(&mut batch),
+            Screen::Chat => self.draw_chat_screen(batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
+        glyph_scratch.clear();
+        self.hud_glyph_scratch = glyph_scratch;
         // ScreenEvent.Render.Post: the open screen has drawn itself and its
         // tooltips, so a native mod draws over it here. Never `Playing`: the
         // prompts, books and sign editors drawn over gameplay keep it, draw
         // after this point and so over what a mod drew.
-        self.draw_screen_with_post_hook(&mut batch);
-        self.draw_saving_indicator(&mut batch);
-        self.draw_every_toast(&mut batch, !show_hud);
+        self.draw_screen_with_post_hook(batch);
+        self.draw_saving_indicator(batch);
+        self.draw_every_toast(batch, !show_hud);
         if self.server_packs.prompt.is_none() {
-            self.remote_hud(&mut batch);
-            self.draw_sign_editor(&mut batch);
-            self.draw_book(&mut batch);
+            self.remote_hud(batch);
+            self.draw_sign_editor(batch);
+            self.draw_book(batch);
         }
-        self.draw_studio_bars(&mut batch);
+        self.draw_studio_bars(batch);
         if show_hud {
-            self.draw_pad_guide(&mut batch, guide_from);
+            self.draw_pad_guide(batch, guide_from);
         }
-        batch
     }
 
     pub(super) fn close_container(&mut self) {
@@ -8388,7 +8431,7 @@ impl Game<'_> {
             self.shows_panorama(),
             self.overlay_holds_view(),
         ) {
-            let scale = HudBatch::new(size, self.settings.gui_scale_inputs()).scale;
+            let scale = Self::gui_metrics(size, self.settings.gui_scale_inputs()).scale;
             crosshair.debug_crosshair(at, view_pitch, view_yaw, scale);
             // Its pass draws with the view alone, no pose: a mod's roll turns the axes about
             // the view direction instead, so they turn with the world.
@@ -8554,7 +8597,8 @@ impl Game<'_> {
         let _projection_frame = (!title).then(|| self.activate_projection_frame());
         pr.lap("pr_projection");
         // GUI hooks project against this frame's camera, including its bob/spin and FOV.
-        let mut hud = horizon_client::spans::time("hud", || self.hud(size));
+        let mut hud = std::mem::replace(&mut self.hud_batch, HudBatch::scratch([1, 1]));
+        horizon_client::spans::time("hud", || self.hud_into(size, &mut hud));
         self.flush_ime(&mut hud);
         self.native_gui_render_post(&mut hud, self.ui.hide_gui, self.focused);
         self.resolve_inline_profiles(&hud.inline_profiles);
@@ -8935,7 +8979,7 @@ impl Game<'_> {
         // A frame the surface refused (occluded, lost, timed out) is `Ok(false)`.
         self.frame_drawn = matches!(result, Ok(true));
         // Restore storage even when rendering fails (for example, a lost surface).
-        store_hud_vertices(std::mem::take(&mut hud.vertices));
+        self.hud_batch = hud;
         self.entity_vertices = entities;
         self.world_geometry = Some(world_geometry);
         *self.entity_spans.get_mut() = entity_spans;
@@ -9121,7 +9165,7 @@ impl Game<'_> {
             match &event {
                 WindowEvent::CursorMoved { position, .. } => {
                     if let Some(r) = &self.renderer {
-                        let b = HudBatch::new(
+                        let b = Self::gui_metrics(
                             [r.config.width, r.config.height],
                             self.settings.gui_scale_inputs(),
                         );
@@ -9432,10 +9476,8 @@ impl Game<'_> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     if let Some(r) = &self.renderer {
-                        let b = HudBatch::new(
-                            [r.config.width, r.config.height],
-                            self.settings.gui_scale_inputs(),
-                        );
+                        let dim = [r.config.width, r.config.height];
+                        let b = Self::gui_metrics(dim, self.settings.gui_scale_inputs());
                         let previous = self.cursor;
                         self.cursor = (position.x as f32 / b.scale, position.y as f32 / b.scale);
                         if self.studio_mouse_dragged(b.width) {
@@ -9468,7 +9510,8 @@ impl Game<'_> {
                             self.world_options_drag();
                         }
                         if self.screen == Screen::Creative {
-                            let (_, oy) = Self::creative_origin(&b);
+                            let batch = HudBatch::new(dim, self.settings.gui_scale_inputs());
+                            let (_, oy) = Self::creative_origin(&batch);
                             self.creative_screen.drag_scrollbar(self.cursor.1 - oy);
                         }
                         if self.screen == Screen::Inventory {
@@ -9485,7 +9528,6 @@ impl Game<'_> {
                             title.drag_field(&self.gui.atlas, self.cursor.0);
                         }
                         if self.dragging && self.screen == Screen::Options {
-                            let _ = b;
                             self.options_drag()?;
                         }
                     }
@@ -9554,7 +9596,7 @@ impl Game<'_> {
                             .as_ref()
                             .map(|w| w.inner_size())
                             .unwrap_or_default();
-                        let batch = HudBatch::new(
+                        let batch = Self::gui_metrics(
                             [size.width, size.height],
                             self.settings.gui_scale_inputs(),
                         );
@@ -9701,7 +9743,7 @@ impl Game<'_> {
                         .as_ref()
                         .map(|r| [r.config.width, r.config.height])
                         .unwrap_or([1, 1]);
-                    let b = HudBatch::new(size, self.settings.gui_scale_inputs());
+                    let b = Self::gui_metrics(size, self.settings.gui_scale_inputs());
                     let atlas = &self.gui.atlas;
                     let shift = self.has_shift_down();
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
@@ -9731,7 +9773,7 @@ impl Game<'_> {
                         .as_ref()
                         .map(|r| [r.config.width, r.config.height])
                         .unwrap_or([1, 1]);
-                    let b = HudBatch::new(size, self.settings.gui_scale_inputs());
+                    let b = Self::gui_metrics(size, self.settings.gui_scale_inputs());
                     if let Some(title) = self.title.as_mut() {
                         title.select_world_at(self.cursor.0, self.cursor.1, (b.width, b.height));
                     }
@@ -10789,6 +10831,9 @@ impl<'a> Game<'a> {
             mod_clear_particles: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
+            hud_batch: HudBatch::scratch([1, 1]),
+            hud_draws: Vec::new(),
+            hud_glyph_scratch: HudGlyphScratch::new(),
             started: now,
             spectator_gui: Default::default(),
             previous: now,
@@ -11782,39 +11827,35 @@ mod sign_use_tests;
 #[path = "game/interface/tests/camera_roll_tests.rs"]
 mod camera_roll_tests;
 
-thread_local! {
-    /// The last frame's HUD vertices, empty: their allocation is what the next frame starts from.
-    static HUD_VERTICES: std::cell::Cell<Vec<horizon_client::hud::HudVertex>> =
-        const { std::cell::Cell::new(Vec::new()) };
-}
-
-fn reused_hud_vertices() -> Vec<horizon_client::hud::HudVertex> {
-    let mut vertices = HUD_VERTICES.take();
-    vertices.clear();
-    vertices
-}
-
-fn store_hud_vertices(mut vertices: Vec<horizon_client::hud::HudVertex>) {
-    vertices.clear();
-    HUD_VERTICES.set(vertices);
+/// Stack-only GUI metrics computed without allocating a scratch [`HudBatch`].
+#[derive(Clone, Copy)]
+struct GuiMetrics {
+    gui: horizon_client_input::window::GuiSize,
+    scale: f32,
+    width: f32,
+    height: f32,
 }
 
 #[cfg(test)]
 mod hud_vertex_tests {
-    use super::{reused_hud_vertices, store_hud_vertices};
     use bytemuck::Zeroable;
-    use horizon_client::hud::HudVertex;
+    use horizon_client::hud::{HudBatch, HudVertex};
+    use horizon_client_render::hud::GuiScale;
 
     #[test]
     fn the_hud_vertex_room_is_reused() {
-        let mut vertices = reused_hud_vertices();
-        vertices.resize(1000, HudVertex::zeroed());
-        let capacity = vertices.capacity();
-        store_hud_vertices(vertices);
-        let again = reused_hud_vertices();
-        assert!(again.is_empty());
-        assert!(again.capacity() >= capacity);
-        store_hud_vertices(again);
+        let mut batch = HudBatch::scratch([854, 480]);
+        batch.vertices.resize(1000, HudVertex::zeroed());
+        let capacity = batch.vertices.capacity();
+        batch.reset(
+            [854, 480],
+            GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
+        assert!(batch.vertices.is_empty());
+        assert!(batch.vertices.capacity() >= capacity);
     }
 }
 

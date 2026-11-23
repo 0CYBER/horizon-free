@@ -7,6 +7,7 @@
 use crate::{font::Font, text::Text};
 use horizon_core::random::{LegacyRandom, RandomSource};
 pub use mod_api::client::hud_layout::{Blend, HealthInputs, HeartKind, PoseOp};
+use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
 
 /// One `GuiGraphicsExtractor` call.
@@ -261,6 +262,12 @@ pub struct HotbarInputs {
 /// `Hud.extractItemHotbar`.
 pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
     let mut out = Vec::new();
+    hotbar_into(w, h, i, &mut out);
+    out
+}
+
+/// Appends [`hotbar`] draws to `out` without allocating a new buffer.
+pub fn hotbar_into(w: i32, h: i32, i: &HotbarInputs, out: &mut Vec<GuiDraw>) {
     let center = w / 2;
     out.push(sprite("hud/hotbar", center - 91, h - 22, 182, 22));
     out.push(sprite(
@@ -319,7 +326,7 @@ pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
                 h - 16 - 3,
                 seed,
                 *pop,
-                &mut out,
+                out,
             );
         }
         seed += 1;
@@ -330,7 +337,7 @@ pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
         } else {
             center + 91 + 10
         };
-        slot(40, x, h - 16 - 3, seed, i.offhand_pop, &mut out);
+        slot(40, x, h - 16 - 3, seed, i.offhand_pop, out);
     }
     if let Some(scale) = i.attack
         && scale < 1.0
@@ -358,7 +365,6 @@ pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
             progress,
         ));
     }
-    out
 }
 
 /// `Hud.extractCrosshair`'s full attack indicator: at full strength on a
@@ -374,37 +380,49 @@ pub fn full_attack_indicator(scale: f32, delay: f32, target: Option<bool>) -> bo
 /// `getAttackStrengthScale(0)` in CROSSHAIR indicator mode and `full`
 /// whether the full indicator shows ([`full_attack_indicator`]).
 pub fn crosshair(w: i32, h: i32, attack: Option<f32>, full: bool) -> Vec<GuiDraw> {
-    crosshair_draws(w, h, attack, full)
-        .into_iter()
-        .map(crosshair_blend)
-        .collect()
+    let mut out = Vec::new();
+    crosshair_into(w, h, attack, full, &mut out);
+    out
 }
-fn crosshair_draws(w: i32, h: i32, attack: Option<f32>, full: bool) -> Vec<GuiDraw> {
-    let mut out = vec![sprite("hud/crosshair", (w - 15) / 2, (h - 15) / 2, 15, 15)];
+
+/// Appends [`crosshair`] draws to `out` without allocating a new buffer.
+pub fn crosshair_into(w: i32, h: i32, attack: Option<f32>, full: bool, out: &mut Vec<GuiDraw>) {
+    out.push(crosshair_blend(sprite(
+        "hud/crosshair",
+        (w - 15) / 2,
+        (h - 15) / 2,
+        15,
+        15,
+    )));
     if let Some(scale) = attack {
         let (x, y) = (w / 2 - 8, h / 2 - 7 + 16);
         if full {
-            out.push(sprite("hud/crosshair_attack_indicator_full", x, y, 16, 16));
+            out.push(crosshair_blend(sprite(
+                "hud/crosshair_attack_indicator_full",
+                x,
+                y,
+                16,
+                16,
+            )));
         } else if scale < 1.0 {
             let progress = (scale * 17.0) as i32;
-            out.push(sprite(
+            out.push(crosshair_blend(sprite(
                 "hud/crosshair_attack_indicator_background",
                 x,
                 y,
                 16,
                 4,
-            ));
-            out.push(region(
+            )));
+            out.push(crosshair_blend(region(
                 "hud/crosshair_attack_indicator_progress",
                 [16, 4],
                 [0, 0],
                 [x, y],
                 progress,
                 4,
-            ));
+            )));
         }
     }
-    out
 }
 
 /// `ExperienceBar.extractBackground` and `ContextualBar.extractExperienceLevel`;
@@ -417,8 +435,24 @@ pub fn experience(
     bar: bool,
     width: &dyn Fn(&str) -> i32,
 ) -> Vec<GuiDraw> {
-    experience_colored([None; 2], w, h, progress, level, bar, width)
+    let mut out = Vec::new();
+    experience_into(w, h, progress, level, bar, width, &mut out);
+    out
 }
+
+/// Appends [`experience`] draws to `out` without allocating a new buffer.
+pub fn experience_into(
+    w: i32,
+    h: i32,
+    progress: f32,
+    level: i32,
+    bar: bool,
+    width: &dyn Fn(&str) -> i32,
+    out: &mut Vec<GuiDraw>,
+) {
+    experience_colored_into([None; 2], w, h, progress, level, bar, width, out);
+}
+
 /// [`experience`] with a resource pack's level number colours (Polytone `text.xpbar`: the
 /// number's, then its outline's; `None` keeps vanilla's).
 pub fn experience_colored(
@@ -431,6 +465,30 @@ pub fn experience_colored(
     width: &dyn Fn(&str) -> i32,
 ) -> Vec<GuiDraw> {
     let mut out = Vec::new();
+    experience_colored_into(
+        [number, outline],
+        w,
+        h,
+        progress,
+        level,
+        bar,
+        width,
+        &mut out,
+    );
+    out
+}
+
+/// Appends [`experience_colored`] draws to `out` without allocating a new buffer.
+pub fn experience_colored_into(
+    [number, outline]: [Option<u32>; 2],
+    w: i32,
+    h: i32,
+    progress: f32,
+    level: i32,
+    bar: bool,
+    width: &dyn Fn(&str) -> i32,
+    out: &mut Vec<GuiDraw>,
+) {
     if bar {
         let (left, top) = (w / 2 - 91, h - 32 + 3);
         let filled = (progress * 183.0) as i32;
@@ -452,7 +510,7 @@ pub fn experience_colored(
         let y = h - 24 - 9 - 2;
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             self::text(
-                &mut out,
+                out,
                 Text::literal(&text),
                 x + dx,
                 y + dy,
@@ -461,9 +519,8 @@ pub fn experience_colored(
             );
         }
         let color = number.map_or(0xFF80_FF20, opaque);
-        self::text(&mut out, Text::literal(text), x, y, color, false);
+        self::text(out, Text::literal(text), x, y, color, false);
     }
-    out
 }
 
 /// State kept between frames (`Hud.lastHealth`, `displayHealth`, ...).
@@ -489,6 +546,12 @@ pub fn vehicle_max_hearts(max_health: f32) -> i32 {
 /// `Hud.extractVehicleHealth`.
 pub fn vehicle_health(w: i32, h: i32, hearts: i32, health: f32) -> Vec<GuiDraw> {
     let mut out = Vec::new();
+    vehicle_health_into(w, h, hearts, health, &mut out);
+    out
+}
+
+/// Appends [`vehicle_health`] draws to `out` without allocating a new buffer.
+pub fn vehicle_health_into(w: i32, h: i32, hearts: i32, health: f32, out: &mut Vec<GuiDraw>) {
     let current = f64::from(health).ceil() as i32;
     let x_right = w / 2 + 91;
     let mut yo = h - 39;
@@ -510,7 +573,6 @@ pub fn vehicle_health(w: i32, h: i32, hearts: i32, health: f32) -> Vec<GuiDraw> 
         yo -= 10;
         base += 20;
     }
-    out
 }
 
 fn heart(
@@ -590,6 +652,12 @@ impl HealthHud {
     /// `Hud.extractPlayerHealth` for a screen of `w` x `h` GUI pixels.
     pub fn layout(&mut self, i: &HealthInputs, w: i32, h: i32) -> Vec<GuiDraw> {
         let mut out = Vec::new();
+        self.layout_into(i, w, h, &mut out);
+        out
+    }
+
+    /// Appends [`HealthHud::layout`] draws to `out` without allocating a new buffer.
+    pub fn layout_into(&mut self, i: &HealthInputs, w: i32, h: i32, out: &mut Vec<GuiDraw>) {
         let tick = i64::from(i.tick);
         let current = ceil(i.health);
         let blink = self.health_blink_time > tick && (self.health_blink_time - tick) / 3 % 2 == 1;
@@ -746,7 +814,6 @@ impl HealthHud {
                 }
             }
         }
-        out
     }
 }
 
@@ -754,9 +821,29 @@ impl HealthHud {
 /// the caller (they need the item renderer) and so are the vignette and
 /// nausea blits (their blending needs the screen-effect pipeline).
 pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, draws: &[GuiDraw]) {
-    let mut stack = vec![IDENTITY];
-    // One buffer for the sprite keys, instead of a string per drawn sprite.
-    let mut name = String::new();
+    if draws.is_empty() {
+        return;
+    }
+    let mut scratch = crate::hud::HudGlyphScratch::new();
+    paint_with_scratch(batch, atlas, draws, &mut scratch);
+}
+
+/// [`paint`], reusing `scratch` for staged glyphs across any [`GuiDraw::Text`] calls.
+pub fn paint_with_scratch(
+    batch: &mut crate::hud::HudBatch,
+    atlas: &crate::hud::HudAtlas,
+    draws: &[GuiDraw],
+    scratch: &mut crate::hud::HudGlyphScratch,
+) {
+    if draws.is_empty() {
+        return;
+    }
+    const GUI_SPRITE_PREFIX: &str = "gui/sprites/";
+    let mut stack: SmallVec<[Pose; 4]> = smallvec![IDENTITY];
+    // Stack buffer for typical `gui/sprites/<name>` keys; spills only on >116-byte sprite names.
+    let mut name_buf = [0u8; 128];
+    name_buf[..GUI_SPRITE_PREFIX.len()].copy_from_slice(GUI_SPRITE_PREFIX.as_bytes());
+    let mut name_overflow = String::new();
     for d in draws {
         let start = batch.vertices.len();
         let pose = *stack.last().unwrap_or(&IDENTITY);
@@ -774,18 +861,26 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 // Effect sprites belong to the mob_effect atlas directory (a
                 // content mod's under its namespace); the other blitSprite
                 // ids refer to GUI sprites.
-                name.clear();
+                let sprite: &str = sprite;
                 let effect = sprite.starts_with("mob_effect/")
                     || sprite
                         .split_once(':')
                         .is_some_and(|(_, path)| path.starts_with("mob_effect/"));
-                if !effect {
-                    name.push_str("gui/sprites/");
-                }
-                name.push_str(sprite);
+                let key: &str = if effect {
+                    sprite
+                } else if GUI_SPRITE_PREFIX.len() + sprite.len() <= name_buf.len() {
+                    let end = GUI_SPRITE_PREFIX.len() + sprite.len();
+                    name_buf[GUI_SPRITE_PREFIX.len()..end].copy_from_slice(sprite.as_bytes());
+                    std::str::from_utf8(&name_buf[..end]).expect("valid utf-8 sprite key")
+                } else {
+                    name_overflow.clear();
+                    name_overflow.push_str(GUI_SPRITE_PREFIX);
+                    name_overflow.push_str(sprite);
+                    name_overflow.as_str()
+                };
                 let found = match effect {
-                    true => atlas.sprite_or_missing(&name),
-                    false => atlas.sprites.get(name.as_str()).copied(),
+                    true => atlas.sprite_or_missing(key),
+                    false => atlas.sprites.get(key).copied(),
                 };
                 let Some(mut r) = found else {
                     continue;
@@ -800,7 +895,7 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                     r.v0 = v0;
                 }
                 let at = [*x as f32, *y as f32, *w as f32, *h as f32];
-                match crate::hud::sprite_modifiers::draws(atlas, &name, r, at, abgr(*color)) {
+                match crate::hud::sprite_modifiers::draws(atlas, key, r, at, abgr(*color)) {
                     // A Polytone screen sprite modifier: the sprite changed, then its overlays.
                     Some(draws) => {
                         for d in draws {
@@ -898,7 +993,15 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                 color,
                 shadow,
             } => {
-                batch.text_styled(atlas, text, *x as f32, *y as f32, abgr(*color), *shadow);
+                batch.text_styled_with_scratch(
+                    atlas,
+                    text,
+                    *x as f32,
+                    *y as f32,
+                    abgr(*color),
+                    *shadow,
+                    scratch,
+                );
             }
             GuiDraw::Push(ops) => {
                 let mut m = pose;
@@ -943,3 +1046,579 @@ fn opaque(color: u32) -> u32 {
 #[cfg(test)]
 #[path = "hud_layout_gradient_tests.rs"]
 mod gradient_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hud::{HudAtlas, HudBatch, HudVertex};
+
+    fn test_atlas() -> HudAtlas {
+        HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn into_helpers_match_vec_constructors_and_reuse_capacity() {
+        let sentinel = GuiDraw::Fill {
+            x0: 1,
+            y0: 2,
+            x1: 3,
+            y1: 4,
+            color: 0xDEAD_BEEF,
+        };
+        let expect_sprite =
+            |name: &'static str, x: i32, y: i32, w: i32, h: i32, blend: Blend| GuiDraw::Sprite {
+                sprite: Cow::Borrowed(name),
+                x,
+                y,
+                w,
+                h,
+                region: None,
+                color: 0xFFFF_FFFF,
+                blend,
+            };
+        let expect_region =
+            |name: &'static str, region: [i32; 4], x: i32, y: i32, w: i32, h: i32, blend: Blend| {
+                GuiDraw::Sprite {
+                    sprite: Cow::Borrowed(name),
+                    x,
+                    y,
+                    w,
+                    h,
+                    region: Some(region),
+                    color: 0xFFFF_FFFF,
+                    blend,
+                }
+            };
+        let expect_text = |value: &str, x: i32, y: i32, color: u32| GuiDraw::Text {
+            text: Text::literal(value),
+            x,
+            y,
+            color,
+            shadow: false,
+        };
+
+        let mut buf = Vec::new();
+
+        // 1. hotbar_into (w = 427, h = 240 -> center = 213)
+        let hotbar_in = HotbarInputs {
+            selected: 3,
+            right_handed: true,
+            offhand: true,
+            slots: [
+                Some(0.0),
+                Some(5.0),
+                None,
+                Some(15.0),
+                None,
+                None,
+                None,
+                None,
+                Some(0.0),
+            ],
+            offhand_pop: 5.0,
+            attack: Some(0.5),
+        };
+        let expected_hotbar = [
+            expect_sprite("hud/hotbar", 122, 218, 182, 22, Blend::Textured),
+            expect_sprite("hud/hotbar_selection", 181, 217, 24, 23, Blend::Textured),
+            expect_sprite("hud/hotbar_offhand_left", 93, 217, 29, 24, Blend::Textured),
+            GuiDraw::Item {
+                slot: 0,
+                x: 125,
+                y: 221,
+                seed: 1,
+                scale: [1.0, 1.0],
+                pivot: [0.0, 0.0],
+            },
+            GuiDraw::Item {
+                slot: 1,
+                x: 145,
+                y: 221,
+                seed: 2,
+                scale: [0.5, 1.5],
+                pivot: [153.0, 233.0],
+            },
+            GuiDraw::Item {
+                slot: 3,
+                x: 185,
+                y: 221,
+                seed: 4,
+                scale: [0.25, 2.5],
+                pivot: [193.0, 233.0],
+            },
+            GuiDraw::Item {
+                slot: 8,
+                x: 285,
+                y: 221,
+                seed: 9,
+                scale: [1.0, 1.0],
+                pivot: [0.0, 0.0],
+            },
+            GuiDraw::Item {
+                slot: 40,
+                x: 96,
+                y: 221,
+                seed: 10,
+                scale: [0.5, 1.5],
+                pivot: [104.0, 233.0],
+            },
+            expect_sprite(
+                "hud/hotbar_attack_indicator_background",
+                310,
+                220,
+                18,
+                18,
+                Blend::Textured,
+            ),
+            expect_region(
+                "hud/hotbar_attack_indicator_progress",
+                [18, 18, 0, 9],
+                310,
+                229,
+                18,
+                9,
+                Blend::Textured,
+            ),
+        ];
+        buf.push(sentinel.clone());
+        hotbar_into(427, 240, &hotbar_in, &mut buf);
+        assert_eq!(buf[0], sentinel);
+        assert_eq!(&buf[1..], &expected_hotbar[..]);
+        assert_eq!(
+            hotbar(427, 240, &hotbar_in).as_slice(),
+            &expected_hotbar[..]
+        );
+        let cap_after_hotbar = buf.capacity();
+        assert!(cap_after_hotbar >= buf.len());
+
+        // 2. crosshair_into (every sprite must use Blend::Crosshair)
+        let crosshair_plain = [expect_sprite(
+            "hud/crosshair",
+            206,
+            112,
+            15,
+            15,
+            Blend::Crosshair,
+        )];
+        let crosshair_charging = [
+            expect_sprite("hud/crosshair", 206, 112, 15, 15, Blend::Crosshair),
+            expect_sprite(
+                "hud/crosshair_attack_indicator_background",
+                205,
+                129,
+                16,
+                4,
+                Blend::Crosshair,
+            ),
+            expect_region(
+                "hud/crosshair_attack_indicator_progress",
+                [16, 4, 0, 0],
+                205,
+                129,
+                6,
+                4,
+                Blend::Crosshair,
+            ),
+        ];
+        let crosshair_full = [
+            expect_sprite("hud/crosshair", 206, 112, 15, 15, Blend::Crosshair),
+            expect_sprite(
+                "hud/crosshair_attack_indicator_full",
+                205,
+                129,
+                16,
+                16,
+                Blend::Crosshair,
+            ),
+        ];
+        for (attack, full, expected) in [
+            (None, false, crosshair_plain.as_slice()),
+            (Some(0.4), false, crosshair_charging.as_slice()),
+            (Some(1.0), true, crosshair_full.as_slice()),
+        ] {
+            buf.clear();
+            buf.push(sentinel.clone());
+            crosshair_into(427, 240, attack, full, &mut buf);
+            assert_eq!(buf[0], sentinel);
+            assert_eq!(&buf[1..], expected);
+            assert_eq!(crosshair(427, 240, attack, full).as_slice(), expected);
+            assert!(buf.capacity() >= cap_after_hotbar);
+        }
+
+        // 3. experience_into (w = 427, h = 240 -> left = 122, top = 211; text "17" at x = 207, y = 205)
+        let width = |s: &str| (s.len() as i32) * 6;
+        let expected_exp = [
+            expect_sprite(
+                "hud/experience_bar_background",
+                122,
+                211,
+                182,
+                5,
+                Blend::Textured,
+            ),
+            expect_region(
+                "hud/experience_bar_progress",
+                [182, 5, 0, 0],
+                122,
+                211,
+                118,
+                5,
+                Blend::Textured,
+            ),
+            expect_text("17", 208, 205, 0xFF00_0000),
+            expect_text("17", 206, 205, 0xFF00_0000),
+            expect_text("17", 207, 206, 0xFF00_0000),
+            expect_text("17", 207, 204, 0xFF00_0000),
+            expect_text("17", 207, 205, 0xFF80_FF20),
+        ];
+        buf.clear();
+        buf.push(sentinel.clone());
+        experience_into(427, 240, 0.65, 17, true, &width, &mut buf);
+        assert_eq!(buf[0], sentinel);
+        assert_eq!(&buf[1..], &expected_exp[..]);
+        assert_eq!(
+            experience(427, 240, 0.65, 17, true, &width).as_slice(),
+            &expected_exp[..]
+        );
+        assert!(buf.capacity() >= cap_after_hotbar);
+
+        // 4. experience_colored_into (Polytone opaque level & outline colours)
+        let expected_exp_colored = [
+            expect_sprite(
+                "hud/experience_bar_background",
+                122,
+                211,
+                182,
+                5,
+                Blend::Textured,
+            ),
+            expect_region(
+                "hud/experience_bar_progress",
+                [182, 5, 0, 0],
+                122,
+                211,
+                45,
+                5,
+                Blend::Textured,
+            ),
+            expect_text("42", 208, 205, 0xFF44_5566),
+            expect_text("42", 206, 205, 0xFF44_5566),
+            expect_text("42", 207, 206, 0xFF44_5566),
+            expect_text("42", 207, 204, 0xFF44_5566),
+            expect_text("42", 207, 205, 0xFF11_2233),
+        ];
+        buf.clear();
+        buf.push(sentinel.clone());
+        experience_colored_into(
+            [Some(0x112233), Some(0x445566)],
+            427,
+            240,
+            0.25,
+            42,
+            true,
+            &width,
+            &mut buf,
+        );
+        assert_eq!(buf[0], sentinel);
+        assert_eq!(&buf[1..], &expected_exp_colored[..]);
+        assert_eq!(
+            experience_colored(
+                [Some(0x112233), Some(0x445566)],
+                427,
+                240,
+                0.25,
+                42,
+                true,
+                &width,
+            )
+            .as_slice(),
+            &expected_exp_colored[..]
+        );
+        assert!(buf.capacity() >= cap_after_hotbar);
+
+        // 5. vehicle_health_into (15 hearts across 2 rows, 23 HP = 11 full + 1 half + 3 empty)
+        let mut expected_vehicle = Vec::new();
+        for i in 0..10 {
+            let xo = 295 - i * 8;
+            expected_vehicle.push(expect_sprite(
+                "hud/heart/vehicle_container",
+                xo,
+                201,
+                9,
+                9,
+                Blend::Textured,
+            ));
+            expected_vehicle.push(expect_sprite(
+                "hud/heart/vehicle_full",
+                xo,
+                201,
+                9,
+                9,
+                Blend::Textured,
+            ));
+        }
+        for (i, heart_fill) in [
+            (0, Some("hud/heart/vehicle_full")),
+            (1, Some("hud/heart/vehicle_half")),
+            (2, None),
+            (3, None),
+            (4, None),
+        ] {
+            let xo = 295 - i * 8;
+            expected_vehicle.push(expect_sprite(
+                "hud/heart/vehicle_container",
+                xo,
+                191,
+                9,
+                9,
+                Blend::Textured,
+            ));
+            if let Some(sprite_name) = heart_fill {
+                expected_vehicle.push(expect_sprite(sprite_name, xo, 191, 9, 9, Blend::Textured));
+            }
+        }
+        buf.clear();
+        buf.push(sentinel.clone());
+        vehicle_health_into(427, 240, 15, 23.0, &mut buf);
+        assert_eq!(buf[0], sentinel);
+        assert_eq!(&buf[1..], expected_vehicle.as_slice());
+        assert_eq!(vehicle_health(427, 240, 15, 23.0), expected_vehicle);
+        let cap_after_vehicle = buf.capacity();
+        assert!(cap_after_vehicle >= cap_after_hotbar);
+
+        // 6. HealthHud::layout_into (armor, hearts with regen bounce + absorption, food, air)
+        let health_in = HealthInputs {
+            tick: 28,
+            millis: 12_345,
+            health: 15.0,
+            max_health: 20.0,
+            absorption: 3.0,
+            armor: 13,
+            food: 15,
+            saturation: 0.0,
+            kind: HeartKind::Normal,
+            regeneration: true,
+            hunger: false,
+            hardcore: false,
+            damage_cooldown: true,
+            air: 181,
+            max_air: 300,
+            under_water: true,
+            vehicle_hearts: 0,
+        };
+        let mut expected_health = Vec::new();
+        // Armor: y = 201 - (2 - 1) * 10 - 10 = 181; 13 armor = 6 full, 1 half, 3 empty.
+        for n in 0..10 {
+            let name = match n {
+                0..=5 => "hud/armor_full",
+                6 => "hud/armor_half",
+                _ => "hud/armor_empty",
+            };
+            expected_health.push(expect_sprite(name, 122 + n * 8, 181, 9, 9, Blend::Textured));
+        }
+        // Hearts (top-right to bottom-left): 2 absorption (1 full + 1 half),
+        // 10 health (7 full + 1 half + 2 empty); regeneration offset_index = 28 % 25 = 3
+        // lifts heart 3 by 2px (y = 199).
+        let heart_rows: &[(i32, i32, Option<&'static str>)] = &[
+            (130, 191, Some("hud/heart/absorbing_half")),
+            (122, 191, Some("hud/heart/absorbing_full")),
+            (194, 201, None),
+            (186, 201, None),
+            (178, 201, Some("hud/heart/half")),
+            (170, 201, Some("hud/heart/full")),
+            (162, 201, Some("hud/heart/full")),
+            (154, 201, Some("hud/heart/full")),
+            (146, 199, Some("hud/heart/full")),
+            (138, 201, Some("hud/heart/full")),
+            (130, 201, Some("hud/heart/full")),
+            (122, 201, Some("hud/heart/full")),
+        ];
+        for &(x, y, heart_fill) in heart_rows {
+            expected_health.push(expect_sprite(
+                "hud/heart/container",
+                x,
+                y,
+                9,
+                9,
+                Blend::Textured,
+            ));
+            if let Some(sprite_name) = heart_fill {
+                expected_health.push(expect_sprite(sprite_name, x, y, 9, 9, Blend::Textured));
+            }
+        }
+        // Food: y = 201; 15 food = 7 full, 1 half, 2 empty (28 % 46 != 0 -> no wobble).
+        for n in 0..10 {
+            let x = 295 - n * 8;
+            expected_health.push(expect_sprite(
+                "hud/food_empty",
+                x,
+                201,
+                9,
+                9,
+                Blend::Textured,
+            ));
+            if n < 7 {
+                expected_health.push(expect_sprite(
+                    "hud/food_full",
+                    x,
+                    201,
+                    9,
+                    9,
+                    Blend::Textured,
+                ));
+            } else if n == 7 {
+                expected_health.push(expect_sprite(
+                    "hud/food_half",
+                    x,
+                    201,
+                    9,
+                    9,
+                    Blend::Textured,
+                ));
+            }
+        }
+        // Air: y = 191; air = 181 / 300 -> 6 full, 1 bursting (#7), 3 empty (#8..=10).
+        for b in 1..=10 {
+            let x = 295 - (b - 1) * 8;
+            let name = match b {
+                1..=6 => "hud/air",
+                7 => "hud/air_bursting",
+                _ => "hud/air_empty",
+            };
+            expected_health.push(expect_sprite(name, x, 191, 9, 9, Blend::Textured));
+        }
+
+        let mut hud_vec = HealthHud::default();
+        let mut hud_into = HealthHud::default();
+        buf.clear();
+        buf.push(sentinel.clone());
+        hud_into.layout_into(&health_in, 427, 240, &mut buf);
+        assert_eq!(buf[0], sentinel);
+        assert_eq!(&buf[1..], expected_health.as_slice());
+        assert_eq!(hud_vec.layout(&health_in, 427, 240), expected_health);
+        assert_eq!(hud_into.bubble_pop_sound, hud_vec.bubble_pop_sound);
+        assert!(hud_into.bubble_pop_sound.is_some());
+
+        // Subsequent clear + reuse keeps the high-water capacity without reallocating.
+        let cap_after_health = buf.capacity();
+        assert!(cap_after_health >= cap_after_vehicle);
+        buf.clear();
+        buf.push(sentinel.clone());
+        hotbar_into(427, 240, &hotbar_in, &mut buf);
+        assert_eq!(buf[0], sentinel);
+        assert_eq!(&buf[1..], &expected_hotbar[..]);
+        assert_eq!(buf.capacity(), cap_after_health);
+    }
+
+    #[test]
+    fn paint_handles_deep_pose_stack_effect_sprites_and_long_sprite_names() {
+        let mut atlas = test_atlas();
+        let white = atlas.white;
+        let long_name = format!("mod_long/{}", "x".repeat(140));
+        atlas
+            .sprites
+            .insert(format!("gui/sprites/{long_name}"), white);
+        atlas
+            .sprites
+            .insert("gui/sprites/hud/test_short".into(), white);
+        atlas.sprites.insert("mob_effect/speed".into(), white);
+
+        let draws = [
+            // Push 6 levels deep (exceeds SmallVec<[Pose; 4]> inline capacity).
+            GuiDraw::Push(vec![PoseOp::Translate(1.0, 2.0)]),
+            GuiDraw::Push(vec![PoseOp::Translate(2.0, 3.0)]),
+            GuiDraw::Push(vec![PoseOp::Translate(3.0, 4.0)]),
+            GuiDraw::Push(vec![PoseOp::Translate(4.0, 5.0)]),
+            GuiDraw::Push(vec![PoseOp::Translate(5.0, 6.0)]),
+            GuiDraw::Push(vec![PoseOp::Translate(6.0, 7.0)]),
+            sprite("hud/test_short", 0, 0, 8, 8),
+            GuiDraw::Sprite {
+                sprite: Cow::Owned(long_name),
+                x: 10,
+                y: 0,
+                w: 8,
+                h: 8,
+                region: None,
+                color: 0xFFFF_FFFF,
+                blend: Blend::Textured,
+            },
+            sprite("mob_effect/speed", 20, 0, 8, 8),
+            GuiDraw::Pop,
+            GuiDraw::Pop,
+            GuiDraw::Pop,
+            GuiDraw::Pop,
+            GuiDraw::Pop,
+            GuiDraw::Pop,
+            // Back at identity pose.
+            fill(0, 0, 4, 4, 0xFF11_2233),
+        ];
+
+        let mut batch = HudBatch::scratch([854, 480]);
+        paint(&mut batch, &atlas, &[]);
+        assert!(batch.vertices.is_empty());
+
+        paint(&mut batch, &atlas, &draws);
+        // 3 sprites + 1 fill = 4 quads = 24 vertices.
+        assert_eq!(batch.vertices.len(), 24);
+        // Cumulative translation of the 6 pushes is (21, 27).
+        assert_eq!(batch.vertices[0].pos, [21.0, 27.0]);
+        assert_eq!(batch.vertices[6].pos, [31.0, 27.0]);
+        assert_eq!(batch.vertices[12].pos, [41.0, 27.0]);
+        // After 6 pops, pose returns to identity.
+        assert_eq!(batch.vertices[18].pos, [0.0, 0.0]);
+        assert_eq!(batch.vertices[18].color, abgr(0xFF11_2233));
+
+        // Second paint into a fresh batch produces bit-identical vertices.
+        let mut expected = HudBatch::scratch([854, 480]);
+        paint(&mut expected, &atlas, &draws);
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&batch.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&expected.vertices),
+        );
+    }
+
+    #[test]
+    fn paint_with_scratch_matches_paint_and_reuses_glyph_scratch() {
+        let atlas = test_atlas();
+        let width = |s: &str| HudBatch::text_width(&atlas, s) as i32;
+        let draws_long = experience_colored([None; 2], 427, 240, 0.5, 12345, true, &width);
+        let draws_short = experience_colored([None; 2], 427, 240, 0.5, 42, true, &width);
+
+        let mut scratch = crate::hud::HudGlyphScratch::new();
+        let mut with_scratch = HudBatch::scratch([854, 480]);
+        paint_with_scratch(&mut with_scratch, &atlas, &draws_long, &mut scratch);
+        let cap = scratch.capacity();
+        assert!(!with_scratch.vertices.is_empty());
+        assert!(cap >= "12345".len());
+        assert!(scratch.is_empty());
+
+        let mut plain = HudBatch::scratch([854, 480]);
+        paint(&mut plain, &atlas, &draws_long);
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&with_scratch.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&plain.vertices),
+        );
+
+        // Subsequent shorter text draws reuse the warm scratch buffer without growing it.
+        with_scratch.reset(
+            [854, 480],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
+        paint_with_scratch(&mut with_scratch, &atlas, &draws_short, &mut scratch);
+        assert!(scratch.is_empty());
+        assert_eq!(scratch.capacity(), cap);
+
+        let mut plain_short = HudBatch::scratch([854, 480]);
+        paint(&mut plain_short, &atlas, &draws_short);
+        assert_eq!(
+            bytemuck::cast_slice::<HudVertex, u8>(&with_scratch.vertices),
+            bytemuck::cast_slice::<HudVertex, u8>(&plain_short.vertices),
+        );
+    }
+}
