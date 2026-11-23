@@ -150,7 +150,7 @@ pub(super) const LOOK_BYTES: u64 = 8;
 /// One vertex buffer of the arena; only the newest page grows.
 struct Page {
     buffer: wgpu::Buffer,
-    /// Optional shader-pack source records, indexed by the vertex index / 4.
+    /// Optional shader-pack source records, one a slot (a quad's at its first vertex).
     sources: Option<wgpu::Buffer>,
     /// A 0.2 shader pack's quad looks (`mesher::QuadLook`), one a slot, while it reads them.
     looks: Option<wgpu::Buffer>,
@@ -861,7 +861,8 @@ impl Arena {
         if used_end > 0 {
             encoder.copy_buffer_to_buffer(&old.buffer, 0, &buffer, 0, used_end * self.stride);
             if let (Some(from), Some(to)) = (&old.sources, &sources) {
-                let bytes = used_end / 4 * 8;
+                // One record a slot, as `write_sources` and `copy` place them.
+                let bytes = used_end * 8;
                 if bytes > 0 {
                     encoder.copy_buffer_to_buffer(from, 0, to, 0, bytes);
                 }
@@ -2180,6 +2181,58 @@ mod tests {
         for (q, expected) in unpacked_sources.iter().enumerate() {
             assert_eq!(read_unpacked[q * 4], *expected);
             assert_eq!(read_unpacked[q * 4 + 1], Default::default());
+        }
+    }
+
+    /// A page that grows keeps every range's sources, one record a slot (#19605): a quarter of
+    /// them came along, and the rest of the page's faces lost their block (`mc_Entity` -1).
+    #[test]
+    fn a_grown_page_keeps_every_slots_sources() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut arena = Arena::new(&device, 24, 4 * GRAIN, false);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut uploads = super::super::upload::Uploads::new(&device);
+        // Four ranges fill the first page; a fifth grows it.
+        let mut written = Vec::new();
+        for n in 0..5u32 {
+            let (page, start) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+            let sources: Vec<_> = (0..GRAIN as u32)
+                .map(|i| crate::mesher::TerrainSource::new(1000 * (n + 1) + i, [1, 2, 3], 4, false))
+                .collect();
+            arena.write_sources(
+                &device,
+                &mut encoder,
+                &mut uploads,
+                page,
+                start,
+                GRAIN,
+                &sources,
+            );
+            written.push((page, start, sources));
+        }
+        assert!(
+            written.iter().all(|w| w.0 == written[0].0),
+            "one page, grown"
+        );
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        for (n, (page, start, sources)) in written.iter().enumerate() {
+            let buffer = arena.sources(*page).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            wgpu::util::DownloadBuffer::read_buffer(
+                &device,
+                &queue,
+                &buffer.slice(start * 8..(start + GRAIN) * 8),
+                move |r| tx.send(r.unwrap().to_vec()).unwrap(),
+            );
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let read: Vec<crate::mesher::TerrainSource> =
+                bytemuck::pod_collect_to_vec(&rx.recv().unwrap());
+            assert_eq!(&read, sources, "range {n} at {start}");
         }
     }
 
