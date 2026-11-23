@@ -111,3 +111,82 @@ fn a_new_player_after_a_portal_keeps_the_old_ones_modifiers() {
     assert_eq!(read(&mut game, "minecraft:armor"), 0.0);
     assert_eq!(read(&mut game, "minecraft:armor_toughness"), 0.0);
 }
+
+/// #17703: a server that sets the attack speed after the login and before the first position
+/// (a 1.8 server behind a translation layer sends 1024 to remove the cooldown) reaches vanilla's
+/// `LocalPlayer`, made by `handleLogin`. Horizon makes the player at the position, and dropped
+/// what came before it on a first login, so the cooldown stayed and sprint hits went out
+/// without the slowdown the server applied.
+#[test]
+#[ignore = "daily"]
+fn attributes_sent_between_login_and_position_reach_the_new_player() {
+    use horizon_protocol::packets::play::{self, AttributeSnapshot, Clientbound as C};
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
+    game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+    let (pipe, _server) = horizon_protocol::connection::Pipe::pair();
+    game.connect_local(pipe, "Steve").unwrap();
+    game.handle_packet(C::Login(play::Login {
+        player_id: 7,
+        hardcore: false,
+        levels: vec!["minecraft:overworld".into()],
+        max_players: 20,
+        chunk_radius: 8,
+        simulation_distance: 8,
+        reduced_debug_info: false,
+        show_death_screen: true,
+        limited_crafting: false,
+        spawn: play::SpawnInfo {
+            dimension_type: 0,
+            dimension: "minecraft:overworld".into(),
+            seed: 1,
+            game_type: 0,
+            previous_game_type: None,
+            debug: false,
+            flat: false,
+            last_death: None,
+            portal_cooldown: 0,
+            sea_level: 63,
+        },
+        online_mode: false,
+        enforces_secure_chat: false,
+    }))
+    .unwrap();
+    assert!(game.player.is_none());
+    let speed = game.motion.attributes.id("minecraft:attack_speed").unwrap();
+    game.handle_packet(C::UpdateAttributes(play::UpdateAttributes {
+        id: 7,
+        values: vec![AttributeSnapshot {
+            attribute: speed.registry_id(),
+            base: 1024.0,
+            modifiers: Vec::new(),
+        }],
+    }))
+    .unwrap();
+    // More updates of another attribute before the position, past any count of updates a buffer
+    // could keep: each replaces only its own attribute, so the attack speed still arrives.
+    let armor = game.motion.attributes.id("minecraft:armor").unwrap();
+    for points in 1..=25 {
+        game.handle_packet(C::UpdateAttributes(play::UpdateAttributes {
+            id: 7,
+            values: vec![AttributeSnapshot {
+                attribute: armor.registry_id(),
+                base: f64::from(points),
+                modifiers: Vec::new(),
+            }],
+        }))
+        .unwrap();
+    }
+    game.handle_packet(C::PlayerPosition(play::PlayerPosition {
+        teleport: 1,
+        position: [0.5, 65.0, 0.5],
+        delta: [0.0; 3],
+        yaw: 0.0,
+        pitch: 0.0,
+        relatives: 0,
+    }))
+    .unwrap();
+    let player = game.player.as_mut().unwrap();
+    assert_eq!(player.attribute("minecraft:attack_speed").unwrap(), 1024.0);
+    assert_eq!(player.attribute("minecraft:armor").unwrap(), 25.0);
+}
