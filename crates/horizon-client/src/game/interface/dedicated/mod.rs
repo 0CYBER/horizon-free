@@ -2340,7 +2340,15 @@ impl Game<'_> {
             "say" if !rest.is_empty() => {
                 // SayCommand from the console: an unsigned system chat
                 // message of type say_command, logged as not secure.
-                let message = rest.join(" ");
+                let message = match self.console_say_message(line) {
+                    Ok(message) => message,
+                    Err(replies) => {
+                        for text in replies {
+                            self.console_reply(text);
+                        }
+                        return;
+                    }
+                };
                 // An RCON client's `say` is `[Rcon] message`, and its reply stays empty: the line is
                 // the console's own log, not a message to the source.
                 let name = if self.rcon_source { "Rcon" } else { "Server" };
@@ -2374,6 +2382,29 @@ impl Game<'_> {
                 }
             }
         }
+    }
+
+    /// The message of a console `say` line as `SayCommand` takes it: the line is parsed as the
+    /// dispatcher parses a player's, so a bad selector fails the command (the error lines are the
+    /// `Err`), and a good one becomes the names it selects.
+    fn console_say_message(&mut self, line: &str) -> std::result::Result<String, Vec<Text>> {
+        self.as_console_in_overworld(|g| {
+            let dispatcher = g.ui.dispatcher.0.clone();
+            let parse = dispatcher.parse(line, &g.ui.registries);
+            match parse.executable() {
+                Ok((ctx, _)) => match ctx.get("message") {
+                    Some(horizon_client::command::Arg::Str(s)) => {
+                        Ok(g.expand_selectors(s).plain())
+                    }
+                    _ => Ok(line.split_whitespace().skip(1).collect::<Vec<_>>().join(" ")),
+                },
+                Err(e) => {
+                    g.chat_capture = Some(Vec::new());
+                    g.syntax_failure(&e, line);
+                    Err(g.chat_capture.take().unwrap_or_default())
+                }
+            }
+        })
     }
 
     fn console_whitelist(&mut self, state: &mut ServerState, rest: &[&str]) {
@@ -3365,5 +3396,73 @@ mod console_source_tests {
         );
         // The console's source is put back after each line.
         assert!(game.command_source.is_none());
+    }
+
+    /// `say` at the console: the message goes through `MessageArgument`, as a player's does. A selector
+    /// becomes the names it selects (none for the console's own `@s`), and a bad one fails the command
+    /// instead of reaching the players as the text that was typed.
+    #[test]
+    #[ignore = "daily"]
+    fn the_consoles_say_resolves_and_checks_its_selectors() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
+        );
+        let settings = Settings::default();
+        let loaded = load_resources(
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            crate::game::execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut resources = None;
+        let res = resources.insert(loaded.resources);
+        let mut game = Game::new(
+            res,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.clone(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert_eq!(game.console_say_message("say hello"), Ok("hello".to_owned()));
+        assert_eq!(
+            game.console_say_message("say hello @s").map(|m| m.trim_end().to_owned()),
+            Ok("hello".to_owned())
+        );
+        let (ok, _) = console(&mut game, "summon pig 0 80 0 {NoAI:1b}");
+        assert!(ok);
+        assert_eq!(
+            game.console_say_message("say hi @e[type=pig]"),
+            Ok("hi Pig".to_owned())
+        );
+        let failed = game
+            .console_say_message("say @e[type=nothing]")
+            .expect_err("an unknown entity type fails the command");
+        assert_eq!(
+            failed.first().map(|t| t.plain()).as_deref(),
+            Some("Invalid or unknown entity type 'minecraft:nothing'")
+        );
     }
 }

@@ -626,6 +626,19 @@ impl Hub {
         }
     }
 
+    /// MsgCommand.sendMessage from a source that is no player (the console, a command block): the
+    /// incoming line for each target, an unsigned disguised chat bound to the source's name.
+    pub fn whisper_from_source(&self, targets: &[usize], name: Tag, text: &str) {
+        let bound = play::ChatTypeBound {
+            chat_type: self.chat_type_id("msg_command_incoming"),
+            name,
+            target: None,
+        };
+        for &t in targets {
+            self.send_disguised(t, literal(text), bound.clone());
+        }
+    }
+
     /// A chat type's registry id.
     fn chat_type_id(&self, name: &str) -> i32 {
         self.sync
