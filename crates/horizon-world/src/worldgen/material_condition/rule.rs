@@ -633,6 +633,13 @@ pub struct CompiledSurfaceRule<R: RandomSource> {
     noises: Vec<((String, bool), Arc<dyn Noise>)>,
     densities: Vec<DensityBinding>,
 }
+impl<R: RandomSource> CompiledSurfaceRule<R> {
+    /// Whether binding this compiled rule to a worker samples any density
+    /// eagerly.
+    pub(crate) fn has_eager_density_bindings(&self) -> bool {
+        self.densities.iter().any(|(_, eager, _)| *eager)
+    }
+}
 /// A density a rule binds: its root, whether it is sampled over the volume,
 /// and the rows it is read at.
 type DensityBinding = (Arc<dyn DensitySampler>, bool, [i32; 2]);

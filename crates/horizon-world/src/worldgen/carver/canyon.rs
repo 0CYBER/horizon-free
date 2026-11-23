@@ -98,13 +98,22 @@ impl CanyonCarver {
         if end > 4096 {
             return Err(CarverError::IterationLimit);
         }
-        let mut width = Vec::with_capacity(context.height as usize);
+        let height = context.height as usize;
+        // Vanilla heights (<= 1024) stay on the stack; taller custom heights spill.
+        let mut stack_width = [0f32; 1024];
+        let mut heap_width = Vec::new();
+        let width: &mut [f32] = if height <= stack_width.len() {
+            &mut stack_width[..height]
+        } else {
+            heap_width.resize(height, 0f32);
+            &mut heap_width
+        };
         let mut factor = 1f32;
-        for index in 0..context.height {
+        for (index, slot) in width.iter_mut().enumerate() {
             if index == 0 || local.next_int_bound(self.shape.width_smoothness)? == 0 {
                 factor = 1. + local.next_float() * local.next_float();
             }
-            width.push(factor * factor);
+            *slot = factor * factor;
         }
         let (mut yaw_change, mut pitch_change) = (0f32, 0f32);
         let mut budget = 1 << 24;
@@ -158,4 +167,66 @@ fn scalar(object: &Object, name: &'static str) -> Result<f32, DecodeError> {
     number_text(required(object, name)?)?
         .parse()
         .map_err(|_| DecodeError::Field(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worldgen::anchor::VerticalAnchor;
+    use horizon_core::carving::CarvingMask;
+
+    #[test]
+    fn stack_and_heap_width_buffers_carve_across_height_boundary() {
+        let make_carver = |y: i32| CanyonCarver {
+            probability: 1.0,
+            y: HeightProvider::Constant(VerticalAnchor::Absolute(y)),
+            vertical_rotation: FloatProvider::Constant(0.0),
+            shape: CanyonShape {
+                distance_factor: FloatProvider::Constant(1.0),
+                thickness: FloatProvider::Constant(3.0),
+                width_smoothness: 3,
+                horizontal_radius_factor: FloatProvider::Constant(1.0),
+                vertical_radius_default_factor: 1.0,
+                vertical_radius_center_factor: 0.0,
+                y_scale: FloatProvider::Constant(3.0),
+            },
+        };
+        let target = ChunkPos::new(0, 0);
+        // Exercise inline stack buffer (384, 1024) and heap-spill buffer (1025),
+        // including cells at y = 1025 that index the spilled slot width[1024].
+        for (height, start_y, min_y, max_y) in [
+            (384, 32, 0, 64),
+            (1024, 1018, 992, 1024),
+            (1025, 1020, 992, 1025),
+        ] {
+            let carver = make_carver(start_y);
+            let context = WorldGenerationContext::new(0, height, 63);
+            let mut mask_a = CarvingMask::new(min_y, max_y).unwrap();
+            let mut mask_b = CarvingMask::new(min_y, max_y).unwrap();
+            let mut rng_a = LegacyRandom::new(99);
+            let mut rng_b = LegacyRandom::new(99);
+            assert!(
+                carver
+                    .carve(context, &mut rng_a, target, target, &mut mask_a)
+                    .unwrap()
+            );
+            assert!(
+                carver
+                    .carve(context, &mut rng_b, target, target, &mut mask_b)
+                    .unwrap()
+            );
+            let cols_a: Vec<_> = mask_a.columns().collect();
+            let cols_b: Vec<_> = mask_b.columns().collect();
+            assert!(
+                !cols_a.is_empty(),
+                "expected canyon cells for height={height}"
+            );
+            assert!(
+                cols_a.iter().any(|c| c.max_y >= start_y),
+                "expected canyon cells near start_y={start_y} for height={height}"
+            );
+            assert_eq!(cols_a, cols_b);
+            assert_eq!(rng_a.state(), rng_b.state());
+        }
+    }
 }
