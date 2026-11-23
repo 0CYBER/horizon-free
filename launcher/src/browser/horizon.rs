@@ -902,23 +902,27 @@ fn fetch_datapack_from(
     Ok((path, v.version.clone()))
 }
 
-/// A project's newest version for this game that wasn't taken down and, for a shader pack, is
-/// for a shader API line the installed game serves.
+/// A project's newest version for this game that wasn't taken down, asks for no capability this
+/// Horizon doesn't know (as [`Index::installable`], which the page and automatic updates go by)
+/// and, for a shader pack, is for a shader API line the installed game serves.
 fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version, String> {
-    let (mut taken_down, mut other_api) = (None, None);
+    let (mut taken_down, mut other_api, mut earlier) = (None, None, None);
     for v in p.versions.iter().filter(|v| v.game == GAME) {
         if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
             taken_down.get_or_insert(r);
+        } else if let Some(why) = unsupported_capabilities(&v.capabilities) {
+            earlier.get_or_insert(why);
         } else if needs_other_shader_api(p, v) {
             other_api.get_or_insert(v.api.as_str());
         } else {
             return Ok(v);
         }
     }
-    Err(match (taken_down, other_api) {
-        (_, Some(api)) => format!("{} {}.", p.name, other_shader_api(api)),
-        (Some(r), None) => format!("{} was taken down: {}", p.name, r.reason),
-        (None, None) => format!("{} has no version for {GAME} to install.", p.name),
+    Err(match (taken_down, other_api, earlier) {
+        (_, Some(api), _) => format!("{} {}.", p.name, other_shader_api(api)),
+        (_, None, Some(why)) => format!("{}: {why}.", p.name),
+        (Some(r), None, None) => format!("{} was taken down: {}", p.name, r.reason),
+        (None, None, None) => format!("{} has no version for {GAME} to install.", p.name),
     })
 }
 

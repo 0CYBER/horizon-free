@@ -634,6 +634,42 @@ fn marked_and_not_installed() {
     fs::remove_dir_all(&home).unwrap();
 }
 
+/// A newer version that asks for a capability this Horizon doesn't know is passed over by an
+/// install, as the page and automatic updates pass it over (`installable`): Install takes the
+/// newest version the game can load, and says why when there is none.
+#[test]
+fn install_passes_over_a_newer_version_this_horizon_cant_load() {
+    let mut index = sample();
+    let entry = index
+        .projects
+        .iter_mut()
+        .find(|p| p.id == "coords_hud")
+        .unwrap();
+    entry.versions[0].game = GAME.into();
+    let loadable = entry.versions[0].version.clone();
+    let mut newer = entry.versions[0].clone();
+    newer.version = "9.0.0".into();
+    newer.capabilities = vec!["game-read".to_string()].into();
+    newer.file.sha256 = "1".repeat(64);
+    entry.versions.insert(0, newer);
+    let p = index.project("coords_hud").unwrap();
+    assert_eq!(installable(&index, p).unwrap().version, loadable);
+    assert_eq!(newest(&index, p).unwrap().version, loadable);
+    let home = scratch("unknown-capability");
+    let done = install_from(&index, true, &hud(&index), &home, &|_, _| {}).unwrap();
+    assert_eq!(done[0].version, loadable);
+    fs::remove_dir_all(&home).unwrap();
+    let mut only = index.clone();
+    only.projects
+        .iter_mut()
+        .find(|p| p.id == "coords_hud")
+        .unwrap()
+        .versions
+        .truncate(1);
+    let e = newest(&only, only.project("coords_hud").unwrap()).unwrap_err();
+    assert!(e.contains("earlier mod system (game-read)"), "{e}");
+}
+
 /// A newer version for a shader API the installed game doesn't serve above one for a line it
 /// does: the one that runs is picked, installed and updated to.
 #[test]
