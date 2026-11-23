@@ -1,4 +1,5 @@
 use crate::item::crafting::{IngredientRule, Shape};
+use horizon_core::identifier::parse_or_keep;
 use serde_json::Value;
 use std::collections::HashSet;
 /// Where `Ingredient::resolve` leaves the hook's answer inside the occurrence
@@ -122,8 +123,11 @@ impl WalkedIngredient {
         let mut named = false;
         let mut add = |s: &str| {
             named = true;
+            // `TagKey.hashedCodec` reads the tag name via `Identifier.read`:
+            // a bare `#tag` names `minecraft`'s, matching the canonical keys
+            // the tag table holds.
             let more: Vec<String> = match s.strip_prefix('#') {
-                Some(tag) => match tags.get(tag) {
+                Some(tag) => match tags.get(&parse_or_keep(tag)) {
                     Some(items) => items.clone(),
                     None => {
                         valid = false;
@@ -258,7 +262,9 @@ impl WalkedIngredient {
                 if tag.contains('#') {
                     return None;
                 }
-                let mut list = block_tags(tag)?;
+                // `BlockTagIngredient` reads the tag via `TagKey.hashedCodec`
+                // (`Identifier.read`): a bare name is `minecraft`'s.
+                let mut list = block_tags(&parse_or_keep(tag))?;
                 dedup_keep_order(&mut list);
                 return Some(Self::flat(list));
             }
@@ -339,5 +345,33 @@ impl WalkedIngredient {
             rule: None,
             display: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// `TagKey.hashedCodec` reads the tag name via `Identifier.read`:
+    /// a bare `#planks` names `minecraft:planks`, matching the canonical
+    /// key the tag table holds.
+    #[test]
+    fn bare_tag_names_minecrafts() {
+        let mut tags = HashMap::new();
+        tags.insert(
+            "minecraft:planks".to_owned(),
+            vec!["minecraft:oak_planks".to_owned()],
+        );
+        let v: Value = serde_json::json!("#planks");
+        let walked =
+            WalkedIngredient::walk_resolved(&v, &tags, &|_| None, &|_| None, &|_| None, &|id| {
+                Some(id.to_owned())
+            });
+        assert!(
+            walked.is_some(),
+            "bare #planks should resolve to minecraft:planks"
+        );
+        assert_eq!(walked.unwrap().order, ["minecraft:oak_planks"]);
     }
 }

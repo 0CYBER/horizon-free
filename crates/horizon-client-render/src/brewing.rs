@@ -7,6 +7,7 @@ use crate::{
     items::{ItemStack, Items},
     providers::Providers,
 };
+use horizon_core::identifier::parse_or_keep;
 use horizon_world::loot::PackOverlay;
 use serde_json::Value;
 use std::{collections::HashSet, path::Path};
@@ -217,10 +218,21 @@ pub struct PotionIngredient {
 impl PotionIngredient {
     fn parse(v: &Value, items: &Items) -> Self {
         let mut set = HashSet::new();
+        // `Ingredient.CODEC` reads each id through `HolderSetCodec` (`TagKey.hashedCodec`
+        // for tags, `Item.CODEC` for items): a bare id or `#tag` names `minecraft`'s.
         let add = |s: &str, set: &mut HashSet<String>| match s.strip_prefix('#') {
-            Some(tag) => set.extend(items.item_tags.get(tag).into_iter().flatten().cloned()),
+            Some(tag) => {
+                set.extend(
+                    items
+                        .item_tags
+                        .get(&parse_or_keep(tag))
+                        .into_iter()
+                        .flatten()
+                        .cloned(),
+                );
+            }
             None => {
-                set.insert(s.to_owned());
+                set.insert(parse_or_keep(s));
             }
         };
         match &v["item"] {
@@ -288,8 +300,10 @@ impl Brewing {
             if v["type"] != "minecraft:brewing" {
                 continue;
             }
+            // `ItemStackTemplate.CODEC` reads the output id via `Item.CODEC`,
+            // which reads via `Identifier.parse`: a bare id names `minecraft`'s.
             let mut output = ItemStack::new(
-                v["output"]["id"].as_str().unwrap_or("minecraft:potion"),
+                &parse_or_keep(v["output"]["id"].as_str().unwrap_or("minecraft:potion")),
                 v["output"]["count"].as_u64().unwrap_or(1) as u32,
             );
             if let Some(potion) =
@@ -636,6 +650,48 @@ mod tests {
         let recipes = Brewing::load(&root, &items, &PackOverlay::new(&files));
         assert_eq!(recipes.recipes.len(), 1);
         assert_eq!(&*recipes.recipes[0].output.item, "minecraft:emerald");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `Ingredient.CODEC` (`HolderSetCodec`): a bare item id or `#tag` names
+    /// `minecraft`'s, so `nether_wart` matches `minecraft:nether_wart` and
+    /// `#planks` resolves the `minecraft:planks` tag.
+    #[test]
+    fn bare_ingredient_ids_name_minecrafts() {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert(
+            "minecraft:planks".to_owned(),
+            ["minecraft:oak_planks".to_owned()]
+                .into_iter()
+                .collect::<HashSet<_>>(),
+        );
+        let items = Items::for_tests(tags);
+        let item = PotionIngredient::parse(&serde_json::json!({"item": "nether_wart"}), &items);
+        assert!(item.test(&ItemStack::new("minecraft:nether_wart", 1)));
+        let tag = PotionIngredient::parse(&serde_json::json!({"item": "#planks"}), &items);
+        assert!(tag.test(&ItemStack::new("minecraft:oak_planks", 1)));
+        assert!(!tag.test(&ItemStack::new("minecraft:stone", 1)));
+    }
+
+    /// `ItemStackTemplate.CODEC` reads `output.id` via `Item.CODEC`: a bare id
+    /// names `minecraft`'s.
+    #[test]
+    fn bare_output_id_names_minecrafts() {
+        let root = content_brewing_root("bare-output", "");
+        std::fs::create_dir_all(root.join("data/minecraft/recipe/brewing")).unwrap();
+        std::fs::write(
+            root.join("data/minecraft/recipe/brewing/bare.json"),
+            br#"{"type":"minecraft:brewing","output":{"id":"emerald"}}"#,
+        )
+        .unwrap();
+        let items = Items::for_tests(Default::default());
+        let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);
+        let bare = recipes
+            .recipes
+            .iter()
+            .find(|r| r.id == "minecraft:brewing/bare")
+            .unwrap();
+        assert_eq!(&*bare.output.item, "minecraft:emerald");
         std::fs::remove_dir_all(root).unwrap();
     }
 

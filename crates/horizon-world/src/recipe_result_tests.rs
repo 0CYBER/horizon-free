@@ -41,3 +41,68 @@ fn an_item_id_written_without_a_namespace_names_minecraft() {
     // An id `Identifier.parse` refuses stays as written; the load decides whether it loads.
     assert_eq!(id(r#""Stick""#).as_deref(), Some("Stick"));
 }
+
+/// `SmeltItemFunction.run` looks up a smelting recipe whose ingredient
+/// `AbstractCookingRecipe` read via `Ingredient.CODEC` (`HolderSetCodec`):
+/// a bare id or `#tag` names `minecraft`'s, so the list `["iron_ore"]` smelts
+/// `minecraft:iron_ore` and `#ores` resolves the `minecraft:ores` tag.
+#[test]
+fn bare_smelting_ingredient_names_minecrafts() {
+    let root = std::env::temp_dir().join(format!("loot-smelt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let recipe_dir = root.join("data/minecraft/recipe");
+    std::fs::create_dir_all(&recipe_dir).unwrap();
+    std::fs::write(
+        recipe_dir.join("bare.json"),
+        r#"{"type":"minecraft:smelting","ingredient":["iron_ore"],"result":{"id":"minecraft:iron_ingot","count":1}}"#,
+    )
+    .unwrap();
+    let tag_dir = root.join("data/minecraft/tags/item");
+    std::fs::create_dir_all(&tag_dir).unwrap();
+    std::fs::write(
+        tag_dir.join("ores.json"),
+        r#"{"values":["minecraft:copper_ore"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        recipe_dir.join("tag.json"),
+        r##"{"type":"minecraft:smelting","ingredient":"#ores","result":{"id":"minecraft:copper_ingot","count":1}}"##,
+    )
+    .unwrap();
+    let loot_dir = root.join("data/minecraft/loot_table");
+    std::fs::create_dir_all(&loot_dir).unwrap();
+    for (name, item) in [
+        ("iron_ore", "minecraft:iron_ore"),
+        ("copper_ore", "minecraft:copper_ore"),
+    ] {
+        std::fs::write(
+            loot_dir.join(format!("{name}.json")),
+            format!(
+                r#"{{"pools":[{{"rolls":1,"entries":[{{"type":"minecraft:item","name":"{item}","modifier":[{{"type":"minecraft:furnace_smelt"}}]}}]}}]}}"#
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("items.json"), "{}").unwrap();
+    let defaults = crate::item_defaults::read(&root).unwrap();
+    let data = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
+    let drops = data.roll(
+        "minecraft:iron_ore",
+        &mut LegacyRandom::new(1),
+        0.0,
+        None,
+        None,
+    );
+    assert_eq!(drops.len(), 1);
+    assert_eq!(&*drops[0].item, "minecraft:iron_ingot");
+    let drops = data.roll(
+        "minecraft:copper_ore",
+        &mut LegacyRandom::new(1),
+        0.0,
+        None,
+        None,
+    );
+    assert_eq!(drops.len(), 1);
+    assert_eq!(&*drops[0].item, "minecraft:copper_ingot");
+    let _ = std::fs::remove_dir_all(&root);
+}
