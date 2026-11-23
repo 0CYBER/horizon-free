@@ -104,6 +104,7 @@ impl Launcher {
                 cmd.envs(vars.iter().map(|(k, v)| (k, v)));
                 Ok(())
             };
+            self.client_build = Some(tag.clone());
             self.starting_client = Some(tag);
             // The jar phase keeps the row of the started instance on Starting.
             self.starting_instance = run.clone();

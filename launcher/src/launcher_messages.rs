@@ -517,7 +517,23 @@ impl Launcher {
                             } else {
                                 None
                             };
+                            // The game may have changed its graphics settings, or the launcher
+                            // just did: the instance's notice is read again.
+                            self.api_notice.replace(None);
                             if let Some((crashed, api)) = switched {
+                                let line = format!(
+                                    "Horizon launcher: the {crashed} renderer crashed while starting in {}, so graphicsApi was switched from auto to {api}",
+                                    home.display()
+                                );
+                                // Windows only, as the record and the notice are.
+                                if std::env::consts::OS == "windows" {
+                                    eprintln!("{line}");
+                                    console_page::keep_line(
+                                        &mut self.prepare_log,
+                                        &mut self.log_revision,
+                                        line,
+                                    );
+                                }
                                 self.client_error = Some(trf(
                                     "Horizon's {crashed} renderer crashed while starting on this \
                                      graphics card, so the game now uses {api}. Press Play to \

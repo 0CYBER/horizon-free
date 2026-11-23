@@ -16,7 +16,8 @@ impl Launcher {
             .client_home
             .clone()
             .unwrap_or_else(|| game_home.clone());
-        match backend::switch_after_start_crash(&run_home, &game_home, api) {
+        let build = self.client_build.as_deref().unwrap_or_default();
+        match backend::switch_after_start_crash(&run_home, &game_home, api, build) {
             Ok(switched) => switched.then_some((crashed.label(), label)),
             Err(e) => {
                 eprintln!("Horizon launcher: could not switch to {label}: {e}");
@@ -490,6 +491,7 @@ impl Launcher {
         // round trip when the token needs renewing) come first; `drain` starts the game when the
         // session arrives.
         self.starting_client = Some(tag.clone());
+        self.client_build = Some(tag.clone());
         self.starting_instance = instance_id.clone();
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();

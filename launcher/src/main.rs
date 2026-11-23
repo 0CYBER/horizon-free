@@ -250,6 +250,8 @@ enum Load<T> {
 }
 
 const LOG_LINES: usize = 2000;
+/// A game folder and the graphics API notice it is due.
+type ApiNoticeOf = (std::path::PathBuf, Option<backend::api_fallback::Notice>);
 
 struct Launcher {
     theme: Theme,
@@ -461,6 +463,12 @@ struct Launcher {
     client_started: Option<std::time::SystemTime>,
     /// The folder the running game keeps its settings in: the game home, or a modpack's.
     client_home: Option<std::path::PathBuf>,
+    /// The Horizon version the last game was started as, for the record of a graphics API
+    /// switched after its start crash (`backend::api_fallback`).
+    client_build: Option<String>,
+    /// A game folder's graphics API notice, read once (`Self::api_notice`); emptied when a game
+    /// ends or the player answers.
+    api_notice: std::cell::RefCell<Option<ApiNoticeOf>>,
     crash: Option<Crash>,
     /// The Servers page (`servers_page.rs`).
     servers: servers_page::Servers,

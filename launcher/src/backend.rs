@@ -55,6 +55,7 @@ pub struct Release {
     pub nightly: Option<String>,
 }
 
+pub mod api_fallback;
 mod look_settings;
 mod play_log;
 mod release_assets;
@@ -2948,18 +2949,33 @@ pub fn native_crash_exit(status: std::process::ExitStatus) -> bool {
 
 /// Switches the crashed run's home from Auto to `api`, and only when it was on Auto the game home
 /// too: the GPU is the same for every profile, while an instance that chose its own API keeps
-/// every home as it is. True when the run's home changed.
+/// every home as it is. True when the run's home changed. Each home that changed to DirectX 12
+/// records the switch and the game version `build` that crashed (`api_fallback`), so its
+/// instance can show it and offer the way back; a record that can't be written changes nothing
+/// else.
 pub fn switch_after_start_crash(
     run_home: &Path,
     game_home: &Path,
     api: &str,
+    build: &str,
 ) -> Result<bool, String> {
     if !switch_from_auto(run_home, api)? {
         return Ok(false);
     }
+    let record = |home: &Path| {
+        if api != "dx12" {
+            return;
+        }
+        if let Err(e) = api_fallback::record_switch(home, "auto", api, build) {
+            eprintln!("Horizon launcher: could not record the switch to {api}: {e}");
+        }
+    };
+    record(run_home);
     if game_home != run_home {
-        if let Err(e) = switch_from_auto(game_home, api) {
-            eprintln!("Horizon launcher: could not switch the game home to {api}: {e}");
+        match switch_from_auto(game_home, api) {
+            Ok(true) => record(game_home),
+            Ok(false) => {}
+            Err(e) => eprintln!("Horizon launcher: could not switch the game home to {api}: {e}"),
         }
     }
     Ok(true)
@@ -5772,19 +5788,56 @@ pub fn {f}("
         fs::create_dir_all(&game).unwrap();
         fs::write(run.join(GRAPHICS_FILE), "graphicsApi:opengl\n").unwrap();
         fs::write(game.join(GRAPHICS_FILE), "graphicsApi:auto\n").unwrap();
-        assert_eq!(switch_after_start_crash(&run, &game, "dx12"), Ok(false));
+        assert_eq!(
+            switch_after_start_crash(&run, &game, "dx12", "nightly-1"),
+            Ok(false)
+        );
         assert_eq!(
             fs::read_to_string(game.join(GRAPHICS_FILE)).unwrap(),
             "graphicsApi:auto\n"
         );
+        assert!(!run.join(api_fallback::FILE).exists());
+        assert!(!game.join(api_fallback::FILE).exists());
         // On Auto, the run's home and the game home both switch.
         fs::write(run.join(GRAPHICS_FILE), "graphicsApi:auto\n").unwrap();
-        assert_eq!(switch_after_start_crash(&run, &game, "dx12"), Ok(true));
+        assert_eq!(
+            switch_after_start_crash(&run, &game, "dx12", "nightly-1"),
+            Ok(true)
+        );
         for home in [&run, &game] {
             assert_eq!(
                 fs::read_to_string(home.join(GRAPHICS_FILE)).unwrap(),
                 "graphicsApi:dx12\n"
             );
+            // Each home that switched says so, and asks its instance's player about it.
+            let switch = api_fallback::read(home).switch.unwrap();
+            assert_eq!(
+                (
+                    switch.from.as_str(),
+                    switch.to.as_str(),
+                    switch.build.as_str()
+                ),
+                ("auto", "dx12", "nightly-1")
+            );
+            assert!(api_fallback::notice(home, "windows").is_some());
+        }
+        // Linux's switch to OpenGL stays as it was: no record and no notice.
+        for home in [&run, &game] {
+            fs::write(
+                home.join(GRAPHICS_FILE),
+                "graphicsApi:auto
+",
+            )
+            .unwrap();
+            fs::remove_file(home.join(api_fallback::FILE)).unwrap();
+        }
+        assert_eq!(
+            switch_after_start_crash(&run, &game, "opengl", "nightly-1"),
+            Ok(true)
+        );
+        for home in [&run, &game] {
+            assert!(!home.join(api_fallback::FILE).exists());
+            assert_eq!(api_fallback::notice(home, "linux"), None);
         }
         let _ = fs::remove_dir_all(&root);
     }

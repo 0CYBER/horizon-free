@@ -209,6 +209,8 @@ impl Launcher {
             client_error: None,
             client_started: None,
             client_home: None,
+            client_build: None,
+            api_notice: Default::default(),
             crash: None,
             servers: servers_page::Servers::new(),
             internet: internet::Internet::new(),
