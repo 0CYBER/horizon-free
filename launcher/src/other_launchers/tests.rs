@@ -429,3 +429,33 @@ fn curseforge_instances_read_their_version_and_loader() {
     assert_eq!(modrinth[0].minecraft, None);
     let _ = fs::remove_dir_all(&root);
 }
+
+#[cfg(unix)]
+#[test]
+fn copying_an_instance_leaves_its_links_behind() {
+    let root = scratch("links");
+    let private = root.join("private.txt");
+    fs::write(&private, "secret").unwrap();
+    let game = root.join("game");
+    fs::create_dir_all(game.join("config")).unwrap();
+    fs::write(game.join("servers.dat"), "own").unwrap();
+    std::os::unix::fs::symlink(&private, game.join("options.txt")).unwrap();
+    std::os::unix::fs::symlink(&private, game.join("config/inner.txt")).unwrap();
+    std::os::unix::fs::symlink(&root, game.join("saves")).unwrap();
+    let found = Found {
+        launcher: "Prism Launcher",
+        name: "x".into(),
+        minecraft: None,
+        loader: None,
+        game,
+        shared: false,
+    };
+    let to = root.join("to");
+    copy_game(&found, &to).unwrap();
+    assert_eq!(fs::read_to_string(to.join("servers.dat")).unwrap(), "own");
+    assert!(to.join("config").is_dir());
+    for gone in ["options.txt", "config/inner.txt", "saves"] {
+        assert!(to.join(gone).symlink_metadata().is_err(), "{gone}");
+    }
+    let _ = fs::remove_dir_all(&root);
+}

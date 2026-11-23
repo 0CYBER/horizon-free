@@ -547,11 +547,30 @@ pub fn copy_game(found: &Found, to: &Path) -> std::io::Result<()> {
         if !wanted {
             continue;
         }
-        if entry.file_type()?.is_dir() {
-            crate::backend::copy_dir(&entry.path(), &to.join(name.as_ref()))?;
-        } else {
-            fs::copy(entry.path(), to.join(name.as_ref()))?;
+        copy_entry(&entry.path(), &to.join(name.as_ref()), entry.file_type()?)?;
+    }
+    Ok(())
+}
+
+/// Copies one file or folder of another launcher's instance. A link is left out: the folder may
+/// come from an archive, and a link in it could carry a file of the player's from elsewhere
+/// into the new instance (and from there into an export).
+fn copy_entry(from: &Path, to: &Path, kind: fs::FileType) -> std::io::Result<()> {
+    if kind.is_symlink() {
+        return Ok(());
+    }
+    if kind.is_dir() {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            copy_entry(
+                &entry.path(),
+                &to.join(entry.file_name()),
+                entry.file_type()?,
+            )?;
         }
+    } else {
+        fs::copy(from, to)?;
     }
     Ok(())
 }
