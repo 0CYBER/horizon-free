@@ -518,10 +518,13 @@ impl Goal for TakeBlock {
         {
             return;
         }
+        // Enderman.takeBlock: the carried block is normalized to its
+        // default state; the BLOCK_DESTROY event below keeps the real one.
+        let carried = cx.w.registry.default_state(&name).unwrap_or(state);
         cx.events.push(MobEvent::TakeBlock {
             mob: m.id,
             pos: [x, y, z],
-            state,
+            state: carried,
         });
         // level.gameEvent(BLOCK_DESTROY, pos, Context.of(enderman, blockState)).
         cx.events.push(MobEvent::GameEvent {
@@ -530,7 +533,7 @@ impl Goal for TakeBlock {
             source: m.id,
             state,
         });
-        m.extra.carried = Some(state);
+        m.extra.carried = Some(carried);
     }
 }
 /// EndermanLeaveBlockGoal
