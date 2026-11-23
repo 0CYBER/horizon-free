@@ -5,10 +5,20 @@
 use super::wire::{
     Connection, RsaPrivateKey, login, offline_uuid, random_bytes, server_hash, translated_json,
 };
-use std::time::Duration;
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 /// The account service's discovery document; `HORIZON_API_DISCOVERY` names another one, as the game's does.
 const DISCOVERY: &str = "https://discovery.minecraftservices.com/minecraft/client";
+
+/// How long the verify endpoint from the discovery document is kept: every login would otherwise fetch the
+/// document again, doubling the calls to the account service.
+const DISCOVERY_TTL: Duration = Duration::from_secs(300);
+
+/// The verify endpoint last found, with the discovery URL it came from and when.
+static VERIFY_ENDPOINT: Mutex<Option<(String, String, Instant)>> = Mutex::new(None);
 
 /// Who is joining, as the account service (or the offline name) says.
 pub struct Profile {
@@ -108,10 +118,20 @@ fn discovery_url() -> String {
         .unwrap_or_else(|| DISCOVERY.to_owned())
 }
 
-/// HasJoinedMinecraftServer: `Ok(None)` when the player did not join with this hash.
-fn has_joined(name: &str, hash: &str) -> Result<Option<Profile>, String> {
+/// The session service's verify endpoint, from the discovery document at `discovery` (kept for a while).
+fn verify_endpoint(discovery: &str) -> Result<String, String> {
+    // The lock is not held over the request: logins must not queue behind a slow account service.
+    if let Some((from, url, at)) = VERIFY_ENDPOINT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        && from == discovery
+        && at.elapsed() < DISCOVERY_TTL
+    {
+        return Ok(url.clone());
+    }
     let doc: serde_json::Value = agent()
-        .get(&discovery_url())
+        .get(discovery)
         .call()
         .map_err(|e| e.to_string())?
         .into_string()
@@ -120,7 +140,21 @@ fn has_joined(name: &str, hash: &str) -> Result<Option<Profile>, String> {
     let url = doc
         .pointer("/discovery/session/endpoints/verify/uri")
         .and_then(|u| u.as_str())
-        .ok_or("no session verify endpoint")?;
+        .ok_or("no session verify endpoint")?
+        .to_owned();
+    *VERIFY_ENDPOINT.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((discovery.to_owned(), url.clone(), Instant::now()));
+    Ok(url)
+}
+
+/// HasJoinedMinecraftServer: `Ok(None)` when the player did not join with this hash.
+fn has_joined(name: &str, hash: &str) -> Result<Option<Profile>, String> {
+    has_joined_via(&discovery_url(), name, hash)
+}
+
+fn has_joined_via(discovery: &str, name: &str, hash: &str) -> Result<Option<Profile>, String> {
+    let url = verify_endpoint(discovery)?;
+    let url = url.as_str();
     let separator = if url.contains('?') { '&' } else { '?' };
     let query = format!("username={}&serverId={}", encode(name), encode(hash));
     match agent().get(&format!("{url}{separator}{query}")).call() {
@@ -185,6 +219,47 @@ mod tests {
         assert_eq!(p.properties.len(), 1);
         assert_eq!(p.properties[0].signature.as_deref(), Some("s"));
         assert!(parse_joined("{}").is_none());
+    }
+
+    #[test]
+    fn logins_share_one_fetch_of_the_discovery_document() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = fetches.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut request = [0u8; 2048];
+                let n = stream.read(&mut request).unwrap();
+                let (status, body) = if request[..n].starts_with(b"GET /discovery") {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    let doc = format!(
+                        r#"{{"discovery":{{"session":{{"endpoints":{{"verify":{{"uri":"http://127.0.0.1:{port}/verify"}}}}}}}}}}"#
+                    );
+                    ("200 OK", doc)
+                } else {
+                    ("204 No Content", String::new())
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let discovery = format!("http://127.0.0.1:{port}/discovery");
+        for i in 0..5 {
+            // The stub answers 204: the player did not join with this hash.
+            assert!(
+                has_joined_via(&discovery, &format!("Player{i}"), "00")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
     }
 
     #[test]
