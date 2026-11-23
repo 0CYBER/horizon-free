@@ -592,7 +592,15 @@ struct Parser<'a> {
     tokens: Vec<String>,
     at: usize,
     calls: &'a mut usize,
+    nesting: usize,
 }
+
+/// Deepest nesting of brackets, unary operators and call arguments, so that a pack can't
+/// overflow the stack while its expression parses.
+const NESTING: usize = 64;
+/// Most tokens an expression may have. A run like `1+1+1+...` builds a tree as deep as it is
+/// long without nesting, and every walk of the tree (`eval`, `clone`, drop) recurses per level.
+const TOKENS: usize = 512;
 
 const OPERATORS: [&str; 18] = [
     "||", "&&", "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "/", "%", "!", "(", ")", ",", ".",
@@ -642,6 +650,7 @@ impl<'a> Parser<'a> {
             tokens,
             at: 0,
             calls,
+            nesting: 0,
         }
     }
     fn peek(&self) -> Option<&str> {
@@ -653,6 +662,12 @@ impl<'a> Parser<'a> {
         hit
     }
     fn expr_all(&mut self) -> Result<Expr, String> {
+        if self.tokens.len() > TOKENS {
+            return Err(format!(
+                "the expression is too long: {} tokens",
+                self.tokens.len()
+            ));
+        }
         let e = self.binary(0)?;
         match self.peek() {
             None => Ok(e),
@@ -684,6 +699,16 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
     fn unary(&mut self) -> Result<Expr, String> {
+        // Every nesting (brackets, arguments, repeated operators) passes through here.
+        self.nesting += 1;
+        if self.nesting > NESTING {
+            return Err("the expression is nested too deeply".into());
+        }
+        let e = self.unary_inner();
+        self.nesting -= 1;
+        e
+    }
+    fn unary_inner(&mut self) -> Result<Expr, String> {
         if self.eat("-") {
             return Ok(Expr::Neg(Box::new(self.unary()?)));
         }
@@ -1643,5 +1668,51 @@ mod tests {
             .map(|n| n[1..].split('`').next().unwrap())
             .collect();
         assert_eq!(noted, warned);
+    }
+
+    #[test]
+    fn deeply_nested_expressions_are_notes_not_a_stack_overflow() {
+        let open = "(".repeat(100_000);
+        for body in [
+            format!("{open}1"),
+            format!("{}1", "-".repeat(100_000)),
+            format!("{}1", "!".repeat(100_000)),
+            format!("{}1", "f(".repeat(100_000)),
+        ] {
+            let c = custom(&format!("uniform.float.x = {body}\n"));
+            assert_eq!(c.notes.len(), 1, "{}", &body[..8]);
+            assert!(c.uniforms().next().is_none());
+        }
+    }
+
+    #[test]
+    fn a_long_chain_is_a_note_and_one_within_the_limit_evaluates_on_a_small_stack() {
+        let chain = |terms: usize| vec!["1"; terms].join("+");
+        let c = custom(&format!("uniform.float.x = {}\n", chain(100_000)));
+        assert_eq!(c.notes.len(), 1);
+        // The longest chain the limit allows must not overflow a 4 MiB stack, debug frames included.
+        let value = std::thread::Builder::new()
+            .stack_size(1 << 22)
+            .spawn(move || {
+                let mut c = custom(&format!("uniform.float.x = {}\n", chain(255)));
+                assert!(c.notes.is_empty(), "{:?}", c.notes);
+                let v = c.eval(0.0, &|_| None)[0].x();
+                drop(c);
+                v
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(value, 255.0);
+    }
+
+    #[test]
+    fn nesting_within_the_limit_still_parses() {
+        let c = custom(&format!(
+            "uniform.float.x = {}1{}\n",
+            "(".repeat(30),
+            ")".repeat(30)
+        ));
+        assert!(c.notes.is_empty(), "{:?}", c.notes);
     }
 }
