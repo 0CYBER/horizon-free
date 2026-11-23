@@ -411,8 +411,15 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
         } else {
             // A random living thing within 20 (8 up or down), no undead.
             let p = m.position;
+            // WitherBoss.TARGETING_CONDITIONS.forCombat().range(20):
+            // the bounding box is only a broad phase; the target must also
+            // be within a 20-block sphere (distanceToSqr <= 400).
             let near = |q: Vec3| {
-                (q.x - p.x).abs() <= 20.0 && (q.y - p.y).abs() <= 8.0 && (q.z - p.z).abs() <= 20.0
+                let (dx, dy, dz) = (q.x - p.x, q.y - p.y, q.z - p.z);
+                dx * dx + dy * dy + dz * dz <= 400.0
+                    && dx.abs() <= 20.0
+                    && dy.abs() <= 8.0
+                    && dz.abs() <= 20.0
             };
             let mut found: Vec<i32> = w
                 .others
