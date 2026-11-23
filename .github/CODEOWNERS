@@ -5,6 +5,8 @@
 # `verify` passes.
 /.github/                                @horizon-rust/council
 /tools/ci/                               @horizon-rust/council
+# Test-inventory rows (plain text lists of #[ignore]d Rust tests, not CI scripts) only need Horizon Team review.
+/tools/ci/ignored-tests/                 @horizon-rust/horizon-team
 /tools/release_train.py                  @horizon-rust/council
 /crates/horizon-release-sign/            @horizon-rust/council
 /crates/horizon-server/src/update.rs     @horizon-rust/council
