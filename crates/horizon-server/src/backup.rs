@@ -67,7 +67,10 @@ fn stamped(time: SystemTime, name: &str) -> Result<String, String> {
     Ok(format!("{}-{name}.zip", stamp(time)))
 }
 
-/// Adds a folder to the zip, under `prefix`, skipping the game's session lock.
+/// Adds a folder to the zip, under `prefix`, skipping the game's session lock. Only regular files and
+/// folders are taken, and links are not followed: vanilla worlds hold no symlinks (vanilla refuses a world
+/// with one unless allow-listed), while a link in an extracted archive could pull a file from outside the
+/// server folder into the zip, and a FIFO or device would make the copy never finish.
 fn add_dir(zip: &mut ZipWriter<BufWriter<File>>, dir: &Path, prefix: &str) -> Result<(), String> {
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
@@ -81,8 +84,16 @@ fn add_dir(zip: &mut ZipWriter<BufWriter<File>>, dir: &Path, prefix: &str) -> Re
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
         let inner = format!("{prefix}/{name}");
-        if path.is_dir() {
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if kind.is_dir() {
             add_dir(zip, &path, &inner)?;
+        } else if !kind.is_file() {
+            eprintln!(
+                "horizon-server: backup skips {}: not a regular file or folder",
+                path.display()
+            );
         } else if name != "session.lock" {
             zip.start_file(inner.as_str(), options)
                 .map_err(|e| e.to_string())?;
@@ -419,6 +430,34 @@ mod tests {
         );
         assert!(file_name(t, Some("../x")).is_err());
         assert_eq!(auto_name(t), "2026-10-14_17-46-40-auto.zip");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_skips_links_and_special_files() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-backup-links-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, b"secret").unwrap();
+        let world = dir.join("world");
+        std::fs::create_dir(&world).unwrap();
+        std::fs::write(world.join("level.dat"), b"level").unwrap();
+        std::os::unix::fs::symlink(&outside, world.join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(&dir, world.join("link-dir")).unwrap();
+        let fifo = CString::new(world.join("pipe").as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let path = create(&dir, &Config::default(), "x.zip").unwrap();
+        let zip = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let mut names: Vec<_> = zip.file_names().map(|n| n.unwrap().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["world/level.dat"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
