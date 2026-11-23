@@ -710,14 +710,14 @@ impl Game<'_> {
         if desired.is_empty() && !self.bosses.sent.contains_key(&viewer.uuid) {
             return Vec::new();
         }
-        let full = viewer.local;
-        let dim = self.dim;
         let sent = self.bosses.sent.entry(viewer.uuid).or_default();
         let mut out = Vec::new();
         let event = |id, action| play::BossEvent { id, action };
-        sent.retain(|id, prev| {
-            let owned = full || prev.scope == Scope::Global || prev.scope == Scope::Level(dim);
-            let keep = !owned || desired.iter().any(|e| e.id == *id);
+        // Every offer in this Game's `sent` map was issued by this Game;
+        // `sent` survives a level swap, so a level-scoped bar whose level is
+        // no longer current must still be removed, not silently kept.
+        sent.retain(|id, _| {
+            let keep = desired.iter().any(|e| e.id == *id);
             if !keep {
                 out.push(event(*id, BossAction::Remove));
             }
@@ -816,6 +816,8 @@ struct Offer {
     darken: bool,
     music: bool,
     fog: bool,
+    /// Kept for the offer's recorded scope; removal no longer keys on it.
+    #[allow(dead_code)]
     scope: Scope,
 }
 
