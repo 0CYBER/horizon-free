@@ -342,3 +342,41 @@ fn the_fast_path_answers_what_the_interpreter_does() {
     assert!(Program::compile(corpus[0]).unwrap().fast.is_some());
     assert!(Program::compile(corpus[1]).unwrap().fast.is_some());
 }
+
+#[test]
+fn deeply_nested_brackets_are_an_error_not_a_stack_overflow() {
+    let src = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+    assert!(Program::compile(&src).is_err());
+}
+
+#[test]
+fn long_runs_of_unary_operators_are_an_error() {
+    for op in ["-", "!"] {
+        assert!(Program::compile(&format!("{}1", op.repeat(100_000))).is_err());
+    }
+}
+
+#[test]
+fn long_operator_chains_are_capped_so_evaluation_and_drop_stay_shallow() {
+    let chain = |terms: usize| vec!["1"; terms].join("+");
+    assert!(Program::compile(&chain(100_000)).is_err());
+    // The longest chain the cap allows must not overflow a small stack, in debug builds too.
+    let ok = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let program = Program::compile(&chain(256)).unwrap();
+            let sum = program.interpret(&mut World::default());
+            drop(program);
+            sum
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(ok, Ok(Value::Num(256.0)));
+}
+
+#[test]
+fn nesting_within_the_limit_still_parses() {
+    let src = format!("{}1{}", "(".repeat(30), ")".repeat(30));
+    assert!(Program::compile(&src).is_ok());
+}

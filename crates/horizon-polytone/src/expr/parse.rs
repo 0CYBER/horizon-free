@@ -63,9 +63,17 @@ const HOST_FUNCTIONS: [&str; 11] = [
     "dateDayOfYear",
 ];
 
+/// Deepest nesting of brackets, unary operators, arguments and blocks, so that no pack can
+/// overflow the thread's stack while it parses.
+const NESTING: usize = 64;
+/// Most tokens a program may have. A run like `1+1+1+...` builds a tree as deep as it is long
+/// without nesting, and evaluating or dropping that tree recurses once per level.
+const TOKENS: usize = 512;
+
 struct Parser {
     tokens: Vec<(Token, usize)>,
     pos: usize,
+    nesting: usize,
     locals: Vec<String>,
     /// A legacy math expression: `lerp`, `smoothstep` and `color` take their old argument order.
     legacy: bool,
@@ -74,10 +82,14 @@ struct Parser {
 /// The statements and how many local slots they use.
 pub(super) fn parse(src: &str) -> Result<(Vec<Stmt>, usize), String> {
     let tokens = tokens(src)?;
+    if tokens.len() > TOKENS {
+        return Err(format!("expression too long: {} tokens", tokens.len()));
+    }
     let mut p = Parser {
         legacy: legacy::is_legacy(&tokens),
         tokens,
         pos: 0,
+        nesting: 0,
         locals: Vec::new(),
     };
     let body = p.statements(false)?;
@@ -153,10 +165,22 @@ impl Parser {
     }
 
     fn block(&mut self) -> Result<Vec<Stmt>, String> {
+        self.enter()?;
         self.expect("{")?;
         let body = self.statements(true)?;
         self.expect("}")?;
+        self.nesting -= 1;
         Ok(body)
+    }
+
+    /// One more level of nesting; every success is paired with `self.nesting -= 1`, and an
+    /// error abandons the whole parse.
+    fn enter(&mut self) -> Result<(), String> {
+        self.nesting += 1;
+        if self.nesting > NESTING {
+            return Err(self.error("expression nested too deeply"));
+        }
+        Ok(())
     }
 
     fn statement(&mut self) -> Result<Stmt, String> {
@@ -212,6 +236,13 @@ impl Parser {
     /// Precedence climbing: ternary 1, `||` 2, `&&` 3, equality 4, comparison 5, `+ -` 6,
     /// `* / %` 7, unary 8, `^` 9 (right to left, so `-2^2` is -4).
     fn expr(&mut self, min: u8) -> Result<Expr, String> {
+        self.enter()?;
+        let e = self.binary_chain(min);
+        self.nesting -= 1;
+        e
+    }
+
+    fn binary_chain(&mut self, min: u8) -> Result<Expr, String> {
         let mut left = self.unary()?;
         loop {
             let Some(Token::Punct(op)) = self.peek().cloned() else {
@@ -239,6 +270,13 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Expr, String> {
+        self.enter()?;
+        let e = self.unary_inner();
+        self.nesting -= 1;
+        e
+    }
+
+    fn unary_inner(&mut self) -> Result<Expr, String> {
         if self.eat("-") {
             return Ok(Expr::Neg(Box::new(self.unary()?)));
         }
