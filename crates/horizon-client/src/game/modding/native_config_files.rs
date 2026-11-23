@@ -26,6 +26,9 @@ static DATA_FILES: GameConfigFiles = GameConfigFiles { bulk: true };
 struct FileRoot {
     path: PathBuf,
     bulk: bool,
+    /// `path` itself is opened from its parent without following a link: a
+    /// world's `serverconfig/` came with the world, not from the player.
+    unlinked: bool,
 }
 
 impl FileRoot {
@@ -82,11 +85,35 @@ fn resolve(
 ) -> Result<(Dir, String), ConfigFileError> {
     let mod_id =
         mod_api::content::crash::current_native_mod().ok_or(ConfigFileError::NoCallingMod)?;
+    resolve_for(root, path, create, mod_id)
+}
+
+/// [`resolve`] for `mod_id`, named by the game rather than taken from the
+/// running hook: a registered config's owner.
+fn resolve_for(
+    root: &FileRoot,
+    path: &ConfigPath,
+    create: bool,
+    mod_id: &str,
+) -> Result<(Dir, String), ConfigFileError> {
     if !root.bulk && !path.owned_by(mod_id) {
         return Err(ConfigFileError::NotOwned);
     }
-    let mut directory =
-        Dir::open_ambient_dir(&root.path, cap_std::ambient_authority()).map_err(io)?;
+    let mut directory = if root.unlinked {
+        let (Some(parent), Some(name)) = (root.path.parent(), root.path.file_name()) else {
+            return Err(ConfigFileError::NotFound);
+        };
+        let parent = Dir::open_ambient_dir(parent, cap_std::ambient_authority()).map_err(io)?;
+        match parent.symlink_metadata(name) {
+            Ok(meta) if meta.file_type().is_symlink() => return Err(ConfigFileError::Symlink),
+            Ok(meta) if !meta.is_dir() => return Err(ConfigFileError::NotAFile),
+            Ok(_) => {}
+            Err(e) => return Err(io(e)),
+        }
+        parent.open_dir_nofollow(name).map_err(io)?
+    } else {
+        Dir::open_ambient_dir(&root.path, cap_std::ambient_authority()).map_err(io)?
+    };
     let mut components = root
         .bulk
         .then_some("horizon-mod-data")
@@ -111,7 +138,14 @@ fn resolve(
                 Err(e) => return Err(io(e)),
             }
         }
-        directory = directory.open_dir_nofollow(part).map_err(io)?;
+        directory = directory.open_dir_nofollow(part).map_err(|e| {
+            // A file where a folder of the path should be: the path names no file.
+            if e.kind() == ErrorKind::NotADirectory {
+                ConfigFileError::NotAFile
+            } else {
+                io(e)
+            }
+        })?;
     }
     Err(ConfigFileError::NotOwned)
 }
@@ -138,7 +172,13 @@ fn stat_of(meta: &Metadata) -> ConfigStat {
 }
 
 fn read(root: &FileRoot, file: &ConfigPath) -> Result<Vec<u8>, ConfigFileError> {
-    let (directory, name) = resolve(root, file, false)?;
+    let mod_id =
+        mod_api::content::crash::current_native_mod().ok_or(ConfigFileError::NoCallingMod)?;
+    read_for(root, file, mod_id)
+}
+
+fn read_for(root: &FileRoot, file: &ConfigPath, mod_id: &str) -> Result<Vec<u8>, ConfigFileError> {
+    let (directory, name) = resolve_for(root, file, false, mod_id)?;
     let meta = directory.symlink_metadata(&name).map_err(io)?;
     if !meta.is_file() {
         return Err(ConfigFileError::NotAFile);
@@ -177,17 +217,26 @@ fn is_write_temp(name: &str) -> bool {
 /// with the file's own, so it stays the mod's own; `list` leaves it out, so a
 /// scan never meets a half-written file, nor one a crash left behind.
 fn write(root: &FileRoot, file: &ConfigPath, bytes: &[u8]) -> Result<(), ConfigFileError> {
+    let mod_id =
+        mod_api::content::crash::current_native_mod().ok_or(ConfigFileError::NoCallingMod)?;
+    write_for(root, file, bytes, mod_id)
+}
+
+fn write_for(
+    root: &FileRoot,
+    file: &ConfigPath,
+    bytes: &[u8],
+    mod_id: &str,
+) -> Result<(), ConfigFileError> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
     if bytes.len() as u64 > root.cap() {
         return Err(ConfigFileError::TooLarge);
     }
     // Neither the implicit bulk root nor a config mod folder can be a file.
-    if file.as_str().is_empty()
-        || (!root.bulk && Some(file.as_str()) == mod_api::content::crash::current_native_mod())
-    {
+    if file.as_str().is_empty() || (!root.bulk && file.as_str() == mod_id) {
         return Err(ConfigFileError::NotAFile);
     }
-    let (directory, name) = resolve(root, file, true)?;
+    let (directory, name) = resolve_for(root, file, true, mod_id)?;
     match directory.symlink_metadata(&name) {
         Ok(meta) if meta.file_type().is_symlink() => return Err(ConfigFileError::Symlink),
         Ok(meta) if !meta.is_file() => return Err(ConfigFileError::NotAFile),
@@ -285,6 +334,7 @@ impl GameConfigFiles {
                 Game::native_config_dir().map_err(io)?
             },
             bulk: self.bulk,
+            unlinked: false,
         })
     }
 }
@@ -296,6 +346,7 @@ fn world_root(game: &Game<'_>) -> Result<FileRoot, ConfigFileError> {
     Ok(FileRoot {
         path: game.world_root.clone(),
         bulk: true,
+        unlinked: false,
     })
 }
 
@@ -326,6 +377,41 @@ macro_rules! files {
 files!(GameConfigFiles, GameConfigFiles::root);
 files!(Game<'_>, world_root);
 
+/// A registered config's file in `dir` (the game's `config/` or, `in_world`,
+/// a world's `serverconfig/`), read as `mod_id`'s own the way the service
+/// reads it: no symbolic link on the path, at most `CONFIG_FILE_MAX` bytes.
+/// A world's `serverconfig/` may not be a link itself either; the player's
+/// own `config/` may.
+pub(super) fn read_config(
+    dir: &std::path::Path,
+    in_world: bool,
+    mod_id: &str,
+    file: &ConfigPath,
+) -> Result<Vec<u8>, ConfigFileError> {
+    let root = FileRoot {
+        path: dir.to_path_buf(),
+        bulk: false,
+        unlinked: in_world,
+    };
+    read_for(&root, file, mod_id)
+}
+
+/// Writes a registered config's file in `dir` as `mod_id`'s own, as
+/// [`read_config`] reads it.
+pub(super) fn write_config(
+    dir: &std::path::Path,
+    mod_id: &str,
+    file: &ConfigPath,
+    bytes: &[u8],
+) -> Result<(), ConfigFileError> {
+    let root = FileRoot {
+        path: dir.to_path_buf(),
+        bulk: false,
+        unlinked: false,
+    };
+    write_for(&root, file, bytes, mod_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +429,7 @@ mod tests {
             Self(FileRoot {
                 path: root,
                 bulk: false,
+                unlinked: false,
             })
         }
     }

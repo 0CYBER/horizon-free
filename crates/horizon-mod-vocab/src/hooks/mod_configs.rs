@@ -13,6 +13,7 @@ pub trait Hooks {
         side = "both",
         contract = "collect",
         out = "configs",
+        collect_validator = "crate::content::config_files::own_configs",
         neoforge = "ModContainer.registerConfig"
     )]
     fn register_configs();

@@ -28,7 +28,9 @@ files `config/<mod id>.<ext>` and `config/<mod id>-<rest>`.
 
 These hooks run in the Config [load phase](../concepts/load-phases.md): settings reads and config files are
 available, world handles and transactions are not. A file outside `config/`, or one already registered, is
-skipped.
+skipped. You register only your own configs: one naming another mod's id is dropped, as is a change to a config
+another mod pushed. The game reads and writes your config files as the `ConfigFiles` service below does: a symbolic
+link on the path, or a file over 4 MiB, is not read.
 
 For files the hooks don't manage, `Host::config_files()` gives your mod its own files in `config/`. Paths retain
 the ownership spelling above, such as `<mod id>/extra.toml`. The service is bound to the mod whose hook or Part

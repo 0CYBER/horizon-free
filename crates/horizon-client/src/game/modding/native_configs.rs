@@ -8,9 +8,12 @@
 //! (`native_config_loading`); the mod parses it. Once a second it looks at
 //! each file's modification time and hands changed text over again
 //! (`native_config_reloading`). A server's configs are dropped when it stops
-//! (`native_config_unloading`).
+//! (`native_config_unloading`). Each file is read and written as its mod's
+//! own through the checked file service (`native_config_files.rs`): no
+//! symbolic link on the path, at most `CONFIG_FILE_MAX` bytes.
 use super::Game;
-use mod_api::ConfigPath;
+use super::native_config_files::{read_config, write_config};
+use mod_api::{ConfigFileError, ConfigPath};
 pub use mod_api::game::ConfigFile;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +25,11 @@ const CHECK_EVERY: Duration = Duration::from_secs(1);
 /// A loaded config, where it was read and what its file looked like then.
 struct Tracked {
     config: ConfigFile,
+    /// The folder it is read in: `config/` or a world's `serverconfig/`.
+    dir: PathBuf,
+    /// `dir` is a world's `serverconfig/`.
+    in_world: bool,
+    file: ConfigPath,
     path: PathBuf,
 }
 
@@ -34,30 +42,46 @@ pub(super) struct NativeConfigs {
     next_check: Option<Instant>,
 }
 
-/// The file `config` is read from: the world's `serverconfig/` copy of a
-/// server config when there is one, else `config_dir`'s, written from the
-/// default when missing.
+/// `file`'s text in `dir`, read as `mod_id`'s own.
+fn read_text(
+    dir: &Path,
+    in_world: bool,
+    mod_id: &str,
+    file: &ConfigPath,
+) -> Result<String, ConfigFileError> {
+    String::from_utf8(read_config(dir, in_world, mod_id, file)?)
+        .map_err(|_| ConfigFileError::Io("not UTF-8 text".into()))
+}
+
+/// The folder `config` is read from and its text: the world's
+/// `serverconfig/` copy of a server config when there is one, else
+/// `config_dir`'s, written from the default when missing. The flag is set for
+/// the world's copy.
 fn locate(
     config: &mod_api::Config,
+    file: &ConfigPath,
     config_dir: &Path,
     world: Option<&Path>,
-) -> std::io::Result<PathBuf> {
+) -> Result<(PathBuf, bool, String), ConfigFileError> {
     if config.kind == mod_api::ConfigKind::Server
         && let Some(world) = world
     {
-        let own = world.join("serverconfig").join(&config.file);
-        if own.is_file() {
-            return Ok(own);
+        let dir = world.join("serverconfig");
+        match read_text(&dir, true, &config.mod_id, file) {
+            Ok(text) => return Ok((dir, true, text)),
+            Err(ConfigFileError::NotFound | ConfigFileError::NotAFile) => {}
+            Err(e) => return Err(e),
         }
     }
-    let path = config_dir.join(&config.file);
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+    let text = match read_text(config_dir, false, &config.mod_id, file) {
+        Err(ConfigFileError::NotFound) => {
+            fs::create_dir_all(config_dir).map_err(|e| ConfigFileError::Io(e.to_string()))?;
+            write_config(config_dir, &config.mod_id, file, config.default.as_bytes())?;
+            read_text(config_dir, false, &config.mod_id, file)
         }
-        fs::write(&path, &config.default)?;
-    }
-    Ok(path)
+        read => read,
+    }?;
+    Ok((config_dir.to_path_buf(), false, text))
 }
 
 impl NativeConfigs {
@@ -74,21 +98,27 @@ impl NativeConfigs {
         self.started = true;
         let mut loaded = Vec::new();
         for config in configs.into_iter().filter(|c| kinds.contains(&c.kind)) {
-            if !ConfigPath::new(&config.file).is_ok_and(|file| file.owned_by(&config.mod_id)) {
+            // The hook keeps only configs naming the mod that pushed them
+            // (`own_configs`); the file has to be that mod's own as well.
+            let Some(file) = ConfigPath::new(&config.file)
+                .ok()
+                .filter(|file| file.owned_by(&config.mod_id))
+            else {
                 log::warn!(
                     "Horizon: mod {} config {:?} is not one of its files in config/",
                     config.mod_id,
                     config.file
                 );
                 continue;
-            }
-            let path = match locate(&config, config_dir, world) {
-                Ok(path) => path,
+            };
+            let (dir, in_world, text) = match locate(&config, &file, config_dir, world) {
+                Ok(found) => found,
                 Err(e) => {
                     log::warn!("Horizon: mod {} config {}: {e}", config.mod_id, config.file);
                     continue;
                 }
             };
+            let path = dir.join(&config.file);
             if self.files.iter().any(|t| t.path == path) {
                 log::warn!(
                     "Horizon: mod {} config {} is registered twice",
@@ -97,38 +127,39 @@ impl NativeConfigs {
                 );
                 continue;
             }
-            let text = match fs::read_to_string(&path) {
-                Ok(text) => text,
-                Err(e) => {
-                    log::warn!(
-                        "Horizon: mod {} config {}: {e}",
-                        config.mod_id,
-                        path.display()
-                    );
-                    continue;
-                }
-            };
-            let file = ConfigFile::from(mod_api::__private::built::ConfigFile {
+            let loaded_file = ConfigFile::from(mod_api::__private::built::ConfigFile {
                 mod_id: config.mod_id,
                 kind: config.kind,
                 file: config.file,
                 text,
             });
-            loaded.push(file.clone());
-            self.files.push(Tracked { config: file, path });
+            loaded.push(loaded_file.clone());
+            self.files.push(Tracked {
+                config: loaded_file,
+                dir,
+                in_world,
+                file,
+                path,
+            });
         }
         loaded
     }
 
     /// The files whose text changed since they were read, read again; a
-    /// file that is gone or unreadable keeps its last text. The text is
+    /// file that is gone, unreadable, a symbolic link or too large keeps its
+    /// last text. The text is
     /// compared, not the file's modification time: a save inside the same
     /// timestamp tick as the load (a mod writing its config from
     /// `config_loading`) keeps the time and the length and still changed.
     fn changed(&mut self) -> Vec<ConfigFile> {
         let mut changed = Vec::new();
         for tracked in &mut self.files {
-            let Ok(text) = fs::read_to_string(&tracked.path) else {
+            let Ok(text) = read_text(
+                &tracked.dir,
+                tracked.in_world,
+                &tracked.config.mod_id,
+                &tracked.file,
+            ) else {
                 continue;
             };
             if text != tracked.config.text {
@@ -439,6 +470,35 @@ mod tests {
         assert!(configs.files.is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_worlds_serverconfig_link_is_not_followed_and_a_file_in_its_path_falls_back() {
+        let root = Folder::new("world-link");
+        let config = root.0.join("config");
+        let (linked, blocked) = (root.0.join("saves/L"), root.0.join("saves/B"));
+        // L's `serverconfig/` is a link to a folder elsewhere holding the file.
+        fs::create_dir_all(root.0.join("elsewhere/gt")).unwrap();
+        fs::write(root.0.join("elsewhere/gt/ores.toml"), "veins = 9\n").unwrap();
+        fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(root.0.join("elsewhere"), linked.join("serverconfig"))
+            .unwrap();
+        // B's `serverconfig/gt` is a file, so it holds no `gt/ores.toml`.
+        fs::create_dir_all(blocked.join("serverconfig")).unwrap();
+        fs::write(blocked.join("serverconfig/gt"), "").unwrap();
+        let ores = || mod_api::Config::new("gt", Server, "veins = 3\n").file("gt/ores.toml");
+        let mut configs = NativeConfigs::default();
+        assert!(
+            configs
+                .load(vec![ores()], &[Server], &config, Some(&linked))
+                .is_empty()
+        );
+        let mut configs = NativeConfigs::default();
+        let loaded = configs.load(vec![ores()], &[Server], &config, Some(&blocked));
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(configs.files[0].path, config.join("gt/ores.toml"));
+        assert_eq!(configs.files[0].config.text, "veins = 3\n");
+    }
+
     #[test]
     fn a_file_not_the_mods_own_or_registered_twice_is_skipped() {
         let root = Folder::new("skip");
@@ -462,6 +522,63 @@ mod tests {
             ["a"]
         );
         assert!(!root.0.join("options.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_mods_folder_is_not_followed_on_load_or_reload() {
+        let root = Folder::new("link");
+        let config = root.0.join("config");
+        fs::create_dir_all(config.join("gt")).unwrap();
+        fs::write(root.0.join("secret.txt"), "outside config/").unwrap();
+        std::os::unix::fs::symlink(root.0.join("secret.txt"), config.join("gt/link.toml"))
+            .unwrap();
+        let mut configs = NativeConfigs::default();
+        let loaded = configs.load(
+            vec![
+                mod_api::Config::new("gt", Common, "").file("gt/link.toml"),
+                mod_api::Config::new("gt", Common, "a = 1\n"),
+            ],
+            &[Common],
+            &config,
+            None,
+        );
+        assert_eq!(
+            loaded.iter().map(|f| f.file.as_str()).collect::<Vec<_>>(),
+            ["gt-common.toml"]
+        );
+        // A loaded file swapped for a link keeps its last text.
+        fs::remove_file(config.join("gt-common.toml")).unwrap();
+        std::os::unix::fs::symlink(root.0.join("secret.txt"), config.join("gt-common.toml"))
+            .unwrap();
+        assert!(configs.changed().is_empty());
+        assert_eq!(configs.files[0].config.text, "a = 1\n");
+        assert_eq!(
+            fs::read_to_string(root.0.join("secret.txt")).unwrap(),
+            "outside config/"
+        );
+    }
+
+    #[test]
+    fn a_config_over_four_mebibytes_is_not_read() {
+        let root = Folder::new("size");
+        let config = root.0.join("config");
+        fs::create_dir_all(&config).unwrap();
+        let over = "x".repeat(mod_api::CONFIG_FILE_MAX as usize + 1);
+        fs::write(config.join("gt-common.toml"), &over).unwrap();
+        let mut configs = NativeConfigs::default();
+        let loaded = configs.load(
+            vec![
+                mod_api::Config::new("gt", Common, ""),
+                // Nor is a default that large written.
+                mod_api::Config::new("gt", Client, &over),
+            ],
+            &[Client, Common],
+            &config,
+            None,
+        );
+        assert!(loaded.is_empty());
+        assert!(!config.join("gt-client.toml").exists());
     }
 
     #[test]
@@ -511,6 +628,9 @@ mod tests {
                 file: "gt-common.toml".into(),
                 text: String::new(),
             }),
+            dir: PathBuf::new(),
+            in_world: false,
+            file: ConfigPath::new("gt-common.toml").unwrap(),
             path: PathBuf::new(),
         });
         assert!(configs.due(start));

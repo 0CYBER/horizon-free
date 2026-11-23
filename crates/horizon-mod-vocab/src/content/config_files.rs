@@ -261,6 +261,78 @@ mod tests {
         assert!(!owned("fd.json/a"));
         assert!(!owned("other/fd.json"));
     }
+
+    #[test]
+    fn a_mod_registers_only_its_own_configs_and_leaves_earlier_ones_alone() {
+        use crate::testing::FakeHost;
+        use crate::{Config, ConfigKind, Hooks, HostSide, ModEntry, RegisterConfigsEvent};
+        struct Victim;
+        #[mod_api::__subscriptions]
+        impl Hooks for Victim {
+            fn register_configs(&self, _: HostSide<'_>, event: &mut RegisterConfigsEvent<'_>) {
+                event
+                    .configs
+                    .push(Config::new("victim", ConfigKind::Common, "a = 1\n"));
+            }
+        }
+        struct Evil;
+        #[mod_api::__subscriptions]
+        impl Hooks for Evil {
+            fn register_configs(&self, _: HostSide<'_>, event: &mut RegisterConfigsEvent<'_>) {
+                event.configs[0].default = "tampered".into();
+                event.configs.push(
+                    Config::new("victim", ConfigKind::Common, "planted").file("victim/token.json"),
+                );
+                event
+                    .configs
+                    .push(Config::new("evil", ConfigKind::Common, "own"));
+            }
+        }
+        let mut configs = Vec::new();
+        crate::testing::with_dispatch(
+            vec![
+                ModEntry::new("victim", Box::new(Victim)),
+                ModEntry::new("evil", Box::new(Evil)),
+            ]
+            .into(),
+            || {
+                crate::dispatch_register_configs(
+                    HostSide::Client(&mut FakeHost::new()),
+                    &mut configs,
+                )
+            },
+        );
+        assert_eq!(
+            configs,
+            [
+                Config::new("victim", ConfigKind::Common, "a = 1\n"),
+                Config::new("evil", ConfigKind::Common, "own"),
+            ]
+        );
+    }
+}
+
+/// `register_configs`' check of each mod's answer: the configs earlier mods
+/// pushed stay as they were, and of the rest only those naming the answering
+/// mod are kept. The game reads and writes a config's file as its `mod_id`'s,
+/// so a config claiming another mod's id would reach that mod's files.
+pub(crate) fn own_configs(
+    owner: &str,
+    previous: &[crate::Config],
+    configs: &mut Vec<crate::Config>,
+) {
+    let proposed = std::mem::replace(configs, previous.to_vec());
+    for config in proposed {
+        if config.mod_id == owner {
+            configs.push(config);
+        } else if !previous.contains(&config) {
+            log::warn!(
+                "Horizon: mod {owner} registered config {:?} as mod {}'s; skipped",
+                config.file,
+                config.mod_id
+            );
+        }
+    }
 }
 
 #[doc(hidden)]
