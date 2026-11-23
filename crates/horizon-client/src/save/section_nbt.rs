@@ -275,6 +275,7 @@ mod tests {
             };
 
         let dir = tempfile::tempdir().unwrap();
+        let _codec = compression_pool::holding_selected_codec();
         let uncached_bytes = write_region(&dir.path().join("uncached"), &chunks, None);
         let first_cached = write_region(
             &dir.path().join("first_cached"),
