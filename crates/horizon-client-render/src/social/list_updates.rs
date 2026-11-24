@@ -1,5 +1,5 @@
 use super::service::{Failure, Service, fetch_friends, session};
-use super::{FriendData, ResultCode, lock, parse_friends};
+use super::{FriendData, ResultCode, lock};
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     thread,
@@ -145,23 +145,15 @@ pub(super) fn update_friend_data() {
             if let Some(retry) = answer.retry_after {
                 inner.service.friends_poll = Some(retry);
             }
-            if let Some(etag) = answer.etag {
-                inner.service.friends_etag = Some(etag);
-            }
-            if answer.status != 304 && !answer.body.is_empty() {
-                match parse_friends(&answer.body) {
-                    Some(data) => inner.service.friends_cache = data,
-                    None => {
-                        // authlib's parse failure is an ERROR result: the handler keeps
-                        // the cached lists and shows the generic error.
-                        inner.handler.latest = inner.service.friends_cache.clone();
-                        inner.handler.state = State::GenericError;
-                        return;
-                    }
-                }
-            }
+            let parsed = inner.service.take_friends(answer);
             inner.handler.latest = inner.service.friends_cache.clone();
-            inner.handler.state = State::Success;
+            // authlib's parse failure is an ERROR result: the handler keeps the cached
+            // lists and shows the generic error.
+            inner.handler.state = if parsed {
+                State::Success
+            } else {
+                State::GenericError
+            };
         }
         Err(failure) => {
             inner.handler.latest = inner.service.friends_cache.clone();

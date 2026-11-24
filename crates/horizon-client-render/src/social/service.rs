@@ -1,4 +1,6 @@
-use super::{FriendData, Presence, PresenceStatus, ResultCode, lock, model::presence_of};
+use super::{
+    FriendData, Presence, PresenceStatus, ResultCode, lock, model::presence_of, parse_friends,
+};
 use crate::auth::{self, AuthSession};
 use serde_json::{Value, json};
 use std::{
@@ -26,6 +28,22 @@ impl Service {
     /// `canMakeRequest`.
     pub(super) fn can_make_request(&self) -> bool {
         self.cooldown.is_none_or(|at| Instant::now() > at)
+    }
+
+    /// `requestFriendData` with the list request's answer. A list that parses replaces the
+    /// cached lists and their ETag, which an answer without one clears. A 304, an empty body
+    /// or one that doesn't parse keeps both, so the next request still asks with the ETag of
+    /// the lists it holds (#15084). False for a body that doesn't parse: authlib's ERROR result.
+    pub(super) fn take_friends(&mut self, answer: Answer) -> bool {
+        if answer.status == 304 || answer.body.is_empty() {
+            return true;
+        }
+        let Some(data) = parse_friends(&answer.body) else {
+            return false;
+        };
+        self.friends_cache = data;
+        self.friends_etag = answer.etag;
+        true
     }
 }
 
@@ -172,6 +190,49 @@ fn http_error(error: ureq::Error) -> Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #15084, after authlib's `requestFriendData`: only a list that parses moves the ETag
+    /// the next request sends.
+    #[test]
+    fn only_a_parsed_friends_list_replaces_the_cached_lists_and_their_etag() {
+        let list = |name: &str| {
+            format!(
+                r#"{{"friends":[{{"profileId":"0123456789abcdef0123456789abcdef","name":"{name}"}}]}}"#
+            )
+        };
+        let answer = |status: u16, etag: Option<&str>, body: &str| Answer {
+            status,
+            etag: etag.map(str::to_owned),
+            retry_after: None,
+            body: body.to_owned(),
+        };
+        let held = |s: &Service| {
+            let names: Vec<String> = s
+                .friends_cache
+                .friends
+                .iter()
+                .map(|f| f.name.clone())
+                .collect();
+            (s.friends_etag.clone(), names)
+        };
+        let seeded = || {
+            let mut s = Service::default();
+            assert!(s.take_friends(answer(200, Some("\"A\""), &list("Alice"))));
+            s
+        };
+        let alice = (Some("\"A\"".to_owned()), vec!["Alice".to_owned()]);
+        assert_eq!(held(&seeded()), alice);
+        // A new list without an ETag: the new list, and no ETag on the next request.
+        let mut s = seeded();
+        assert!(s.take_friends(answer(200, None, &list("Bob"))));
+        assert_eq!(held(&s), (None, vec!["Bob".to_owned()]));
+        // Nothing new, or nothing readable, under another ETag: the old list and its ETag.
+        for (status, body, parsed) in [(304, "", true), (200, "", true), (200, "{", false)] {
+            let mut s = seeded();
+            assert_eq!(s.take_friends(answer(status, Some("\"B\""), body)), parsed);
+            assert_eq!(held(&s), alice, "{status} {body:?}");
+        }
+    }
 
     #[test]
     fn retry_after_reads_whole_positive_seconds() {
