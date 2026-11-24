@@ -22,6 +22,9 @@ use horizon_core::nbt::Tag;
 use horizon_protocol::packets::play::Clientbound;
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+mod tab_latency_tests;
+
 /// What `ServerPlayer` last recorded for the criteria that follow the player.
 #[derive(Default)]
 pub(super) struct Recorded {
@@ -1040,6 +1043,9 @@ impl Game<'_> {
         for p in players.iter_mut().filter(|p| faces.contains(&p.uuid)) {
             p.skin = self.face_skin(p.uuid, &p.skin);
         }
+        let mut latency_width = tab_list::LATENCY_WIDTH;
+        self.native_tab_list_latency_width(&mut latency_width);
+        let draw_latency = mod_api::__private::listened(mod_api::HookId::TabListLatencyDraw);
         let board = &self.score.board;
         let objective = board.display_objective(sb::SLOT_LIST);
         let up = |id: u128| upside_down.contains(&id);
@@ -1064,8 +1070,35 @@ impl Game<'_> {
             upside_down: &up,
             mark: &marked,
         };
-        let draws = self.tab_list.layout(&inputs, &self.gui.atlas.font);
-        horizon_client::hud_layout::paint(batch, &self.gui.atlas, &draws);
+        let mut slots = Vec::new();
+        let draws = self.tab_list.layout_with_latency(
+            &inputs,
+            &self.gui.atlas.font,
+            latency_width,
+            draw_latency.then_some(&mut slots),
+        );
+        let atlas = &self.gui.atlas;
+        let mut start = 0;
+        for slot in slots {
+            let at = slot.sprite_at;
+            horizon_client::hud_layout::paint(batch, atlas, &draws[start..at]);
+            let mark = batch.vertices.len();
+            let mut canceled = false;
+            self.native_tab_list_latency_draw(
+                slot.player.uuid,
+                &slot.player.name,
+                slot.player.latency,
+                slot.bounds,
+                batch,
+                &mut canceled,
+            );
+            if batch.vertices.len() != mark {
+                let [x0, y0, x1, y1] = slot.bounds.map(|n| n as f32);
+                batch.clip_since(mark, x0, y0, x1, y1);
+            }
+            start = at + usize::from(canceled);
+        }
+        horizon_client::hud_layout::paint(batch, atlas, &draws[start..]);
     }
 }
 

@@ -1,0 +1,2 @@
+ids = ["hook:tab_list_latency_width", "hook:tab_list_latency_draw", "type:TabListLatencyWidthEvent", "type:TabListLatencyDrawEvent"]
+why = "Client mods can reserve a wider latency column and replace the ping icon at each player-list draw slot (#19399), without covering the player's name or objective score. Existing hooks and draws are unchanged without listeners."

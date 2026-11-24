@@ -5,6 +5,38 @@ is one of vanilla's `GuiGraphics` calls: `fill`, `text`, `sprite`, `item_stack` 
 takes a buffer of `GuiDraw` ops for the same calls, with `Push` / `Pop` for the pose. Native and wasm mods use
 the same methods and the same ops.
 
+## Replace the ping bars in the player list
+
+Use the client hooks `tab_list_latency_width` and `tab_list_latency_draw` together. The first runs
+before the visible list is laid out. Set `event.width` to the width your drawing needs in GUI pixels;
+the default is 13, the maximum is 128, and a narrow screen can leave less space.
+
+The second runs at each visible row's ping-icon slot. It provides `player_uuid`, the profile's
+`player_name`, and `latency_ms` (negative means unknown). The game clips your drawing to `bounds`,
+given as `[left, top, right, bottom]` with exclusive right and bottom edges. The rectangle may
+be narrower than requested to keep the name and objective score clear. Return `Flow::Cancel` to
+omit that row's ping bars, or `Flow::Continue` to leave them in place.
+
+```rust,ignore
+fn tab_list_latency_width(&self, _: &dyn ClientHost, event: &mut TabListLatencyWidthEvent) {
+    event.width = 54;
+}
+
+fn tab_list_latency_draw(
+    &self,
+    _: &dyn ClientHost,
+    event: &mut TabListLatencyDrawEvent<'_>,
+) -> Flow {
+    let [left, top, right, _] = event.bounds;
+    if right <= left || event.latency_ms < 0 {
+        return Flow::Continue;
+    }
+    let label = format!("{} ms", event.latency_ms);
+    event.draw.text(&label, [left as f32 + 1.0, top as f32], 0xFFFF_FFFF, false);
+    Flow::Cancel
+}
+```
+
 ## Gradient fills
 
 `DrawContext::fill_gradient(rect, top, bottom)` is vanilla's `GuiGraphics.fillGradient`, the call screen

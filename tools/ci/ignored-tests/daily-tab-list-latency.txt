@@ -1,0 +1,2 @@
+# Tab-list hooks need the real game atlas and player-list glyphs.
+horizon-client game::scoreboard::tab_latency_tests::live_tab_latency_hooks_keep_scores_and_replace_clipped_ping_icons lib daily game-boot
