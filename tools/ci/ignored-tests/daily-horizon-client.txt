@@ -222,6 +222,7 @@ horizon-client game::server_travel::changed_dimension_tests::a_nether_portal_tri
 horizon-client game::server_travel::changed_dimension_tests::an_end_gateway_jump_within_the_level_is_not_heard_on_any_server lib daily resources
 horizon-client game::server_travel::credits_respawn_tests::the_credits_respawn_waits_for_the_client_to_load lib daily resources
 horizon-client game::split::players::tests::offline_guests_join_only_local_servers lib daily network
+horizon-client game::stations::tests::resource_tooltip_includes_mod_edits_and_falls_back_to_base_lines_reentrantly lib daily resources
 horizon-client game::stats::phantom_spawn_tests::no_phantoms_under_a_roof_the_sky_light_does_not_reach lib daily game-boot
 horizon-client game::stats::phantom_spawn_tests::phantoms_spawn_under_a_glass_roof lib daily game-boot
 horizon-client game::stats::player_stat_award_tests::a_suffocating_block_above_the_bed_obstructs_sleep lib daily resources

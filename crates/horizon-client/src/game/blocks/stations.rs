@@ -11,6 +11,26 @@ mod draw;
 #[path = "stations/tooltip.rs"]
 mod tooltip;
 use super::smithing_icons::smithing_slot_icons;
+
+thread_local! {
+    /// Nesting depth of tooltip mod callbacks on this thread; re-entrant `ItemResource::tooltip`
+    /// queries fall back to base lines while non-zero.
+    static IN_TOOLTIP_CALLBACK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+struct TooltipCallbackGuard;
+impl TooltipCallbackGuard {
+    fn enter() -> Self {
+        IN_TOOLTIP_CALLBACK.with(|depth| depth.set(depth.get() + 1));
+        Self
+    }
+}
+impl Drop for TooltipCallbackGuard {
+    fn drop(&mut self) {
+        IN_TOOLTIP_CALLBACK.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
 /// Invalid measurements must not reach tooltip positioning or reserve empty space.
 fn tooltip_component_size(size: Option<[f32; 2]>) -> Option<[f32; 2]> {
     size.filter(|size| size.iter().all(|v| v.is_finite() && *v > 0.0))
@@ -1553,8 +1573,9 @@ impl Game<'_> {
         creative: bool,
     ) -> Option<Vec<mod_api::TooltipElement>> {
         self.items().get(&stack.item)?;
+        let mod_callbacks = IN_TOOLTIP_CALLBACK.with(|depth| depth.get() == 0);
         Some(
-            self.build_stack_tooltip_lines(stack, false, creative, advanced, false)
+            self.build_stack_tooltip_lines(stack, false, creative, advanced, mod_callbacks)
                 .into_iter()
                 .map(|(text, color)| {
                     text.try_into_api()
@@ -1573,6 +1594,7 @@ impl Game<'_> {
         advanced: bool,
         mod_callbacks: bool,
     ) -> Vec<(horizon_client::text::Text, u32)> {
+        let _tooltip_callback_guard = mod_callbacks.then(TooltipCallbackGuard::enter);
         let e: &Enchantments = self.active_enchantment_definitions();
         let color = self.rarity_color(stack);
         let advanced = !nested && advanced;
@@ -2576,6 +2598,124 @@ mod tests {
                     advanced
                 );
             }
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn resource_tooltip_includes_mod_edits_and_falls_back_to_base_lines_reentrantly() {
+        use mod_api::{
+            self, ClientHost, Hooks, ItemPart, ItemResource, ItemTooltipEvent, ModEntry, Mods,
+            Registrar, TooltipAppendContext, TooltipAppender, TooltipElement, TooltipEvent,
+            TooltipPlacement,
+        };
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct PartLine;
+        #[mod_api::horizon_part]
+        impl ItemPart for PartLine {
+            fn tooltip(&self, _: &dyn ClientHost, event: &mut TooltipEvent<'_>) {
+                event
+                    .lines
+                    .push((mod_api::Text::literal("part-line"), u32::MAX));
+            }
+        }
+
+        struct AppenderLine;
+        impl TooltipAppender for AppenderLine {
+            fn append(
+                &self,
+                _: &dyn ClientHost,
+                _: &mod_api::ItemStack,
+                _: &TooltipAppendContext,
+                lines: &mut Vec<(mod_api::Text, u32)>,
+            ) {
+                lines.push((mod_api::Text::literal("appender-line"), u32::MAX));
+            }
+        }
+
+        struct TooltipMod {
+            nested_lines: Arc<Mutex<Vec<Vec<mod_api::Text>>>>,
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for TooltipMod {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                let stick = r.item_key("minecraft:stick");
+                r.item_part(stick, PartLine);
+                r.register_tooltip_appender(
+                    "minecraft:lore",
+                    TooltipPlacement::After("minecraft:lore".to_owned()),
+                    Arc::new(AppenderLine),
+                );
+            }
+            fn item_tooltip(&self, host: &dyn ClientHost, event: &mut ItemTooltipEvent<'_>) {
+                // Re-entrant query from inside a tooltip callback must return base lines only
+                // without re-entering item parts, appenders or item_tooltip.
+                let nested = ItemResource::of(event.stack)
+                    .tooltip(host, event.advanced, event.creative)
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|el| match el {
+                        TooltipElement::Text(t, _) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                self.nested_lines.lock().unwrap().push(nested);
+                event
+                    .lines
+                    .push((mod_api::Text::literal("event-line"), u32::MAX));
+            }
+        }
+
+        let nested_lines = Arc::new(Mutex::new(Vec::new()));
+        let mods: Mods = vec![ModEntry::new(
+            "tooltip_query",
+            Box::new(TooltipMod {
+                nested_lines: Arc::clone(&nested_lines),
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            crate::game::api_values::install_parts(&mods).unwrap();
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                let mut stick = super::ItemStack::new("minecraft:stick", 1);
+                stick.data_mut().set_other(
+                    "minecraft:lore",
+                    Some(horizon_core::nbt::Tag::List(vec![
+                        horizon_core::nbt::Tag::String("base-lore".into()),
+                    ])),
+                );
+                let resource = ItemResource::of(&crate::game::api_values::test_snapshot(&stick));
+                let queried = resource.tooltip(game, false, false).unwrap();
+                let inventory: Vec<_> = game
+                    .stack_tooltip_lines(&stick, false, false)
+                    .into_iter()
+                    .map(|(text, color)| TooltipElement::Text(text.try_into_api().unwrap(), color))
+                    .collect();
+                assert!(queried == inventory);
+                let texts: Vec<mod_api::Text> = queried
+                    .iter()
+                    .filter_map(|el| match el {
+                        TooltipElement::Text(t, _) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(texts.contains(&mod_api::Text::literal("part-line")));
+                assert!(texts.contains(&mod_api::Text::literal("appender-line")));
+                assert!(texts.contains(&mod_api::Text::literal("event-line")));
+
+                let recorded = nested_lines.lock().unwrap();
+                assert!(!recorded.is_empty());
+                for nested in recorded.iter() {
+                    assert!(
+                        !nested.contains(&mod_api::Text::literal("part-line"))
+                            && !nested.contains(&mod_api::Text::literal("appender-line"))
+                            && !nested.contains(&mod_api::Text::literal("event-line")),
+                        "re-entrant query must return base lines only"
+                    );
+                }
+            });
         });
     }
 

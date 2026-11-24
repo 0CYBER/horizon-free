@@ -298,9 +298,10 @@ impl ItemResource {
     ) -> Option<f32> {
         backend_of(host)?.item_resource_attack_damage_bonus(&self.0, attacker, target, base_damage)
     }
-    /// Standard tooltip text, with explicit advanced and creative flags and the client's
-    /// current viewer context. Uses the same line builder as inventory tooltips and skips
-    /// mod callbacks, so a tooltip hook can safely request another item's base lines.
+    /// Inventory tooltip lines, with explicit advanced and creative flags and the client's
+    /// current viewer context. Uses the same line builder as inventory tooltips, including item
+    /// parts, registered tooltip appenders and `item_tooltip` edits. When called re-entrantly
+    /// from inside a tooltip callback, returns the base lines without re-invoking mod callbacks.
     /// Returns None without a client backend, or when the item cannot be resolved.
     pub fn tooltip(
         &self,
