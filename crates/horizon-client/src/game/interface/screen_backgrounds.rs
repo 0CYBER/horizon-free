@@ -225,14 +225,14 @@ impl Game<'_> {
         &self,
         batch: &HudBatch,
     ) -> Option<mod_api::ScreenView<'_>> {
-        if self.screen != Screen::Playing
-            || self.screen_over_playing()
-            || self.remote_loading()
-            || !self.screen_render_listened()
-        {
+        if !self.screen_render_listened() || !self.title_screen_render_uncovered() {
             return None;
         }
         self.title_screen_view(batch)
+    }
+
+    pub(super) fn title_screen_render_uncovered(&self) -> bool {
+        self.screen == Screen::Playing && !self.screen_over_playing() && !self.remote_loading()
     }
 }
 

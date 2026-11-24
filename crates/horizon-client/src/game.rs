@@ -4880,6 +4880,16 @@ impl Game<'_> {
             // resource-reload failure still shows on the title (#4428).
             let drawn = self.draw_title_screen_with_pre_hook(batch);
             if drawn && let Some(title) = &self.title {
+                let mut decorate = |row: horizon_client::multiplayer::SavedServerRow<'_>,
+                                    batch: &mut HudBatch| {
+                    self.decorate_server_row(row, batch)
+                };
+                let decorate =
+                    (mod_api::__private::listened(mod_api::HookId::ServerListRowDecorations)
+                        && self.title_screen_render_uncovered())
+                    .then_some(
+                        &mut decorate as &mut horizon_client::multiplayer::DecorateServerRow<'_>,
+                    );
                 title.draw_with_items(
                     &self.gui.atlas,
                     Some(&self.pack.item_renderer),
@@ -4888,6 +4898,7 @@ impl Game<'_> {
                     self.settings.file.bool("hideSplashTexts"),
                     self.settings.file.bool("hideServerAddress"),
                     &mut |phase, batch| self.draw_screen_phase(batch, phase),
+                    decorate,
                 );
             }
             // ScreenEvent.Render.Post over the title's own screens: a mod draws

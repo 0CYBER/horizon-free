@@ -55,7 +55,7 @@ impl Title {
         hide_splash: bool,
         phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
     ) {
-        self.draw_with_items(atlas, None, batch, cursor, hide_splash, false, phases);
+        self.draw_with_items(atlas, None, batch, cursor, hide_splash, false, phases, None);
     }
     /// [`Title::draw`] with the item models, which draw the item icons of the
     /// Superflat screens the way `GuiGraphicsExtractor.item` does.
@@ -69,6 +69,7 @@ impl Title {
         hide_splash: bool,
         hide_server_address: bool,
         phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
+        decorate_server_row: Option<&mut crate::multiplayer::DecorateServerRow<'_>>,
     ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
         if self.rules.borrow().is_some() {
@@ -117,6 +118,7 @@ impl Title {
             return screen.draw(batch, atlas, cursor, phases);
         }
         let mut fade_from = None;
+        let mut row_tooltip = Vec::new();
         if crate::widgets::narrating()
             && let Some(info) = self.narration()
         {
@@ -800,15 +802,18 @@ impl Title {
                 self.ban_buttons
                     .set([layout.buttons[0], layout.buttons[1], layout.buttons[2]]);
             }
-            Mode::Multiplayer(screen) => screen.draw(
-                atlas,
-                batch,
-                &mut self.caret.borrow_mut(),
-                self.started,
-                cursor,
-                hide_server_address,
-                phases,
-            ),
+            Mode::Multiplayer(screen) => {
+                row_tooltip = screen.draw(
+                    atlas,
+                    batch,
+                    &mut self.caret.borrow_mut(),
+                    self.started,
+                    cursor,
+                    hide_server_address,
+                    phases,
+                    decorate_server_row,
+                );
+            }
             Mode::Realms(screen) => screen.draw(
                 batch,
                 atlas,
@@ -912,7 +917,7 @@ impl Title {
             self.select_tooltip(atlas, batch, cursor, (w, h), worlds, *selected);
         }
         if let Mode::Multiplayer(screen) = &self.mode {
-            screen.draw_tooltip(atlas, batch, cursor);
+            screen.draw_tooltip(atlas, batch, cursor, row_tooltip);
         }
         if let Mode::Realms(screen) = &self.mode {
             screen.draw_tooltip(atlas, batch, cursor, (w, h));

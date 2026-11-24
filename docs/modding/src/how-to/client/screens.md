@@ -40,6 +40,46 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## Decorating Multiplayer rows
+
+Implement the client hook `server_list_row_decorations` to draw on the saved servers in the title's
+Multiplayer list. The event gives you the saved `name` and `address`, the full scrolled `rect`, and its
+`visible_rect`. Both rectangles use `[x, y, width, height]` in GUI pixels. Position your decoration
+relative to `rect`: the game clips the drawing to `visible_rect`, including at the scroll edges.
+Hidden and offscreen entries, LAN games, the LAN scanner, and pages such as Add or Edit Server do not
+fire the hook.
+Native and WebAssembly client mods use the same hook and `DrawContext` methods.
+
+`mouse` gives the pointer in GUI pixels only when it's over the visible part of the row. Append
+`Text` lines to `tooltip` then; the screen places them after drawing its contents, outside the row
+clip, and keeps its own ping or player tooltip lines first. You can test the pointer against your
+sprite's rectangle if you want the tooltip only on the sprite. Keep saved addresses private; do not
+log them or send them off the client.
+
+```rust,ignore
+fn server_list_row_decorations(
+    &self,
+    _: &dyn ClientHost,
+    event: &mut ServerListRowDecorationsEvent<'_>,
+) {
+    let [x, y, w, _] = event.rect;
+    let [sx, sy, sw, sh] = [x + w - 16.0, y + 23.0, 12.0, 8.0];
+    let painted = event.draw.sprite(
+        "example:gui/sprites/region_flag",
+        [0.0, 0.0, 12.0, 8.0],
+        [sx, sy, sw, sh],
+        None,
+    );
+    if painted
+        && let Some([mx, my]) = event.mouse
+        && (sx..sx + sw).contains(&mx)
+        && (sy..sy + sh).contains(&my)
+    {
+        event.tooltip.push(Text::literal("Server region"));
+    }
+}
+```
+
 ## Quit Game
 
 A native client mod with its own Quit Game confirmation can call `host.request_client_quit()`

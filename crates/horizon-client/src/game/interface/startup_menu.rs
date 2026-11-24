@@ -1436,6 +1436,7 @@ impl Loading {
                 self.settings.file.bool("hideSplashTexts"),
                 self.settings.file.bool("hideServerAddress"),
                 &mut |_, _| {},
+                None, // A ClientHost is not available until the game takes over.
             );
         }
         if let Some(focus) = self.menu.key_focus
