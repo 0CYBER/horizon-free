@@ -106,6 +106,7 @@ horizon-client game::mounts::tests::saddling_and_armouring_play_at_pitch_one_fro
 horizon-client game::native_block_entity_transform_tests::structure_transform_placement_rotations_mirrors_unset_and_refusal lib daily child-process
 horizon-client game::native_chat_recipients_tests::a_chat_line_hidden_from_one_receiver_reaches_the_others lib daily resources
 horizon-client game::native_chat_recipients_tests::say_and_me_are_asked_per_receiver_and_a_whisper_is_not lib daily resources
+horizon-client game::native_client_session::tests::title_and_boss_bar_reads_follow_what_the_server_sent lib daily resources
 horizon-client game::native_config_files::tests::compiled_wasm_bulk_files_use_actual_game_filesystem_roots lib daily wasm-fixture
 horizon-client game::native_config_files::tests::world_bulk_files_survive_save_reload_backup_and_world_deletion lib daily game-boot
 horizon-client game::native_custom_geometry::tests::a_beam_stands_its_height_on_its_base lib daily resources

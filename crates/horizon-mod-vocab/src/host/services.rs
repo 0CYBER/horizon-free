@@ -113,6 +113,29 @@ pub trait ClientSession {
         )
     }
     /// Side: client.
+    /// Side: client.
+    /// The title, subtitle and action bar on screen now. Each is None once its timer has run
+    /// out; the subtitle shows only with a title. What this client has been sent; None outside
+    /// a logged-in client world. Sends nothing.
+    fn client_titles(&self) -> Option<ClientTitles> {
+        crate::world::phase::unprovided(
+            "ClientSession::client_titles",
+            "client_titles",
+            crate::world::phase::LoadAccess::ClientSetup,
+        )
+    }
+    /// Side: client.
+    /// The boss bars the window shows, in the order the server added them: each bar's name and
+    /// progress (0 to 1, as drawn). What this client has been sent; None outside a logged-in
+    /// client world. Sends nothing.
+    fn client_boss_bars(&self) -> Option<Vec<ClientBossBarEntry>> {
+        crate::world::phase::unprovided(
+            "ClientSession::client_boss_bars",
+            "client_boss_bars",
+            crate::world::phase::LoadAccess::ClientSetup,
+        )
+    }
+    /// Side: client.
     /// Existing local frame counters; None outside a logged-in client world.
     /// This read collects no history and sends nothing anywhere.
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {

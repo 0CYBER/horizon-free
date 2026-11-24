@@ -66,6 +66,47 @@ impl Game<'_> {
         Some(waypoints(&self.waypoints))
     }
 
+    /// The title, subtitle and action bar on screen now: a title or action bar whose time has
+    /// run out reads as None, and a subtitle shows only with its title. None outside a
+    /// logged-in client world.
+    pub(super) fn native_client_titles(&self) -> Option<mod_api::ClientTitles> {
+        use super::api_values::TryIntoApi;
+        self.native_session()?;
+        let t = &self.titles;
+        // A text too deep for the API reads as its plain words rather than dropping the read.
+        let text = |text: &horizon_client::text::Text| {
+            text.try_into_api()
+                .unwrap_or_else(|_| mod_api::Text::literal(text.plain()))
+        };
+        let title = t.title.clone().filter(|_| t.time > 0);
+        let subtitle = title.as_ref().and(t.subtitle.clone());
+        let action_bar = t.overlay.clone().filter(|_| t.overlay_time > 0);
+        Some(mod_api::ClientTitles::new(
+            title.as_ref().map(&text),
+            subtitle.as_ref().map(&text),
+            action_bar.as_ref().map(text),
+        ))
+    }
+
+    /// The boss bars the window shows, in the order the server added them. None outside a
+    /// logged-in client world.
+    pub(super) fn native_client_boss_bars(&self) -> Option<Vec<mod_api::ClientBossBarEntry>> {
+        use super::api_values::TryIntoApi;
+        self.native_session()?;
+        // A text too deep for the API reads as its plain words rather than dropping the bar.
+        let text = |text: &horizon_client::text::Text| {
+            text.try_into_api()
+                .unwrap_or_else(|_| mod_api::Text::literal(text.plain()))
+        };
+        Some(
+            self.boss_overlay
+                .bars(horizon_client::boss_overlay::now_millis())
+                .into_iter()
+                .map(|bar| mod_api::ClientBossBarEntry::new(text(&bar.name), bar.progress))
+                .collect(),
+        )
+    }
+
     /// The local player's item use (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`,
     /// `getUseItemRemainingTicks`); None when no item is in use or outside a logged-in client
     /// world.
@@ -387,6 +428,92 @@ pub(super) mod tests {
             list.entries[1].id,
             mod_api::ClientWaypointId::Name("home".into())
         );
+    }
+
+    /// The titles and boss bars a client reads are the ones the server sent it.
+    #[test]
+    #[ignore = "daily"]
+    fn title_and_boss_bar_reads_follow_what_the_server_sent() {
+        use horizon_protocol::packets::play::{self, Clientbound as C};
+        use horizon_core::nbt::Tag;
+
+        fn s(text: &str) -> Tag {
+            Tag::String(text.into())
+        }
+
+        fn plain(text: &mod_api::Text) -> String {
+            let own = match &text.content {
+                mod_api::text::TextContent::Literal(words) => words.as_str(),
+                _ => "",
+            };
+            text.children
+                .iter()
+                .map(plain)
+                .fold(own.to_owned(), |all, c| all + &c)
+        }
+
+        with_client_game(|game| {
+            assert_eq!(game.client_session().client_titles(), None);
+            assert_eq!(game.client_session().client_boss_bars(), None);
+            let _server = logged_client(game);
+            // Nothing shown yet: an empty snapshot, not None.
+            let titles = game.client_session().client_titles().unwrap();
+            assert!(titles.title.is_none());
+            assert!(titles.subtitle.is_none());
+            assert!(titles.action_bar.is_none());
+            assert_eq!(game.client_session().client_boss_bars(), Some(Vec::new()));
+
+            // Titles and an action bar.
+            game.handle_packet(C::SetSubtitleText(play::Text { text: s("sub") }))
+                .unwrap();
+            // A subtitle alone is not shown: the HUD draws it under a title.
+            assert!(
+                game.client_session()
+                    .client_titles()
+                    .unwrap()
+                    .subtitle
+                    .is_none()
+            );
+            game.handle_packet(C::SetTitleText(play::Text { text: s("big") }))
+                .unwrap();
+            game.handle_packet(C::SetActionBarText(play::Text { text: s("bar") }))
+                .unwrap();
+            let titles = game.client_session().client_titles().unwrap();
+            assert_eq!(
+                titles.title.as_ref().map(plain).as_deref(),
+                Some("big")
+            );
+            assert_eq!(
+                titles.subtitle.as_ref().map(plain).as_deref(),
+                Some("sub")
+            );
+            assert_eq!(
+                titles.action_bar.as_ref().map(plain).as_deref(),
+                Some("bar")
+            );
+            game.titles.clear();
+            game.titles.overlay_time = 0;
+            let titles = game.client_session().client_titles().unwrap();
+            assert!(titles.title.is_none() && titles.action_bar.is_none());
+
+            // A boss bar.
+            game.handle_packet(C::BossEvent(play::BossEvent {
+                id: 1,
+                action: play::BossAction::Add {
+                    name: s("Dragon"),
+                    progress: 0.5,
+                    color: 5,
+                    overlay: 0,
+                    darken: false,
+                    music: false,
+                    fog: false,
+                },
+            }))
+            .unwrap();
+            let bars = game.client_session().client_boss_bars().unwrap();
+            assert_eq!(bars.len(), 1);
+            assert_eq!(plain(&bars[0].name), "Dragon");
+        });
     }
 
     pub(in crate::game) fn logged_client(

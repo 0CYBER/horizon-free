@@ -38,6 +38,20 @@ impl ClientSession for Game<'_> {
         );
         self.native_client_waypoints()
     }
+    fn client_titles(&self) -> Option<ClientTitles> {
+        mod_api::__private::check_access(
+            "client_titles",
+            mod_api::__private::LoadAccess::ClientSetup,
+        );
+        self.native_client_titles()
+    }
+    fn client_boss_bars(&self) -> Option<Vec<ClientBossBarEntry>> {
+        mod_api::__private::check_access(
+            "client_boss_bars",
+            mod_api::__private::LoadAccess::ClientSetup,
+        );
+        self.native_client_boss_bars()
+    }
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {
         mod_api::__private::check_access(
             "client_frame_stats",
