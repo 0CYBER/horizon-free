@@ -313,13 +313,18 @@ impl Game<'_> {
         {
             return b.seat(index, listed.len(), false, PLAYER_RIDING_OFFSET, false);
         }
+        self.boat_seat(i, 0)
+    }
+    /// `Entity.positionRider` for a player whose seat the server has assigned.
+    pub(super) fn boat_seat(&self, i: usize, index: usize) -> Vec3 {
+        let b = &self.boats[i];
         let players = self.boat_players(b.id);
         let count = if self.persist.off_level.is_empty() {
             players.max(1) + self.boat_mobs(b.id).len()
         } else {
             self.boat_passengers(b.id) + usize::from(players == 0)
         };
-        b.seat(0, count, false, PLAYER_RIDING_OFFSET, false)
+        b.seat(index, count, false, PLAYER_RIDING_OFFSET, false)
     }
     /// `getRootVehicle` of mob `j`: the mob or boat at the bottom of what it
     /// rides, None when it rides nothing.

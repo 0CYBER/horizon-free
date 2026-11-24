@@ -263,6 +263,8 @@ impl Game<'_> {
         }
         let (keys, dead) = (input_keys(g.input), g.dead || g.health <= 0.0);
         let boat = self.boats.iter().position(|b| b.id == vehicle);
+        // Choose the seat before swapping this guest into the window player's slot.
+        let boat_seat = usize::from(boat.is_some() && !self.guest_controls_vehicle(conn, vehicle));
         let cart = self.carts.iter().any(|c| c.id == vehicle);
         let mount = self.mobs.iter().any(|m| m.id == vehicle);
         let cushion = self.cushions.iter().any(|c| c.id == vehicle);
@@ -327,7 +329,7 @@ impl Game<'_> {
                     game.dismount(i);
                     return None;
                 }
-                let p = game.player_boat_seat(i);
+                let p = game.boat_seat(i, boat_seat);
                 return Some([p.x, p.y, p.z]);
             }
             // The minecart moves with the rider's input, and lets it out when
@@ -400,7 +402,10 @@ impl Game<'_> {
             .boats
             .iter()
             .position(|b| b.id == vehicle)
-            .map(|i| (self.boats[i].position, self.player_boat_seat(i)))
+            .map(|i| {
+                let seat = usize::from(!self.guest_controls_vehicle(conn, vehicle));
+                (self.boats[i].position, self.boat_seat(i, seat))
+            })
             .or_else(|| {
                 self.carts
                     .iter()

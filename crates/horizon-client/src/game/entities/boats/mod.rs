@@ -1378,11 +1378,7 @@ impl Game<'_> {
             self.swing_arm();
             return true;
         }
-        if sneaking
-            || self.boats[i].out_of_control >= 60.0
-            || self.ridden_by_guest(self.boats[i].id)
-            || !self.boat_has_room(i)
-        {
+        if sneaking || self.boats[i].out_of_control >= 60.0 || !self.boat_has_room(i) {
             return false;
         }
         let id = self.boats[i].id;

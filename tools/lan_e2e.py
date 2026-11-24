@@ -14508,6 +14508,80 @@ CHECKS += ['hive_bees']
 CHECK_FNS['hive_bees'] = check_hive_bees
 
 
+def check_boat_boarding_order(host, guest, out):
+    """The first player aboard keeps the front seat and steering when the second joins (#15941)."""
+    positions = [(game, pos_of(game)) for game in (host, guest)]
+    x, _, z = (math.floor(v) for v in positions[0][1])
+    y = 100
+    spot = (x + 0.5, y, z + 0.5)
+    host('command', command=f'fill {x - 3} {y - 2} {z - 2} {x + 3} {y - 1} {z + 10} minecraft:stone')
+    host('command', command=f'fill {x - 3} {y} {z - 2} {x + 3} {y + 3} {z + 10} minecraft:air')
+    host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 9} minecraft:water')
+    tag = 'lan_boat_boarding_order'
+
+    def boat(game, boat_id):
+        return next(o for o in game('status')['objects'] if o['id'] == boat_id)
+
+    result = {}
+    try:
+        for driver, passenger in ((guest, host), (host, guest)):
+            host('command', command=f'summon minecraft:oak_boat {spot[0]} {y - 0.1} {spot[2]} '
+                 f'{{Rotation:[0f,0f],Tags:["{tag}"]}}')
+            for game, dx in ((driver, -2), (passenger, 2)):
+                game('command', command=f'tp @s {spot[0] + dx} {y} {spot[2]}')
+            host.wait(24)
+            guest.wait(12)
+            boat_id = board(driver, 'oak_boat', spot)['id']
+            # Aim at the boat's empty end so the first rider cannot intercept the click.
+            px, py, pz = boat(passenger, boat_id)['position']
+            passenger.raw('look-at', f'{px:.2f}', f'{py + 0.25:.2f}', f'{pz - 0.5:.2f}')
+            passenger.raw('mouse', 'right', 'click')
+            passenger.wait(12)
+            boarded = passenger('status').get('riding') == boat_id
+            if not boarded:
+                # Measure seat assignment and steering even when boarding by interaction failed.
+                passenger('command', command=f'ride @s mount @e[tag={tag},limit=1]')
+            passenger.until(lambda: passenger('status').get('riding'), lambda riding: riding == boat_id, ticks=20)
+            assert driver('status').get('riding') == boat_id
+            host.wait(12)
+            guest.wait(12)
+
+            shared_boat = boat(host, boat_id)
+            start = shared_boat['position']
+            yaw = math.radians(shared_boat['yaw'])
+
+            def offset(position):
+                return round(-(position[0] - start[0]) * math.sin(yaw)
+                             + (position[2] - start[2]) * math.cos(yaw), 3)
+
+            seen = {
+                'passenger_boarded_by_click': boarded,
+                'server_seats': {g.name: offset(server_player(host, g)['position']) for g in (host, guest)},
+                'client_seats': {g.name: offset(pos_of(g)) for g in (host, guest)},
+            }
+            for rider in (passenger, driver):
+                before = boat(host, boat_id)['position']
+                rider.script(['key w down', 'wait 20', 'key w up', 'wait 8'])
+                after = boat(host, boat_id)['position']
+                seen[f'{rider.name}_paddle_blocks'] = round(math.dist(before, after), 3)
+            result[f'{driver.name}_first'] = seen
+            host('command', command=f'kill @e[tag={tag}]')
+        lab.write_json(out / 'boat-boarding-order.json', result)
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+        for game, pos in positions:
+            game('command', command='tp @s ' + ' '.join(str(v) for v in pos))
+    for driver, passenger in ((guest, host), (host, guest)):
+        seen = result[f'{driver.name}_first']
+        assert seen['passenger_boarded_by_click'], result
+        for seats in (seen['server_seats'], seen['client_seats']):
+            assert abs(seats[driver.name] - 0.2) < 0.15 and abs(seats[passenger.name] + 0.6) < 0.15, result
+        assert seen[f'{passenger.name}_paddle_blocks'] < 0.15 and seen[f'{driver.name}_paddle_blocks'] > 0.5, result
+    return result
+
+
+CHECKS += ['boat_boarding_order']
+CHECK_FNS['boat_boarding_order'] = check_boat_boarding_order
 
 
 def prepare_view_center(bins, *games):
