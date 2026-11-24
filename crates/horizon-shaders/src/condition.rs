@@ -5,11 +5,20 @@
 //! pack would then lose a whole section of its settings over one unknown name.
 
 use crate::Macros;
-use crate::macros::{is_ident, is_ident_start};
+use crate::macros::{Budget, MAX_LINE_TOKENS, is_ident, is_ident_start};
 
 /// The value of a condition; `Err` says what is wrong with it.
 pub fn eval_condition(expr: &str, macros: &Macros) -> Result<i64, String> {
-    let tokens = tokens(&resolve_defined(expr, macros)?, macros)?;
+    eval_condition_within(expr, macros, &Budget::new(MAX_LINE_TOKENS))
+}
+
+/// [`eval_condition`] whose macro expansion is charged to `budget`; `Err` when it runs out.
+pub(crate) fn eval_condition_within(
+    expr: &str,
+    macros: &Macros,
+    budget: &Budget,
+) -> Result<i64, String> {
+    let tokens = tokens(&resolve_defined(expr, macros)?, macros, budget)?;
     let mut parser = Parser {
         tokens: &tokens,
         at: 0,
@@ -71,12 +80,13 @@ impl Conditionals {
         word: &str,
         rest: &str,
         macros: &Macros,
+        budget: &Budget,
     ) -> Result<bool, String> {
         let on = self.active();
         match word {
             "if" | "ifdef" | "ifndef" => {
                 let value = if on {
-                    test(word, rest, macros)
+                    test(word, rest, macros, budget)
                 } else {
                     Ok(false)
                 };
@@ -101,7 +111,7 @@ impl Conditionals {
                 let take = b.outer && !b.taken;
                 let value = match word {
                     "else" => Ok(take),
-                    _ if take => test("if", rest, macros),
+                    _ if take => test("if", rest, macros, budget),
                     _ => Ok(false),
                 };
                 b.on = *value.as_ref().unwrap_or(&false);
@@ -118,12 +128,12 @@ impl Conditionals {
     }
 }
 
-fn test(word: &str, rest: &str, macros: &Macros) -> Result<bool, String> {
+fn test(word: &str, rest: &str, macros: &Macros, budget: &Budget) -> Result<bool, String> {
     let name = rest.split_whitespace().next().unwrap_or("");
     match word {
         "ifdef" => Ok(macros.is_defined(name)),
         "ifndef" => Ok(!macros.is_defined(name)),
-        _ => eval_condition(rest, macros)
+        _ => eval_condition_within(rest, macros, budget)
             .map(|v| v != 0)
             .map_err(|e| format!("`#{word} {rest}`: {e}; read as false")),
     }
@@ -194,8 +204,11 @@ const OPS: [&str; 22] = [
     "<", ">", "&", "^", "|",
 ];
 
-fn tokens(expr: &str, macros: &Macros) -> Result<Vec<Token>, String> {
-    let expanded = macros.expand(expr);
+fn tokens(expr: &str, macros: &Macros, budget: &Budget) -> Result<Vec<Token>, String> {
+    let expanded = macros.expand_within(expr, budget);
+    if budget.over() {
+        return Err("macro expansion is too large".into());
+    }
     let mut out = Vec::new();
     let mut rest = expanded.trim_start();
     while let Some(c) = rest.chars().next() {

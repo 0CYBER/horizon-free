@@ -157,7 +157,12 @@ impl Properties {
         conditionals: &mut Conditionals,
         macros: &mut Macros,
     ) {
-        match conditionals.apply(word, rest, macros) {
+        match conditionals.apply(
+            word,
+            rest,
+            macros,
+            &crate::macros::Budget::new(crate::macros::MAX_LINE_TOKENS),
+        ) {
             Err(e) => self.note(number, &e),
             Ok(true) => {}
             Ok(false) if conditionals.active() => match word {

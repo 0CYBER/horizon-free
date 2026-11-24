@@ -13,11 +13,18 @@ use std::collections::HashMap;
 use crate::Macros;
 use crate::Pack;
 use crate::condition::{Conditionals, split_directive};
+use crate::macros::{Budget, MAX_LINE_TOKENS, MAX_NESTING};
 use crate::pack::normalize;
 
 const MAX_DEPTH: usize = 10;
 /// How many lines one macro call may span.
 const MAX_CALL_LINES: usize = 64;
+/// Most output lines of one stage. A file that includes the next level eight times per level
+/// emits 8^depth lines; real stages, includes and all, are in the low tens of thousands.
+const MAX_LINES: usize = 1 << 18;
+/// Most tokens all macro replacements of one stage may add, as many as ~16 times a large real
+/// stage needs; one line gets [`MAX_LINE_TOKENS`] of it.
+const MAX_TOKENS: usize = 1 << 24;
 
 /// Where a line came from: an index into [`Preprocessed::files`] and a line number from 1.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -69,6 +76,9 @@ pub fn preprocess(pack: &Pack, path: &str, macros: &Macros) -> Preprocessed {
         out: Preprocessed::default(),
         code: Vec::new(),
         texts: HashMap::new(),
+        file_index: HashMap::new(),
+        tokens_left: MAX_TOKENS,
+        stopped: false,
     };
     run.file(path, 0, Origin::default());
     // Iris 1.11.7 draws a program whose `#if` stays open to its end: a warning, as there.
@@ -90,10 +100,19 @@ struct Run<'p> {
     code: Vec<String>,
     /// Files already read: a guarded header is included many times.
     texts: HashMap<String, Option<String>>,
+    /// Where each of `out.files` is, so that a pack with many files isn't searched per include.
+    file_index: HashMap<String, usize>,
+    /// What is left of [`MAX_TOKENS`].
+    tokens_left: usize,
+    /// A limit was passed and diagnosed: nothing more is read, so one is reported once.
+    stopped: bool,
 }
 
 impl Run<'_> {
     fn file(&mut self, path: &str, depth: usize, from: Origin) {
+        if self.stopped {
+            return;
+        }
         let cached = self
             .texts
             .entry(path.to_owned())
@@ -101,18 +120,29 @@ impl Run<'_> {
         let Some(text) = cached.clone() else {
             return self.diagnose(from, &format!("can't find `{path}`"));
         };
-        let file = match self.out.files.iter().position(|f| f == path) {
-            Some(i) => i,
+        let file = match self.file_index.get(path) {
+            Some(&i) => i,
             None => {
                 self.out.files.push(path.to_owned());
+                self.file_index
+                    .insert(path.to_owned(), self.out.files.len() - 1);
                 self.out.files.len() - 1
             }
-        } as u16;
+        };
+        let Some(file) = file_slot(file) else {
+            self.out.files.pop();
+            self.file_index.remove(path);
+            self.stopped = true;
+            return self.diagnose(
+                from,
+                &format!("more than {} files read", usize::from(u16::MAX) + 1),
+            );
+        };
         let (text, comments) = strip_comments(&text);
         let lines: Vec<&str> = text.split('\n').map(|l| l.trim_end_matches('\r')).collect();
         let mut comments = comments.into_iter().peekable();
         let mut n = 0;
-        while n < lines.len() {
+        while n < lines.len() && !self.stopped {
             let first = n;
             let mut line = lines[n].to_owned();
             while line.ends_with('\\') && n + 1 < lines.len() {
@@ -123,11 +153,24 @@ impl Run<'_> {
             n += 1;
             // A macro call's arguments may span lines: they join the line the call starts on.
             if !line.trim_start().starts_with('#') && self.conditionals.active() {
+                let probe_origin = Origin {
+                    file,
+                    line: first as u32 + 1,
+                };
                 while n < lines.len()
                     && n - first < MAX_CALL_LINES
                     && !lines[n].trim_start().starts_with('#')
-                    && self.macros.unfinished_call(&line, &lines[n..])
                 {
+                    // The probe expands the line so far: it spends the stage budget too.
+                    let allowed = self.tokens_left.min(MAX_LINE_TOKENS);
+                    let budget = Budget::new(allowed);
+                    let unfinished = self.macros.unfinished_call(&line, &lines[n..], &budget);
+                    if self.charge(&budget, allowed, probe_origin) {
+                        return;
+                    }
+                    if !unfinished {
+                        break;
+                    }
                     line.push(' ');
                     line.push_str(lines[n]);
                     n += 1;
@@ -159,17 +202,33 @@ impl Run<'_> {
         let Some(after) = line.trim_start().strip_prefix('#') else {
             let code = if self.conditionals.active() {
                 self.macros.define("__LINE__", origin.line.to_string());
-                self.macros.expand(line)
+                let allowed = self.tokens_left.min(MAX_LINE_TOKENS);
+                let budget = Budget::new(allowed);
+                let code = self.macros.expand_within(line, &budget);
+                if self.charge(&budget, allowed, origin) {
+                    return;
+                }
+                code
             } else {
                 String::new()
             };
             return self.emit(code, origin);
         };
         self.emit(String::new(), origin);
+        if self.stopped {
+            return;
+        }
         let Some((word, rest)) = split_directive(after) else {
             return self.diagnose(origin, &format!("unknown directive `#{}`", after.trim()));
         };
-        match self.conditionals.apply(word, rest, &self.macros) {
+        // A condition's expansion spends the stage's budget, as a source line's does.
+        let allowed = self.tokens_left.min(MAX_LINE_TOKENS);
+        let budget = Budget::new(allowed);
+        let applied = self.conditionals.apply(word, rest, &self.macros, &budget);
+        if self.charge(&budget, allowed, origin) {
+            return;
+        }
+        match applied {
             // As Iris loads such a pack: the branch is skipped, the program kept.
             Err(e) if e.ends_with("read as false") => {
                 return self.out.warnings.push(Diagnostic { origin, message: e });
@@ -215,6 +274,25 @@ impl Run<'_> {
         }
     }
 
+    /// Takes what `budget` spent out of the stage's tokens; `true` (and stopped, diagnosed once)
+    /// when it ran over.
+    fn charge(&mut self, budget: &Budget, allowed: usize, origin: Origin) -> bool {
+        self.tokens_left -= allowed - budget.left();
+        if !budget.over() {
+            return false;
+        }
+        self.stopped = true;
+        let message = if allowed < MAX_LINE_TOKENS {
+            format!("macro expansions add more than {MAX_TOKENS} tokens")
+        } else {
+            format!(
+                "one line's macro expansion adds more than {MAX_LINE_TOKENS} tokens or nests more than {MAX_NESTING} calls"
+            )
+        };
+        self.diagnose(origin, &message);
+        true
+    }
+
     fn define(&mut self, rest: &str, origin: Origin) {
         if let Err(e) = self.macros.define_line(rest) {
             self.diagnose(origin, &e);
@@ -222,6 +300,13 @@ impl Run<'_> {
     }
 
     fn emit(&mut self, code: String, origin: Origin) {
+        if self.code.len() >= MAX_LINES {
+            if !self.stopped {
+                self.stopped = true;
+                self.diagnose(origin, &format!("the output passes {MAX_LINES} lines"));
+            }
+            return;
+        }
         self.code.push(code);
         self.out.lines.push(origin);
     }
@@ -232,6 +317,11 @@ impl Run<'_> {
             message: message.to_owned(),
         });
     }
+}
+
+/// The `Origin::file` of the file at `index` of `Preprocessed::files`; `None` past 65,535.
+fn file_slot(index: usize) -> Option<u16> {
+    u16::try_from(index).ok()
 }
 
 /// An `#include` path: from the `shaders` folder with a leading `/`, else from the including
@@ -335,6 +425,71 @@ mod tests {
             ]
         );
         assert!(p.diagnostics.is_empty(), "{:?}", p.diagnostics);
+    }
+
+    /// 8 includes per level for 8 levels would be 8^8 = 16.8 million lines; it stops at the limit.
+    #[test]
+    fn an_include_fan_out_stops_at_the_line_limit() {
+        let levels = 8;
+        let mut files = vec![];
+        for k in 0..levels {
+            let body = format!("#include \"l{}.glsl\"\n", k + 1).repeat(8);
+            files.push((format!("program/l{k}.glsl"), body));
+        }
+        files.push((format!("program/l{levels}.glsl"), "float x;\n".to_owned()));
+        files.push(("program/final.fsh".into(), "#include \"l0.glsl\"\n".into()));
+        let list: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let p = run(&list);
+        assert_eq!(p.lines.len(), MAX_LINES);
+        assert_eq!(p.code.split('\n').count(), MAX_LINES);
+        assert_eq!(
+            p.diagnostics.len(),
+            1,
+            "{} diagnostics, first {:?}",
+            p.diagnostics.len(),
+            p.diagnostics.first()
+        );
+        assert!(p.diagnostics[0].message.contains("lines"));
+    }
+
+    #[test]
+    fn macro_expansion_that_doubles_per_level_stops_at_the_token_limit() {
+        let levels = 30;
+        let mut src = String::from("#define A0 x\n");
+        for k in 1..=levels {
+            src += &format!("#define A{k} A{} A{}\n", k - 1, k - 1);
+        }
+        // Two uses: the second must not get a fresh line budget out of nothing.
+        src += &format!("A{levels}\nfloat after;\nA{levels}\n");
+        let p = run(&[("program/final.fsh", &src)]);
+        assert_eq!(p.diagnostics.len(), 1, "{:?}", p.diagnostics);
+        assert!(p.diagnostics[0].message.contains("macro expansion"));
+        assert!(p.code.len() < 1 << 20, "{} bytes", p.code.len());
+    }
+
+    #[test]
+    fn expansion_within_the_limits_is_untouched() {
+        let levels = 10;
+        let mut src = String::from("#define A0 x\n");
+        for k in 1..=levels {
+            src += &format!("#define A{k} A{} A{}\n", k - 1, k - 1);
+        }
+        src += &format!("A{levels}\n");
+        let p = run(&[("program/final.fsh", &src)]);
+        assert!(p.diagnostics.is_empty(), "{:?}", p.diagnostics);
+        assert_eq!(p.code.matches('x').count(), 1 << levels);
+    }
+
+    /// The index of a 65,537th file doesn't fit an `Origin`; it must not wrap onto file 0. (Reading
+    /// that many files through a pack takes about a minute, so the conversion is tested alone.)
+    #[test]
+    fn a_file_index_past_u16_is_refused() {
+        assert_eq!(file_slot(0), Some(0));
+        assert_eq!(file_slot(usize::from(u16::MAX)), Some(u16::MAX));
+        assert_eq!(file_slot(usize::from(u16::MAX) + 1), None);
     }
 
     #[test]
@@ -482,5 +637,41 @@ mod tests {
         assert_eq!(p.warnings.len(), 1);
         let code: Vec<&str> = code_lines(&p).iter().map(|(c, _)| *c).collect();
         assert_eq!(code, ["float b;", "float c;"]);
+    }
+
+    #[test]
+    fn conditions_spend_the_stage_budget() {
+        // One condition expands to 30,001 tokens, under the line limit; 600 of them pass the stage's.
+        let mut src = format!("#define SUM ({}1)\n", "1+".repeat(15_000));
+        src += &"#if SUM\n#endif\n".repeat(600);
+        let p = run(&[("program/final.fsh", &src)]);
+        assert_eq!(p.diagnostics.len(), 1, "{:?}", p.diagnostics.first());
+        assert!(
+            p.diagnostics[0]
+                .message
+                .contains("macro expansions add more")
+        );
+    }
+
+    #[test]
+    fn a_directive_after_the_line_limit_is_not_handled() {
+        let src = format!("{}#error boom\n", "\n".repeat(MAX_LINES));
+        let p = run(&[("program/final.fsh", &src)]);
+        assert_eq!(p.diagnostics.len(), 1, "{:?}", p.diagnostics);
+        assert!(p.diagnostics[0].message.contains("lines"));
+    }
+
+    #[test]
+    fn a_continuation_probe_spends_the_stage_budget() {
+        // Each call opens `F(` after a 30,001-token expansion and never closes it: the probe
+        // expands the growing line up to 64 times, 1.9 million tokens a call.
+        let mut src = format!("#define SUM ({}1)\n#define F(x) x\n", "1+".repeat(15_000));
+        for _ in 0..12 {
+            src += "SUM F(\n";
+            src += &"\n".repeat(64);
+        }
+        let p = run(&[("program/final.fsh", &src)]);
+        assert_eq!(p.diagnostics.len(), 1, "{:?}", p.diagnostics.first());
+        assert!(p.diagnostics[0].message.contains("macro expansion"));
     }
 }
