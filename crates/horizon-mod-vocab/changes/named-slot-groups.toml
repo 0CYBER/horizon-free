@@ -1,0 +1,7 @@
+ids = [
+  "method:Hooks::item_attribute_modifier",
+  "type:ItemAttributeModifiers",
+  "type:ItemAttributeModifier",
+]
+why = "Item attribute modifiers can record a mod-defined slot group name (NamedSlotGroup, add_named/replace_named) alongside vanilla EquipmentSlotGroups. The name is stored and round-tripped; equipment evaluators still match only vanilla names, so a named group does not make the modifier apply yet. ItemAttributeModifier gains an optional named_slot field, so its wire layout and the wire layout of ItemAttributeModifiers, which holds those entries, change for wasm mods."
+migrate = "Rebuild wasm mods against this SDK for the changed ItemAttributeModifier and ItemAttributeModifiers wire layouts; older builds are refused at load. Mods that add modifiers with vanilla groups are unchanged and keep applying as before. Named groups are storage only: do not rely on them to apply a modifier in a custom slot."

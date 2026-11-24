@@ -7,6 +7,7 @@ use horizon_items::item_data::ModifierRow;
 use horizon_items::items::{ItemStack, Items};
 use mod_api::{
     AttributeModifier, AttributeOperation, EquipmentSlotGroup, Identifier, ItemAttributeModifier,
+    NamedSlotGroup,
 };
 use std::borrow::Cow;
 
@@ -30,8 +31,8 @@ fn modified<'a>(stack: &ItemStack, rows: Cow<'a, [ModifierRow]>) -> Cow<'a, [Mod
     if !mod_api::__private::listened(mod_api::HookId::ItemAttributeModifier) {
         return rows;
     }
-    // A row the API can't name (an unknown operation or slot group, a bad
-    // id) is kept as it is, ahead of the rest.
+    // A row the API can't name (an unknown operation, a malformed slot group
+    // or a bad id) is kept as it is, ahead of the rest.
     let mut kept = Vec::new();
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows.iter() {
@@ -72,13 +73,18 @@ fn entry(row: &ModifierRow) -> Option<ItemAttributeModifier> {
         "add_multiplied_total" => AttributeOperation::AddMultipliedTotal,
         _ => return None,
     };
-    let slot = SLOT_GROUPS.iter().find(|(name, _)| *name == row.slot)?.1;
     let modifier = AttributeModifier::new(Identifier::parse(&row.id).ok()?, row.amount, operation);
-    Some(ItemAttributeModifier::new(
-        Identifier::parse(&row.attribute).ok()?,
-        modifier,
-        slot,
-    ))
+    let attribute = Identifier::parse(&row.attribute).ok()?;
+    if let Some((_, group)) = SLOT_GROUPS.iter().find(|(name, _)| *name == row.slot) {
+        return Some(ItemAttributeModifier::new(attribute, modifier, *group));
+    }
+    // A name the vanilla groups do not use is a mod's slot group. Keep its text
+    // exactly so it survives the round-trip; equipment evaluators do not apply
+    // named groups yet (they only match vanilla names), so this stores the
+    // modifier rather than making it take effect.
+    NamedSlotGroup::new(row.slot.clone())
+        .ok()
+        .map(|group| ItemAttributeModifier::named(attribute, modifier, group))
 }
 
 fn row(entry: &ItemAttributeModifier) -> ModifierRow {
@@ -88,9 +94,13 @@ fn row(entry: &ItemAttributeModifier) -> ModifierRow {
         AttributeOperation::AddMultipliedTotal => "add_multiplied_total",
         _ => unreachable!("AttributeOperation: unhandled variant"),
     };
-    let slot = match SLOT_GROUPS.iter().find(|(_, group)| *group == entry.slot) {
-        Some((name, _)) => name,
-        None => unreachable!("EquipmentSlotGroup: unhandled variant"),
+    let slot = if let Some(group) = &entry.named_slot {
+        group.as_str()
+    } else {
+        match SLOT_GROUPS.iter().find(|(_, group)| *group == entry.slot) {
+            Some((name, _)) => name,
+            None => unreachable!("EquipmentSlotGroup: unhandled variant"),
+        }
     };
     ModifierRow::new(
         &entry.attribute.to_string(),
@@ -106,16 +116,32 @@ mod tests {
     use super::*;
 
     /// Every slot group and operation the API names reads back as the row it
-    /// came from.
+    /// came from, and a mod's own group keeps its exact name.
     #[test]
     fn rows_and_entries_name_the_same_modifier() {
         for (slot, _) in SLOT_GROUPS {
             for operation in ["add_value", "add_multiplied_base", "add_multiplied_total"] {
                 let source = ModifierRow::new("minecraft:luck", "test:charm", 0.5, operation, slot);
-                assert_eq!(row(&entry(&source).unwrap()), source);
+                let decoded = entry(&source).unwrap();
+                assert!(decoded.named_slot.is_none());
+                assert_eq!(row(&decoded), source);
             }
         }
-        let unknown = ModifierRow::new("minecraft:luck", "test:charm", 0.5, "add_value", "pocket");
-        assert!(entry(&unknown).is_none());
+        for slot in ["pocket", "curios:ring", "mod:accessory/slot"] {
+            let source = ModifierRow::new("minecraft:luck", "test:charm", 0.5, "add_value", slot);
+            let decoded = entry(&source).unwrap();
+            assert_eq!(decoded.slot, EquipmentSlotGroup::Any);
+            assert_eq!(decoded.named_slot.as_ref().unwrap().as_str(), slot);
+            assert_eq!(row(&decoded), source);
+        }
+        // A malformed name is not a slot group the API can carry.
+        let bad = ModifierRow::new(
+            "minecraft:luck",
+            "test:charm",
+            0.5,
+            "add_value",
+            "Bad Name!",
+        );
+        assert!(entry(&bad).is_none());
     }
 }

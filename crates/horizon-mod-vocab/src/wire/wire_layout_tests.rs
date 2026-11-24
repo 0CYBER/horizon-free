@@ -586,6 +586,21 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
             id("minecraft:generic.attack_damage"),
             modifier,
             EquipmentSlotGroup::MainHand,
+            Option::<NamedSlotGroup>::None,
+        ),
+    );
+    let named = ItemAttributeModifier::named(
+        id("minecraft:luck"),
+        AttributeModifier::new(id("example:ring"), 1.0, AttributeOperation::AddValue),
+        NamedSlotGroup::new("curios:ring").unwrap(),
+    );
+    fields(
+        named.clone(),
+        (
+            id("minecraft:luck"),
+            AttributeModifier::new(id("example:ring"), 1.0, AttributeOperation::AddValue),
+            EquipmentSlotGroup::Any,
+            Some(NamedSlotGroup::new("curios:ring").unwrap()),
         ),
     );
     fields(

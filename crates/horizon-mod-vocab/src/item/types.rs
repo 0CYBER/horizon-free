@@ -338,6 +338,70 @@ pub enum EquipmentSlotGroup {
     Saddle,
 }
 
+/// A mod-defined equipment slot group's name, for example `curios:ring`.
+///
+/// Use this to record a modifier for a slot Horizon does not name in
+/// [`EquipmentSlotGroup`]. The name travels as text and is kept unchanged, so
+/// the stack's component stores and round-trips it. Equipment evaluators only
+/// match vanilla group names today, so a named group does **not** yet make its
+/// modifier apply; this is storage, not custom-slot behaviour. The vanilla enum
+/// and its wire layout are not extended.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, horizon_mod_api_macros::Wire)]
+#[wire(via = String)]
+#[non_exhaustive]
+pub struct NamedSlotGroup(String);
+
+impl NamedSlotGroup {
+    /// A named group from `name`, either a bare path (`pocket`) or a
+    /// `namespace:path` pair (`curios:ring`) with one colon and both parts
+    /// nonempty. A name is at most 256 characters and uses lowercase letters,
+    /// digits and `_ . / - :` only. The text is kept as it arrived.
+    pub fn new(name: impl Into<String>) -> Result<Self, &'static str> {
+        let name = name.into();
+        let parts = name.split(':').collect::<Vec<_>>();
+        let structure = match parts.as_slice() {
+            [path] => !path.is_empty(),
+            [namespace, path] => !namespace.is_empty() && !path.is_empty(),
+            _ => false,
+        };
+        if name.len() > 256
+            || !structure
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.-/:".contains(&c))
+        {
+            return Err(
+                "a slot group name must be a path or namespace:path of 1..=256 lowercase resource-location characters",
+            );
+        }
+        Ok(Self(name))
+    }
+    /// The group's name, exactly as it was given.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for NamedSlotGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&NamedSlotGroup> for String {
+    fn from(group: &NamedSlotGroup) -> Self {
+        group.0.clone()
+    }
+}
+
+impl TryFrom<String> for NamedSlotGroup {
+    type Error = &'static str;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::new(name)
+    }
+}
+
 /// One attribute modifier an item stack grants (vanilla's
 /// `ItemAttributeModifiers.Entry`): the attribute (`minecraft:armor`), the
 /// modifier, and the slots it applies in.
@@ -350,8 +414,10 @@ pub struct ItemAttributeModifier {
     pub attribute: Identifier,
     /// The modifier.
     pub modifier: AttributeModifier,
-    /// The slots it applies in.
+    /// The slots it applies in. `Any` when `named_slot` is set.
     pub slot: EquipmentSlotGroup,
+    /// A mod-defined group, used instead of `slot` when set.
+    pub named_slot: Option<NamedSlotGroup>,
 }
 
 impl ItemAttributeModifier {
@@ -365,6 +431,17 @@ impl ItemAttributeModifier {
             attribute,
             modifier,
             slot,
+            named_slot: None,
+        }
+    }
+    /// `modifier` on `attribute`, in a mod-defined slot group. `slot` is
+    /// `Any` for such an entry: readers use `named_slot` instead.
+    pub fn named(attribute: Identifier, modifier: AttributeModifier, group: NamedSlotGroup) -> Self {
+        Self {
+            attribute,
+            modifier,
+            slot: EquipmentSlotGroup::Any,
+            named_slot: Some(group),
         }
     }
 }
@@ -420,6 +497,41 @@ impl ItemAttributeModifiers {
         slot: EquipmentSlotGroup,
     ) {
         let entry = ItemAttributeModifier::new(attribute, modifier, slot);
+        match self.find(&entry.attribute, &entry.modifier.id) {
+            Some(i) => self.entries[i] = entry,
+            None => self.entries.push(entry),
+        }
+        self.changed = true;
+    }
+    /// Adds `modifier` on `attribute` in a mod-defined slot group, unless
+    /// `attribute` already has a modifier with its id. Whether it was added.
+    /// The name is written into the stack's `attribute_modifiers` component
+    /// unchanged and survives later reads. Equipment evaluators only match
+    /// vanilla group names, so the modifier is stored but does not yet apply.
+    /// With no mod listening to `item_attribute_modifier` nothing is copied back.
+    pub fn add_named(
+        &mut self,
+        attribute: Identifier,
+        modifier: AttributeModifier,
+        group: NamedSlotGroup,
+    ) -> bool {
+        if self.find(&attribute, &modifier.id).is_some() {
+            return false;
+        }
+        self.entries
+            .push(ItemAttributeModifier::named(attribute, modifier, group));
+        self.changed = true;
+        true
+    }
+    /// Puts `modifier` on `attribute` in a mod-defined slot group, in place
+    /// of the one with its id, or at the end.
+    pub fn replace_named(
+        &mut self,
+        attribute: Identifier,
+        modifier: AttributeModifier,
+        group: NamedSlotGroup,
+    ) {
+        let entry = ItemAttributeModifier::named(attribute, modifier, group);
         match self.find(&entry.attribute, &entry.modifier.id) {
             Some(i) => self.entries[i] = entry,
             None => self.entries.push(entry),
@@ -781,5 +893,74 @@ impl InteractionResult {
     /// `consumesAction`: the click is used up.
     pub fn consumes_action(self) -> bool {
         matches!(self, Self::Success | Self::SuccessServer | Self::Consume)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn modifier(id: &str) -> AttributeModifier {
+        AttributeModifier::new(Identifier::parse(id).unwrap(), 1.0, AttributeOperation::AddValue)
+    }
+
+    #[test]
+    fn named_group_keeps_its_exact_name() {
+        for name in ["pocket", "curios:ring", "mod:accessory/slot"] {
+            assert_eq!(NamedSlotGroup::new(name).unwrap().as_str(), name);
+        }
+        for bad in [
+            "",
+            "Upper",
+            "two words",
+            "a!",
+            "a:b:c",
+            "a:",
+            ":b",
+            &"x".repeat(257),
+        ] {
+            assert!(NamedSlotGroup::new(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn named_group_wire_roundtrips_and_refuses_invalid_text() {
+        use crate::wire::{Reader, Writer};
+        let group = NamedSlotGroup::new("curios:ring").unwrap();
+        let mut out = Writer::new();
+        out.put(&group);
+        assert_eq!(Reader::decode::<NamedSlotGroup>(out.bytes()).unwrap(), group);
+
+        for bad in ["a:b:c", "a:", ":b", "Upper"] {
+            let mut out = Writer::new();
+            out.put_str(bad);
+            assert!(Reader::decode::<NamedSlotGroup>(out.bytes()).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn add_named_keeps_duplicates_out_and_replace_named_updates_in_place() {
+        let mut list = ItemAttributeModifiers::default();
+        let attribute = Identifier::parse("minecraft:luck").unwrap();
+        let ring = NamedSlotGroup::new("curios:ring").unwrap();
+        assert!(list.add_named(attribute.clone(), modifier("example:charm"), ring.clone()));
+        assert!(!list.add_named(attribute.clone(), modifier("example:charm"), ring.clone()));
+        assert_eq!(list.len(), 1);
+        let entry = list.iter().next().unwrap();
+        assert_eq!(entry.slot, EquipmentSlotGroup::Any);
+        assert_eq!(entry.named_slot.as_ref(), Some(&ring));
+
+        list.replace_named(attribute.clone(), modifier("example:charm"), NamedSlotGroup::new("curios:necklace").unwrap());
+        assert_eq!(list.len(), 1);
+        assert_eq!(
+            list.iter().next().unwrap().named_slot.as_ref().unwrap().as_str(),
+            "curios:necklace"
+        );
+
+        // A vanilla modifier and a named one can coexist under different ids.
+        assert!(list.add(attribute, modifier("example:belt"), EquipmentSlotGroup::Chest));
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().any(|e| e.named_slot.is_none()));
+        assert!(list.iter().any(|e| e.named_slot.is_some()));
     }
 }
