@@ -10,6 +10,7 @@ use horizon_client::{
     collisions::SceneCollisions,
     enchant::EffectContext,
     items::ItemStack,
+    lan::guest::Guest,
     mesher::Vertex,
     mobs::{Damage, DamageKind, Species, Who, anim::Poses},
 };
@@ -36,6 +37,21 @@ struct Catcher {
     touches: bool,
     creative: bool,
     uuid: Option<[i32; 4]>,
+}
+/// `Abilities.instabuild` of the player a trident's hit names
+/// (`damageSources().trident(this, owner)`), which `VehicleEntity.hurtServer`
+/// (a discard, no item), `isCreativePlayer` (a fixed frame gives way, an
+/// invulnerable entity doesn't refuse) and `ItemFrame.dropItem`
+/// (`hasInfiniteMaterials`: no drops) read: the mode of the guest who threw it
+/// (`thrower`, found by `guest`; no player once they have left), else this
+/// game's own player's (`local`). Tridents tick outside every guest's turn,
+/// so `local` is never the throwing guest's.
+fn thrower_creative<'g>(
+    thrower: Option<u32>,
+    guest: impl FnOnce(u32) -> Option<&'g Guest>,
+    local: bool,
+) -> bool {
+    thrower.map_or(local, |conn| guest(conn).is_some_and(Guest::creative))
 }
 impl Game<'_> {
     /// The trident stack's maximum damage component, else its item's default.
@@ -805,7 +821,11 @@ impl Game<'_> {
                         // ThrownTrident.onHitEntity on a boat or minecart:
                         // VehicleEntity.hurtServer takes the damage; an item
                         // frame's ItemFrame.hurtServer.
-                        let creative = t.guest.is_none() && self.creative;
+                        let creative = thrower_creative(
+                            t.guest,
+                            |conn| self.command_guest(conn),
+                            self.creative,
+                        );
                         let causing = match t.guest {
                             Some(conn) => self.command_guest(conn).map_or(0, |g| g.entity_id),
                             None => self.own_entity_id(),
@@ -816,12 +836,7 @@ impl Game<'_> {
                             direct: t.id as i32,
                             position: Some([t.previous.x, t.previous.y, t.previous.z]),
                         };
-                        let source_creative = match t.guest {
-                            Some(conn) => self.command_guest(conn).is_some_and(|g| g.creative()),
-                            None => self.creative,
-                        };
-                        let vanilla =
-                            self.saved_refuses_damage(id, "minecraft:trident", source_creative);
+                        let vanilla = self.saved_refuses_damage(id, "minecraft:trident", creative);
                         if let Some(i) = self.boats.iter().position(|b| b.id == id) {
                             let kind = self.boats[i].entity_type();
                             if !crate::game::entity::damage_level_of!(self, scoped)
@@ -1174,6 +1189,35 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
+    /// A guest's trident hits with that guest's abilities, whatever the
+    /// server's own state (`local`) holds: a creative guest's trident discards
+    /// the boat it breaks and knocks a framed item loose without a drop.
+    #[test]
+    fn a_guests_trident_hits_with_its_throwers_creative_mode() {
+        use crate::game::native_player_death::tests::new_guest;
+        let mut creative = new_guest(4, 104);
+        creative.game_mode = horizon_client::lan::guest::CREATIVE;
+        let survival = new_guest(5, 105);
+        let hub = |conn: u32| [&creative, &survival].into_iter().find(|g| g.conn == conn);
+        assert!(
+            super::thrower_creative(Some(4), hub, false),
+            "creative guest"
+        );
+        assert!(
+            !super::thrower_creative(Some(5), hub, true),
+            "survival guest"
+        );
+        assert!(
+            !super::thrower_creative(Some(6), hub, true),
+            "a thrower who left"
+        );
+        assert!(
+            super::thrower_creative(None, hub, true),
+            "this game's player"
+        );
+        assert!(!super::thrower_creative(None, hub, false));
+    }
+
     /// A stack can reach its final durability point after use began. The release
     /// guard is independent of admission, and short charges still do nothing.
     #[test]
