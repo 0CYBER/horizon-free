@@ -37,6 +37,13 @@ impl Game<'_> {
     pub(in crate::game) fn menu_blur_radius(&self) -> f32 {
         self.settings.menu_blur as f32
     }
+    /// `GuiGraphics.blurBeforeThisStratum`: the vertices drawn so far in `batch` are the blurred
+    /// background (`HudBatch::blur_at`, as `Screen.extractBlurredBackground` marks the in-game HUD),
+    /// and this frame asks for the menu blur (`menu_blur`). API @API:screen_transparent_background@.
+    pub(in crate::game) fn native_blur_behind(&self, batch: &mut HudBatch) {
+        batch.blur_at = batch.vertices.len() as u32;
+        self.screen_blur_requested.set(true);
+    }
     /// `Screen.extractMenuBackground`: draws the tiled menu background (32x32) across `rect`
     /// (`[x, y, w, h]` in GUI pixels). If `in_world` is true, uses the dark translucent
     /// texture (`gui/inworld_menu_background`); otherwise uses the opaque dirt-like

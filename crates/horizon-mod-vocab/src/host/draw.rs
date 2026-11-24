@@ -171,6 +171,14 @@ pub trait DrawContext {
     fn draw_menu_background(&mut self, rect: [f32; 4], in_world: bool) {
         unimplemented!("DrawContext::draw_menu_background")
     }
+    /// `GuiGraphics.blurBeforeThisStratum` (`Screen.extractBlurredBackground`): what this frame's
+    /// GUI drew before the call, with the panorama or world under it, is blurred by the player's
+    /// menu background blur (`menuBackgroundBlurriness`; nothing at 0), and what is drawn after stays
+    /// sharp: a mod's modal over its own page or screen. One boundary a frame, the last call's.
+    /// API @API:screen_transparent_background@.
+    fn blur_behind(&mut self) {
+        unimplemented!("DrawContext::blur_behind")
+    }
     /// Repeats sprite `sprite` across `rect` (`[x, y, w, h]` in GUI pixels) with each tile
     /// sized `size` GUI pixels square, tinted by `argb`. False when the sprite is not in the HUD atlas.
     /// API @API:screen_transparent_background@.

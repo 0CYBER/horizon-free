@@ -113,6 +113,9 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_draw_menu_background(&mut *self.surface, rect, in_world)
     }
+    fn blur_behind(&mut self) {
+        self.game.native_blur_behind(&mut *self.surface)
+    }
     fn tiled_sprite(&mut self, sprite: &str, rect: [f32; 4], size: f32, argb: u32) -> bool {
         self.game
             .native_tiled_sprite(&mut *self.surface, sprite, rect, size, argb)

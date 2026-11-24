@@ -2546,6 +2546,7 @@ horizon-client game::sulfur_prime_phase_tests::a_tnt_body_taken_off_this_tick_st
 horizon-client game::sulfur_prime_phase_tests::a_warmed_cube_primes_on_the_first_powered_tick lib daily resources
 horizon-client game::sulfur_prime_phase_tests::control_a_primed_cube_on_power_is_not_primed_again lib daily resources
 horizon-client game::sulfur_prime_phase_tests::control_an_adopted_cube_without_power_stays_unprimed lib daily resources
+horizon-client game::sync_background_tests::blur_behind_marks_the_drawn_vertices_and_asks_for_the_menu_blur lib daily resources
 horizon-client game::sync_background_tests::cancelled_background_keeps_custom_geometry_and_one_blur_request lib daily resources
 horizon-client game::sync_background_tests::cancelled_landing_restores_farmland_before_its_crop_is_notified lib daily resources
 horizon-client game::test_pos_guest_tests::test_pos_as_a_guest_uses_the_guest_s_view lib daily resources
