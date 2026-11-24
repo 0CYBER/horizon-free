@@ -5,6 +5,7 @@ repositories owned by this test (TemporaryDirectory), never the working tree's r
 or its Git configuration.
 """
 
+import errno
 import os
 from pathlib import Path
 import subprocess
@@ -58,8 +59,13 @@ class ChangedPathsQuotedNameTests(unittest.TestCase):
                 for rel in byte_paths:
                     full = os.path.join(os.fsencode(str(repo)), rel)
                     os.makedirs(os.path.dirname(full), exist_ok=True)
-                    with open(full, "wb") as stream:
-                        stream.write(b"// fixture\n")
+                    try:
+                        with open(full, "wb") as stream:
+                            stream.write(b"// fixture\n")
+                    except OSError as error:
+                        if error.errno != errno.EILSEQ:
+                            raise
+                        self.skipTest("this file system refuses a file name that isn't UTF-8 (macOS's APFS)")
                 (repo / "tools").mkdir(exist_ok=True)
                 (repo / non_player).write_text("pass\n", encoding="utf-8")
                 self.git(repo, "add", "-A")

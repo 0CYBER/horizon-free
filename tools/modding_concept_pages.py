@@ -214,7 +214,7 @@ def check_html(directory, src=SRC):
             if url.scheme or url.netloc:
                 continue
             assert not unquote(url.path).startswith("/"), f"{page}: root-relative link {link}"
-            target = (path.parent / unquote(url.path)).resolve() if url.path else path
+            target = (path.parent / unquote(url.path)).resolve() if url.path else path.resolve()
             assert target.is_relative_to(directory.resolve()) and target.is_file(), (
                 f"{page}: missing rendered link {link} (link to repository files with a GitHub URL)")
             if url.fragment:

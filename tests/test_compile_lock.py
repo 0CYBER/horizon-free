@@ -561,6 +561,7 @@ class CompileLockTests(unittest.TestCase):
                 self.assertEqual(target.read_text(), "keep")
 
     @needs_flock
+    @unittest.skipIf(os.name == "posix" and os.geteuid() == 0, "root creates files in a 0555 folder anyway")
     def test_a_folder_and_lock_files_the_job_cannot_replace(self):
         # Made beforehand (by another user, say): the folder 0555, the lock files 0666. The job opens them as they
         # are; it can't create or replace anything there, and needs not.
@@ -572,7 +573,7 @@ class CompileLockTests(unittest.TestCase):
         self.addCleanup(os.chmod, self.folder, 0o755)
         with self.turn("pr") as turn:
             self.assertTrue(turn.held)
-            self.assertEqual(self.turn("main").holder(), "", "no `holder` could be made: nothing to show")
+            self.assertEqual(turn.holder(), "", "no `holder` could be made: nothing to show")
         self.assertEqual(sorted(os.listdir(self.folder)), ["priority", "turn"])
         # Nor `waiting`: said once, and the turn works as before.
         self.assertTrue(self.lines[0].startswith("  compile lock: the waiting lock file can't be used "
@@ -582,12 +583,25 @@ class CompileLockTests(unittest.TestCase):
         os.chmod(self.folder, 0o755)
         os.unlink(os.path.join(self.folder, "priority"))
         os.chmod(self.folder, 0o555)
-        if os.geteuid() != 0:  # root creates files anyway
-            self.lines.clear()
-            with self.turn("pr") as turn:
-                self.assertFalse(turn.held)
-            self.assertEqual(len(self.lines), 1)
-            self.assertTrue(self.lines[0].endswith("compiling without it"))
+        self.lines.clear()
+        with self.turn("pr") as turn:
+            self.assertFalse(turn.held)
+        self.assertEqual(len(self.lines), 1)
+        self.assertTrue(self.lines[0].endswith("compiling without it"))
+
+    def test_a_turn_not_yet_open_touches_no_file(self):
+        # Without its folder open, the display file has nowhere to be: nothing is read, made or written, least of all
+        # in the current directory (a checkout's root, when tests run).
+        here = os.path.join(self.temp.name, "cwd")
+        os.mkdir(here)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(here)
+        turn = self.turn("pr")
+        self.assertEqual(turn.holder(), "")
+        turn.write_holder()
+        turn.clear_holder()
+        self.assertEqual(os.listdir(here), [])
+        self.assertFalse(os.path.exists(self.folder))
 
     @needs_flock
     def test_a_priority_job_that_could_not_announce_itself_says_so(self):

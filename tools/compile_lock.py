@@ -126,6 +126,8 @@ def open_entry(folder, name, write=False):
     """A descriptor on folder/name, a regular file with one link, opened as it is, or made (0666) only where
     missing and the folder allows it. Never follows a link and never blocks (a FIFO opens at once and is refused).
     Odd for anything else. Every check is on the open descriptor, never on the path."""
+    if folder is None:  # dir_fd=None would mean the current directory
+        raise Odd(f"no lock folder is open for `{name}`")
     access = (os.O_WRONLY if write else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     try:
         descriptor = os.open(name, access, dir_fd=folder)

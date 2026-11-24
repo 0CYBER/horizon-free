@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import subprocess
@@ -455,7 +456,12 @@ class AssemblyTests(unittest.TestCase):
         for path in paths:
             target = Path(self.repo, path)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("new\n")
+            try:
+                target.write_text("new\n")
+            except OSError as error:
+                if error.errno != errno.EILSEQ:
+                    raise
+                self.skipTest("this file system refuses a file name that isn't UTF-8 (macOS's APFS)")
         head = self.commit("paths Git would quote")
         changed = ns.changed_files(self.main, head, cwd=self.repo)
         self.assertCountEqual(changed, paths)

@@ -64,7 +64,7 @@ class RunTestBinariesTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
     def test_every_binary_runs_and_each_failure_is_listed_at_the_end(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()  # the binary's $PWD is resolved (macOS: /var is /private/var)
             package = root / "crates/horizon-world"
             package.mkdir(parents=True)
             passing, failing, unstartable = root / "passing", root / "failing", root / "unstartable"

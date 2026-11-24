@@ -115,7 +115,7 @@ class GameBootCheck(unittest.TestCase):
     def test_the_committed_list_names_fixtures_that_exist(self):
         for name in check.fixtures():
             function = name.rsplit("::", 1)[-1]
-            found = subprocess.run(["git", "grep", "-q", "-E", rf"fn {function}\b", "--", "crates/*.rs"],
+            found = subprocess.run(["git", "grep", "-q", "-w", "-E", f"fn {function}", "--", "crates/*.rs"],
                                    cwd=check.ROOT)
             self.assertEqual(found.returncode, 0, f"{name} is not defined anywhere under crates/")
 

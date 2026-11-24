@@ -66,7 +66,7 @@ class ExecutableIdentityTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.dir = Path(temporary.name)
+        self.dir = Path(temporary.name).resolve()  # the report names the resolved path (macOS: /var is /private/var)
         self.resources = self.dir / "res"
         self.resources.mkdir()
         self.env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")

@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "tools/ci/test-compile-lock.sh"
 
 
-@unittest.skipIf(os.name == "nt", "requires Bash, flock and pipe readiness")
+@unittest.skipIf(os.name == "nt" or not shutil.which("flock"), "requires Bash, flock and pipe readiness")
 class TestCompileLockTests(unittest.TestCase):
     def test_background_compiler_child_cannot_keep_the_lock_after_compiler_exit(self):
         import signal

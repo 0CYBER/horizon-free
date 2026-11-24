@@ -56,7 +56,7 @@ digest() { file_digests "$1" | sha256 | cut -c1-16; }
 use_private_copy() {
   local work="$shared/job"
   rm -rf "$work"
-  cp -a --reflink=auto "$prepared" "$work"
+  if [ "$(uname)" = Darwin ]; then cp -ca "$prepared" "$work"; else cp -a --reflink=auto "$prepared" "$work"; fi
   for name in minecraft tools; do ln -sfn "$source/$name" ".local/$name"; done
   while read -r name; do ln -sfn "$work/$name" ".local/$name"; done < "$work/.entries"
   echo "prepared key $key: private copy for this job ($(find "$work" -type f | wc -l) files)"
