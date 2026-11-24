@@ -324,13 +324,14 @@ impl Game<'_> {
             }
             return;
         }
+        let stuck_in_water = self.concrete_stuck_in_water(block.state, pos);
         let landing = self.with_level(|b, level, ticks| {
             b.falling_block_landed(
                 level,
                 ticks,
                 BlockPos::new(pos[0], pos[1], pos[2]),
                 block.state,
-                false,
+                stuck_in_water,
             )
         });
         if let Landing::Placed(state) = landing {
@@ -439,7 +440,64 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::game::{Game, native_entity_refs::tests::with_game};
+    use crate::game::{FallingBlock, Game, native_entity_refs::tests::with_game};
+    use horizon_client::chunk::Chunk;
+    use horizon_core::position::BlockPos;
+
+    /// `FallingBlockEntity.tick`'s `isStuckInWater`: concrete powder falling
+    /// into floating water (air below it) stops in the first water cell and
+    /// sets into concrete, instead of falling through.
+    #[test]
+    #[ignore = "daily"]
+    fn concrete_powder_stops_and_sets_in_the_first_water_it_falls_into() {
+        with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            game.block_ticks
+                .add_empty_chunk(horizon_core::position::ChunkPos::new(0, 0))
+                .unwrap();
+            let registry = game.pack.assets.registry;
+            let water = registry.default_state("minecraft:water").unwrap();
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            let powder = registry.default_state("minecraft:red_concrete_powder").unwrap();
+            let concrete = registry.default_state("minecraft:red_concrete").unwrap();
+            game.world.set(0, 50, 0, stone).unwrap();
+            game.world.set(0, 61, 0, water).unwrap();
+            game.world.set(0, 62, 0, water).unwrap();
+            let at = Vec3::new(0.5, 70.0, 0.5);
+            game.falling.push(FallingBlock {
+                on_ground: false,
+                attachment_lifetime: Default::default(),
+                rotation: [0.0; 2],
+                join: Default::default(),
+                id: 71,
+                state: powder,
+                start_pos: BlockPos::new(0, 70, 0),
+                position: at,
+                previous: at,
+                velocity: Vec3::ZERO,
+                age: 0,
+                no_gravity: false,
+                portal: Default::default(),
+                drop_item: true,
+                fall_distance: 0.0,
+                stuck: Vec3::ZERO,
+                damage: Default::default(),
+                saved: None,
+            });
+            let mut ticks = 0;
+            while !game.falling.is_empty() {
+                assert!(ticks < 200, "the powder never landed");
+                game.tick_one_falling(0, &[]).unwrap();
+                ticks += 1;
+            }
+            assert_eq!(game.world.block(0, 62, 0), concrete, "it sets in the top water cell");
+            assert_eq!(game.world.block(0, 61, 0), water, "the water below stays");
+            assert!(game.dropped.is_empty(), "it does not break into an item");
+        });
+    }
+
     use horizon_client::{items::ItemStack, motion::PlayerMotion};
     use horizon_core::{equipment_slot::EquipmentSlot, geometry::Vec3};
     use mod_api::{

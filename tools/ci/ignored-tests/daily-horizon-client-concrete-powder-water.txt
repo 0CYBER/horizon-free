@@ -1,0 +1,2 @@
+# Concrete powder stuck in water (FallingBlockEntity.isStuckInWater) using prepared vanilla resources.
+horizon-client game::falling_damage::tests::concrete_powder_stops_and_sets_in_the_first_water_it_falls_into lib daily resources

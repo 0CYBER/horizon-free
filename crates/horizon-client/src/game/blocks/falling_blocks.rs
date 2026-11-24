@@ -288,19 +288,22 @@ impl Game<'_> {
         }
         let y = next.y.floor() as i32;
         let outside = y <= self.world.bottom_y() || y >= self.world.top_y();
-        if !on_ground && (f.age > 100 && outside || f.age > 600) {
+        // isStuckInWater: concrete powder in water lands there like on the
+        // ground (only the server runs this branch).
+        let at = [
+            f.position.x.floor() as i32,
+            f.position.y.floor() as i32,
+            f.position.z.floor() as i32,
+        ];
+        let stuck_in_water = self.remote.is_none() && self.concrete_stuck_in_water(f.state, at);
+        if !on_ground && !stuck_in_water && (f.age > 100 && outside || f.age > 600) {
             return Ok(if f.drop_item && entity_drops {
                 FallStep::Dropped(next)
             } else {
                 FallStep::Gone
             });
         }
-        if on_ground {
-            let at = [
-                f.position.x.floor() as i32,
-                f.position.y.floor() as i32,
-                f.position.z.floor() as i32,
-            ];
+        if on_ground || stuck_in_water {
             // On the ground the motion is multiplied by (0.7, -0.5, 0.7); in a
             // moving piston's cell the place/drop/discard branch is skipped and
             // the entity goes on to the air drag below.
@@ -317,6 +320,16 @@ impl Game<'_> {
         } else {
             FallStep::Falling
         })
+    }
+    /// `FallingBlockEntity.tick`'s `isStuckInWater`: a concrete-powder block
+    /// whose cell `at` holds water stops falling there.
+    pub(in crate::game) fn concrete_stuck_in_water(&self, state: BlockStateId, at: [i32; 3]) -> bool {
+        self.res
+            .behaviours()
+            .data(state)
+            .is(horizon_world::level::classes::Class::ConcretePowder)
+            && self.res.facts().get(self.world.block(at[0], at[1], at[2])).fluid
+                == horizon_client::blocks::Fluid::Water
     }
     /// `Entity.spawnAtLocation`: an item entity where the block was.
     pub(super) fn drop_falling_block(&mut self, state: BlockStateId, at: Vec3) {
