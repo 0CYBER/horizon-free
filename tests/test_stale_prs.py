@@ -70,24 +70,42 @@ class TriggerTests(unittest.TestCase):
         self.assertEqual(decide(pr(idle=4.1)), "warn")
         self.assertEqual(decide(pr(idle=3.9)), "skip")
 
-    def test_a_persons_comment_counts_as_activity_and_a_bots_doesnt(self):
-        self.assertEqual(decide(pr(idle=10, comments=[comment(ago(1))])), "skip")
+    def test_only_the_authors_comment_resets_the_author_clock(self):
+        # The author's own comment is activity; a maintainer's comment after a 10-day-old push is exactly the
+        # PR the sweep used to miss (#19327).
+        self.assertEqual(decide(pr(idle=10, comments=[comment(ago(1), login="author")])), "skip")
+        self.assertEqual(decide(pr(idle=10, comments=[comment(ago(1))])), "warn")
         self.assertEqual(decide(pr(idle=10, comments=[comment(ago(1), bot=True)])), "warn")
+
+    def test_an_author_who_answered_the_team_is_not_swept(self):
+        p = pr(idle=10, comments=[comment(ago(10), login="author"), comment(ago(5)),
+                                  comment(ago(1), login="author")])
+        self.assertEqual(decide(p), "skip")
 
     def test_a_reopen_counts_as_activity(self):
         p = pr(idle=10)
-        p["timelineItems"]["nodes"].append({"__typename": "ReopenedEvent", "createdAt": ago(1)})
+        p["timelineItems"]["nodes"].append({"__typename": "ReopenedEvent", "createdAt": ago(1),
+                                          "actor": {"login": "author"}})
         self.assertEqual(decide(p), "skip")
+        p = pr(idle=10)
+        p["timelineItems"]["nodes"].append({"__typename": "ReopenedEvent", "createdAt": ago(1),
+                                          "actor": {"login": "maintainer"}})
+        self.assertEqual(decide(p), "warn")
 
     def test_a_push_counts_from_when_it_arrived_not_when_the_commit_was_made(self):
         self.assertEqual(decide(pr(idle=10, pushed=1)), "skip")
-        # Fast-forward to an older SHA whose check suite was created days ago still updates suite updatedAt.
-        self.assertEqual(decide(pr(idle=10, pushed=10, suite_updated=1)), "skip")
+        # A check suite's updatedAt also moves on a CI rerun: it is not the author's activity (#19327).
+        self.assertEqual(decide(pr(idle=10, pushed=10, suite_updated=1)), "warn")
 
     def test_a_reply_in_a_review_thread_counts_as_activity(self):
-        self.assertEqual(decide(pr(idle=10, threads=[{"publishedAt": ago(1), "author": {"__typename": "User"}}])),
+        self.assertEqual(decide(pr(idle=10, threads=[{"publishedAt": ago(1),
+                                                      "author": {"login": "author", "__typename": "User"}}])),
                          "skip")
-        self.assertEqual(decide(pr(idle=10, threads=[{"publishedAt": ago(1), "author": {"__typename": "Bot"}}])),
+        self.assertEqual(decide(pr(idle=10, threads=[{"publishedAt": ago(1),
+                                                      "author": {"login": "reviewer", "__typename": "User"}}])),
+                         "warn")
+        self.assertEqual(decide(pr(idle=10, threads=[{"publishedAt": ago(1),
+                                                      "author": {"__typename": "Bot"}}])),
                          "warn")
 
     def test_asked_for_another_review_waits_for_the_reviewer(self):
@@ -268,7 +286,7 @@ class SweepTests(unittest.TestCase):
 
     def test_a_warning_reads_the_pull_request_again(self):
         for fresh in (pr(1, idle=10, draft=True), pr(1, idle=10, labels=["keep-open"]),
-                      pr(1, idle=10, comments=[comment(ago(0.1))])):
+                      pr(1, idle=10, comments=[comment(ago(0.1), login="author")])):
             api = FakeApi([pr(1, idle=10)], fresh={1: fresh}, fresh_after={1: 0})
             self.assertEqual(sweep(api)["recheck"], [1])
             self.assertEqual(api.calls, [])

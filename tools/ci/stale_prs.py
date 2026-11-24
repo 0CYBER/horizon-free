@@ -51,10 +51,10 @@ ACTIVITY = """timelineItems(itemTypes: [PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSH
     nodes {
       __typename
       ... on PullRequestCommit { commit { committedDate } }
-      ... on HeadRefForcePushedEvent { createdAt }
-      ... on ReopenedEvent { createdAt }
-      ... on ReadyForReviewEvent { createdAt }
-      ... on PullRequestReview { submittedAt author { __typename } }
+      ... on HeadRefForcePushedEvent { createdAt actor { login } }
+      ... on ReopenedEvent { createdAt actor { login } }
+      ... on ReadyForReviewEvent { createdAt actor { login } }
+      ... on PullRequestReview { submittedAt author { login __typename } }
     }
   }"""
 FIELDS = """
@@ -63,7 +63,7 @@ FIELDS = """
   headRepository { nameWithOwner }
   reviewRequests(first: 50) { nodes { requestedReviewer { ... on User { login } } } }
   commits(last: 1) { nodes { commit { pushedDate checkSuites(first: 20) { nodes { createdAt updatedAt } } } } }
-  reviewThreads(last: 50) { nodes { comments(last: 5) { nodes { publishedAt author { __typename } } } } }
+  reviewThreads(last: 50) { nodes { comments(last: 5) { nodes { publishedAt author { login __typename } } } } }
   mergeQueueEntry { id }
   labels(first: 100) { nodes { name } }
   latestOpinionatedReviews(first: 50, writersOnly: true) {
@@ -97,16 +97,60 @@ def is_bot(node: dict) -> bool:
     return ((node.get("author") or {}).get("__typename")) == "Bot"
 
 
-def pushed_at(pr: dict) -> list[str]:
+def pushed_at(pr: dict, *, reruns: bool = True) -> list[str]:
     """When the head arrived: `pushedDate` and check-suite timestamps (`updatedAt` updates even when GitHub reuses a
-    suite from another branch for an older SHA). A commit's own date can be days before a push."""
+    suite from another branch for an older SHA). A commit's own date can be days before a push. `reruns=False`
+    leaves out `updatedAt`, which a CI rerun or a reused suite also moves without the author doing anything."""
     head = (pr["commits"]["nodes"] or [{}])[-1].get("commit") or {}
     out = [head["pushedDate"]] if head.get("pushedDate") else []
     for suite in (head.get("checkSuites") or {}).get("nodes", []):
-        for key in ("createdAt", "updatedAt"):
+        for key in ("createdAt", "updatedAt") if reruns else ("createdAt",):
             if suite.get(key):
                 out.append(suite[key])
     return out
+
+
+def login_of(node: dict) -> str:
+    return (((node.get("author") or {}).get("login")) or "").lower()
+
+
+def author_activity(pr: dict) -> datetime:
+    """The newest thing the pull request's author did: opened it, pushed a commit, reopened it, marked it ready for
+    review, commented, reviewed, or replied in a review thread. A maintainer's comment or a CI rerun does not reset
+    this clock: otherwise a PR that conflicts after the author has gone quiet is never swept (#19327)."""
+    author = login_of(pr)
+    times = [pr["createdAt"], *pushed_at(pr, reruns=False)]
+    for thread in pr["reviewThreads"]["nodes"]:
+        times += [c["publishedAt"] for c in thread["comments"]["nodes"]
+                  if not is_bot(c) and login_of(c) == author]
+    for item in pr["timelineItems"]["nodes"]:
+        kind = item.get("__typename")
+        if kind == "PullRequestReview":
+            if not is_bot(item) and login_of(item) == author:
+                times.append(item.get("submittedAt"))
+        elif kind == "PullRequestCommit":
+            times.append((item.get("commit") or {}).get("committedDate"))
+        elif (((item.get("actor") or {}).get("login")) or "").lower() == author:
+            # Reopened, ready for review, force-pushed: a maintainer doing it does not reset the author's clock.
+            times.append(item.get("createdAt"))
+    times += [c["createdAt"] for c in pr["comments"]["nodes"]
+              if not is_bot(c) and login_of(c) == author]
+    return max(when(t) for t in times if t)
+
+
+def other_activity(pr: dict) -> datetime | None:
+    """The newest comment, review or review-thread reply by someone other than the author and the bots, if any."""
+    author = login_of(pr)
+    times = []
+    for thread in pr["reviewThreads"]["nodes"]:
+        times += [c["publishedAt"] for c in thread["comments"]["nodes"]
+                  if not is_bot(c) and login_of(c) != author]
+    for item in pr["timelineItems"]["nodes"]:
+        if item.get("__typename") == "PullRequestReview" and not is_bot(item) and login_of(item) != author:
+            times.append(item.get("submittedAt"))
+    times += [c["createdAt"] for c in pr["comments"]["nodes"]
+              if not is_bot(c) and login_of(c) != author]
+    return max((when(t) for t in times if t), default=None)
 
 
 def last_activity(pr: dict) -> datetime:
@@ -144,8 +188,13 @@ def reasons(pr: dict, now: datetime, days: dict) -> set[str] | None:
     if pr["mergeable"] == "UNKNOWN":
         return None
     out = set()
-    idle = now - last_activity(pr)
-    if pr["mergeable"] == "CONFLICTING" and idle >= timedelta(days=days[CONFLICT]):
+    # The conflict clock is the author's: a maintainer's comment does not reset it. A pull request the author acted
+    # on last is waiting on the team, not stale, so it is not swept either (#19327).
+    authored = author_activity(pr)
+    other = other_activity(pr)
+    idle = now - authored
+    if (pr["mergeable"] == "CONFLICTING" and idle >= timedelta(days=days[CONFLICT])
+            and (other is None or authored <= other)):
         out.add(CONFLICT)
     review = changes_review(pr)
     if review and now - max(when(review["submittedAt"]), last_activity(pr)) >= timedelta(days=days[CHANGES]):
@@ -250,7 +299,8 @@ def notice_text(repo: str, why: set[str], head: str, days: dict) -> str:
 def closing_text(repo: str, days: dict) -> str:
     return (f"Closing: nothing changed in the {days['grace']} days after the notice above. Thank you for the work! "
             "Once it's updated (merged with main, or the review answered), reopen it, or ask here and we will. "
-            f"[Why]({GUIDE.format(repo=repo)})")
+            "Merge `main` rather than force-pushing: GitHub cannot reopen a pull request whose branch was "
+            f"force-pushed after it closed. [Why]({GUIDE.format(repo=repo)})")
 
 
 # --- GitHub ------------------------------------------------------------------------------------------------------
