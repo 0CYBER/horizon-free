@@ -481,6 +481,14 @@ impl Game<'_> {
     /// `init_remote_for_replay` makes anew), back as a fresh open has it, so the world rebuilt
     /// from the start shows only what the packets replayed set.
     fn reset_replay_world_extras(&mut self) {
+        // A new LocalPlayer holds nothing (vanilla's handleLogin): the snapshot sends only the
+        // slots that were full, so an item the replaced session held must not stay in an empty
+        // slot.
+        self.inventory = vec![None; 36];
+        self.offhand = None;
+        self.armor = [None, None, None, None];
+        // The snapshot says weather only when there is a storm, and a Login keeps the world's.
+        self.world.weather = Default::default();
         self.border = Default::default();
         self.tab_list = Default::default();
         self.score.board = Default::default();
@@ -1078,6 +1086,52 @@ impl Game<'_> {
         }
     }
 
+    /// What the client holds of the session outside the world's chunks, for the recording's
+    /// snapshot ([`horizon_client::studio::snapshot`]).
+    fn session_snapshot_state(
+        &self,
+        r: &super::remote::Remote,
+    ) -> horizon_client::studio::snapshot::SessionState {
+        use horizon_client::studio::snapshot::SessionState;
+        let held = |slot: i32, stack: &Option<horizon_client::items::ItemStack>| {
+            self.to_network(stack).map(|stack| (slot, stack))
+        };
+        let inventory = self
+            .inventory
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, stack)| held(slot as i32, stack))
+            // Inventory slots 36 to 39 are feet to head; `armor` is head first.
+            .chain(
+                self.armor
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, stack)| held(39 - i as i32, stack)),
+            )
+            .chain(held(40, &self.offhand))
+            .collect();
+        SessionState {
+            game_time: self.world.game_time,
+            // Every clock the connection holds (`ClientClockManager`), each as the tick loop has
+            // advanced it; by id, so a snapshot of the same state is the same bytes.
+            clocks: {
+                let mut clocks: Vec<_> = r.clocks.values().cloned().collect();
+                clocks.sort_by_key(|clock| clock.clock);
+                clocks
+            },
+            rain_level: self.world.weather.rain_level.1,
+            thunder_level: self.world.weather.thunder_level.1,
+            health: r.health,
+            experience: (
+                self.experience.progress,
+                self.experience.level,
+                self.experience.total,
+            ),
+            selected_slot: self.selected,
+            inventory,
+        }
+    }
+
     /// Dump current player pose, dimension login, center chunk, and resident loaded chunks
     /// into the recording stream at timestamp 0ms so replays accurately reconstruct the world.
     pub(super) fn dump_world_snapshot_to_recorder(
@@ -1158,6 +1212,11 @@ impl Game<'_> {
             },
         );
         record_cb(player_pos);
+
+        // 2b. The time, weather, inventory and vitals the server sent long before this recording.
+        for packet in horizon_client::studio::snapshot::packets(&self.session_snapshot_state(r)) {
+            record_cb(packet);
+        }
 
         // 3. Encode resident loaded chunks into LevelChunkWithLight packets
         let biome_names: Vec<String> = world_biomes!(self)
