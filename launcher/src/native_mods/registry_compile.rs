@@ -259,7 +259,7 @@ pub(super) fn compile(
                 .map_err(|e| e.to_string())?
                 .parse()
                 .map_err(|e| format!("Cargo.toml: {e}"))?;
-            super::registry_generate::rewrite_dependencies(
+            let mut named = super::registry_generate::rewrite_dependencies(
                 bundle,
                 &local,
                 &mut manifest,
@@ -271,11 +271,21 @@ pub(super) fn compile(
             {
                 for (_, target) in targets.iter_mut() {
                     if let Some(table) = target.as_table_mut() {
-                        super::registry_generate::rewrite_dependencies(
+                        named.extend(super::registry_generate::rewrite_dependencies(
                             bundle, &local, table, &mut todo,
-                        )?;
+                        )?);
                     }
                 }
+            }
+            // A local crate that names the SDK gets its libraries as the mod's crate does (below).
+            if !local.as_os_str().is_empty() && !named.is_empty() {
+                bindings.insert(
+                    dest.join(&local),
+                    registry_rustc::Bindings {
+                        externs: sdk_externs(&deps, id, named)?,
+                        link_args: Vec::new(),
+                    },
+                );
             }
             if local.as_os_str().is_empty() {
                 let targets: Vec<_> = declared[index]
@@ -337,20 +347,7 @@ pub(super) fn compile(
             }
             fs::write(path, manifest.to_string()).map_err(|e| e.to_string())?;
         }
-        let mut externs: BTreeMap<String, PathBuf> = BTreeMap::from([
-            ("mod_api".into(), prebuilt::library(&deps, "mod_api")?),
-            ("mod_vocab".into(), prebuilt::library(&deps, "mod_vocab")?),
-        ]);
-        for (name, path) in &externs {
-            prebuilt::refuse_closure_rlib(id, name, path)?;
-        }
-        for (name, package) in project.api_dependencies() {
-            if package != "internals" {
-                let path = prebuilt::library(&deps, package)?;
-                prebuilt::refuse_closure_rlib(id, package, &path)?;
-                externs.insert(name, path);
-            }
-        }
+        let externs = sdk_externs(&deps, id, project.api_dependencies())?;
         if internals::needed(&bundle.manifest)
             || project
                 .api_dependencies()
@@ -708,6 +705,31 @@ fn keep_unchanged_times(staged: &Path, previous: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The SDK libraries a crate of mod `id` compiles against: `mod_api` and `mod_vocab` always, and
+/// each SDK package it names (`named`: the name its code uses, and the library), the internals
+/// facade aside, which is a crate of its own.
+fn sdk_externs(
+    deps: &Path,
+    id: &str,
+    named: impl IntoIterator<Item = (String, &'static str)>,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let mut externs: BTreeMap<String, PathBuf> = BTreeMap::from([
+        ("mod_api".into(), prebuilt::library(deps, "mod_api")?),
+        ("mod_vocab".into(), prebuilt::library(deps, "mod_vocab")?),
+    ]);
+    for (name, path) in &externs {
+        prebuilt::refuse_closure_rlib(id, name, path)?;
+    }
+    for (name, package) in named {
+        if package != "internals" {
+            let path = prebuilt::library(deps, package)?;
+            prebuilt::refuse_closure_rlib(id, package, &path)?;
+            externs.insert(name, path);
+        }
+    }
+    Ok(externs)
 }
 
 #[cfg(test)]

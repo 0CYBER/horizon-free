@@ -41,7 +41,23 @@ fn sdk_path(package: &str) -> String {
 /// one code, each with its own reason: the git form the path form replaced, a version alone (which
 /// Cargo would resolve from crates.io), any other source selector, and a path elsewhere.
 pub fn sdk_source(key: &str, package: &str, value: &toml::Value) -> Result<(), String> {
-    let path = sdk_path(package);
+    sdk_source_at(Path::new(""), key, package, value)
+}
+
+/// [`sdk_source`] for a crate at `relative` inside the mod (empty for its root crate): a local
+/// crate names the same SDK copy, so its path climbs back to the mod's root first
+/// (`../../.horizon/sdk/api/crates/horizon-mod-api` from `src/helper`).
+pub fn sdk_source_at(
+    relative: &Path,
+    key: &str,
+    package: &str,
+    value: &toml::Value,
+) -> Result<(), String> {
+    let path = format!(
+        "{}{}",
+        "../".repeat(relative.components().count()),
+        sdk_path(package)
+    );
     let why = if value.get("git").is_some() {
         "the SDK is no longer named by git".to_owned()
     } else if let Some(selector) = [

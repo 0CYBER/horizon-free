@@ -4,7 +4,7 @@ use horizon_platform::mod_package::index::native::{
     all_dependencies, check_sdk_dependency, dependency_tables, has_mod_api_dependency,
 };
 pub(super) use horizon_platform::mod_package::index::native::{
-    sdk_source, INTERNALS_PACKAGE, MOD_API_PACKAGE as API_PACKAGE, POINTS_PACKAGE,
+    sdk_source_at, INTERNALS_PACKAGE, MOD_API_PACKAGE as API_PACKAGE, POINTS_PACKAGE,
     SDK_PACKAGES as PACKAGES,
 };
 use std::fs;
