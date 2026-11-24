@@ -546,7 +546,7 @@ impl Game<'_> {
             self.attack_ticks = 0;
             return true;
         }
-        self.hit_frame(i, true, self.creative);
+        self.hit_frame(i, true, self.creative, false);
         true
     }
     /// `ItemFrame.hurtServer` from a projectile (`AbstractArrow.onHitEntity`,
@@ -564,22 +564,22 @@ impl Game<'_> {
         let Some(i) = self.item_frames.iter().position(|f| f.id == id) else {
             return false;
         };
-        if self.item_frames[i].fixed {
-            if !creative {
-                return false;
-            }
-            self.item_frames[i].item = None;
+        let fixed = self.item_frames[i].fixed;
+        if fixed && !creative {
+            return false;
         }
-        self.hit_frame(i, by_player, creative);
+        self.hit_frame(i, by_player, creative, fixed);
         true
     }
     /// The non-fixed part of `ItemFrame.hurtServer`: a filled frame gives its
     /// item up (`shouldDamageDropItem`), an empty one breaks
     /// (`BlockAttachedEntity.hurtServer`). `by_player`: the damage source's
     /// entity is the acting player, `creative` when they have infinite
-    /// materials (no drops).
-    fn hit_frame(&mut self, mut i: usize, by_player: bool, creative: bool) {
-        let with_frame = self.item_frames[i].item.is_none();
+    /// materials (no drops). `whole`: the frame breaks even with an item in it
+    /// (a fixed frame hurt by a creative player keeps its item until the
+    /// break hook lets the whole frame go).
+    fn hit_frame(&mut self, mut i: usize, by_player: bool, creative: bool, whole: bool) {
+        let with_frame = whole || self.item_frames[i].item.is_none();
         let entity_id = self.item_frames[i].id;
         if with_frame {
             let (kind, pos) = (self.item_frames[i].kind(), self.item_frames[i].pos);
@@ -591,7 +591,7 @@ impl Game<'_> {
                 return;
             };
             i = now;
-            if self.item_frames[i].item.is_some() {
+            if !whole && self.item_frames[i].item.is_some() {
                 return;
             }
         }
@@ -725,8 +725,9 @@ impl Game<'_> {
     }
     /// `ServerExplosion.hurtEntities` for item frames: a frame within the blast
     /// is killed and dropped with its item (`BlockAttachedEntity.hurtServer`).
-    /// A fixed frame is not hurt by an explosion, and `blast_spares_decorations`
-    /// keeps every frame without `mobGriefing`.
+    /// A fixed frame resists an explosion unless the blast was caused by a
+    /// creative player (`ItemFrame.canHurtWhenFixed`), and
+    /// `blast_spares_decorations` keeps every frame without `mobGriefing`.
     pub(super) fn explosion_breaks_frames(
         &mut self,
         blast: [f64; 3],
@@ -736,6 +737,11 @@ impl Game<'_> {
         if self.blast_spares_decorations(interaction) {
             return;
         }
+        // DamageSource.isCreativePlayer: a creative player's blast can hurt
+        // a fixed frame; another player's, a mob's or an ownerless one cannot.
+        let creative = self
+            .blast_attacker()
+            .is_some_and(|(id, _)| self.creative_damage_source_id(id as i32));
         let mut i = 0;
         while i < self.item_frames.len() {
             let c = center(&self.item_frames[i]);
@@ -743,11 +749,24 @@ impl Game<'_> {
                 ((c[0] - blast[0]).powi(2) + (c[1] - blast[1]).powi(2) + (c[2] - blast[2]).powi(2))
                     .sqrt()
                     / diameter;
-            if dist > 1.0
-                || self.item_frames[i].fixed
-                || !self.combat.visits(self.item_frames[i].id)
-                || !self.break_frame_by(i, self.explosion_kill_credit())
-            {
+            if dist > 1.0 || !self.combat.visits(self.item_frames[i].id) {
+                i += 1;
+                continue;
+            }
+            let gone = if self.item_frames[i].fixed {
+                if !creative {
+                    i += 1;
+                    continue;
+                }
+                // A fixed frame breaks whole and drops neither itself nor its
+                // item, as on the projectile path (`projectile_hurts_frame`).
+                let before = self.item_frames.len();
+                self.hit_frame(i, true, true, true);
+                self.item_frames.len() < before
+            } else {
+                self.break_frame_by(i, self.explosion_kill_credit())
+            };
+            if !gone {
                 i += 1;
             }
         }
@@ -1502,6 +1521,45 @@ mod game_event_tests {
         game.tick_item_frames();
         assert!(game.item_frames.is_empty(), "nothing holds the frame");
         assert_eq!(posted(), [("minecraft:block_change", center, None)]);
+    }
+
+    /// `ItemFrame.canHurtWhenFixed`: a creative player's blast breaks a fixed,
+    /// filled frame whole and drops nothing (`dropItem` skips a fixed frame);
+    /// a survival player's or an ownerless blast leaves it with its item.
+    #[test]
+    #[ignore = "daily"]
+    fn only_a_creative_players_blast_breaks_a_fixed_frame() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        let feet = Vec3::new(0.5, 70.0, -1.0);
+        game.player =
+            Some(horizon_client::motion::PlayerMotion::new(game.motion, feet).expect("a player"));
+        game.player.as_mut().expect("a player").entity_id = 1;
+        let me = game.own_entity_id() as u32;
+        assert_eq!(me, 1, "the blast's owner is this player");
+        // (creative, the blast's owner is the player, the frame breaks)
+        for (creative, owned, breaks) in [(true, true, true), (false, true, false), (true, false, false)] {
+            game.creative = creative;
+            game.dropped.clear();
+            game.item_frames.clear();
+            let mut f = frame(1, [0, 64, 1], Some(ItemStack::new("minecraft:stick", 1)));
+            f.fixed = true;
+            game.item_frames.extend(vec![f]);
+            game.combat = Default::default();
+            game.combat.blast_owner = owned.then(|| (me, horizon_client::text::Text::literal("Steve")));
+            game.combat.blast_owner_player = owned;
+            game.explosion_breaks_frames(
+                [0.5, 64.5, 1.0],
+                2.0,
+                super::super::explosion::BlockInteraction::Keep,
+            );
+            let case = format!("creative={creative} owned={owned}");
+            assert_eq!(game.item_frames.is_empty(), breaks, "{case}");
+            if !breaks {
+                assert!(game.item_frames[0].item.is_some(), "{case}: the item stays");
+            }
+            assert!(game.dropped.is_empty(), "{case}: a fixed frame drops nothing");
+        }
     }
 }
 

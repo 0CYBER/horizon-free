@@ -1,0 +1,3 @@
+# A creative blast breaking a fixed item frame: prepared resources.
+# PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::frames::game_event_tests::only_a_creative_players_blast_breaks_a_fixed_frame lib daily resources
