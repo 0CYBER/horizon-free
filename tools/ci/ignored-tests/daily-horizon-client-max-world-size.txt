@@ -1,0 +1,2 @@
+# A dedicated server's max-world-size limits every level's border and is never saved (#15573).
+horizon-client game::levels::tests::max_world_size_limits_every_levels_border_and_is_not_saved lib daily resources

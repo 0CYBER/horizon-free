@@ -1196,6 +1196,9 @@ impl Game<'_> {
         // Read before the levels are made: each one's block ticks take it (`Levels::new_ticks`).
         self.levels
             .set_max_chained_neighbor_updates(props.max_chained_neighbor_updates);
+        // `max-world-size` limits every level's border (`MinecraftServer.createLevels`): set before
+        // the world's levels read their borders.
+        self.levels.set_absolute_max_size(props.max_world_size);
         let prepared = self.prepare_world_and_rules(WorldRequest::new(
             &folder,
             Some(&level_name),

@@ -118,17 +118,20 @@ impl Game<'_> {
         if root.is_none() && dim == super::Dim::Overworld {
             root = save::read_dat(&self.world_root.join("data/minecraft/world_border.dat"));
         }
-        root.as_ref()
+        let border = root
+            .as_ref()
             .and_then(|root| root.get("data"))
             .map(horizon_client::worldborder::WorldBorder::unpack)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        self.levels.limit_border(border)
     }
     /// Save the border of the level in place (`SavedData`, one per level).
     pub(super) fn save_border(&self) {
         if !self.score.loaded || self.remote.is_some() {
             return;
         }
-        if self.border != horizon_client::worldborder::WorldBorder::default()
+        // Not `!= WorldBorder::default()`: that counts `max-world-size`, which is never saved.
+        if !self.border.is_default_when_saved()
             && let Err(e) = save::write_dat(
                 &self.border_path(self.dim),
                 Tag::compound([

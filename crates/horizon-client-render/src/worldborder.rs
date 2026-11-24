@@ -219,6 +219,12 @@ impl WorldBorder {
         }
         b
     }
+    /// Whether `pack` writes what a new border's `pack` writes. The absolute maximum size is not
+    /// in it: vanilla's `WorldBorder$Settings` has no such component, and a dedicated server sets
+    /// the limit again at each start (`MinecraftServer.createLevels`).
+    pub fn is_default_when_saved(&self) -> bool {
+        self.pack() == Self::default().pack()
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +270,28 @@ mod tests {
         b.warning_distance = 9;
         let back = WorldBorder::unpack(&b.pack());
         assert_eq!(back, b);
+    }
+    /// A server's `max-world-size` is set at each start and never saved: a border that differs
+    /// from a new one only by that limit has nothing to write, but one that also has another
+    /// setting changed does.
+    #[test]
+    fn the_absolute_max_size_alone_is_nothing_to_save() {
+        let mut b = WorldBorder::default();
+        assert!(b.is_default_when_saved());
+        b.set_absolute_max_size(1000);
+        // `==` counts the limit, so `!= WorldBorder::default()` would say there is something to write.
+        assert_ne!(b, WorldBorder::default());
+        assert!(b.is_default_when_saved());
+        // Nothing of the limit is in the saved form: it reads back as the default one.
+        assert_eq!(
+            WorldBorder::unpack(&b.pack()).absolute_max_size(),
+            29_999_984
+        );
+        b.set_size(500.0);
+        assert!(!b.is_default_when_saved());
+        let mut other = WorldBorder::default();
+        other.set_absolute_max_size(1000);
+        other.warning_time = 10;
+        assert!(!other.is_default_when_saved());
     }
 }

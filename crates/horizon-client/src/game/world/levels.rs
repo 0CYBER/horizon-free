@@ -466,6 +466,10 @@ pub(super) struct Levels {
     /// `max-chained-neighbor-updates` of a dedicated server, for the levels it opens;
     /// `None` is the default every other server runs with.
     max_chained_neighbor_updates: Option<i32>,
+    /// The dedicated server's `max-world-size` (`DedicatedServer.getAbsoluteMaxWorldSize`); none
+    /// for the integrated server, whose borders keep the default. Kept by `clear`: it is the
+    /// server's setting, not the world's.
+    absolute_max_size: Option<i32>,
     /// The levels a mod asked to have saved (`level_request_save`), each once, saved at the start
     /// of the next server tick.
     requested_saves: Vec<Dim>,
@@ -477,6 +481,24 @@ impl Levels {
     /// Sets the neighbour update chain limit of the levels made from now on.
     pub(super) fn set_max_chained_neighbor_updates(&mut self, max: i32) {
         self.max_chained_neighbor_updates = Some(max);
+    }
+
+    /// Set `max-world-size`, before the levels' borders are loaded.
+    pub(super) fn set_absolute_max_size(&mut self, limit: i32) {
+        self.absolute_max_size = Some(limit);
+    }
+
+    /// `MinecraftServer.createLevels`: each level's border, once its saved settings are read,
+    /// gets `setAbsoluteMaxSize(getAbsoluteMaxWorldSize())`. Its size is kept; its bounds are
+    /// clamped to the limit.
+    pub(super) fn limit_border(
+        &self,
+        mut border: horizon_client::worldborder::WorldBorder,
+    ) -> horizon_client::worldborder::WorldBorder {
+        if let Some(limit) = self.absolute_max_size {
+            border.set_absolute_max_size(limit);
+        }
+        border
     }
 
     /// The block ticks of a new level, with the server's neighbour update chain limit.
@@ -1993,6 +2015,91 @@ mod tests {
         assert_eq!(game.border.remaining_ticks(), 40);
     }
 
+    /// `MinecraftServer.createLevels`: `max-world-size` clamps the bounds of a border read from
+    /// the save, whatever its size, and keeps its size. Without a limit (the integrated server)
+    /// the border is as it was read.
+    #[test]
+    fn max_world_size_clamps_the_bounds_of_a_loaded_border() {
+        use horizon_client::worldborder::WorldBorder;
+        let mut levels = Levels::default();
+        let wide = |size: f64, center: [f64; 2]| {
+            let mut border = WorldBorder::default();
+            border.set_center(center);
+            border.set_size(size);
+            WorldBorder::unpack(&border.pack())
+        };
+        let saved = wide(5000.0, [0.0, 0.0]);
+        let unlimited = levels.limit_border(saved.clone());
+        assert_eq!(unlimited, saved);
+        assert_eq!(unlimited.bounds(), [-2500.0, -2500.0, 2500.0, 2500.0]);
+
+        levels.set_absolute_max_size(1000);
+        let limited = levels.limit_border(saved);
+        assert_eq!(limited.absolute_max_size(), 1000);
+        assert_eq!(limited.size(), 5000.0);
+        assert_eq!(limited.bounds(), [-1000.0, -1000.0, 1000.0, 1000.0]);
+        assert!(limited.contains(999.0, -999.0));
+        assert!(!limited.contains(1000.0, 0.0));
+        // The default border (a new level's) is as wide as the world: the limit is its edge.
+        let default = levels.limit_border(WorldBorder::default());
+        assert_eq!(default.bounds(), [-1000.0, -1000.0, 1000.0, 1000.0]);
+        // Each side is clamped alone: centre 900, size 400 reaches 700..1100 in x and -200..200 in z.
+        let off_centre = levels.limit_border(wide(400.0, [900.0, 0.0]));
+        assert_eq!(off_centre.bounds(), [700.0, -200.0, 1000.0, 200.0]);
+        // Clearing the levels (a world loads) keeps the server's setting.
+        levels.clear();
+        assert_eq!(
+            levels
+                .limit_border(WorldBorder::default())
+                .absolute_max_size(),
+            1000
+        );
+    }
+
+    /// `max-world-size`, set before `load_world` as the dedicated start does: the border in place
+    /// and the parked ones are limited, and the limit alone writes no `world_border.dat` (vanilla
+    /// does not save it), while a changed border still does.
+    #[test]
+    #[ignore = "daily"]
+    fn max_world_size_limits_every_levels_border_and_is_not_saved() {
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let home =
+            std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join("h4-02");
+        let world = home.join("saves/h4-02");
+        // A new world each run: a border saved by the last one would already be in the End.
+        let _ = std::fs::remove_dir_all(&home);
+        let saved = |dim: Dim| {
+            horizon_client::save::dimension_dir(&world, dim.id())
+                .join("data/minecraft/world_border.dat")
+                .exists()
+        };
+        {
+            let mut resources = None;
+            let mut game = open_game_limited(&mut resources, &root, &home, &world, Some(1000));
+            game.tick_world(true).unwrap();
+            // A level is made when a command first runs in it; only the End's border changes.
+            assert!(game.run_command("execute in minecraft:the_nether run worldborder get"));
+            assert!(game.run_command("execute in minecraft:the_end run worldborder set 100"));
+            assert_eq!(game.dim, Dim::Overworld);
+            let limits = (
+                game.border.absolute_max_size(),
+                game.levels
+                    .parked_border(Dim::Nether)
+                    .map(|b| b.absolute_max_size()),
+                game.levels
+                    .parked_border(Dim::End)
+                    .map(|b| b.absolute_max_size()),
+            );
+            assert_eq!(limits, (1000, Some(1000), Some(1000)));
+            assert_eq!(game.border.bounds(), [-1000.0, -1000.0, 1000.0, 1000.0]);
+            game.save_game().unwrap();
+        }
+        assert_eq!(
+            (saved(Dim::Overworld), saved(Dim::Nether), saved(Dim::End)),
+            (false, false, true)
+        );
+    }
+
     /// `ServerLevel.getWorldBorder`: `/worldborder` in one level leaves the others' alone.
     #[test]
     #[ignore = "daily"]
@@ -2466,6 +2573,17 @@ mod tests {
         home: &std::path::Path,
         world: &std::path::Path,
     ) -> Game<'a> {
+        open_game_limited(resources, root, home, world, None)
+    }
+
+    /// `open_game` with the dedicated server's `max-world-size` set before the world loads.
+    fn open_game_limited<'a>(
+        resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
+        root: &std::path::Path,
+        home: &std::path::Path,
+        world: &std::path::Path,
+        max_world_size: Option<i32>,
+    ) -> Game<'a> {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
         let settings = Settings::default();
         let loaded = load_resources(
@@ -2503,6 +2621,9 @@ mod tests {
         .unwrap();
         game.build_registries();
         game.set_allow_commands(true);
+        if let Some(limit) = max_world_size {
+            game.levels.set_absolute_max_size(limit);
+        }
         let folder = world.to_string_lossy().into_owned();
         game.load_world(
             crate::game::world_loading::WorldRequest::new(
