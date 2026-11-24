@@ -18,3 +18,18 @@ static ALLOCATOR: horizon_threads::GameAllocator = horizon_threads::GAME_ALLOCAT
 pub mod game;
 pub mod orb_limits;
 pub mod server_impulse;
+
+#[cfg(test)]
+mod test_cwd_isolation {
+    #[test]
+    fn test_binary_starts_in_isolated_game_dir() {
+        horizon_threads::test_game_dir::ensure_linked();
+        let isolated = horizon_threads::test_game_dir::isolated_dir()
+            .expect("test binary should start in a per-binary scratch game directory");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_ne!(
+            std::fs::canonicalize(isolated).unwrap_or_else(|_| isolated.to_path_buf()),
+            std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.to_path_buf()),
+        );
+    }
+}

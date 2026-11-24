@@ -156,7 +156,7 @@ windows-segment-heap = []
 workspace = true
 
 [dev-dependencies]
-horizon-threads = { path = "../horizon-threads", features = ["test-allocation-probe"] }
+horizon-threads = { path = "../horizon-threads", features = ["test-allocation-probe", "test-game-dir"] }
 horizon-mod-wasm = { path = "../horizon-mod-wasm", features = ["listener-fixture", "test-copy-probe"] }
 tempfile = "3"
 mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", features = ["testing"] }

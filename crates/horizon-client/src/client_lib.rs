@@ -22,6 +22,20 @@ pub mod powder_snow;
 mod test_log;
 #[cfg(test)]
 mod test_resources;
+#[cfg(test)]
+mod test_cwd_isolation {
+    #[test]
+    fn test_binary_starts_in_isolated_game_dir() {
+        horizon_threads::test_game_dir::ensure_linked();
+        let isolated = horizon_threads::test_game_dir::isolated_dir()
+            .expect("test binary should start in a per-binary scratch game directory");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_ne!(
+            std::fs::canonicalize(isolated).unwrap_or_else(|_| isolated.to_path_buf()),
+            std::fs::canonicalize(manifest).unwrap_or_else(|_| manifest.to_path_buf()),
+        );
+    }
+}
 pub use horizon_client_render::{
     assets, atlas_sources, audio, auth, autotune, ban_notice, bidi, biome, block_edit,
     block_entities, block_entity_anim, block_entity_render, block_sprites, block_states,

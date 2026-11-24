@@ -30,6 +30,8 @@ pub mod stack_dump;
 /// Alt+Space and a bare Alt never open the window's system menu, as in GLFW.
 #[cfg(target_os = "windows")]
 pub mod system_menu;
+#[cfg(feature = "test-game-dir")]
+pub mod test_game_dir;
 pub mod unwind;
 pub mod work;
 

@@ -37,6 +37,8 @@ alloc-census = ["alloc-count"]
 test-allocation-probe = []
 # Counts allocation calls on the current thread in behavior tests only.
 test-allocation-count = []
+# Starts each test binary in a scratch working directory of its own.
+test-game-dir = []
 
 [lints]
 workspace = true

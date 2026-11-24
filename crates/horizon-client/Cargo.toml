@@ -187,7 +187,7 @@ horizon-mod-wasm = { path = "../horizon-mod-wasm", features = ["runtime-fixture"
 wat = "1.261"
 tempfile = "3"
 horizon-mod-runtime = { path = "../horizon-mod-runtime", features = ["test-work-count"] }
-horizon-threads = { path = "../horizon-threads", features = ["test-allocation-count"] }
+horizon-threads = { path = "../horizon-threads", features = ["test-allocation-count", "test-game-dir"] }
 mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", features = ["testing"] }
 mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab", features = ["testing"] }
 horizon-client-render = { path = "../horizon-client-render", features = ["test-support"] }
