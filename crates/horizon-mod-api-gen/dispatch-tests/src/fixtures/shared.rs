@@ -190,6 +190,9 @@ fn entered_with_id(
         (entry.id, hooks)
     })
 }
+fn effect_owner(_: EffectKey) -> Option<&'static str> {
+    None
+}
 fn listening(hook_id: HookId) -> impl Iterator<Item = (bool, &'static ModEntry)> {
     MODS.get().into_iter().flat_map(move |installed| {
         installed

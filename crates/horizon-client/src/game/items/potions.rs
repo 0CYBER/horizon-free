@@ -1261,6 +1261,11 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
+        let active_effects: Vec<mod_api::EffectKey> = effects
+            .list
+            .iter()
+            .filter_map(|e| e.registry_index.and_then(mod_api::__private::effect_key_by_index))
+            .collect();
         let (actions, raid_omen_added) = effects.tick_with(
             &mut |e, t, actions, dispatch| {
                 for action in actions.drain(..) {
@@ -1300,6 +1305,7 @@ impl Game<'_> {
                         health,
                         max_health,
                         food,
+                        &active_effects,
                     );
                     let registry = &self.motion.health.damage;
                     actions.extend(changes.into_iter().filter_map(|change| {
@@ -1529,12 +1535,20 @@ impl Game<'_> {
         health: f32,
         max_health: f32,
         food: Option<PlayerFood>,
+        active_effects: &[mod_api::EffectKey],
     ) -> (bool, Vec<EffectTickChange>) {
         let mut apply = false;
         self.native_should_apply_effect_tick_this_tick(effect, tick_count, amplifier, &mut apply);
         let mut keep = true;
         let mut changes = Vec::new();
         if apply {
+            if let Some(owner) = mod_api::__private::effect_index(effect)
+                .and_then(horizon_client_core::potions::effect_by_index)
+                .and_then(|def| def.owner)
+            {
+                mod_api::__private::set_effect_owner(effect, owner);
+            }
+            let _active = mod_api::__private::scope_active_tick_effects(active_effects);
             self.native_apply_effect_tick(mod_api::__private::ApplyEffectTickCall {
                 effect,
                 dimension: self.dim.id(),
@@ -2740,6 +2754,16 @@ impl horizon_client::mobs::ModEffectTicks for Game<'_> {
         let Some(effect) = mod_api::__private::effect_key_by_index(effect) else {
             return true;
         };
+        let active_effects: Vec<mod_api::EffectKey> = mob
+            .extra
+            .effects
+            .iter()
+            .filter_map(|e| {
+                e.registry_index
+                    .and_then(mod_api::__private::effect_key_by_index)
+                    .or_else(|| mod_api::__private::effect_key(e.id))
+            })
+            .collect();
         let (keep, changes) = self.mod_effect_tick(
             effect,
             Some(mob.id as i32),
@@ -2749,6 +2773,7 @@ impl horizon_client::mobs::ModEffectTicks for Game<'_> {
             mob.health,
             mob.attrs.max_health,
             None,
+            &active_effects,
         );
         for change in changes {
             match change {
@@ -2982,7 +3007,8 @@ mod tests {
             "test-potions",
             Box::new(TestMod),
         )]));
-        assert!(brewing::register_mod_effects([(
+        assert!(brewing::register_mod_effects_owned([(
+            "test-potions".into(),
             "test:effect".into(),
             0,
             brewing::Category::Neutral,

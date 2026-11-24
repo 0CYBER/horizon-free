@@ -17,6 +17,8 @@ pub enum Category {
 #[derive(Clone, Copy, Debug)]
 pub struct EffectDef {
     pub id: &'static str,
+    /// The declaring mod's `[mod] id` for content-mod effects, `None` for vanilla effects.
+    pub owner: Option<&'static str>,
     /// Position in the process-owned effect registry, resolved when an instance is created.
     pub index: usize,
     pub color: u32,
@@ -45,6 +47,7 @@ impl EffectDef {
 const fn fx(index: usize, id: &'static str, color: u32, category: Category) -> EffectDef {
     EffectDef {
         index,
+        owner: None,
         id,
         color,
         category,
@@ -114,13 +117,30 @@ static MOD_EFFECTS: OnceLock<Vec<EffectDef>> = OnceLock::new();
 pub fn register_mod_effects(
     effects: impl IntoIterator<Item = (String, u32, Category, Option<i32>)>,
 ) -> bool {
+    register_mod_effects_with_owners(
+        effects
+            .into_iter()
+            .map(|(id, color, category, sort_order)| (None, id, color, category, sort_order)),
+    )
+}
+/// Like [`register_mod_effects`], recording each effect's declaring mod id.
+pub fn register_mod_effects_owned(
+    effects: impl IntoIterator<Item = (String, String, u32, Category, Option<i32>)>,
+) -> bool {
+    register_mod_effects_with_owners(effects.into_iter().map(
+        |(owner, id, color, category, sort_order)| (Some(owner), id, color, category, sort_order),
+    ))
+}
+fn register_mod_effects_with_owners(
+    effects: impl IntoIterator<Item = (Option<String>, String, u32, Category, Option<i32>)>,
+) -> bool {
     if MOD_EFFECTS.get().is_some() {
         return false;
     }
     let defs: Vec<EffectDef> = effects
         .into_iter()
         .enumerate()
-        .map(|(index, (id, color, category, sort_order))| {
+        .map(|(index, (owner, id, color, category, sort_order))| {
             debug_assert!(id.contains(':'), "{id} has no namespace");
             let def = fx(
                 EFFECTS.len() + index,
@@ -128,7 +148,9 @@ pub fn register_mod_effects(
                 color,
                 category,
             );
+            let owner = owner.map(|o| &*Box::leak(o.into_boxed_str()));
             EffectDef {
+                owner,
                 sort_order: sort_order.unwrap_or(def.sort_order),
                 ..def
             }

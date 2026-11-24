@@ -960,6 +960,13 @@ pub(super) fn emit<'a>(
                     call(&mod_item, "break"),
                 ),
             ),
+            None if name == "apply_effect_tick" => (
+                String::new(),
+                format!(
+                    "{{ let __owner = super::effect_owner({event}.effect); let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if let Some(expected) = __owner && owner.id != expected {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
+                    call(&mod_item, "break"),
+                ),
+            ),
             None if mod_cancel && hook.isolate => (
                 String::new(),
                 format!(

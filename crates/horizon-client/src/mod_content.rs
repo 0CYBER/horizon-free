@@ -85,8 +85,19 @@ pub fn drop_dangling_remainders(mods: &mut Vec<ContentMod>) -> Vec<String> {
 /// The mods' mob effects in registry order: by id, as items are. Their
 /// network ids follow vanilla's in this order.
 pub fn mob_effects(mods: &[ContentMod]) -> Vec<&MobEffect> {
-    let mut effects: Vec<&MobEffect> = mods.iter().flat_map(|m| &m.content.effects).collect();
-    effects.sort_by(|a, b| a.id.cmp(&b.id));
+    mob_effects_with_owners(mods)
+        .into_iter()
+        .map(|(_, effect)| effect)
+        .collect()
+}
+
+/// The mods' mob effects in registry order alongside each effect's declaring mod id.
+pub fn mob_effects_with_owners(mods: &[ContentMod]) -> Vec<(&str, &MobEffect)> {
+    let mut effects: Vec<(&str, &MobEffect)> = mods
+        .iter()
+        .flat_map(|m| m.content.effects.iter().map(move |e| (m.id.as_str(), e)))
+        .collect();
+    effects.sort_by(|(_, a), (_, b)| a.id.cmp(&b.id));
     effects
 }
 

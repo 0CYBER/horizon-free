@@ -592,6 +592,62 @@ pub fn effect_key_by_index(index: usize) -> Option<EffectKey> {
         .map(EffectKey)
 }
 
+static EFFECT_OWNERS: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::HashMap<u32, &'static str>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// Record the declaring mod's `[mod] id` for a content-mod effect key so
+/// `Hooks::apply_effect_tick` routes only to that mod.
+pub fn set_effect_owner(key: EffectKey, owner: &'static str) {
+    EFFECT_OWNERS
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key.0, owner);
+}
+
+/// The declaring mod's `[mod] id` for `key`, if recorded.
+pub fn effect_owner(key: EffectKey) -> Option<&'static str> {
+    EFFECT_OWNERS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key.0)
+        .copied()
+}
+
+thread_local! {
+    static ACTIVE_TICK_EFFECTS: std::cell::RefCell<Vec<EffectKey>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+// no wire: host-side RAII guard for thread-local active effect scoping; never crosses to a guest.
+/// RAII guard restoring the previous thread-local active effect list on drop.
+#[non_exhaustive]
+pub struct ActiveTickEffectsGuard {
+    previous: Vec<EffectKey>,
+}
+
+impl Drop for ActiveTickEffectsGuard {
+    fn drop(&mut self) {
+        let previous = std::mem::take(&mut self.previous);
+        ACTIVE_TICK_EFFECTS.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+/// Scope the holder's active effects on the current thread during `apply_effect_tick` so
+/// `ApplyEffectTickEvent::has_effect` can query them without changing the event's wire layout.
+pub fn scope_active_tick_effects(effects: &[EffectKey]) -> ActiveTickEffectsGuard {
+    let previous = ACTIVE_TICK_EFFECTS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        std::mem::replace(&mut *slot, effects.to_vec())
+    });
+    ActiveTickEffectsGuard { previous }
+}
+
+/// Whether `effect` is active on the current ticking holder.
+pub(crate) fn active_tick_has_effect(effect: EffectKey) -> bool {
+    ACTIVE_TICK_EFFECTS.with(|slot| slot.borrow().contains(&effect))
+}
+
 impl crate::BoolGameRuleKey {
     #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {

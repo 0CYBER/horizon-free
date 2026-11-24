@@ -287,7 +287,8 @@ fn run_output(family: Family, output: Output) {
         horizon_client::block_contact::HOOKS.set(crate::game::native_hooks::BLOCK_CONTACT_HOOKS);
     static EFFECT: std::sync::Once = std::sync::Once::new();
     EFFECT.call_once(|| {
-        horizon_client::brewing::register_mod_effects([(
+        horizon_client::brewing::register_mod_effects_owned([(
+            "borrowed-panic".into(),
             "borrowed-panic:hit".into(),
             0,
             horizon_client::brewing::Category::Neutral,

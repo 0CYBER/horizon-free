@@ -30,4 +30,5 @@ pub use world::types::*;
 #[doc(hidden)]
 pub(crate) mod built;
 
+pub(crate) use content::registry_keys::effect_owner;
 pub(crate) use runtime::{listening, receives_cancelled};

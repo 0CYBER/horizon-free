@@ -7,7 +7,8 @@ mod __private {
     pub use crate::wire::wire_types::registry_entry_key_slot;
     // hidden: load-owned key resolution, used by the game at the registry boundaries
     pub use crate::content::registry_keys::{
-        block_definitions, block_key, effect_index, resolve_block_keys, resolve_effects,
+        block_definitions, block_key, effect_index, effect_owner, resolve_block_keys,
+        resolve_effects, scope_active_tick_effects, set_effect_owner,
     };
     pub use crate::content::registry_keys::{
         block_entity_type_key, block_entity_type_name, block_id as block_key_id, dimension_id,

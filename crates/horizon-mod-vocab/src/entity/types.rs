@@ -1350,6 +1350,11 @@ pub enum EffectTickChange {
 }
 
 impl ApplyEffectTickEvent<'_> {
+    /// Whether the holder currently has `effect` active during this tick.
+    pub fn has_effect(&self, effect: EffectKey) -> bool {
+        crate::content::registry_keys::active_tick_has_effect(effect)
+    }
+
     /// Queue `LivingEntity.heal` on the holder.
     pub fn heal(&mut self, amount: f32) {
         self.changes.push(EffectTickChange::Heal(amount));
@@ -1373,6 +1378,101 @@ impl ApplyEffectTickEvent<'_> {
     pub fn eat(&mut self, nutrition: i32, saturation_modifier: f32) {
         self.changes
             .push(EffectTickChange::Eat(nutrition, saturation_modifier));
+    }
+}
+
+#[cfg(test)]
+mod apply_effect_tick_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn apply_effect_tick_routes_only_to_declaring_mod_and_exposes_has_effect() {
+        struct World;
+        impl crate::Host for World {}
+        crate::impl_host_areas!(World);
+
+        struct Listener {
+            calls: Arc<AtomicUsize>,
+            saw_present: Arc<AtomicBool>,
+            saw_absent: Arc<AtomicBool>,
+            present: EffectKey,
+            absent: EffectKey,
+        }
+        impl crate::Hooks for Listener {
+            fn subscribed(&self) -> &'static [Option<crate::HookId>] {
+                &[Some(crate::HookId::ApplyEffectTick)]
+            }
+            fn apply_effect_tick(
+                &self,
+                _: &dyn crate::Host,
+                event: &mut ApplyEffectTickEvent<'_>,
+            ) {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.saw_present
+                    .store(event.has_effect(self.present), Ordering::SeqCst);
+                self.saw_absent
+                    .store(event.has_effect(self.absent), Ordering::SeqCst);
+            }
+        }
+
+        let present = EffectKey(1);
+        let absent = EffectKey(2);
+        let owner_calls = Arc::new(AtomicUsize::new(0));
+        let other_calls = Arc::new(AtomicUsize::new(0));
+        let saw_present = Arc::new(AtomicBool::new(false));
+        let saw_absent = Arc::new(AtomicBool::new(true));
+        let mods = Arc::from([
+            crate::ModEntry::new(
+                "owner_mod",
+                Box::new(Listener {
+                    calls: owner_calls.clone(),
+                    saw_present: saw_present.clone(),
+                    saw_absent: saw_absent.clone(),
+                    present,
+                    absent,
+                }),
+            ),
+            crate::ModEntry::new(
+                "other_mod",
+                Box::new(Listener {
+                    calls: other_calls.clone(),
+                    saw_present: Arc::new(AtomicBool::new(false)),
+                    saw_absent: Arc::new(AtomicBool::new(false)),
+                    present,
+                    absent,
+                }),
+            ),
+        ]);
+        let holder = crate::LivingRef::new(crate::EntityRef::new(crate::WorldEpoch::new(1), 42));
+        let mut changes = Vec::new();
+        let mut keep = true;
+        crate::content::registry_keys::set_effect_owner(present, "owner_mod");
+        let _active = crate::content::registry_keys::scope_active_tick_effects(&[present]);
+        crate::testing::with_dispatch(mods, || {
+            crate::dispatch_apply_effect_tick(
+                &World,
+                crate::__private::ApplyEffectTickCall {
+                    effect: present,
+                    dimension: "minecraft:overworld",
+                    entity: Some(42),
+                    amplifier: 0,
+                    holder,
+                    health: 20.0,
+                    max_health: 20.0,
+                    food: None,
+                    changes: &mut changes,
+                    keep: &mut keep,
+                },
+            );
+        });
+        assert_eq!(owner_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(other_calls.load(Ordering::SeqCst), 0);
+        assert!(saw_present.load(Ordering::SeqCst));
+        assert!(!saw_absent.load(Ordering::SeqCst));
     }
 }
 
