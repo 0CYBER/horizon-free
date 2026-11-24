@@ -272,15 +272,15 @@ impl Surface for NativeSurface {
         // https://github.com/gfx-rs/wgpu/issues/8354 for more details. In other present modes it
         // only adds acquire latency, see https://github.com/gfx-rs/wgpu/issues/9559.
         //
-        // Horizon: NVIDIA's driver on a Wayland surface gets it in every present mode, so the CPU
-        // waits until the compositor has given the image back and no submission waits for that on
-        // the GPU (`acquire_on_cpu`).
+        // Horizon: NVIDIA's driver on a Wayland surface gets it in every present mode but
+        // Immediate, so the CPU waits until the compositor has given the image back and no
+        // submission waits for that on the GPU (`acquire_on_cpu`).
         let fence = if (cfg!(target_os = "windows")
             && matches!(
                 config.present_mode,
                 wgt::PresentMode::Fifo | wgt::PresentMode::FifoRelaxed
             ))
-            || acquire_on_cpu(device.shared.vendor_id, self.wayland)
+            || acquire_on_cpu(device.shared.vendor_id, self.wayland, config.present_mode)
         {
             let raw = unsafe {
                 device
@@ -984,12 +984,18 @@ impl<'a> SwapchainSubmissionSemaphoreGuard for NativeSwapchainSubmissionSemaphor
 /// being captured, a submission that waited on the GPU for an image the compositor still held kept
 /// the GPU on that context until the kernel's context switch timeout (Xid 109) lost the device.
 /// Only NVIDIA on a Wayland surface by default: elsewhere the fence costs frames with VSync off
-/// (#4604) for nothing. Windows keeps wgpu's own rule (a fence in FIFO only).
-/// `HORIZON_ACQUIRE_FENCE=0` or `=1` overrides the choice on any surface.
-fn acquire_on_cpu(vendor_id: u32, wayland: bool) -> bool {
+/// (#4604) for nothing. Not in Immediate either, where each frame then waited on the CPU for the
+/// compositor: it lost frames and stuttered with VSync off (#20616), and the hang was seen in
+/// Mailbox. Windows keeps wgpu's own rule (a fence in FIFO only).
+/// `HORIZON_ACQUIRE_FENCE=0` or `=1` overrides the choice on any surface and in any mode.
+fn acquire_on_cpu(vendor_id: u32, wayland: bool, mode: wgt::PresentMode) -> bool {
     match std::env::var("HORIZON_ACQUIRE_FENCE").as_deref() {
         Ok("0") => false,
         Ok("1") => true,
-        _ => wayland && vendor_id == crate::auxil::db::nvidia::VENDOR,
+        _ => {
+            wayland
+                && vendor_id == crate::auxil::db::nvidia::VENDOR
+                && mode != wgt::PresentMode::Immediate
+        }
     }
 }
