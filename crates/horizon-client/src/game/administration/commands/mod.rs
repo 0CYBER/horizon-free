@@ -13,6 +13,7 @@ pub(super) mod execute;
 pub(super) mod extra;
 mod give;
 mod item_count;
+mod item_predicate;
 pub(in crate::game) mod items;
 mod misc;
 mod modprofile;
@@ -3428,6 +3429,7 @@ impl Game<'_> {
         self.feedback(Text::translate("commands.setworldspawn.success", &args));
         Ok(1)
     }
+    #[allow(dead_code)]
     fn item_matches(&self, predicate: &ItemInput, item: &str) -> bool {
         if predicate.any {
             return true;
@@ -3447,139 +3449,15 @@ impl Game<'_> {
         predicate.id == item
     }
     /// `ItemPredicateArgument`: the item test and its `[...]` component
-    /// tests (presence, `=` equality, `!` negation, `|` alternatives).
+    /// tests (presence, `=` equality, `~` sub-predicates, `!` negation, `|` alternatives).
     pub(super) fn stack_matches(&self, predicate: &ItemInput, stack: &ItemStack) -> bool {
-        if !self.item_matches(predicate, &stack.item) {
-            return false;
-        }
-        let Some(tests) = predicate.components.as_deref() else {
-            return true;
-        };
-        let inner = tests
-            .trim()
-            .strip_prefix('[')
-            .and_then(|t| t.strip_suffix(']'))
-            .unwrap_or("");
-        // `stack.get(type)`: the effective value, so a value equal to the
-        // prototype (left out of the patch) still matches.
-        let components = horizon_client::item_data::effective_components(
-            stack,
-            self.items().component_defaults.get(&*stack.item),
-        );
-        let test = |term: &str| -> bool {
-            let term = term.trim();
-            let (negated, term) = match term.strip_prefix('!') {
-                Some(t) => (true, t.trim()),
-                None => (false, term),
-            };
-            let split = term.find(['=', '~']).unwrap_or(term.len());
-            let id = term[..split].trim();
-            let id = if id.contains(':') {
-                id.to_owned()
-            } else {
-                format!("minecraft:{id}")
-            };
-            let present = components.get(&id.as_str().into());
-            let result = match term[split..].chars().next() {
-                // Both count wrappers in `ItemPredicateArgument` use the live
-                // stack count and the same integer bounds matcher.
-                Some('=' | '~') if id == "minecraft:count" => {
-                    let value = horizon_core::nbt::parse_snbt(term[split + 1..].trim());
-                    value.is_ok_and(|(v, _)| item_count::matches(stack.count, &v))
-                }
-                Some('=') => {
-                    let value = horizon_core::nbt::parse_snbt(term[split + 1..].trim())
-                        .ok()
-                        .map(|(t, _)| t);
-                    match (present, value) {
-                        (Some(have), Some(want)) => {
-                            (horizon_client::nbt_path::compare_nbt(&want, Some(have))
-                                && horizon_client::nbt_path::compare_nbt(have, Some(&want)))
-                                // A prototype value keeps its loaded number widths.
-                                || horizon_client::item_data::same_component_value(&id, have, &want)
-                        }
-                        _ => false,
-                    }
-                }
-                Some('~') => {
-                    // Component sub-predicates.
-                    let value = horizon_core::nbt::parse_snbt(term[split + 1..].trim())
-                        .ok()
-                        .map(|(t, _)| t);
-                    match (id.as_str(), value) {
-                        // `MinMaxBounds.Ints.matches`: DamagePredicate's damage-only
-                        // Int bounds shape; effective DAMAGE presence is required.
-                        // Other fields keep the entire existing predicate path.
-                        ("minecraft:damage", Some(ref v))
-                            if matches!(v, horizon_core::nbt::Tag::Compound(c) if c.len() == 1)
-                                && match v.get("damage") {
-                                    Some(horizon_core::nbt::Tag::Int(_)) => true,
-                                    Some(horizon_core::nbt::Tag::Compound(bounds)) => {
-                                        bounds.iter().all(|(key, value)| {
-                                            matches!(key.to_string_lossy().as_str(), "min" | "max")
-                                                && matches!(value, horizon_core::nbt::Tag::Int(_))
-                                        })
-                                    }
-                                    _ => false,
-                                } =>
-                        {
-                            let removed = stack
-                                .data()
-                                .is_some_and(|data| data.other("!minecraft:damage").is_some());
-                            let has_damage = !removed
-                                && (present.is_some()
-                                    || self.items().get(&stack.item).is_some_and(|item| {
-                                        item.components.iter().any(|c| c == "minecraft:damage")
-                                    }));
-                            let n = i64::from(stack.damage);
-                            has_damage
-                                && match v.get("damage").unwrap() {
-                                    horizon_core::nbt::Tag::Int(exact) => n == i64::from(*exact),
-                                    bounds => {
-                                        let get = |key| match bounds.get(key) {
-                                            Some(horizon_core::nbt::Tag::Int(value)) => {
-                                                Some(i64::from(*value))
-                                            }
-                                            _ => None,
-                                        };
-                                        get("min").is_none_or(|min| n >= min)
-                                            && get("max").is_none_or(|max| n <= max)
-                                    }
-                                }
-                        }
-                        (_, Some(v)) => present.is_some_and(|have| {
-                            horizon_client::nbt_path::compare_nbt(&v, Some(have))
-                        }),
-                        _ => false,
-                    }
-                }
-                // Count is a pseudo-component, not a catalog component.
-                _ if id == "minecraft:count" => present.is_some(),
-                _ => self.stack_component_present(stack, &id),
-            };
-            result != negated
-        };
-        split_top_level(inner, ',')
-            .iter()
-            .filter(|t| !t.trim().is_empty())
-            .all(|term| split_top_level(term, '|').iter().any(|alt| test(alt)))
+        item_predicate::stack_matches(self, predicate, stack)
     }
     /// `ItemPredicateArgument.createComponentExistencePredicate`: the stack's
     /// effective component presence, with its patch ahead of its prototype.
+    #[allow(dead_code)]
     fn stack_component_present(&self, stack: &ItemStack, id: &str) -> bool {
-        // Read the modeled patch before saved-default elision. A removal wins
-        // even when the actual item prototype supplies the component.
-        if let Some(patch) = horizon_client::item_data::components_tag(stack.damage, stack.data()) {
-            if patch.get(&format!("!{id}")).is_some() {
-                return false;
-            }
-            if patch.get(id).is_some() {
-                return true;
-            }
-        }
-        self.items()
-            .get(&stack.item)
-            .is_some_and(|item| item.components.iter().any(|key| key == id))
+        item_predicate::stack_component_present(self, stack, id)
     }
     fn cmd_clear(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {

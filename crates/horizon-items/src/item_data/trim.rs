@@ -66,10 +66,14 @@ pub fn material_from_nbt(tag: &Tag) -> Option<Holder<Material>> {
 }
 pub fn pattern_from_nbt(tag: &Tag) -> Option<Holder<Pattern>> {
     holder(tag, |tag| {
+        let decal = match tag.get("decal") {
+            Some(v) => super::component_bool(v)?,
+            None => false,
+        };
         Some(Pattern {
             asset_id: name(tag.get("asset_id")?)?,
             description: description(tag.get("description")?)?,
-            decal: matches!(tag.get("decal"), Some(Tag::Byte(v)) if *v != 0),
+            decal,
         })
     })
 }

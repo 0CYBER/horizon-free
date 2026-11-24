@@ -1323,7 +1323,13 @@ fn explosion_tag(e: &crate::firework::FireworkExplosion) -> Tag {
 fn explosion_from(e: &Tag) -> crate::firework::FireworkExplosion {
     let ints = |t: Option<&Tag>| match t {
         Some(Tag::IntArray(v)) => v.iter().map(|c| *c as u32).collect(),
-        Some(Tag::List(v)) => v.iter().filter_map(int).map(|c| c as u32).collect(),
+        Some(Tag::ByteArray(v)) => v.iter().map(|&c| i32::from(c as i8) as u32).collect(),
+        Some(Tag::LongArray(v)) => v.iter().map(|&c| c as i32 as u32).collect(),
+        Some(Tag::List(v)) => v
+            .iter()
+            .filter_map(crate::properties::component_int)
+            .map(|c| c as u32)
+            .collect(),
         _ => Vec::new(),
     };
     crate::firework::FireworkExplosion {
@@ -1335,8 +1341,11 @@ fn explosion_from(e: &Tag) -> crate::firework::FireworkExplosion {
         ),
         colors: ints(e.get("colors")),
         fade: ints(e.get("fade_colors")),
-        trail: e.get("has_trail").and_then(int).unwrap_or(0) != 0,
-        twinkle: e.get("has_twinkle").and_then(int).unwrap_or(0) != 0,
+        trail: e.get("has_trail").and_then(component_bool).unwrap_or(false),
+        twinkle: e
+            .get("has_twinkle")
+            .and_then(component_bool)
+            .unwrap_or(false),
     }
 }
 /// An `ItemStackTemplate`: `{id, count?, components?}`.

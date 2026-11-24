@@ -923,3 +923,217 @@ fn glider_unit_codec_requires_maps_and_discards_unknown_fields() {
         assert!(decoded_component_value("minecraft:glider", &value, &registry).is_err());
     }
 }
+
+#[test]
+fn item_predicate_codecs_match_vanilla_26_3_sub_predicates_and_reject_malformed() {
+    use super::{Reader, Registries, parse_predicate};
+    use crate::args::RegistryIds;
+
+    let mut reg = Registries {
+        items: vec!["minecraft:stone".into(), "minecraft:firework_rocket".into()],
+        enchantments: vec!["minecraft:sharpness".into()],
+        attributes: vec!["minecraft:attack_damage".into()],
+        effects: vec!["minecraft:speed".into()],
+        ..Default::default()
+    };
+    let preds = [
+        "minecraft:damage",
+        "minecraft:enchantments",
+        "minecraft:stored_enchantments",
+        "minecraft:potion_contents",
+        "minecraft:custom_data",
+        "minecraft:container",
+        "minecraft:bundle_contents",
+        "minecraft:firework_explosion",
+        "minecraft:fireworks",
+        "minecraft:writable_book_content",
+        "minecraft:written_book_content",
+        "minecraft:attribute_modifiers",
+        "minecraft:trim",
+        "minecraft:jukebox_playable",
+        "minecraft:villager/variant",
+    ];
+    let comps = [
+        "minecraft:max_stack_size",
+        "minecraft:fireworks",
+        "minecraft:firework_explosion",
+        "minecraft:custom_data",
+        "minecraft:damage",
+        "minecraft:potion_contents",
+        "minecraft:consumable",
+        "minecraft:death_protection",
+        "minecraft:equippable",
+        "minecraft:tool",
+        "minecraft:attribute_modifiers",
+        "minecraft:writable_book_content",
+        "minecraft:written_book_content",
+        "minecraft:lore",
+        "minecraft:repairable",
+        "minecraft:container",
+        "minecraft:bundle_contents",
+        "minecraft:bees",
+        "minecraft:trim",
+        "minecraft:pot_decorations",
+    ];
+    reg.persistent_components = comps.iter().map(|s| (*s).to_owned()).collect();
+    reg.by_registry.insert(
+        "minecraft:data_component_predicate_type".into(),
+        RegistryIds {
+            ids: preds.iter().map(|s| (*s).to_owned()).collect(),
+            tags: vec![],
+        },
+    );
+    reg.by_registry.insert(
+        "minecraft:data_component_type".into(),
+        RegistryIds {
+            ids: comps.iter().map(|s| (*s).to_owned()).collect(),
+            tags: vec![],
+        },
+    );
+    reg.by_registry.insert(
+        "minecraft:potion".into(),
+        RegistryIds {
+            ids: vec!["minecraft:swiftness".into(), "minecraft:water".into()],
+            tags: vec![],
+        },
+    );
+    reg.by_registry.insert(
+        "minecraft:trim_material".into(),
+        RegistryIds {
+            ids: vec!["minecraft:iron".into()],
+            tags: vec![],
+        },
+    );
+    reg.by_registry.insert(
+        "minecraft:trim_pattern".into(),
+        RegistryIds {
+            ids: vec!["minecraft:coast".into()],
+            tags: vec![],
+        },
+    );
+    reg.by_registry.insert(
+        "minecraft:jukebox_song".into(),
+        RegistryIds {
+            ids: vec!["minecraft:cat".into()],
+            tags: vec![],
+        },
+    );
+    reg.by_registry.insert(
+        "minecraft:villager_type".into(),
+        RegistryIds {
+            ids: vec!["minecraft:plains".into()],
+            tags: vec![],
+        },
+    );
+
+    for valid in [
+        "*[minecraft:custom_data~{}]",
+        "*[minecraft:custom_data~{a:1b}]",
+        r#"*[minecraft:custom_data~"{a:1b}"]"#,
+        "*[minecraft:damage~{}]",
+        "*[minecraft:damage~{damage:0}]",
+        "*[minecraft:damage~{durability:{min:1,max:250}}]",
+        "*[minecraft:enchantments~[]]",
+        r#"*[minecraft:enchantments~[{enchantments:"minecraft:sharpness",levels:{min:1}}]]"#,
+        "*[minecraft:stored_enchantments~[]]",
+        "*[minecraft:potion_contents~{}]",
+        r#"*[minecraft:potion_contents~{potions:"minecraft:swiftness"}]"#,
+        r#"*[minecraft:potion_contents~{potions:["minecraft:swiftness","minecraft:water"],effects:{size:{min:1}}}]"#,
+        r#"*[minecraft:container~{items:{size:{min:1},contains:[{items:"minecraft:stone"}]}}]"#,
+        r#"*[minecraft:bundle_contents~{items:{count:[{test:{items:"minecraft:stone"},count:{min:1}}]}}]"#,
+        r#"*[minecraft:firework_explosion~{shape:"star",has_twinkle:true,has_trail:false}]"#,
+        "*[minecraft:fireworks~{flight_duration:1,explosions:{size:0}}]",
+        r#"*[minecraft:writable_book_content~{pages:{size:0,contains:["a"]}}]"#,
+        r#"*[minecraft:written_book_content~{author:"a",title:"t",generation:{min:0,max:2},resolved:false}]"#,
+        r#"*[minecraft:attribute_modifiers~{modifiers:{contains:[{attribute:"minecraft:attack_damage",amount:{min:1.0},operation:"add_value",slot:"mainhand"}]}}]"#,
+        r#"*[minecraft:trim~{material:"minecraft:iron",pattern:"minecraft:coast"}]"#,
+        r#"*[minecraft:jukebox_playable~{song:"minecraft:cat"}]"#,
+        r#"*[minecraft:villager/variant~"minecraft:plains"]"#,
+        r#"*[minecraft:villager/variant~["minecraft:plains"]]"#,
+        "*[minecraft:max_stack_size~{}]",
+        "*[minecraft:count=1]",
+        "*[minecraft:count={min:1,max:4}]",
+        "*[minecraft:count~{min:2}]",
+        "*[minecraft:fireworks={flight_duration:1,explosions:[]}]",
+        "*[minecraft:fireworks={flight_duration:200,unknown_field:1}]",
+        r#"*[minecraft:custom_data="{a:1b}"]"#,
+        // Unknown fields are ignored by vanilla record codecs.
+        "*[minecraft:consumable={unknown:1}]",
+        "*[minecraft:potion_contents={unknown:1}]",
+        r#"*[minecraft:potion_contents={custom_effects:[{id:"minecraft:speed",show_particles:false,hidden_effect:{amplifier:1b,duration:100}}]}]"#,
+        r#"*[minecraft:equippable={slot:"head",unknown:1}]"#,
+        "*[minecraft:tool={rules:[],unknown:1}]",
+        r#"*[minecraft:written_book_content={title:"T",author:"A",pages:[["Page 1"]],unknown:1}]"#,
+        r#"*[minecraft:lore=[["Line 1"],"Line 2"]]"#,
+        // Inline armor trim holders (vanilla 26.3) and 26.3 compound pot_decorations.
+        r#"*[minecraft:trim={material:{palette_id:"minecraft:gold",description:"Inline material"},pattern:{asset_id:"minecraft:coast",description:"Inline pattern",decal:0b}}]"#,
+        r#"*[minecraft:trim={material:"minecraft:iron",pattern:{asset_id:"minecraft:coast",description:["Coast"]}}]"#,
+        r#"*[minecraft:pot_decorations={back:{id:"minecraft:stone"},front:{id:"minecraft:stone",count:1},unknown:1}]"#,
+        r#"*[minecraft:firework_explosion={shape:"star",colors:[B;1b,-1b],fade_colors:[L;2L]}]"#,
+    ] {
+        let mut reader = Reader::new(valid);
+        assert!(
+            parse_predicate(&mut reader, &reg).is_ok(),
+            "expected valid predicate: {valid}"
+        );
+        assert_eq!(reader.cursor, valid.len(), "trailing input in {valid}");
+    }
+
+    for invalid in [
+        // 26.3 PotionsPredicate is a record `{potions?, effects?}`, not a bare HolderSet.
+        r#"*[minecraft:potion_contents~"minecraft:swiftness"]"#,
+        r#"*[minecraft:potion_contents~["minecraft:swiftness","minecraft:water"]]"#,
+        "*[minecraft:custom_data~1]",
+        r#"*[minecraft:custom_data~"not_a_compound"]"#,
+        "*[minecraft:damage~5]",
+        "*[minecraft:damage~{damage:{min:5,max:1}}]",
+        "*[minecraft:enchantments~{}]",
+        r#"*[minecraft:enchantments~[{enchantments:"minecraft:missing"}]]"#,
+        "*[minecraft:container~[]]",
+        "*[minecraft:bundle_contents~{items:1}]",
+        r#"*[minecraft:firework_explosion~{shape:"nope"}]"#,
+        "*[minecraft:fireworks~{flight_duration:{min:3,max:1}}]",
+        "*[minecraft:writable_book_content~{pages:{contains:[1]}}]",
+        r#"*[minecraft:written_book_content~{resolved:"bad"}]"#,
+        r#"*[minecraft:attribute_modifiers~{modifiers:{contains:[{slot:"nope"}]}}]"#,
+        "*[minecraft:trim~1]",
+        r#"*[minecraft:jukebox_playable~"minecraft:cat"]"#,
+        "*[minecraft:villager/variant~{}]",
+        "*[minecraft:max_stack_size~1]",
+        r#"*[minecraft:count="bad"]"#,
+        "*[minecraft:count={min:5,max:1}]",
+        "*[minecraft:count~{min:5,max:1}]",
+        "*[minecraft:fireworks=1]",
+        "*[minecraft:fireworks={flight_duration:-1}]",
+        "*[minecraft:fireworks={flight_duration:256}]",
+        // Exact `=` rejects malformed values for known fields.
+        "*[minecraft:custom_data=1]",
+        r#"*[minecraft:custom_data="not_a_compound"]"#,
+        "*[minecraft:potion_contents={potion:1}]",
+        r#"*[minecraft:potion_contents={custom_effects:[{id:"minecraft:speed",show_icon:"bad"}]}]"#,
+        r#"*[minecraft:potion_contents={custom_effects:[{id:"minecraft:speed",hidden_effect:1}]}]"#,
+        "*[minecraft:consumable={animation:1}]",
+        r#"*[minecraft:consumable={animation:"bogus"}]"#,
+        "*[minecraft:consumable={consume_seconds:-1.0f}]",
+        "*[minecraft:death_protection={death_effects:1}]",
+        r#"*[minecraft:equippable={slot:"nope"}]"#,
+        "*[minecraft:tool={rules:[{blocks:1}]}]",
+        "*[minecraft:attribute_modifiers={modifiers:[]}]",
+        r#"*[minecraft:written_book_content={title:"T",author:"A",generation:9}]"#,
+        "*[minecraft:lore=[1]]",
+        "*[minecraft:repairable={items:1}]",
+        r#"*[minecraft:container=[{slot:300,item:{id:"minecraft:stone"}}]]"#,
+        r#"*[minecraft:bees=[{entity_data:1,ticks_in_hive:0,min_ticks_in_hive:0}]]"#,
+        r#"*[minecraft:trim={material:{description:"missing palette"},pattern:"minecraft:coast"}]"#,
+        r#"*[minecraft:trim={material:"minecraft:iron",pattern:{asset_id:"minecraft:coast",description:"P",decal:"bad"}}]"#,
+        r#"*[minecraft:pot_decorations=["minecraft:stone"]]"#,
+        "*[minecraft:pot_decorations={back:1}]",
+    ] {
+        let err = parse_predicate(&mut Reader::new(invalid), &reg).expect_err(invalid);
+        assert!(
+            !err.message.plain().contains("exists:"),
+            "internal exists: prefix leaked in error for {invalid}: {}",
+            err.message.plain()
+        );
+    }
+}
