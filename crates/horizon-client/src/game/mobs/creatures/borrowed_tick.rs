@@ -22,9 +22,15 @@ fn route_player_events(
             };
             events.insert(k, *event);
         }
-        // A hoglin broadcast carries the source's player, not the receiving
-        // hoglin's independently selected player.
+        // A hoglin broadcast or an alert carries the source's player as it is now,
+        // not the receiver's independently selected player, nor the source's
+        // binding when the batch is delivered (an earlier alert may rebind it).
         if let MobEvent::HoglinAttackTarget {
+            target: Who::Player,
+            player,
+            ..
+        }
+        | MobEvent::SetTarget {
             target: Who::Player,
             player,
             ..
@@ -1062,6 +1068,37 @@ mod hoglin_routing_tests {
                 player, ..
             } if player == expected));
         }
+    }
+}
+
+#[cfg(test)]
+mod alert_routing_tests {
+    use super::*;
+
+    /// Player 12 hit zombified piglin 9001 and player 13 hit 9002 before one tick. 9001's
+    /// tick alerts 9002, and 9002's alerts 9003. The batch is delivered after the tick, so
+    /// 9001's alert has rebound 9002 to player 12 by the time 9002's alert is applied; vanilla
+    /// hands each alerted mob `getLastHurtByMob()` as it alerts, so 9003 still goes for 13.
+    #[test]
+    fn two_attackers_in_one_tick_each_alert_carries_its_own() {
+        let mut events = Vec::new();
+        for (source, seen, alerted) in [(9001, Some(12), 9002), (9002, Some(13), 9003)] {
+            let from = events.len();
+            events.push(MobEvent::SetTarget {
+                mob: alerted,
+                target: Who::Player,
+                player: None,
+            });
+            route_player_events(&mut events, from, seen, &[], &mut Vec::new(), source);
+        }
+        let carried: Vec<(u32, Option<u32>)> = events
+            .iter()
+            .map(|e| match e {
+                MobEvent::SetTarget { mob, player, .. } => (*mob, *player),
+                other => panic!("an alert stays an alert: {other:?}"),
+            })
+            .collect();
+        assert_eq!(carried, [(9002, Some(12)), (9003, Some(13))]);
     }
 }
 

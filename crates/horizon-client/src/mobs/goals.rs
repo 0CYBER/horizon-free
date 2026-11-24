@@ -1966,10 +1966,13 @@ impl Goal for HurtByTarget {
                 return;
             }
             for other in ids {
-                cx.events.push(MobEvent::SetTarget {
+                // A target-change hook may have switched the selected player:
+                // the alert carries the one this mob now targets.
+                cx.events.push(cx.w.route_player_event(MobEvent::SetTarget {
                     mob: other,
                     target: by,
-                });
+                    player: None,
+                }));
             }
         }
         if cub {

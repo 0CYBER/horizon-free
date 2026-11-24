@@ -2094,10 +2094,15 @@ pub enum MobEvent {
         source: Damage,
         apply_blocking: Option<f32>,
     },
-    /// Set another mob's attack target (HurtByTargetGoal alerts).
+    /// Set another mob's attack target (`HurtByTargetGoal.alertOthers`,
+    /// `PiglinAi.broadcastAngerTarget`): `mob` takes the alerting mob's attacker.
+    /// For a `Who::Player` target, `player` is the connection the alerting mob
+    /// saw as it sent the event (vanilla hands over the entity itself), not the
+    /// one nearest `mob`; `None` is the host. Its tick fills it in.
     SetTarget {
         mob: u32,
         target: Who,
+        player: Option<u32>,
     },
     PiglinAlertTarget(undead::PiglinAlert),
     /// `HoglinAi.broadcastAttackTarget`: receiver and source player connection.
@@ -2599,7 +2604,8 @@ impl MobEvent {
             | Self::StabDismount { target }
             | Self::Ignite(target, _)
             | Self::ZombieIgnite(target, _)
-            | Self::IronGolemHit { target, .. } => *target == Who::Player,
+            | Self::IronGolemHit { target, .. }
+            | Self::SetTarget { target, .. } => *target == Who::Player,
             Self::Projectile(projectile) => matches!(
                 &projectile.kind,
                 crate::projectiles::ProjectileKind::ShulkerBullet {

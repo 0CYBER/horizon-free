@@ -201,6 +201,7 @@ horizon-client game::persist::completion_tests::nosave_riders_transfer_live_with
 horizon-client game::persist::completion_tests::registered_nosave_riders_are_live_but_not_serialized_or_vehicles lib daily resources
 horizon-client game::persist::completion_tests::valid_nonmob_rider_is_live_and_merge_does_not_adopt_passengers lib daily resources
 horizon-client game::persist::lookup_order_tests::orbs_keep_their_section_entry_order_after_reload lib daily resources
+horizon-client game::piglins::tests::an_alerted_zombified_piglin_targets_the_attacker_not_its_nearest_player lib daily resources
 horizon-client game::rectangular_recipe_remainder_tests::rectangular_recipe_for_preserves_two_custom_remainder_cells lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::a_callback_click_survives_until_the_next_tick lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::a_screen_drops_the_clicks_and_holds_nothing lib daily resources

@@ -2225,9 +2225,18 @@ impl Game<'_> {
             match e {
                 MobEvent::ForPlayer { conn, event } => {
                     let mut event = *event;
+                    // An alert carries its player itself rather than running as a guest.
+                    if let MobEvent::SetTarget {
+                        target: Who::Player,
+                        player,
+                        ..
+                    } = &mut event
+                    {
+                        *player = conn;
+                        self.handle_mob_events(vec![event])?;
                     // Projectiles are spawned in the world rather than run
                     // as a guest, but must retain the selected guest target.
-                    if let Some(conn) = conn
+                    } else if let Some(conn) = conn
                         && let MobEvent::Projectile(p) = &mut event
                         && let ProjectileKind::ShulkerBullet { target, .. } = &mut p.kind
                         && *target == Some(Who::Player)
@@ -2860,12 +2869,15 @@ impl Game<'_> {
                         );
                     }
                 }
-                MobEvent::SetTarget { mob, target } => {
-                    let player = self
-                        .lan
-                        .as_ref()
-                        .and_then(|host| host.mob_players.get(&mob).copied())
-                        .or(self.lan_acting);
+                MobEvent::SetTarget {
+                    mob,
+                    target,
+                    player,
+                } => {
+                    // `alertOther(other, lastHurtByMob)` hands over the attacker itself: a
+                    // player target is the one the alerting mob saw when it sent this, not
+                    // the receiver's nearest, nor whom an earlier alert in the batch rebound
+                    // the alerting mob to.
                     self.set_event_ai_target(mob, Some(target), player);
                 }
                 MobEvent::PiglinAlertTarget(alert) => self.piglin_alert_target(alert),

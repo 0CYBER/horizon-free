@@ -446,4 +446,55 @@ mod tests {
         assert_eq!(m.extra.swing_right_arm, Some(m.main_arm_left()));
         assert_eq!(m.swing_duration(), 6, "SwingAnimation.DEFAULT's ticks");
     }
+
+    /// `HurtByTargetGoal.alertOthers` hands each alerted mob the attacker itself
+    /// (`alertOther(other, this.mob.getLastHurtByMob())`, then `other.setTarget`). With two
+    /// players on, a zombified piglin alerted by one that player 12 hit takes player 12,
+    /// though player 13 is the player nearest to it.
+    #[test]
+    #[ignore = "daily"]
+    fn an_alerted_zombified_piglin_targets_the_attacker_not_its_nearest_player() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use crate::game::native_item_places::tests::{guest, open_to_lan};
+        use horizon_client::mobs::{Mob, MobEvent, Who};
+        use horizon_core::geometry::Vec3;
+
+        with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombified_piglin")
+                .unwrap()
+                .clone();
+            for (id, x) in [(9001, 0.0), (9002, 20.0)] {
+                game.mobs
+                    .push(Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
+            }
+            open_to_lan(game);
+            for (conn, x) in [(12, 2.0), (13, 22.0)] {
+                let mut placed = guest(conn);
+                placed.loaded = true;
+                placed.position = [x, 64.0, 0.0];
+                game.lan.as_mut().unwrap().hub.guests.push(placed);
+            }
+            // Player 12 hit the first piglin, whose tick sent the alert; the second sees
+            // player 13, its nearest.
+            let host = game.lan.as_mut().unwrap();
+            host.mob_players.insert(9002, 13);
+            game.handle_mob_events(vec![MobEvent::SetTarget {
+                mob: 9002,
+                target: Who::Player,
+                player: Some(12),
+            }])
+            .unwrap();
+            let alerted = game.mobs.iter().find(|m| m.id == 9002).unwrap();
+            assert_eq!(alerted.ai.target, Some(Who::Player));
+            assert_eq!(
+                game.lan.as_ref().unwrap().mob_players.get(&9002),
+                Some(&12),
+                "the alerted piglin goes for player 12, who hit the first one"
+            );
+        });
+    }
 }
