@@ -293,6 +293,14 @@ fn close_enough_for_spawning(p: &LevelPlayer, (cx, cz): (i32, i32)) -> bool {
     );
     !p.spectator && x * x + z * z < 16384.0
 }
+/// `ChunkMap.skipPlayer`: with `spectatorsGenerateChunks` false a spectator
+/// is not added to the distance manager, so its chunks never enlarge the
+/// natural-spawn chunk count the caps divide by.
+fn skip_spectators(players: &mut Vec<LevelPlayer>, spectators_generate_chunks: bool) {
+    if !spectators_generate_chunks {
+        players.retain(|p| !p.spectator);
+    }
+}
 /// The chunks within 8 of a player, in `scratch.candidates`, and for each in
 /// `scratch.close` whether a non-spectator is within 128 blocks or `forced`
 /// says a ticket holds it for natural spawning. How many there are.
@@ -1478,6 +1486,12 @@ impl<'a> Game<'a> {
                 players.retain(|p| !fake.contains(&p.uuid));
             }
         }
+        skip_spectators(
+            &mut players,
+            self.ui
+                .rules
+                .bool_at(horizon_client::gamerules::vanilla::SPECTATORS_GENERATE_CHUNKS),
+        );
         if players.is_empty() {
             return;
         }
@@ -1928,6 +1942,25 @@ mod tests {
             "only the held chunk"
         );
         assert!(!scratch.candidates.contains(&(30, 30)), "outside the area");
+    }
+
+    /// A far spectator's square counts toward the spawnable chunks only while
+    /// `spectatorsGenerateChunks` is on.
+    #[test]
+    fn spectators_count_toward_spawnable_chunks_only_when_they_generate_chunks() {
+        for (rule, count) in [(true, 2 * 289), (false, 289)] {
+            let mut players = vec![
+                player(8.0, 64.0, 8.0, false),
+                player(8000.0, 64.0, 8.0, true),
+            ];
+            skip_spectators(&mut players, rule);
+            let mut scratch = SpawnScratch::default();
+            assert_eq!(
+                scratch.collect(&players, |_| false, |_| true),
+                count,
+                "{rule}"
+            );
+        }
     }
 
     /// The candidates as the uncached port collected them every tick: each
