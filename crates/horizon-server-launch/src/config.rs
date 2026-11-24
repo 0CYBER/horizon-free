@@ -1097,29 +1097,117 @@ static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// default, and the next start would write those into `server.properties`. Another process (the
 /// CLI's `config set`) has its own temporary file.
 pub(crate) fn replace(path: &Path, text: &str) -> std::io::Result<()> {
+    replace_with(path, text, || {})
+}
+
+/// [`replace`], with `before_publish` run once per attempt between staging and publishing (a test
+/// uses it to create the destination at that moment).
+fn replace_with(path: &Path, text: &str, mut before_publish: impl FnMut()) -> std::io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let name = path
         .file_name()
         .map_or_else(Default::default, |n| n.to_string_lossy());
-    let tmp = path.with_file_name(format!(
-        ".{name}.{}.{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = (|| {
-        let mut file = std::fs::File::create(&tmp)?;
-        std::io::Write::write_all(&mut file, text.as_bytes())?;
-        file.sync_all()?;
-        if let Ok(meta) = std::fs::metadata(path) {
-            std::fs::set_permissions(&tmp, meta.permissions())?;
+    loop {
+        let tmp = path.with_file_name(format!(
+            ".{name}.{}.{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        // A target that is missing is a new file; any other failure to look at it is the caller's to
+        // see, not a reason to treat the file as new.
+        let old = match std::fs::metadata(path) {
+            Ok(meta) => Some(meta),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // These files hold secrets (the RCON password, the management secret, the API token): with an
+        // old file to keep the mode of, the temporary one is owner-only until it has that mode, so it
+        // is never more readable than what it replaces. A new file gets the default mode, as vanilla's.
+        #[cfg(unix)]
+        if old.is_some() {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         }
-        std::fs::rename(&tmp, path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        // A temporary name taken by another writer fails here, and that writer's file is left alone:
+        // only a file this call created is removed below.
+        let mut file = options.open(&tmp)?;
+        let written = (|| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            file.sync_all()?;
+            // The old file's mode, read as late as possible and applied to the staged file's own
+            // handle before it is renamed into place.
+            if old.is_some() {
+                match std::fs::metadata(path) {
+                    Ok(meta) => file.set_permissions(meta.permissions())?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        })();
+        // Closed before the rename and the cleanup, as Windows may refuse either on an open file.
+        drop(file);
+        before_publish();
+        let published = written.and_then(|()| {
+            if old.is_some() {
+                std::fs::rename(&tmp, path).map(|()| true)
+            } else {
+                publish_new(&tmp, path)
+            }
+        });
+        if !matches!(published, Ok(true)) {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        match published {
+            Ok(true) => return Ok(()),
+            // A file appeared at the path while this one was staged (another initializer, an admin):
+            // it is not clobbered with the default mode; the next attempt replaces it keeping its mode.
+            Ok(false) => continue,
+            Err(e) => return Err(e),
+        }
     }
-    written
+}
+
+/// Puts the staged file `tmp` at `path` only if nothing is there yet: `Ok(false)` when something
+/// is, and `tmp` is left for the caller to remove. A hard link fails when its name exists, where a
+/// rename would replace it. A file system without hard links gets the file created at `path` only
+/// if it is absent (`create_new`) and `tmp`'s text copied into it, so nothing there is replaced.
+fn publish_new(tmp: &Path, path: &Path) -> std::io::Result<bool> {
+    match std::fs::hard_link(tmp, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(tmp);
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(_) => {
+            let mut file = match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            let copied = std::fs::File::open(tmp)
+                .and_then(|mut src| std::io::copy(&mut src, &mut file))
+                .and_then(|_| file.sync_all());
+            drop(file);
+            match copied {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(tmp);
+                    Ok(true)
+                }
+                // Only the file this call created is removed.
+                Err(e) => {
+                    let _ = std::fs::remove_file(path);
+                    Err(e)
+                }
+            }
+        }
+    }
 }
 
 /// Sets one typed setting in `server.toml` (`whitelist on`), keeping the owner's comments.
@@ -1218,6 +1306,66 @@ mod tests {
             p.put(k, (*v).to_owned());
         }
         p
+    }
+
+    /// The replacement itself runs everywhere; the mode it keeps is a Unix check.
+    #[test]
+    fn replace_keeps_the_mode_of_the_file_it_replaces() {
+        let dir = std::env::temp_dir().join(format!("horizon-replace-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.properties");
+        std::fs::write(&path, "old").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o640))
+            .unwrap();
+        replace(&path, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(&path).unwrap().permissions()
+            ) & 0o777,
+            0o640
+        );
+        // A new file is made too, and no temporary file stays.
+        replace(&dir.join("fresh.properties"), "x").unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A file that appears while a new one is staged (another initializer's owner-only file) is not
+    /// replaced by a default-mode file: the write retries as a replacement and keeps its mode.
+    #[test]
+    fn a_file_that_appears_during_a_new_write_keeps_its_mode() {
+        let dir = std::env::temp_dir().join(format!("horizon-replace-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.toml");
+        let mut first = true;
+        replace_with(&path, "new", || {
+            if std::mem::take(&mut first) {
+                std::fs::write(&path, "theirs").unwrap();
+                #[cfg(unix)]
+                std::fs::set_permissions(
+                    &path,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o600),
+                )
+                .unwrap();
+            }
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(&path).unwrap().permissions()
+            ) & 0o777,
+            0o600
+        );
+        // No temporary file of either attempt stays.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// `server.toml` is checked as `config set` checks `backups.keep`: 0 would make the supervisor delete

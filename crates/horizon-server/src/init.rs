@@ -251,7 +251,10 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
         Err(e) => println!("{e}"),
     }
 
-    std::fs::write(&toml_path, config::render(&cfg)).map_err(|e| e.to_string())?;
+    // Owner only: server.toml can hold the API token, the RCON password and the Discord webhook.
+    // (Existing files keep their mode when the server rewrites them.)
+    horizon_platform::server_files::private_file::write_private(&toml_path, config::render(&cfg))
+        .map_err(|e| e.to_string())?;
     println!(
         "Wrote {}. Start the server with: horizon-server run --dir {}",
         toml_path.display(),
@@ -394,6 +397,16 @@ mod tests {
         assert!(
             ops.contains("\"Alex\"") && ops.contains("\"level\": 4"),
             "{ops}"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(
+                &std::fs::metadata(dir.join(config::FILE))
+                    .unwrap()
+                    .permissions()
+            ) & 0o777,
+            0o600,
+            "server.toml holds secrets"
         );
         // A second init refuses to overwrite the configuration.
         assert!(run(&dir, Answers::default()).is_err());

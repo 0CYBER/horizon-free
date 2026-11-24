@@ -24,10 +24,11 @@ pub fn write_private(path: &Path, text: impl AsRef<[u8]>) -> io::Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let written = options.open(&tmp).and_then(|mut file| {
-        file.write_all(text.as_ref())?;
-        file.sync_all()
-    });
+    // A temporary name taken by another writer fails here, and that writer's file is left alone:
+    // only a file this call created is removed below.
+    let mut file = options.open(&tmp)?;
+    let written = file.write_all(text.as_ref()).and_then(|()| file.sync_all());
+    drop(file);
     let result = written.and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
