@@ -2,12 +2,16 @@
 use super::Game;
 use super::mods;
 use glam::{DVec3, Mat4, Vec3};
+use horizon_client::block_entity_render;
 use horizon_client::mesher::Vertex;
 use horizon_client::screen_effects::{CameraQuads, sampling};
+use horizon_client::text::Text;
 use horizon_client::world_geometry::{self, ModelBatch, WorldGeometry};
+use horizon_client::world_primitives::{MAX_BEAM_HEIGHT, text_unit};
 use mod_api::{
     DrawError, InstanceError, ModelInstance, ModelRef, PipelineDrawError, PipelineQuad,
-    RenderLevelStage, RenderPipelineRef, WorldDrawUsage, WorldLine, WorldQuad,
+    RenderLevelStage, RenderPipelineRef, WorldBeam, WorldDrawUsage, WorldLine, WorldQuad,
+    WorldText,
 };
 
 impl Game<'_> {
@@ -110,6 +114,81 @@ impl Game<'_> {
         quads: &[WorldQuad],
     ) -> Result<(), DrawError> {
         draw.quads(quads)
+    }
+    /// A beacon's beam, as `BeaconRenderer.submitBeaconBeam` draws one at this view's game
+    /// time: its colour's alpha scales the beacon's own (the core's 255, the glow's 32).
+    pub(super) fn native_world_draw_beam(
+        &self,
+        draw: &mut WorldGeometry,
+        beam: &WorldBeam,
+    ) -> Result<(), DrawError> {
+        // `beam` draws around the block's centre, half a block in from its corner.
+        let corner =
+            DVec3::from(beam.base) - DVec3::from(draw.camera()) - DVec3::new(0.5, 0.0, 0.5);
+        if !corner.is_finite() || !corner.as_vec3().is_finite() {
+            return Err(DrawError::NonFinite);
+        }
+        // BeaconRenderer's animation time: game time mod 40 plus the partial tick.
+        let time = (draw.time() * 20.0).rem_euclid(40.0);
+        let mut quads = Vec::new();
+        block_entity_render::beam(
+            Mat4::from_translation(corner.as_vec3()),
+            block_entity_render::BeamShape {
+                scale: 1.0,
+                time,
+                start: 0,
+                height: beam.height.min(MAX_BEAM_HEIGHT) as i32,
+                color: beam.color & 0xFF_FFFF,
+                solid_radius: 0.2,
+                glow_radius: 0.25,
+            },
+            self.gui.atlas.sprites["entity/beacon/beacon_beam"],
+            &mut quads,
+        );
+        for v in &mut quads {
+            let alpha = (v.color >> 24) * (beam.color >> 24) / 255;
+            v.color = alpha << 24 | v.color & 0xFF_FFFF;
+        }
+        draw.atlas_quads(beam.depth, &quads)
+    }
+    /// A line of text facing the camera, laid out and drawn as a name tag's.
+    pub(super) fn native_world_draw_text(
+        &self,
+        draw: &mut WorldGeometry,
+        text: &WorldText,
+    ) -> Result<(), DrawError> {
+        let offset = DVec3::from(text.at) - DVec3::from(draw.camera());
+        if !offset.is_finite() || !offset.as_vec3().is_finite() || !text.scale.is_finite() {
+            return Err(DrawError::NonFinite);
+        }
+        if text.scale <= 0.0 {
+            return Err(DrawError::InvalidWidth);
+        }
+        let unit = text_unit(text.scale, text.scale_with_distance, offset.length());
+        // A huge scale far away overflows.
+        if !unit.is_finite() {
+            return Err(DrawError::NonFinite);
+        }
+        // A line of text is 9 font pixels tall, hung below its anchor: lift it by half.
+        let line = [(
+            Text::colored(text.text.as_str(), text.color & 0xFF_FFFF),
+            f64::from(unit * 4.5),
+        )];
+        let mut quads = Vec::new();
+        let patches = self.name_tag_quads(
+            offset,
+            &line,
+            text.color >> 24,
+            text.background,
+            0,
+            0,
+            unit,
+            &mut quads,
+        );
+        // Glyphs new to the atlas upload with this frame (`Game::text_patches`), drawn or not: the
+        // glyph cache already counts them as uploaded.
+        self.text_patches.borrow_mut().extend(patches);
+        draw.atlas_quads(text.depth, &quads)
     }
     /// Submit quads drawn by a mod pipeline atomically: the handle is checked against the
     /// published pipelines once, then the batch is validated and queued or refused whole.
@@ -1274,6 +1353,99 @@ mod tests {
             assert_eq!(draw.usage().instances_used, 0);
             assert_eq!(entities.len(), 4);
             assert_eq!(game.prepared_model_draws.borrow()[0].cpu_vertices, 4);
+        });
+    }
+
+    /// A beam stands on its base for its height, at most a beacon's 2048 blocks, a quarter
+    /// block round the block's centre, as a beacon's layer with the colour's alpha over its own.
+    #[test]
+    #[ignore = "daily"]
+    fn a_beam_stands_its_height_on_its_base() {
+        use mod_api::{WorldBeam, WorldDepth};
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let mut draw = WorldGeometry::default();
+            draw.reset([10.0, 0.0, 10.0], Mat4::IDENTITY, [0.0; 2]);
+            let beam = WorldBeam::new([10.5, 64.0, 10.5], 10, 0x80FF_0000, WorldDepth::Tested);
+            context(game, &mut draw).beam(&beam).unwrap();
+            let quads = draw.batch().quads;
+            assert!(!quads.is_empty());
+            assert!(draw.batch().quads_through.is_empty());
+            let ys: Vec<f32> = quads.iter().map(|v| v.pos[1]).collect();
+            assert_eq!(ys.iter().copied().fold(f32::MAX, f32::min), 64.0);
+            assert_eq!(ys.iter().copied().fold(f32::MIN, f32::max), 74.0);
+            for v in quads {
+                assert!((0.25..=0.75).contains(&v.pos[0]), "{:?}", v.pos);
+                assert!((0.25..=0.75).contains(&v.pos[2]), "{:?}", v.pos);
+                assert_eq!(v.layer & 0xFFFF, 6);
+                assert!(v.color >> 24 <= 0x80);
+            }
+
+            let mut tall = WorldGeometry::default();
+            tall.reset([0.0; 3], Mat4::IDENTITY, [0.0; 2]);
+            let beam = WorldBeam::new([0.5, 0.0, 0.5], 5000, 0xFFFF_FFFF, WorldDepth::ThroughWalls);
+            context(game, &mut tall).beam(&beam).unwrap();
+            let top = tall.batch().quads_through.iter().map(|v| v.pos[1]);
+            assert_eq!(top.fold(f32::MIN, f32::max), 2048.0);
+            let far = WorldBeam::new([f64::NAN, 0.0, 0.0], 1, 0xFFFF_FFFF, WorldDepth::Tested);
+            assert_eq!(
+                context(game, &mut tall).beam(&far),
+                Err(DrawError::NonFinite)
+            );
+        });
+    }
+
+    /// Text draws as a name tag's glyphs on its background, in the depth mode asked for; a
+    /// scale that can't size it is refused, leaving the view's output as it was.
+    #[test]
+    #[ignore = "daily"]
+    fn text_draws_its_glyphs_and_refuses_a_bad_scale() {
+        use mod_api::{WorldDepth, WorldText};
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let mut draw = WorldGeometry::default();
+            draw.reset([0.0; 3], Mat4::IDENTITY, [0.0; 2]);
+            let at = [0.0, 64.0, 5.0];
+            let plain = WorldText::new(at, "Home", 0xFFFF_FFFF, WorldDepth::ThroughWalls);
+            context(game, &mut draw).text(&plain).unwrap();
+            let glyphs = draw.usage().quads;
+            assert!(glyphs > 0);
+            assert!(draw.batch().quads.is_empty());
+            assert_eq!(draw.batch().quads_through.len() as u32, glyphs * 4);
+            let tagged = plain.clone().background();
+            context(game, &mut draw).text(&tagged).unwrap();
+            assert!(
+                draw.usage().quads > 2 * glyphs,
+                "the background adds its own quad"
+            );
+            let before = draw.usage();
+            assert_eq!(
+                context(game, &mut draw).text(&plain.clone().scale(0.0)),
+                Err(DrawError::InvalidWidth)
+            );
+            assert_eq!(
+                context(game, &mut draw).text(&plain.scale(f32::NAN)),
+                Err(DrawError::NonFinite)
+            );
+            // Finite, but 1024 blocks away its size overflows f32.
+            let huge = WorldText::new([0.0, 64.0, 1024.0], "Home", 0xFFFF_FFFF, WorldDepth::Tested)
+                .scale(f32::MAX)
+                .scale_with_distance();
+            assert_eq!(
+                context(game, &mut draw).text(&huge),
+                Err(DrawError::NonFinite)
+            );
+            // Its size fits f32, but a glyph 80 font pixels from the centre lands past it.
+            let wide = WorldText::new(
+                at,
+                "Home, sweet home, far away",
+                0xFFFF_FFFF,
+                WorldDepth::Tested,
+            )
+            .scale(f32::MAX);
+            assert_eq!(
+                context(game, &mut draw).text(&wide),
+                Err(DrawError::NonFinite)
+            );
+            assert_eq!(draw.usage(), before);
         });
     }
 }

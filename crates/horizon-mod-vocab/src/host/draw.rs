@@ -465,6 +465,20 @@ pub trait WorldDrawContext {
     fn quads(&mut self, quads: &[WorldQuad]) -> Result<(), DrawError> {
         unimplemented!("WorldDrawContext::world_draw_quads")
     }
+    /// Submit a beacon's beam atomically, textured and scrolling as a beacon's at this view's
+    /// game time, alpha-blended without writing depth. A taller beam than 2048 blocks is cut
+    /// there. Its quads count against the same per-view capacity as [`quads`](Self::quads).
+    fn beam(&mut self, beam: &WorldBeam) -> Result<(), DrawError> {
+        unimplemented!("WorldDrawContext::world_draw_beam")
+    }
+    /// Submit a line of text atomically, facing the camera as a name tag does, in the game's
+    /// font, alpha-blended without writing depth. Its glyph and background quads count against
+    /// the same per-view capacity as [`quads`](Self::quads). A scale that is not finite is
+    /// refused with [`DrawError::NonFinite`], one that is zero or negative with
+    /// [`DrawError::InvalidWidth`].
+    fn text(&mut self, text: &WorldText) -> Result<(), DrawError> {
+        unimplemented!("WorldDrawContext::world_draw_text")
+    }
     /// Submit world quads drawn by the mod pipeline `pipeline`, atomically: its shader gets each
     /// quad's texture coordinate and colour, and its blend and depth modes apply. The quads
     /// count against the same per-view capacity as [`quads`](Self::quads), and within a stage

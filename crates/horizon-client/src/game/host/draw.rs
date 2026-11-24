@@ -321,6 +321,12 @@ impl WorldDrawContext for GameWorldDrawContext<'_, '_> {
     fn quads(&mut self, quads: &[WorldQuad]) -> Result<(), DrawError> {
         self.game.native_world_draw_quads(&mut *self.surface, quads)
     }
+    fn beam(&mut self, beam: &WorldBeam) -> Result<(), DrawError> {
+        self.game.native_world_draw_beam(&mut *self.surface, beam)
+    }
+    fn text(&mut self, text: &WorldText) -> Result<(), DrawError> {
+        self.game.native_world_draw_text(&mut *self.surface, text)
+    }
     fn pipeline_quads(
         &mut self,
         pipeline: RenderPipelineRef,

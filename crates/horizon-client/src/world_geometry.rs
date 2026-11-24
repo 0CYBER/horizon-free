@@ -107,6 +107,9 @@ impl WorldGeometry {
     pub fn set_time(&mut self, seconds: f32) {
         self.time = seconds;
     }
+    pub fn time(&self) -> f32 {
+        self.time
+    }
     /// Entity-stream cut used by directly staged instances in this view.
     pub fn set_model_cut(&mut self, cut: u32) {
         self.model_cut = cut;
@@ -276,6 +279,19 @@ impl WorldGeometry {
                 },
             ));
         }
+        Ok(())
+    }
+    /// Append camera-relative quads from the shared atlas, 4 vertices each, whole, or leave the
+    /// output unchanged: a beam's or text's, tessellated by the caller. A position that
+    /// overflowed in tessellation refuses the batch.
+    pub fn atlas_quads(&mut self, depth: WorldDepth, vertices: &[Vertex]) -> Result<(), DrawError> {
+        if vertices.iter().flat_map(|v| v.pos).any(|c| !c.is_finite()) {
+            return Err(DrawError::NonFinite);
+        }
+        if vertices.len() / 4 > (CAPACITY - self.usage().quads) as usize {
+            return Err(DrawError::CapacityExceeded);
+        }
+        self.quads[usize::from(depth == WorldDepth::ThroughWalls)].extend_from_slice(vertices);
         Ok(())
     }
     /// Append an entire batch of quads drawn by the mod pipeline in `slot`, or leave the

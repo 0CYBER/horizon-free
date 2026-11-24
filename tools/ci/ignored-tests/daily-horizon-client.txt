@@ -77,6 +77,8 @@ horizon-client game::native_chat_recipients_tests::a_chat_line_hidden_from_one_r
 horizon-client game::native_chat_recipients_tests::say_and_me_are_asked_per_receiver_and_a_whisper_is_not lib daily resources
 horizon-client game::native_config_files::tests::compiled_wasm_bulk_files_use_actual_game_filesystem_roots lib daily wasm-fixture
 horizon-client game::native_config_files::tests::world_bulk_files_survive_save_reload_backup_and_world_deletion lib daily game-boot
+horizon-client game::native_custom_geometry::tests::a_beam_stands_its_height_on_its_base lib daily resources
+horizon-client game::native_custom_geometry::tests::text_draws_its_glyphs_and_refuses_a_bad_scale lib daily resources
 horizon-client game::native_datafix_tests::a_mods_host_upgrades_old_data_and_refuses_by_name lib daily game-boot
 horizon-client game::native_disconnect_tests::a_client_mod_leaves_at_the_end_of_the_frame_with_its_reason lib daily resources
 horizon-client game::native_disconnect_tests::a_leave_request_does_not_follow_a_world_switch lib daily resources

@@ -64,6 +64,84 @@ impl WorldQuad {
     }
 }
 
+/// A beacon's beam (`BeaconRenderer.submitBeaconBeam`): its rotating core and translucent glow,
+/// scrolling as a beacon's do, `height` blocks up from `base`, the centre of its foot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct WorldBeam {
+    /// The centre of the beam's foot in blocks, before camera subtraction.
+    pub base: [f64; 3],
+    /// Blocks up from `base`, at most 2048 as a beacon's last section.
+    pub height: u32,
+    /// Packed 0xAARRGGBB color: the alpha scales the beacon's own, an opaque core and a faint glow.
+    pub color: u32,
+    /// Occlusion behavior.
+    pub depth: WorldDepth,
+}
+impl WorldBeam {
+    /// Describe a beam; the draw context validates it when submitting it.
+    pub fn new(base: [f64; 3], height: u32, color: u32, depth: WorldDepth) -> Self {
+        Self {
+            base,
+            height,
+            color,
+            depth,
+        }
+    }
+}
+
+/// One line of text in the game's font, facing the camera and centred on `at`, as a name tag.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct WorldText {
+    /// The text's centre in blocks, before camera subtraction.
+    pub at: [f64; 3],
+    /// The line drawn, unstyled.
+    pub text: String,
+    /// Packed 0xAARRGGBB color, including alpha.
+    pub color: u32,
+    /// A name tag's size times this, above zero.
+    pub scale: f32,
+    /// Grows with the distance from the camera, keeping the size on screen it has 8 blocks away.
+    pub scale_with_distance: bool,
+    /// A name tag's translucent black behind the text.
+    pub background: bool,
+    /// Occlusion behavior.
+    pub depth: WorldDepth,
+}
+impl WorldText {
+    /// Text of a name tag's size, without a background; the draw context validates it when
+    /// submitting it.
+    pub fn new(at: [f64; 3], text: impl Into<String>, color: u32, depth: WorldDepth) -> Self {
+        Self {
+            at,
+            text: text.into(),
+            color,
+            scale: 1.0,
+            scale_with_distance: false,
+            background: false,
+            depth,
+        }
+    }
+    /// A name tag's size times `scale`.
+    pub fn scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self
+    }
+    /// Keep its size on screen as it moves away ([`Self::scale_with_distance`]).
+    pub fn scale_with_distance(mut self) -> Self {
+        self.scale_with_distance = true;
+        self
+    }
+    /// On a name tag's background ([`Self::background`]).
+    pub fn background(mut self) -> Self {
+        self.background = true;
+        self
+    }
+}
+
 /// Why a whole geometry batch was refused; nothing from that batch was appended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -71,7 +149,7 @@ impl WorldQuad {
 pub enum DrawError {
     /// A coordinate or width is not finite, or a camera-relative coordinate overflows f32.
     NonFinite,
-    /// A finite line width is zero or negative.
+    /// A finite line width or text scale is zero or negative.
     InvalidWidth,
     /// The batch would exceed this view's setup-time capacity.
     CapacityExceeded,
