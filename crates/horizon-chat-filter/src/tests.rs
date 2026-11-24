@@ -398,3 +398,101 @@ fn a_punishment_that_lasts_no_time_is_refused() {
     config.tempban_after = 0;
     assert!(config.check().is_ok());
 }
+
+#[test]
+fn invisible_letters_dont_split_a_word() {
+    // The Hangul fillers are letters that render as nothing; the others are no letters at all.
+    let plain = Text::new("nigger");
+    for c in [
+        '\u{115F}',
+        '\u{1160}',
+        '\u{3164}',
+        '\u{FFA0}',
+        '\u{2800}',
+        '\u{180E}',
+        '\u{34F}',
+        '\u{61C}',
+        '\u{17B4}',
+        '\u{17B5}',
+        '\u{FE0F}',
+        '\u{E0041}',
+    ] {
+        let t = Text::new(&format!("nig{c}ger"));
+        assert_eq!(t.runs, plain.runs, "U+{:X} splits the word", c as u32);
+        assert!(filter().matches(&format!("n{c}igger")), "U+{:X}", c as u32);
+    }
+}
+
+#[test]
+fn an_allowed_prefix_excuses_only_what_it_matches() {
+    let f = filter();
+    // Allowed on its own, but not as the start of a longer word with a listed one after it.
+    assert!(!f.matches("snigger"));
+    assert!(f.matches("sniggernigger"));
+    assert!(f.matches("snigger.nigger"));
+    assert!(f.matches("sniggerrnigger"));
+    assert!(!f.matches("sniggerer"));
+}
+
+#[test]
+fn an_allowed_whole_word_is_excused_though_a_prefix_would_leave_a_listed_word() {
+    let f = Filter::new("!foobar\n!foo*\nbar");
+    assert!(!f.matches("foobar"));
+    // The prefix alone leaves `bar` behind, as in another word.
+    assert!(f.matches("foobarx"));
+    assert!(f.matches("bar"));
+}
+
+#[test]
+fn a_prefix_excuses_every_repeat_of_its_last_letter() {
+    let f = Filter::new("!ab*\nbc");
+    assert!(!f.matches("abbc"));
+    assert!(!f.matches("abbbbc"));
+    assert!(f.matches("abbxbc"));
+    assert!(f.matches("bc"));
+}
+
+#[test]
+fn what_an_allowed_prefix_leaves_is_part_of_the_longer_word() {
+    // An allow of the rest does not excuse it: the rest is no word of its own.
+    let f = Filter::new("!foo*\n!bar\nbar");
+    assert!(f.matches("foobar"));
+    assert!(!f.matches("bar"));
+    // Nor does an allowed prefix of the rest.
+    let f = Filter::new("!foo*\n!bar*\nbarx");
+    assert!(f.matches("foobarx"));
+    assert!(!f.matches("foo"));
+    // A whole-word block is a word as written: it does not strike the end of a longer word.
+    let f = Filter::new("!foo*\n=bar");
+    assert!(!f.matches("foobar"));
+    assert!(f.matches("bar"));
+    assert!(f.matches("a bar"));
+    // A blocked word inside the left-over text still counts, and one inside the allowed part does not.
+    let f = Filter::new("!foo*\nbar\noo");
+    assert!(f.matches("foobar"));
+    assert!(!f.matches("foo"));
+}
+
+#[test]
+fn the_longest_allowed_prefix_decides_what_is_left_to_scan() {
+    let f = Filter::new("!ab*\n!abc*\ncd\nef");
+    // `abcd` is covered by `!abc*`; scanning after the shorter `!ab*` would flag `cd`.
+    assert!(!f.matches("abcd"));
+    // A blocked word after the longest prefix still counts.
+    assert!(f.matches("abcef"));
+    // An entirely allowed word is not flagged.
+    assert!(!f.matches("abc"));
+    assert!(!f.matches("ab"));
+    // With only the shorter prefix matching, what it leaves is scanned.
+    assert!(!f.matches("abxd"));
+    assert!(f.matches("abef"));
+}
+
+#[test]
+fn overlapping_allowed_prefixes_cost_one_scan() {
+    // Many overlapping prefixes at the start of a long word each leave a scan of the rest.
+    let f = Filter::new("!a*\n!ab*\n!aba*\n!abab*\nzz");
+    let text = "ab".repeat(200);
+    assert!(!f.matches(&text));
+    assert!(f.matches(&format!("{text}zz")));
+}

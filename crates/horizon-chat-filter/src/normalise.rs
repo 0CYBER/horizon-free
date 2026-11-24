@@ -185,8 +185,18 @@ fn fold(c: char) -> Fold {
     let u = c as u32;
     let from = |base: u32, span: u32| char::from(b'a' + ((u - base) % span) as u8);
     let mapped = match u {
-        // Zero-width characters, soft hyphen, combining marks, variation selectors.
-        0xAD | 0x34F | 0x200B..=0x200F | 0x2060..=0x2064 | 0xFEFF | 0x180E => return Fold::Skip,
+        // Zero-width characters, soft hyphen, combining marks, variation selectors, and the Hangul
+        // fillers (letters that render as nothing; chat allows them).
+        0xAD
+        | 0x34F
+        | 0x200B..=0x200F
+        | 0x2060..=0x2064
+        | 0xFEFF
+        | 0x180E
+        | 0x115F
+        | 0x1160
+        | 0x3164
+        | 0xFFA0 => return Fold::Skip,
         0x300..=0x36F
         | 0x1AB0..=0x1AFF
         | 0x1DC0..=0x1DFF

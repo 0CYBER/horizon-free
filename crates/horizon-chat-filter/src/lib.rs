@@ -178,18 +178,8 @@ impl Filter {
         let t = Text::new(text);
         let runs = &t.runs;
         for &(start, end) in t.words.iter().chain(&t.spaced) {
-            let word = &runs[start..end];
-            if self.is_allowed(word) {
-                continue;
-            }
-            for at in 0..word.len() {
-                for &e in &self.by_first[usize::from(word[at].letter)] {
-                    let e = &self.entries[e];
-                    let whole = e.kind == Kind::Whole;
-                    if (!whole || at == 0) && fits(&e.runs, &word[at..], whole) {
-                        return true;
-                    }
-                }
+            if self.word_hits(&runs[start..end]) {
+                return true;
             }
         }
         // Spread entries over the whole text, from the start of a word, across at least two.
@@ -207,14 +197,50 @@ impl Filter {
         false
     }
 
-    fn is_allowed(&self, word: &[Run]) -> bool {
-        self.allowed.iter().any(|(a, prefix)| {
-            if *prefix {
-                // A prefix: its last run may be part of a longer one.
-                word.len() >= a.len() && fits(a, word, false)
-            } else {
-                fits(a, word, true)
+    /// Whether one word holds a slur, after what the allow entries excuse. Allow entries and
+    /// whole-word blocks are tied to the word as it was written, from its first run to its last.
+    fn word_hits(&self, word: &[Run]) -> bool {
+        // A whole word that is allowed is excused, whatever a prefix would leave of it.
+        if self
+            .allowed
+            .iter()
+            .any(|(a, prefix)| !*prefix && fits(a, word, true))
+        {
+            return false;
+        }
+        // The longest allowed prefix that starts the word covers the most: what it leaves is
+        // scanned once, and text a shorter prefix would leave but this one covers is not flagged.
+        let longest = self
+            .allowed
+            .iter()
+            .filter(|(a, prefix)| *prefix && fits(a, word, false))
+            .map(|(a, _)| a.len())
+            .max();
+        if let Some(covered) = longest {
+            // It excuses what it matches, with every repeat of its last letter. What is left is
+            // scanned for blocked words inside it: a whole-word block never matches it (it is
+            // part of a longer word), and no allow entry applies to it (it is no word of its own).
+            return self.embedded_hit(&word[covered..]);
+        }
+        for at in 0..word.len() {
+            for &e in &self.by_first[usize::from(word[at].letter)] {
+                let e = &self.entries[e];
+                let whole = e.kind == Kind::Whole;
+                if (!whole || at == 0) && fits(&e.runs, &word[at..], whole) {
+                    return true;
+                }
             }
+        }
+        false
+    }
+
+    /// Whether `runs`, the end of a longer word, hold a blocked word inside them.
+    fn embedded_hit(&self, runs: &[Run]) -> bool {
+        (0..runs.len()).any(|at| {
+            self.by_first[usize::from(runs[at].letter)]
+                .iter()
+                .map(|&e| &self.entries[e])
+                .any(|e| e.kind != Kind::Whole && fits(&e.runs, &runs[at..], false))
         })
     }
 }
