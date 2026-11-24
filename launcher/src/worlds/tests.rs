@@ -259,3 +259,15 @@ fn the_mods_a_world_was_saved_with_are_read_and_matched() {
     assert!(saved_with(&all, &["other".into()]).is_empty());
     fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn a_level_dat_over_the_cap_is_not_read() {
+    let home = scratch("huge-level");
+    let path = home.join("level.dat");
+    fs::File::create(&path)
+        .unwrap()
+        .set_len(crate::instances::MAX_LEVEL_DAT + 1)
+        .unwrap();
+    assert!(level_dat(&path).is_none());
+    fs::remove_dir_all(home).unwrap();
+}

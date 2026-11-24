@@ -1091,3 +1091,24 @@ fn a_pinned_version_that_is_gone_stays_unresolved() {
     let java = Some(JavaGame::default());
     assert_eq!(instance(Some("v-a"), java).missing_pin(&installed), None);
 }
+
+/// A sparse file of `len` bytes: it weighs nothing on disk, and reading it whole would allocate.
+fn sparse(path: &Path, len: u64) {
+    fs::File::create(path).unwrap().set_len(len).unwrap();
+}
+
+#[test]
+fn a_file_over_the_cap_is_not_read() {
+    let dir = scratch("capped");
+    let file = dir.join(PICTURE);
+    fs::write(&file, b"abc").unwrap();
+    assert_eq!(read_capped(&file, 3).unwrap(), b"abc");
+    assert!(read_capped(&file, 2).is_err());
+    assert!(read_capped(&dir.join("missing"), 3).is_err());
+    // Just over the cap: refused from its size, without a read of the zeros.
+    sparse(&file, MAX_PICTURE_FILE + 1);
+    assert!(read_capped(&file, MAX_PICTURE_FILE).is_err());
+    sparse(&file, MAX_TEXT_FILE + 1);
+    assert!(read_text_capped(&file, MAX_TEXT_FILE).is_err());
+    fs::remove_dir_all(dir).unwrap();
+}

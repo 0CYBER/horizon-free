@@ -317,3 +317,20 @@ fn invalid_native_manifest_does_not_hide_a_valid_duplicate() {
     );
     fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn an_options_file_over_the_cap_is_neither_read_nor_rewritten() {
+    let home = scratch("huge-options");
+    let options = home.join(OPTIONS);
+    fs::File::create(&options)
+        .unwrap()
+        .set_len(crate::instances::MAX_TEXT_FILE + 1)
+        .unwrap();
+    assert_eq!(read_text(&options), "");
+    assert!(set_line(&options, "resourcePacks", "[]").is_err());
+    assert_eq!(
+        fs::metadata(&options).unwrap().len(),
+        crate::instances::MAX_TEXT_FILE + 1
+    );
+    fs::remove_dir_all(home).unwrap();
+}

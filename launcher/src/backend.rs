@@ -2985,14 +2985,15 @@ pub fn switch_after_start_crash(
 /// (`preferredGraphicsBackend:"opengl"` or `"vulkan"`), which the game runs when `graphicsApi` is
 /// unset or `auto` (the game's `settings.rs`).
 fn options_choose_api(home: &Path) -> bool {
-    fs::read_to_string(home.join("options.txt")).is_ok_and(|text| {
-        text.lines().any(|line| {
-            line.split_once(':').is_some_and(|(key, value)| {
-                key.trim() == "preferredGraphicsBackend"
-                    && matches!(value.trim().trim_matches('"'), "opengl" | "vulkan")
+    crate::instances::read_text_capped(&home.join("options.txt"), crate::instances::MAX_TEXT_FILE)
+        .is_ok_and(|text| {
+            text.lines().any(|line| {
+                line.split_once(':').is_some_and(|(key, value)| {
+                    key.trim() == "preferredGraphicsBackend"
+                        && matches!(value.trim().trim_matches('"'), "opengl" | "vulkan")
+                })
             })
         })
-    })
 }
 
 /// Sets `graphicsApi:<api>` in `home`'s graphics settings when it is unset or `auto` and options.txt
@@ -3002,7 +3003,7 @@ pub fn switch_from_auto(home: &Path, api: &str) -> Result<bool, String> {
         return Ok(false);
     }
     let path = home.join(GRAPHICS_FILE);
-    let text = match fs::read_to_string(&path) {
+    let text = match crate::instances::read_text_capped(&path, crate::instances::MAX_TEXT_FILE) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(format!("{}: {e}", path.display())),

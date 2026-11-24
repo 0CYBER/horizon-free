@@ -31,7 +31,9 @@ impl Launcher {
     ) -> Option<Arc<RenderImage>> {
         let file = instance.home.join(instances::PICTURE);
         let key = format!("picture:{}", instance.id);
-        self.icon_image(key, size, true, || std::fs::read(file).ok())
+        self.icon_image(key, size, true, || {
+            instances::read_capped(&file, instances::MAX_PICTURE_FILE).ok()
+        })
     }
 
     /// What an instance shows when nothing was chosen for it.
@@ -157,9 +159,6 @@ pub(super) struct Chosen {
     pub(super) preview: Arc<RenderImage>,
 }
 
-/// The most a chosen file may weigh: a photo, not a film.
-const MAX_PICTURE_FILE: u64 = 64 << 20;
-
 impl Launcher {
     /// Asks for an image file and makes it the dialog's picture, read and scaled off the UI
     /// thread.
@@ -181,11 +180,8 @@ impl Launcher {
             let made = cx
                 .background_executor()
                 .spawn(async move {
-                    let too_big = std::fs::metadata(&path).map_err(|e| e.to_string())?.len()
-                        > MAX_PICTURE_FILE;
-                    let bytes = (!too_big)
-                        .then(|| std::fs::read(&path).ok())
-                        .flatten()
+                    let bytes = instances::read_capped(&path, instances::MAX_PICTURE_FILE)
+                        .ok()
                         .ok_or_else(|| format!("{}: too big, or unreadable", path.display()))?;
                     let png = instances::picture(bytes)?;
                     let preview = fitted(png.clone(), 28., scale).ok_or("Not a picture")?;

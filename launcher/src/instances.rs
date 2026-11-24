@@ -84,6 +84,43 @@ impl Icon {
 /// An instance's own picture, in its game folder: one the player chose, or its modpack's icon.
 /// Drawn instead of [`Meta::icon`] while it is there.
 pub const PICTURE: &str = "icon.png";
+
+/// The most an instance's picture file may weigh: a photo, not a film.
+pub const MAX_PICTURE_FILE: u64 = 64 << 20;
+/// The most a small settings text (options.txt, horizon-graphics.txt) may weigh; real ones are
+/// kilobytes.
+pub const MAX_TEXT_FILE: u64 = 4 << 20;
+/// The most a world's level.dat may weigh, as stored (gzip); real ones are kilobytes.
+pub const MAX_LEVEL_DAT: u64 = 32 << 20;
+
+/// The file's bytes, or an error when it is larger than `max`. Instance files can come from an
+/// imported pack, so a huge one must not be read whole.
+pub fn read_capped(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file too large",
+        ));
+    }
+    let mut bytes = Vec::new();
+    // The bound holds even when the file grows after the size check.
+    file.take(max + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file too large",
+        ));
+    }
+    Ok(bytes)
+}
+
+/// [`read_capped`] as text; a file that is not UTF-8 is an error as in `fs::read_to_string`.
+pub fn read_text_capped(path: &Path, max: u64) -> std::io::Result<String> {
+    String::from_utf8(read_capped(path, max)?)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
 /// How many pixels a side a picture is kept at: twice the largest it is drawn.
 pub const PICTURE_SIDE: u32 = 128;
 

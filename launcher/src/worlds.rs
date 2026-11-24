@@ -104,7 +104,7 @@ pub fn icon_picture(world: &Path) -> Option<Vec<u8>> {
 
 /// level.dat: gzip, as vanilla writes it, or plain.
 fn level_dat(path: &Path) -> Option<Tag> {
-    let bytes = fs::read(path).ok()?;
+    let bytes = crate::instances::read_capped(path, crate::instances::MAX_LEVEL_DAT).ok()?;
     let mut raw = Vec::new();
     let raw = match flate2::read::GzDecoder::new(&bytes[..])
         .take(64 << 20)
