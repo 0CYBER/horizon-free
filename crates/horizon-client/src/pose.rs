@@ -171,18 +171,12 @@ impl PlayerMotion {
         }
     }
     pub fn dimensions_for_pose(&mut self, pose: Pose) -> Result<Dimensions> {
-        Ok(pose.dimensions(self.attribute("minecraft:scale")? as f32))
+        let scale = self.attribute("minecraft:scale")? as f32;
+        Ok(effective_dimensions(pose, scale, self.size_answer))
     }
     pub fn refresh_dimensions(&mut self) -> Result<()> {
         self.scale = self.attribute("minecraft:scale")? as f32;
-        self.dimensions = self.pose.dimensions(self.scale);
-        // `EntityEvent.Size`: an `entity_size` answer for this pose and size still holds.
-        if let Some(size) = self
-            .size_answer
-            .and_then(|answer| answer.holds(self.pose.into(), self.dimensions.to_array()))
-        {
-            self.dimensions = crate::pose::Dimensions::from_array(size);
-        }
+        self.dimensions = effective_dimensions(self.pose, self.scale, self.size_answer);
         Ok(())
     }
     pub fn set_pose(&mut self, pose: Pose) -> Result<()> {
@@ -329,5 +323,51 @@ impl MotionWorld<'_, '_, '_> {
             self.player.set_pose(Pose::Standing)?;
         }
         Ok(())
+    }
+}
+
+/// Effective dimensions for `pose` at `scale`, applying an `entity_size` answer when it holds.
+fn effective_dimensions(pose: Pose, scale: f32, size_answer: Option<SizeAnswer>) -> Dimensions {
+    let mut dimensions = pose.dimensions(scale);
+    // `EntityEvent.Size`: an `entity_size` answer for this pose and size still holds.
+    if let Some(size) =
+        size_answer.and_then(|answer| answer.holds(pose.into(), dimensions.to_array()))
+    {
+        dimensions = Dimensions::from_array(size);
+    }
+    dimensions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pose_dimensions_apply_matching_size_answer() {
+        let vanilla_crouch = Pose::Crouching.dimensions(1.0);
+        assert_eq!(
+            effective_dimensions(Pose::Crouching, 1.0, None).to_array(),
+            vanilla_crouch.to_array()
+        );
+
+        let resized = [0.4, 0.9, 0.75];
+        let answer = Some(SizeAnswer {
+            pose: Pose::Crouching.into(),
+            vanilla: vanilla_crouch.to_array(),
+            size: Some(resized),
+        });
+        assert_eq!(
+            effective_dimensions(Pose::Crouching, 1.0, answer).to_array(),
+            resized
+        );
+        // A different pose or scale is not covered by the crouching 1.0 size answer.
+        assert_eq!(
+            effective_dimensions(Pose::Standing, 1.0, answer).to_array(),
+            Pose::Standing.dimensions(1.0).to_array()
+        );
+        assert_eq!(
+            effective_dimensions(Pose::Crouching, 2.0, answer).to_array(),
+            Pose::Crouching.dimensions(2.0).to_array()
+        );
     }
 }
