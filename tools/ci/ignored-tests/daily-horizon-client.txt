@@ -24,6 +24,7 @@ horizon-client game::crafting_recipe_kind_tests::unregistered_serializer_failed_
 horizon-client game::creatures::mob_pearl_hook_tests::a_landed_ender_pearl_bursts_into_portal_particles lib daily resources
 horizon-client game::dedicated::tests::console_logging_survives_closed_stdout lib daily child-process
 horizon-client game::dispenser::decision_tests::crown_is_prepared_once_for_three_and_eight_dispenser_candidates lib daily resources
+horizon-client game::dispenser::tests::dispensed_shears_cut_the_leads_a_server_player_holds lib daily game-boot
 horizon-client game::dragon::tests::a_fireballs_breath_cloud_starts_at_its_hit_position lib daily resources
 horizon-client game::end_crystal_room_tests::a_dragon_over_the_cell_refuses_the_crystal_and_its_flight_frees_it lib daily resources
 horizon-client game::end_crystal_room_tests::a_dropped_item_in_the_cell_refuses_the_crystal lib daily resources

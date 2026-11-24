@@ -2306,7 +2306,30 @@ impl Game<'_> {
                 };
                 (Holder::Player, v.bounds.center(), None)
             }
-            Target::Guest(_) | Target::Stand(_) => return false,
+            // A server's player holds leads but wears none (`Player` is not
+            // `Leashable`). Their own turn drops the mobs and boats on their
+            // lead and posts the shear game event without a source
+            // (`dropAllLeashConnections(null)`); the snip, PLAYERS for a
+            // player, plays at their block after it.
+            Target::Guest(conn) => {
+                let Some(at) = (self.lan.as_ref())
+                    .and_then(|h| h.hub.guest(conn))
+                    .map(|g| g.position)
+                else {
+                    return false;
+                };
+                let dropped = self.for_player(super::commands::Target::Guest(conn), |g| {
+                    g.drop_all_leash_connections()
+                });
+                if dropped != Some(true) {
+                    return false;
+                }
+                let block = at.map(|v| v.floor() + 0.5);
+                self.audio
+                    .play("minecraft:item.shears.snip", Some(block), 1.0, 1.0);
+                return true;
+            }
+            Target::Stand(_) => return false,
         };
         let area = Aabb::new(centre, centre).inflate(Vec3::new(16.0, 16.0, 16.0));
         let mut leashed: Vec<(u32, usize)> = self
@@ -3178,6 +3201,54 @@ mod tests {
         assert_eq!((done, left), (true, 1), "boots go on the free feet slot");
         let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
         assert!(guest.armor[3].is_some() && guest.armor[1].is_none());
+    }
+
+    /// `ShearsDispenseItemBehavior.tryShearEntity`: a server's player in front
+    /// has the leads they hold cut (`shearOffAllLeashConnections(null)`), each
+    /// falling as a lead at its mob; a lead another player holds stays.
+    #[test]
+    #[ignore = "daily"]
+    fn dispensed_shears_cut_the_leads_a_server_player_holds() {
+        use horizon_client::{lan::playerdata::uuid_ints, mobs::leash::Holder};
+        let mut resources = None;
+        let mut game = server_with_guest(&mut resources);
+        let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+        // Cow 40 on the guest's lead, cow 41 on someone else's, both out of
+        // the block in front.
+        for (id, x, holder) in [(40, 12.5, 208), (41, 4.5, 999)] {
+            let mut cow = Mob::new(id, kind.clone(), Vec3::new(x, 200.0, 8.5), 0.0);
+            cow.extra.leash = Some(Holder::Player);
+            cow.extra.leash_player = Some(uuid_ints(holder));
+            game.mobs.push(cow);
+        }
+        let leash = |game: &Game<'_>, id: u32| {
+            let cow = game.mobs.iter().find(|m| m.id == id).unwrap();
+            cow.extra.leash
+        };
+        game.audio.capture = Some(Vec::new());
+        crate::game::sculk::TEST_POSTED_EVENTS.with(|e| *e.borrow_mut() = Some(Vec::new()));
+        // The guest's feet are in block (8, 200, 8), the only entity there.
+        assert!(game.shear_entity((8, 200, 8)).unwrap());
+        assert_eq!(leash(&game, 40), None);
+        assert_eq!(leash(&game, 41), Some(Holder::Player));
+        let drops: Vec<_> = (game.dropped.iter())
+            .map(|i| (&*i.stack.item, i.stack.count, i.position))
+            .collect();
+        assert_eq!(drops, [("minecraft:lead", 1, Vec3::new(12.5, 200.0, 8.5))]);
+        // The shear game event at the player, without a source, and the snip
+        // at their block.
+        let shear = ("minecraft:shear", [8.5, 200.0, 8.5], None);
+        crate::game::sculk::TEST_POSTED_EVENTS.with(|e| {
+            assert!(e.borrow_mut().take().unwrap().contains(&shear));
+        });
+        let snips = game.audio.capture.take().unwrap();
+        assert!(
+            snips
+                .iter()
+                .any(|s| s.event == "minecraft:item.shears.snip" && s.position == [8.5, 200.5, 8.5])
+        );
+        // Nothing is left to cut: the next shears find nothing to do.
+        assert!(!game.shear_entity((8, 200, 8)).unwrap());
     }
 
     /// A spectator is not a target (`canEquipWithDispenser`: `!isSpectator()`).
