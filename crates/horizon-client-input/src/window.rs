@@ -683,10 +683,11 @@ pub fn icon() -> Option<winit::window::Icon> {
     decode_icon(icon_png()?)
 }
 
-fn decode_icon(png: &[u8]) -> Option<winit::window::Icon> {
+/// A window icon from an RGBA, RGB or palette PNG (expanded to RGBA), None when it does not decode.
+pub fn decode_icon(png: &[u8]) -> Option<winit::window::Icon> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(png));
     decoder.ignore_checksums(true);
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    decoder.set_transformations(png::Transformations::ALPHA | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
     let mut bytes = vec![0; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut bytes).ok()?;
@@ -1132,5 +1133,68 @@ mod tests {
                 320.0f64, 240.0f64
             )))
         );
+    }
+}
+
+#[cfg(test)]
+mod icon_tests {
+    /// A 1×1 PNG of `color_type` (6 RGBA, 3 palette with an opaque `PLTE`), written by hand (no
+    /// encoder in this crate's tests).
+    fn one_pixel_png(color_type: u8) -> Vec<u8> {
+        fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            out.extend((data.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend(kind);
+            out.extend(data);
+            out.extend(crc32(&out[start..]).to_be_bytes());
+        }
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut c = !0u32;
+            for &b in bytes {
+                c ^= u32::from(b);
+                for _ in 0..8 {
+                    c = if c & 1 != 0 {
+                        0xEDB8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        // zlib stored block of one row: filter 0 and the pixel
+        let raw: &[u8] = if color_type == 3 {
+            &[0, 0]
+        } else {
+            &[0, 0x12, 0x34, 0x56, 0xFF]
+        };
+        let len = raw.len() as u8;
+        let mut z = vec![0x78, 0x01, 0x01, len, 0, !len, 0xFF];
+        z.extend(raw);
+        let (mut a, mut b) = (1u32, 0u32);
+        for &x in raw {
+            a = (a + u32::from(x)) % 65521;
+            b = (b + a) % 65521;
+        }
+        z.extend(((b << 16) | a).to_be_bytes());
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(
+            &mut out,
+            b"IHDR",
+            &[0, 0, 0, 1, 0, 0, 0, 1, 8, color_type, 0, 0, 0],
+        );
+        if color_type == 3 {
+            chunk(&mut out, b"PLTE", &[0x12, 0x34, 0x56]);
+        }
+        chunk(&mut out, b"IDAT", &z);
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn an_icon_decodes_from_a_png_and_not_from_anything_else() {
+        assert!(super::decode_icon(&one_pixel_png(6)).is_some());
+        assert!(super::decode_icon(&one_pixel_png(3)).is_some());
+        assert!(super::decode_icon(b"not a png").is_none());
     }
 }
