@@ -112,16 +112,137 @@ pub(super) fn hanging_drop_position(center: [f64; 3], step: [i32; 3]) -> [f64; 3
         center[2] + f64::from(step[2]) * 0.15,
     ]
 }
-/// A frame's item, waiting for its model: the frames' borrow of `self` ends
-/// before `resolve_item` reads the pack.
+/// Index of a frame's item stack in `Game::item_frames`, avoiding cloning `ItemStack`
+/// while collecting visible framed items.
+#[derive(Clone, Copy)]
+struct FramedStack(usize);
+
+/// A frame's item, waiting for its model after all frame backings are emitted.
 struct FramedItem {
-    stack: ItemStack,
+    stack: FramedStack,
     id: u32,
     matrix: glam::Mat4,
     light: u8,
     cull: bool,
     kind: &'static str,
-    owner: OwnerState,
+    /// `None` for plain static items whose resolution does not read the frame owner.
+    owner: Option<OwnerState>,
+}
+
+struct PreparedFrameQuad {
+    /// Block-centered corners pre-rotated by the frame's facing matrix.
+    corners: [glam::DVec3; 4],
+    uv: [[f32; 2]; 4],
+    normal: [i8; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PreparedFrameCacheKey {
+    pack_generation: u64,
+    sprites_ptr: usize,
+    sprites_len: usize,
+    models: [(usize, usize); 4],
+}
+
+struct PreparedFrameCache {
+    key: PreparedFrameCacheKey,
+    /// Lazily prepared quads per `[variant: 0..4][facing: 0..6]`.
+    variants: [[Option<Vec<PreparedFrameQuad>>; 6]; 4],
+}
+
+impl PreparedFrameCache {
+    fn new(key: PreparedFrameCacheKey) -> Self {
+        Self {
+            key,
+            variants: std::array::from_fn(|_| std::array::from_fn(|_| None)),
+        }
+    }
+
+    fn quads(
+        &mut self,
+        variant: usize,
+        facing: usize,
+        model: &FrameModel,
+        sprites: &std::collections::HashMap<String, horizon_client::hud::Rect>,
+    ) -> &[PreparedFrameQuad] {
+        self.variants[variant][facing].get_or_insert_with(|| {
+            prepare_frame_quads(model, frame_facing_rotations()[facing], sprites)
+        })
+    }
+}
+
+fn frame_facing_rotation_for(facing: usize) -> glam::DMat4 {
+    let step_y = match facing {
+        0 => -1,
+        1 => 1,
+        _ => 0,
+    };
+    let (x_rot, y_rot) = if step_y == 0 {
+        let to_y = match facing {
+            3 => 0.0,
+            4 => 90.0,
+            2 => 180.0,
+            _ => 270.0,
+        };
+        (0.0f64, 180.0f64 - to_y)
+    } else {
+        (-90.0 * f64::from(step_y), 180.0)
+    };
+    glam::DMat4::from_rotation_x(x_rot.to_radians())
+        * glam::DMat4::from_rotation_y(y_rot.to_radians())
+}
+
+fn frame_facing_rotations() -> &'static [glam::DMat4; 6] {
+    static ROTATIONS: std::sync::OnceLock<[glam::DMat4; 6]> = std::sync::OnceLock::new();
+    ROTATIONS.get_or_init(|| std::array::from_fn(frame_facing_rotation_for))
+}
+
+fn frame_item_rotations() -> &'static [glam::DMat4; 8] {
+    static ROTATIONS: std::sync::OnceLock<[glam::DMat4; 8]> = std::sync::OnceLock::new();
+    ROTATIONS.get_or_init(|| {
+        std::array::from_fn(|r| glam::DMat4::from_rotation_z((r as f64 * 45.0).to_radians()))
+    })
+}
+
+fn prepare_frame_quads(
+    model: &FrameModel,
+    rot: glam::DMat4,
+    sprites: &std::collections::HashMap<String, horizon_client::hud::Rect>,
+) -> Vec<PreparedFrameQuad> {
+    let mut out = Vec::with_capacity(model.len());
+    for (corners, uv, sprite) in model {
+        let Some(r) = sprites.get(sprite) else {
+            continue;
+        };
+        let rotated = corners.map(|c| {
+            rot.transform_point3(glam::DVec3::new(
+                f64::from(c[0]) - 0.5,
+                f64::from(c[1]) - 0.5,
+                f64::from(c[2]) - 0.5,
+            ))
+        });
+        let n = (rotated[1] - rotated[0])
+            .cross(rotated[2] - rotated[0])
+            .normalize_or_zero();
+        let normal = [
+            (n.x.clamp(-1.0, 1.0) * 127.0) as i8,
+            (n.y.clamp(-1.0, 1.0) * 127.0) as i8,
+            (n.z.clamp(-1.0, 1.0) * 127.0) as i8,
+            -127,
+        ];
+        let mapped_uv = uv.map(|[u, v]| [r.u0 + u * (r.u1 - r.u0), r.v0 + v * (r.v1 - r.v0)]);
+        out.push(PreparedFrameQuad {
+            corners: rotated,
+            uv: mapped_uv,
+            normal,
+        });
+    }
+    out
+}
+
+thread_local! {
+    static PREPARED_FRAMES: std::cell::RefCell<Option<PreparedFrameCache>> =
+        const { std::cell::RefCell::new(None) };
 }
 /// `ItemFrameRenderer.extractRenderState`'s `ItemOwner` (`updateForNonLiving`
 /// with the frame entity): `ItemFrame.position` and
@@ -498,9 +619,7 @@ impl Game<'_> {
             self.frame_output_changed(f.pos);
         }
         self.drop_frame_items(&mut f, with_frame, by_player, creative);
-        if !with_frame
-            && let Some(now) = self.item_frames.iter().position(|g| g.id == entity_id)
-        {
+        if !with_frame && let Some(now) = self.item_frames.iter().position(|g| g.id == entity_id) {
             self.item_frames[now].random = f.random.clone();
         }
         // BLOCK_CHANGE by the attacker after the drops: ItemFrame.hurtServer
@@ -705,6 +824,33 @@ impl Game<'_> {
             return;
         }
         let sprites = &self.gui.atlas.sprites;
+        let cache_key = PreparedFrameCacheKey {
+            pack_generation: self.pack.item_renderer.generation(),
+            sprites_ptr: std::ptr::from_ref(sprites) as usize,
+            sprites_len: sprites.len(),
+            models: [
+                (self.frame_model.as_ptr() as usize, self.frame_model.len()),
+                (
+                    self.glow_frame_model.as_ptr() as usize,
+                    self.glow_frame_model.len(),
+                ),
+                (
+                    self.map_frame_model.as_ptr() as usize,
+                    self.map_frame_model.len(),
+                ),
+                (
+                    self.glow_map_frame_model.as_ptr() as usize,
+                    self.glow_map_frame_model.len(),
+                ),
+            ],
+        };
+        let mut frame_cache = PREPARED_FRAMES
+            .with(|cell| cell.borrow_mut().take())
+            .filter(|c| c.key == cache_key)
+            .unwrap_or_else(|| PreparedFrameCache::new(cache_key));
+        let facing_rotations = frame_facing_rotations();
+        let item_rotations = frame_item_rotations();
+        let can_use_static = self.pack.item_renderer.cit.is_none();
         // Each with its frame's type: a pack tells a glow frame and what it holds apart by its
         // `entityId` (`glow_item_frame` in entity.properties), the item drawn within its frame.
         let mut maps: Vec<(i32, glam::Mat4, u32, bool, &'static str)> = Vec::new();
@@ -712,7 +858,7 @@ impl Game<'_> {
         // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at a view scale
         // of 1.
         let range = 16.0 * 64.0 * self.view_scale();
-        for f in &self.item_frames {
+        for (frame_idx, f) in self.item_frames.iter().enumerate() {
             // LevelExtractor: the camera entity is not drawn from its own eyes.
             if self.hides_as_camera(f.id) {
                 continue;
@@ -742,27 +888,12 @@ impl Game<'_> {
             }
             let entity_start = out.len();
             self.mark_motion(entity_start, Self::MOTION_OBJECT | u64::from(f.id));
-            let s = f.step();
-            // Pose: to the block centre, then X/Y rotation by facing.
-            let (x_rot, y_rot) = if s[1] == 0 {
-                let to_y = match f.facing {
-                    3 => 0.0,
-                    4 => 90.0,
-                    2 => 180.0,
-                    _ => 270.0,
-                };
-                (0.0f64, 180.0f64 - to_y)
-            } else {
-                (-90.0 * f64::from(s[1]), 180.0)
-            };
-            let pose = glam::DMat4::from_translation(
-                glam::DVec3::new(
-                    f64::from(f.pos[0]) + 0.5,
-                    f64::from(f.pos[1]) + 0.5,
-                    f64::from(f.pos[2]) + 0.5,
-                ) - camera,
-            ) * glam::DMat4::from_rotation_x(x_rot.to_radians())
-                * glam::DMat4::from_rotation_y(y_rot.to_radians());
+            let facing_idx = usize::from(f.facing.min(5));
+            let origin = glam::DVec3::new(
+                f64::from(f.pos[0]) + 0.5,
+                f64::from(f.pos[1]) + 0.5,
+                f64::from(f.pos[2]) + 0.5,
+            ) - camera;
             let light = self.world.light(f.pos[0], f.pos[1], f.pos[2]);
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             // ItemFrameRenderer.getBlockLightLevel: a glow frame's model is at least 5 bright.
@@ -773,59 +904,34 @@ impl Game<'_> {
             };
             let frame_packed =
                 (u32::from(frame_light >> 4) * 16) | ((u32::from(frame_light & 15) * 16) << 8);
-            let frame_start = out.len();
-            let mut quad =
-                |m: &glam::DMat4, corners: [[f64; 3]; 4], uv: [[f32; 2]; 4], light: u32| {
-                    // The frame model is drawn with the entity shader, lit by its face normal.
-                    let at = corners.map(|c| m.transform_point3(glam::DVec3::from_array(c)));
-                    let n = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
-                    let normal = [0, 1, 2].map(|k| (n[k].clamp(-1.0, 1.0) * 127.0) as i8);
-                    for (p, uv) in at.into_iter().zip(uv) {
+            if !f.invisible {
+                let (variant, model) = match (f.glow, map.is_some()) {
+                    (false, false) => (0, &self.frame_model),
+                    (true, false) => (1, &self.glow_frame_model),
+                    (false, true) => (2, &self.map_frame_model),
+                    (true, true) => (3, &self.glow_map_frame_model),
+                };
+                // HDR output: a glow frame shines softly (entity.wgsl hdr_entity_mark); the item
+                // in it is only lit, as vanilla draws it.
+                let layer = if f.glow {
+                    u32::from(horizon_client::mesher::INCANDESCENT) << 16
+                } else {
+                    0
+                };
+                let quads = frame_cache.quads(variant, facing_idx, model, sprites);
+                out.reserve(quads.len() * 4);
+                for q in quads {
+                    for (corner, uv) in q.corners.into_iter().zip(q.uv) {
                         out.push(Vertex {
-                            normal: [normal[0], normal[1], normal[2], -127],
-                            pos: p.as_vec3().to_array(),
+                            normal: q.normal,
+                            pos: (origin + corner).as_vec3().to_array(),
                             uv,
-                            layer: 0,
+                            layer,
                             color: 0xFFFF_FFFF,
-                            light,
-
+                            light: frame_packed,
                             glint_uv: [0.0, 0.0],
                         });
                     }
-                };
-            let map_uv = |r: &horizon_client::hud::Rect, uv: [[f32; 2]; 4]| {
-                uv.map(|[u, v]| [r.u0 + u * (r.u1 - r.u0), r.v0 + v * (r.v1 - r.v0)])
-            };
-            if !f.invisible {
-                let model = match (f.glow, map.is_some()) {
-                    (true, true) => &self.glow_map_frame_model,
-                    (false, true) => &self.map_frame_model,
-                    (true, false) => &self.glow_frame_model,
-                    (false, false) => &self.frame_model,
-                };
-                for (corners, uv, sprite) in model {
-                    let Some(r) = sprites.get(sprite) else {
-                        continue;
-                    };
-                    quad(
-                        &pose,
-                        corners.map(|c| {
-                            [
-                                f64::from(c[0]) - 0.5,
-                                f64::from(c[1]) - 0.5,
-                                f64::from(c[2]) - 0.5,
-                            ]
-                        }),
-                        map_uv(r, *uv),
-                        frame_packed,
-                    );
-                }
-            }
-            // HDR output: a glow frame shines softly (entity.wgsl hdr_entity_mark); the item in it
-            // is only lit, as vanilla draws it.
-            if f.glow {
-                for v in &mut out[frame_start..] {
-                    v.layer |= u32::from(horizon_client::mesher::INCANDESCENT) << 16;
                 }
             }
             self.finish_lit_entity(culling, f, out, entity_start);
@@ -842,6 +948,10 @@ impl Game<'_> {
                     continue;
                 }
             }
+            let Some(stack) = f.item.as_ref() else {
+                continue;
+            };
+            let pose = glam::DMat4::from_translation(origin) * facing_rotations[facing_idx];
             if let Some(id) = map {
                 // ItemFrameRenderer: the map fills the face, in 90-degree steps.
                 let depth = if f.invisible { 0.5 } else { 0.4375 };
@@ -859,18 +969,25 @@ impl Game<'_> {
                 maps.push((id, m.as_mat4(), item_light, cull_contents, f.kind()));
                 continue;
             }
-            let Some(stack) = f.item.clone() else {
-                continue;
-            };
             // `GlowItemFrame` items render full bright (15728880).
             let item_light = if f.glow { 0xFF } else { light };
             let depth = if f.invisible { 0.5 } else { 0.4375 };
+            let rot_z = if (0..8).contains(&f.rotation) {
+                item_rotations[f.rotation as usize]
+            } else {
+                glam::DMat4::from_rotation_z((f64::from(f.rotation) * 45.0).to_radians())
+            };
             let m = pose
                 * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
-                * glam::DMat4::from_rotation_z((f64::from(f.rotation) * 45.0).to_radians())
+                * rot_z
                 * glam::DMat4::from_scale(glam::DVec3::splat(0.5));
+            let use_static = can_use_static
+                && stack.count > 0
+                && stack.damage == 0
+                && stack.data().is_none()
+                && self.pack.item_renderer.is_static_item(&stack.item);
             items.push(FramedItem {
-                stack,
+                stack: FramedStack(frame_idx),
                 id: f.id,
                 matrix: m.as_mat4(),
                 light: item_light,
@@ -879,32 +996,66 @@ impl Game<'_> {
                 // `ItemFrameRenderer.extractRenderState` hands the frame entity
                 // itself to the item model (`updateForNonLiving`), so a framed
                 // compass's needle reads the frame's position and yaw.
-                owner: frame_owner(f),
+                owner: (!use_static).then(|| frame_owner(f)),
             });
         }
-        // `extractRenderState`: FIXED, seeded by the frame entity.
-        let skinning = self.skinning();
-        let lights = horizon_client::block_entity_render::diffuse_lights(self.nether_lighting());
-        for item in items {
-            let entity_start = out.len();
-            self.mark_entity(entity_start, item.kind);
-            self.mark_motion(entity_start, Self::MOTION_FRAME_ITEM | u64::from(item.id));
-            let state = self.resolve_item(
-                &item.stack,
-                horizon_assets::item_model::DisplayContext::Fixed,
-                Some(&item.owner),
-                item.id as i32,
-            );
-            let light = horizon_client::block_entity_render::vertex_light(item.light);
-            // Posed on the GPU when every layer can be.
-            let skinned = skinning
-                .then(|| self.submit_item_skinned(&state, &[item.matrix], light, lights))
-                .flatten();
-            if skinned.is_none() {
-                self.submit_item_world(&state, item.matrix, light, out);
-            }
-            if item.cull {
-                self.cull_skinned(out, entity_start, skinned);
+        PREPARED_FRAMES.with(|cell| *cell.borrow_mut() = Some(frame_cache));
+        if !items.is_empty() {
+            // `extractRenderState`: FIXED, seeded by the frame entity.
+            let skinning = self.skinning();
+            let lights =
+                horizon_client::block_entity_render::diffuse_lights(self.nether_lighting());
+            let hdr_on = self.renderer.as_ref().is_some_and(|r| r.hdr_on());
+            let mut static_cache = self
+                .pack
+                .item_renderer
+                .static_cache_for(horizon_assets::item_model::DisplayContext::Fixed);
+            let mut scratch_layers: Vec<horizon_client::item_render::LayerRender> = Vec::new();
+            for item in items {
+                let frame = &self.item_frames[item.stack.0];
+                let Some(stack) = frame.item.as_ref() else {
+                    continue;
+                };
+                let entity_start = out.len();
+                self.mark_entity(entity_start, item.kind);
+                self.mark_motion(entity_start, Self::MOTION_FRAME_ITEM | u64::from(item.id));
+                let light = horizon_client::block_entity_render::vertex_light(item.light);
+                let mut dynamic_state: Option<horizon_client::item_render::ItemRenderState> = None;
+                let (state, hdr) = if item.owner.is_none()
+                    && let Some(cached) = static_cache
+                        .as_mut()
+                        .and_then(|cache| cache.get(&stack.item))
+                {
+                    (&cached.state, self.item_hdr(&stack.item, hdr_on))
+                } else {
+                    let owner = item.owner.unwrap_or_else(|| frame_owner(frame));
+                    let resolved = self.resolve_item_uncached_into(
+                        stack,
+                        horizon_assets::item_model::DisplayContext::Fixed,
+                        Some(&owner),
+                        item.id as i32,
+                        horizon_client::cit::Hand::Main,
+                        std::mem::take(&mut scratch_layers),
+                    );
+                    let hdr = (resolved.hdr_tier, resolved.hdr_light);
+                    let state_ref = dynamic_state.insert(resolved);
+                    (&*state_ref, hdr)
+                };
+                // Posed on the GPU when every layer can be.
+                let skinned = skinning
+                    .then(|| {
+                        self.submit_item_skinned_hdr(state, hdr, &[item.matrix], light, lights)
+                    })
+                    .flatten();
+                if skinned.is_none() {
+                    self.submit_item_world_hdr(state, hdr, item.matrix, light, out);
+                }
+                if item.cull {
+                    self.cull_skinned(out, entity_start, skinned);
+                }
+                if let Some(owned) = dynamic_state {
+                    scratch_layers = owned.layers;
+                }
             }
         }
         // Maps: keyed by their map id, which several frames can show, so they stay unmarked.
@@ -956,6 +1107,195 @@ mod source_tests {
         let model = super::bake_frame(&source, "item_frame");
         assert_eq!(model.len(), 1);
         assert_eq!(model[0].2, "example:block/frame");
+    }
+
+    #[test]
+    fn prepared_frame_quads_match_uncached_transform_across_all_facings() {
+        use horizon_client::hud::Rect;
+        use horizon_client::mesher::Vertex;
+        let model: super::FrameModel = vec![
+            (
+                [
+                    [0.125, 0.125, 0.9375],
+                    [0.875, 0.125, 0.9375],
+                    [0.875, 0.875, 0.9375],
+                    [0.125, 0.875, 0.9375],
+                ],
+                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                "block/oak_planks".into(),
+            ),
+            (
+                [
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                "block/missing_in_atlas".into(),
+            ),
+        ];
+        let mut sprites = std::collections::HashMap::new();
+        sprites.insert(
+            "block/oak_planks".into(),
+            Rect {
+                u0: 0.125,
+                v0: 0.25,
+                u1: 0.375,
+                v1: 0.5,
+                w: 16,
+                h: 16,
+            },
+        );
+        let camera = glam::DVec3::new(128.25, 63.5, -256.75);
+        let pos = [140i32, 68, -240];
+        let origin = glam::DVec3::new(
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.5,
+            f64::from(pos[2]) + 0.5,
+        ) - camera;
+        let steps = [
+            [0, -1, 0],
+            [0, 1, 0],
+            [0, 0, -1],
+            [0, 0, 1],
+            [-1, 0, 0],
+            [1, 0, 0],
+        ];
+        for facing in 0u8..6 {
+            let s = steps[usize::from(facing)];
+            let (x_rot, y_rot) = if s[1] == 0 {
+                let to_y = match facing {
+                    3 => 0.0,
+                    4 => 90.0,
+                    2 => 180.0,
+                    _ => 270.0,
+                };
+                (0.0f64, 180.0f64 - to_y)
+            } else {
+                (-90.0 * f64::from(s[1]), 180.0)
+            };
+            let pose = glam::DMat4::from_translation(origin)
+                * glam::DMat4::from_rotation_x(x_rot.to_radians())
+                * glam::DMat4::from_rotation_y(y_rot.to_radians());
+            let mut expected = Vec::new();
+            for (corners, uv, sprite) in &model {
+                let Some(r) = sprites.get(sprite) else {
+                    continue;
+                };
+                let at = corners.map(|c| {
+                    pose.transform_point3(glam::DVec3::new(
+                        f64::from(c[0]) - 0.5,
+                        f64::from(c[1]) - 0.5,
+                        f64::from(c[2]) - 0.5,
+                    ))
+                });
+                let n = (at[1] - at[0]).cross(at[2] - at[0]).normalize_or_zero();
+                let normal = [0, 1, 2].map(|k| (n[k].clamp(-1.0, 1.0) * 127.0) as i8);
+                let mapped_uv =
+                    uv.map(|[u, v]| [r.u0 + u * (r.u1 - r.u0), r.v0 + v * (r.v1 - r.v0)]);
+                for (p, uv) in at.into_iter().zip(mapped_uv) {
+                    expected.push(Vertex {
+                        normal: [normal[0], normal[1], normal[2], -127],
+                        pos: p.as_vec3().to_array(),
+                        uv,
+                        layer: 0,
+                        color: 0xFFFF_FFFF,
+                        light: 0x00F0_00F0,
+                        glint_uv: [0.0, 0.0],
+                    });
+                }
+            }
+
+            let prepared = super::prepare_frame_quads(
+                &model,
+                super::frame_facing_rotations()[usize::from(facing)],
+                &sprites,
+            );
+            let mut actual = Vec::new();
+            for q in &prepared {
+                for (corner, uv) in q.corners.into_iter().zip(q.uv) {
+                    actual.push(Vertex {
+                        normal: q.normal,
+                        pos: (origin + corner).as_vec3().to_array(),
+                        uv,
+                        layer: 0,
+                        color: 0xFFFF_FFFF,
+                        light: 0x00F0_00F0,
+                        glint_uv: [0.0, 0.0],
+                    });
+                }
+            }
+            assert_eq!(actual.len(), expected.len(), "facing {facing}");
+            for (i, (a, e)) in actual.iter().zip(&expected).enumerate() {
+                assert_eq!(a.pos, e.pos, "facing {facing} vert {i} pos");
+                assert_eq!(a.uv, e.uv, "facing {facing} vert {i} uv");
+                assert_eq!(a.normal, e.normal, "facing {facing} vert {i} normal");
+                assert_eq!(a.layer, e.layer, "facing {facing} vert {i} layer");
+                assert_eq!(a.color, e.color, "facing {facing} vert {i} color");
+                assert_eq!(a.light, e.light, "facing {facing} vert {i} light");
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_frame_cache_invalidates_on_pack_reload_generation() {
+        use horizon_client::hud::Rect;
+        let model: super::FrameModel = vec![(
+            [
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [0.0, 1.0, 1.0],
+            ],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            "block/frame".into(),
+        )];
+        let mut sprites_v1 = std::collections::HashMap::new();
+        sprites_v1.insert(
+            "block/frame".into(),
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 0.5,
+                v1: 0.5,
+                w: 16,
+                h: 16,
+            },
+        );
+        let key_v1 = super::PreparedFrameCacheKey {
+            pack_generation: 1,
+            sprites_ptr: std::ptr::from_ref(&sprites_v1) as usize,
+            sprites_len: sprites_v1.len(),
+            models: [(model.as_ptr() as usize, model.len()); 4],
+        };
+        let mut cache = super::PreparedFrameCache::new(key_v1);
+        assert_eq!(cache.quads(0, 3, &model, &sprites_v1)[0].uv[2], [0.5, 0.5]);
+
+        let mut sprites_v2 = std::collections::HashMap::new();
+        sprites_v2.insert(
+            "block/frame".into(),
+            Rect {
+                u0: 0.5,
+                v0: 0.5,
+                u1: 1.0,
+                v1: 1.0,
+                w: 16,
+                h: 16,
+            },
+        );
+        let key_v2 = super::PreparedFrameCacheKey {
+            pack_generation: 2,
+            sprites_ptr: std::ptr::from_ref(&sprites_v2) as usize,
+            sprites_len: sprites_v2.len(),
+            models: [(model.as_ptr() as usize, model.len()); 4],
+        };
+        assert_ne!(cache.key, key_v2);
+        let mut reloaded = super::PreparedFrameCache::new(key_v2);
+        assert_eq!(
+            reloaded.quads(0, 3, &model, &sprites_v2)[0].uv[2],
+            [1.0, 1.0]
+        );
     }
 }
 

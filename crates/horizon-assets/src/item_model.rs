@@ -190,6 +190,10 @@ impl DisplayContext {
         Self::Fixed,
         Self::OnShelf,
     ];
+    pub const COUNT: usize = Self::ALL.len();
+    pub const fn index(self) -> usize {
+        self as usize
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -279,6 +283,18 @@ pub fn identifier(name: &str) -> Result<String> {
         return Err(err("invalid resource identifier"));
     }
     Ok(format!("{namespace}:{path}"))
+}
+/// Whether `name` is already a canonical `namespace:path` identifier (so [`identifier`] would
+/// return `Ok(name.to_owned())` without allocation).
+fn is_canonical_identifier(name: &str) -> bool {
+    let Some((namespace, path)) = name.split_once(':') else {
+        return false;
+    };
+    let valid = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.-".contains(&c);
+    !namespace.is_empty()
+        && !path.contains(':')
+        && namespace.bytes().all(valid)
+        && path.bytes().all(|c| valid(c) || c == b'/')
 }
 fn ident(v: &Value) -> Result<String> {
     identifier(&string(v)?)
@@ -460,6 +476,24 @@ pub struct SwitchCase {
 }
 
 impl ItemModelNode {
+    /// Whether this node tree always resolves to the exact same layers, transforms, and tints
+    /// for a plain stack (no component patch) regardless of [`Context`] (owner, level, display
+    /// context, seed, count) or [`ItemEnv`] callbacks.
+    pub fn is_static_without_components(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            Self::Model(leaf) => leaf.tints.iter().all(TintSource::is_constant),
+            Self::Composite { models, .. } => models.iter().all(Self::is_static_without_components),
+            Self::Condition { .. }
+            | Self::Select { .. }
+            | Self::RangeDispatch { .. }
+            | Self::Special { .. }
+            | Self::RegisteredSpecial { .. }
+            | Self::FluidContainer(_)
+            | Self::BundleSelectedItem
+            | Self::Registered { .. } => false,
+        }
+    }
     pub fn decode(v: &Value) -> Result<Self> {
         let m = object(v)?;
         let kind = ident(required(m, "type")?)?;
@@ -710,6 +744,11 @@ pub enum TintSource {
     },
 }
 impl TintSource {
+    /// Whether this tint depends only on static model data (never on stack components,
+    /// owner, level, or host [`ItemEnv`] callbacks).
+    pub fn is_constant(&self) -> bool {
+        matches!(self, Self::Constant(_))
+    }
     fn decode(v: &Value) -> Result<Self> {
         let m = object(v)?;
         let default = || rgb(required(m, "default")?);
@@ -1367,8 +1406,7 @@ impl ItemModels {
         let Some(Value::String(model_id)) = components.get("minecraft:item_model") else {
             return;
         };
-        let id = identifier(model_id).unwrap_or_else(|_| model_id.clone());
-        let definition = self.definitions.get(&id);
+        let definition = self.definition_for(model_id);
         out.oversized_in_gui = definition.is_some_and(|d| d.oversized_in_gui);
         let mut state = Resolve {
             models: self,
@@ -1381,6 +1419,56 @@ impl ItemModels {
             Some(d) => state.node(out, &d.model, &Mat4::IDENTITY),
             None => state.missing(out, &Mat4::IDENTITY),
         }
+    }
+    fn definition_for(&self, model_id: &str) -> Option<&ClientItem> {
+        if is_canonical_identifier(model_id) {
+            self.definitions.get(model_id)
+        } else {
+            let id = identifier(model_id).unwrap_or_else(|_| model_id.to_owned());
+            self.definitions.get(&id)
+        }
+    }
+    fn static_definition(&self, item: &str) -> Option<&ClientItem> {
+        if item == "minecraft:air" {
+            return None;
+        }
+        let prototype = self.prototypes.get(item)?;
+        if prototype_has_foil(item, prototype) {
+            return None;
+        }
+        let Value::String(model_id) = prototype.get("minecraft:item_model")? else {
+            return None;
+        };
+        let definition = self.definition_for(model_id)?;
+        definition
+            .model
+            .is_static_without_components()
+            .then_some(definition)
+    }
+    /// Whether a plain stack of `item` (count > 0, no component patch, no prototype foil)
+    /// resolves identically regardless of [`Context`] or [`ItemEnv`].
+    pub fn is_static_item(&self, item: &str) -> bool {
+        self.static_definition(item).is_some()
+    }
+    /// Every prototype item id whose plain stack resolves statically (see [`Self::is_static_item`]).
+    pub fn static_item_ids(&self) -> Vec<String> {
+        self.prototypes
+            .keys()
+            .filter(|item| self.is_static_item(item))
+            .cloned()
+            .collect()
+    }
+    /// Resolve a plain stack of `item` (count > 0, no component patch) without constructing a
+    /// [`StackView`], [`Context`], or calling [`ItemEnv`]. Returns `None` for air or any item
+    /// whose definition is dynamic, missing, or carries prototype foil.
+    pub fn resolve_static(&self, item: &str) -> Option<ResolvedItem> {
+        let definition = self.static_definition(item)?;
+        let mut out = ResolvedItem {
+            layers: Vec::new(),
+            oversized_in_gui: definition.oversized_in_gui,
+        };
+        append_static_node(&mut out, &definition.model, &Mat4::IDENTITY);
+        Some(out)
     }
     /// `ItemModelResolver.shouldPlaySwapAnimation`.
     pub fn hand_animation_on_swap(&self, stack: &StackView) -> bool {
@@ -1426,6 +1514,61 @@ fn depth_scale(z: f32) -> Mat4 {
 
 fn compose(parent: &Mat4, own: &Option<Mat4>) -> Mat4 {
     own.as_ref().map_or(*parent, |t| parent.mul(t))
+}
+
+fn prototype_has_foil(item: &str, prototype: &Components) -> bool {
+    if let Some(v) = prototype.get("minecraft:enchantment_glint_override") {
+        return v.as_bool().unwrap_or(false);
+    }
+    let enchanted = prototype
+        .get("minecraft:enchantments")
+        .is_some_and(enchantments_present);
+    enchanted
+        || (item == "minecraft:compass" && prototype.contains_key("minecraft:lodestone_tracker"))
+}
+
+fn append_static_node(out: &mut ResolvedItem, node: &ItemModelNode, parent: &Mat4) {
+    match node {
+        ItemModelNode::Empty => {}
+        ItemModelNode::Model(leaf) => {
+            let transform = compose(parent, &leaf.transformation);
+            let tints = leaf
+                .tints
+                .iter()
+                .map(|t| match t {
+                    TintSource::Constant(v) => *v,
+                    _ => unreachable!("is_static_without_components guarantees constant tints"),
+                })
+                .collect();
+            out.layers.push(Layer {
+                content: LayerContent::Model {
+                    model: leaf.model.clone(),
+                },
+                tints,
+                foil: FoilType::None,
+                transform,
+            });
+        }
+        ItemModelNode::Composite {
+            models,
+            transformation,
+        } => {
+            let child = compose(parent, transformation);
+            for m in models {
+                append_static_node(out, m, &child);
+            }
+        }
+        ItemModelNode::Condition { .. }
+        | ItemModelNode::Select { .. }
+        | ItemModelNode::RangeDispatch { .. }
+        | ItemModelNode::Special { .. }
+        | ItemModelNode::RegisteredSpecial { .. }
+        | ItemModelNode::FluidContainer(_)
+        | ItemModelNode::BundleSelectedItem
+        | ItemModelNode::Registered { .. } => {
+            unreachable!("is_static_without_components rejected dynamic node")
+        }
+    }
 }
 
 impl Resolve<'_> {

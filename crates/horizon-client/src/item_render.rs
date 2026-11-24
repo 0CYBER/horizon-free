@@ -20,6 +20,7 @@ mod tint_tests;
 
 use crate::{
     block_entity_render::{ModelPart, diffuse},
+    fast_hash::{FxHashMap, FxHashSet},
     hud::Rect,
     mesher::{CULL_BACK, Vertex},
 };
@@ -39,7 +40,10 @@ use horizon_core::nbt::Tag;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        Arc, Mutex, RwLock, RwLockReadGuard, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// One quad as submitted for drawing: pose-space corners, atlas UVs, the
@@ -303,19 +307,63 @@ impl ItemRenderState {
         renderer: &ItemRenderer,
         sprites: &HashMap<String, Rect>,
         pose: Mat4,
-        (light, lights, tier): (u32, Option<(Vec3, Vec3)>, u8),
+        sink: (u32, Option<(Vec3, Vec3)>, u8),
         skin: &mut crate::mobs::skin::Skin,
     ) -> bool {
-        use crate::gfx::entity_skin::{SkinJob, SkinPart};
-        // The axes' order in a stored vertex (`SkinVertex::axis`).
-        const AXES: [Direction; 6] = [
-            Direction::East,
-            Direction::Up,
-            Direction::South,
-            Direction::West,
-            Direction::Down,
-            Direction::North,
-        ];
+        self.submit_skinned_poses(renderer, sprites, &[pose], sink, skin)
+    }
+
+    /// [`Self::submit_skinned`] for a slice of poses (such as all copies of a dropped item
+    /// stack), validating layers and looking up [`crate::mobs::skin::StoredItem`], translucency,
+    /// and live sprite rects once per layer across all poses instead of per pose.
+    pub fn submit_skinned_poses(
+        &self,
+        renderer: &ItemRenderer,
+        sprites: &HashMap<String, Rect>,
+        poses: &[Mat4],
+        sink: (u32, Option<(Vec3, Vec3)>, u8),
+        skin: &mut crate::mobs::skin::Skin,
+    ) -> bool {
+        // Common 1-layer fast path: single `skin.models.item()` lookup and stack-allocated
+        // live rect buffer across all poses.
+        if let [layer] = self.layers.as_slice() {
+            let LayerGeometry::Quads(baked) = &layer.geometry else {
+                return false;
+            };
+            if layer.foil != FoilType::None {
+                return false;
+            }
+            let Some(stored) = skin.models.item(baked, skin.frame) else {
+                return false;
+            };
+            if renderer.sprites.any_translucent(&stored.runs, baked) {
+                return false;
+            }
+            let bounds = stored.bounds;
+            let frame = &mut *skin.frame;
+            let skin_bounds = &mut skin.bounds;
+            const INLINE_RUNS: usize = 8;
+            if stored.runs.len() <= INLINE_RUNS {
+                let mut rects = [None; INLINE_RUNS];
+                resolve_run_rects(stored, baked, sprites, &mut rects[..stored.runs.len()]);
+                let rects = &rects[..stored.runs.len()];
+                for &pose in poses {
+                    let m = emit_skinned_layer(layer, stored, rects, pose, sink, frame);
+                    grow_skin_bounds(skin_bounds, m, bounds);
+                }
+            } else {
+                let mut rects = vec![None; stored.runs.len()];
+                resolve_run_rects(stored, baked, sprites, &mut rects);
+                for &pose in poses {
+                    let m = emit_skinned_layer(layer, stored, &rects, pose, sink, frame);
+                    grow_skin_bounds(skin_bounds, m, bounds);
+                }
+            }
+            return true;
+        }
+        // Validate every layer and resolve its live sprite rects once across all poses.
+        let mut all_rects: Vec<Option<[f32; 4]>> = Vec::new();
+        let mut layer_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(self.layers.len());
         for layer in &self.layers {
             let LayerGeometry::Quads(baked) = &layer.geometry else {
                 return false;
@@ -323,64 +371,135 @@ impl ItemRenderState {
             if layer.foil != FoilType::None {
                 return false;
             }
-            if skin
-                .models
-                .item_opaque(baked, skin.frame, |sprite| {
-                    renderer.sprites.translucent(sprite_name(sprite))
-                })
-                .is_none()
-            {
+            let Some(stored) = skin.models.item(baked, skin.frame) else {
+                return false;
+            };
+            if renderer.sprites.any_translucent(&stored.runs, baked) {
                 return false;
             }
+            let start = all_rects.len();
+            all_rects.resize(start + stored.runs.len(), None);
+            resolve_run_rects(stored, baked, sprites, &mut all_rects[start..]);
+            layer_ranges.push(start..all_rects.len());
         }
-        for layer in &self.layers {
-            let LayerGeometry::Quads(baked) = &layer.geometry else {
-                continue;
-            };
-            let m = pose * layer.matrix;
-            let mut normals = FaceNormals::new(m);
-            let Some(stored) = skin.models.item(baked, skin.frame) else {
-                continue;
-            };
-            for run in &stored.runs {
-                // `submit_quads`' sprite and tint, once for the run's quads.
-                let q = &baked.quads[run.quad];
-                let Some(r) = sprites
-                    .get(sprite_name(&q.material.sprite))
-                    .or_else(|| sprites.get(crate::hud::MISSING_SPRITE))
-                else {
+        for &pose in poses {
+            for (layer, range) in self.layers.iter().zip(&layer_ranges) {
+                let LayerGeometry::Quads(baked) = &layer.geometry else {
                     continue;
                 };
-                let color = if run.tint_index >= 0 {
-                    layer
-                        .tints
-                        .get(run.tint_index as usize)
-                        .copied()
-                        .unwrap_or(-1)
-                } else {
-                    -1
+                let Some(stored) = skin.models.item(baked, skin.frame) else {
+                    continue;
                 };
-                let colors = AXES.map(|d| shaded(argb(color), normals.face(d), lights));
-                let frame = &mut *skin.frame;
-                frame.jobs.push(SkinJob {
-                    first: run.first,
-                    count: run.count,
-                    part: frame.parts.len() as u32,
-                    dst: frame.vertices,
-                    rect: [r.u0, r.v0, r.u1, r.v1],
-                    light,
-                    overlay: u32::from(tier) << 16,
-                    mode: SkinJob::ITEM,
-                    ..Default::default()
-                });
-                frame.parts.push(SkinPart::item(m, colors));
-                frame.vertices += run.count;
+                let bounds = stored.bounds;
+                let m = emit_skinned_layer(
+                    layer,
+                    stored,
+                    &all_rects[range.clone()],
+                    pose,
+                    sink,
+                    skin.frame,
+                );
+                grow_skin_bounds(&mut skin.bounds, m, bounds);
             }
-            let bounds = stored.bounds;
-            skin.grow_bounds(m, bounds);
         }
         true
     }
+}
+
+fn resolve_run_rects(
+    stored: &crate::mobs::skin::StoredItem,
+    baked: &BakedItemModel,
+    sprites: &HashMap<String, Rect>,
+    out: &mut [Option<[f32; 4]>],
+) {
+    debug_assert_eq!(stored.runs.len(), out.len());
+    let mut missing: Option<Option<[f32; 4]>> = None;
+    let mut prev: Option<(&str, Option<[f32; 4]>)> = None;
+    for (run, dst) in stored.runs.iter().zip(out) {
+        let sprite = sprite_name(&baked.quads[run.quad].material.sprite);
+        if let Some((prev_sprite, prev_rect)) = prev
+            && prev_sprite == sprite
+        {
+            *dst = prev_rect;
+            continue;
+        }
+        let rect = sprites
+            .get(sprite)
+            .map(|r| [r.u0, r.v0, r.u1, r.v1])
+            .or_else(|| {
+                *missing.get_or_insert_with(|| {
+                    sprites
+                        .get(crate::hud::MISSING_SPRITE)
+                        .map(|r| [r.u0, r.v0, r.u1, r.v1])
+                })
+            });
+        prev = Some((sprite, rect));
+        *dst = rect;
+    }
+}
+
+fn grow_skin_bounds(bounds: &mut Option<(Vec3, Vec3)>, m: Mat4, (lo, hi): (Vec3, Vec3)) {
+    let center = m.transform_point3((lo + hi) * 0.5);
+    let half = (hi - lo) * 0.5;
+    let r = Mat3::from_mat4(m);
+    let extent = r.x_axis.abs() * half.x + r.y_axis.abs() * half.y + r.z_axis.abs() * half.z;
+    let (a, b) = (center - extent, center + extent);
+    *bounds = Some(match *bounds {
+        Some((l, h)) => (l.min(a), h.max(b)),
+        None => (a, b),
+    });
+}
+
+fn emit_skinned_layer(
+    layer: &LayerRender,
+    stored: &crate::mobs::skin::StoredItem,
+    rects: &[Option<[f32; 4]>],
+    pose: Mat4,
+    (light, lights, tier): (u32, Option<(Vec3, Vec3)>, u8),
+    frame: &mut crate::gfx::entity_skin::SkinFrame,
+) -> Mat4 {
+    use crate::gfx::entity_skin::{SkinJob, SkinPart};
+    // The axes' order in a stored vertex (`SkinVertex::axis`).
+    const AXES: [Direction; 6] = [
+        Direction::East,
+        Direction::Up,
+        Direction::South,
+        Direction::West,
+        Direction::Down,
+        Direction::North,
+    ];
+    let m = pose * layer.matrix;
+    let mut normals = FaceNormals::new(m);
+    let overlay = u32::from(tier) << 16;
+    for (run, rect) in stored.runs.iter().zip(rects) {
+        let Some(rect) = *rect else {
+            continue;
+        };
+        let color = if run.tint_index >= 0 {
+            layer
+                .tints
+                .get(run.tint_index as usize)
+                .copied()
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
+        let colors = AXES.map(|d| shaded(argb(color), normals.face(d), lights));
+        frame.jobs.push(SkinJob {
+            first: run.first,
+            count: run.count,
+            part: frame.parts.len() as u32,
+            dst: frame.vertices,
+            rect,
+            light,
+            overlay,
+            mode: SkinJob::ITEM,
+            ..Default::default()
+        });
+        frame.parts.push(SkinPart::item(m, colors));
+        frame.vertices += run.count;
+    }
+    m
 }
 
 /// The atlas name of a sprite identifier (`minecraft:item/apple` -> `item/apple`).
@@ -550,7 +669,7 @@ struct FileSprites {
     cache: Mutex<HashMap<String, Option<SpriteMask>>>,
     /// Sprites with a pixel that is neither fully transparent nor opaque
     /// (`Transparency.hasTranslucent`), filled in as sprites load.
-    translucent: Mutex<HashMap<String, bool>>,
+    translucent: RwLock<FxHashMap<String, bool>>,
 }
 impl SpriteLookup for FileSprites {
     fn mask(&self, sprite: &str) -> Option<SpriteMask> {
@@ -575,11 +694,38 @@ fn argb_pixels(rgba: &[u8]) -> Vec<u32> {
 }
 impl FileSprites {
     fn translucent(&self, sprite: &str) -> bool {
-        let known = |this: &Self| this.translucent.lock().ok()?.get(sprite).copied();
-        known(self).unwrap_or_else(|| {
-            self.mask(sprite);
-            known(self).unwrap_or(false)
-        })
+        if let Ok(cache) = self.translucent.read()
+            && let Some(&hit) = cache.get(sprite)
+        {
+            return hit;
+        }
+        self.mask(sprite);
+        self.translucent
+            .read()
+            .ok()
+            .and_then(|cache| cache.get(sprite).copied())
+            .unwrap_or(false)
+    }
+    fn any_translucent(&self, runs: &[crate::mobs::skin::ItemRun], baked: &BakedItemModel) -> bool {
+        if let Ok(cache) = self.translucent.read() {
+            let mut all_known = true;
+            for run in runs {
+                let sprite = sprite_name(&baked.quads[run.quad].material.sprite);
+                match cache.get(sprite) {
+                    Some(&true) => return true,
+                    Some(&false) => {}
+                    None => {
+                        all_known = false;
+                        break;
+                    }
+                }
+            }
+            if all_known {
+                return false;
+            }
+        }
+        runs.iter()
+            .any(|run| self.translucent(sprite_name(&baked.quads[run.quad].material.sprite)))
     }
     fn png(&self, sprite: &str, directory: &str) -> String {
         crate::atlas_sources::texture_resource(sprite, directory)
@@ -603,7 +749,7 @@ impl FileSprites {
             }
         };
         let translucent = argb.iter().any(|p| matches!(p >> 24, 1..=254));
-        if let Ok(mut cache) = self.translucent.lock() {
+        if let Ok(mut cache) = self.translucent.write() {
             cache.insert(sprite.to_owned(), translucent);
         }
         let alpha: Vec<u8> = argb.iter().map(|p| (p >> 24) as u8).collect();
@@ -661,13 +807,98 @@ impl FileSprites {
 // The renderer
 // ---------------------------------------------------------------------------
 
+static NEXT_RENDERER_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
+struct BakedEntry {
+    model: Arc<BakedItemModel>,
+    extents: Arc<Vec<Vec3>>,
+}
+
+/// Pre-resolved static item state for one `(item_id, DisplayContext)` pair, along with its
+/// precomputed model bounding box. Shared across all plain stacks of that item until resource
+/// pack reload replaces the [`ItemRenderer`].
+#[derive(Debug)]
+pub struct CachedStaticItem {
+    pub state: ItemRenderState,
+    pub bounding_box: (Vec3, Vec3),
+}
+
+/// Borrowed reader for one [`DisplayContext`]'s static item cache: holds the `RwLock` read guard
+/// across a batch of items (dropped items, item frames), releasing and re-acquiring only on a
+/// cold cache miss. Falls back to the freshly built item without blocking when the cache lock is
+/// busy (for example, when another batch read guard for the same display is live on this thread).
+pub struct StaticDisplayCache<'a> {
+    renderer: &'a ItemRenderer,
+    display: DisplayContext,
+    guard: Option<RwLockReadGuard<'a, FxHashMap<String, Arc<CachedStaticItem>>>>,
+    fallback: Option<Arc<CachedStaticItem>>,
+}
+
+impl StaticDisplayCache<'_> {
+    /// Look up or populate `item` in this display context's static cache, returning a direct
+    /// reference into the held cache guard (zero per-item locks, zero `Arc` clones, zero heap
+    /// allocations on hit). Falls back to the built item without blocking when the cache lock is
+    /// busy (for example, when another batch read guard for this display is live on the current
+    /// thread). Returns `None` for air or any dynamic / foil / missing item.
+    pub fn get(&mut self, item: &str) -> Option<&CachedStaticItem> {
+        let lock = &self.renderer.static_cache[self.display.index()];
+        if self.guard.is_none() {
+            self.guard = lock.try_read().ok();
+        }
+        let present = self
+            .guard
+            .as_ref()
+            .is_some_and(|cache| cache.contains_key(item));
+        if present {
+            return self
+                .guard
+                .as_ref()
+                .and_then(|cache| cache.get(item))
+                .map(Arc::as_ref);
+        }
+        if !self.renderer.is_static_item(item) {
+            return None;
+        }
+        // Drop our read guard before baking or trying the write lock so there is never a
+        // read-to-write upgrade deadlock on this thread.
+        self.guard = None;
+        let built = self.renderer.build_static_item(item, self.display)?;
+        let fallback = match lock.try_write() {
+            Ok(mut cache) => Arc::clone(cache.entry(item.to_owned()).or_insert(built)),
+            Err(_) => built,
+        };
+        self.guard = lock.try_read().ok();
+        if self
+            .guard
+            .as_ref()
+            .is_some_and(|cache| cache.contains_key(item))
+        {
+            self.fallback = None;
+            return self
+                .guard
+                .as_ref()
+                .and_then(|cache| cache.get(item))
+                .map(Arc::as_ref);
+        }
+        Some(Arc::as_ref(self.fallback.insert(fallback)))
+    }
+}
+
 /// The baked item models and everything resolution needs.
 pub struct ItemRenderer {
     pub models: ItemModels,
     library: Arc<ModelLibrary>,
     sprites: FileSprites,
-    baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
-    extents: Mutex<HashMap<String, Arc<Vec<Vec3>>>>,
+    baked: RwLock<FxHashMap<String, BakedEntry>>,
+    special_extents: RwLock<FxHashMap<String, Arc<Vec<Vec3>>>>,
+    /// Prototype item ids classified static at pack load (plain stacks resolve identically
+    /// regardless of owner, level, seed, count, or `ItemEnv`).
+    static_items: FxHashSet<String>,
+    /// Cached static [`ItemRenderState`] and bounding box per `(DisplayContext, item_id)`.
+    static_cache: [RwLock<FxHashMap<String, Arc<CachedStaticItem>>>; DisplayContext::COUNT],
+    /// Monotonic generation bumped on every [`ItemRenderer`] load (resource pack reload).
+    generation: u64,
     /// GUI items already drawn: the HUD vertices of a static item at a GUI position
     /// (`gui::draw`), which are the same every frame it stays there.
     pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<[crate::hud::HudVertex]>>>,
@@ -842,6 +1073,7 @@ impl ItemRenderer {
                 Some(out)
             })
             .unwrap_or_default();
+        let static_items: FxHashSet<String> = models.static_item_ids().into_iter().collect();
         Ok(Self {
             glint_atlas: Mutex::default(),
             item_ids,
@@ -851,16 +1083,124 @@ impl ItemRenderer {
                 root: root.source().clone(),
                 permutations,
                 cache: Mutex::default(),
-                translucent: Mutex::default(),
+                translucent: RwLock::default(),
             },
-            baked: Mutex::default(),
-            extents: Mutex::default(),
+            baked: RwLock::default(),
+            special_extents: RwLock::default(),
+            static_items,
+            static_cache: std::array::from_fn(|_| RwLock::default()),
+            generation: NEXT_RENDERER_GENERATION.fetch_add(1, Ordering::Relaxed),
             gui_drawn: Mutex::default(),
             parts,
             skull_textures,
             grass,
             cit,
         })
+    }
+    /// Monotonic pack-load generation id, bumped whenever resource packs reload.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// Whether `item` is classified as a static item (plain stacks always resolve to the same
+    /// layers regardless of context or `ItemEnv`).
+    pub fn is_static_item(&self, item: &str) -> bool {
+        self.static_items.contains(item)
+    }
+    /// Open a batched read guard over `display`'s static item cache (`None` when CIT rules are
+    /// loaded). Hold across per-frame loops (dropped items, item frames) to avoid per-item locks.
+    pub fn static_cache_for(&self, display: DisplayContext) -> Option<StaticDisplayCache<'_>> {
+        if self.cit.is_some() {
+            return None;
+        }
+        Some(StaticDisplayCache {
+            renderer: self,
+            display,
+            guard: self.static_cache[display.index()].try_read().ok(),
+            fallback: None,
+        })
+    }
+    /// Look up or populate the cached [`CachedStaticItem`] for a plain `item` id and `display`.
+    /// When the cache lock is busy (for example, when a [`StaticDisplayCache`] read guard for this
+    /// display is live on the current thread), falls back to the freshly built item without
+    /// blocking. Returns `None` when CIT rules are active, for air, or for any dynamic / foil /
+    /// missing item.
+    pub fn resolve_static(
+        &self,
+        item: &str,
+        display: DisplayContext,
+    ) -> Option<Arc<CachedStaticItem>> {
+        if self.cit.is_some() || !self.static_items.contains(item) {
+            return None;
+        }
+        let lock = &self.static_cache[display.index()];
+        if let Ok(cache) = lock.try_read()
+            && let Some(hit) = cache.get(item)
+        {
+            return Some(Arc::clone(hit));
+        }
+        let built = self.build_static_item(item, display)?;
+        if let Ok(mut cache) = lock.try_write() {
+            return Some(Arc::clone(cache.entry(item.to_owned()).or_insert(built)));
+        }
+        if let Ok(cache) = lock.try_read()
+            && let Some(hit) = cache.get(item)
+        {
+            return Some(Arc::clone(hit));
+        }
+        Some(built)
+    }
+    /// Fast path of [`Self::resolve_static`] for a live [`crate::items::ItemStack`]: returns
+    /// `None` whenever the stack is empty, damaged, carries any component patch (`data()`), or
+    /// CIT rules are active.
+    pub fn resolve_static_stack(
+        &self,
+        stack: &crate::items::ItemStack,
+        display: DisplayContext,
+    ) -> Option<Arc<CachedStaticItem>> {
+        if self.cit.is_some() || stack.count == 0 || stack.damage != 0 || stack.data().is_some() {
+            return None;
+        }
+        self.resolve_static(&stack.item, display)
+    }
+    fn build_static_item(
+        &self,
+        item: &str,
+        display: DisplayContext,
+    ) -> Option<Arc<CachedStaticItem>> {
+        let resolved = self.models.resolve_static(item)?;
+        let mut layers = Vec::with_capacity(resolved.layers.len());
+        for layer in resolved.layers {
+            let LayerContent::Model { model } = layer.content else {
+                unreachable!("resolve_static only emits Model layers");
+            };
+            let entry = self.bake_entry(&model);
+            let matrix = glam_matrix(&entry.model.layer_matrix(display, &layer.transform));
+            let uses_block_light = entry.model.uses_block_light;
+            let particle = sprite_name(&entry.model.particle.sprite).to_owned();
+            layers.push(LayerRender {
+                geometry: LayerGeometry::Quads(entry.model),
+                tints: layer.tints,
+                foil: FoilType::None,
+                matrix,
+                uses_block_light,
+                particle,
+                extents: entry.extents,
+            });
+        }
+        let state = ItemRenderState {
+            display,
+            layers,
+            oversized_in_gui: resolved.oversized_in_gui,
+            animated: false,
+            cit_glint: None,
+            hdr_tier: 0,
+            hdr_light: 0,
+        };
+        let bounding_box = state.bounding_box();
+        Some(Arc::new(CachedStaticItem {
+            state,
+            bounding_box,
+        }))
     }
     /// The models a pack's own item definitions (outside the `minecraft` namespace) draw, at any
     /// depth of their composite, condition, select and range nodes.
@@ -916,29 +1256,32 @@ impl ItemRenderer {
             let Some(renderer) = renderer.upgrade() else {
                 return;
             };
-            let baked = renderer.bake(&name);
-            renderer.quad_extents(&name, &baked);
+            renderer.bake_entry(&name);
         }
     }
     /// `ModelBakery` item baking, cached per model.
     pub fn bake(&self, model: &str) -> Arc<BakedItemModel> {
-        self.baked_with(model, || {
+        self.bake_entry(model).model
+    }
+    fn bake_entry(&self, model: &str) -> BakedEntry {
+        self.baked_entry_with(model, || {
             bake_item_model(&self.library, &self.sprites, model)
         })
     }
     /// A layer baked from something other than a model id, such as an extruded sprite,
-    /// cached under `key` (which no model id can equal: identifiers hold no NUL).
-    fn baked_with(
+    /// cached together with its quad extents and particle sprite under `key` (which no model id
+    /// can equal: identifiers hold no NUL).
+    fn baked_entry_with(
         &self,
         key: &str,
         bake: impl FnOnce() -> std::result::Result<BakedItemModel, horizon_assets::DecodeError>,
-    ) -> Arc<BakedItemModel> {
-        if let Ok(cache) = self.baked.lock()
+    ) -> BakedEntry {
+        if let Ok(cache) = self.baked.read()
             && let Some(hit) = cache.get(key)
         {
             return hit.clone();
         }
-        let baked = bake()
+        let model = bake()
             .or_else(|_| bake_item_model(&self.library, &self.sprites, MISSING_MODEL))
             .map(Arc::new)
             .unwrap_or_else(|_| {
@@ -952,34 +1295,25 @@ impl ItemRenderer {
                     transforms: Default::default(),
                 })
             });
-        if let Ok(mut cache) = self.baked.lock() {
-            cache.insert(key.to_owned(), baked.clone());
+        let entry = BakedEntry {
+            extents: Arc::new(corners(&model)),
+            model,
+        };
+        if let Ok(mut cache) = self.baked.write() {
+            return cache.entry(key.to_owned()).or_insert(entry).clone();
         }
-        baked
-    }
-    /// `CuboidItemModelWrapper.computeExtents`: the distinct quad corners.
-    fn quad_extents(&self, model: &str, baked: &BakedItemModel) -> Arc<Vec<Vec3>> {
-        if let Ok(cache) = self.extents.lock()
-            && let Some(hit) = cache.get(model)
-        {
-            return hit.clone();
-        }
-        let out = Arc::new(corners(baked));
-        if let Ok(mut cache) = self.extents.lock() {
-            cache.insert(model.to_owned(), out.clone());
-        }
-        out
+        entry
     }
     fn special_extents(&self, model: &SpecialModel) -> Arc<Vec<Vec3>> {
         let key = model.to_json().to_string();
-        if let Ok(cache) = self.extents.lock()
+        if let Ok(cache) = self.special_extents.read()
             && let Some(hit) = cache.get(&key)
         {
             return hit.clone();
         }
         let out = Arc::new(special::extents(self, model));
-        if let Ok(mut cache) = self.extents.lock() {
-            cache.insert(key, out.clone());
+        if let Ok(mut cache) = self.special_extents.write() {
+            return cache.entry(key).or_insert(out).clone();
         }
         out
     }
@@ -993,10 +1327,10 @@ impl ItemRenderer {
         parts: &[horizon_assets::item_model::SpecialPart],
     ) -> PreparedParts {
         let part = |model: &str, tints, pose| {
-            let geometry = self.bake(model);
+            let entry = self.bake_entry(model);
             PreparedPart {
-                extents: self.quad_extents(model, &geometry),
-                geometry,
+                extents: entry.extents,
+                geometry: entry.model,
                 tints,
                 pose,
             }
@@ -1015,10 +1349,8 @@ impl ItemRenderer {
                 .map(|p| part(&p.model, p.tints.clone(), p.pose))
                 .collect(),
         };
-        PreparedParts(Arc::new(PreparedSpecial {
-            base: self.bake(base),
-            parts,
-        }))
+        let base = self.bake(base);
+        PreparedParts(Arc::new(PreparedSpecial { base, parts }))
     }
     /// The layers of a prepared answer (`LayerContent::Parts`), one for each part: the part's own
     /// model's quads, posed under the layer's transform, with the base model's display transform,
@@ -1075,6 +1407,22 @@ impl ItemRenderer {
         env: &dyn ItemEnv,
         rule: Option<usize>,
     ) -> ItemRenderState {
+        self.resolve_with_rule_into(stack, display, owner, level, seed, env, rule, Vec::new())
+    }
+    /// [`Self::resolve_with_rule`], reusing the buffer of `layers` (cleared before population).
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_with_rule_into(
+        &self,
+        stack: &StackView,
+        display: DisplayContext,
+        owner: Option<&OwnerState>,
+        level: Option<&LevelState>,
+        seed: i32,
+        env: &dyn ItemEnv,
+        rule: Option<usize>,
+        mut layers: Vec<LayerRender>,
+    ) -> ItemRenderState {
+        layers.clear();
         let ctx = Context {
             display,
             owner,
@@ -1083,40 +1431,54 @@ impl ItemRenderer {
         };
         let resolved = self.models.resolve(stack, &ctx, env);
         let mut animated = false;
-        let mut layers = Vec::with_capacity(resolved.layers.len());
+        layers.reserve(resolved.layers.len());
         for layer in resolved.layers {
             let (geometry, baked, extents) = match layer.content {
                 LayerContent::Model { model } => {
-                    let (baked, extents) = rule
-                        .and_then(|rule| self.cit_layer(rule, &model))
-                        .unwrap_or_else(|| {
-                            let baked = self.bake(&model);
-                            let extents = self.quad_extents(&model, &baked);
-                            (baked, extents)
-                        });
-                    (LayerGeometry::Quads(baked.clone()), baked, extents)
+                    if let Some((baked, extents)) =
+                        rule.and_then(|rule| self.cit_layer(rule, &model))
+                    {
+                        (LayerGeometry::Quads(baked.clone()), baked, extents)
+                    } else {
+                        let entry = self.bake_entry(&model);
+                        (
+                            LayerGeometry::Quads(entry.model.clone()),
+                            entry.model,
+                            entry.extents,
+                        )
+                    }
                 }
                 LayerContent::Sprite { sprite, mask } => {
                     let key = sprite_layer_key(&sprite, mask.as_deref());
-                    let baked = self.baked_with(&key, || {
+                    let entry = self.baked_entry_with(&key, || {
                         bake_sprite_layer(&self.library, &self.sprites, &sprite, mask.as_deref())
                     });
-                    let extents = self.quad_extents(&key, &baked);
-                    (LayerGeometry::Quads(baked.clone()), baked, extents)
+                    (
+                        LayerGeometry::Quads(entry.model.clone()),
+                        entry.model,
+                        entry.extents,
+                    )
                 }
                 LayerContent::Missing => {
-                    let baked = self.bake(MISSING_MODEL);
-                    let extents = self.quad_extents(MISSING_MODEL, &baked);
-                    (LayerGeometry::Quads(baked.clone()), baked, extents)
+                    let entry = self.bake_entry(MISSING_MODEL);
+                    (
+                        LayerGeometry::Quads(entry.model.clone()),
+                        entry.model,
+                        entry.extents,
+                    )
                 }
                 LayerContent::Special {
                     base,
                     model,
                     argument,
                 } => {
-                    let baked = self.bake(&base);
+                    let entry = self.bake_entry(&base);
                     let extents = self.special_extents(&model);
-                    (LayerGeometry::Special { model, argument }, baked, extents)
+                    (
+                        LayerGeometry::Special { model, argument },
+                        entry.model,
+                        extents,
+                    )
                 }
                 LayerContent::Parts(prepared) => {
                     // What a mod drew may change with every draw, so no GUI item is kept.
@@ -1353,35 +1715,67 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
     cluster_poses_with_depth(pose, amount, seed, hi.z - lo.z)
 }
 
-/// [`cluster_poses`] with the depth of the resolved model's bounding box
-/// already computed for this draw (also used to place the stack's bob).
-pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) -> Vec<Mat4> {
+/// Maximum number of copies returned by [`rendered_amount`] (vanilla `ItemClusterRenderState`).
+pub const MAX_CLUSTER_COPIES: usize = 5;
+
+fn emit_cluster_poses(pose: Mat4, amount: u32, seed: i64, depth: f32, mut emit: impl FnMut(Mat4)) {
     use horizon_core::random::{LegacyRandom, RandomSource};
-    let mut out = Vec::with_capacity(amount as usize);
     if amount == 0 {
-        return out;
+        return;
     }
-    let mut random = LegacyRandom::new(seed);
-    let mut next = || random.next_float() * 2.0 - 1.0;
     if depth > 0.0625 {
-        out.push(pose);
-        for _ in 1..amount {
-            let (x, y, z) = (next() * 0.15, next() * 0.15, next() * 0.15);
-            out.push(pose * Mat4::from_translation(Vec3::new(x, y, z)));
+        emit(pose);
+        if amount > 1 {
+            let mut random = LegacyRandom::new(seed);
+            let mut next = || random.next_float() * 2.0 - 1.0;
+            for _ in 1..amount {
+                let (x, y, z) = (next() * 0.15, next() * 0.15, next() * 0.15);
+                emit(pose * Mat4::from_translation(Vec3::new(x, y, z)));
+            }
         }
     } else {
         let offset = depth * 1.5;
         let mut p = pose
             * Mat4::from_translation(Vec3::new(0.0, 0.0, -(offset * (amount - 1) as f32 / 2.0)));
-        out.push(p);
-        p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
-        for _ in 1..amount {
-            let (x, y) = (next() * 0.15 * 0.5, next() * 0.15 * 0.5);
-            out.push(p * Mat4::from_translation(Vec3::new(x, y, 0.0)));
+        emit(p);
+        if amount > 1 {
+            let mut random = LegacyRandom::new(seed);
+            let mut next = || random.next_float() * 2.0 - 1.0;
             p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+            for _ in 1..amount {
+                let (x, y) = (next() * 0.15 * 0.5, next() * 0.15 * 0.5);
+                emit(p * Mat4::from_translation(Vec3::new(x, y, 0.0)));
+                p *= Mat4::from_translation(Vec3::new(0.0, 0.0, offset));
+            }
         }
     }
+}
+
+/// [`cluster_poses`] with the depth of the resolved model's bounding box
+/// already computed for this draw (also used to place the stack's bob).
+pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) -> Vec<Mat4> {
+    let mut out = Vec::with_capacity(amount as usize);
+    emit_cluster_poses(pose, amount, seed, depth, |m| out.push(m));
     out
+}
+
+/// Stack-allocated [`cluster_poses_with_depth`] for `amount <= MAX_CLUSTER_COPIES` (`0..=5`,
+/// covering every output of [`rendered_amount`]). Returns `([Mat4; 5], len)` bit-identically
+/// to [`cluster_poses_with_depth`] with zero heap allocation.
+pub fn cluster_poses_stack(
+    pose: Mat4,
+    amount: u32,
+    seed: i64,
+    depth: f32,
+) -> ([Mat4; MAX_CLUSTER_COPIES], usize) {
+    let mut out = [Mat4::IDENTITY; MAX_CLUSTER_COPIES];
+    let clamped = (amount as usize).min(MAX_CLUSTER_COPIES);
+    let mut len = 0usize;
+    emit_cluster_poses(pose, clamped as u32, seed, depth, |m| {
+        out[len] = m;
+        len += 1;
+    });
+    (out, len)
 }
 
 #[cfg(test)]
@@ -1474,11 +1868,11 @@ mod tests {
         let renderer =
             Arc::new(ItemRenderer::load(&ResourceRoot::directory(root.clone()), &data).unwrap());
         ItemRenderer::bake_ahead(&Arc::downgrade(&renderer), renderer.pack_model_names());
-        let baked = renderer.baked.lock().unwrap();
-        assert_eq!(baked["track:item/rail"].quads.len(), 1);
-        assert_eq!(baked["track:item/signal_on"].quads.len(), 2);
+        let baked = renderer.baked.read().unwrap();
+        assert_eq!(baked["track:item/rail"].model.quads.len(), 1);
+        assert_eq!(baked["track:item/signal_on"].model.quads.len(), 2);
         assert!(!baked.contains_key("minecraft:item/stick"));
-        assert_eq!(renderer.extents.lock().unwrap()["track:item/rail"].len(), 4);
+        assert_eq!(baked["track:item/rail"].extents.len(), 4);
         drop(baked);
         let _ = fs::remove_dir_all(&root);
     }
@@ -1619,7 +2013,7 @@ mod tests {
             root: source.clone(),
             permutations: Vec::new(),
             cache: Mutex::default(),
-            translucent: Mutex::default(),
+            translucent: RwLock::default(),
         };
         let mask = sprites.mask("example:item/mask").unwrap();
         assert_eq!((mask.width, mask.height), (1, 1));
@@ -2343,5 +2737,858 @@ mod tests {
             }
             assert_eq!(got, transform_normal(m, direction_vector(d)), "{d:?}");
         }
+    }
+
+    fn write_test_file(root: &std::path::Path, rel: &str, data: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, data).unwrap();
+    }
+
+    fn test_cube_model(sprite: &str, size: u32, particle: &str, tint: bool) -> String {
+        let tint_field = if tint { r#","tintindex":0"# } else { "" };
+        let faces = ["north", "east", "south", "west", "up", "down"]
+            .map(|f| {
+                format!(r##""{f}":{{"uv":[0,0,{size},{size}],"texture":"#all"{tint_field}}}"##)
+            })
+            .join(",");
+        format!(
+            r#"{{"textures":{{"all":"{sprite}","particle":"{particle}"}},"elements":[{{"from":[0,0,0],"to":[{size},{size},{size}],"faces":{{{faces}}}}}],"display":{{"ground":{{"scale":[0.5,0.5,0.5]}},"fixed":{{"rotation":[0,180,0]}},"gui":{{"rotation":[30,225,0],"scale":[0.625,0.625,0.625]}}}}}}"#
+        )
+    }
+
+    fn build_static_cache_pack(
+        root: &std::path::Path,
+        widget_model: &str,
+        morph_dynamic: bool,
+        with_cit: bool,
+    ) -> ItemRenderer {
+        let items_json = serde_json::json!({
+            "test:widget": {"minecraft:item_model": "test:widget"},
+            "test:composite": {"minecraft:item_model": "test:composite"},
+            "test:morph": {"minecraft:item_model": "test:morph"},
+            "test:foil_apple": {
+                "minecraft:item_model": "test:widget",
+                "minecraft:enchantment_glint_override": true
+            },
+            "test:compass": {"minecraft:item_model": "test:compass"},
+            "test:clock": {"minecraft:item_model": "test:clock"},
+            "test:bow": {"minecraft:item_model": "test:bow"},
+            "test:trimmed": {"minecraft:item_model": "test:trimmed"},
+            "test:dyed": {"minecraft:item_model": "test:dyed"},
+            "test:potion": {"minecraft:item_model": "test:potion"},
+            "test:bundle": {"minecraft:item_model": "test:bundle"},
+            "test:grass": {"minecraft:item_model": "test:grass"},
+            "minecraft:air": {"minecraft:item_model": "test:widget"}
+        });
+        write_test_file(root, "items.json", &items_json.to_string());
+        write_test_file(
+            root,
+            "assets/minecraft/atlases/items.json",
+            r#"{"sources":[{"type":"single","resource":"test:item/a"},{"type":"single","resource":"test:item/b"}]}"#,
+        );
+        glint_tests::png(
+            &root.join("assets/test/textures/item/a.png"),
+            16,
+            16,
+            [200, 100, 50, 255],
+        );
+        glint_tests::png(
+            &root.join("assets/test/textures/item/b.png"),
+            16,
+            16,
+            [50, 150, 220, 255],
+        );
+        write_test_file(
+            root,
+            "assets/test/models/item/a.json",
+            &test_cube_model("test:item/a", 8, "test:item/a", false),
+        );
+        write_test_file(
+            root,
+            "assets/test/models/item/b.json",
+            &test_cube_model("test:item/b", 12, "test:item/b", true),
+        );
+        write_test_file(
+            root,
+            "assets/test/items/widget.json",
+            &format!(r#"{{"model":{{"type":"minecraft:model","model":"{widget_model}"}}}}"#),
+        );
+        write_test_file(
+            root,
+            "assets/test/items/composite.json",
+            r#"{"oversized_in_gui":true,"model":{"type":"minecraft:composite","models":[{"type":"minecraft:model","model":"test:item/a"},{"type":"minecraft:model","model":"test:item/b","tints":[{"type":"minecraft:constant","value":-16711936}]}]}}"#,
+        );
+        let morph_def = if morph_dynamic {
+            r#"{"model":{"type":"minecraft:select","property":"minecraft:display_context","cases":[{"when":"gui","model":{"type":"minecraft:model","model":"test:item/b"}}],"fallback":{"type":"minecraft:model","model":"test:item/a"}}}"#
+        } else {
+            r#"{"model":{"type":"minecraft:model","model":"test:item/a"}}"#
+        };
+        write_test_file(root, "assets/test/items/morph.json", morph_def);
+        write_test_file(
+            root,
+            "assets/test/items/compass.json",
+            r#"{"model":{"type":"minecraft:range_dispatch","property":"minecraft:compass","target":"spawn","entries":[{"threshold":0.0,"model":{"type":"minecraft:model","model":"test:item/a"}}],"fallback":{"type":"minecraft:model","model":"test:item/a"}}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/clock.json",
+            r#"{"model":{"type":"minecraft:range_dispatch","property":"minecraft:time","source":"daytime","entries":[{"threshold":0.0,"model":{"type":"minecraft:model","model":"test:item/a"}}],"fallback":{"type":"minecraft:model","model":"test:item/a"}}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/bow.json",
+            r#"{"model":{"type":"minecraft:condition","property":"minecraft:using_item","on_true":{"type":"minecraft:model","model":"test:item/b"},"on_false":{"type":"minecraft:model","model":"test:item/a"}}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/trimmed.json",
+            r#"{"model":{"type":"minecraft:select","property":"minecraft:trim_material","cases":[{"when":"minecraft:gold","model":{"type":"minecraft:model","model":"test:item/b"}}],"fallback":{"type":"minecraft:model","model":"test:item/a"}}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/dyed.json",
+            r#"{"model":{"type":"minecraft:model","model":"test:item/b","tints":[{"type":"minecraft:dye","default":-6265536}]}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/potion.json",
+            r#"{"model":{"type":"minecraft:model","model":"test:item/b","tints":[{"type":"minecraft:potion","default":-13083194}]}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/bundle.json",
+            r#"{"model":{"type":"minecraft:bundle/selected_item"}}"#,
+        );
+        write_test_file(
+            root,
+            "assets/test/items/grass.json",
+            r#"{"model":{"type":"minecraft:model","model":"test:item/b","tints":[{"type":"minecraft:grass","temperature":0.5,"downfall":1.0}]}}"#,
+        );
+        if with_cit {
+            write_test_file(
+                root,
+                "assets/minecraft/optifine/cit.properties",
+                "useGlint=false\n",
+            );
+        }
+        let data = crate::test_resources::item_data(root, DataLoadOrigin::ClientPreload).unwrap();
+        ItemRenderer::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            &data,
+        )
+        .unwrap()
+    }
+
+    fn assert_states_bit_equal(a: &ItemRenderState, b: &ItemRenderState, label: &str) {
+        assert_eq!(a.display, b.display, "{label}: display");
+        assert_eq!(
+            a.oversized_in_gui, b.oversized_in_gui,
+            "{label}: oversized_in_gui"
+        );
+        assert_eq!(a.animated, b.animated, "{label}: animated");
+        assert_eq!(a.hdr_tier, b.hdr_tier, "{label}: hdr_tier");
+        assert_eq!(a.hdr_light, b.hdr_light, "{label}: hdr_light");
+        assert_eq!(a.layers.len(), b.layers.len(), "{label}: layers len");
+        for (i, (la, lb)) in a.layers.iter().zip(&b.layers).enumerate() {
+            assert_eq!(la.tints, lb.tints, "{label} layer {i}: tints");
+            assert_eq!(la.foil, lb.foil, "{label} layer {i}: foil");
+            assert_eq!(
+                la.matrix.to_cols_array().map(f32::to_bits),
+                lb.matrix.to_cols_array().map(f32::to_bits),
+                "{label} layer {i}: matrix"
+            );
+            assert_eq!(
+                la.uses_block_light, lb.uses_block_light,
+                "{label} layer {i}: light"
+            );
+            assert_eq!(la.particle, lb.particle, "{label} layer {i}: particle");
+            assert_eq!(*la.extents, *lb.extents, "{label} layer {i}: extents");
+            match (&la.geometry, &lb.geometry) {
+                (LayerGeometry::Quads(ba), LayerGeometry::Quads(bb)) => {
+                    assert!(
+                        Arc::ptr_eq(ba, bb),
+                        "{label} layer {i}: shared BakedItemModel Arc"
+                    );
+                }
+                _ => panic!("{label} layer {i}: unexpected non-quad static geometry"),
+            }
+        }
+    }
+
+    #[test]
+    fn static_cache_matches_uncached_resolve_and_bypasses_dynamic_items() {
+        use horizon_assets::item_model::NoEnv;
+        let dir = tempfile::tempdir().unwrap();
+        let r = build_static_cache_pack(dir.path(), "test:item/a", false, false);
+        drop(dir);
+
+        for item in ["test:widget", "test:composite", "test:morph"] {
+            assert!(r.is_static_item(item), "{item} should be classified static");
+            let plain = crate::items::ItemStack::new(item, 1);
+            for display in DisplayContext::ALL {
+                let uncached = r.resolve(&StackView::new(item, 1), display, None, None, 42, &NoEnv);
+                let cached = r
+                    .resolve_static_stack(&plain, display)
+                    .expect("plain static stack hits cache");
+                assert_states_bit_equal(&cached.state, &uncached, &format!("{item} {display:?}"));
+                assert_eq!(cached.bounding_box, uncached.bounding_box());
+
+                // Batched reader returns the exact same cached entry.
+                let mut reader = r.static_cache_for(display).expect("no CIT");
+                let batched = reader.get(item).expect("batched hit");
+                assert_states_bit_equal(
+                    &batched.state,
+                    &uncached,
+                    &format!("batched {item} {display:?}"),
+                );
+                assert_eq!(batched.bounding_box, uncached.bounding_box());
+            }
+        }
+
+        // Dynamic item definitions must never hit the static cache.
+        for dynamic in [
+            "minecraft:air",
+            "test:foil_apple",
+            "test:compass",
+            "test:clock",
+            "test:bow",
+            "test:trimmed",
+            "test:dyed",
+            "test:potion",
+            "test:bundle",
+            "test:grass",
+            "test:nonexistent",
+        ] {
+            assert!(!r.is_static_item(dynamic), "{dynamic} must not be static");
+            let stack = crate::items::ItemStack::new(dynamic, 1);
+            assert!(
+                r.resolve_static_stack(&stack, DisplayContext::Ground)
+                    .is_none()
+            );
+            let mut reader = r.static_cache_for(DisplayContext::Ground).unwrap();
+            assert!(reader.get(dynamic).is_none());
+        }
+
+        // Component patches, damage, or zero count on an otherwise static item must bypass cache.
+        let empty = crate::items::ItemStack::new("test:widget", 0);
+        assert!(
+            r.resolve_static_stack(&empty, DisplayContext::Ground)
+                .is_none()
+        );
+
+        let mut damaged = crate::items::ItemStack::new("test:widget", 1);
+        damaged.damage = 5;
+        assert!(
+            r.resolve_static_stack(&damaged, DisplayContext::Ground)
+                .is_none()
+        );
+
+        let mut enchanted = crate::items::ItemStack::new("test:widget", 1);
+        enchanted
+            .data_mut()
+            .enchantments
+            .push((Arc::from("minecraft:sharpness"), 1));
+        assert!(
+            r.resolve_static_stack(&enchanted, DisplayContext::Ground)
+                .is_none()
+        );
+
+        let mut custom_model_data = crate::items::ItemStack::new("test:widget", 1);
+        custom_model_data.data_mut().other.push((
+            "minecraft:custom_model_data".into(),
+            Tag::Compound(horizon_core::nbt::Compound::new()),
+        ));
+        assert!(
+            r.resolve_static_stack(&custom_model_data, DisplayContext::Ground)
+                .is_none()
+        );
+
+        let mut named = crate::items::ItemStack::new("test:widget", 1);
+        named.data_mut().custom_name = Some(Tag::String("Renamed".into()));
+        assert!(
+            r.resolve_static_stack(&named, DisplayContext::Ground)
+                .is_none()
+        );
+
+        let mut dyed = crate::items::ItemStack::new("test:widget", 1);
+        dyed.data_mut().dyed_color = Some(0x112233);
+        assert!(
+            r.resolve_static_stack(&dyed, DisplayContext::Ground)
+                .is_none()
+        );
+
+        let mut trimmed = crate::items::ItemStack::new("test:widget", 1);
+        trimmed.data_mut().trim = Some(("minecraft:gold".into(), "minecraft:coast".into()));
+        assert!(
+            r.resolve_static_stack(&trimmed, DisplayContext::Ground)
+                .is_none()
+        );
+
+        // `resolve_with_rule_into` reuses the scratch Vec capacity and produces identical output.
+        let mut scratch = Vec::with_capacity(8);
+        let cap_before = scratch.capacity();
+        let reused = r.resolve_with_rule_into(
+            &StackView::new("test:composite", 1),
+            DisplayContext::Gui,
+            None,
+            None,
+            0,
+            &NoEnv,
+            None,
+            scratch,
+        );
+        let expected = r.resolve(
+            &StackView::new("test:composite", 1),
+            DisplayContext::Gui,
+            None,
+            None,
+            0,
+            &NoEnv,
+        );
+        assert_states_bit_equal(&reused, &expected, "resolve_with_rule_into");
+        scratch = reused.layers;
+        assert!(scratch.capacity() >= cap_before);
+    }
+
+    #[test]
+    fn static_cache_invalidates_on_resource_pack_reload_and_cit() {
+        use horizon_assets::item_model::NoEnv;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let v1 = build_static_cache_pack(root, "test:item/a", false, false);
+        let v1_widget = v1
+            .resolve_static("test:widget", DisplayContext::Ground)
+            .expect("v1 widget static");
+        assert_eq!(v1_widget.state.layers[0].particle, "test:item/a");
+        assert!(v1.is_static_item("test:morph"));
+
+        // Resource pack reload: swap `test:widget` model A -> B and turn `test:morph` dynamic.
+        let v2 = build_static_cache_pack(root, "test:item/b", true, false);
+        assert!(v2.generation() > v1.generation());
+        let v2_widget = v2
+            .resolve_static("test:widget", DisplayContext::Ground)
+            .expect("v2 widget static");
+        let v2_uncached = v2.resolve(
+            &StackView::new("test:widget", 1),
+            DisplayContext::Ground,
+            None,
+            None,
+            0,
+            &NoEnv,
+        );
+        assert_states_bit_equal(&v2_widget.state, &v2_uncached, "reloaded widget");
+        assert_eq!(v2_widget.state.layers[0].particle, "test:item/b");
+        assert!(!v2.is_static_item("test:morph"));
+        assert!(
+            v2.resolve_static("test:morph", DisplayContext::Ground)
+                .is_none()
+        );
+
+        // Pack with CIT rules disables the static cache completely.
+        let cit_pack = build_static_cache_pack(root, "test:item/a", false, true);
+        drop(dir);
+        assert!(cit_pack.cit.is_some());
+        assert!(
+            cit_pack
+                .resolve_static("test:widget", DisplayContext::Ground)
+                .is_none()
+        );
+        assert!(cit_pack.static_cache_for(DisplayContext::Ground).is_none());
+    }
+
+    #[test]
+    fn static_cache_concurrent_cold_and_warm_reads_are_consistent() {
+        use horizon_assets::item_model::NoEnv;
+        let dir = tempfile::tempdir().unwrap();
+        let renderer = Arc::new(build_static_cache_pack(
+            dir.path(),
+            "test:item/a",
+            false,
+            false,
+        ));
+        drop(dir);
+
+        let handles: Vec<_> = (0..8)
+            .map(|t| {
+                let r = Arc::clone(&renderer);
+                std::thread::spawn(move || {
+                    let display = DisplayContext::ALL[t % DisplayContext::COUNT];
+                    let direct = r.resolve_static("test:composite", display).unwrap();
+                    let mut batch = r.static_cache_for(display).unwrap();
+                    let via_batch = batch.get("test:composite").unwrap();
+                    let uncached = r.resolve(
+                        &StackView::new("test:composite", 1),
+                        display,
+                        None,
+                        None,
+                        t as i32,
+                        &NoEnv,
+                    );
+                    assert_states_bit_equal(&direct.state, &uncached, "concurrent direct");
+                    assert_states_bit_equal(&via_batch.state, &uncached, "concurrent batch");
+                    (display, direct)
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for (display, cached) in &results {
+            let again = renderer.resolve_static("test:composite", *display).unwrap();
+            assert!(
+                Arc::ptr_eq(cached, &again),
+                "concurrent cache lookups share the same Arc for {display:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_cache_cold_lookup_while_batch_guard_live_falls_back_without_deadlock() {
+        use horizon_assets::item_model::NoEnv;
+        let dir = tempfile::tempdir().unwrap();
+        let r = build_static_cache_pack(dir.path(), "test:item/a", false, false);
+
+        let display = DisplayContext::Ground;
+        let expected_widget = r.resolve(
+            &StackView::new("test:widget", 1),
+            display,
+            None,
+            None,
+            0,
+            &NoEnv,
+        );
+        let expected_composite = r.resolve(
+            &StackView::new("test:composite", 1),
+            display,
+            None,
+            None,
+            0,
+            &NoEnv,
+        );
+        let expected_morph = r.resolve(
+            &StackView::new("test:morph", 1),
+            display,
+            None,
+            None,
+            0,
+            &NoEnv,
+        );
+
+        // Hold a live batch read guard for `display` on the current thread while both lookup paths
+        // perform cold misses for that same display.
+        let mut live_guard = r.static_cache_for(display).expect("no CIT");
+
+        // 1. Direct public `resolve_static` (and `resolve_static_stack`) cold miss while
+        //    `live_guard` is held on the same thread must fall back to the built item immediately.
+        let direct_busy = r
+            .resolve_static("test:widget", display)
+            .expect("busy direct cold lookup falls back to built item");
+        assert_states_bit_equal(&direct_busy.state, &expected_widget, "busy direct widget");
+        assert_eq!(direct_busy.bounding_box, expected_widget.bounding_box());
+
+        let stack_busy = r
+            .resolve_static_stack(&crate::items::ItemStack::new("test:widget", 1), display)
+            .expect("busy stack cold lookup falls back to built item");
+        assert_states_bit_equal(&stack_busy.state, &expected_widget, "busy stack widget");
+        assert_eq!(stack_busy.bounding_box, expected_widget.bounding_box());
+
+        // 2. A second `StaticDisplayCache` batch guard on the same thread hitting a cold item must
+        //    also fall back to the built item without blocking on `live_guard`, and `live_guard`
+        //    itself hitting a cold item while `other_guard` is live must likewise not deadlock.
+        let mut other_guard = r.static_cache_for(display).expect("second batch guard");
+        {
+            let batch_busy = other_guard
+                .get("test:composite")
+                .expect("busy batch cold lookup falls back to built item");
+            assert_states_bit_equal(
+                &batch_busy.state,
+                &expected_composite,
+                "busy batch composite",
+            );
+            assert_eq!(batch_busy.bounding_box, expected_composite.bounding_box());
+        }
+        {
+            let live_busy = live_guard
+                .get("test:morph")
+                .expect("live batch cold lookup with sibling guard falls back to built item");
+            assert_states_bit_equal(&live_busy.state, &expected_morph, "busy live morph");
+            assert_eq!(live_busy.bounding_box, expected_morph.bounding_box());
+        }
+        drop(other_guard);
+        drop(live_guard);
+
+        // 3. Once the live batch guards are dropped, subsequent lookups populate the cache and
+        //    return the shared `Arc` across both lookup paths.
+        let cached_widget = r
+            .resolve_static("test:widget", display)
+            .expect("widget populates cache once guards drop");
+        let cached_widget_again = r
+            .resolve_static("test:widget", display)
+            .expect("widget hits populated cache");
+        assert!(
+            !Arc::ptr_eq(&direct_busy, &cached_widget),
+            "busy cold lookup did not populate cache while read guard was live"
+        );
+        assert!(
+            Arc::ptr_eq(&cached_widget, &cached_widget_again),
+            "subsequent direct lookups share the populated cache Arc"
+        );
+        assert_states_bit_equal(
+            &cached_widget.state,
+            &expected_widget,
+            "populated direct widget",
+        );
+
+        let mut fresh_batch = r.static_cache_for(display).expect("fresh batch guard");
+        let batch_composite_ptr = {
+            let batch_composite = fresh_batch
+                .get("test:composite")
+                .expect("composite populates cache via batch guard");
+            assert_states_bit_equal(
+                &batch_composite.state,
+                &expected_composite,
+                "populated batch composite",
+            );
+            std::ptr::from_ref(batch_composite)
+        };
+        let direct_composite = r
+            .resolve_static("test:composite", display)
+            .expect("direct lookup hits entry populated by batch guard");
+        assert!(
+            std::ptr::eq(batch_composite_ptr, Arc::as_ptr(&direct_composite)),
+            "batch guard and direct lookup share the exact cached Arc"
+        );
+        let direct_composite_again = r
+            .resolve_static("test:composite", display)
+            .expect("second direct lookup hits cache");
+        assert!(
+            Arc::ptr_eq(&direct_composite, &direct_composite_again),
+            "repeated direct lookups share the exact cached Arc"
+        );
+        let batch_widget = fresh_batch
+            .get("test:widget")
+            .expect("batch lookup hits widget populated by direct lookup");
+        assert!(
+            std::ptr::eq(
+                std::ptr::from_ref(batch_widget),
+                Arc::as_ptr(&cached_widget)
+            ),
+            "batch lookup shares the exact cached widget Arc"
+        );
+        drop(fresh_batch);
+
+        // 4. Holding a write lock on the display slot must also cause both lookup paths (and
+        //    opening a batch guard) to fall back to the built item without deadlocking, and the
+        //    batch guard must acquire the read lock once the writer drops.
+        let write_guard = r.static_cache[display.index()].write().unwrap();
+        let write_busy_cold = r
+            .resolve_static("test:morph", display)
+            .expect("write-busy cold direct lookup falls back");
+        assert_states_bit_equal(&write_busy_cold.state, &expected_morph, "write-busy morph");
+        let write_busy_warm = r
+            .resolve_static("test:widget", display)
+            .expect("write-busy warm direct lookup falls back");
+        assert_states_bit_equal(
+            &write_busy_warm.state,
+            &expected_widget,
+            "write-busy widget",
+        );
+        let mut write_busy_batch = r.static_cache_for(display).expect("no CIT");
+        {
+            let batch_write_busy = write_busy_batch
+                .get("test:morph")
+                .expect("write-busy batch lookup falls back");
+            assert_states_bit_equal(
+                &batch_write_busy.state,
+                &expected_morph,
+                "write-busy batch morph",
+            );
+        }
+        drop(write_guard);
+        let recovered_widget = write_busy_batch
+            .get("test:widget")
+            .expect("batch guard re-acquires read lock after writer drops");
+        assert!(
+            std::ptr::eq(
+                std::ptr::from_ref(recovered_widget),
+                Arc::as_ptr(&cached_widget)
+            ),
+            "recovered batch guard hits shared cached Arc"
+        );
+    }
+
+    #[test]
+    fn cluster_poses_stack_matches_cluster_poses_with_depth_bit_for_bit() {
+        let pose = Mat4::from_translation(Vec3::new(1.25, -0.5, 3.75)) * Mat4::from_rotation_y(1.2);
+        for depth in [0.03125f32, 0.0625, 0.0626, 0.25, 0.5] {
+            for seed in [0i64, 187, 42_424] {
+                for amount in 0..=MAX_CLUSTER_COPIES as u32 {
+                    let expected = cluster_poses_with_depth(pose, amount, seed, depth);
+                    let (buf, len) = cluster_poses_stack(pose, amount, seed, depth);
+                    assert_eq!(
+                        len,
+                        expected.len(),
+                        "depth={depth} seed={seed} amount={amount}"
+                    );
+                    for (i, (a, e)) in buf[..len].iter().zip(&expected).enumerate() {
+                        assert_eq!(
+                            a.to_cols_array().map(f32::to_bits),
+                            e.to_cols_array().map(f32::to_bits),
+                            "depth={depth} seed={seed} amount={amount} copy={i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn submit_skinned_and_poses_reflect_in_place_sprite_rect_mutation() {
+        use crate::gfx::entity_skin::{SkinFrame, expand};
+        use crate::mobs::skin::{Skin, SkinModels};
+        let dir = tempfile::tempdir().unwrap();
+        let r = build_static_cache_pack(dir.path(), "test:item/a", false, false);
+
+        let mut sprites = HashMap::from([
+            (
+                "test:item/a".to_owned(),
+                Rect {
+                    u0: 0.0,
+                    v0: 0.0,
+                    u1: 0.25,
+                    v1: 0.25,
+                    w: 16,
+                    h: 16,
+                },
+            ),
+            (
+                "test:item/b".to_owned(),
+                Rect {
+                    u0: 0.25,
+                    v0: 0.25,
+                    u1: 0.5,
+                    v1: 0.5,
+                    w: 16,
+                    h: 16,
+                },
+            ),
+        ]);
+        let map_addr = std::ptr::from_ref(&sprites) as usize;
+        let map_len = sprites.len();
+
+        let base_pose =
+            Mat4::from_translation(Vec3::new(0.5, 1.25, -2.0)) * Mat4::from_rotation_y(0.9);
+        let (pose_buf, pose_len) = cluster_poses_stack(base_pose, 5, 187, 0.25);
+        let poses = &pose_buf[..pose_len];
+        let lights = Some(crate::block_entity_render::diffuse_lights(false));
+        let sink_args = (0x00F0_00F0, lights, 0);
+        let mut models = SkinModels::default();
+        let mut frame = SkinFrame::default();
+
+        let check_item = |item: &str,
+                          sprites: &HashMap<String, Rect>,
+                          expected_rects: &[[f32; 4]],
+                          models: &mut SkinModels,
+                          frame: &mut SkinFrame|
+         -> Vec<[f32; 2]> {
+            let cached = r.resolve_static(item, DisplayContext::Ground).unwrap();
+            let mut cpu_cluster = Vec::new();
+            for &pose in poses {
+                let mut sink = WorldSink {
+                    out: &mut cpu_cluster,
+                    light: 0x00F0_00F0,
+                    lights,
+                    glint: None,
+                    tier: 0,
+                };
+                cached.state.submit(&r, sprites, &NoHost, pose, &mut sink);
+            }
+
+            // Batched cluster path (`submit_skinned_poses`).
+            frame.clear_draws();
+            let bounds_poses = {
+                let mut skin = Skin::new(models, frame);
+                assert!(
+                    cached
+                        .state
+                        .submit_skinned_poses(&r, sprites, poses, sink_args, &mut skin)
+                );
+                skin.bounds
+            };
+            let frame_ref: &SkinFrame = frame;
+            let job_rects: Vec<[f32; 4]> = frame_ref.jobs.iter().map(|j| j.rect).collect();
+            assert!(!job_rects.is_empty(), "{item}: expected skinned jobs");
+            for (i, rect) in job_rects.iter().enumerate() {
+                assert_eq!(
+                    *rect,
+                    expected_rects[i % expected_rects.len()],
+                    "{item}: job {i} rect"
+                );
+            }
+            let gpu_poses = expand(&frame_ref.new_model, frame_ref);
+            assert_eq!(gpu_poses.len(), cpu_cluster.len(), "{item} poses len");
+            for (i, (g, c)) in gpu_poses.iter().zip(&cpu_cluster).enumerate() {
+                assert_eq!(
+                    bytemuck::bytes_of(g),
+                    bytemuck::bytes_of(c),
+                    "{item} poses vert {i}"
+                );
+            }
+
+            // Single-pose path (`submit_skinned`) across every pose in the cluster.
+            frame.clear_draws();
+            let bounds_single = {
+                let mut skin = Skin::new(models, frame);
+                for &pose in poses {
+                    assert!(
+                        cached
+                            .state
+                            .submit_skinned(&r, sprites, pose, sink_args, &mut skin)
+                    );
+                }
+                skin.bounds
+            };
+            assert_eq!(bounds_poses, bounds_single, "{item}: bounds match");
+            let frame_ref: &SkinFrame = frame;
+            let gpu_single = expand(&frame_ref.new_model, frame_ref);
+            assert_eq!(gpu_single.len(), cpu_cluster.len(), "{item} single len");
+            for (i, (g, c)) in gpu_single.iter().zip(&cpu_cluster).enumerate() {
+                assert_eq!(
+                    bytemuck::bytes_of(g),
+                    bytemuck::bytes_of(c),
+                    "{item} single vert {i}"
+                );
+            }
+            gpu_poses.iter().map(|v| v.uv).collect()
+        };
+
+        let widget_uvs_before = check_item(
+            "test:widget",
+            &sprites,
+            &[[0.0, 0.0, 0.25, 0.25]],
+            &mut models,
+            &mut frame,
+        );
+        let composite_uvs_before = check_item(
+            "test:composite",
+            &sprites,
+            &[[0.0, 0.0, 0.25, 0.25], [0.25, 0.25, 0.5, 0.5]],
+            &mut models,
+            &mut frame,
+        );
+
+        // Mutate both sprite rects IN PLACE inside the same HashMap (identical address and len).
+        *sprites.get_mut("test:item/a").unwrap() = Rect {
+            u0: 0.5,
+            v0: 0.125,
+            u1: 0.75,
+            v1: 0.375,
+            w: 16,
+            h: 16,
+        };
+        *sprites.get_mut("test:item/b").unwrap() = Rect {
+            u0: 0.75,
+            v0: 0.625,
+            u1: 1.0,
+            v1: 0.875,
+            w: 16,
+            h: 16,
+        };
+        assert_eq!(std::ptr::from_ref(&sprites) as usize, map_addr);
+        assert_eq!(sprites.len(), map_len);
+
+        let widget_uvs_after = check_item(
+            "test:widget",
+            &sprites,
+            &[[0.5, 0.125, 0.75, 0.375]],
+            &mut models,
+            &mut frame,
+        );
+        let composite_uvs_after = check_item(
+            "test:composite",
+            &sprites,
+            &[[0.5, 0.125, 0.75, 0.375], [0.75, 0.625, 1.0, 0.875]],
+            &mut models,
+            &mut frame,
+        );
+        assert_ne!(widget_uvs_before, widget_uvs_after);
+        assert_ne!(composite_uvs_before, composite_uvs_after);
+
+        // Replacing a sprite with `MISSING_SPRITE` fallback and mutating it in place also stays live.
+        sprites.remove("test:item/a");
+        sprites.insert(
+            crate::hud::MISSING_SPRITE.to_owned(),
+            Rect {
+                u0: 0.1,
+                v0: 0.2,
+                u1: 0.3,
+                v1: 0.4,
+                w: 16,
+                h: 16,
+            },
+        );
+        let missing_uvs_before = check_item(
+            "test:widget",
+            &sprites,
+            &[[0.1, 0.2, 0.3, 0.4]],
+            &mut models,
+            &mut frame,
+        );
+        *sprites.get_mut(crate::hud::MISSING_SPRITE).unwrap() = Rect {
+            u0: 0.6,
+            v0: 0.7,
+            u1: 0.8,
+            v1: 0.9,
+            w: 16,
+            h: 16,
+        };
+        let missing_uvs_after = check_item(
+            "test:widget",
+            &sprites,
+            &[[0.6, 0.7, 0.8, 0.9]],
+            &mut models,
+            &mut frame,
+        );
+        assert_ne!(missing_uvs_before, missing_uvs_after);
+    }
+
+    #[test]
+    fn public_api_layer_render_particle_and_stored_item_fields_preserved() {
+        use crate::mobs::skin::{ItemRun, StoredItem};
+        let baked = Arc::new(BakedItemModel {
+            quads: Vec::new(),
+            uses_block_light: false,
+            particle: horizon_assets::model::Material {
+                sprite: "test:item/a".to_owned(),
+                force_translucent: false,
+            },
+            transforms: Default::default(),
+        });
+        let layer = LayerRender {
+            geometry: LayerGeometry::Quads(baked),
+            tints: Vec::new(),
+            foil: FoilType::None,
+            matrix: Mat4::IDENTITY,
+            particle: String::from("test:item/a"),
+            uses_block_light: false,
+            extents: Arc::new(Vec::new()),
+        };
+        let particle_ref: &String = &layer.particle;
+        assert_eq!(particle_ref.as_str(), "test:item/a");
+        let particle_owned: String = layer.particle;
+        assert_eq!(particle_owned, "test:item/a");
+
+        let stored = StoredItem {
+            runs: vec![ItemRun {
+                first: 0,
+                count: 4,
+                quad: 0,
+                tint_index: -1,
+            }],
+            bounds: (Vec3::ZERO, Vec3::ONE),
+        };
+        let StoredItem { runs, bounds } = stored;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(bounds, (Vec3::ZERO, Vec3::ONE));
     }
 }

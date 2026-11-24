@@ -628,3 +628,243 @@ fn component_select_normalizes_text_components_books_and_entity_ids() {
     );
     assert_eq!(resolve_model(&egg), "example:item/cold_variant");
 }
+
+#[test]
+fn static_item_classification_and_resolution_match_uncached_resolve() {
+    let mut models = ItemModels::default();
+    let mut insert = |item: &str, model_id: &str, definition: Value, extra: Vec<(&str, Value)>| {
+        models
+            .definitions
+            .insert(model_id.into(), ClientItem::decode(&definition).unwrap());
+        let mut proto = BTreeMap::from([(
+            "minecraft:item_model".into(),
+            Value::String(model_id.into()),
+        )]);
+        for (k, v) in extra {
+            proto.insert(k.into(), v);
+        }
+        Arc::make_mut(&mut models.prototypes).insert(item.into(), proto);
+    };
+
+    // Static items: plain leaf, constant-tinted leaf, empty, composite with transform + oversized_in_gui.
+    insert(
+        "minecraft:stone",
+        "minecraft:stone",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:block/stone"}}),
+        vec![],
+    );
+    insert(
+        "minecraft:tinted_gem",
+        "minecraft:tinted_gem",
+        json!({
+            "oversized_in_gui": true,
+            "model": {
+                "type": "minecraft:composite",
+                "transformation": [1.0, 0.0, 0.0, 0.25, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+                "models": [
+                    {"type": "minecraft:model", "model": "minecraft:item/base", "tints": [{"type": "minecraft:constant", "value": -1}]},
+                    {"type": "minecraft:empty"},
+                    {"type": "minecraft:model", "model": "minecraft:item/overlay", "tints": [{"type": "minecraft:constant", "value": [1.0, 0.5, 0.0]}]}
+                ]
+            }
+        }),
+        vec![],
+    );
+    insert(
+        "minecraft:empty_item",
+        "minecraft:empty_item",
+        json!({"model": {"type": "minecraft:empty"}}),
+        vec![],
+    );
+    // Air must never be static even if given a definition.
+    insert(
+        "minecraft:air",
+        "minecraft:air",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/air"}}),
+        vec![],
+    );
+    // Prototype foil items must never be classified static.
+    insert(
+        "minecraft:enchanted_golden_apple",
+        "minecraft:enchanted_golden_apple",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/golden_apple"}}),
+        vec![("minecraft:enchantment_glint_override", json!(true))],
+    );
+    insert(
+        "minecraft:default_enchanted",
+        "minecraft:default_enchanted",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/stick"}}),
+        vec![("minecraft:enchantments", json!({"minecraft:sharpness": 1}))],
+    );
+    insert(
+        "minecraft:compass",
+        "minecraft:compass",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/compass"}}),
+        vec![("minecraft:lodestone_tracker", json!({"tracked": true}))],
+    );
+
+    // Dynamic tint sources must never be static.
+    insert(
+        "minecraft:leather_helmet",
+        "minecraft:leather_helmet",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/leather_helmet", "tints": [{"type": "minecraft:dye", "default": -6265536}]}}),
+        vec![],
+    );
+    insert(
+        "minecraft:grass_block",
+        "minecraft:grass_block",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:block/grass_block", "tints": [{"type": "minecraft:grass", "temperature": 0.5, "downfall": 1.0}]}}),
+        vec![],
+    );
+    insert(
+        "minecraft:potion",
+        "minecraft:potion",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/potion", "tints": [{"type": "minecraft:potion", "default": -13083194}]}}),
+        vec![],
+    );
+    insert(
+        "minecraft:cmd_tinted",
+        "minecraft:cmd_tinted",
+        json!({"model": {"type": "minecraft:model", "model": "minecraft:item/stick", "tints": [{"type": "minecraft:custom_model_data", "default": -1}]}}),
+        vec![],
+    );
+
+    // Dynamic node types: Condition (bow/using), RangeDispatch (clock/damage), Select (trimmed armor),
+    // Special (shield), BundleSelectedItem, and Composite containing a dynamic child.
+    insert(
+        "minecraft:bow",
+        "minecraft:bow",
+        json!({"model": {
+            "type": "minecraft:condition",
+            "property": "minecraft:using_item",
+            "on_true": {"type": "minecraft:model", "model": "minecraft:item/bow_pulling_0"},
+            "on_false": {"type": "minecraft:model", "model": "minecraft:item/bow"}
+        }}),
+        vec![],
+    );
+    insert(
+        "minecraft:clock",
+        "minecraft:clock",
+        json!({"model": {
+            "type": "minecraft:range_dispatch",
+            "property": "minecraft:time",
+            "source": "daytime",
+            "entries": [{"threshold": 0.0, "model": {"type": "minecraft:model", "model": "minecraft:item/clock_00"}}],
+            "fallback": {"type": "minecraft:model", "model": "minecraft:item/clock_00"}
+        }}),
+        vec![],
+    );
+    insert(
+        "minecraft:iron_chestplate",
+        "minecraft:iron_chestplate",
+        json!({"model": {
+            "type": "minecraft:select",
+            "property": "minecraft:trim_material",
+            "cases": [{"when": "minecraft:gold", "model": {"type": "minecraft:model", "model": "minecraft:item/iron_chestplate_gold_trim"}}],
+            "fallback": {"type": "minecraft:model", "model": "minecraft:item/iron_chestplate"}
+        }}),
+        vec![],
+    );
+    insert(
+        "minecraft:shield",
+        "minecraft:shield",
+        json!({"model": {"type": "minecraft:special", "base": "minecraft:item/shield", "model": {"type": "minecraft:shield"}}}),
+        vec![],
+    );
+    insert(
+        "minecraft:bundle",
+        "minecraft:bundle",
+        json!({"model": {"type": "minecraft:bundle/selected_item"}}),
+        vec![],
+    );
+    insert(
+        "minecraft:composite_dynamic",
+        "minecraft:composite_dynamic",
+        json!({"model": {
+            "type": "minecraft:composite",
+            "models": [
+                {"type": "minecraft:model", "model": "minecraft:item/base"},
+                {"type": "minecraft:condition", "property": "minecraft:damaged",
+                 "on_true": {"type": "minecraft:model", "model": "minecraft:item/damaged"},
+                 "on_false": {"type": "minecraft:model", "model": "minecraft:item/ok"}}
+            ]
+        }}),
+        vec![],
+    );
+
+    let static_ids = models.static_item_ids();
+    assert_eq!(
+        static_ids,
+        vec![
+            "minecraft:empty_item",
+            "minecraft:stone",
+            "minecraft:tinted_gem",
+        ]
+    );
+
+    for item in [
+        "minecraft:stone",
+        "minecraft:tinted_gem",
+        "minecraft:empty_item",
+    ] {
+        assert!(models.is_static_item(item), "{item} should be static");
+        let cached = models.resolve_static(item).expect("static item resolves");
+        for display in DisplayContext::ALL {
+            for count in [1, 16, 64] {
+                let ctx = Context {
+                    display,
+                    owner: None,
+                    level: None,
+                    seed: count,
+                };
+                let uncached = models.resolve(&StackView::new(item, count), &ctx, &NoEnv);
+                assert_eq!(cached, uncached, "{item} in {display:?} count={count}");
+            }
+        }
+    }
+
+    for dynamic in [
+        "minecraft:air",
+        "minecraft:unknown_item",
+        "minecraft:enchanted_golden_apple",
+        "minecraft:default_enchanted",
+        "minecraft:compass",
+        "minecraft:leather_helmet",
+        "minecraft:grass_block",
+        "minecraft:potion",
+        "minecraft:cmd_tinted",
+        "minecraft:bow",
+        "minecraft:clock",
+        "minecraft:iron_chestplate",
+        "minecraft:shield",
+        "minecraft:bundle",
+        "minecraft:composite_dynamic",
+    ] {
+        assert!(
+            !models.is_static_item(dynamic),
+            "{dynamic} must not be static"
+        );
+        assert!(
+            models.resolve_static(dynamic).is_none(),
+            "{dynamic} must return None"
+        );
+    }
+}
+
+#[test]
+fn canonical_identifier_fast_path_matches_identifier_codec() {
+    for raw in [
+        "minecraft:stone",
+        "example:dir/sub_item-1.2",
+        "stone",
+        ":stone",
+        "BAD:Upper",
+        "a:b:c",
+        "",
+        ":",
+    ] {
+        if is_canonical_identifier(raw) {
+            assert_eq!(identifier(raw).unwrap(), raw);
+        }
+    }
+}
