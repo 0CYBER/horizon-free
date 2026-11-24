@@ -317,7 +317,22 @@ impl PackResources {
             block_registries: native_block_states::block_registries(assets.registry),
             assets,
             render,
-            item_renderer: Arc::new(item_renderer),
+            item_renderer: {
+                let renderer = Arc::new(item_renderer);
+                // The pack's own item models baked on a worker, before they show in the world. It
+                // holds the renderer weakly, so an unloaded pack stops it, and starts only when
+                // there is work: a pack without models of its own leaves the renderer unshared.
+                let names = renderer.pack_model_names();
+                if !names.is_empty() {
+                    let ahead = Arc::downgrade(&renderer);
+                    let _ = std::thread::Builder::new()
+                        .name("Item models".into())
+                        .spawn(move || {
+                            horizon_client::item_render::ItemRenderer::bake_ahead(&ahead, names)
+                        });
+                }
+                renderer
+            },
             source: root.source().clone(),
             data_source: root.data().clone(),
             data_changes: root.data_changes().clone(),
