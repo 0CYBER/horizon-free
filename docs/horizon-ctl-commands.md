@@ -199,7 +199,7 @@ The reply fields of the commands described so far (more follow, a group at a tim
 | `lod` | object | far terrain: distances, tiles, quads and sampling progress |
 | `renderer` | object, null | GPU, driver, backend, size, draw counts and GPU memory; null without a renderer |
 | `display` | object, null | the monitor: width, height, scale, refresh_hz; null without a window |
-| `server` | object, null | the connected server's address, name and state; null when not connected |
+| `server` | object, null | the connected server's address, name and state (status is connection or terrain-loading text, empty once the client has sent its loaded packet); null when not connected |
 
 ### `hello`
 

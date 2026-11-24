@@ -183,7 +183,7 @@ const STATUS_REPLY: &[Field] = &[
     f(
         "server",
         "object|null",
-        "the connected server's address, name and state; null when not connected",
+        "the connected server's address, name and state (status is connection or terrain-loading text, empty once the client has sent its loaded packet); null when not connected",
     ),
 ];
 

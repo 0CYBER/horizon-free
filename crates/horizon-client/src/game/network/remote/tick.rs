@@ -43,6 +43,7 @@ impl Game<'_> {
         }
         if !r.loaded_sent {
             r.loaded_sent = true;
+            r.status.clear();
             self.send(S::PlayerLoaded(Empty));
         }
         // LevelLoadingScreen.onClose.

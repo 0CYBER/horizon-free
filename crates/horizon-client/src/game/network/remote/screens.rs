@@ -295,7 +295,8 @@ impl Game<'_> {
             // ServerboundPlayerLoadedPacket sent: the level around the
             // player is ready, and the client ticks and sends its moves.
             "loaded": r.loaded_sent,
-            "status": r.status,
+            // The connection text is progress, not the state of an already loaded level.
+            "status": remote_status_text(r.loaded_sent, &r.status),
             "entity_id": r.entity_id,
             "dimension": r.dimension.name,
             "game_mode": r.game_mode,
@@ -356,5 +357,26 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+}
+
+/// Connection or terrain-loading progress reported in `server.status`: empty once the client has
+/// sent `ServerboundPlayerLoadedPacket`.
+fn remote_status_text(loaded_sent: bool, status: &str) -> &str {
+    if loaded_sent { "" } else { status }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::remote_status_text;
+
+    #[test]
+    fn remote_status_text_is_empty_once_loaded_and_kept_before() {
+        assert_eq!(
+            remote_status_text(false, "Loading terrain..."),
+            "Loading terrain..."
+        );
+        assert_eq!(remote_status_text(true, "Loading terrain..."), "");
+        assert_eq!(remote_status_text(false, ""), "");
     }
 }

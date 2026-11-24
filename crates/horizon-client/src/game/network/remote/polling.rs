@@ -84,6 +84,7 @@ impl Game<'_> {
             self.send(S::PlayerLoaded(Empty));
             let r = self.remote.as_mut().unwrap();
             r.loaded_sent = true;
+            r.status.clear();
             r.level_load.finish();
         }
         Ok(())
