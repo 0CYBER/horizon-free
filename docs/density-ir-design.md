@@ -1,5 +1,11 @@
 # Density program IR design
 
+> **Status: unmerged prototype.** This describes the code in
+> [#19144](https://github.com/horizon-rust/horizon/pull/19144), not current
+> `main`. The one claimable next step is
+> [#19146](https://github.com/horizon-rust/horizon/issues/19146). Read the
+> per-phase evidence in `gpu-noise-parity-progress.md` first.
+
 This document is the design source of truth for a small, additive density
 program representation used by CPU/GPU parity probes. The production CPU path
 remains unchanged: `get_sampler` optimizes a graph, then `compile_raw` lowers
@@ -10,7 +16,7 @@ supports only a documented pointwise subset.
 ## Existing graph and sampler inventory
 
 `GraphNode` is declared in
-[`graph/mod.rs`](../crates/horizon-core/src/density/graph/mod.rs:63). Its
+[`graph/mod.rs`](../crates/horizon-core/src/density/graph/mod.rs#L63). Its
 definition variants and current disposition are:
 
 | Definition kind | Definition location | Existing compiled behavior | IR disposition |
@@ -25,15 +31,15 @@ definition variants and current disposition are:
 | BlendDensity | `graph/mod.rs:82` | `BlendDensitySampler`, compiler `:301-303` | `NeedsContext`; world blender is supplied through worker context |
 | Reference | `graph/mod.rs:84-87` | recursively compiled, compiler `:299` | Export recurses to the child; holder identity stays upstream |
 | Gradient | `graph/mod.rs:88-95` | `GradientSampler`, compiler `:399-406` | `UnsupportedOperation`; tiling and integer-coordinate semantics need tests |
-| Unary | `graph/mod.rs:96-99` | `UnarySampler`, compiler `:407-410` | `UnsupportedOperation`; sqrt/log accuracy and NaN rules need policy |
-| Binary | `graph/mod.rs:100-104` | `compile_binary`, compiler `:447-449`, `:568+` | Add/Multiply exported; Subtract/Divide/Minimum/Maximum rejected |
+| Unary | `graph/mod.rs:96-99` | `UnarySampler`, compiler `:407-410` | Exported except `Sqrt`/`Log` (libm, not bit-reproducible on a GPU) |
+| Binary | `graph/mod.rs:100-104` | `compile_binary`, compiler `:447-449`, `:568+` | All exported; constant-right folds mirror `compile_binary` (`x-c` -> `x+-c`, `x/c` -> `x*(1/c)`) |
 | Round | `graph/mod.rs:105-109` | `RoundSampler`, compiler `:411-427` | `UnsupportedOperation`; integer conversion and ties need contract |
 | Power | `graph/mod.rs:110-113` | `PowerSampler`, compiler `:428-446` | `UnsupportedOperation`; libm/backend behavior needs policy |
-| Clamp | `graph/mod.rs:114-118` | `UnarySampler`, compiler `:450-453` | `UnsupportedOperation`; NaN/min/max behavior needs validation |
+| Clamp | `graph/mod.rs:114-118` | `UnarySampler`, compiler `:450-453` | Exported; NaN/min/max edge documented on the tier |
 | Choice | `graph/mod.rs:119-125` | `RangeChoiceSampler`, compiler `:454-483` | `UnsupportedOperation`; branch selection and bulk order matter |
-| Lerp | `graph/mod.rs:126-130` | `LerpSampler`, compiler `:484-513` | Exported when each child exports; endpoint branches preserved |
+| Lerp | `graph/mod.rs:126-130` | `LerpSampler`, compiler `:484-513` | Exported when each child exports; endpoint branches preserved. Production `interpolate` is non-FMA; the IR's `evaluate_fma` is not production-equivalent yet |
 | Slice | `graph/mod.rs:131-135` | `SliceSampler`, compiler `:514-549` | `NeedsContext`; changes coordinates and axis domain |
-| Cache | `graph/mod.rs:136` | preparation `compiler.rs:219-243`, `CachingDensitySampler`; raw rejection `:550` | `NeedsContext`; worker-owned cache IDs and lifetime |
+| Cache | `graph/mod.rs:136` | preparation `compiler.rs:219-243`, `CachingDensitySampler`; raw rejection `:550` | Unwrapped to its child: the scalar cache is memoization at one position, identity for a pointwise program |
 | Interpolated | `graph/mod.rs:137-141` | `InterpolatedSampler`, compiler `:551-553` | `NeedsContext`; requires grid scheduling/context |
 | Surface | `graph/mod.rs:142-147` | surface-search sampler, compiler `:554-566` | `NeedsContext`; searches across heights |
 | IntervalSelect | `graph/mod.rs:148-152` | `IntervalSelectSampler`, compiler `:384-398` | `UnsupportedOperation`; bounded branch representation not implemented |
@@ -49,10 +55,10 @@ export entry is `export_to_program` (`:75-77`) with its detailed recursive
 lowering at `try_export_to_program` (`:81-155`) and complete blocker list in
 `export_blockers` (`:157-212`). The router
 compiles its eight roots through `DensityCompiler::get_sampler` at
-[`router.rs:71-81`](../crates/horizon-world/src/worldgen/router.rs:71).
+[`router.rs:71-81`](../crates/horizon-world/src/worldgen/router.rs#L71-L81).
 The final-density root is selected as a trait object by the generator
 (`generator.rs:2883-2900`) and reaches
-[`fill_noise_inner`](../crates/horizon-world/src/worldgen/terrain.rs:654),
+[`fill_noise_inner`](../crates/horizon-world/src/worldgen/terrain.rs#L654),
 which calls `final_density.sample_volume(...)` at `terrain.rs:675`.
 
 ### WGSL representation assessment
@@ -165,16 +171,19 @@ overworld router has been exported.
 |---|---|
 | Constant | Supported |
 | Reference | Recursively unwraps and exports its child |
-| Binary Add / Multiply | Supported |
+| Binary Add / Multiply / Subtract / Divide / Minimum / Maximum | Supported; constant-right folds mirror `compile_binary` |
+| Clamp | Supported |
+| Unary (except `Sqrt`/`Log`) | Supported |
 | Lerp | Supported when every child exports |
+| Cache | Unwrapped to its child |
 | Noise, OffsetNoise, BlendedNoise, EndIslands | `NoiseKind` |
-| WorldField, BlendDensity, Cache, Slice, Interpolated, Surface | `NeedsContext` |
+| WorldField, BlendDensity, Slice, Interpolated, Surface | `NeedsContext` |
 | Bound sampler definition | `BoundSampler` |
-| Spline, Gradient, Unary, Round, Power, Clamp, Choice | `UnsupportedOperation` |
-| Binary Subtract / Divide / Minimum / Maximum | `UnsupportedOperation` |
+| Spline, Gradient, Round, Power, Choice, `Sqrt`/`Log` | `UnsupportedOperation` |
 | IntervalSelect, DistanceToPoint | `UnsupportedOperation` |
 
-The default vanilla overworld router was not evaluated because the prepared
-26.3 registry/settings bundle is absent from this checkout. The exporter will
-reject a graph when it reaches an unsupported definition, but the exact
-vanilla blocker set is **OPEN** until that preset data is available.
+Phase 48 measured the default vanilla overworld router on the WIP branch:
+229 reachable `final_density` nodes, 136 supported, **93** blockers, and still
+**0 of 8** router fields exported. That is a branch measurement, not a result
+for current `main`; repeat it as part of
+[#19146](https://github.com/horizon-rust/horizon/issues/19146).

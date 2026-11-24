@@ -269,8 +269,9 @@ From the Horizon checkout, run the inventory and the complete existing probe
 suite with Vulkan/high-performance selection:
 
 ```sh
-set -eu
+set -u
 cargo run -p horizon-client-lib --example wgpu_adapter_inventory
+failed=
 for probe in \
   wgpu_perlin_probe \
   wgpu_lattice_probe \
@@ -278,9 +279,16 @@ for probe in \
   wgpu_density_graph_probe \
   wgpu_sqrt_probe
 do
-  WGPU_BACKEND=vulkan WGPU_POWER_PREF=high \
+  if ! WGPU_BACKEND=vulkan WGPU_POWER_PREF=high \
     cargo run -p horizon-client-lib --example "$probe"
+  then
+    failed="$failed $probe"
+  fi
 done
+if [ -n "$failed" ]; then
+  echo "probes failed:$failed" >&2
+  exit 1
+fi
 ```
 
 To repeat for every physical adapter, set `WGPU_ADAPTER_NAME` to each

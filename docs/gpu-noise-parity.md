@@ -1,5 +1,12 @@
 # GPU noise parity probe
 
+> **These probes are not in this checkout.** `density_program_probe`,
+> `wgpu_perlin_probe` and `tools/perlin_spirv_probe.sh` live in
+> [#19144](https://github.com/horizon-rust/horizon/pull/19144), and
+> [#19146](https://github.com/horizon-rust/horizon/issues/19146) is the task
+> that ports the rung-2 part to `main`. The commands below become runnable only
+> once those files and their example registrations exist here.
+
 Run the WGSL comparison with:
 
 ```sh
@@ -180,7 +187,7 @@ options. The selector-validation rerun used `WGPU_ADAPTER_NAME=llvmpipe`.
 | R1–R6 explicit-FMA density-program ladder | llvmpipe / GL | VERIFIED: 0/60,000 mismatches per stage |
 | Arbitrary-bit sqrt diagnostic | both AMD adapters | VERIFIED: 4,767/60,006; separate issue |
 | Custom trivial router fixed volume | llvmpipe (CPU/GL) | VERIFIED: (a)/(b)/(c) all bit-exact over 4,096 cells |
-| Vanilla NoiseRouter / terrain volume | not run | prepared 26.3 preset data is absent; no GPU path exists |
+| Vanilla NoiseRouter / terrain volume | not run | Phase 48 (WIP branch) measured the overworld `final_density` export: 229 reachable, 136 supported, 93 blockers, 0 of 8 fields export. No GPU terrain path exists; repeat on current `main` (#19146) |
 
 The original unforced AMD Perlin figures above compare a strict CPU arithmetic
 reference with ordinary WGSL expressions. In the explicit-FMA contract, RADV

@@ -781,6 +781,12 @@ Read-only phase: no source file was changed. All line references are to HEAD
   column, block-quantised, hundreds of blocks away. **[VERIFIED]** It does
   break bit-identical output, so the bench's full-data hash cannot be a GPU
   pass gate; a height/span tolerance gate is required.
+- **Do not carry that bound into full terrain.** The 2.4e-7 figure belongs to
+  the synthetic explicit-FMA ladder. Phase 32 measured a **3.010e-6** final
+  field difference for the hybrid path, and production uses non-fused f32
+  expressions, so any terrain threshold claim needs its own measured bound and
+  a comparison against the production sampler. The `2.4e-7` number alone does
+  not license a "no visible seams" conclusion for generated chunks.
 - **[VERIFIED]** Gates: `cargo test -p horizon-core -p horizon-world --lib
   --bins` passed (126 core / 339 world, 3 and 2 ignored); no source file was
   touched in this phase.
@@ -1722,7 +1728,7 @@ algorithms and pool policy, not kernels.
 > tested area). This is an attribution/clarity clean-up, not a throughput
 > fix; throughput work remains with #1760/#1778.
 >
-> 🤖 Generated with [<tool>](<tool-url>)
+> 🤖 Generated with [OpenCode](https://opencode.ai)
 
 **Verdict: do not merge as a "fix" and do not post; this is a marker of how
 far the safe local fix reaches.** The remaining convoy needs the
@@ -1841,7 +1847,9 @@ and the report is complete when the `base` table is 0/60,000 on all rungs and
 the header shows the RADV adapter. The `--allow-contraction` table is the
 interesting second number: if RADV diverges there and not under `base`, the
 contract is sufficient and a passthrough leaf tier is *permitted*; if it
-diverges under both, a GPU density tier cannot be exact on RADV at all.
+diverges under both, these two tested variants are rejected on that RADV
+setup. That observation does not prove every possible exact GPU density
+implementation must diverge; a different lowering remains open until measured.
 
 ### Residuals
 
@@ -1962,7 +1970,12 @@ Design, read-only:
    honours it; `--allow-contraction` is the diagnostic that says whether the
    contract was doing any work.
 4. **Exact or CPU.** There is no tolerance mode. Output must be bit-identical
-   to `evaluate_fma`, which is what the production density path computes.
+   to the reference the tier is tested against. The rung probes currently
+   compare against the synthetic `evaluate_fma` ladder; before the tier can be
+   enabled, the same output must also equal the compiled production sampler
+   (`add_volume`) bit-for-bit. Production uses ordinary non-fused f32
+   expressions, so this comparison is the real acceptance gate, not an
+   assumption that `evaluate_fma` *is* production.
 5. **Certification is per release.** Driver updates can change fusion
    behaviour, so the probe is re-run on the release's target driver and the
    result recorded; a stale certificate means off.
@@ -2078,21 +2091,43 @@ claimed as a passed gate unless it says VERIFIED.
   and every `mul_add` site is an explicit `GLSL.std.450 Fma`. Float constants
   are written as exact bit patterns (`!0xXXXXXXXX`), which `spirv-as` /
   `spirv-val --target-env vulkan1.3` accept.
-- **Not done**: the emitted module has not been assembled and dispatched from
-  the tree, there is no rung-2 probe example yet, and the 0/60,000 llvmpipe
-  gate has not run. The RADV script for rung 2 does not exist. Treat rung 2 as
-  **PENDING-HW / unfinished**, not passed.
+- **Not done**: the emitted module has not been dispatched from the tree; only
+  assembly and `spirv-val` validation are covered (see the follow-up audit
+  below). There is no rung-2 probe example yet, and the 0/60,000 llvmpipe gate
+  for the rung-2 module has not run. The RADV script for rung 2 does not exist.
+  Treat rung 2 as **PENDING-HW / unfinished**, not passed.
 - **Known edge (document in the tier, not a bug in the mirror)**: the generic
   `java_min`/`java_max` semantics in the IR differ from the compiled scalar
-  sampler's early-outs only for NaN operands and signed zero on the
-  early-out path (multiply/divide by a zero left operand, min/max bound hit).
+  sampler's early-outs for NaN operands and signed zero on the early-out path
+  (multiply/divide by a zero left operand, min/max bound hit). The rung-2 gate
+  must therefore compare against the compiled sampler as well as
+  `evaluate_fma`, and must reproduce the sampler's early-out order before
+  these operations can be called bit-exact.
+- **Follow-up audit (2026-11-23)**: the emitter's `Constant`, `Perlin` and a
+  combined rung-2 module now assemble with `spirv-as --target-env vulkan1.3`
+  and pass `spirv-val`. Fixed along the way: `OpCompositeExtract` uses literal
+  indices, access-chain operands are IDs (`%`), the `Point` block member has a
+  `v3i` pointer type, the `Point` array stride is 64 bytes (was 56, which was
+  not a multiple of the 16-byte alignment), and the output access chain uses
+  the `f32` pointer type. The exporter also mirrors `compile_binary`'s
+  constant-right folds (`x-c` -> `x+-c`, `x/c` -> `x*(1/c)`) so a constant
+  divisor cannot round differently from the compiled sampler.
+- **Follow-up audit tests**: `cargo test -p horizon-core --lib` is now 131
+  passed, 3 ignored. Four new SPIR-V tests assemble and validate `Constant`,
+  `Perlin`, a rung-2 module and literal extract indices; one graph test pins
+  the constant-divisor fold against the compiled sampler.
+- **WGSL NaN check fixed**: the helper block used to call the non-existent
+  `isNan`; it now uses a bit-pattern test, and `density_program_probe` reads
+  0/60,000 on llvmpipe again. The rung-2 module itself still has no dispatch
+  probe.
 
 ### Handoff notes
 
 - Base commit `eaa7da4fb`. Upstream `origin/main` had advanced by 31,478
   commits when this was written; a rebase or a fresh port will be needed.
-- No push permission on `horizon-rust/horizon` for the account used here and no
-  fork exists, so the WIP branch is local only.
+- No push permission on `horizon-rust/horizon` for the account used here; the
+  work is published through the fork in #19144 (code) and #19148 (docs), with
+  #19146 tracking the rung-2 port.
 - Resume from `docs/session-handoff.md`; the next concrete step is to finish the
   rung-2 probe (assemble, dispatch, compare 60,000 samples against
   `evaluate_fma`) and then re-run `vanilla_router_export`.

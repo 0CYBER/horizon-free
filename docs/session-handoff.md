@@ -1,5 +1,13 @@
 # Session handoff: GPU density parity and worldgen
 
+> **Historical session notes (2026-11-21).** This was written while the
+> experimental branch was still local. The committed code, probes and fixtures
+> live in [#19144](https://github.com/horizon-rust/horizon/pull/19144); the one
+> claimable next step is
+> [#19146](https://github.com/horizon-rust/horizon/issues/19146). Every
+> **[VERIFIED]** result below was measured on that branch (base `eaa7da4fb`);
+> it must be repeated on current `main` and is not a current result for `main`.
+
 ## Read first, in order
 
 - **[VERIFIED]** `docs/gpu-noise-parity-progress.md` — cumulative phase log, exact probe results, completed gates, and resume anchor.
@@ -7,19 +15,24 @@
 - **[VERIFIED]** `docs/radv-divergence.md` — RADV mismatch localization, explicit-FMA outcome, and `RADV_DEBUG=noopt` constraint.
 - **[VERIFIED]** `docs/density-ir-design.md` — supported exporter subset, blocker categories, and semantics required before extending the IR.
 - **[VERIFIED]** `docs/gpu-adapter-enablement.md` — hardware adapter inventory and recorded per-adapter probe results.
-- **[VERIFIED]** `crates/horizon-core/src/density/graph/compiler.rs` — source of truth for `export_to_program`, `export_blockers`, and blocker mappings.
-- **[VERIFIED]** `crates/horizon-core/src/density/graph/mod.rs` — graph-node definitions traversed by the exporter.
+
+> The probe and fixture paths below are **not in this checkout**. They are in
+> [#19144](https://github.com/horizon-rust/horizon/pull/19144). Read them there
+> until the code is ported.
+
+- **[IN #19144]** `crates/horizon-core/src/density/graph/compiler.rs` — source of truth for `export_to_program`, `export_blockers`, and blocker mappings.
+- **[IN #19144]** `crates/horizon-core/src/density/graph/mod.rs` — graph-node definitions traversed by the exporter.
 - **[VERIFIED]** `crates/horizon-world/src/worldgen/router.rs` — production router construction entry point and roots.
-- **[VERIFIED]** `crates/horizon-client/examples/density_program_probe.rs` — R1–R6 CPU/WGSL ladder and fixed-volume probe.
-- **[VERIFIED]** `crates/horizon-client/examples/wgpu_perlin_probe.rs` — Perlin and Smeared Perlin leaf probe.
-- **[VERIFIED]** `crates/horizon-client/examples/wgpu_lattice_probe.rs` — coordinate, wrap, permutation, and gradient-index probe.
-- **[VERIFIED]** `crates/horizon-client/examples/wgpu_density_interp_probe.rs` — trilinear interpolation and density blend probe.
-- **[VERIFIED]** `crates/horizon-client/examples/wgpu_density_graph_probe.rs` — compiled spline/blend composition probe.
-- **[VERIFIED]** `crates/horizon-client/examples/wgpu_sqrt_probe.rs` — separate sqrt behavior diagnostic.
-- **[VERIFIED]** `crates/horizon-client/examples/wgpu_adapter_inventory.rs` — visible WGPU adapter inventory.
-- **[VERIFIED]** `crates/horizon-client/examples/radv_divergence_probe.rs` — strict versus explicit-FMA backend diagnostic.
-- **[VERIFIED]** `crates/horizon-client/examples/density_program_world.rs` — deterministic fixed-volume fixture used by density-program checks.
-- **[VERIFIED]** `crates/horizon-client-lib/Cargo.toml` — example registrations and current WGPU-related manifest changes; inspect before adding dependencies or targets.
+- **[IN #19144]** `crates/horizon-client/examples/density_program_probe.rs` — R1–R6 CPU/WGSL ladder and fixed-volume probe.
+- **[IN #19144]** `crates/horizon-client/examples/wgpu_perlin_probe.rs` — Perlin and Smeared Perlin leaf probe.
+- **[IN #19144]** `crates/horizon-client/examples/wgpu_lattice_probe.rs` — coordinate, wrap, permutation, and gradient-index probe.
+- **[IN #19144]** `crates/horizon-client/examples/wgpu_density_interp_probe.rs` — trilinear interpolation and density blend probe.
+- **[IN #19144]** `crates/horizon-client/examples/wgpu_density_graph_probe.rs` — compiled spline/blend composition probe.
+- **[IN #19144]** `crates/horizon-client/examples/wgpu_sqrt_probe.rs` — separate sqrt behavior diagnostic.
+- **[IN #19144]** `crates/horizon-client/examples/wgpu_adapter_inventory.rs` — visible WGPU adapter inventory.
+- **[IN #19144]** `crates/horizon-client/examples/radv_divergence_probe.rs` — strict versus explicit-FMA backend diagnostic.
+- **[IN #19144]** `crates/horizon-client/examples/density_program_world.rs` — deterministic fixed-volume fixture used by density-program checks.
+- **[IN #19144]** `crates/horizon-client-lib/Cargo.toml` — example registrations and current WGPU-related manifest changes; inspect before adding dependencies or targets.
 
 ## Locked contract
 
@@ -46,23 +59,33 @@
 - **[VERIFIED]** `radv_divergence_probe.rs` is 450 lines and `density_program_probe.rs` is 395 lines; keep probe entry files below 500 lines.
 - **[VERIFIED]** No feature-gated production WGPU worldgen route exists; exporter/IR currently serve probes and do not replace CPU terrain generation.
 
-## Current blocker
+## Historical blocker (superseded by Phase 48)
 
-- **[VERIFIED]** Vanilla overworld router export is unmeasured because the prepared registry/settings bundle at `.local/horizon-client/26.3` is absent; `test -e .local/horizon-client/26.3` failed and the exact search below returned no matching path.
-- **[VERIFIED]** Confirm availability with exactly: `find . -maxdepth 4 -name '26.3' -not -path './target/*'`.
-- **[OPEN]** Until that exact prepared bundle is available at `.local/horizon-client/26.3`, the default vanilla router's export result and reachable blocker set are unknown. Do not infer its contents or blocker set.
+- **[HISTORICAL]** When first written, vanilla overworld router export was
+  unmeasured because the prepared registry/settings bundle at
+  `.local/horizon-client/26.3` was absent.
+- **[HISTORICAL]** Phase 48 later measured it on the WIP branch: 229 reachable
+  `final_density` nodes, 136 supported, 93 blockers, still **0 of 8** router
+  fields exported. That is a branch measurement, not a result for `main`.
+- **[OPEN]** Repeat the export on current `main` as part of the rung-2 port and
+  record the numbers in `gpu-noise-parity-progress.md`.
 
 ## Unsupported node list from `export_blockers`
 
 - **[VERIFIED]** `NoiseKind`: Noise, OffsetNoise, BlendedNoise, EndIslands.
-- **[VERIFIED]** `NeedsContext`: WorldField, BlendDensity, Cache, Slice, Interpolated, Surface.
-- **[VERIFIED]** `UnsupportedOperation`: Spline, Gradient, Unary, Round, Power, Clamp, Choice, non-Add/Multiply Binary, IntervalSelect, DistanceToPoint.
+- **[VERIFIED]** `NeedsContext`: WorldField, BlendDensity, Slice, Interpolated, Surface. `Cache` is unwrapped to its child.
+- **[VERIFIED]** `UnsupportedOperation`: Spline, Gradient, Round, Power, Choice, `Sqrt`/`Log` Unary, IntervalSelect, DistanceToPoint.
 - **[VERIFIED]** `BoundSampler`: already-bound sampler definitions.
+- Phase 48 also exports `Clamp`, the remaining `Unary` kinds and every `Binary`
+  kind; see the progress log for the current disposition.
 
 ## Ordered tasks
 
-1. **[VERIFIED] Confirm the blocker, with no code changes.** Run `find . -maxdepth 4 -name '26.3' -not -path './target/*'` and check `.local/horizon-client/26.3`. Touch no files. Gate: if absent, stop dependent vanilla-router work and record that exact precondition; if present, proceed to task 2.
-2. **[OPEN] Measure the actual vanilla router export.** With the prepared bundle present, locate and load the default overworld density registry/settings using the existing loader; identify its `final_density` graph and call `export_blockers` and `export_to_program`. Touch only the smallest relevant probe/test and `docs/gpu-noise-parity-progress.md` (update `docs/density-ir-design.md` only if coverage decisions change); do not alter the four protected files. Gate: record the complete blockers and export result. If export fails, stop before production wiring and make the A2 scope decision below based on observed blockers.
+1. **[OPEN] Port rung 2 to current `main` first.** Take the rung-2 files from
+   [#19144](https://github.com/horizon-rust/horizon/pull/19144), then require
+   the 0/60,000 llvmpipe gate before any later rung. If the gate fails, stop
+   and fix the emitter or the mirror; do not start rungs 3–7.
+2. **[OPEN] Measure the actual vanilla router export on current `main`.** Locate and load the default overworld density registry/settings using the existing loader; identify its `final_density` graph and call `export_blockers` and `export_to_program`. Touch only the smallest relevant probe/test and `docs/gpu-noise-parity-progress.md` (update `docs/density-ir-design.md` only if coverage decisions change); do not alter the four protected files. Gate: record the complete blockers and export result. If export fails, stop before production wiring and make the A2 scope decision below based on observed blockers.
 3. **[OPEN] Extend one IR node family only if task 2 proves it is required.** Choose one of `NoiseKind`, `NeedsContext`, `UnsupportedOperation`, or `BoundSampler`; state the concrete vanilla blocker, required inputs/semantics, and independent CPU expected-value test before coding. Touch `crates/horizon-core/src/density/program.rs`, its compiler/tests, the focused probe, and progress/design docs as needed. Gate: independent CPU expected values and the existing named-adapter probe contract pass; stop if semantics or vanilla inputs cannot be represented without guessing.
 4. **[OPEN] Add production GPU routing only after vanilla export succeeds.** Draft the smallest feature-gated `gpu-worldgen` route and compare a deterministic vanilla overworld volume with the CPU path on the named adapters. Touch only an unprotected feature/module seam, focused probe/fixture, manifest if a feature is required, and parity docs; do not edit protected files. If integration requires a protected file, stop and record the exact seam blocker. Gate: report voxel threshold flips and numeric errors per adapter under the locked contract; do not tune tolerance to pass.
 5. **[OPEN] Run final gates after changes.** Run `cargo test -p horizon-core -p horizon-world`, `cargo build -p horizon-client`, `cargo fmt --all -- --check`, and `git diff --check`; rerun the focused parity harnesses for touched code and update the progress log with exact results. Gate: report each result and any remaining open router/adapter coverage.
@@ -98,17 +121,26 @@
 
 ## Handoff status — 2026-11-21 (Phase 48, stopped mid-rung 2)
 
-- **[VERIFIED]** Phase 48 rung 1 (`Cache` unwrap) is done and gated: overworld
-  `final_density` blockers fell 109 → 93 (supported 120 → 136); still 0 of 8
-  fields export. `cargo test -p horizon-core --lib` passes (126).
-- **[VERIFIED]** Phase 48 rung 2 IR, CPU mirror, graph mapping and the new
+- **[VERIFIED]** Phase 48 rung 1 (`Cache` unwrap) is done and gated on the WIP
+  branch: overworld `final_density` blockers fell 109 → 93 (supported 120 →
+  136); still 0 of 8 fields export. `cargo test -p horizon-core --lib` passes.
+- **[VERIFIED]** Phase 48 rung 2 IR, CPU mirror, graph mapping and the
   IR→SPIR-V emitter (`crates/horizon-core/src/density/spirv.rs`) compile.
+- **[VERIFIED]** (follow-up audit) The emitter's `Constant`, `Perlin` and a
+  rung-2 module now assemble with `spirv-as --target-env vulkan1.3` and pass
+  `spirv-val`. `OpCompositeExtract` uses literal indices, access-chain IDs are
+  spelled with `%`, the block member has its own `v3i` pointer type, the
+  `Point` stride is 64 bytes, and the WGSL helpers use a bit-pattern NaN test
+  instead of the non-existent `isNan`. `density_program_probe` runs
+  0/60,000 on llvmpipe.
 - **[OPEN]** Rung 2 is *not* gated: no probe dispatches the emitted module and
-  the 0/60,000 llvmpipe run has not happened. Do not describe it as passing.
+  the 0/60,000 llvmpipe run for the emitted rung-2 module has not happened. Do
+  not describe it as passing.
 - **[OPEN]** The tree is based on an old `main` (`eaa7da4fb`); upstream has
   moved far ahead. Port the work instead of assuming the branch merges.
-- **[OPEN]** The uncommitted history is preserved on `wip/gpu-density-exact-tier`
-  (local only; the account has no push rights on the upstream repo).
-- Next step: finish the rung-2 probe, then rungs 3–7 in the order recorded in
-  `gpu-noise-parity-progress.md`, then Phase 49 (startup self-test and the
-  per-(device, driver) allowlist).
+- **[VERIFIED]** The work is published on branch `wip/gpu-density-exact-tier`
+  in [#19144](https://github.com/horizon-rust/horizon/pull/19144); the docs are
+  in [#19148](https://github.com/horizon-rust/horizon/pull/19148).
+- Next step: port rung 2, then require **0/60,000 on llvmpipe** before starting
+  rungs 3–7 in the order recorded in `gpu-noise-parity-progress.md`, then Phase
+  49 (startup self-test and the per-(device, driver) allowlist).
