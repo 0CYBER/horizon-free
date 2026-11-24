@@ -121,6 +121,12 @@ cargo run --release -p horizon-game -- --render-distance 12
 
 Development builds that link quickly: `cargo build --profile fast -p horizon-game`.
 
+On Windows, with the build prerequisites and prepared resources above and `python` on `PATH`, run
+`tools\build-and-run.bat --world "Dev World" --render-distance 8` from the checkout.
+It builds `target\fast\horizon-client.exe`, passes along game arguments, and prints the new
+temporary run directory. Saves, options and logs stay there by default, not in the checkout
+or in your regular Horizon profile. Each invocation starts with a fresh directory.
+
 `HORIZON_OCCLUSION_PROFILE=1` enables detailed entity-occlusion phase and bounds-scan timings
 in `horizon-ctl stats` and `bench`. The normal benchmark keeps these CPU-clock reads disabled;
 query, cache-hit and cull counters remain available without profiling.
