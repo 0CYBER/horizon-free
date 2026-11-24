@@ -238,7 +238,7 @@ def main():
     build = (args.work_dir or net.lab.LOCAL / 'hostile-sound-categories' / f'run-{time.time_ns()}').resolve()
     build.mkdir(parents=True, exist_ok=False)
     spec = program(); (build / 'program.json').write_text(json.dumps(spec, indent=2) + '\n')
-    name = str(build.relative_to(net.lab.LOCAL))
+    name = str(build.relative_to(net.lab.LOCAL.resolve()))
     _, _, java, native, client = net.sides(name, args.binary.resolve() if args.binary else None)
     reference = args.reference_dir.resolve() if args.reference_dir else build
     if not args.reference_dir:

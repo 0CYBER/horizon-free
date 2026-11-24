@@ -157,7 +157,7 @@ def main():
     script=Path(__file__).read_bytes()
     (build/'manifest.json').write_text(json.dumps(dict(script_sha256=hashlib.sha256(script).hexdigest(),
         declared_at=sound.now(), program_sha256=hashlib.sha256((build/'program.json').read_bytes()).hexdigest()),indent=2)+'\n')
-    _,_,java,native,client=net.sides(str(build.relative_to(net.lab.LOCAL)),
+    _,_,java,native,client=net.sides(str(build.relative_to(net.lab.LOCAL.resolve())),
                                     args.binary.resolve() if args.binary else None)
     reference=args.reference_dir.resolve() if args.reference_dir else build
     if not args.reference_dir:

@@ -54,6 +54,22 @@ class SoundHarnessInvocationTest(unittest.TestCase):
                 self.assertEqual(self.run_harness(name, '--binary', '{local}/game', '--work-dir', '{local}/chosen'),
                                  ['game', 'chosen', 'True'])
 
+    def test_symlinked_local_resolves_run_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / 'real-local'
+            target.mkdir()
+            link = root / 'local-link'
+            link.symlink_to(target, target_is_directory=True)
+            for name, folder in [('test_mob_local_sound_parity', 'mob-local-sound'),
+                                 ('test_hostile_sound_categories_parity', 'hostile-sound-categories'),
+                                 ('test_ominous_warning_sound_parity', 'ominous-warning-sound-parity')]:
+                with self.subTest(harness=name):
+                    result = subprocess.run([sys.executable, '-c', PROBE, str(TOOLS), name, str(link)],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.split(), ['None', folder, 'True'])
+
 
 if __name__ == '__main__':
     unittest.main()
