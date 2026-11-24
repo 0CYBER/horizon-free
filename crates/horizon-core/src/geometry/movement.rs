@@ -99,9 +99,9 @@ pub fn try_resolve_step_movement_into<S: std::borrow::Borrow<VoxelShape>, E>(
         }
         shapes.clear();
         collect(query, shapes)?;
-        for height in
-            borrowed_step_heights(step_box, shapes.as_slice(), max_step, resolved.y as f32)
-        {
+        let heights =
+            collect_step_heights_inline(step_box, shapes.as_slice(), max_step, resolved.y as f32);
+        for &height in heights.as_slice() {
             let candidate = resolve_borrowed_shape_movement(
                 Vec3::new(movement.x, height as f64, movement.z),
                 step_box,
@@ -164,17 +164,89 @@ pub fn candidate_step_heights(
     borrowed_step_heights(aabb, shapes, max_step, current_y)
 }
 
-fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
+const INLINE_STEP_HEIGHTS_CAP: usize = 8;
+
+/// Stack-backed candidate step-up height list (normal entity collisions yield
+/// 0-4 distinct heights), spilling to a `Vec<f32>` only when more than 8 exist.
+enum StepHeights {
+    Inline {
+        items: [f32; INLINE_STEP_HEIGHTS_CAP],
+        len: usize,
+    },
+    Heap(Vec<f32>),
+}
+
+impl StepHeights {
+    #[inline]
+    fn new() -> Self {
+        Self::Inline {
+            items: [0.0; INLINE_STEP_HEIGHTS_CAP],
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[f32] {
+        match self {
+            Self::Inline { items, len } => &items[..*len],
+            Self::Heap(vec) => vec.as_slice(),
+        }
+    }
+
+    #[inline]
+    fn push_unique(&mut self, value: f32) {
+        let bits = value.to_bits();
+        match self {
+            Self::Inline { items, len } => {
+                if items[..*len].iter().any(|old| old.to_bits() == bits) {
+                    return;
+                }
+                if *len < INLINE_STEP_HEIGHTS_CAP {
+                    items[*len] = value;
+                    *len += 1;
+                } else {
+                    let mut vec = Vec::with_capacity(INLINE_STEP_HEIGHTS_CAP * 2);
+                    vec.extend_from_slice(&items[..*len]);
+                    vec.push(value);
+                    *self = Self::Heap(vec);
+                }
+            }
+            Self::Heap(vec) => {
+                if !vec.iter().any(|old| old.to_bits() == bits) {
+                    vec.push(value);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn sort(&mut self) {
+        match self {
+            Self::Inline { items, len } => items[..*len].sort_unstable_by(f32::total_cmp),
+            Self::Heap(vec) => vec.sort_unstable_by(f32::total_cmp),
+        }
+    }
+
+    fn into_vec(self) -> Vec<f32> {
+        match self {
+            Self::Inline { items, len } => items[..len].to_vec(),
+            Self::Heap(vec) => vec,
+        }
+    }
+}
+
+fn collect_step_heights_inline<S: std::borrow::Borrow<VoxelShape>>(
     aabb: Aabb,
     shapes: &[S],
     max_step: f32,
     current_y: f32,
-) -> Vec<f32> {
-    let mut heights = Vec::<f32>::with_capacity(4);
+) -> StepHeights {
+    let mut heights = StepHeights::new();
+    let min_y = aabb.min(Axis::Y);
     for shape in shapes {
         let shape = shape.borrow();
         for coordinate in shape.coordinates(Axis::Y) {
-            let height = (*coordinate - aabb.min(Axis::Y)) as f32;
+            let height = (*coordinate - min_y) as f32;
             if height < 0.0 || height == current_y {
                 continue;
             }
@@ -184,13 +256,20 @@ fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
             // FloatArraySet uses Float.floatToIntBits, so NaNs compare equal
             // while positive and negative zero remain separate members.
             let height = if height.is_nan() { f32::NAN } else { height };
-            if !heights.iter().any(|old| old.to_bits() == height.to_bits()) {
-                heights.push(height);
-            }
+            heights.push_unique(height);
         }
     }
-    heights.sort_unstable_by(f32::total_cmp);
+    heights.sort();
     heights
+}
+
+fn borrowed_step_heights<S: std::borrow::Borrow<VoxelShape>>(
+    aabb: Aabb,
+    shapes: &[S],
+    max_step: f32,
+    current_y: f32,
+) -> Vec<f32> {
+    collect_step_heights_inline(aabb, shapes, max_step, current_y).into_vec()
 }
 
 #[cfg(test)]
