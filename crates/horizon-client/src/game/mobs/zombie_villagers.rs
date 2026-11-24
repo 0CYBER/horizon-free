@@ -262,7 +262,16 @@ impl Game<'_> {
 
 /// `Mob.convertTo` (`ConversionType.SINGLE`, keeping equipment and the
 /// pick-up-loot flag): what any converted mob carries over.
-fn carry_over(from: &Mob, to: &mut Mob) {
+///
+/// `copy_unfinalized_data` distinguishes vanilla's two conversion directions:
+/// - Zombification (`Zombie.killedEntity`) copies `VillagerDataFinalized`
+///   before `finalizeSpawn` (which sets it to `true` for an unfinalized source)
+///   and copies `VillagerData` *after*, so an unfinalized villager keeps its
+///   own biome type with `data_finalized = true`.
+/// - Curing (`ZombieVillager.finishConversion`) copies both *before*
+///   `finalizeSpawn(CONVERSION)`, so an unfinalized zombie villager keeps the
+///   curing biome's finalized type already chosen on `to`.
+fn carry_over(from: &Mob, to: &mut Mob, copy_unfinalized_data: bool) {
     to.position = from.position;
     to.previous = from.position;
     to.velocity = from.velocity;
@@ -308,7 +317,11 @@ fn carry_over(from: &Mob, to: &mut Mob) {
     }
 
     // VillagerData and the trades, experience and gossip.
-    to.extra.variant = from.extra.variant;
+    let from_finalized = villager::ext(from).is_some_and(|e| e.data_finalized);
+    if copy_unfinalized_data || from_finalized {
+        to.extra.variant = from.extra.variant;
+        villager::ext_mut(to).data_finalized = true;
+    }
     to.extra.profession = from.extra.profession.clone();
     to.extra.villager_level = from.extra.villager_level.max(1);
     to.extra.trade = from.extra.trade.clone();
@@ -319,7 +332,7 @@ fn carry_over(from: &Mob, to: &mut Mob) {
 /// A villager rises as a zombie villager (never as an adult-age baby: a baby
 /// stays a baby for good).
 pub(super) fn convert_to_zombie_villager(from: &Mob, to: &mut Mob) {
-    carry_over(from, to);
+    carry_over(from, to, true);
     to.extra.age = if from.is_baby() { i32::MIN / 2 } else { 0 };
 }
 /// A cured zombie villager becomes a villager again, queasy for 10 seconds
@@ -330,7 +343,7 @@ pub(super) fn convert_to_villager(
     nausea: bool,
     enchantments: &Enchantments,
 ) -> Vec<ItemStack> {
-    carry_over(from, to);
+    carry_over(from, to, false);
     let mut drops_out = Vec::new();
     // `EquipmentSlot.VALUES` order: main hand, off hand, feet, legs, chest, head.
     for (slot, name) in drops::SLOTS.iter().take(6).enumerate() {
@@ -533,5 +546,46 @@ mod tests {
         let kept = &villager::ext(&bare).unwrap().inventory;
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].item.as_ref(), "minecraft:iron_boots");
+
+        // Curing an unfinalized zombie villager keeps the curing biome's
+        // finalized villager type; a finalized source keeps its own type.
+        let unfinalized_zv = mob(6, Species::ZombieVillager, "minecraft:zombie_villager");
+        let mut desert_cured = mob(7, Species::Villager, "minecraft:villager");
+        desert_cured.extra.variant = 1; // desert, chosen by finalizeSpawn(Conversion)
+        villager::ext_mut(&mut desert_cured).data_finalized = true;
+        convert_to_villager(
+            &unfinalized_zv,
+            &mut desert_cured,
+            true,
+            &Enchantments::default(),
+        );
+        assert_eq!(desert_cured.extra.variant, 1);
+        assert!(villager::ext(&desert_cured).is_some_and(|e| e.data_finalized));
+
+        let mut finalized_zv = mob(8, Species::ZombieVillager, "minecraft:zombie_villager");
+        finalized_zv.extra.variant = 5; // swamp
+        villager::ext_mut(&mut finalized_zv).data_finalized = true;
+        let mut swamp_cured = mob(9, Species::Villager, "minecraft:villager");
+        swamp_cured.extra.variant = 1; // desert
+        villager::ext_mut(&mut swamp_cured).data_finalized = true;
+        convert_to_villager(
+            &finalized_zv,
+            &mut swamp_cured,
+            true,
+            &Enchantments::default(),
+        );
+        assert_eq!(swamp_cured.extra.variant, 5);
+        assert!(villager::ext(&swamp_cured).is_some_and(|e| e.data_finalized));
+
+        // Zombifying an unfinalized plains villager in a desert preserves its
+        // plains type while finalizing `VillagerDataFinalized` (`Zombie.killedEntity`
+        // runs `finalizeSpawn` before copying `VillagerData`).
+        let unfinalized_villager = mob(10, Species::Villager, "minecraft:villager");
+        let mut desert_zv = mob(11, Species::ZombieVillager, "minecraft:zombie_villager");
+        desert_zv.extra.variant = 1; // desert, chosen by finalizeSpawn(Conversion)
+        villager::ext_mut(&mut desert_zv).data_finalized = true;
+        convert_to_zombie_villager(&unfinalized_villager, &mut desert_zv);
+        assert_eq!(desert_zv.extra.variant, 0);
+        assert!(villager::ext(&desert_zv).is_some_and(|e| e.data_finalized));
     }
 }

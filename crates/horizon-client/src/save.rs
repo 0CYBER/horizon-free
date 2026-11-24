@@ -669,6 +669,20 @@ fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
         map.remove(&"LootTable".into());
         map.remove(&"LootTableSeed".into());
     }
+    if crate::block_entity_nbt::id(current).as_deref() == Some("minecraft:trial_spawner")
+        && let Tag::Compound(map) = &mut merged
+    {
+        for key in ["normal_config", "ominous_config"] {
+            match current.get(key) {
+                Some(value) => {
+                    map.insert(key.into(), value.clone());
+                }
+                None => {
+                    map.remove(&key.into());
+                }
+            }
+        }
+    }
     merged
 }
 /// `BlockDataAccessor.getData` (`BlockEntity.saveWithFullMetadata`): the tag

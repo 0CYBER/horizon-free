@@ -228,10 +228,7 @@ pub fn villager_birth<L: VillagerLevel + ?Sized>(
         return;
     };
     if let Some(child) = l.parts().mobs.iter_mut().find(|m| m.id == id) {
-        child.extra.variant = variant;
-        child.extra.profession = Default::default();
-        child.extra.age = -24000;
-        child.extra.bed = Some(bed);
+        init_bred_child(child, variant, bed);
     }
     // VillagerMakeLove.giveBirth: entity event 12 for the child.
     l.mob_event_particles(id, 12);
@@ -511,4 +508,81 @@ pub fn kick_villager_out_of_bed<L: VillagerLevel + ?Sized>(l: &mut L, head: [i32
     let id = l.mobs()[i].id;
     l.wake_villager(id);
     true
+}
+
+/// `Villager.getBreedOffspring`: sets the child's type, clears its profession,
+/// marks its data finalized, and sets baby age and claimed bed.
+fn init_bred_child(child: &mut Mob, variant: u8, bed: [i32; 3]) {
+    child.extra.variant = variant;
+    child.extra.profession = Default::default();
+    child.extra.age = -24000;
+    child.extra.bed = Some(bed);
+    villager::ext_mut(child).data_finalized = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::mobs::{Anim, Brain, MobType, Part};
+    use std::sync::Arc;
+
+    #[test]
+    fn bred_villager_child_is_finalized() {
+        let kind = MobType {
+            shadow: None,
+            id: "minecraft:villager".into(),
+            species: Species::Villager,
+            width: 0.6,
+            height: 1.95,
+            eye_height: 1.62,
+            category: "misc".into(),
+            max_health: 20.0,
+            speed: 0.5,
+            flying_speed: 0.4,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 48.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            item_stack_limits: Arc::default(),
+            attribute_bounds: Default::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Default::default(),
+            model: Arc::new(Part {
+                name: "root".into(),
+                pose: [0.0; 9],
+                polygons: Vec::new(),
+                children: Vec::new(),
+            }),
+            layers: Default::default(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Humanoid { zombie_arms: false },
+            sounds: ["entity.villager.ambient"; 3],
+            sound_overrides: Default::default(),
+            food: Arc::default(),
+            tempt: Arc::default(),
+            passenger_attachments: Vec::new(),
+        };
+        let mut child = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+        init_bred_child(&mut child, 2, [4, 64, 8]);
+        assert_eq!(child.extra.variant, 2);
+        assert_eq!(child.extra.age, -24000);
+        assert_eq!(child.extra.bed, Some([4, 64, 8]));
+        assert!(villager::ext(&child).is_some_and(|e| e.data_finalized));
+    }
 }

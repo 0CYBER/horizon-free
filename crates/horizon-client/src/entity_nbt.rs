@@ -1161,8 +1161,11 @@ pub fn mob_to_nbt(
         }
         "minecraft:villager" => {
             map.insert("VillagerData".into(), villager_data(m));
-            // A loaded villager with VillagerData is finalized.
-            map.insert("VillagerDataFinalized".into(), Tag::Byte(1));
+            let finalized = crate::mobs::villager::ext(m).is_some_and(|e| e.data_finalized);
+            map.insert(
+                "VillagerDataFinalized".into(),
+                Tag::Byte(i8::from(finalized)),
+            );
             let t = m.extra.trade.as_deref().cloned().unwrap_or_default();
             map.insert("Xp".into(), Tag::Int(t.xp));
             map.insert("LastRestock".into(), Tag::Long(t.last_restock));
@@ -4124,7 +4127,7 @@ fn put_memories(map: &mut Compound, m: &Mob) {
 }
 fn read_villager(m: &mut Mob, tag: &Tag) {
     use crate::{merchant::Trader, mobs::render::VILLAGER_TYPES};
-    if let Some(data) = tag.get("VillagerData") {
+    if let Some(data @ Tag::Compound(_)) = tag.get("VillagerData") {
         let name = |key| text(data.get(key)).map(|s| s.trim_start_matches("minecraft:").to_owned());
         if let Some(t) = name("type").and_then(|t| VILLAGER_TYPES.iter().position(|v| *v == t)) {
             m.extra.variant = t as u8;

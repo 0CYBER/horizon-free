@@ -1978,8 +1978,11 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             + self.random.next_double() * 0.2
     }
     fn villager_type(&mut self, m: &mut Mob) {
-        let at = block(m);
-        m.extra.variant = self.level.mob_maps().villager_type(&self.level.biome(at));
+        if !super::villager::ext(m).is_some_and(|e| e.data_finalized) {
+            let at = block(m);
+            m.extra.variant = self.level.mob_maps().villager_type(&self.level.biome(at));
+            super::villager::ext_mut(m).data_finalized = true;
+        }
     }
     /// `VariantUtils.selectVariantToSpawn` into `variant`, by registry name.
     fn variant(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {

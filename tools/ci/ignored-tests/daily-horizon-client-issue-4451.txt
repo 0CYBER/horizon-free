@@ -243,6 +243,7 @@ horizon-client game::commands::data::saved_tag_tests::tag_list_is_not_repeated_t
 horizon-client game::commands::data::saved_tag_tests::the_last_tag_leaves_no_key_and_a_spawner_keeps_its_tags lib daily resources
 horizon-client game::commands::data::tests::guest_placement_keeps_forced_metadata_in_each_dimension lib daily resources
 horizon-client game::commands::data::tests::merging_display_nbt_keeps_the_uuid_and_forces_the_start_delay lib daily resources
+horizon-client game::commands::data::tests::structure_block_nbt_load_syncs_mode_property_even_when_nbt_unchanged lib daily resources
 horizon-client game::commands::data::vehicle_container_tests::loaded_vehicle_saves_own_only_their_container_fields lib daily resources
 horizon-client game::commands::data::wolf_live_anger_tests::live_wolf_anger_writes_use_the_level_clock_and_keep_bee_state lib daily resources
 horizon-client game::commands::effective_presence_tests::registered_presence_uses_actual_catalog_and_stack_patch lib daily resources

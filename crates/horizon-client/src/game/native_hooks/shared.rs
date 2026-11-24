@@ -1873,13 +1873,16 @@ impl GameLevel<'_> {
     /// Creates a declared state-aware block entity from its actual state. No answer
     /// means no entity; the registered declaration owns its type identity.
     pub(super) fn new_block_entity_for_state(&self, state: BlockStateId) -> Option<BlockEntity> {
-        let name = &self.registry.state(state)?.name;
+        let state_info = self.registry.state(state)?;
+        let name = &state_info.name;
         if self.world.block_entities.stateful_entity(state.0) {
             let mut nbt = None;
             self.native_block_entity(name, state, &mut nbt);
             return block_entity_for_block(self.registry, self.facts, name, nbt?);
         }
-        self.new_block_entity(name)
+        let mut entity = self.new_block_entity(name)?;
+        entity.apply_state_mode(state_info.properties.get("mode").map(String::as_str));
+        Some(entity)
     }
     /// Replaces the block at `pos` with `state` through `Level.setBlock`, as
     /// `Game::native_set_block` does for the Host, from a hook that gets the

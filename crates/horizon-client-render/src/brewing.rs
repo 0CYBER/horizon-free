@@ -355,10 +355,10 @@ pub struct BrewTick {
     pub drops: Vec<ItemStack>,
 }
 impl BrewingStand {
+    /// `BrewingStandBlockEntity.<init>`: `totalBrewTime` and `totalFuel` start
+    /// at 0 (`loadAdditional` applies the 400 / 20 defaults when reading NBT).
     pub fn new() -> Self {
         Self {
-            total_brew_time: 400,
-            total_fuel: 20,
             speed: 1.0,
             ..Default::default()
         }
@@ -1139,5 +1139,15 @@ mod tests {
         stack.data_mut().potion_extra = vec![("custom_name".into(), Tag::String("test".into()))];
         assert!(!contents_empty(&stack));
         assert_eq!(contents_color(&stack), 0xFF38_5DC6);
+    }
+
+    #[test]
+    fn fresh_brewing_stand_starts_with_zero_totals() {
+        let stand = BrewingStand::new();
+        assert_eq!(stand.brew_time, 0);
+        assert_eq!(stand.total_brew_time, 0);
+        assert_eq!(stand.fuel, 0);
+        assert_eq!(stand.total_fuel, 0);
+        assert_eq!(stand.speed, 1.0);
     }
 }

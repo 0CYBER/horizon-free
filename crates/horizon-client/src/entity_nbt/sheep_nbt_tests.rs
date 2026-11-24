@@ -464,7 +464,25 @@ fn a_baby_villager_keeps_its_age() {
     let tag = mob_to_nbt(&m, [1, 2, 3, 4], None, None, |_| None);
     assert_eq!(number(tag.get("Age")), Some(-21359));
     assert_eq!(number(tag.get("AgeLocked")), Some(0));
-    assert_eq!(number(tag.get("VillagerDataFinalized")), Some(1));
+    assert_eq!(number(tag.get("VillagerDataFinalized")), Some(0));
+
+    let with_data = Tag::compound([
+        ("id", string("minecraft:villager")),
+        ("Pos", doubles(&[0.5, 64.0, 0.5])),
+        ("VillagerData", Tag::Compound(Default::default())),
+    ]);
+    let m_data = mob_from_nbt(&with_data, &types, 2, None).unwrap();
+    let tag_data = mob_to_nbt(&m_data, [1, 2, 3, 5], None, None, |_| None);
+    assert_eq!(number(tag_data.get("VillagerDataFinalized")), Some(1));
+
+    let with_flag = Tag::compound([
+        ("id", string("minecraft:villager")),
+        ("Pos", doubles(&[0.5, 64.0, 0.5])),
+        ("VillagerDataFinalized", Tag::Byte(1)),
+    ]);
+    let m_flag = mob_from_nbt(&with_flag, &types, 3, None).unwrap();
+    let tag_flag = mob_to_nbt(&m_flag, [1, 2, 3, 6], None, None, |_| None);
+    assert_eq!(number(tag_flag.get("VillagerDataFinalized")), Some(1));
 }
 
 /// `Dolphin.addAdditionalSaveData`: a fed dolphin stays fed and a wet one

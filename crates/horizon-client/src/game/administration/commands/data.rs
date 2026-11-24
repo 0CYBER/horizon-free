@@ -976,6 +976,16 @@ impl Game<'_> {
         } else {
             false
         };
+        let structure_mode = match &new {
+            BlockEntity::StructureBlock(b) => Some(b.mode.serialized_name()),
+            _ => None,
+        };
+        if let Some(mode) = structure_mode {
+            // `StructureBlockEntity.loadAdditional` calls `updateBlockState()`
+            // unconditionally, even when the serialized entity tag is unchanged.
+            // State-only sync does not flip `/setblock` into reporting a change.
+            self.set_mode_property(key, "minecraft:structure_block", mode);
+        }
         if after == before && !rolled && !lock_changed && !name_changed && !cooldown_changed {
             return false;
         }
@@ -1295,6 +1305,10 @@ impl Game<'_> {
                     }
                     self.take_loot_table(key, &tag, &mut new);
                     self.load_block_name(key, &new, &tag);
+                    let structure_mode = match &new {
+                        BlockEntity::StructureBlock(b) => Some(b.mode.serialized_name()),
+                        _ => None,
+                    };
                     if let (Some(BlockEntity::Mod(current)), BlockEntity::Mod(loaded)) =
                         (self.world.block_entities.get_mut(&key), &mut new)
                         && current.id() == loaded.id()
@@ -1306,6 +1320,10 @@ impl Game<'_> {
                         current.items = std::mem::take(&mut loaded.items);
                     } else {
                         self.world.block_entities.insert(key, new);
+                    }
+                    if let Some(mode) = structure_mode {
+                        // `StructureBlockEntity.loadAdditional` calls `updateBlockState()`.
+                        self.set_mode_property(key, "minecraft:structure_block", mode);
                     }
                     self.world.set_block_lock(key, &tag);
                     self.update_spawner_display(key);
@@ -1636,6 +1654,54 @@ mod tests {
     use super::*;
     use crate::game::native_entity_refs::tests::with_game;
     use horizon_core::geometry::Vec3;
+
+    /// `StructureBlockEntity.loadAdditional` calls `updateBlockState()` even
+    /// when the entity's serialized NBT matches what was already stored (e.g.
+    /// `/setblock ... structure_block[mode=save]{mode:"LOAD"}` over a bare
+    /// structure block).
+    #[test]
+    #[ignore = "daily"]
+    fn structure_block_nbt_load_syncs_mode_property_even_when_nbt_unchanged() {
+        with_game(|game| {
+            let pos = [4, 64, 4];
+            let key = (pos[0], pos[1], pos[2]);
+            let Some(load_state) = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:structure_block")
+            else {
+                return;
+            };
+            let _ = game.world.set(pos[0], pos[1], pos[2], load_state);
+            game.world.block_entities.insert(
+                key,
+                BlockEntity::StructureBlock(Box::new(
+                    horizon_client::structure_block::StructureBlock::new(
+                        horizon_client::structure_block::StructureMode::Load,
+                    ),
+                )),
+            );
+            game.set_mode_property(key, "minecraft:structure_block", "save");
+            let before = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(pos[0], pos[1], pos[2]))
+                .and_then(|s| s.properties.get("mode").map(String::as_str));
+            assert_eq!(before, Some("save"));
+            // State-only correction syncs the block state back to `load`
+            // without reporting a serialized entity-tag change.
+            assert!(!game.load_block_entity_nbt(pos, r#"{mode:"LOAD"}"#));
+            let after = game
+                .pack
+                .assets
+                .registry
+                .state(game.world.block(pos[0], pos[1], pos[2]))
+                .and_then(|s| s.properties.get("mode").map(String::as_str));
+            assert_eq!(after, Some("load"));
+        });
+    }
 
     /// `lan_guest_joined`'s placement-only pass, between a forced write and
     /// the tracker pass, must not spend the marks in either dimension.

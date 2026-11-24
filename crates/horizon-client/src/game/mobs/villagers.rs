@@ -615,6 +615,10 @@ mod birth_tests {
         assert_eq!(baby.extra.age, -24000);
         assert_eq!(baby.extra.variant, 2);
         assert_eq!(baby.extra.bed, Some(BED));
+        assert!(
+            horizon_client::mobs::villager::ext(baby).is_some_and(|e| e.data_finalized),
+            "Villager.getBreedOffspring marks the child finalized"
+        );
         assert_eq!(bed_owners(game), vec![baby.id]);
         assert_eq!(game.lan_entity_events, vec![(baby.id as i32, 12)]);
     }

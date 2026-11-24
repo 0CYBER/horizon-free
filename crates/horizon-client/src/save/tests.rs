@@ -2386,6 +2386,29 @@ fn a_loot_chest_keeps_the_components_and_lock_it_was_loaded_with() {
     assert!(full.get("keepPacked").is_none());
 }
 #[test]
+fn trial_spawner_save_overlay_uses_normalized_inline_configs() {
+    let saved = horizon_core::nbt::parse_snbt(
+        r#"{id:"minecraft:trial_spawner",x:1,y:2,z:3,normal_config:{spawn_range:4,total_mobs:6.0f},ominous_config:{spawn_range:5,total_mobs:6.0f},components:{"minecraft:custom_data":{k:1}}}"#,
+    )
+    .unwrap()
+    .0;
+    let (pos, spawner) = decode_block_entity(&saved).expect("trial_spawner");
+    let full = full_block_entity_data(
+        pos,
+        &spawner,
+        "minecraft:trial_spawner",
+        Some(&saved),
+        None,
+        None,
+    );
+    assert_eq!(full.get("normal_config"), None);
+    assert_eq!(
+        full.get("ominous_config"),
+        Some(&horizon_core::nbt::parse_snbt("{spawn_range:5}").unwrap().0)
+    );
+    assert_eq!(full.get("components"), saved.get("components"));
+}
+#[test]
 fn spawner_block_entity_round_trips() {
     // A dungeon spawner as vanilla saves it (`id` is mob_spawner, not the block).
     let saved = horizon_core::nbt::parse_snbt(

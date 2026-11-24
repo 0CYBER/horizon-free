@@ -178,7 +178,7 @@ pub fn write_nbt(m: &Mob, map: &mut Compound) {
 /// `VillagerDataFinalized` nor `VillagerData` keeps the constructor's random
 /// profession and stays unfinalized.
 pub fn read_nbt(m: &mut Mob, tag: &Tag) {
-    let saved = tag.get("VillagerData").is_some();
+    let saved = matches!(tag.get("VillagerData"), Some(Tag::Compound(_)));
     let finalized = saved || crate::entity_nbt::flag(tag, "VillagerDataFinalized");
     // `readAdditionalSaveData` redraws only for a finalized save that carries
     // no `VillagerData` (`orElseGet(initializeZombieVillagerData)`); every
@@ -281,6 +281,44 @@ mod tests {
         );
         load(&mut redrawn, "{VillagerDataFinalized:1b}");
         assert_eq!(redrawn.extra.profession.index(), Some(3));
+    }
+
+    /// Non-compound `VillagerData` (e.g. `{VillagerData:0}`) fails `VillagerData.CODEC`
+    /// and is treated as absent through the full entity loader, both with and
+    /// without an explicit `VillagerDataFinalized: 1b`.
+    #[test]
+    fn non_compound_villager_data_is_treated_as_absent_on_load() {
+        let types = std::collections::HashMap::from([("minecraft:zombie_villager".into(), kind())]);
+        let load = |snbt: &str| {
+            let tag = horizon_core::nbt::parse_snbt(snbt).unwrap().0;
+            crate::entity_nbt::mob_from_nbt_with_random(
+                &tag,
+                &types,
+                1,
+                None,
+                horizon_core::random::EntityRandom::own(LegacyRandom::new(42)),
+            )
+            .expect("zombie villager")
+        };
+
+        let unfinalized =
+            load(r#"{id:"minecraft:zombie_villager",Pos:[0.0d,64.0d,0.0d],VillagerData:0}"#);
+        assert_eq!(unfinalized.extra.profession.index(), Some(5));
+        assert_eq!(
+            crate::entity_nbt::mob_to_nbt(&unfinalized, [1, 2, 3, 4], None, None, |_| None)
+                .get("VillagerDataFinalized"),
+            Some(&Tag::Byte(0))
+        );
+
+        let finalized = load(
+            r#"{id:"minecraft:zombie_villager",Pos:[0.0d,64.0d,0.0d],VillagerData:0,VillagerDataFinalized:1b}"#,
+        );
+        assert_eq!(finalized.extra.profession.index(), Some(3));
+        assert_eq!(
+            crate::entity_nbt::mob_to_nbt(&finalized, [1, 2, 3, 4], None, None, |_| None)
+                .get("VillagerDataFinalized"),
+            Some(&Tag::Byte(1))
+        );
     }
 
     #[test]
