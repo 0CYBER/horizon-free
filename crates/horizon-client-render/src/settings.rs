@@ -18,11 +18,17 @@ pub fn set_source_volumes(volumes: [f32; 11]) {
 pub fn sound_source(event: &str) -> usize {
     let e = event.trim_start_matches("minecraft:");
     let index = |name: &str| SOUND_SOURCES.iter().position(|n| *n == name).unwrap_or(0);
-    const HOSTILE: [&str; 36] = [
+    const HOSTILE: [&str; 42] = [
         "zombie",
         // ShulkerBullet.getSoundSource: HOSTILE (ShulkerBullet.java:63).
         "shulker_bullet",
         "skeleton",
+        // Shulker and Hoglin override getSoundSource; Zoglin and Creaking
+        // extend Monster. All four are HOSTILE in pinned vanilla 26.3.
+        "shulker",
+        "hoglin",
+        "zoglin",
+        "creaking",
         "creeper",
         "spider",
         "cave_spider",
@@ -47,6 +53,9 @@ pub fn sound_source(event: &str) -> usize {
         "elder_guardian",
         "silverfish",
         "zombified_piglin",
+        // AbstractPiglin extends Monster.
+        "piglin",
+        "piglin_brute",
         "wither_skeleton",
         "bogged",
         "breeze",
@@ -1058,6 +1067,12 @@ mod tests {
             ("block.note_block.trumpet_exposed", 2),
             ("entity.shulker_bullet.hit", 5),
             ("entity.shulker_bullet.hurt", 5),
+            ("entity.shulker.ambient", 5),
+            ("entity.hoglin.ambient", 5),
+            ("entity.zoglin.ambient", 5),
+            ("entity.creaking.ambient", 5),
+            ("entity.piglin.ambient", 5),
+            ("entity.piglin_brute.ambient", 5),
             ("entity.cow.hurt", 6),
             ("entity.ender_dragon.flap", 5),
             ("entity.ender_dragon.growl", 5),
