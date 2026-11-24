@@ -121,7 +121,8 @@ fn build_tag(root: JsonInput<'_>, parent_depth: usize) -> Result<Tag, JsonNbtErr
     enum Work<'a> {
         Enter(JsonInput<'a>),
         List(usize),
-        Object(Vec<JavaString>),
+        Object(&'a Map<String, Value>),
+        Fields(&'a [(&'a str, &'a Value)]),
     }
     let mut work = vec![Work::Enter(root)];
     let mut done = Vec::new();
@@ -142,9 +143,7 @@ fn build_tag(root: JsonInput<'_>, parent_depth: usize) -> Result<Tag, JsonNbtErr
                     );
                 }
                 JsonInput::Value(Value::Object(values)) | JsonInput::Object(values) => {
-                    work.push(Work::Object(
-                        values.keys().map(|k| k.as_str().into()).collect(),
-                    ));
+                    work.push(Work::Object(values));
                     work.extend(
                         values
                             .values()
@@ -153,9 +152,7 @@ fn build_tag(root: JsonInput<'_>, parent_depth: usize) -> Result<Tag, JsonNbtErr
                     );
                 }
                 JsonInput::Fields(fields) => {
-                    work.push(Work::Object(
-                        fields.iter().map(|(key, _)| (*key).into()).collect(),
-                    ));
+                    work.push(Work::Fields(fields));
                     work.extend(
                         fields
                             .iter()
@@ -168,9 +165,23 @@ fn build_tag(root: JsonInput<'_>, parent_depth: usize) -> Result<Tag, JsonNbtErr
                 let values = done.split_off(done.len() - len);
                 done.push(Tag::List(values));
             }
-            Work::Object(keys) => {
-                let values = done.split_off(done.len() - keys.len());
-                done.push(Tag::Compound(keys.into_iter().zip(values).collect()));
+            Work::Object(map) => {
+                let start = done.len() - map.len();
+                let compound: Compound = map
+                    .keys()
+                    .map(|k| JavaString::from(k.as_str()))
+                    .zip(done.drain(start..))
+                    .collect();
+                done.push(Tag::Compound(compound));
+            }
+            Work::Fields(fields) => {
+                let start = done.len() - fields.len();
+                let compound: Compound = fields
+                    .iter()
+                    .map(|(k, _)| JavaString::from(*k))
+                    .zip(done.drain(start..))
+                    .collect();
+                done.push(Tag::Compound(compound));
             }
         }
     }
@@ -179,6 +190,9 @@ fn build_tag(root: JsonInput<'_>, parent_depth: usize) -> Result<Tag, JsonNbtErr
 
 fn validate_tag(root: &Tag) -> Result<(), JsonNbtError> {
     let valid_string = |s: &JavaString| {
+        if s.0.iter().all(|&u| !(0xd800..=0xdfff).contains(&u)) {
+            return Ok(());
+        }
         if char::decode_utf16(s.0.iter().copied()).any(|c| c.is_err()) {
             Err(JsonNbtError::InvalidString)
         } else {
@@ -245,7 +259,7 @@ impl<'a> JsonTag<'a> {
         enum Work<'a> {
             Enter(&'a Tag),
             List(usize),
-            Object(Vec<String>),
+            Object(&'a Compound),
         }
         let mut work = vec![Work::Enter(self.root)];
         let mut done = Vec::new();
@@ -288,12 +302,7 @@ impl<'a> JsonTag<'a> {
                             continue;
                         }
                         Tag::Compound(values) => {
-                            work.push(Work::Object(
-                                values
-                                    .keys()
-                                    .map(|k| k.to_string().expect("validated UTF-16"))
-                                    .collect(),
-                            ));
+                            work.push(Work::Object(values));
                             work.extend(values.values().rev().map(Work::Enter));
                             continue;
                         }
@@ -304,9 +313,14 @@ impl<'a> JsonTag<'a> {
                     let values = done.split_off(done.len() - len);
                     done.push(Value::Array(values));
                 }
-                Work::Object(keys) => {
-                    let values = done.split_off(done.len() - keys.len());
-                    done.push(Value::Object(keys.into_iter().zip(values).collect()));
+                Work::Object(compound) => {
+                    let start = done.len() - compound.len();
+                    let map: Map<String, Value> = compound
+                        .keys()
+                        .map(|k| k.to_string().expect("validated UTF-16"))
+                        .zip(done.drain(start..))
+                        .collect();
+                    done.push(Value::Object(map));
                 }
             }
         }
@@ -314,20 +328,31 @@ impl<'a> JsonTag<'a> {
     }
 }
 
+fn integer_tag(value: i64) -> Tag {
+    if let Ok(value) = i8::try_from(value) {
+        return Tag::Byte(value);
+    }
+    if let Ok(value) = i16::try_from(value) {
+        return Tag::Short(value);
+    }
+    if let Ok(value) = i32::try_from(value) {
+        return Tag::Int(value);
+    }
+    Tag::Long(value)
+}
+
 fn number(number: &Number) -> Tag {
-    // BigDecimal.longValueExact in JsonOps: do not round a fraction or a u64
-    // through f64 into an apparently integral signed long.
-    if let Some(value) = exact_long(&number.to_string()) {
-        if let Ok(value) = i8::try_from(value) {
-            return Tag::Byte(value);
+    // Fast path for exact signed integers already stored by serde_json::Number
+    // without allocating a decimal string.
+    if let Some(value) = number.as_i64() {
+        return integer_tag(value);
+    }
+    // Unsigned integers above i64::MAX cannot fit in an exact signed long.
+    if !number.is_u64() {
+        let maybe_integral = number.as_f64().is_none_or(|f| f.fract() == 0.0);
+        if maybe_integral && let Some(value) = exact_long(&number.to_string()) {
+            return integer_tag(value);
         }
-        if let Ok(value) = i16::try_from(value) {
-            return Tag::Short(value);
-        }
-        if let Ok(value) = i32::try_from(value) {
-            return Tag::Int(value);
-        }
-        return Tag::Long(value);
     }
     let value = number
         .as_f64()
