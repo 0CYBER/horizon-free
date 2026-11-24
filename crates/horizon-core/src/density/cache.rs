@@ -46,7 +46,12 @@ impl SamplerContext {
     }
     pub fn clear_caches(&mut self) {
         if let Some(caches) = &mut self.caches {
-            caches.clear();
+            for mut cell in caches.drain(..) {
+                if cell.buffer.capacity() > 0 {
+                    cell.buffer.clear();
+                    self.cache_buffers.push(cell.buffer);
+                }
+            }
         }
     }
     fn prepare_cache(&mut self, id: usize) -> Result<bool, SampleError> {
@@ -130,6 +135,11 @@ impl DensitySampler for CachingDensitySampler {
             return Ok(());
         }
         let mut cached = std::mem::take(&mut cell.buffer);
+        if cached.capacity() == 0
+            && let Some(recycled) = context.cache_buffers.pop()
+        {
+            cached = recycled;
+        }
         cached.resize(volume.size(), 0.0);
         // Unwritten values after a failed child are deterministic. Differential
         // error tests use a reference arena with the same zero-initialization.

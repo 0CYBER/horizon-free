@@ -91,6 +91,7 @@ impl std::error::Error for SampleError {}
 #[derive(Debug, Default)]
 pub struct SamplerContext {
     scratch: Vec<Vec<f32>>,
+    cache_buffers: Vec<Vec<f32>>,
     caches: Option<Vec<cache::CacheCell>>,
     fields: WorldFields,
     sparse: bool,
@@ -126,10 +127,15 @@ impl SamplerContext {
     /// Cached scalar/volume results and world bindings must not cross chunks or
     /// graphs, whose cache IDs can refer to different functions.
     pub fn reset(&mut self) {
-        self.caches = self.caches.as_ref().map(|_| Vec::new());
+        self.clear_caches();
         self.fields = WorldFields::default();
         if let Some(planes) = &mut self.planes {
-            planes.clear();
+            for (_, mut buf) in planes.drain() {
+                if buf.capacity() > 0 {
+                    buf.clear();
+                    self.cache_buffers.push(buf);
+                }
+            }
         }
         self.capture = None;
         self.lattice = Vec::new();
@@ -153,6 +159,7 @@ impl SamplerContext {
     /// Release retained storage between worlds or after unusually large work.
     pub fn clear_scratch(&mut self) {
         self.scratch.clear();
+        self.cache_buffers.clear();
     }
 }
 

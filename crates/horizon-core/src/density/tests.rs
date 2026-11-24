@@ -1369,3 +1369,28 @@ fn interpolation_reuses_captured_lattice_samples_bit_for_bit() {
         .unwrap();
     assert!(output.iter().all(|v| *v == 5.0));
 }
+
+#[test]
+fn reset_recycles_cache_and_plane_buffers_until_clear_scratch() {
+    let mut context = SamplerContext::cached().with_planes();
+    let cached = CachingDensitySampler::new(0, Arc::new(ConstantSampler(5.0))).unwrap();
+    let volume = DensityVolume::new([5, 49, 5], [0, -64, 0], [4, 8, 4]).unwrap();
+    let mut output = vec![0.0; volume.size()];
+    cached
+        .sample_volume(&mut context, &mut output, volume)
+        .unwrap();
+    context.reset();
+    assert!(context.caches.as_ref().unwrap().is_empty());
+    assert_eq!(context.cache_buffers.len(), 1);
+    let first_ptr = context.cache_buffers[0].as_ptr();
+    cached
+        .sample_volume(&mut context, &mut output, volume)
+        .unwrap();
+    assert!(context.cache_buffers.is_empty());
+    context.reset();
+    assert_eq!(context.cache_buffers.len(), 1);
+    assert_eq!(context.cache_buffers[0].as_ptr(), first_ptr);
+    context.reset();
+    context.clear_scratch();
+    assert!(context.cache_buffers.is_empty());
+}
