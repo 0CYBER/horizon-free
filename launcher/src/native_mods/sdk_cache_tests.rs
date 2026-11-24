@@ -610,6 +610,35 @@ fn a_stamp_from_another_index_is_not_trusted() {
 }
 
 #[test]
+fn a_superseded_nightly_uses_its_archived_signed_index() {
+    let fixture = Fixture::new();
+    let base = fixture.scratch.path().join("base");
+    let kept = fixture.scratch.path().join("versions");
+    let version = "nightly-2026-11-18-0123456";
+    let replacement = "nightly-2026-11-18-abcdef0";
+    let archive = format!("mod-index-{version}");
+    let index = index_of(&[], rust_toolchain::VERSION).to_json();
+    for tag in ["nightly", "nightly-2026-11-18", &archive] {
+        publish(&base, tag, replacement, &fixture.key, index.as_bytes(), &[]);
+    }
+    let read = || build_of_in(&kept, version, &fixture.base(), &fixture.keys());
+    assert!(matches!(read(), Err(Refusal::Unsigned { .. })));
+    assert!(!kept.join(version).exists());
+
+    publish(
+        &base,
+        &archive,
+        version,
+        &fixture.key,
+        index.as_bytes(),
+        &[],
+    );
+    assert_eq!(read().unwrap(), COMMIT);
+    fs::remove_dir_all(base).unwrap();
+    assert_eq!(read().unwrap(), COMMIT);
+}
+
+#[test]
 fn a_game_release_names_its_build_through_its_signed_index() {
     let fixture = Fixture::new();
     let base = fixture.scratch.path().join("base");

@@ -11,6 +11,9 @@ file itself.
 
 A Nightly carries a copy of its build's `sdk.json` in its own signed sums. The launcher learns which build a game is
 from the copy in that game's release, and keeps the answer, so it is known offline afterwards.
+When a second Nightly displaces a dated release of the same day, the three files needed to verify the first
+build (`sdk.json`, `SHA256SUMS` and `SHA256SUMS.v2.sig`) stay in `mod-index-nightly-<date>-<short commit>`.
+The launcher checks that copy against the original Nightly version before using its SDK.
 
 This describes the restored publication contract, not a claim that every main commit already has an SDK.
 Publication follows code-owner review and green checks/parity on the exact main SHA. A build without its signed,

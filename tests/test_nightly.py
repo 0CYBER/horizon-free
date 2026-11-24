@@ -144,6 +144,48 @@ class RotateTests(unittest.TestCase):
         self.assertNotEqual(rename[-1], "nightly-" + str(local_today - dt.timedelta(days=1)))
         self.assertEqual(now_timezones, [dt.timezone.utc])
 
+    def test_same_day_rotation_saves_the_three_metadata_files_before_deleting(self):
+        day = "nightly-2026-11-18"
+        sha = "a" * 40
+        archive = f"mod-index-{day}-{sha[:7]}"
+        files = {"sdk.json": json.dumps({"build": {"commit": sha}}).encode(),
+                 "SHA256SUMS": b"sums", "SHA256SUMS.v2.sig": b"signature"}
+        saved = {}
+        deleted = []
+
+        def gh(*args, **kwargs):
+            if args[:3] == ("release", "view", "nightly"):
+                return json.dumps({"name": "Nightly 2026-11-18"})
+            if args[:3] == ("release", "view", day):
+                return json.dumps({"assets": [{"name": name} for name in files]})
+            if args[:2] == ("release", "download"):
+                folder = Path(args[args.index("--dir") + 1])
+                folder.mkdir(exist_ok=True)
+                for name, data in (files if args[2] == day else saved).items():
+                    self.assertIn(("--pattern", name), list(zip(args, args[1:])))
+                    (folder / name).write_bytes(data)
+            if args[:3] == ("release", "view", archive) and saved:
+                return json.dumps({"isDraft": False})
+            if args[:3] == ("release", "create", archive):
+                self.assertFalse(saved, "a retry must reuse the complete archive")
+                for arg in args:
+                    if Path(arg).name in files and Path(arg).is_file():
+                        saved[Path(arg).name] = Path(arg).read_bytes()
+            if args[:3] == ("release", "delete", day):
+                self.assertEqual(saved, files)
+                deleted.append(day)
+            return ""
+
+        with mock.patch.object(nightly, "gh", gh), mock.patch.object(nightly.subprocess, "run") as verify, \
+                mock.patch.dict(nightly.os.environ, {"GITHUB_REPOSITORY": "horizon-rust/horizon"}):
+            nightly.rotate()
+            nightly.rotate()
+            saved["sdk.json"] = b"different"
+            with self.assertRaises(SystemExit):
+                nightly.rotate()
+            self.assertIn(f"{day}-{sha[:7]}", verify.call_args.args[0])
+            self.assertEqual(deleted, [day, day])
+
 
 class ScheduledTests(unittest.TestCase):
     def test_the_scheduled_nightly_drops_merged_closed_and_refused_ones(self):

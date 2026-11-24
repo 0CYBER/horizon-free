@@ -421,6 +421,49 @@ def pick(force: bool) -> None:
     build_set(main, prs, left_out, today, force, dry_run)
 
 
+def archive_mod_index(dated: str) -> None:
+    """Keep the displaced Nightly's signed SDK index, without copying the game archives."""
+    names = (SDK_INDEX, "SHA256SUMS", "SHA256SUMS.v2.sig")
+
+    def download(tag: str, folder: Path) -> None:
+        gh("release", "download", tag, "--dir", str(folder),
+           *(arg for name in names for arg in ("--pattern", name)))
+
+    def verify(version: str, folder: Path) -> None:
+        subprocess.run(["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign", "--", "verify",
+                        "--repository", train.REPO, "--tag", version, "--signature", "SHA256SUMS.v2.sig",
+                        "--only", SDK_INDEX, str(folder)], check=True)
+
+    with tempfile.TemporaryDirectory() as scratch:
+        folder = Path(scratch)
+        download(dated, folder)
+        sha = json.loads((folder / SDK_INDEX).read_bytes())["build"]["commit"]
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise SystemExit(f"{dated}'s SDK index does not name a full commit")
+        version = f"{dated}-{sha[:7]}"
+        verify(version, folder)
+        archive = f"mod-index-{version}"
+        paths = [str(folder / name) for name in names]
+        existing = gh("release", "view", archive, "--json", "isDraft", check=False)
+        if not existing:
+            gh("release", "create", archive, "--target", sha, "--prerelease", "--latest=false",
+               "--title", f"Mod SDK index for {version}", "--notes", "Signed metadata for native mod builds.", *paths)
+            return
+        release = json.loads(existing)
+        if release["isDraft"]:
+            # A failed upload can leave the draft that gh release create used to stage its assets.
+            gh("release", "upload", archive, "--clobber", *paths)
+            gh("release", "edit", archive, "--draft=false", "--prerelease", "--latest=false")
+            return
+        # A rerun of the same build can sign different game archives while keeping the same SDK.
+        kept = folder / "kept"
+        kept.mkdir()
+        download(archive, kept)
+        verify(version, kept)
+        if (kept / SDK_INDEX).read_bytes() != (folder / SDK_INDEX).read_bytes():
+            raise SystemExit(f"{archive} differs from {dated}; keeping the dated release")
+
+
 def rotate() -> None:
     """The current `nightly` becomes nightly-<its date>, so tonight's can take the tag."""
     current = gh("release", "view", "nightly", "--json", "name", check=False)
@@ -428,7 +471,10 @@ def rotate() -> None:
         return
     m = TITLE_DATE.search(json.loads(current)["name"])
     dated = f"nightly-{m.group(1)}" if m else f"nightly-{dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)}"
-    if gh("release", "view", dated, "--json", "tagName", check=False):
+    previous = gh("release", "view", dated, "--json", "assets", check=False)
+    if previous:
+        if any(asset["name"] == SDK_INDEX for asset in json.loads(previous)["assets"]):
+            archive_mod_index(dated)
         gh("release", "delete", dated, "--cleanup-tag", "--yes")  # a second nightly the same day replaces the first
     gh("release", "edit", "nightly", "--tag", dated)
     gh("api", "-X", "DELETE", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/refs/tags/nightly", check=False)

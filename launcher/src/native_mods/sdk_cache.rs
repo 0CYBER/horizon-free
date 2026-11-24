@@ -921,11 +921,14 @@ fn build_of_in(
     // The Nightly being served is published as `nightly` and renamed `nightly-<date>` when the
     // next one goes out: the current tag is tried first. Its v2 signature binds the exact
     // version, so whichever tag serves it, only that version's index is accepted. A snapshot is
-    // served under its version alone.
+    // served under its version alone. When rotation replaces an earlier Nightly of the same
+    // date, its three signed metadata files stay under a tag named for that exact version.
+    let archive = format!("mod-index-{version}");
     let tags: Vec<String> = match (channel, horizon_release_sign::nightly_date(version)) {
         (Some(horizon_release_sign::Channel::Nightly), Some(date)) => vec![
             horizon_release_sign::NIGHTLY.to_owned(),
             format!("nightly-{date}"),
+            archive.clone(),
         ],
         _ => vec![version.to_owned()],
     };
@@ -941,6 +944,8 @@ fn build_of_in(
             }
             // Offline is offline whichever tag: no use trying the next.
             Err(refusal @ Refusal::Offline { .. }) => return Err(refusal),
+            // Most builds have no archive. Keep the dated release's reason in that case.
+            Err(Refusal::NoSdk { .. }) if tag == &archive => {}
             Err(refusal) => last = refusal,
         }
     }
