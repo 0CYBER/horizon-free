@@ -685,3 +685,111 @@ fn a_block_entity_saved_in_another_chunk_moves_into_this_one() {
         (-27, 70, 93)
     );
 }
+
+fn baseline_paletted_compact(container: &mut PalettedContainer) -> io::Result<()> {
+    let values = (0..container.entries)
+        .map(|i| container.get(i).cloned())
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut compact =
+        PalettedContainer::uniform(values[0].clone(), container.entries, container.min_bits)?;
+    for (i, value) in values.into_iter().enumerate() {
+        compact.set(i, value)?;
+    }
+    compact.extra = std::mem::take(&mut container.extra);
+    *container = compact;
+    Ok(())
+}
+
+fn baseline_section_compact(section: &mut BlockSection<'_>) -> io::Result<()> {
+    let values: Vec<_> = (0..4096).map(|i| section.get(i).unwrap()).collect();
+    section.palette.clear();
+    section.last = None;
+    section.counts.clear();
+    section.free.clear();
+    for state in &values {
+        if let Some(id) = id_in(&section.palette, &section.counts, &mut section.last, *state) {
+            section.counts[id as usize] += 1;
+        } else {
+            section.palette.push(*state);
+            section.counts.push(1);
+            section.last = Some((*state, section.palette.len() as u32 - 1));
+        }
+    }
+    let bits = bits_for_palette(section.palette.len(), 4);
+    section.storage = if bits == 0 {
+        None
+    } else {
+        let mut storage = PackedStorage::new(bits, 4096).map_err(|e| invalid(e.to_string()))?;
+        let mut last = None;
+        for (i, state) in values.iter().enumerate() {
+            let id = id_in(&section.palette, &section.counts, &mut last, *state).unwrap();
+            storage.set(i, id).unwrap();
+        }
+        Some(storage)
+    };
+    Ok(())
+}
+
+#[test]
+fn paletted_and_section_compact_match_baseline() {
+    let registry = benchmark_registry(64);
+    let make_tag = |i: u32| registry.state(BlockStateId(i)).unwrap().to_nbt();
+
+    // Mixed container with dead slots + extra field.
+    let mut pc = PalettedContainer::uniform(make_tag(0), 4096, 4).unwrap();
+    for i in 0..4096 {
+        pc.set(i, make_tag((i % 24) as u32)).unwrap();
+    }
+    // Overwrite state 23 so it becomes unused.
+    for i in (23..4096).step_by(24) {
+        pc.set(i, make_tag(0)).unwrap();
+    }
+
+    let mut pc_base = pc.clone();
+    let mut pc_fast = pc.clone();
+    baseline_paletted_compact(&mut pc_base).unwrap();
+    pc_fast.compact().unwrap();
+    assert_eq!(pc_fast.to_nbt(), pc_base.to_nbt());
+    assert_eq!(pc_fast.palette_len(), pc_base.palette_len());
+    assert_eq!(pc_fast.bits(), pc_base.bits());
+
+    // A loaded palette that holds one tag in two slots compacts to one slot.
+    let mut loaded = Compound::new();
+    loaded.insert(
+        key("palette"),
+        Tag::List(vec![make_tag(1), make_tag(2), make_tag(1)]),
+    );
+    let mut words = PackedStorage::new(4, 4096).unwrap();
+    for i in 0..4096 {
+        words.set(i, (i % 3) as u32).unwrap();
+    }
+    loaded.insert(
+        key("data"),
+        Tag::LongArray(words.words().iter().map(|&v| v as i64).collect()),
+    );
+    let loaded = PalettedContainer::from_nbt(&Tag::Compound(loaded), 4096, 4).unwrap();
+    let mut loaded_base = loaded.clone();
+    let mut loaded_fast = loaded;
+    baseline_paletted_compact(&mut loaded_base).unwrap();
+    loaded_fast.compact().unwrap();
+    assert_eq!(loaded_fast.palette_len(), 2);
+    assert_eq!(loaded_fast.to_nbt(), loaded_base.to_nbt());
+
+    // BlockSection::compact matches baseline palette, counts, free, and storage.
+    let mut sec_base = BlockSection::uniform(BlockStateId(0), &registry).unwrap();
+    let mut sec_fast = BlockSection::uniform(BlockStateId(0), &registry).unwrap();
+    for i in 0..4096 {
+        let s = BlockStateId(((i * 7) % 24) as u32);
+        sec_base.set(i, s).unwrap();
+        sec_fast.set(i, s).unwrap();
+    }
+    for i in 0..4096 {
+        if sec_base.get(i).unwrap() == BlockStateId(23) {
+            sec_base.set(i, BlockStateId(0)).unwrap();
+            sec_fast.set(i, BlockStateId(0)).unwrap();
+        }
+    }
+    baseline_section_compact(&mut sec_base).unwrap();
+    sec_fast.compact().unwrap();
+    assert_fields(&sec_fast, &sec_base, "compact");
+}
