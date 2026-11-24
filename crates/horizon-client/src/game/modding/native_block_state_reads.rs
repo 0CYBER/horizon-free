@@ -30,6 +30,16 @@ impl Game<'_> {
         let name = &self.res.facts().get(state).name;
         Some(self.items().block_in_tag("minecraft:fire", name))
     }
+    /// `BlockState.isRedstoneConductor` for the state alone (without a level). None for an unknown
+    /// state.
+    pub(super) fn block_state_is_redstone_conductor(&self, state: BlockStateId) -> Option<bool> {
+        self.pack.assets.registry.state(state)?;
+        Some(
+            self.res.behaviours().facts(state).flags
+                & horizon_world::level::data::state_flags::CONDUCTOR
+                != 0,
+        )
+    }
     /// `BlockState.requiresCorrectToolForDrops()`. None for an unknown state.
     pub(super) fn block_state_requires_correct_tool(&self, state: BlockStateId) -> Option<bool> {
         self.pack.assets.registry.state(state)?;
@@ -108,6 +118,12 @@ mod tests {
             assert_eq!(facts.is_fire(state("minecraft:soul_fire")), Some(true));
             assert_eq!(facts.is_fire(stone), Some(false));
             assert_eq!(facts.is_fire(state("minecraft:air")), Some(false));
+            assert_eq!(facts.is_redstone_conductor(stone), Some(true));
+            assert_eq!(facts.is_redstone_conductor(glass), Some(false));
+            assert_eq!(
+                facts.is_redstone_conductor(state("minecraft:air")),
+                Some(false)
+            );
             assert_eq!(facts.requires_correct_tool(obsidian), Some(true));
             assert_eq!(facts.requires_correct_tool(dirt), Some(false));
             // A wooden pickaxe mines stone's drops but not obsidian's (it needs diamond).

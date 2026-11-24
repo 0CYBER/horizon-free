@@ -195,6 +195,13 @@ impl BlockStates<'_> {
     pub fn is_fire(&self, state: BlockState) -> Option<bool> {
         self.backend?.block_state_is_fire(state)
     }
+    /// `BlockState.isRedstoneConductor` for `state` alone (without a level position): stone yes,
+    /// glass and air no. Positional overrides (such as an open shulker box) need
+    /// [`LevelRef::is_redstone_conductor`](crate::LevelRef::is_redstone_conductor). None as for
+    /// `replaceable`.
+    pub fn is_redstone_conductor(&self, state: BlockState) -> Option<bool> {
+        self.backend?.block_state_is_redstone_conductor(state)
+    }
     /// `BlockState.requiresCorrectToolForDrops()`: `state` drops its loot only when mined with a
     /// correct tool (obsidian yes, dirt no). None as for `replaceable`.
     pub fn requires_correct_tool(&self, state: BlockState) -> Option<bool> {
@@ -238,6 +245,8 @@ mod tests {
         assert_eq!(facts.light_emission(state), None);
         assert_eq!(facts.friction(state), None);
         assert_eq!(facts.is_solid_render(state), None);
+        assert_eq!(facts.is_fire(state), None);
+        assert_eq!(facts.is_redstone_conductor(state), None);
         assert_eq!(facts.is_fire(state), None);
         assert_eq!(facts.requires_correct_tool(state), None);
         let stack = crate::ItemStack::of(crate::ItemKey(0));
