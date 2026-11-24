@@ -5,6 +5,8 @@ pub use crate::render_views::{
 };
 use glam::{DVec3, Mat4};
 use std::sync::OnceLock;
+
+pub mod celestial_sky;
 pub struct WorldDrawn<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,

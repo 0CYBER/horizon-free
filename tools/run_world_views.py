@@ -13,7 +13,9 @@ import lab
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--bench", action="store_true", help="time frames with and without views (optimized build)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--bench", action="store_true", help="time frames with and without views (optimized build)")
+    mode.add_argument("--celestial", action="store_true", help="check native celestial sky geometry pixels")
     parser.add_argument("--check-only", action="store_true", help="compile the staged fixture without a display")
     args = parser.parse_args()
     target = prebuilt_game.ROOT / "target" / "world-views"
@@ -37,7 +39,7 @@ def main():
         env = lab.game_env(CARGO_TARGET_DIR=target / "build", **homes)
         subprocess.run(["cargo", "run", "--profile", "release" if args.bench else "dev", "-p",
                         "horizon-client-render", "--example", "world_views", "--", str(output),
-                        *(["--bench"] if args.bench else [])],
+                        *(["--bench"] if args.bench else ["--celestial"] if args.celestial else [])],
                        cwd=staged, env=env, check=True)
 
 

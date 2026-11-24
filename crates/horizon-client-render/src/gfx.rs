@@ -566,6 +566,7 @@ mod lod;
 mod looks;
 #[cfg(any(test, feature = "test-support"))]
 pub use looks::PartLooks;
+mod mod_celestial;
 pub mod mod_pipelines;
 pub mod native_entity;
 mod native_executor;
@@ -1804,6 +1805,7 @@ pub struct Renderer {
     celestial_after_solid_globals: wgpu::Buffer,
     celestial_after_solid_group: wgpu::BindGroup,
     celestial_buffer: wgpu::Buffer,
+    mod_celestial: Option<mod_celestial::Layer>,
     end_sky: end_sky::EndSky,
     stars: stars::Stars,
     /// Custom sky layers (`crate::custom_sky`), and the frame's from the game.
@@ -4386,6 +4388,8 @@ impl Renderer {
             (frame_format, linear_light),
             wgpu::CompareFunction::Equal,
         );
+        let mod_celestial =
+            mod_celestial::Layer::listened(&entity_layout, (frame_format, linear_light));
         drop(entity_step);
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
@@ -5058,6 +5062,7 @@ impl Renderer {
             celestial_after_solid_globals,
             celestial_after_solid_group,
             celestial_buffer,
+            mod_celestial,
             end_sky: end_sky::EndSky::default(),
             stars,
             custom_sky,
@@ -11095,6 +11100,29 @@ impl Renderer {
                 vis.fit(&self.device, [depth.width(), depth.height()], flat)
             };
         }
+        // Gather geometry only at the main sky pass's admission point. The pack ownership is
+        // known now, and the upload must be encoded before opening the pass that reads it.
+        let mod_celestial_vertices = if let Some(layer) = &mut self.mod_celestial
+            && !frame.title
+            && sky_visible
+            && frame.skybox
+            && !frame.end_sky
+            && pack_sky_visibility.sky
+            && !pack_draws_sky
+            && !pack_draws_celestial
+            && !native_sky_pass
+            && !self.executor.is_some_and(|pack| pack.replaces_sky)
+        {
+            layer.prepare(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                jittered,
+                frame.sky.star_angle,
+            )
+        } else {
+            0
+        };
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -11161,6 +11189,12 @@ impl Renderer {
                     // sun, moon and stars.
                     if self.custom_sky.is_drawing() {
                         self.custom_sky.draw(&mut pass);
+                        pass.set_bind_group(0, &self.group, &[]);
+                    }
+                    if mod_celestial_vertices > 0
+                        && let Some(layer) = &self.mod_celestial
+                    {
+                        layer.draw(&mut pass, &self.entity_group, mod_celestial_vertices);
                         pass.set_bind_group(0, &self.group, &[]);
                     }
                 }

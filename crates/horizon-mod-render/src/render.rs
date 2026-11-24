@@ -8,7 +8,11 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/native_render_generated.rs"));
 }
 pub use generated::{
-    HandDrawnEvent, RenderNeedsEvent, WorldDrawnEvent, WorldViewDrawnEvent, WorldViewsEvent,
+    CelestialSkyEvent, HandDrawnEvent, RenderNeedsEvent, WorldDrawnEvent, WorldViewDrawnEvent,
+    WorldViewsEvent,
+};
+pub use horizon_client_render::render_slots::celestial_sky::{
+    CelestialDrawError, CelestialSky, CelestialVertex, MAX_CELESTIAL_TRIANGLES,
 };
 pub use wgpu;
 
@@ -372,11 +376,20 @@ pub fn world_views_hooked() -> bool {
     replaced!(world_views)
 }
 
+/// Add a backdrop to the main Overworld-style sky before its sun, moon and stars.
+/// The triangles submitted through [`CelestialSky`] draw over the sky and behind terrain.
+#[inline(never)]
+#[horizon_mod_api_macros::replaceable]
+pub fn celestial_sky(sky: &mut CelestialSky<'_>) {
+    let _ = sky;
+}
+
 pub use horizon_client_render::render_geometry::{EntitySpan, Vertex};
 
 /// Install the native render adapters before engine startup.
 pub fn install() {
     use horizon_client_render::render_slots as engine;
+    engine::celestial_sky::install(|| replaced!(celestial_sky).then_some(celestial_sky));
     engine::install(engine::Slots {
         world_drawn: |v| {
             world_drawn(&mut WorldDrawn {

@@ -283,13 +283,21 @@ fn render_records_need_no_game_sources() {
     generate_render(&root, &root).unwrap();
     let generated = fs::read_to_string(root.join("native_render_generated.rs")).unwrap();
     let file = syn::parse_file(&generated).unwrap();
-    assert_eq!(
-        file.items
-            .iter()
-            .filter(|item| matches!(item, syn::Item::Struct(_)))
-            .count(),
-        5
-    );
+    for name in [
+        "CelestialSkyEvent",
+        "HandDrawnEvent",
+        "RenderNeedsEvent",
+        "WorldDrawnEvent",
+        "WorldViewDrawnEvent",
+        "WorldViewsEvent",
+    ] {
+        assert!(
+            file.items
+                .iter()
+                .any(|item| matches!(item, syn::Item::Struct(record) if record.ident == name)),
+            "missing standalone render record {name}"
+        );
+    }
     fs::remove_dir_all(root).unwrap();
 }
 

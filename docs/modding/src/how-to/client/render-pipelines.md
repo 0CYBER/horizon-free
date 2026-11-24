@@ -162,3 +162,27 @@ naming `RenderPipeline::textured`.
 
 A pipeline cannot take values of its own from the mod, sample more than one texture, or replace the
 vertex stage.
+
+## Celestial sky geometry
+
+Native mods can inject into `mod_render::render::celestial_sky` to add a backdrop such as a nebula
+without replacing the vanilla sun, moon or stars. The layer draws in the main Overworld-style sky
+after the disc, sunrise and resource-pack sky layers, but before the celestial bodies and terrain.
+It does not run when the sky is hidden, on the title screen, in the End sky, or when a shader pack
+owns the sky or its celestial pass.
+
+`CelestialSky` supplies the camera-relative `view_proj` (including view effects and jitter) and
+`star_angle_degrees`, even when stars are too dim to draw. Positions are camera-relative world
+offsets, without subtracting the camera. To follow the stars, rotate offsets first with
+`star_rotation()` (`Y(-90°) × X(star_angle)`).
+
+`draw_triangles(sprite, vertices)` takes triangles in either winding, with UVs in `0..=1` across
+one `AtlasRegion`. Resolve it from `gui_sprite` at `texture_atlas_stitched` and refresh it on GUI
+atlas reload. RGB tint is unlit vanilla gamma (`0..=16`, with 1 at paper white); alpha is coverage
+(`0..=1`). The renderer multiplies the texture by the interpolated tint, converts to the frame's
+encoding, and blends without writing depth. Float frames retain light above white without applying
+the stock sun's HDR lift to the backdrop.
+
+Submissions share 4,096 triangles per frame. An incomplete triangle, an invalid atlas region, or
+nonfinite/out-of-range coordinates, UVs or colors refuse the entire submission. Each coordinate
+must be in `-512..=512`. The hook exposes neither GPU handles nor a WebAssembly wire form.

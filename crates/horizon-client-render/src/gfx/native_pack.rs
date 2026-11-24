@@ -805,6 +805,7 @@ impl NativePack {
             // GPU culling doesn't list the sections `[displacement]`'s grid takes quads from.
             displacement: self.displacement.is_some(),
             material: self.material.is_some(),
+            replaces_sky: self.sky.is_some(),
             hides_clouds: !self.vanilla_clouds,
             // `[sky]`'s sun, moon and stars are left out only where its stage draws its own.
             hides_sun: self.sky.is_some() && !self.vanilla_sun,
@@ -1105,6 +1106,7 @@ file = \"material.wgsl\"
         // Without post passes, a pack whose frame holds gamma light keeps the player's FXAA,
         // and TAA's upscaling under Horizon's tonemap.
         let plain = Capabilities {
+            replaces_sky: true,
             engine_resolve: true,
             engine_upscale: true,
             ..Capabilities::default()
@@ -1117,7 +1119,13 @@ file = \"material.wgsl\"
         };
         let built = NativePack::new(&device, &queue, &linear, pack(""), &[], Default::default());
         let linear = built.expect("the pack builds").0.capabilities();
-        assert_eq!(linear, Capabilities::default());
+        assert_eq!(
+            linear,
+            Capabilities {
+                replaces_sky: true,
+                ..Capabilities::default()
+            }
+        );
         let hides = Capabilities {
             hides_clouds: true,
             hides_sun: true,
