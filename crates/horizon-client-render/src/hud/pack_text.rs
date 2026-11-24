@@ -48,6 +48,19 @@ pub(super) fn load_core(
     defines: &[&str],
     glue: &Glue,
 ) -> Option<Arc<CoreProgram>> {
+    load_core_with(root, defaults, name, defines, glue, &|_| false)
+}
+
+/// [`load_core`] for a pipeline whose shader names a block or sampler of its own beyond vanilla's,
+/// which `provided` lets through at its [`crate::core_shader::other_binding`].
+pub(super) fn load_core_with(
+    root: &ResourceSource,
+    defaults: &ResourceSource,
+    name: &str,
+    defines: &[&str],
+    glue: &Glue,
+    provided: &dyn Fn(&str) -> bool,
+) -> Option<Arc<CoreProgram>> {
     // The game passes the packs' resolved source as both: a shader is the pack's own when it
     // differs from the layer the packs were resolved over.
     let defaults = if defaults.same_generation(root) {
@@ -71,7 +84,9 @@ pub(super) fn load_core(
         let path = format!("assets/{namespace}/{path}");
         read(root, &path).or_else(|| read(defaults, &path))
     };
-    match crate::core_shader::translate_core(&vertex, &fragment, defines, &include, glue) {
+    match crate::core_shader::translate_core_with(
+        &vertex, &fragment, defines, &include, glue, provided,
+    ) {
         Ok(program) => {
             log::info!("the resource pack's {name} shader is used");
             Some(Arc::new(program))
@@ -83,7 +98,7 @@ pub(super) fn load_core(
     }
 }
 
-/// The packs' core shaders the atlas carries (text, block outline, sky, stars).
+/// The packs' core shaders the atlas carries (text, block outline, sky, stars, lightmap).
 pub(super) fn load_shaders(
     atlas: &mut super::HudAtlas,
     root: &ResourceSource,
@@ -108,6 +123,58 @@ pub(super) fn load_shaders(
         &["IS_SEE_THROUGH"],
         &crate::gfx::core_text::SEE_THROUGH_GLUE,
     );
+    // `LightmapInfo` is the lightmap pipeline's own uniform block, none of vanilla's shared ones.
+    atlas.lightmap_shader = load_lightmap(root, defaults);
+}
+
+/// The packs' `core/lightmap` shader, when a pack replaces either stage. The pipeline's vertex
+/// stage is `core/screenquad.vsh` (`RenderPipelines.LIGHTMAP`): there is no `lightmap.vsh` for
+/// the defaults to fall back to, so a pack that ships only the fragment stage — how fullbright
+/// packs work — still loads, over the game's own screenquad vertex shader.
+fn load_lightmap(root: &ResourceSource, defaults: &ResourceSource) -> Option<Arc<CoreProgram>> {
+    // The game passes the packs' resolved source as both: a shader is the pack's own when it
+    // differs from the layer the packs were resolved over.
+    let defaults = if defaults.same_generation(root) {
+        defaults.underlay().unwrap_or(defaults)
+    } else {
+        defaults
+    };
+    let read = |base: &ResourceSource, path: &str| base.read_to_string(path).ok();
+    let own =
+        |path: &str| read(root, path).filter(|text| read(defaults, path).as_ref() != Some(text));
+    let vertex_path = "assets/minecraft/shaders/core/lightmap.vsh";
+    let fragment_path = "assets/minecraft/shaders/core/lightmap.fsh";
+    let (own_vertex, own_fragment) = (own(vertex_path), own(fragment_path));
+    if own_vertex.is_none() && own_fragment.is_none() {
+        return None;
+    }
+    let screenquad = "assets/minecraft/shaders/core/screenquad.vsh";
+    let vertex = own_vertex
+        .or_else(|| read(defaults, vertex_path))
+        .or_else(|| read(defaults, screenquad))?;
+    let fragment = own_fragment.or_else(|| read(defaults, fragment_path))?;
+    let include = |id: &str| {
+        let (namespace, path) = id.split_once(':')?;
+        let path = format!("assets/{namespace}/{path}");
+        read(root, &path).or_else(|| read(defaults, &path))
+    };
+    match crate::core_shader::translate_core_with(
+        &vertex,
+        &fragment,
+        &[],
+        &include,
+        &crate::gfx::core_lightmap::GLUE,
+        &|name| name == "LightmapInfo",
+    ) {
+        Ok(program) => {
+            log::info!("the resource pack's lightmap shader is used");
+            Some(Arc::new(program))
+        }
+        Err(e) => {
+            log::warn!("the resource pack's lightmap shader is not used: {e}");
+            None
+        }
+    }
 }
 
 /// Each uniform block's offset in the one buffer (`core_shader::BLOCKS` order).

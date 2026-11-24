@@ -524,6 +524,7 @@ pub mod capture;
 mod celestial;
 mod census;
 pub mod compositor;
+pub(crate) mod core_lightmap;
 pub(crate) mod core_lines;
 pub(crate) mod core_sky;
 pub(crate) mod core_text;
@@ -1739,6 +1740,12 @@ pub struct Renderer {
     core_text: Option<core_text::CoreText>,
     /// The packs' `core/sky` and `core/stars`, drawn in place of the native sky and stars.
     core_sky: Option<core_sky::CoreSky>,
+    /// A resource pack's `core/lightmap`, which draws the lightmap texture in place of the
+    /// CPU-built vanilla formula.
+    pack_lightmap: Option<core_lightmap::PackLightmap>,
+    /// Whether the CPU built the lightmap texture last: the pack's shader
+    /// redraws over a fullbright's CPU build even with unchanged inputs.
+    lightmap_from_cpu: bool,
     /// Gizmo lines: opaque ones (`RenderTypes.lines`, which writes depth),
     /// translucent ones (`RenderTypes.linesTranslucentNoDepthWrite`) and the
     /// always-on-top ones.
@@ -3616,7 +3623,10 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                // A pack's core/lightmap draws the texture in place (`Lightmap.render`).
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let lightmap_view = lightmap.create_view(&Default::default());
@@ -5019,6 +5029,8 @@ impl Renderer {
             core_lines: None,
             core_text: None,
             core_sky: None,
+            pack_lightmap: None,
+            lightmap_from_cpu: false,
             debug_lines_opaque,
             debug_lines,
             debug_lines_on_top,
@@ -5358,6 +5370,16 @@ impl Renderer {
         let (disc, stars) = (disc.filter(|_| keep), stars.filter(|_| keep));
         self.core_sky = core_sky::CoreSky::new(&self.device, self.output.frame.format, disc, stars);
     }
+    /// A resource pack's `core/lightmap` (`HudAtlas::lightmap_shader`), which draws the
+    /// lightmap texture in place of the CPU-built vanilla formula.
+    pub fn set_lightmap_shader(&mut self, program: Option<&crate::core_shader::CoreProgram>) {
+        self.pack_lightmap =
+            program.and_then(|p| core_lightmap::PackLightmap::new(&self.device, p));
+        // The next frame draws the lightmap again, whichever shader won.
+        self.lightmap_uploaded = false;
+        self.lightmap_key = None;
+        self.lightmap_from_cpu = false;
+    }
     /// LevelRenderer.submitBlockOutline: the buffer holds `edges` per stroke, the black
     /// secondary stroke first when high contrast is on.
     #[horizon_mod_api_macros::replaceable]
@@ -5403,6 +5425,7 @@ impl Renderer {
     fn upload_again(&mut self) {
         self.lightmap_uploaded = false;
         self.lightmap_key = None;
+        self.lightmap_from_cpu = false;
         self.static_entity_catalog_revision = 0;
         for section in self.static_entity_sections.values_mut() {
             section.revision = 0;
@@ -8003,6 +8026,72 @@ impl Renderer {
         let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
         View::screen(yaw, pitch, fov_degrees, aspect, far)
     }
+    /// The vanilla formula's lightmap (`lightmap.fsh`), per (block, sky) level: the texture when
+    /// no pack's core/lightmap runs, and the table the debug lightmap overlay reads either way.
+    fn vanilla_lightmap_pixels(
+        sky: &Sky,
+        darkness: f32,
+        gamma: f32,
+        night_vision: f32,
+        flicker: f32,
+        boss_darken: f32,
+    ) -> [u8; 16 * 16 * 4] {
+        let brightness = |level: f32| level / (4.0 - 3.0 * level);
+        let mut pixels = [0u8; 16 * 16 * 4];
+        for s in 0..16 {
+            for b in 0..16 {
+                let block_level = b as f32 / 15.0;
+                let sky_level = s as f32 / 15.0;
+                let block_brightness = brightness(block_level) * (1.4 + flicker);
+                let sky_brightness = brightness(sky_level) * sky.sky_light_factor;
+                // NightVisionColor defaults to 0x999999.
+                let mut color =
+                    Vec3::from(sky.ambient_light_color).max(Vec3::splat(0.6 * night_vision));
+                color += Vec3::from(sky.sky_light_color) * sky_brightness;
+                let parabolic = (2.0 * block_level - 1.0).powi(2);
+                let block_color = Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
+                color += block_color * block_brightness;
+                // lightmap.fsh: a boss bar mixes the light toward 70/60/60%.
+                color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), boss_darken);
+                color -= Vec3::splat(darkness);
+                color = color.clamp(Vec3::ZERO, Vec3::ONE);
+                let max = color.max_element().max(1e-6);
+                let inverted = 1.0 - max;
+                let scaled = 1.0 - inverted.powi(4);
+                let not_gamma = color * (scaled / max);
+                color = color.lerp(not_gamma, gamma);
+                let i = (s * 16 + b) * 4;
+                pixels[i] = (color.x * 255.0) as u8;
+                pixels[i + 1] = (color.y * 255.0) as u8;
+                pixels[i + 2] = (color.z * 255.0) as u8;
+                pixels[i + 3] = 255;
+            }
+        }
+        pixels
+    }
+    /// Whether the pack's lightmap shader redraws the texture this frame:
+    /// nothing drew it yet, or the CPU built it last (a fullbright toggle
+    /// overwrote the pack's draw), or an input changed.
+    fn pack_lightmap_needs_draw(
+        uploaded: bool,
+        from_cpu: bool,
+        key: Option<LightmapKey>,
+        next: &LightmapKey,
+    ) -> bool {
+        !uploaded || from_cpu || key != Some(*next)
+    }
+    /// Whether the CPU-built lightmap re-uploads this frame: it differs from
+    /// the last table, or nothing drew the texture yet. (`lightmap_pixels`
+    /// keeps the vanilla formula's table even while the pack's shader draws
+    /// the texture, so an unchanged table after a pack draw is the CPU back
+    /// at its steady state — the pack's next draw, not the CPU's, reacts.)
+    fn cpu_lightmap_needs_upload(
+        pixels: &[u8; 16 * 16 * 4],
+        table: &[u8; 16 * 16 * 4],
+        uploaded: bool,
+    ) -> bool {
+        pixels != table || !uploaded
+    }
     fn update_lightmap(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -8013,6 +8102,11 @@ impl Renderer {
         flicker: f32,
         boss_darken: f32,
     ) {
+        // A resource pack's core/lightmap draws the texture on the GPU
+        // (`RenderPipelines.LIGHTMAP`, `Lightmap.render`), a fullbright pack's
+        // lightmap shader among them. `lightmap_pixels` stays the vanilla
+        // formula's table: the debug lightmap overlay and the external
+        // lightmap read it, and it is what the CPU path builds.
         let key = LightmapKey::new(
             sky,
             darkness,
@@ -8022,48 +8116,65 @@ impl Renderer {
             boss_darken,
             self.fullbright,
         );
-        if self.lightmap_uploaded && self.lightmap_key == Some(key) {
+        if !self.fullbright {
+            let data =
+                core_lightmap::uniforms(sky, darkness, gamma, night_vision, flicker, boss_darken);
+            if let Some(lightmap) = self.pack_lightmap.as_ref() {
+                if Self::pack_lightmap_needs_draw(
+                    self.lightmap_uploaded,
+                    self.lightmap_from_cpu,
+                    self.lightmap_key,
+                    &key,
+                ) {
+                    lightmap.prepare(&mut self.uploads, encoder, &data);
+                    let view = self.lightmap_view.clone();
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Resource pack lightmap"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            ..Default::default()
+                        });
+                        lightmap.draw(&mut pass);
+                    }
+                    self.lightmap_uploaded = true;
+                    self.lightmap_from_cpu = false;
+                    self.lightmap_key = Some(key);
+                    self.lightmap_pixels = Self::vanilla_lightmap_pixels(
+                        sky,
+                        darkness,
+                        gamma,
+                        night_vision,
+                        flicker,
+                        boss_darken,
+                    );
+                }
+                return;
+            }
+        }
+        // Same inputs as the texture the CPU last built: nothing to redo.
+        if self.lightmap_uploaded && self.lightmap_from_cpu && self.lightmap_key == Some(key) {
             return;
         }
-        let mut pixels = [255u8; 16 * 16 * 4];
-        if !self.fullbright {
-            // lightmap.fsh: per (block, sky) level.
-            let brightness = |level: f32| level / (4.0 - 3.0 * level);
-            for s in 0..16 {
-                for b in 0..16 {
-                    let block_level = b as f32 / 15.0;
-                    let sky_level = s as f32 / 15.0;
-                    let block_brightness = brightness(block_level) * (1.4 + flicker);
-                    let sky_brightness = brightness(sky_level) * sky.sky_light_factor;
-                    // NightVisionColor defaults to 0x999999.
-                    let mut color =
-                        Vec3::from(sky.ambient_light_color).max(Vec3::splat(0.6 * night_vision));
-                    color += Vec3::from(sky.sky_light_color) * sky_brightness;
-                    let parabolic = (2.0 * block_level - 1.0).powi(2);
-                    let block_color =
-                        Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
-                    color += block_color * block_brightness;
-                    // lightmap.fsh: a boss bar mixes the light toward 70/60/60%.
-                    color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), boss_darken);
-                    color -= Vec3::splat(darkness);
-                    color = color.clamp(Vec3::ZERO, Vec3::ONE);
-                    let max = color.max_element().max(1e-6);
-                    let inverted = 1.0 - max;
-                    let scaled = 1.0 - inverted.powi(4);
-                    let not_gamma = color * (scaled / max);
-                    color = color.lerp(not_gamma, gamma);
-                    let i = (s * 16 + b) * 4;
-                    pixels[i] = (color.x * 255.0) as u8;
-                    pixels[i + 1] = (color.y * 255.0) as u8;
-                    pixels[i + 2] = (color.z * 255.0) as u8;
-                    pixels[i + 3] = 255;
-                }
-            }
+        // lightmap.fsh: per (block, sky) level.
+        let mut pixels =
+            Self::vanilla_lightmap_pixels(sky, darkness, gamma, night_vision, flicker, boss_darken);
+        if self.fullbright {
+            pixels.fill(255);
         }
         // The lightmap changes with the time of day, flicker and effects,
         // not every frame: upload only what differs from the texture.
         self.lightmap_key = Some(key);
-        if pixels == self.lightmap_pixels && self.lightmap_uploaded {
+        if !Self::cpu_lightmap_needs_upload(&pixels, &self.lightmap_pixels, self.lightmap_uploaded)
+        {
             return;
         }
         self.uploads.texture(
@@ -8080,6 +8191,7 @@ impl Renderer {
         );
         self.lightmap_pixels = pixels;
         self.lightmap_uploaded = true;
+        self.lightmap_from_cpu = true;
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64, cull_inactive: bool) {
         let active = cull_inactive.then_some(&self.active_animated_layers[..]);

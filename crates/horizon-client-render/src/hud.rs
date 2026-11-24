@@ -117,6 +117,9 @@ pub struct HudAtlas {
     /// The packs' `core/sky` and `core/stars`, when a pack replaces them.
     pub sky_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     pub stars_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
+    /// The packs' `core/lightmap`, which draws the lightmap texture in place of the CPU
+    /// formula (`RenderPipelines.LIGHTMAP`).
+    pub lightmap_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     /// The packs' `core/position_tex_color` (`RenderPipelines.GUI_TEXTURED`), when a pack
     /// replaces it: [`HudBatch::pack_blit`] draws the menu textures with it.
     pub blit_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
@@ -1105,6 +1108,7 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            lightmap_shader: None,
             blit_shader: None,
             sprite_modifiers: Default::default(),
             random_textures: Default::default(),
@@ -1175,6 +1179,7 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            lightmap_shader: None,
             blit_shader: None,
             sprite_modifiers: Default::default(),
             random_textures: Default::default(),
@@ -1797,6 +1802,7 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            lightmap_shader: None,
             blit_shader: None,
             sprite_modifiers: Default::default(),
             random_textures,
