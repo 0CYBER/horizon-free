@@ -629,6 +629,87 @@ mod loader_tests {
         assert!(library.resolve("t:loop").is_err());
     }
 
+    /// Resolved composite children, all levels.
+    fn children(model: &crate::resolve::ResolvedCuboidModel) -> usize {
+        match model.loader() {
+            Some(ResolvedLoader::Composite(c)) => c.iter().map(|m| 1 + children(m)).sum(),
+            _ => 0,
+        }
+    }
+    #[test]
+    fn composite_children_share_one_budget_per_resolve() {
+        // `levels` files of 6 children, each naming the next file: 6 + 36 + ... children,
+        // each costing itself plus its one inherited slot.
+        let fan_out = |levels: usize| {
+            let mut models: Vec<(String, String)> = (0..levels)
+                .map(|i| {
+                    let child = format!(r#"{{"parent":"t:m{}"}}"#, i + 1);
+                    let children: Vec<String> =
+                        (0..6).map(|c| format!(r#""c{c}":{child}"#)).collect();
+                    let json = format!(
+                        r#"{{"loader":"neoforge:composite","textures":{{"a":"block/a"}},"children":{{{}}}}}"#,
+                        children.join(",")
+                    );
+                    (format!("t:m{i}"), json)
+                })
+                .collect();
+            models.push((format!("t:m{levels}"), "{}".to_owned()));
+            let models: Vec<(&str, &str)> = models
+                .iter()
+                .map(|(n, j)| (n.as_str(), j.as_str()))
+                .collect();
+            library(&models, &[]).resolve("t:m0")
+        };
+        // 4 levels: 1 554 children of about 230 bytes each; 6 levels would be 55 986 children.
+        assert_eq!(children(&fan_out(4).unwrap()), 6 + 36 + 216 + 1296);
+        assert!(fan_out(6).is_err());
+        // One file is enough when every child copies many slots...
+        let wide = |slots: usize| {
+            let textures: Vec<String> =
+                (0..slots).map(|i| format!(r#""s{i}":"block/a""#)).collect();
+            let children: Vec<String> = (0..64).map(|c| format!(r#""c{c}":{{}}"#)).collect();
+            let json = format!(
+                r#"{{"loader":"neoforge:composite","textures":{{{}}},"children":{{{}}}}}"#,
+                textures.join(","),
+                children.join(",")
+            );
+            library(&[("t:wide", &json)], &[]).resolve("t:wide")
+        };
+        assert_eq!(children(&wide(10).unwrap()), 64);
+        assert!(wide(1000).is_err());
+        // ...or a parent whose `visibility` every child copies into the objects it hides.
+        let hiding = |entries: usize| {
+            let hidden: Vec<String> = (0..entries).map(|i| format!(r#""o{i}":false"#)).collect();
+            let obj = format!(
+                r#"{{"loader":"neoforge:obj","model":"t:x.obj","visibility":{{{}}}}}"#,
+                hidden.join(",")
+            );
+            let children: Vec<String> = (0..64)
+                .map(|c| format!(r#""c{c}":{{"parent":"t:o"}}"#))
+                .collect();
+            let json = format!(
+                r#"{{"loader":"neoforge:composite","children":{{{}}}}}"#,
+                children.join(",")
+            );
+            library(&[("t:o", &obj), ("t:c", &json)], &[]).resolve("t:c")
+        };
+        assert_eq!(children(&hiding(100).unwrap()), 64);
+        assert!(hiding(2000).is_err());
+        // ...or a few slots of long names: bytes count, not entries. Each child copies the
+        // inherited 100 KiB sprite twice (its slot, then its material).
+        let long = |count: usize| {
+            let sprite = format!("block/{}", "a".repeat(100 << 10));
+            let children: Vec<String> = (0..count).map(|c| format!(r#""c{c}":{{}}"#)).collect();
+            let json = format!(
+                r#"{{"loader":"neoforge:composite","textures":{{"all":"{sprite}"}},"children":{{{}}}}}"#,
+                children.join(",")
+            );
+            library(&[("t:long", &json)], &[]).resolve("t:long")
+        };
+        assert_eq!(children(&long(2).unwrap()), 2);
+        assert!(long(8).is_err());
+    }
+
     const OBJ: &str = "mtllib m.mtl\nv 0 0 0\nv 1 0 0\nv 1 0 1\nv 0 0 1\nv 0 1 0\n\
         vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n\
         usemtl top\nf 1/1 4/4 3/3 2/2\nusemtl side\nf 1/1 2/2 5/4\nusemtl bare\nf 1/1 2/2 5/4\n";

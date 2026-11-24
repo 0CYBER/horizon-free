@@ -15,6 +15,47 @@ pub const MISSING_MODEL: &str = "minecraft:builtin/missing";
 pub const GENERATED_MODEL: &str = "minecraft:builtin/generated";
 /// Composite children nest through parents that may name the composite again.
 const MAX_LOADER_DEPTH: u8 = 8;
+/// What one top-level resolve may copy, in bytes: every model of every parent chain it walks,
+/// composite children included, is charged its name, texture slots and `visibility` names before
+/// they are copied, and every resolved material its slot and sprite name, [`ENTRY_COST`] each
+/// besides their text. Depth alone lets a few files that each name the next one many times fan
+/// out exponentially, and an alias copies the sprite it names. A vanilla block model's resolve
+/// copies about 2 KB; this leaves room for a composite of hundreds of such children.
+pub(crate) const MAX_RESOLVE_WORK: usize = 1 << 20;
+/// About what a `String` and its map node take besides their text.
+const ENTRY_COST: usize = 32;
+fn charge(work: &mut usize, cost: usize) -> Result<()> {
+    *work = work.saturating_add(cost);
+    if *work > MAX_RESOLVE_WORK {
+        return Err(error("model resolves too much texture and composite data"));
+    }
+    Ok(())
+}
+fn slot_cost(name: &str, slot: &TextureSlot) -> usize {
+    ENTRY_COST
+        + name.len()
+        + match slot {
+            TextureSlot::Reference(target) => target.len(),
+            TextureSlot::Material(material) => material.sprite.len(),
+        }
+}
+fn slots_cost(slots: &BTreeMap<String, TextureSlot>) -> usize {
+    slots.iter().map(|(k, v)| slot_cost(k, v)).sum()
+}
+/// What resolving through `model` copies of it: its name (`name_len` bytes, held twice: in the
+/// chain's names and the cycle check), its parent's name, slots and `visibility` names.
+fn model_cost(name_len: usize, model: &CuboidModel) -> usize {
+    let names =
+        |map: &BTreeMap<String, bool>| -> usize { map.keys().map(|k| ENTRY_COST + k.len()).sum() };
+    2 * (ENTRY_COST + name_len)
+        + model.parent.as_ref().map_or(0, |p| ENTRY_COST + p.len())
+        + slots_cost(&model.textures)
+        + names(&model.visibility)
+        + match &model.loader {
+            Some(Loader::Composite { visibility, .. }) => names(visibility),
+            _ => 0,
+        }
+}
 
 /// Reads asset files that models point at (`namespace:path` is `assets/namespace/path`).
 pub trait AssetReader: Send + Sync {
@@ -237,11 +278,21 @@ impl ModelLibrary {
         child: Option<&BTreeMap<String, TextureSlot>>,
     ) -> Result<ResolvedCuboidModel> {
         let next = Some(identifier(name)?);
-        self.resolve_chain(Vec::new(), Vec::new(), next, &BTreeMap::new(), child, 0)
+        let mut work = 0;
+        self.resolve_chain(
+            Vec::new(),
+            Vec::new(),
+            next,
+            &BTreeMap::new(),
+            child,
+            0,
+            &mut work,
+        )
     }
     /// `chain` and `names` start with models that are not in the library (a
     /// composite child); `next` is the parent to follow. `fallback` slots lose
-    /// to any slot the chain defines.
+    /// to any slot the chain defines. `work` is what this top-level resolve has copied so far
+    /// ([`MAX_RESOLVE_WORK`]).
     fn resolve_chain(
         &self,
         mut chain: Vec<Arc<CuboidModel>>,
@@ -250,16 +301,21 @@ impl ModelLibrary {
         fallback: &BTreeMap<String, TextureSlot>,
         child: Option<&BTreeMap<String, TextureSlot>>,
         depth: u8,
+        work: &mut usize,
     ) -> Result<ResolvedCuboidModel> {
         if depth > MAX_LOADER_DEPTH {
             return Err(error("composite models nest too deeply"));
         }
+        // The inherited and child slots are copied below too. A composite child handed in was
+        // charged by its parent before its label and parent name were built.
+        charge(work, slots_cost(fallback) + child.map_or(0, slots_cost))?;
         let mut visited = BTreeSet::new();
         while let Some(name) = next.take() {
+            let model = self.models.get(&name).unwrap_or(&self.missing);
+            charge(work, model_cost(name.len(), model))?;
             if !visited.insert(name.clone()) {
                 return Err(error("cyclic model parent"));
             }
-            let model = self.models.get(&name).unwrap_or(&self.missing);
             chain.push(Arc::clone(model));
             names.push(name);
             next = model.parent.clone();
@@ -272,7 +328,13 @@ impl ModelLibrary {
             .iter()
             .find_map(|m| m.gui_light)
             .unwrap_or(GuiLight::Side);
-        let render_type = chain.iter().find_map(|m| m.render_type.clone());
+        let render_type = match chain.iter().find_map(|m| m.render_type.as_deref()) {
+            Some(kind) => {
+                charge(work, ENTRY_COST + kind.len())?;
+                Some(kind.to_owned())
+            }
+            None => None,
+        };
         let geometry = chain.iter().find(|m| m.elements.is_some()).map(Arc::clone);
         let generated = chain
             .iter()
@@ -305,6 +367,7 @@ impl ModelLibrary {
                 children,
                 visibility,
             }) => {
+                charge(work, slots.iter().map(|(k, v)| slot_cost(k, v)).sum())?;
                 let inherited: BTreeMap<String, TextureSlot> = slots
                     .iter()
                     .map(|(k, v)| (k.clone(), (*v).clone()))
@@ -319,6 +382,9 @@ impl ModelLibrary {
                     if visibility.get(child_name) == Some(&false) {
                         continue;
                     }
+                    // The child's label (`<model>#<child>`) and parent name, before building them.
+                    let label_len = names[0].len() + 1 + child_name.len();
+                    charge(work, model_cost(label_len, child_model))?;
                     resolved.push(self.resolve_chain(
                         vec![Arc::clone(child_model)],
                         vec![format!("{}#{child_name}", names[0])],
@@ -326,6 +392,7 @@ impl ModelLibrary {
                         &inherited,
                         None,
                         depth + 1,
+                        work,
                     )?);
                 }
                 Some(ResolvedLoader::Composite(resolved))
@@ -372,13 +439,24 @@ impl ModelLibrary {
         };
         let mut textures = BTreeMap::<String, Material>::new();
         let mut unresolved_textures = BTreeSet::<String>::new();
+        // Every slot on a walk keeps its own copy of the material it reaches: charged before the
+        // first copy is made.
+        let walk_cost = |path: &[&str], material: &Material| -> usize {
+            path.iter()
+                .map(|name| 2 * ENTRY_COST + name.len() + material.sprite.len())
+                .sum()
+        };
         for start in slots.keys() {
             let mut current = start.as_str();
             let mut seen = BTreeSet::new();
             let mut path = Vec::new();
             let material = loop {
                 if let Some(material) = textures.get(current) {
-                    break Some(material.clone());
+                    if path.is_empty() {
+                        break Some(None);
+                    }
+                    charge(work, walk_cost(&path, material))?;
+                    break Some(Some(material.clone()));
                 }
                 if unresolved_textures.contains(current) || !seen.insert(current) {
                     break None;
@@ -389,15 +467,23 @@ impl ModelLibrary {
                 path.push(current);
                 match slot {
                     TextureSlot::Reference(target) => current = target,
-                    TextureSlot::Material(material) => break Some(material.clone()),
+                    TextureSlot::Material(material) => {
+                        charge(work, walk_cost(&path, material))?;
+                        break Some(Some(material.clone()));
+                    }
                 }
             };
             // Cache the entire walk, including failures, so long alias chains
             // and cycles are traversed once rather than once per referencing slot.
             match material {
-                Some(material) => {
-                    for name in path {
-                        textures.insert(name.to_owned(), material.clone());
+                // `start` was already resolved by an earlier walk.
+                Some(None) => {}
+                Some(Some(material)) => {
+                    if let Some((last, rest)) = path.split_last() {
+                        for name in rest {
+                            textures.insert((*name).to_owned(), material.clone());
+                        }
+                        textures.insert((*last).to_owned(), material);
                     }
                 }
                 None => {
@@ -754,6 +840,42 @@ mod tests {
             ("minecraft:item/x".to_owned(), model("{}")),
         ]);
         assert!(base.overlaid(twins).is_err());
+    }
+    #[test]
+    fn aliases_that_copy_a_long_sprite_past_the_budget_are_an_error() {
+        // Every alias of `all` holds its own copy of the 64 KiB sprite once resolved.
+        let model = |aliases: usize| {
+            let mut textures = vec![format!(r#""all":"block/{}""#, "a".repeat(64 << 10))];
+            textures.extend((0..aliases).map(|i| format!(r##""a{i}":"#all""##)));
+            format!(r#"{{"textures":{{{}}}}}"#, textures.join(","))
+        };
+        let few = model(4);
+        let many = model(32);
+        let library = library(&[("block/few", &few), ("block/many", &many)]);
+        assert_eq!(library.resolve("block/few").unwrap().textures.len(), 5);
+        assert!(library.resolve("block/many").is_err());
+    }
+    #[test]
+    fn composite_children_copying_a_long_render_type_past_the_budget_are_an_error() {
+        // Every child of `kind`'s children resolves its own copy of the 64 KiB render type.
+        let kind = format!(r#"{{"render_type":"{}"}}"#, "c".repeat(64 << 10));
+        let composite = |children: usize| {
+            let children: Vec<String> = (0..children)
+                .map(|c| format!(r#""c{c}":{{"parent":"block/kind"}}"#))
+                .collect();
+            format!(
+                r#"{{"loader":"neoforge:composite","children":{{{}}}}}"#,
+                children.join(",")
+            )
+        };
+        let (few, many) = (composite(4), composite(32));
+        let library = library(&[
+            ("block/kind", &kind),
+            ("block/few", &few),
+            ("block/many", &many),
+        ]);
+        assert!(library.resolve("block/few").is_ok());
+        assert!(library.resolve("block/many").is_err());
     }
     #[test]
     fn absent_parents_fall_back_but_cycles_invalidate_descendants() {

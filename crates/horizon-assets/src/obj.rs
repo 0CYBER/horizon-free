@@ -1,6 +1,16 @@
 //! Wavefront OBJ and MTL text, as obj-loader models use them.
 use std::collections::BTreeMap;
 
+/// The most faces (after polygons are split into quads) one obj file may have: the same bound
+/// as a registered loader's quads (`MAX_LOADER_QUADS` in horizon-client-render), far above any
+/// block or item model. A file over it is refused whole, never cut.
+pub(crate) const MAX_OBJ_FACES: usize = 65_536;
+/// The most bytes of `usemtl` and `o`/`g` names one obj file's faces may hold, every face
+/// counting its own copy of both: 64 bytes of names per face at [`MAX_OBJ_FACES`]. Each face
+/// owns its names, so without it a long name repeated on many faces is copied once per face.
+/// A file over it is refused whole, before the copy that would pass it.
+pub(crate) const MAX_OBJ_NAME_BYTES: usize = 4 << 20;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjVertex {
     /// Block units.
@@ -42,6 +52,7 @@ pub fn parse_obj(text: &str) -> Result<ParsedObj, String> {
     let mut parsed = ParsedObj::default();
     let mut material = String::new();
     let mut object = String::new();
+    let mut name_bytes = 0usize;
     for (number, line) in text.lines().enumerate() {
         let mut words = line.split_whitespace();
         let Some(keyword) = words.next() else {
@@ -82,6 +93,21 @@ pub fn parse_obj(text: &str) -> Result<ParsedObj, String> {
                 }
                 if corners.len() < 3 {
                     return Err(at("face needs three vertices"));
+                }
+                // A polygon of n corners becomes n - 2 faces, so count before pushing.
+                let added = if corners.len() <= 4 {
+                    1
+                } else {
+                    corners.len() - 2
+                };
+                if parsed.faces.len() + added > MAX_OBJ_FACES {
+                    return Err(at(&format!("more than {MAX_OBJ_FACES} faces")));
+                }
+                name_bytes = name_bytes.saturating_add(added * (material.len() + object.len()));
+                if name_bytes > MAX_OBJ_NAME_BYTES {
+                    return Err(at(&format!(
+                        "faces name more than {MAX_OBJ_NAME_BYTES} bytes of materials and objects"
+                    )));
                 }
                 let mut push = |vertices: [ObjVertex; 4]| {
                     parsed.faces.push(ObjFace {
@@ -171,6 +197,31 @@ mod tests {
     fn bad_indices_are_errors() {
         assert!(parse_obj("v 0 0 0\nf 1 2 3\n").is_err());
         assert!(parse_obj("v 0 0 0\nv 1 0 0\nf 1 2\n").is_err());
+    }
+    #[test]
+    fn long_names_on_many_faces_and_too_many_faces_are_an_error() {
+        // Each face holds its own copy of both names: 1000 faces of two 1 KiB names fit,
+        // 1000 of two 4 KiB names (8 MB of copies from a 9 KB file) do not.
+        let named = |length: usize| {
+            let name = "m".repeat(length);
+            let text = format!(
+                "v 0 0 0\no {name}\nusemtl {name}\n{}",
+                "f 1 1 1\n".repeat(1000)
+            );
+            parse_obj(&text)
+        };
+        assert_eq!(named(1024).unwrap().faces.len(), 1000);
+        assert!(named(4096).is_err());
+        // The limit counts the faces a polygon splits into, and refuses the file whole.
+        let full = format!("v 0 0 0\n{}", "f 1 1 1\n".repeat(MAX_OBJ_FACES));
+        assert_eq!(parse_obj(&full).unwrap().faces.len(), MAX_OBJ_FACES);
+        assert!(parse_obj(&format!("{full}f 1 1 1\n")).is_err());
+        let polygon = format!(
+            "v 0 0 0\n{}f{}\n",
+            "f 1 1 1\n".repeat(MAX_OBJ_FACES - 2),
+            " 1".repeat(6)
+        );
+        assert!(parse_obj(&polygon).is_err());
     }
     #[test]
     fn mtl_maps_slots_and_sprites() {
