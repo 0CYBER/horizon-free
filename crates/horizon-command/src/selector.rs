@@ -6,6 +6,7 @@ use super::args::{
     read_identifier, read_int_bounds, suggest_resources,
 };
 use super::{CmdResult, CommandError, Reader, SuggestionsBuilder};
+use std::borrow::Cow;
 
 /// The option names in vanilla's registration order.
 const OPTIONS: [&str; 21] = [
@@ -164,8 +165,7 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
         }
     }
 
-    /// EntitySelectorParser.parse.
-    pub fn parse(&mut self) -> CmdResult<Selector> {
+    fn parse_internal(&mut self) -> CmdResult<()> {
         self.start_position = self.reader.cursor;
         self.sugg = Sugg::NameOrSelector;
         if self.reader.can_read() && self.reader.peek() == '@' {
@@ -181,7 +181,18 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
         } else {
             self.parse_name_or_uuid()?;
         }
+        Ok(())
+    }
+
+    /// EntitySelectorParser.parse.
+    pub fn parse(&mut self) -> CmdResult<Selector> {
+        self.parse_internal()?;
         Ok(self.s.clone())
+    }
+
+    fn into_parsed(mut self) -> CmdResult<Selector> {
+        self.parse_internal()?;
+        Ok(self.s)
     }
 
     fn parse_selector(&mut self) -> CmdResult<()> {
@@ -196,14 +207,19 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
         let start = self.reader.cursor;
         // A mod's token is a whole word (`@allies`), so it is looked up before vanilla's letter:
         // `@allies` is not `@a`, and an unregistered word falls back to the letter.
-        let string: &'a str = self.reader.string;
-        let word = string[start..]
-            .bytes()
-            .take_while(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
-            .count();
-        let word = &string[start..start + word];
-        if let Some(token) = self.reg.selector_tokens.iter().find(|t| t.name == word) {
-            self.reader.cursor = start + word.len();
+        let mod_token = if self.reg.selector_tokens.is_empty() {
+            None
+        } else {
+            let string: &'a str = self.reader.string;
+            let word = string[start..]
+                .bytes()
+                .take_while(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
+                .count();
+            let word = &string[start..start + word];
+            self.reg.selector_tokens.iter().find(|t| t.name == word)
+        };
+        if let Some(token) = mod_token {
+            self.reader.cursor = start + token.name.len();
             let s = &mut self.s;
             s.kind = 'e';
             s.token = Some(token.name.clone());
@@ -296,8 +312,8 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
         Ok(())
     }
 
-    fn can_use(&self, option: &str) -> bool {
-        match option {
+    fn option_usable(&self, option: &str) -> Option<bool> {
+        Some(match option {
             "name" => self.name_option.can_parse_any(),
             "distance" => !self.has_distance,
             "level" => !self.has_level,
@@ -314,10 +330,15 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
             "gamemode" => self.gamemode_option.can_parse_any(),
             "team" => self.team_option.can_parse_any(),
             "type" => self.type_option.can_parse_any(),
+            "tag" | "nbt" | "predicate" => true,
             "scores" => !self.scores_option,
             "advancements" => !self.advancements_option,
-            _ => true,
-        }
+            _ => return None,
+        })
+    }
+
+    fn can_use(&self, option: &str) -> bool {
+        self.option_usable(option).unwrap_or(true)
     }
 
     fn parse_options(&mut self) -> CmdResult<()> {
@@ -326,22 +347,30 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
         while self.reader.can_read() && self.reader.peek() != ']' {
             self.reader.skip_whitespace();
             let start = self.reader.cursor;
-            let key = self.reader.read_string()?;
-            if !OPTIONS.contains(&key.as_str()) {
-                return Err(rollback(
-                    self.reader,
-                    start,
-                    "argument.entity.options.unknown",
-                    &[&key],
-                ));
-            }
-            if !self.can_use(&key) {
-                return Err(rollback(
-                    self.reader,
-                    start,
-                    "argument.entity.options.inapplicable",
-                    &[&key],
-                ));
+            let key: Cow<'a, str> =
+                if self.reader.can_read() && matches!(self.reader.peek(), '"' | '\'') {
+                    Cow::Owned(self.reader.read_string()?)
+                } else {
+                    Cow::Borrowed(self.reader.read_unquoted_string())
+                };
+            match self.option_usable(&key) {
+                None => {
+                    return Err(rollback(
+                        self.reader,
+                        start,
+                        "argument.entity.options.unknown",
+                        &[&key],
+                    ));
+                }
+                Some(false) => {
+                    return Err(rollback(
+                        self.reader,
+                        start,
+                        "argument.entity.options.inapplicable",
+                        &[&key],
+                    ));
+                }
+                Some(true) => {}
             }
             self.reader.skip_whitespace();
             if !self.reader.can_read() || self.reader.peek() != '=' {
@@ -807,7 +836,7 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
 
 /// Parse a selector from `reader` (EntitySelectorParser.parse).
 pub fn parse(reader: &mut Reader, reg: &Registries, allow_selectors: bool) -> CmdResult<Selector> {
-    SelectorParser::new(reader, reg, allow_selectors).parse()
+    SelectorParser::new(reader, reg, allow_selectors).into_parsed()
 }
 
 /// Re-parse the text from `builder.start` and fill the selector suggestions.
@@ -821,6 +850,6 @@ pub fn suggest(
         cursor: builder.start,
     };
     let mut parser = SelectorParser::new(&mut reader, reg, reg.permission >= 2);
-    let _ = parser.parse();
+    let _ = parser.parse_internal();
     parser.fill_suggestions(builder, names);
 }
