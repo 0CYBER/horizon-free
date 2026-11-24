@@ -96,6 +96,9 @@ pub struct Boat {
     /// `Entity.fallDistance`: counted by `AbstractBoat.checkFallDamage`, saved
     /// and loaded (`fall_distance`).
     pub fall_distance: f64,
+    /// `AbstractBoat.lastYd`: the vertical velocity `checkFallDamage` saw,
+    /// before the move's collisions zeroed it; `getWaterLevelAbove` scans with it.
+    pub last_yd: f64,
     /// `Entity.stuckSpeedMultiplier`: set where the boat sits in powder snow
     /// (`PowderSnowBlock.entityInside`) or a cobweb (`WebBlock.entityInside`),
     /// spent by the next move.
@@ -200,6 +203,7 @@ impl Boat {
             input: [false; 4],
             on_ground: false,
             fall_distance: 0.0,
+            last_yd: 0.0,
             stuck: Vec3::ZERO,
             chest: false,
             items: Vec::new(),

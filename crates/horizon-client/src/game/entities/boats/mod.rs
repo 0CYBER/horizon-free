@@ -165,7 +165,10 @@ impl Game<'_> {
     fn water_level_above(&self, b: &Boat) -> f32 {
         let bb = b.bounds();
         let (lo, hi) = (bb.min_position(), bb.max_position());
-        let (y0, y1) = (hi.y.floor() as i32, hi.y.ceil() as i32);
+        // AbstractBoat.getWaterLevelAbove: ceil(maxY - lastYd), so a boat
+        // falling into water scans up to the real surface instead of stopping
+        // one row short.
+        let (y0, y1) = (hi.y.floor() as i32, (hi.y - b.last_yd).ceil() as i32);
         'rows: for y in y0..y1 {
             let mut height = 0.0f32;
             for x in lo.x.floor() as i32..hi.x.ceil() as i32 {
@@ -516,6 +519,8 @@ impl Game<'_> {
                 b.position.z + moved.z,
             );
             b.on_ground = movement.y < 0.0 && moved.y > movement.y;
+            // checkFallDamage saves lastYd before the collisions below zero it.
+            b.last_yd = b.velocity.y;
             b.fall_distance = self.boat_fall(&b, moved.y);
             if (moved.x - movement.x).abs() > 1.0e-7 {
                 b.velocity.x = 0.0;
@@ -1815,6 +1820,39 @@ mod tests {
 
     fn boat() -> Boat {
         Boat::new(1, Arc::from("oak"), Vec3::ZERO, 0.0)
+    }
+
+    /// `AbstractBoat.getWaterLevelAbove` scans up to `ceil(maxY - lastYd)`,
+    /// with the velocity `checkFallDamage` saved before the move's collisions
+    /// zeroed it: a boat whose fall clips on the pool floor still finds the
+    /// water's surface, not the air a row higher.
+    #[test]
+    #[ignore = "daily"]
+    fn a_boat_landing_on_a_pool_floor_scans_up_to_the_water_surface() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
+            let registry = &game.pack.assets.registry;
+            let water = registry.default_state("minecraft:water").unwrap();
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            for x in 0..3 {
+                for z in 0..3 {
+                    game.world.set(x, 199, z, stone).unwrap();
+                    game.world.set(x, 200, z, water).unwrap();
+                    game.world.set(x, 201, z, water).unwrap();
+                }
+            }
+            let mut b = boat();
+            b.position = Vec3::new(1.5, 200.2, 1.5);
+            b.velocity.y = -0.6;
+            let b = game.tick_boat(b, false);
+            assert_eq!(b.position.y, 200.0, "the fall clips on the floor");
+            assert_eq!(b.velocity.y, 0.0, "and the collision zeroes it");
+            // The source at y=201 has air above: 201 + 8/9.
+            assert_eq!(game.water_level_above(&b), 201.0 + 8.0 / 9.0);
+        });
     }
 
     /// `controlBoat`'s push with `Mth`'s sine table (`(float) Math.sin(i /
