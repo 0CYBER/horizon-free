@@ -111,6 +111,7 @@ fn draw(
             attributes: &attributes,
         })],
         (super::super::LINEAR_FRAME, false),
+        wgpu::CompareFunction::Always,
     );
     let globals = super::super::Globals {
         view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),

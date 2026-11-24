@@ -1080,6 +1080,11 @@ struct SunriseOut {
 @vertex fn vs_sunrise(@location(0) clip: vec4<f32>, @location(1) weight: f32) -> SunriseOut {
     return SunriseOut(clip, weight);
 }
+// The sunrise fan drawn after solid terrain: pinned to the reversed-Z far plane (`z = 0.0`) so
+// `CompareFunction::Equal` draws only on pixels untouched by opaque geometry.
+@vertex fn vs_sunrise_depth(@location(0) clip: vec4<f32>, @location(1) weight: f32) -> SunriseOut {
+    return SunriseOut(vec4(clip.xy, 0.0, clip.w), weight);
+}
 @fragment fn fs_sunrise(in: SunriseOut) -> @location(0) vec4<f32> {
     return vec4(sky_finished(globals.sunrise.rgb).rgb, in.weight * globals.sunrise.a);
 }

@@ -18,6 +18,7 @@ impl Celestial {
         shader: &wgpu::ShaderModule,
         vertex: &[Option<wgpu::VertexBufferLayout<'_>>],
         (format, linear): (wgpu::TextureFormat, bool),
+        depth_compare: wgpu::CompareFunction,
     ) -> Self {
         let pipeline = |label, entry, blend, write_mask| {
             kept.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -36,7 +37,7 @@ impl Celestial {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
                     depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    depth_compare: Some(depth_compare),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -64,10 +65,15 @@ impl Celestial {
             operation,
         };
         use wgpu::{BlendFactor as F, BlendOperation as Op};
+        let after_solid = depth_compare == wgpu::CompareFunction::Equal;
         // RenderPipelines.CELESTIAL: additive (src alpha, one), with the colour premultiplied
         // in fs_sky_celestial. The frame's alpha is left alone: nothing reads it here.
         let added = pipeline(
-            "Celestial bodies",
+            if after_solid {
+                "Celestial bodies (after solid)"
+            } else {
+                "Celestial bodies"
+            },
             "fs_sky_celestial",
             wgpu::BlendState {
                 color: component(F::One, F::One, Op::Add),
@@ -82,7 +88,11 @@ impl Celestial {
             let min = component(F::One, F::One, Op::Min);
             [
                 pipeline(
-                    "The sun onto the sky",
+                    if after_solid {
+                        "The sun onto the sky (after solid)"
+                    } else {
+                        "The sun onto the sky"
+                    },
                     "fs_sky_sun",
                     wgpu::BlendState {
                         color: affine,
@@ -91,7 +101,11 @@ impl Celestial {
                     wgpu::ColorWrites::COLOR,
                 ),
                 pipeline(
-                    "The sun's clip",
+                    if after_solid {
+                        "The sun's clip (after solid)"
+                    } else {
+                        "The sun's clip"
+                    },
                     "fs_sky_sun_clip",
                     wgpu::BlendState {
                         color: min,

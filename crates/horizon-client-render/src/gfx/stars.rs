@@ -52,10 +52,12 @@ struct Uniform {
 
 pub(super) struct Stars {
     pipeline: wgpu::RenderPipeline,
+    pipeline_after_solid: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     vertices: wgpu::Buffer,
     count: u32,
+    use_after_solid: bool,
 }
 
 impl Stars {
@@ -109,78 +111,94 @@ impl Stars {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x3];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Stars"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_stars"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 12,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_stars"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &super::linear_blend::frame_constants(format, linear),
+        let make_pipeline = |label, depth_compare| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_stars"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attributes,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: None,
                     ..Default::default()
                 },
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // RenderPipelines.STARS: the celestial blend (src alpha, one), with the
-                    // colour premultiplied in fs_stars.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(depth_compare),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_stars"),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &super::linear_blend::frame_constants(format, linear),
+                        ..Default::default()
+                    },
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        // RenderPipelines.STARS: the celestial blend (src alpha, one), with the
+                        // colour premultiplied in fs_stars.
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent::REPLACE,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline("Stars", wgpu::CompareFunction::Always);
+        let pipeline_after_solid =
+            make_pipeline("Stars (after solid)", wgpu::CompareFunction::Equal);
         Self {
             pipeline,
+            pipeline_after_solid,
             group,
             uniform,
             vertices,
             count: triangles.len() as u32,
+            use_after_solid: false,
         }
     }
 
     /// This frame's sky rotation (camera-relative world from star space,
-    /// times the view projection) and star brightness.
+    /// times the view projection) and star brightness. When `pin_to_far` is
+    /// true, pins clip depth to reversed-Z `z = 0.0` and selects the
+    /// depth-equal pipeline for [`Self::draw`].
     pub(super) fn prepare(
-        &self,
+        &mut self,
         uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         clip_from_sky: Mat4,
         brightness: f32,
         globals: &super::Globals,
+        pin_to_far: bool,
     ) {
+        self.use_after_solid = pin_to_far;
         let b = brightness.clamp(0.0, 1.0);
+        let clip_from_sky = if pin_to_far {
+            super::zero_z_row(clip_from_sky)
+        } else {
+            clip_from_sky.to_cols_array_2d()
+        };
         let uniform = Uniform {
-            clip_from_sky: clip_from_sky.to_cols_array_2d(),
+            clip_from_sky,
             color: [b; 4],
             hdr_settings: globals.hdr_settings,
             hdr_light: globals.hdr_light,
@@ -190,7 +208,11 @@ impl Stars {
 
     #[horizon_mod_api_macros::replaceable]
     pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(if self.use_after_solid {
+            &self.pipeline_after_solid
+        } else {
+            &self.pipeline
+        });
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.draw(0..self.count, 0..1);
