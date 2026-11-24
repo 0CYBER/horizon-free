@@ -520,9 +520,17 @@ def failure_diagnostics(output):
             # game-discovery emits canonical absolute #[path] declarations. Only
             # this checkout's exact resolved prefix is authoritative; never guess
             # another checkout's prefix or search for a matching path suffix.
-            prefix = str(Path(__file__).resolve().parents[2]) + os.sep
+            prefix = Path(__file__).resolve().parents[2].as_posix() + "/"
+            if os.sep == "\\":
+                path = path.replace("\\", "/")
+                # std::fs::canonicalize yields verbatim \\?\C:\... paths on
+                # Windows; drop that prefix, but keep \\?\UNC\ shares foreign.
+                if path.startswith("//?/") and not path[4:].upper().startswith("UNC/"):
+                    path = path[4:]
             if path.startswith(prefix):
                 path = path[len(prefix):]
+            elif path.startswith("/") or re.match(r"^[A-Za-z]:", path):
+                path = ""
             # Rust cross-crate source paths can contain lexical ../ segments.
             # Never resolve an untrusted path against the filesystem, and never
             # allow a traversal to leave the root, even if it later returns.
@@ -535,7 +543,7 @@ def failure_diagnostics(output):
                     parts.pop()
                 elif part not in ("", "."):
                     parts.append(part)
-            path = "/".join(parts) if not path.startswith("/") else ""
+            path = "/".join(parts)
             lines = source_lines(path) if path in tracked_rust_paths() else None
             if (location and lines is not None and
                     1 <= int(location[2]) <= len(lines) and int(location[3]) >= 1):
