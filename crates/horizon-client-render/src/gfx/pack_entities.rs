@@ -236,6 +236,9 @@ pub(super) struct Draw {
     /// A boat's water patch (`WATER_MASK_OVERLAY`): depth only, with the program's pipeline that
     /// writes no colour.
     pub water_mask: bool,
+    /// A beam's translucent glow (`RenderTypes.beaconBeam(true)`): drawn after the cores, with
+    /// the beam program's pipeline that writes no depth.
+    pub beam_glow: bool,
 }
 
 /// Which entity runs a pack's shadow pass draws (2.4, 3.2).
@@ -463,14 +466,14 @@ impl PackEntities {
                     pack,
                     casts,
                     overlay,
-                    false,
-                    false,
+                    Part::Plain,
                 );
             }
         }
         let first = spans.first().map_or(entities.len(), |s| s.start as usize);
         extend_without_portals(rest, &entities[..first.min(entities.len())]);
-        let (mut other, mut portal_faces, mut beam_faces) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut other, mut portal_faces) = (Vec::new(), Vec::new());
+        let (mut beam_faces, mut beam_glow) = (Vec::new(), Vec::new());
         let mut water_patches = Vec::new();
         let mut without_fluids = Vec::new();
         for (span, range, material) in material_runs(entities, spans, drawn) {
@@ -510,14 +513,19 @@ impl PackEntities {
                 || whole
                     .chunks(4)
                     .any(|q| q[0].layer & 0xffff == super::entity_batch::WATER_MASK_OVERLAY);
-            let parts: [(&[Vertex], Part); 4] = if split {
+            let parts: [(&[Vertex], Part); 5] = if split {
                 other.clear();
                 portal_faces.clear();
                 beam_faces.clear();
+                beam_glow.clear();
                 water_patches.clear();
                 for quad in whole.chunks(4) {
                     match quad[0].layer & 0xffff {
                         9 | 10 => portal_faces.extend_from_slice(quad),
+                        // The glow carries the OIT tag (`block_entity_render::beam`), the core not.
+                        6 if quad[0].layer & super::OIT_ENTITY != 0 => {
+                            beam_glow.extend_from_slice(quad)
+                        }
                         6 => beam_faces.extend_from_slice(quad),
                         super::entity_batch::WATER_MASK_OVERLAY => {
                             water_patches.extend_from_slice(quad)
@@ -529,11 +537,13 @@ impl PackEntities {
                     (&other, Part::Plain),
                     (&portal_faces, Part::Portal),
                     (&beam_faces, Part::Beam),
+                    (&beam_glow, Part::BeamGlow),
                     (&water_patches, Part::WaterMask),
                 ]
             } else {
                 [
                     (whole, Part::Plain),
+                    (&[], Part::Plain),
                     (&[], Part::Plain),
                     (&[], Part::Plain),
                     (&[], Part::Plain),
@@ -545,7 +555,7 @@ impl PackEntities {
                 }
                 let program = match part {
                     Part::Portal => Some(BLOCK),
-                    Part::Beam => Some(BEAM),
+                    Part::Beam | Part::BeamGlow => Some(BEAM),
                     // Drawn by the entity program, whose depth-only pipeline it takes.
                     Part::WaterMask => material.filter(|&p| p == ENTITY),
                     Part::Plain => material.filter(|&p| {
@@ -556,7 +566,7 @@ impl PackEntities {
                 let pack = program.is_some_and(|p| drawn[p]) && !span.hidden;
                 // Portal faces cast too (a pack's shadow pass sees block entities whole, as Iris
                 // draws them); beams do not.
-                let casts = !matches!(part, Part::Beam | Part::WaterMask)
+                let casts = !matches!(part, Part::Beam | Part::BeamGlow | Part::WaterMask)
                     && program.is_some_and(|p| shadow.cast(&span, p));
                 if !pack && !span.hidden {
                     extend_without_portals(rest, run);
@@ -566,7 +576,7 @@ impl PackEntities {
                 };
                 let start = self.scratch.len() as u32;
                 match part {
-                    Part::Beam => beam_segments(run, &mut self.scratch),
+                    Part::Beam | Part::BeamGlow => beam_segments(run, &mut self.scratch),
                     _ => self.scratch.extend_from_slice(run),
                 }
                 // A run copied whole keeps its vertices' order, for `at_velocity`; so does the
@@ -586,7 +596,6 @@ impl PackEntities {
                 }
                 let vertices = self.scratch.len() as u32 - start;
                 let overlay = self.scratch[start as usize].layer & 0xffff;
-                let portal = part == Part::Portal;
                 self.push_draw(
                     span,
                     posed + start,
@@ -595,8 +604,7 @@ impl PackEntities {
                     pack,
                     casts,
                     overlay,
-                    portal,
-                    part == Part::WaterMask,
+                    part,
                 );
             }
         }
@@ -667,8 +675,7 @@ impl PackEntities {
         pack: bool,
         casts: bool,
         overlay: u32,
-        portal: bool,
-        water_mask: bool,
+        part: Part,
     ) {
         let (entity_id, block_id) = match program {
             BLOCK | BLOCK_TRANSLUCENT => (0, span.id),
@@ -692,8 +699,9 @@ impl PackEntities {
             pack,
             shadow: casts,
             slot: self.draws.len() as u32,
-            portal,
-            water_mask,
+            portal: part == Part::Portal,
+            water_mask: part == Part::WaterMask,
+            beam_glow: part == Part::BeamGlow,
         });
     }
 }
@@ -727,7 +735,10 @@ fn plain(run: &[Vertex]) -> bool {
 enum Part {
     Plain,
     Portal,
+    /// A beam's opaque core.
     Beam,
+    /// A beam's translucent glow (`Draw::beam_glow`).
+    BeamGlow,
     /// A boat's water patch: depth only (`Draw::water_mask`).
     WaterMask,
 }
@@ -1558,6 +1569,61 @@ mod gpu_span_tests {
         let (draws, _) = prepare(no_entities, &mut rest);
         assert!(draws.iter().all(|d| !d.2), "{draws:?}");
         assert_eq!(rest.len(), 8, "the boat and its patch stay Horizon's");
+    }
+
+    /// A beacon beam's opaque core and translucent glow (`RenderTypes.beaconBeam(false|true)`)
+    /// are two draws of the beam program; only the glow is drawn without depth writes.
+    #[test]
+    fn a_beams_glow_is_a_draw_of_its_own() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let instance = crate::gfx::test_gpu::instance();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+        else {
+            return;
+        };
+        let layout = super::super::pack_draw::DrawUniforms::new(&device);
+        let mut geometry = PackEntities::new(&device, &layout.layout);
+        // One face of the core, then one of the glow, one sprite copy each.
+        let cpu: Vec<Vertex> = [6, 6 | super::super::OIT_ENTITY]
+            .into_iter()
+            .flat_map(|layer| {
+                [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]].map(|uv| Vertex {
+                    layer,
+                    uv,
+                    ..bytemuck::Zeroable::zeroed()
+                })
+            })
+            .collect();
+        let spans = [EntitySpan {
+            start: 0,
+            id: 3,
+            stage: render_stage("NONE"),
+            ..Default::default()
+        }];
+        let mut rest = Vec::new();
+        geometry.prepare(
+            &device,
+            &queue,
+            &layout.layout,
+            &cpu,
+            &spans,
+            [true; PROGRAMS],
+            ([0.; 4], [1; 2]),
+            Casters::default(),
+            &mut rest,
+            None,
+            (&[], &[]),
+        );
+        assert_eq!(
+            (geometry.draws.iter())
+                .map(|d| (d.program, d.quads, d.beam_glow))
+                .collect::<Vec<_>>(),
+            [(BEAM, 1, false), (BEAM, 1, true)]
+        );
+        assert!(rest.is_empty());
     }
 
     #[test]
