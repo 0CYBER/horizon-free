@@ -13,7 +13,7 @@ A comment on an issue, on its first line:
 An assigned issue is taken, and so is one claimed on Discord (Kira's `in progress` label). Trackers and proposals
 (labels `tracker`, `proposal`, `not claimable`, set by maintainers) are never claimed whole. Refused with a one-line
 answer: a pull request (claim the issue it fixes), a closed or locked issue, an issue someone else holds, more than
-8 open claims at once, not counting issues a pull request already fixes (the council and the trusted reviewers have
+8 open claims at once, not counting issues the claimant's own open pull request already fixes (the council and the trusted reviewers have
 no limit). For the first hour after an issue is filed only its author can `/claim` it (the council and the trusted reviewers
 included; an issue filed by a bot has no such hour). A success answers with a 👍 on the comment; the assignment shows in the thread.
 A claim made here is released after 5 days unless an open pull request links the issue (`Fixes #N`, a mention, or the
@@ -150,6 +150,41 @@ query($owner: String!, $name: String!, $cursor: String) {
 }"""
 
 
+CLAIMED_ISSUES = """
+query($owner: String!, $name: String!, $login: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, states: OPEN, filterBy: {assignee: $login}, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: false) {
+          pageInfo { hasNextPage endCursor }
+          nodes { author { login } }
+        }
+      }
+    }
+  }
+}"""
+
+# The rest of one issue's closing pull requests, when the first ten are not all of them.
+CLOSING_PRS = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      closedByPullRequestsReferences(first: 50, includeClosedPrs: false, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { author { login } }
+      }
+    }
+  }
+}"""
+
+
+def authored_by(connection: dict, login: str) -> bool:
+    """Whether one of the connection's pull requests is `login`'s (a deleted account has no author)."""
+    return any((pr.get("author") or {}).get("login", "").lower() == login.lower() for pr in connection["nodes"])
+
+
 class Api:
     """The few GitHub calls this needs; tests replace it."""
 
@@ -169,10 +204,35 @@ class Api:
         gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/assignees", "-f", f"assignees[]={login}")
 
     def open_claims(self, login: str) -> int:
-        # An issue a pull request already fixes (linked by "Fixes #N") is done on the contributor's side: it no
-        # longer counts, since a review can take days (rdbtCVS, 2026-10-30).
-        q = f"repo:{self.repo} is:issue is:open assignee:{login} -linked:pr"
-        return int(gh("api", "-X", "GET", "search/issues", "-f", f"q={q}", "-f", "per_page=1", "--jq", ".total_count"))
+        # An issue the claimant's own open pull request fixes (closing keyword or sidebar link) is done on their
+        # side: it no longer counts, since a review can take days (rdbtCVS, 2026-10-30). Someone else's pull
+        # request linking it does not lift the claimant's limit, so it is read from the issue, not searched.
+        owner, name = self.repo.split("/")
+        held, cursor = 0, None
+        while True:
+            args = ["api", "graphql", "-f", f"owner={owner}", "-f", f"name={name}", "-f", f"login={login}",
+                    "-f", f"query={CLAIMED_ISSUES}"]
+            if cursor:
+                args += ["-f", f"cursor={cursor}"]
+            page = json.loads(gh(*args))["data"]["repository"]["issues"]
+            held += sum(not self.fixed_by(node, login) for node in page["nodes"])
+            if not page["pageInfo"]["hasNextPage"]:
+                return held
+            cursor = page["pageInfo"]["endCursor"]
+
+    def fixed_by(self, issue: dict, login: str) -> bool:
+        """Whether an open pull request of `login` fixes the issue (a node of CLAIMED_ISSUES), reading on
+        through the closing pull requests while the claimant's is not among those seen."""
+        owner, name = self.repo.split("/")
+        connection = issue["closedByPullRequestsReferences"]
+        while True:
+            if authored_by(connection, login):
+                return True
+            if not connection["pageInfo"]["hasNextPage"]:
+                return False
+            raw = gh("api", "graphql", "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={issue['number']}",
+                     "-f", f"cursor={connection['pageInfo']['endCursor']}", "-f", f"query={CLOSING_PRS}")
+            connection = json.loads(raw)["data"]["repository"]["issue"]["closedByPullRequestsReferences"]
 
     def react(self, comment_id: int) -> None:
         gh("api", f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-f", "content=+1")
@@ -184,9 +244,9 @@ class Api:
         owner, name = self.repo.split("/")
         out, cursor = [], None
         while True:
-            args = ["api", "graphql", "-F", f"owner={owner}", "-F", f"name={name}", "-f", f"query={ASSIGNED_ISSUES}"]
+            args = ["api", "graphql", "-f", f"owner={owner}", "-f", f"name={name}", "-f", f"query={ASSIGNED_ISSUES}"]
             if cursor:
-                args += ["-F", f"cursor={cursor}"]
+                args += ["-f", f"cursor={cursor}"]
             page = json.loads(gh(*args))["data"]["repository"]["issues"]
             out += page["nodes"]
             if not page["pageInfo"]["hasNextPage"]:
