@@ -47,6 +47,7 @@ mod tests {
                 .push(mod_api::Text::translate("test.tail", vec![]));
             text.children.push(sibling);
             let host: &dyn mod_api::ClientHost = game;
+            let server_host: &dyn mod_api::ServerHost = game;
             for (space, tail, expected) in [
                 ("Space", "tail", "Space / Cake + tail"),
                 ("Espace", "fin", "Espace / Cake + fin"),
@@ -60,20 +61,36 @@ mod tests {
                             ("test.tail".into(), tail.into()),
                         ],
                     ),
-                    || assert_eq!(host.text_string(&text).unwrap(), expected),
+                    || {
+                        assert_eq!(host.text_string(&text).unwrap(), expected);
+                        assert_eq!(server_host.text_string(&text).unwrap(), expected);
+                    },
                 );
             }
             assert_eq!(
                 host.text_string(&mod_api::Text::literal("§aX")).unwrap(),
                 "§aX"
             );
+            assert_eq!(
+                server_host
+                    .text_string(&mod_api::Text::literal("§aX"))
+                    .unwrap(),
+                "§aX"
+            );
             assert_eq!(host.text_string(&mod_api::Text::literal("")).unwrap(), "");
+            assert_eq!(
+                server_host
+                    .text_string(&mod_api::Text::literal(""))
+                    .unwrap(),
+                ""
+            );
             let fallback = mod_api::Text::new(mod_api::text::TextContent::Translatable {
                 key: "test.missing.plain".into(),
                 fallback: Some("Fallback %s".into()),
                 arguments: vec![mod_api::Text::literal("X")],
             });
             assert_eq!(host.text_string(&fallback).unwrap(), "Fallback X");
+            assert_eq!(server_host.text_string(&fallback).unwrap(), "Fallback X");
         });
     }
 

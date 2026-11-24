@@ -593,4 +593,41 @@ mod tests {
             assert_eq!(refused[9], r#"Err(InvalidSettingKey(""))"#);
         });
     }
+
+    #[test]
+    fn server_host_text_string_follows_metadata_phase_access() {
+        crate::__private::initialize().unwrap();
+        struct ServerDouble;
+        impl Host for ServerDouble {}
+        crate::impl_host_areas!(ServerDouble);
+        impl ServerHost for ServerDouble {}
+        crate::impl_server_host_areas!(ServerDouble, except(text));
+        impl crate::prelude::TextServerHost for ServerDouble {
+            fn text_string(&self, text: &Text) -> Result<String, TextFormError> {
+                check_access("text_string", LoadAccess::Metadata);
+                Ok(match &text.content {
+                    crate::text::TextContent::Literal(s) => s.clone(),
+                    _ => String::new(),
+                })
+            }
+        }
+
+        let host: &dyn ServerHost = &ServerDouble;
+        for allowed in [ModPhase::Setup, ModPhase::Reloading, ModPhase::World] {
+            let _phase = PhaseOwner::scope(allowed);
+            assert_eq!(host.text_string(&Text::literal("hello")).unwrap(), "hello");
+        }
+        for refused_phase in [ModPhase::Registration, ModPhase::Config] {
+            let _phase = PhaseOwner::scope(refused_phase);
+            let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = host.text_string(&Text::literal("hello"));
+            }))
+            .unwrap_err();
+            assert!(
+                err.downcast_ref::<String>()
+                    .unwrap()
+                    .contains(&format!("{refused_phase:?}"))
+            );
+        }
+    }
 }
