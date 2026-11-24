@@ -23,6 +23,44 @@ fn center(pos: Pos) -> [f64; 3] {
         f64::from(pos.2) + 0.5,
     ]
 }
+/// The UUIDs of the players `CrafterRecipeCraftedTrigger` reaches for the
+/// crafter at `pos` (`getEntitiesOfClass(ServerPlayer.class, ...)`): each of
+/// the level's `players` that is not a spectator and whose box meets the
+/// 17-block box around the crafter's centre (8.5 from the centre to a face:
+/// the player's own width and height reach into it, not its eye point).
+/// `AABB.intersects` is strict: a box that only touches a face is out.
+fn crafter_witnesses(
+    pos: Pos,
+    players: impl IntoIterator<Item = crate::game::natural_spawning::LevelPlayer>,
+) -> Vec<u128> {
+    let c = center(pos);
+    players
+        .into_iter()
+        .filter(|p| {
+            let (lo, hi) = (p.bounds.min_position(), p.bounds.max_position());
+            !p.spectator
+                && (lo.x < c[0] + 8.5 && hi.x > c[0] - 8.5)
+                && (lo.y < c[1] + 8.5 && hi.y > c[1] - 8.5)
+                && (lo.z < c[2] + 8.5 && hi.z > c[2] - 8.5)
+        })
+        .map(|p| p.uuid)
+        .collect()
+}
+/// The connections of the `guests` that `near` names, each to take the
+/// trigger in their own turn; a dead one is left out. A guest whose client is
+/// still loading (placed, no `PlayerLoaded` yet) counts: `getEntitiesOfClass`
+/// finds every `ServerPlayer` in the level, where `for_each_player` waits for
+/// that packet.
+fn witness_turns<'g>(
+    near: &[u128],
+    guests: impl IntoIterator<Item = &'g horizon_client::lan::guest::Guest>,
+) -> Vec<u32> {
+    guests
+        .into_iter()
+        .filter(|g| !g.dead && near.contains(&g.uuid))
+        .map(|g| g.conn)
+        .collect()
+}
 /// Whether an advancement condition's `recipes` entry names the recipe.
 fn recipe_matches(condition: &Value, id: &str) -> bool {
     match condition {
@@ -194,33 +232,36 @@ impl Game<'_> {
     }
     /// The trigger and the sound and particle events after an ejected result.
     fn crafter_crafted_notice(&mut self, pos: Pos, facing: Direction, recipe: &str) {
-        // CrafterRecipeCraftedTrigger: every player whose box meets the 17-block
-        // box around the crafter's centre (8.5 from the centre to a face: the
-        // player's own width and height reach into it, not its eye point).
-        // `AABB.intersects` is strict: a box that only touches a face is out.
-        let near = self.player.as_ref().is_some_and(|p| {
-            let c = center(pos);
-            let b = p.bounds();
-            let (lo, hi) = (b.min_position(), b.max_position());
-            (lo.x < c[0] + 8.5 && hi.x > c[0] - 8.5)
-                && (lo.y < c[1] + 8.5 && hi.y > c[1] - 8.5)
-                && (lo.z < c[2] + 8.5 && hi.z > c[2] - 8.5)
-        });
-        if near {
+        // The crafter crafts in its scheduled tick, outside any player's turn,
+        // and a server has no player of its own: each of the level's players
+        // the trigger reaches hears it in their own turn.
+        let near = crafter_witnesses(pos, self.level_players_iter());
+        if !near.is_empty() {
             let id = horizon_client::crafting::qualified(recipe);
-            let me = self.player_entity_for("minecraft:crafter_recipe_crafted");
-            self.trigger("minecraft:crafter_recipe_crafted", move |c, w| {
-                let ctx = adv::Entities {
-                    this: Some(&me),
-                    origin: me.position,
-                    tool: None,
-                    block_pos: None,
-                };
-                adv::conditions(&c["player"], &ctx, w) && recipe_matches(&c["recipes"], &id)
-            });
+            let me = horizon_client::lan::playerdata::ints_uuid(self.acting_uuid());
+            if self.player.is_some() && !self.lan_acting_fake && near.contains(&me) {
+                self.trigger_crafter_recipe_crafted(&id);
+            }
+            let guests = self.lan.iter().flat_map(|h| h.hub.guests.iter());
+            for conn in witness_turns(&near, guests) {
+                self.as_guest(conn, |g| g.trigger_crafter_recipe_crafted(&id));
+            }
         }
         self.dispenser_event(1049, pos, 0);
         self.dispenser_event(2010, pos, facing as i32);
+    }
+    /// `CrafterRecipeCraftedTrigger` for the player in place.
+    fn trigger_crafter_recipe_crafted(&mut self, id: &str) {
+        let me = self.player_entity_for("minecraft:crafter_recipe_crafted");
+        self.trigger("minecraft:crafter_recipe_crafted", move |c, w| {
+            let ctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &ctx, w) && recipe_matches(&c["recipes"], id)
+        });
     }
     /// The two insert loops of `dispenseItem`: one item at a time when the
     /// container holds fewer than the stack (`Container.getMaxStackSize`) or is
@@ -498,6 +539,49 @@ mod tests {
             "minecraft:crafter"
         ));
         assert!(recipe_matches(&Value::Null, "minecraft:crafter"));
+    }
+    /// `CrafterRecipeCraftedTrigger` reaches every player whose box meets the
+    /// 17-block box around the crafter. A server has no player of its own, so
+    /// a player it serves standing 8 blocks off must be reached, or nobody
+    /// there earns "Crafters Crafting Crafters". A spectator is not
+    /// (`NO_SPECTATORS`), nor a box that only touches the far face; a box that
+    /// reaches in is, though the feet are further out.
+    #[test]
+    fn a_crafter_reaches_the_players_a_server_serves() {
+        use crate::game::natural_spawning::LevelPlayer;
+        // A player's 0.6 wide box from `x` up.
+        let served = |uuid: u128, x: f64, spectator: bool| LevelPlayer {
+            uuid,
+            position: Vec3::new(x + 0.3, 64.0, 0.5),
+            bounds: Aabb::new(Vec3::new(x, 64.0, 0.2), Vec3::new(x + 0.6, 65.8, 0.8)),
+            alive: true,
+            creative: false,
+            spectator,
+        };
+        // The crafter at (0, 64, 0): the box runs from -8 to 9 along x.
+        let pos = (0, 64, 0);
+        assert_eq!(crafter_witnesses(pos, [served(7, 8.25, false)]), vec![7]);
+        let players = [
+            served(1, 8.25, true),
+            served(2, 9.0, false),
+            served(3, -8.5, false),
+        ];
+        assert_eq!(crafter_witnesses(pos, players), vec![3]);
+    }
+    /// A served player whose client is still loading (placed, no
+    /// `PlayerLoaded` yet) is in the level all the same: `getEntitiesOfClass`
+    /// finds it, so the trigger reaches it in its own turn as it does a loaded
+    /// one, or a craft in that window passes it by. A guest the box missed is
+    /// not reached.
+    #[test]
+    fn a_crafter_reaches_a_served_player_whose_client_is_still_loading() {
+        use crate::game::native_player_death::tests::new_guest;
+        let mut playing = new_guest(1, 11);
+        (playing.loaded, playing.loading) = (true, false);
+        let mut loading = new_guest(2, 12);
+        (loading.loaded, loading.loading) = (false, true);
+        let guests = [playing, loading, new_guest(3, 13)];
+        assert_eq!(witness_turns(&[11, 12], &guests), vec![1, 2]);
     }
     /// `CrafterBlock.dispenseItem` ejects into the container entity in front of
     /// it (`HopperBlockEntity.getContainerAt`'s `getEntityContainer`), not

@@ -65,6 +65,31 @@ fn thunder_strike_column(ticks: &mut Ticks, cx: i32, cz: i32) -> (i32, i32) {
     (r.x, r.z)
 }
 
+/// The players `findLightningTargetAround` may strike in the column at `x`,
+/// `z` whose top is `top`: the block of each of `players` that is alive
+/// (`isAlive`: spectators too), 3 blocks around the column, no lower than 3
+/// below its top, under open sky (`sees_sky`). `players` are the level's
+/// (`level_players_iter`): a server has none of its own.
+fn players_to_strike(
+    players: impl IntoIterator<Item = super::natural_spawning::LevelPlayer>,
+    [x, top, z]: [i32; 3],
+    sees_sky: impl Fn([i32; 3]) -> bool,
+) -> Vec<[i32; 3]> {
+    players
+        .into_iter()
+        .filter(|p| p.alive)
+        .map(|p| {
+            [
+                p.position.x.floor() as i32,
+                p.position.y.floor() as i32,
+                p.position.z.floor() as i32,
+            ]
+        })
+        .filter(|p| (p[0] - x).abs() <= 3 && (p[2] - z).abs() <= 3 && p[1] >= top - 3)
+        .filter(|p| sees_sky(*p))
+        .collect()
+}
+
 #[cfg(test)]
 impl Bolt {
     /// A spent bolt at `at`, for tests that call `thunder_hit` directly.
@@ -242,24 +267,13 @@ impl Game<'_> {
             .filter(|p| (p[0] - x).abs() <= 3 && (p[2] - z).abs() <= 3 && p[1] >= top.y - 3)
             .filter(|p| sees_sky(self, *p))
             .collect();
-        if let Some(p) = self
-            .player
-            .as_ref()
-            .filter(|p| !p.health.dead_or_dying())
-            .map(|p| {
-                [
-                    p.position.x.floor() as i32,
-                    p.position.y.floor() as i32,
-                    p.position.z.floor() as i32,
-                ]
-            })
-            && (p[0] - x).abs() <= 3
-            && (p[2] - z).abs() <= 3
-            && p[1] >= top.y - 3
-            && sees_sky(self, p)
-        {
-            candidates.push(p);
-        }
+        // The players are living entities too: every one in the level, as a
+        // server has no player of its own, only the ones it serves.
+        candidates.extend(players_to_strike(
+            self.level_players_iter(),
+            [x, top.y, z],
+            |p| sees_sky(self, p),
+        ));
         if !candidates.is_empty() {
             let i = self
                 .world
@@ -982,6 +996,43 @@ mod tests {
         assert!(!in_viewer_box(bolt, [0.0, 85.5, 0.0]));
         assert!(!in_viewer_box(bolt, [0.0, 48.5, 0.0]));
         assert!(!in_viewer_box(bolt, [15.5, 64.0, 0.0]));
+    }
+
+    /// `findLightningTargetAround` picks among the living entities in the
+    /// column, players included. A server has no player of its own, so a
+    /// player it serves, standing in the open beside the column, must be a
+    /// target, or natural lightning never strikes a player there. A dead one,
+    /// one under a roof, one 4 blocks off and one more than 3 below the
+    /// column's top are not.
+    #[test]
+    fn lightning_can_strike_the_players_a_server_serves() {
+        use super::super::natural_spawning::LevelPlayer;
+        let served = |x: f64, y: f64, alive: bool| {
+            let position = Vec3::new(x, y, 0.5);
+            LevelPlayer {
+                uuid: 1,
+                position,
+                bounds: Aabb::new(position, position),
+                alive,
+                creative: false,
+                spectator: false,
+            }
+        };
+        // The column at (0, 0) tops out at 64; a roof covers (1, 64, 0).
+        let open = |p: [i32; 3]| p != [1, 64, 0];
+        let column = [0, 64, 0];
+        assert_eq!(
+            players_to_strike([served(2.5, 64.0, true)], column, open),
+            vec![[2, 64, 0]]
+        );
+        let players = [
+            served(2.5, 64.0, false),
+            served(1.5, 64.0, true),
+            served(4.5, 64.0, true),
+            served(0.5, 60.0, true),
+            served(-2.5, 61.0, true),
+        ];
+        assert_eq!(players_to_strike(players, column, open), vec![[-3, 61, 0]]);
     }
 
     #[test]
