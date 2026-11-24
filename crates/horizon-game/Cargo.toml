@@ -9,6 +9,7 @@ description = "The game as the platform runs it: the engine's entry with the pla
 [dependencies]
 horizon-guest-stack = { path = "../horizon-guest-stack" }
 horizon-client = { path = "../horizon-client", default-features = false }
+horizon-theme = { path = "../horizon-theme" }
 horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index"] }
 
 horizon-mod-host = { path = "../horizon-mod-host", default-features = false }

@@ -399,7 +399,7 @@ The shell paints through `graphics_style`, which follows the menu style the laye
 (`menu_style::install`). Its `surfaces` picks one of two looks, with the same layout:
 
 - `Surfaces::Flat`: see-through glass panels and flat controls in the style's colours. The official game
-  gives this with Horizon's Blocks palette (`horizon_look.rs`).
+  gives this with Horizon's Blocks palette (`horizon-game/src/look.rs`).
 - `Surfaces::Vanilla`: what vanilla's Options screens draw, from the player's resource packs. Panels are
   the list background between its header and footer separators, and the open page is a selection
   list's entry (a grey edge round black, white with the focus). Controls are the `widget/*` sprites: a

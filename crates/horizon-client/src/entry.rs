@@ -1,6 +1,4 @@
 //! Startup shared by the gameplay library and its executable.
-#[path = "horizon_look.rs"]
-mod horizon_look;
 use crate::{crash, game, logging};
 use horizon_mod_package::selection::{Argument, LaunchArguments};
 pub(crate) mod dedicated_arguments;
@@ -113,7 +111,6 @@ pub fn start<G>(
     runtime_environment::capture(&launch);
     horizon_threads::configure_allocator();
     horizon_chat_filter::install();
-    horizon_look::give();
     // OptiFine's and Polytone's pack formats (platform, docs/layers.md), before any pack loads.
     horizon_client::pack_formats::install();
     // The controller glyphs' pictures: Horizon's own art, until a platform crate registers its own.

@@ -67,3 +67,4 @@ horizon_client::game::creatures::mob_group::Group<M>::deferred  kind=field  #184
 horizon_client::game::creatures::mob_islands::Foreign<'_>::defers  kind=field  #18420
 horizon_client::game::creatures::mob_islands::defers  kind=fn  #18420
 horizon_client::game::spear::Game<'_>::remote_sync_look  #16850
+horizon_client::entry::horizon_look  #15407

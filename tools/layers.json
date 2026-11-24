@@ -152,7 +152,6 @@
     "horizon-client -> horizon-optifine",
     "horizon-client -> horizon-shader-api",
     "horizon-client -> horizon-shaders",
-    "horizon-client -> horizon-theme",
     "horizon-client-lib -> horizon-anticheat",
     "horizon-client-lib -> horizon-hdr",
     "horizon-client-lib -> horizon-mcp",

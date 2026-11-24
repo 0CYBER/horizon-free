@@ -1859,7 +1859,6 @@ dependencies = [
  "horizon-shaders",
  "horizon-system",
  "horizon-telemetry",
- "horizon-theme",
  "horizon-threads",
  "horizon-world",
  "log",
@@ -2149,6 +2148,7 @@ dependencies = [
  "horizon-mod-host",
  "horizon-mod-package",
  "horizon-protocol",
+ "horizon-theme",
  "serde_json",
  "tempfile",
  "winresource",
@@ -2545,6 +2545,7 @@ dependencies = [
  "horizon-official-servers",
  "horizon-perf-share",
  "horizon-platform",
+ "horizon-theme",
  "log",
  "winresource",
 ]

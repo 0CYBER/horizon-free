@@ -50,6 +50,11 @@ static MOD_LINKS: [mod_links::Links; 2] = [
 /// Registers Horizon's in-game parts with the game. The executable calls it before it runs the
 /// game, and so does the launcher's generated executable for native mods.
 pub fn register() {
+    // Horizon's mark in the windows and the taskbar (branding: the plain game keeps the default
+    // icon), and the menus' look, here too for the native-mod executable, which starts the game
+    // without `horizon_game::main`.
+    horizon_game::set_icon_png(horizon_theme::ICON_PNG);
+    horizon_game::give_menu_look();
     let late = PARTS.into_iter().map(hooks::register);
     let late = late.chain(STORES.into_iter().map(settings::register));
     let late = late.chain(MOD_LINKS.iter().map(mod_links::register));
