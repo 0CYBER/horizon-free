@@ -49,6 +49,16 @@ impl PackStack {
 }
 
 impl Game<'_> {
+    /// `RegistryDataLoader.load`: a slot source that does not decode with
+    /// `SlotSources.TYPED_CODEC` fails the whole load, before anything is published.
+    fn check_slot_sources(&self, store: &DataStore) -> Result<(), ReloadStageError> {
+        self.candidate_slot_source_registries(store)
+            .map(|_| ())
+            .map_err(|line| {
+                log::error!("{line}");
+                ReloadStageError::DataSource(line)
+            })
+    }
     pub(super) fn prepare_server_reload(
         &self,
         stack: &PackStack,
@@ -78,6 +88,7 @@ impl Game<'_> {
             conditions
                 .check_errors()
                 .map_err(ReloadStageError::DataSource)?;
+            self.check_slot_sources(&store)?;
             return Ok(PreparedServerReload {
                 steps: vec![PreparedStep::Vanilla(Box::new(store))],
                 resources: mod_api::RetainedListeners::default(),
@@ -101,6 +112,11 @@ impl Game<'_> {
         conditions
             .check_errors()
             .map_err(ReloadStageError::DataSource)?;
+        for step in &steps {
+            if let PreparedStep::Vanilla(store) = step {
+                self.check_slot_sources(store)?;
+            }
+        }
         Ok(PreparedServerReload { steps, resources })
     }
     pub(super) fn apply_server_reload_callbacks(

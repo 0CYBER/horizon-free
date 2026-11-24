@@ -110,6 +110,62 @@ pub(in crate::game) fn expand(store: &DataStore, source: &Value) -> Result<Value
     }
     resolve(store, source, &mut BTreeSet::new())
 }
+/// Check that every holder `source` names resolves, without expanding it: each
+/// source id and tag is walked once, so a chain of groups naming the next source
+/// twice stays linear. The same unknown and recursive references as [`expand`].
+pub(in crate::game) fn check_references(
+    store: &DataStore,
+    source: &Value,
+    active: &mut BTreeSet<String>,
+    checked: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    if let Some(name) = source.as_str() {
+        if let Some(tag) = name.strip_prefix('#') {
+            let tag = format!("#{}", id(tag));
+            if checked.contains(&tag) {
+                return Ok(());
+            }
+            for name in store.slot_source_tag(&tag[1..])? {
+                check_references(store, &Value::String(name), active, checked)?;
+            }
+            checked.insert(tag);
+            return Ok(());
+        }
+        let name = id(name);
+        if checked.contains(&name) {
+            return Ok(());
+        }
+        if !active.insert(name.clone()) {
+            return Err(format!("Recursive slot source {name}"));
+        }
+        let result = store
+            .slot_sources
+            .get(&name)
+            .ok_or_else(|| format!("Unknown slot source {name}"))
+            .and_then(|s| check_references(store, s, active, checked));
+        active.remove(&name);
+        if result.is_ok() {
+            checked.insert(name);
+        }
+        return result;
+    }
+    if let Some(terms) = source.as_array() {
+        return terms
+            .iter()
+            .try_for_each(|s| check_references(store, s, active, checked));
+    }
+    let kind = source["type"]
+        .as_str()
+        .unwrap_or_default()
+        .trim_start_matches("minecraft:");
+    match kind {
+        "group" => check_references(store, &source["terms"], active, checked),
+        "contents" | "filtered" | "limit_slots" => {
+            check_references(store, &source["slot_source"], active, checked)
+        }
+        _ => Ok(()),
+    }
+}
 impl Game<'_> {
     /// Literal ranges retain priority; all remaining consumers resolve the same holder snapshot.
     pub(super) fn resolved_slot_source(&self, raw: &str) -> R<Option<Value>> {
@@ -185,5 +241,41 @@ mod tests {
             json!({"type":"limit_slots","limit":1,"slot_source":"t:cycle"}),
         );
         assert!(expand(&store, &json!("t:cycle")).is_err());
+    }
+
+    /// A load checks every source; a chain of groups naming the next source twice
+    /// expands to 2^n leaves, but its references are walked once each.
+    #[test]
+    fn checking_a_doubling_chain_walks_each_source_once() {
+        let mut store = DataStore::default();
+        let depth = 64;
+        for i in 0..depth {
+            let next = format!("t:s{}", i + 1);
+            store.slot_sources.insert(
+                format!("t:s{i}"),
+                json!({"type":"group","terms":[next, next]}),
+            );
+        }
+        let check = |store: &DataStore| {
+            check_references(
+                store,
+                &json!("t:s0"),
+                &mut BTreeSet::new(),
+                &mut BTreeSet::new(),
+            )
+        };
+        assert_eq!(
+            check(&store),
+            Err(format!("Unknown slot source t:s{depth}"))
+        );
+        store.slot_sources.insert(
+            format!("t:s{depth}"),
+            json!({"type":"slot_range","slots":"container.0"}),
+        );
+        assert_eq!(check(&store), Ok(()));
+        store
+            .slot_sources
+            .insert(format!("t:s{depth}"), json!("t:s0"));
+        assert_eq!(check(&store), Err("Recursive slot source t:s0".into()));
     }
 }

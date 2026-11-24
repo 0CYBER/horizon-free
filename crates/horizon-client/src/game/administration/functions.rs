@@ -4,6 +4,9 @@
 mod loading;
 #[path = "functions/registry_graph.rs"]
 mod registry_graph;
+#[path = "functions/slot_sources.rs"]
+mod slot_sources;
+
 use super::{
     Game,
     commands::{
@@ -488,7 +491,15 @@ impl Game<'_> {
         // `ServerFunctionLibrary` compiles its functions: an item or block
         // argument's `#tag` resolves against them.
         self.sync_pack_tag_ids();
-        let mut registries = self.ui.registries.clone();
+        // The same candidate the prepare step checked: on a world's first open its item tags
+        // are not in the live tables yet.
+        let mut registries = match self.candidate_slot_source_registries(&store) {
+            Ok(registries) => registries,
+            Err(error) => {
+                log::error!("Horizon: slot sources changed after their check: {error}");
+                return;
+            }
+        };
         registries.permission = self.fns.command_level();
         registries.functions = store.functions.keys().cloned().collect();
         registries.function_tags = store.function_tags.keys().cloned().collect();
@@ -504,17 +515,6 @@ impl Game<'_> {
             .extend(pack_tables.map(str::to_owned));
         registries.loot_tables.sort();
         registries.loot_tables.dedup();
-        let sources = registries
-            .by_registry
-            .entry("minecraft:slot_source".into())
-            .or_default();
-        sources.ids = store.slot_sources.keys().cloned().collect();
-        sources.tags = store
-            .slot_source_tags
-            .keys()
-            .filter(|id| store.slot_source_tag(id).is_ok())
-            .cloned()
-            .collect();
         for (id, ids) in [
             ("minecraft:predicate", &registries.predicates),
             ("minecraft:item_modifier", &registries.item_modifiers),

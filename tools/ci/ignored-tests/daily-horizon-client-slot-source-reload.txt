@@ -1,0 +1,4 @@
+# #13951: a broken slot source refuses the first data pack load, with the prepared 26.3 data.
+horizon-client game::commands::items::registered_slot_source_preservation_tests::a_broken_slot_source_refuses_the_first_load_until_it_is_fixed lib daily resources
+horizon-client game::commands::items::registered_slot_source_preservation_tests::a_filtered_source_may_name_an_item_tag_its_pack_adds lib daily resources
+horizon-client game::commands::items::registered_slot_source_preservation_tests::a_first_open_admits_a_filter_naming_an_item_tag_its_pack_adds lib daily resources

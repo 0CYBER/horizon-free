@@ -46,8 +46,9 @@ fn holder_set(t: &Tag, reg: &Registries) -> Result<(), String> {
 }
 /// `ExtraCodecs.POSITIVE_INT`: `Codec.INT` takes any numeric tag's
 /// `intValue`, then `intRangeWithMessage(1, MAX_VALUE, ...)`.
-fn positive_int(t: &Tag) -> Result<(), String> {
-    let value = match *t {
+/// `Codec.INT`: any numeric tag's `intValue`.
+fn int_value(t: &Tag) -> Result<i32, String> {
+    Ok(match *t {
         Tag::Byte(v) => i32::from(v),
         Tag::Short(v) => i32::from(v),
         Tag::Int(v) => v,
@@ -56,7 +57,72 @@ fn positive_int(t: &Tag) -> Result<(), String> {
         Tag::Float(bits) => f32::from_bits(bits) as i32,
         Tag::Double(bits) => f64::from_bits(bits) as i32,
         _ => return Err("Not a number".into()),
+    })
+}
+/// `MinMaxBounds.Ints.CODEC`: one int, or `{min, max}` (each optional), with
+/// `min <= max`.
+fn int_bounds(t: &Tag) -> Result<(), String> {
+    let Tag::Compound(map) = t else {
+        return int_value(t).map(|_| ());
     };
+    let min = get(map, "min").map(int_value).transpose()?;
+    let max = get(map, "max").map(int_value).transpose()?;
+    if let (Some(min), Some(max)) = (min, max)
+        && min > max
+    {
+        return Err("Min value cannot be greater than max".into());
+    }
+    Ok(())
+}
+/// `RegistryCodecs.homogeneousList(Registries.ITEM)`: a `#tag`, one item id or a list of them.
+fn item_holder_set(t: &Tag, reg: &Registries) -> Result<(), String> {
+    let names = match t {
+        Tag::List(values) => values
+            .iter()
+            .map(|v| as_string(v).ok_or_else(|| "Not a string".to_owned()))
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => vec![as_string(t).ok_or_else(|| "Not a string".to_owned())?],
+    };
+    for name in names {
+        // A list holds elements only; a lone string may name a tag.
+        let (tag, id) = match name.strip_prefix('#') {
+            Some(id) if !matches!(t, Tag::List(_)) => (true, id),
+            _ => (false, name.as_str()),
+        };
+        let id =
+            parse_identifier(id).ok_or_else(|| format!("Not a valid resource location: {id}"))?;
+        // Without the game's data (a bare command test), the ids are not checked.
+        let known = if tag {
+            reg.tags("minecraft:item")
+        } else {
+            reg.ids("minecraft:item")
+        };
+        if !known.is_empty() && !known.contains(&id) {
+            return Err(if tag {
+                format!("Missing tag: 'minecraft:item':'{id}'")
+            } else {
+                format!("Can't find element '{id}' in registry 'minecraft:item'")
+            });
+        }
+    }
+    Ok(())
+}
+/// `ItemPredicate.CODEC` as far as a registry load checks it: its `items` set and its
+/// `count` bounds. Its `components` and `predicates` are not decoded here.
+fn item_predicate(t: &Tag, reg: &Registries) -> Result<(), String> {
+    let Tag::Compound(map) = t else {
+        return Err("Not an item predicate map".into());
+    };
+    if let Some(items) = get(map, "items") {
+        item_holder_set(items, reg)?;
+    }
+    if let Some(count) = get(map, "count") {
+        int_bounds(count)?;
+    }
+    Ok(())
+}
+fn positive_int(t: &Tag) -> Result<(), String> {
+    let value = int_value(t)?;
     if value < 1 {
         return Err(format!("Value must be positive: {value}"));
     }
@@ -120,9 +186,7 @@ fn typed(t: &Tag, reg: &Registries) -> Result<(), String> {
             }
             "minecraft:filtered" => {
                 require(map, t, &["item_filter"])?;
-                if !matches!(get(map, "item_filter"), Some(Tag::Compound(_))) {
-                    return Err("Not an item predicate map".into());
-                }
+                item_predicate(get(map, "item_filter").unwrap(), reg)?;
             }
             _ => {}
         }
@@ -218,6 +282,63 @@ mod tests {
             let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
             let actual = decode(&tag, &reg).unwrap_err();
             assert!(actual.contains(error), "{input}: {actual}");
+        }
+    }
+
+    /// `FilteredSlotSource` decodes its `item_filter` with `ItemPredicate.CODEC`: the item
+    /// holder set binds against the item registry and the count bounds are ints with min <= max.
+    #[test]
+    fn a_filtered_source_decodes_its_item_predicate() {
+        let reg = Registries {
+            items: vec!["minecraft:stone".into(), "minecraft:dirt".into()],
+            item_tags: vec!["minecraft:logs".into()],
+            ..Default::default()
+        };
+        let filtered = |filter: &str| {
+            format!(
+                r#"{{type:"filtered",slot_source:{{type:"slot_range",slots:"container.0"}},item_filter:{filter}}}"#
+            )
+        };
+        for filter in [
+            "{}",
+            r#"{items:"minecraft:stone"}"#,
+            r#"{items:"stone"}"#,
+            r##"{items:"#minecraft:logs"}"##,
+            r#"{items:["minecraft:stone","minecraft:dirt"]}"#,
+            "{count:3}",
+            "{count:{min:1,max:3}}",
+            "{count:{min:2}}",
+        ] {
+            let (tag, _) = horizon_core::nbt::parse_snbt(&filtered(filter)).unwrap();
+            assert!(decode(&tag, &reg).is_ok(), "{filter}");
+        }
+        for (filter, error) in [
+            (
+                r#"{items:"minecraft:does_not_exist"}"#,
+                "Can't find element 'minecraft:does_not_exist'",
+            ),
+            (
+                r##"{items:"#minecraft:not_a_tag"}"##,
+                "Missing tag: 'minecraft:item':'minecraft:not_a_tag'",
+            ),
+            (
+                r#"{items:["minecraft:stone","minecraft:nope"]}"#,
+                "Can't find element 'minecraft:nope'",
+            ),
+            (
+                r##"{items:["#minecraft:logs"]}"##,
+                "Not a valid resource location",
+            ),
+            (r#"{count:"x"}"#, "Not a number"),
+            (
+                "{count:{min:3,max:1}}",
+                "Min value cannot be greater than max",
+            ),
+            ("3", "Not an item predicate map"),
+        ] {
+            let (tag, _) = horizon_core::nbt::parse_snbt(&filtered(filter)).unwrap();
+            let actual = decode(&tag, &reg).unwrap_err();
+            assert!(actual.contains(error), "{filter}: {actual}");
         }
     }
 }

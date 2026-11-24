@@ -2909,6 +2909,18 @@ mod registered_slot_source_preservation_tests {
         resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
         name: &str,
     ) -> (Game<'a>, std::path::PathBuf) {
+        let (mut game, high) = packs(resources, name);
+        game.ensure_datapacks();
+        assert!(game.run_command("setblock 0 100 0 chest{Items:[{Slot:0b,id:\"stone\",count:5},{Slot:1b,id:\"dirt\",count:2},{Slot:3b,id:\"stone\",count:7}]}"));
+        assert!(game.run_command("scoreboard objectives add slotprobe dummy"));
+        (game, high)
+    }
+
+    /// A world with two packs that both define `parity:first_three`; nothing loaded yet.
+    fn packs<'a>(
+        resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
+        name: &str,
+    ) -> (Game<'a>, std::path::PathBuf) {
         let mut game = crate::game::game_tests::tests::server_game(resources);
         game.build_registries();
         game.set_allow_commands(true);
@@ -2924,10 +2936,42 @@ mod registered_slot_source_preservation_tests {
             high = path;
         }
         game.world_root = root;
-        game.ensure_datapacks();
+        (game, high)
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_broken_slot_source_refuses_the_first_load_until_it_is_fixed() {
+        let mut resources = None;
+        let directory = tempfile::tempdir().unwrap();
+        let world = directory.path().join("slot-source-first-load-world");
+        let (mut game, file) = packs(&mut resources, world.to_str().unwrap());
+        let features = game.level.enabled_features.clone();
+        let fixed = std::fs::read_to_string(&file).unwrap();
+        // Broken before any command runs, since a command loads the packs lazily.
+        std::fs::write(&file, "{").unwrap();
         assert!(game.run_command("setblock 0 100 0 chest{Items:[{Slot:0b,id:\"stone\",count:5},{Slot:1b,id:\"dirt\",count:2},{Slot:3b,id:\"stone\",count:7}]}"));
         assert!(game.run_command("scoreboard objectives add slotprobe dummy"));
-        (game, high)
+        // The last one parses and binds; only its codec refuses the slot range.
+        for definition in [
+            "{",
+            r#""parity:first_three""#,
+            r#"{"type":"minecraft:slot_range","slots":"container.nope"}"#,
+        ] {
+            std::fs::write(&file, definition).unwrap();
+            // MinecraftServer: the world does not open on a failed first load.
+            assert!(
+                game.open_world_datapacks(&features).is_err(),
+                "{definition}"
+            );
+            // The lazy path admits nothing either.
+            game.ensure_datapacks();
+            assert!(!game.run_command("execute if slots block 0 100 0 parity:first_three"));
+        }
+        // Nothing marked the packs loaded, so the next lazy load picks up the fix.
+        std::fs::write(&file, fixed).unwrap();
+        game.ensure_datapacks();
+        count(&mut game, 3);
     }
 
     fn count(game: &mut Game<'_>, expected: i32) {
@@ -2936,6 +2980,67 @@ mod registered_slot_source_preservation_tests {
             game.score.board.score("#r", "slotprobe").unwrap().value,
             expected
         );
+    }
+
+    /// A world's first open admits the packs before its tables exist, so a filter and a
+    /// function naming a tag their pack adds must not be dropped after the check passed.
+    #[test]
+    #[ignore = "daily"]
+    fn a_first_open_admits_a_filter_naming_an_item_tag_its_pack_adds() {
+        let mut resources = None;
+        let directory = tempfile::tempdir().unwrap();
+        let world = directory.path().join("slot-source-first-open-tag-world");
+        let (mut game, file) = packs(&mut resources, world.to_str().unwrap());
+        let data = file.parent().unwrap().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(data.join("tags/item")).unwrap();
+        std::fs::write(
+            data.join("tags/item/allowed.json"),
+            r#"{"values":["minecraft:stone"]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(data.join("function")).unwrap();
+        std::fs::write(
+            data.join("function/probe.mcfunction"),
+            "execute if items block 0 100 0 container.0 #parity:allowed\n",
+        )
+        .unwrap();
+        std::fs::write(&file, r##"{"type":"minecraft:filtered","slot_source":{"type":"minecraft:slot_range","slots":"container.*"},"item_filter":{"items":"#parity:allowed"}}"##).unwrap();
+        let features = game.level.enabled_features.clone();
+        let stack = game.open_world_datapacks(&features).unwrap();
+        let root = game.options.resources.clone();
+        game.open_world_tables(&stack, &root).unwrap();
+        assert!(game.run_command("setblock 0 100 0 chest{Items:[{Slot:0b,id:\"stone\",count:5},{Slot:1b,id:\"dirt\",count:2},{Slot:3b,id:\"stone\",count:7}]}"));
+        assert!(game.run_command("scoreboard objectives add slotprobe dummy"));
+        count(&mut game, 2); // The two stone stacks: the source was admitted.
+        assert!(game.run_command("function parity:probe")); // So was the function.
+    }
+
+    /// The candidate's own item tags count: the world tables that publish them are staged
+    /// after the slot sources are checked.
+    #[test]
+    #[ignore = "daily"]
+    fn a_filtered_source_may_name_an_item_tag_its_pack_adds() {
+        let mut resources = None;
+        let directory = tempfile::tempdir().unwrap();
+        let world = directory.path().join("slot-source-pack-tag-world");
+        let (mut game, file) = scene(&mut resources, world.to_str().unwrap());
+        let features = game.level.enabled_features.clone();
+        count(&mut game, 3);
+        let tag = file
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("tags/item/allowed.json");
+        std::fs::create_dir_all(tag.parent().unwrap()).unwrap();
+        std::fs::write(&tag, r#"{"values":["minecraft:stone"]}"#).unwrap();
+        std::fs::write(&file, r##"{"type":"minecraft:filtered","slot_source":{"type":"minecraft:slot_range","slots":"container.*"},"item_filter":{"items":"#parity:allowed"}}"##).unwrap();
+        assert!(game.reload_datapacks(true, &features).is_ok());
+        count(&mut game, 2); // The two stone stacks.
+        // Without the tag the same source names a tag no pack defines any more.
+        std::fs::remove_file(&tag).unwrap();
+        assert!(game.reload_datapacks(true, &features).is_err());
+        count(&mut game, 2); // The rejected candidate keeps the loaded snapshot.
     }
 
     #[test]
@@ -2953,10 +3058,31 @@ mod registered_slot_source_preservation_tests {
         game.reload_datapacks(true, &game.level.enabled_features.clone())
             .unwrap();
         count(&mut game, 2);
-        std::fs::write(file, "{").unwrap();
-        game.reload_datapacks(true, &game.level.enabled_features.clone())
-            .unwrap();
-        count(&mut game, 1); // Existing policy: invalid higher JSON is skipped.
+        let features = game.level.enabled_features.clone();
+        std::fs::write(&file, "{").unwrap();
+        assert!(game.reload_datapacks(true, &features).is_err());
+        count(&mut game, 2); // Rejected candidate retains the accepted snapshot.
+        // The registry reads a file with TYPED_CODEC: neither a holder id nor an
+        // inline list of sources loads, nor a source the codec refuses.
+        for definition in [
+            r#""parity:first_three""#,
+            r#"[{"type":"minecraft:slot_range","source":"container","slots":"container.0"}]"#,
+            // Parses and binds; only its codec refuses the slot range.
+            r#"{"type":"minecraft:slot_range","slots":"container.nope"}"#,
+            // FilteredSlotSource's item_filter is an ItemPredicate: its items must exist.
+            r#"{"type":"minecraft:filtered","slot_source":{"type":"minecraft:slot_range","slots":"container.0"},"item_filter":{"items":"minecraft:does_not_exist"}}"#,
+        ] {
+            std::fs::write(&file, definition).unwrap();
+            assert!(
+                game.reload_datapacks(true, &features).is_err(),
+                "{definition}"
+            );
+            count(&mut game, 2);
+        }
+        // The same filtered source with an item that exists loads.
+        std::fs::write(&file, r#"{"type":"minecraft:filtered","slot_source":{"type":"minecraft:slot_range","slots":"container.0"},"item_filter":{"items":"minecraft:stone"}}"#).unwrap();
+        assert!(game.reload_datapacks(true, &features).is_ok());
+        count(&mut game, 1); // container.0 holds stone.
         assert!(!game.run_command("execute if slots block 0 100 0 first_three"));
         assert_eq!(game.block_entity_nbt([0, 100, 0]).as_ref(), Some(&before));
         assert_eq!(game.world.game_time, clock);
