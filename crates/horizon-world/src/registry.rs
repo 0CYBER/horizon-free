@@ -87,9 +87,19 @@ fn cacheable_saved_state(tag: &Tag) -> bool {
 /// The hash [`BlockRegistry`] indexes states by (fixed keys: the same in
 /// every process).
 fn state_key(state: &BlockState) -> u64 {
+    named_state_key(
+        &state.name,
+        state
+            .properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+}
+
+fn named_state_key<'a>(name: &str, properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64 {
     let mut hasher = DefaultHasher::new();
-    state.name.hash(&mut hasher);
-    for (key, value) in &state.properties {
+    name.hash(&mut hasher);
+    for (key, value) in properties {
         key.hash(&mut hasher);
         value.hash(&mut hasher);
     }
@@ -228,6 +238,14 @@ impl BlockRegistry {
     }
     pub fn id(&self, state: &BlockState) -> Option<BlockStateId> {
         self.data.id(state)
+    }
+    /// Look up an exact state by name and all properties in name order, without copying them.
+    pub fn id_by_properties(
+        &self,
+        name: &str,
+        properties: &[(&str, &str)],
+    ) -> Option<BlockStateId> {
+        self.data.id_by_properties(name, properties)
     }
 
     /// The id a saved palette entry resolves to, with `decode_column`'s rules:

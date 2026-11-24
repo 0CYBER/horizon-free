@@ -6,8 +6,14 @@ mods own bounded edit descriptions, never mutable renderer models. Evaluate
 ModelData on the client world-owning thread before freezing geometry selection.
 Workers read concrete results from [section meshing](section-meshing.md)'s arismoko/horizon#1508
 plan. This extends that plan's input boundary; its scheduling, halo, publication,
-geometry limits and rendering rules remain authoritative. No Rust API is
-implemented; every stage below has file **none** pending design approval.
+geometry limits and rendering rules remain authoritative for that proposal.
+
+The implemented native `modify_baking_result` hook covers a narrower surface: it borrows the
+staged, already baked block and standalone catalog on the resource loader. A listener may
+inspect faces or keep, remove or reshape them before publication. This introduces no live
+world data and no callable model at render time. Items whose geometry is chosen during
+stack-dependent preparation, ModelData, and the Wire/wasm design below are not implemented
+by that hook. See [Drawing resolved models](../../modding/src/how-to/client/model-drawing.md).
 
 ## Evidence and limits
 

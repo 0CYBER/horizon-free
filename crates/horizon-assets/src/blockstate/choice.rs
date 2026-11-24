@@ -131,6 +131,26 @@ impl<T> CompiledChoices<T> {
             Choice::Weighted { variants, .. } => variants.first()?,
         })
     }
+    /// Visit all variants of the selected parts without sampling a position's render RNG.
+    pub fn for_each_alternative<'a>(
+        &'a self,
+        selected: &SelectedModels,
+        mut visit: impl FnMut(&'a T),
+    ) {
+        let mut each = |choice: &'a Choice<T>| match choice {
+            Choice::Single(value) => visit(value),
+            Choice::Weighted { variants, .. } => variants.iter().for_each(&mut visit),
+        };
+        match selected {
+            SelectedModels::Variant(index) => each(&self.variants[*index]),
+            SelectedModels::Multipart(indices) => {
+                for &index in indices {
+                    each(&self.multipart[index]);
+                }
+            }
+        }
+    }
+
     /// Append selected variants without allocating intermediate part lists.
     pub fn collect<'a>(
         &'a self,

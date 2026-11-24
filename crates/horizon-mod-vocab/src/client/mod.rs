@@ -1,5 +1,6 @@
 //! Client-only surfaces: screens, input, sound, drawing and options.
 
+pub(crate) mod baked_models;
 pub(crate) mod block_state_definition;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]

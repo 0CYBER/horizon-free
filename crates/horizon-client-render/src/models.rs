@@ -208,6 +208,7 @@ pub(crate) fn prepare_with_models(
         catalog.bake_standalone(root.source(), sprites, models, &standalone.names)?;
         catalog.bake_standalone_forms(root.source(), sprites, models, &standalone.forms);
     }
+    catalog::baking_result::modify(&mut catalog, registry, sprites);
     let mut placements = Vec::new();
     let mut states = Vec::new();
     for (index, (name, properties)) in GALLERY.iter().enumerate() {
@@ -288,6 +289,10 @@ pub fn load_visibility(
         .collect::<std::result::Result<_, &str>>()?;
     Ok(FaceVisibility::new(&occlusion, &definitions)?)
 }
+
+#[cfg(test)]
+#[path = "models/baking_result_tests.rs"]
+mod baking_result_tests;
 
 #[cfg(test)]
 mod tests {

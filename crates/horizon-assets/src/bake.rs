@@ -175,7 +175,8 @@ fn corners(from: [f32; 3], to: [f32; 3], direction: Direction) -> [[f32; 3]; 4] 
     selectors
         .map(|selector| std::array::from_fn(|i| if selector[i] == 0 { from[i] } else { to[i] }))
 }
-fn facing(vertices: &[[f32; 3]; 4]) -> Option<Direction> {
+/// The cardinal direction closest to the normal of the first three vertices in draw order.
+pub fn facing(vertices: &[[f32; 3]; 4]) -> Option<Direction> {
     let a: [f32; 3] = std::array::from_fn(|i| vertices[1][i] - vertices[0][i]);
     let b: [f32; 3] = std::array::from_fn(|i| vertices[2][i] - vertices[0][i]);
     let n = [

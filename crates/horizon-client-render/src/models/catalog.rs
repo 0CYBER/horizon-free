@@ -1,6 +1,8 @@
 //! Bind prepared registry states to model choices; bake each transformed model
 //! once and share its geometry across positions. Resource failure recovery and
 //! resource-pack reloads remain separate work.
+pub(super) mod baking_result;
+
 use crate::{Result, sprites::Sprites};
 use horizon_assets::{
     bake::{BlockModelTransform, ModelQuad, RenderType, bake_block_model},
@@ -48,7 +50,7 @@ impl QuadShape {
         const SOUTH: usize = 3;
         const WEST: usize = 4;
         const EAST: usize = 5;
-        let (mut min, mut max) = ([32f32; 3], [-32f32; 3]);
+        let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for p in positions {
             for i in 0..3 {
                 min[i] = min[i].min(p[i]);
@@ -230,16 +232,7 @@ fn bake_resolved(
         .into_iter()
         .map(|quad| {
             let layer = sprites.insert(&quad.material.sprite)?;
-            // A model's `render_type` replaces the pass its sprite would pick.
-            let (translucent, opaque) = match quad.render_type {
-                Some(RenderType::Translucent | RenderType::Tripwire) => (true, false),
-                Some(RenderType::Solid) => (false, true),
-                Some(RenderType::Cutout | RenderType::CutoutMipped) => (false, false),
-                None | Some(RenderType::Unsupported) => (
-                    quad.material.force_translucent || sprites.translucent[layer as usize],
-                    sprites.region_opaque(layer, &quad.uv),
-                ),
-            };
+            let (translucent, opaque) = face_transparency(sprites, &quad, layer);
             Ok(BakedFace::new(quad, layer, opaque, translucent, None))
         })
         .collect::<Result<_>>()?;
@@ -250,6 +243,19 @@ fn bake_resolved(
         faces,
         cube,
     })
+}
+
+fn face_transparency(sprites: &Sprites, quad: &ModelQuad, layer: u32) -> (bool, bool) {
+    // A model's `render_type` replaces the pass its sprite would pick.
+    match quad.render_type {
+        Some(RenderType::Translucent | RenderType::Tripwire) => (true, false),
+        Some(RenderType::Solid) => (false, true),
+        Some(RenderType::Cutout | RenderType::CutoutMipped) => (false, false),
+        None | Some(RenderType::Unsupported) => (
+            quad.material.force_translucent || sprites.translucent[layer as usize],
+            sprites.region_opaque(layer, &quad.uv),
+        ),
+    }
 }
 
 /// `FaceBakery.bakeQuad`: use the same centered geometry and inverse face UV
