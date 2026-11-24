@@ -157,6 +157,7 @@ pub fn parse_set(value: &str) -> Result<(String, String), String> {
 /// What the game knows about the run before it starts.
 pub struct Setup {
     pub scenario: String,
+    /// The process's start: `startup.title_ms` and `startup.world_ms` count from it.
     pub started: Instant,
     pub app: App,
     pub simulation_distance: u32,

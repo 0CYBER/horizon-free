@@ -541,6 +541,11 @@ pub mod startup {
         ON.load(Ordering::Relaxed)
     }
 
+    /// The process's start [`init`] was given, written or not; `None` before it.
+    pub fn origin() -> Option<Instant> {
+        ORIGIN.get().copied()
+    }
+
     fn micros(at: Instant) -> u128 {
         ORIGIN.get().map_or(0, |origin| {
             at.saturating_duration_since(*origin).as_micros()

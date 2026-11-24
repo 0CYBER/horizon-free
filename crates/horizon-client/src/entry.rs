@@ -102,6 +102,8 @@ pub fn start<G>(
     code: CodeRuntime,
     startup: Startup,
 ) {
+    // The startup spans count from here, before the allocator, hooks and languages are set up.
+    let started = std::time::Instant::now();
     let _ = CODE_RUNTIME.set(code);
     let Startup {
         launch,
@@ -135,7 +137,7 @@ pub fn start<G>(
     horizon_hooks::engine::seal();
     // The text crates ship (`horizon_hooks::lang`), loaded with the game's own languages.
     horizon_client::lang::install_crate_files(horizon_hooks::lang::engine::all());
-    horizon_client::spans::startup::init(std::time::Instant::now());
+    horizon_client::spans::startup::init(started);
     logging::set_game_home(launch.context.home.clone());
     // The dedicated server logs in its own folder, as vanilla's does; the game in its home.
     let (home, side, thread) = if launch

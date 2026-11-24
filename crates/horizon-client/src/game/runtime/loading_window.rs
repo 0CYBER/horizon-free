@@ -362,7 +362,9 @@ pub(super) fn start_game<'a>(
             control.sender(),
             horizon_client::benchmark::Setup {
                 scenario,
-                started,
+                // The report's startup times count from the process's start, not
+                // from `run`: what `entry` does before it belongs to the start too.
+                started: horizon_client::spans::startup::origin().unwrap_or(started),
                 app: horizon_bench::App {
                     name: "horizon-client".into(),
                     version: horizon_client::crash::version(),
