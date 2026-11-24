@@ -45,6 +45,7 @@ horizon-client game::fishing::impact::tests::misses_water_and_the_closed_gate_em
 horizon-client game::fishing::impact::tests::removing_a_bobber_in_its_impact_clears_the_line_without_rewards lib daily resources
 horizon-client game::game_mode::tests::leaving_creative_keeps_the_carried_stack lib daily resources
 horizon-client game::game_mode::tests::the_tick_swap_out_of_creative_keeps_the_carried_stack lib daily resources
+horizon-client game::ghasts::ghastling_hatch_tests::hatched_ghastling_spawns_non_persistent lib daily resources
 horizon-client game::gui_clips::dispatch_tests::a_hook_call_clips_what_its_mod_draws_and_closes_what_it_leaves_open lib daily resources
 horizon-client game::gui_entity::tests::a_screen_draws_a_mob_by_type_once_and_refuses_what_it_cant_draw lib daily game-boot
 horizon-client game::initial_spawn_tests::a_spawn_search_follows_the_level_seed lib daily resources

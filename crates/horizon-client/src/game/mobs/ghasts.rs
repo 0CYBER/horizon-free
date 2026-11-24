@@ -192,7 +192,7 @@ impl Game<'_> {
             Some("west") => 90.0,
             _ => 0.0,
         };
-        if let Some(id) = self.spawn_mob_raw("minecraft:happy_ghast", at, true)
+        if let Some(id) = self.spawn_mob_raw("minecraft:happy_ghast", at, false)
             && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             // DriedGhastBlock.spawnGhastling sets the baby age before
@@ -211,6 +211,33 @@ impl Game<'_> {
                 .in_source(SoundSource::Blocks);
             self.play_bound_sound(sound, id, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod ghastling_hatch_tests {
+    #[test]
+    #[ignore = "daily"]
+    fn hatched_ghastling_spawns_non_persistent() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let dried = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:dried_ghast")
+                .expect("minecraft:dried_ghast state");
+            game.spawn_ghastling([4, 64, 4], dried);
+            let hatched = game
+                .mobs
+                .iter()
+                .find(|m| m.kind.id == "minecraft:happy_ghast")
+                .expect("hatched ghastling should spawn");
+            assert!(
+                !hatched.persistent,
+                "DriedGhastBlock.spawnGhastling must not mark hatched ghastlings persistent"
+            );
+            assert!(hatched.is_baby(), "hatched ghastling should start as a baby");
+        });
     }
 }
 
