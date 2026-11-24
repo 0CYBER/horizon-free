@@ -1,0 +1,1 @@
+horizon-client game::native_entity_invulnerable::tests::an_invisible_stand_refuses_even_a_creative_punch lib daily resources

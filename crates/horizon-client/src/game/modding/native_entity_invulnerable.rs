@@ -1156,6 +1156,22 @@ mod tests {
         });
     }
 
+    /// `ArmorStand.hurtServer` refuses an invisible stand's hit outright: even
+    /// a creative player's punch, which would break a visible one, leaves it.
+    #[test]
+    #[ignore = "daily"]
+    fn an_invisible_stand_refuses_even_a_creative_punch() {
+        use horizon_client::entities::ArmorStand;
+        with_game(|game| {
+            let mut stand = ArmorStand::new(15, Vec3::new(0.5, 64.0, 0.5), 0.0);
+            stand.invisible = true;
+            game.armor_stands.push(stand);
+            game.creative = true;
+            assert!(!game.punch_armor_stand(0));
+            assert_eq!(game.armor_stands.len(), 1, "still standing");
+        });
+    }
+
     /// arismoko/horizon#916, review round 2: the player's flag and window ride the save —
     /// `sync_level` writes them, `load_saved_state_once` reads them back.
     #[test]

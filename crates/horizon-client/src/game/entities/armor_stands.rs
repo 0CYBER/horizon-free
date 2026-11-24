@@ -976,7 +976,12 @@ impl Game<'_> {
         ) {
             return false;
         }
-
+        // ArmorStand.hurtServer, after isInvulnerableTo: an invisible or
+        // marker stand refuses the hit before any creative break or wobble:
+        // no sound, no wobble, no drops.
+        if self.armor_stands[i].invisible || self.armor_stands[i].marker {
+            return false;
+        }
         self.break_armor_stand_by_hit(
             i,
             self.creative,
