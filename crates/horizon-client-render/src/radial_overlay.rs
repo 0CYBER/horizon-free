@@ -481,21 +481,58 @@ impl Layout {
         // whole: first the header goes back to the top, over the bars; then the ring goes down
         // over the rows, to the hotbar. Health stays clear before the bars do: the world goes on
         // behind the dial.
-        [
-            (room.below_top(HEADER_TOP), room.bottom()),
-            (HEADER_TOP, room.bottom()),
-        ]
-        .into_iter()
-        .map(|(header_y, bottom)| Self::at(w, h, header_y, bottom))
-        .find(|layout| layout.r <= layout.fit)
-        .unwrap_or_else(|| Self::at(w, h, HEADER_TOP, h))
+        // On vanilla's surfaces the tab row gets shorter first, then the hotbar cells give way
+        // to vanilla's smaller inventory slots, before the bars or the rows give up their room.
+        let roomy = h >= ROOMY_H;
+        let full = Self::tab_h(roomy);
+        let kept = (room.below_top(HEADER_TOP), room.bottom());
+        let mut tries = vec![(kept, full, None)];
+        if vanilla::on() {
+            let short = vanilla::header_h(false);
+            let small = Some(vanilla::SMALL_CELL);
+            tries.extend([
+                (kept, short, None),
+                (kept, full, small),
+                (kept, short, small),
+            ]);
+            tries.extend([
+                ((HEADER_TOP, room.bottom()), full, None),
+                ((HEADER_TOP, room.bottom()), short, small),
+            ]);
+        } else {
+            tries.push(((HEADER_TOP, room.bottom()), full, None));
+        }
+        tries
+            .into_iter()
+            .map(|((header_y, bottom), tab_h, cell)| Self::at(w, h, header_y, bottom, tab_h, cell))
+            .find(Self::fits)
+            .unwrap_or_else(|| {
+                let cell = vanilla::on().then_some(vanilla::SMALL_CELL);
+                Self::at(w, h, HEADER_TOP, h, full, cell)
+            })
+    }
+
+    /// The ring fits its band; on vanilla's surfaces its tiles' squares also stay apart on the
+    /// diagonals (a hotbar cell can't shrink as the dial's own tile does).
+    fn fits(&self) -> bool {
+        let apart = self.r * FRAC_1_SQRT_2 >= self.tile + 2.0 * GROW;
+        self.r <= self.fit && (apart || !vanilla::on())
+    }
+
+    /// The tab row's height: vanilla's tab bar on its surfaces, the dial's own row otherwise.
+    fn tab_h(roomy: bool) -> f32 {
+        match (vanilla::on(), roomy) {
+            (true, _) => vanilla::header_h(roomy),
+            (false, true) => TAB_H,
+            (false, false) => TAB_H_SMALL,
+        }
     }
 
     /// The dial with its header's top at `header_y`, over a HUD whose bottom rows begin at
     /// `room_bottom`.
-    fn at(w: f32, h: f32, header_y: f32, room_bottom: f32) -> Self {
+    /// `cell`: the tiles' size when it is fixed (vanilla's inventory slot), else from the view.
+    fn at(w: f32, h: f32, header_y: f32, room_bottom: f32, tab_h: f32, cell: Option<f32>) -> Self {
         let roomy = h >= ROOMY_H;
-        let tab_h = if roomy { TAB_H } else { TAB_H_SMALL };
         let top = header_y + tab_h + HEADER_GAP;
         // The hotbar, and the status rows above it where they show (`Keep::StatusRows`).
         let reserve = if roomy {
@@ -504,8 +541,15 @@ impl Layout {
             0.0
         };
         let bottom = h - reserve - BOTTOM_GAP;
-        let tile = (TILE_SHARE * h).floor().clamp(TILE_MIN, TILE_MAX);
-        let chips = tile >= CHIP_TILE;
+        // On vanilla's surfaces a tile is a hotbar cell, never smaller.
+        let least = if vanilla::on() {
+            vanilla::least_tile()
+        } else {
+            TILE_MIN
+        };
+        let tile = cell.unwrap_or_else(|| (TILE_SHARE * h).floor().clamp(least, TILE_MAX));
+        // Vanilla's surfaces have no chips: a toggle's state is in the hub's tooltip.
+        let chips = tile >= CHIP_TILE && !vanilla::on();
         let (cx, cy) = ((w / 2.0).floor(), ((top + bottom) / 2.0).floor());
         let chip_room = if chips { CHIP_GAP + CHIP_H } else { 0.0 };
         let below = bottom - cy - chip_room;
@@ -667,6 +711,9 @@ pub fn draw_overlay(
     look: &Look,
     clock: Clock,
 ) {
+    if vanilla::on() {
+        return vanilla::draw(batch, atlas, painter, dial, look, clock);
+    }
     let lay = Layout::new(batch.width, batch.height, dial.room);
     let (alpha, scale) = look.presence(clock);
     let page = dial.pages.page(dial.seen.page);
@@ -1061,6 +1108,8 @@ fn hint_look() -> hint::Look {
     }
 }
 
+mod vanilla;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1068,6 +1117,59 @@ mod tests {
     use crate::hud_kit::icon::NoItems;
     use crate::hud_kit::room::Keep;
     use crate::pad_glyph::Glyphs;
+
+    /// The dial's own look: these tests pin Horizon's flat surfaces (`vanilla_set` tests the
+    /// look on vanilla's), whatever the look with no style given uses.
+    fn horizon(body: fn()) {
+        crate::menu_style::with_surfaces(crate::menu_style::Surfaces::Flat, body)
+    }
+
+    #[test]
+    fn the_scaling_rule_gives_the_brief_s_numbers() {
+        horizon(the_scaling_rule_gives_the_brief_s_numbers_body)
+    }
+
+    #[test]
+    fn the_ring_stays_off_the_status_rows_above_the_hotbar() {
+        horizon(the_ring_stays_off_the_status_rows_above_the_hotbar_body)
+    }
+
+    #[test]
+    fn tiles_sit_on_true_45_degree_rays_clear_of_each_other_the_hub_and_the_tabs() {
+        horizon(tiles_sit_on_true_45_degree_rays_clear_of_each_other_the_hub_and_the_tabs_body)
+    }
+
+    #[test]
+    fn chips_and_the_hint_stay_clear_of_the_tiles_and_inside_the_view() {
+        horizon(chips_and_the_hint_stay_clear_of_the_tiles_and_inside_the_view_body)
+    }
+
+    #[test]
+    fn everything_drawn_stays_inside_the_view() {
+        horizon(everything_drawn_stays_inside_the_view_body)
+    }
+
+    #[test]
+    fn an_action_that_can_t_run_is_slashed_and_the_hub_says_why() {
+        horizon(an_action_that_can_t_run_is_slashed_and_the_hub_says_why_body)
+    }
+
+    #[test]
+    fn the_hub_s_text_stays_inside_the_hub() {
+        horizon(the_hub_s_text_stays_inside_the_hub_body)
+    }
+
+    #[test]
+    fn a_missing_slot_shows_its_mark_and_the_hub_names_its_id() {
+        horizon(a_missing_slot_shows_its_mark_and_the_hub_names_its_id_body)
+    }
+
+    #[test]
+    fn the_bumpers_sit_against_the_strip_and_only_those_that_turn_it() {
+        horizon(the_bumpers_sit_against_the_strip_and_only_those_that_turn_it_body)
+    }
+
+    mod vanilla_set;
 
     /// The dial eases on the design system's curves: its literal copies match them.
     #[test]
@@ -1078,22 +1180,22 @@ mod tests {
 
     /// A 1280x720 window (and 854x480, and a quarter of a 1708x960 one), GUI scale 4 on
     /// 1280x720, a small view and a wide splitscreen half.
-    const VIEWS: [(f32, f32); 4] = [
+    pub(super) const VIEWS: [(f32, f32); 4] = [
         (427.0, 240.0),
         (320.0, 180.0),
         (213.0, 120.0),
         (427.0, 120.0),
     ];
-    const ALL: [bool; SLOTS] = [true; SLOTS];
+    pub(super) const ALL: [bool; SLOTS] = [true; SLOTS];
 
-    fn atlas() -> HudAtlas {
+    pub(super) fn atlas() -> HudAtlas {
         HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
             "/nonexistent/horizon-test-assets".into(),
         ))
         .unwrap()
     }
 
-    fn rooms(w: f32, h: f32) -> Vec<Room> {
+    pub(super) fn rooms(w: f32, h: f32) -> Vec<Room> {
         let bar = |n: usize| {
             let bottom = crate::hud_overlays::boss_bars_bottom(h as i32, n) as f32;
             Room::new(w, h).with(Keep::BossBars, [(w - 182.0) / 2.0, 0.0, 182.0, bottom])
@@ -1101,12 +1203,11 @@ mod tests {
         vec![Room::new(w, h), bar(1), bar(2)]
     }
 
-    fn inside(rect: [f32; 4], w: f32, h: f32) -> bool {
+    pub(super) fn inside(rect: [f32; 4], w: f32, h: f32) -> bool {
         rect[0] >= 0.0 && rect[1] >= 0.0 && rect[0] + rect[2] <= w && rect[1] + rect[3] <= h
     }
 
-    #[test]
-    fn the_scaling_rule_gives_the_brief_s_numbers() {
+    fn the_scaling_rule_gives_the_brief_s_numbers_body() {
         let full = Layout::new(427.0, 240.0, &Room::new(427.0, 240.0));
         assert!(full.roomy && full.chips && full.cancel && full.big_icon);
         assert_eq!((full.tab_h, full.tile, full.r), (12.0, 26.0, 64.0));
@@ -1120,8 +1221,7 @@ mod tests {
         assert_eq!(small.lines, 2);
     }
 
-    #[test]
-    fn the_ring_stays_off_the_status_rows_above_the_hotbar() {
+    fn the_ring_stays_off_the_status_rows_above_the_hotbar_body() {
         // Survival rows from their top down: hearts, food and armour; then absorption's second
         // row of hearts over that (vanilla: `h - 39`, rows 10 apart, armour above them).
         for (w, h) in [(427.0, 240.0), (320.0, 180.0)] {
@@ -1147,8 +1247,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tiles_sit_on_true_45_degree_rays_clear_of_each_other_the_hub_and_the_tabs() {
+    fn tiles_sit_on_true_45_degree_rays_clear_of_each_other_the_hub_and_the_tabs_body() {
         for (w, h) in VIEWS {
             for room in rooms(w, h) {
                 let lay = Layout::new(w, h, &room);
@@ -1191,8 +1290,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn chips_and_the_hint_stay_clear_of_the_tiles_and_inside_the_view() {
+    fn chips_and_the_hint_stay_clear_of_the_tiles_and_inside_the_view_body() {
         for (w, h) in [(427.0, 240.0), (640.0, 360.0), (854.0, 480.0)] {
             for room in rooms(w, h) {
                 let lay = Layout::new(w, h, &room);
@@ -1232,7 +1330,7 @@ mod tests {
         );
     }
 
-    fn dial<'a>(
+    pub(super) fn dial<'a>(
         pages: &'a Pages,
         room: &'a Room,
         seen: Seen,
@@ -1252,21 +1350,20 @@ mod tests {
         }
     }
 
-    fn draw(size: [u32; 2], dial: &Dial, look: &Look) -> HudBatch {
+    pub(super) fn draw(size: [u32; 2], dial: &Dial, look: &Look) -> HudBatch {
         let mut batch = HudBatch::scratch(size);
         let clock = Clock::new(Instant::now(), true);
         draw_overlay(&mut batch, &atlas(), &NoItems, dial, look, clock);
         batch
     }
 
-    fn shown(seen: Seen) -> Look {
+    pub(super) fn shown(seen: Seen) -> Look {
         let mut look = Look::default();
         look.observe(Some(seen), Instant::now());
         look
     }
 
-    #[test]
-    fn everything_drawn_stays_inside_the_view() {
+    fn everything_drawn_stays_inside_the_view_body() {
         let pages = Pages::default();
         for size in [
             [1280, 720],
@@ -1299,7 +1396,7 @@ mod tests {
     }
 
     /// The colours drawn in a tile's square.
-    fn colours_in(batch: &HudBatch, [x, y, w, h]: [f32; 4]) -> Vec<u32> {
+    pub(super) fn colours_in(batch: &HudBatch, [x, y, w, h]: [f32; 4]) -> Vec<u32> {
         batch
             .vertices
             .iter()
@@ -1308,8 +1405,7 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn an_action_that_can_t_run_is_slashed_and_the_hub_says_why() {
+    fn an_action_that_can_t_run_is_slashed_and_the_hub_says_why_body() {
         let pages = Pages::default();
         let page = pages.page(0);
         let slot = (0..SLOTS).find(|i| !page.slot(*i).is_empty()).unwrap();
@@ -1378,8 +1474,7 @@ mod tests {
         assert!(picture.is_none());
     }
 
-    #[test]
-    fn the_hub_s_text_stays_inside_the_hub() {
+    fn the_hub_s_text_stays_inside_the_hub_body() {
         let english = lang::Language::load(&[], "en_us");
         let mut pages = Pages::default();
         pages.set_slot(0, 0, Slot::Action(RadialAction::Advancements));
@@ -1447,8 +1542,7 @@ mod tests {
         assert_eq!(toggle_state(RadialAction::Chat, Toggles::default()), None);
     }
 
-    #[test]
-    fn a_missing_slot_shows_its_mark_and_the_hub_names_its_id() {
+    fn a_missing_slot_shows_its_mark_and_the_hub_names_its_id_body() {
         let pages = Pages::parse([("radial_0_slots", "mymod:dash,,,,,,,")].into_iter()).unwrap();
         let room = Room::new(427.0, 240.0);
         let seen = Seen {
@@ -1477,8 +1571,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_bumpers_sit_against_the_strip_and_only_those_that_turn_it() {
+    fn the_bumpers_sit_against_the_strip_and_only_those_that_turn_it_body() {
         let atlas = atlas();
         let room = Room::new(427.0, 240.0);
         let lay = Layout::new(427.0, 240.0, &room);

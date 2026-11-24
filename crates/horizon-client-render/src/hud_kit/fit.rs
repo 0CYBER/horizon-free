@@ -33,6 +33,32 @@ pub const ELLIPSIS: &str = "...";
 /// One walk over the characters, adding their advances as `Font::fit` does, with the ellipsis's
 /// advance on top. Text with `§` codes or right-to-left characters is measured whole at each
 /// length instead, since codes take no room and right-to-left text is shaped as it draws.
+/// `text` cut as vanilla cuts a line that is too wide (`ComponentRenderUtils.clipText`): the
+/// longest start of it no wider than `width` less the ellipsis's width, then the ellipsis. Text
+/// that fits is left whole. Unlike [`ellipsize`] it keeps a trailing space, as vanilla does.
+pub fn clip_text<'a>(atlas: &HudAtlas, text: &'a str, width: f32) -> Cow<'a, str> {
+    let font = &atlas.font;
+    if font.width(text) <= width {
+        return Cow::Borrowed(text);
+    }
+    let plain = !text.contains('§') && matches!(crate::bidi::visual_str(text), Cow::Borrowed(_));
+    if !plain {
+        return Cow::Owned(ellipsize_shaped(atlas, text, width));
+    }
+    // `Font.substrByWidth`: advances summed until the next would pass the room.
+    let room = width - font.width(ELLIPSIS);
+    let mut used = 0.0_f32;
+    let mut end = 0;
+    for (i, c) in text.char_indices() {
+        used += font.glyph(c).advance;
+        if used > room {
+            break;
+        }
+        end = i + c.len_utf8();
+    }
+    Cow::Owned(format!("{}{ELLIPSIS}", &text[..end]))
+}
+
 pub fn ellipsize<'a>(atlas: &HudAtlas, text: &'a str, width: f32) -> Cow<'a, str> {
     let font = &atlas.font;
     if font.width(text) <= width {
@@ -136,6 +162,24 @@ mod tests {
             "/nonexistent/horizon-test-assets".into(),
         ))
         .unwrap()
+    }
+
+    /// Vanilla's `clipText`: the longest start that leaves room for "...", trailing space kept;
+    /// text that fits stays whole.
+    #[test]
+    fn clip_text_cuts_as_vanilla_does() {
+        let atlas = atlas();
+        let w = |t: &str| atlas.font.width(t);
+        assert_eq!(
+            clip_text(&atlas, "hello world", w("hello world")),
+            "hello world"
+        );
+        let room = w("hello ") + w(ELLIPSIS);
+        assert_eq!(clip_text(&atlas, "hello world", room), "hello ...");
+        assert_eq!(ellipsize(&atlas, "hello world", room), "hello...");
+        let cut = clip_text(&atlas, "hello world", room - 1.0);
+        assert_eq!(cut, "hello...");
+        assert!(w(&cut) <= room - 1.0);
     }
 
     /// Every Horizon string in a few languages, long and short, with `§` codes and right-to-left

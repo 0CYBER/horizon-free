@@ -21,7 +21,7 @@ The kit grows a piece at a time, each with something on screen that needs it:
 | `hud_kit::icon` | `Icon`: a sprite, an item, a glyph or the player's face, through an `IconPainter` |
 | `hud_kit::tabs` | `collapsed`: a page list in one row, `‹ Name ›` with a pip per page; `tab_strip`: a row of tabs that falls back to it |
 | `pad_glyph`, with `GlyphOf` and `MenuJob` in `gamepad.rs` | `Glyph`: a controller button, asked for by what it does, in the player's `Glyphs` |
-| `hud_kit::fit` | `ellipsize`, `wrap`, `chord` and `fit_in_circle`: text cut or wrapped to the room it has |
+| `hud_kit::fit` | `ellipsize`, `clip_text` (vanilla's `clipText`), `wrap`, `chord` and `fit_in_circle`: text cut or wrapped to the room it has |
 | `hud_kit::hint` | `HintRow`: glyphs and what they do, "(A) Jump", measured, fitted and drawn one way |
 | `settings_shell` | `Shell`: a searchable settings screen (Extras, Graphics, Controller Settings, Shaders) a `Screen` describes; it draws and drives it, binding rows included |
 
@@ -410,6 +410,13 @@ The shell paints through `graphics_style`, which follows the menu style the laye
 Two of vanilla's pieces draw in any look, for overlays that use them: `graphics_style::vanilla_tab`
 (a Create World tab, `MenuTabBar.MenuTabButton`) and `ui::tooltip_panel` (a tooltip's background and
 frame round any content).
+
+The radial menu follows the same switch (`graphics_style::vanilla_surfaces()`). On vanilla's surfaces
+every slot is an advancement task frame with its item: the picked one in the obtained (gold) frame under
+a container's hover glow, one that can't run dimmed, an empty one faded. The hub is a tooltip with one
+short line (the item's name), the pages are Create World's tabs, and there are no
+state chips. A view too tight for the frames takes vanilla's 18 px inventory slots before the HUD's rows
+are covered (`radial_overlay/vanilla.rs`).
 
 `HORIZON_MENU_STYLE=vanilla` starts the official game with no style given, so it draws in `NEUTRAL`.
 Use it to see and test the vanilla look; `pad_menu_e2e.py` passes the variable on to the game.
