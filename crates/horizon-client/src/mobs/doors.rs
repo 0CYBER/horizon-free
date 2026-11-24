@@ -207,7 +207,9 @@ impl Goal for BreakDoor {
                 data: 0,
             });
             if !m.ai.swinging {
-                m.swing();
+                // `swingForAttack(getUsedItemHand())`: the off hand while its
+                // flag is set, whether or not a use is still running.
+                m.swing_for_attack(m.extra.using_off_hand);
             }
         }
         self.break_time += 1;

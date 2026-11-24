@@ -3459,8 +3459,16 @@ impl Game<'_> {
                 && !dead
                 && old.and_then(|o| o.2).is_none_or(|before| time < before)
             {
-                host.hub
-                    .swing(m.id as i32, i32::from(m.swing_is_off_hand()), at, None);
+                // The packet names the hand and the animation the swing started
+                // with; the swing records the arm, so the main hand is the
+                // right one unless the mob is left-handed.
+                host.hub.swing(
+                    m.id as i32,
+                    m.swing_is_off_hand(),
+                    m.anim.swing_animation,
+                    at,
+                    None,
+                );
             }
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
@@ -5815,7 +5823,7 @@ pub(super) mod mob_swing_sync_tests {
         rx
     }
 
-    fn swings(rx: &mpsc::Receiver<Out>) -> Vec<play::SwingAnimation> {
+    pub(super) fn swings(rx: &mpsc::Receiver<Out>) -> Vec<play::SwingAnimation> {
         rx.try_iter()
             .flat_map(|out| match out {
                 Out::Packet(body) => vec![body],

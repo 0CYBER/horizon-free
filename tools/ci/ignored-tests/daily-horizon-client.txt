@@ -13,6 +13,7 @@ horizon-client game::commands::profiles::save_all_command_tests::a_save_all_keep
 horizon-client game::commands::profiles::save_all_command_tests::every_source_of_a_guests_save_all_keeps_its_feedback lib daily resources
 horizon-client game::commands::selector_bounds_tests::actual_selector_uses_body_overlap_but_distance_stays_at_the_origin lib daily game-boot
 horizon-client game::commands::world_cmds::allay_owner_damage_tests::allay_owner_adapters_compare_the_actual_player_uuid lib daily game-boot
+horizon-client game::commands::world_cmds::swing_command_tests::a_second_swing_inside_a_mobs_first_half_is_refused lib daily resources
 horizon-client game::container_loot::tests::commands_clone_and_structures lib daily child-process
 horizon-client game::container_loot::tests::player_and_world_triggers lib daily child-process
 horizon-client game::container_loot::tests::random_selection_streams lib daily resources
@@ -68,6 +69,7 @@ horizon-client game::item_entities::give_fake_item_tests::give_that_fits_spawns_
 horizon-client game::item_entities::item_rain_fire_tests::rain_puts_a_burning_item_out_with_the_hiss lib daily resources
 horizon-client game::item_entities::item_rain_fire_tests::rain_puts_out_what_a_fire_block_ignites_in_the_same_tick lib daily resources
 horizon-client game::item_entities::orb_pickup_tests::a_player_picks_a_random_orb_not_the_first lib daily resources
+horizon-client game::lan::mob_states::mob_swing_animation_tests::a_mobs_spear_thrust_reaches_guests_as_a_stab lib daily resources
 horizon-client game::lan_actions::admin_feedback::tests::a_level_zero_operator_hears_another_operators_command lib daily resources
 horizon-client game::lan_actions::admin_feedback::tests::a_level_zero_splitscreen_seat_hears_no_admin_line lib daily resources
 horizon-client game::lan_actions::admin_feedback::tests::an_integrated_server_without_commands_tells_no_one lib daily resources

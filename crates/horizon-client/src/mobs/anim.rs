@@ -3,6 +3,7 @@
 //! part poses before the model is drawn.
 use super::{Mob, Part, keyframes::AnimationState, living::wrap};
 use crate::fast_hash::{FxHashMap, FxHashSet};
+use crate::first_person::SwingAnimation;
 use horizon_core::geometry::trig::Mth;
 use horizon_core::use_animation::UseAnimation;
 use std::collections::HashMap;
@@ -91,6 +92,9 @@ pub struct AnimState {
     /// with their previous-tick copies for interpolation.
     pub v: [f32; 8],
     pub vo: [f32; 8],
+    /// The running swing's own animation (`SwingState.currentSwing.animation()`):
+    /// the base duration and type a `ClientboundSwingAnimationPacket` names.
+    pub swing_animation: SwingAnimation,
 }
 impl AnimState {
     pub fn begin_tick(&mut self) {

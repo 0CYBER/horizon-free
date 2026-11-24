@@ -2107,6 +2107,10 @@ fn command_operation(ctx: &Context) -> horizon_world::attributes::Operation {
 mod attribute_missing_tests;
 
 #[cfg(test)]
+#[path = "swing_command_tests.rs"]
+mod swing_command_tests;
+
+#[cfg(test)]
 mod allay_owner_damage_tests {
     use crate::game::native_entity_refs::tests::with_game_at;
     use horizon_client::mobs::{Damage, Mob};

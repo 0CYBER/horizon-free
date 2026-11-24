@@ -23,6 +23,7 @@ use super::{
 };
 use crate::blocks::Fluid;
 use crate::breathing::{Breath, breathe, drown, own_air};
+use crate::first_person::SwingAnimation;
 use crate::health::DamageLevel;
 use crate::powder_snow::particle_velocity as powder_snow_particle_velocity;
 use horizon_core::{
@@ -481,16 +482,22 @@ impl Mob {
             6
         }
     }
-    /// `SwingState.startIfAble`: a swing past the first half of the current
-    /// one restarts it.
-    fn start_swing(&mut self, duration: i32) -> bool {
+    /// `SwingState.startIfAble`: a swing inside the first half of the current
+    /// one is refused. `swing_time` counts one behind `SwingState.ticks` (a
+    /// swing starts at -1 and `tick_swing` counts it up at the end of the
+    /// mob's tick, where vanilla's `SwingState.tick` runs at the start of
+    /// `baseTick`), so vanilla's `ticks > 0 && ticks <= durationTicks / 2` is
+    /// `swing_time >= 0 && swing_time < durationTicks / 2`.
+    fn start_swing(&mut self, animation: SwingAnimation, duration: i32) -> bool {
         let half = self.swing_duration() / 2;
-        if self.ai.swinging && self.ai.swing_time >= 0 && self.ai.swing_time < half {
+        let ticks = self.ai.swing_time + 1;
+        if self.ai.swinging && ticks > 0 && ticks <= half {
             return false;
         }
         self.ai.swing_time = -1;
         self.ai.swinging = true;
         self.ai.swing_duration = duration.max(1);
+        self.anim.swing_animation = animation;
         true
     }
     /// Whether the current swing is the off hand's (`swing_hand`'s arm
@@ -502,7 +509,7 @@ impl Mob {
     }
     /// LivingEntity.swing
     pub fn swing(&mut self) {
-        if self.start_swing(6) {
+        if self.start_swing(SwingAnimation::DEFAULT, 6) {
             self.extra.swing_right_arm = None;
             self.extra.swing_stab = false;
         }
@@ -510,7 +517,7 @@ impl Mob {
     /// `LivingEntity.swing(hand, animation, false)` for a swing of `duration`
     /// ticks (`getModifiedSwingDuration`): the arm is `hand.asArm(mainArm)`.
     pub fn swing_hand(&mut self, off_hand: bool, duration: i32) {
-        if self.start_swing(duration) {
+        if self.start_swing(SwingAnimation::DEFAULT, duration) {
             self.extra.swing_right_arm = Some(!off_hand != self.main_arm_left());
             self.extra.swing_stab = false;
         }
@@ -519,11 +526,7 @@ impl Mob {
     /// this mob's haste, conduit power or mining fatigue
     /// (`LivingEntity.getModifiedSwingDuration`). Whether the swing started
     /// (`SwingState.startIfAble`).
-    pub fn swing_hand_modified(
-        &mut self,
-        off_hand: bool,
-        animation: crate::first_person::SwingAnimation,
-    ) -> bool {
+    pub fn swing_hand_modified(&mut self, off_hand: bool, animation: SwingAnimation) -> bool {
         let amplifier = |id: &str| {
             self.extra
                 .effects
@@ -534,7 +537,7 @@ impl Mob {
         let dig_speed = amplifier("minecraft:haste").max(amplifier("minecraft:conduit_power"));
         let fatigue = amplifier("minecraft:mining_fatigue");
         let duration = crate::first_person::swing_duration(animation, dig_speed, fatigue);
-        if self.start_swing(duration) {
+        if self.start_swing(animation, duration) {
             self.extra.swing_right_arm = Some(!off_hand != self.main_arm_left());
             self.extra.swing_stab = animation.kind == 2;
             return true;

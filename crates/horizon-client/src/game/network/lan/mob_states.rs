@@ -224,3 +224,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "mob_swing_animation_tests.rs"]
+mod mob_swing_animation_tests;

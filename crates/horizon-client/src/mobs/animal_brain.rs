@@ -2544,7 +2544,7 @@ fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i
                 return false;
             }
             mem(m).look_target.set(Tracker::entity(target, true));
-            m.swing();
+            m.swing_for_attack(false);
             super::ai::do_hurt_target(
                 m,
                 target,

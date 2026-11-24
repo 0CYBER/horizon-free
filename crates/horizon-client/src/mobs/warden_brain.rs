@@ -1076,7 +1076,7 @@ impl B {
                     return false;
                 }
                 mem(m).look_target.set(Tracker::Entity(target, true));
-                m.swing();
+                m.swing_for_attack(false);
                 warden::do_hurt_target(m, target, w, cx.level, cx.events);
                 mem(m)
                     .attack_cooling_down

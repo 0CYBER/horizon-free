@@ -4,7 +4,9 @@ use super::{
     hub::Hub,
     menu::{self, Menu, NativeMenuEvent, Rules, SlotRef, Slots, View},
 };
-use crate::{containers::BlockEntity, items::ItemStack, world::World};
+use crate::{
+    containers::BlockEntity, first_person::SwingAnimation, items::ItemStack, world::World,
+};
 use horizon_core::nbt::Tag;
 use horizon_core::random::RandomSource;
 use horizon_protocol::{
@@ -322,15 +324,24 @@ impl Hub {
         );
     }
 
-    pub fn swing(&self, id: i32, hand: i32, at: [f64; 3], except: Option<u32>) {
+    /// `ClientboundSwingAnimationPacket`: the hand and the animation the swing
+    /// started with (its base duration; a client applies the swinger's effects).
+    pub fn swing(
+        &self,
+        id: i32,
+        off_hand: bool,
+        animation: SwingAnimation,
+        at: [f64; 3],
+        except: Option<u32>,
+    ) {
         self.broadcast_near(
             at,
             128.0,
             &C::SwingAnimation(play::SwingAnimation {
                 id,
-                hand,
-                kind: 1,
-                duration: 6,
+                hand: i32::from(off_hand),
+                kind: i32::from(animation.kind),
+                duration: animation.duration,
             }),
             except,
         );
