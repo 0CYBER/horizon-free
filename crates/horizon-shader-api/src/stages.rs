@@ -306,6 +306,19 @@ fn view_position(uv: vec2<f32>, depth: f32) -> vec3<f32> {
 }
 ";
 
+const POST_VIEW_DIRECTION: &str = "\
+// The normalized world-space ray through this screen UV, unaffected by view translations.
+fn horizon_view_direction(uv: vec2<f32>) -> vec3<f32> {
+    let projection_inverse = frame.projection_inverse;
+    let far = projection_inverse * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    // At reversed depth 1, near = far + depth_axis. Form far.xyz * near.w -
+    // near.xyz * far.w: translation cancels, including when far.w is zero.
+    let depth_axis = projection_inverse[2];
+    let direction = far.xyz * depth_axis.w - depth_axis.xyz * far.w;
+    return normalize((frame.view_inverse * vec4<f32>(direction, 0.0)).xyz);
+}
+";
+
 /// `block_light_color` of the material and entity preludes: the argument is the sampler the
 /// stage has for it. The `[[lights]]` colours are decoded.
 macro_rules! block_light_color {
@@ -2493,6 +2506,14 @@ pub(crate) fn compose_traced(
                 "@group({GROUP}) @binding({POST_OPAQUE_DEPTH_BINDING}) var opaque_depth: texture_depth_2d;\n\
                  @group({GROUP}) @binding({POST_OPAQUE_COLOR_BINDING}) var opaque_color: texture_2d<f32>;\n"
             );
+        }
+        // `horizon_` is reserved. Unchanged stages that don't use the helper keep the old WGSL.
+        if files
+            .iter()
+            .map(source)
+            .any(|text| text.contains("horizon_view_direction"))
+        {
+            prelude += POST_VIEW_DIRECTION;
         }
     }
     if kind == StageKind::Post && pack.manifest.motion.is_some() {

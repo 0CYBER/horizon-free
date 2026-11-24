@@ -656,6 +656,55 @@ impl Chain {
     }
 }
 
+#[test]
+fn post_view_direction_ignores_bob_translation_and_keeps_view_rotation() {
+    use glam::{Mat4, Vec3};
+
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let frame = Chain::frame(&device, &queue);
+    // An existing pack's unprefixed view_direction can coexist with the new helper.
+    let shader = "
+        fn view_direction() -> vec3<f32> { return normalize(vec3<f32>(-1.0, 0.5, -0.5)); }
+        fn post(input: PostInput) -> vec4<f32> {
+            let uv = vec2<f32>(0.75, 0.25);
+            let expected = view_direction();
+            let ray_ok = distance(horizon_view_direction(uv), expected) < 0.001;
+            let point_ok = distance(normalize(view_position(uv, 1.0)), expected) < 0.001;
+            return vec4<f32>(f32(ray_ok), f32(point_ok), 0.0, 1.0);
+        }
+    ";
+    let post = Chain::post(
+        &device,
+        &frame,
+        "[[post]]\nfile = \"ray.wgsl\"\n",
+        &[("ray.wgsl", shader)],
+    );
+    let mut chain = Chain::new(&device, frame, post);
+    let view_inverse = Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    for projection in [
+        crate::gfx::world_projection(90.0, 1.0, 16.0),
+        Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.05),
+    ] {
+        for (translation, legacy) in [(Vec3::ZERO, 255), (Vec3::new(0.03, -0.04, 0.02), 0)] {
+            let inputs = horizon_shader_api::Frame {
+                headroom: 1.0,
+                resolution: [4.0; 2],
+                projection_inverse: (projection * Mat4::from_translation(translation))
+                    .inverse()
+                    .to_cols_array_2d(),
+                view_inverse: view_inverse.to_cols_array_2d(),
+                ..Default::default()
+            };
+            queue.write_buffer(&chain.frame.buffer, 0, bytemuck::bytes_of(&inputs));
+            let got = chain.run(&device, &queue, [4, 4]);
+            assert_eq!(got, [255, legacy, 0, 255], "translation {translation:?}");
+        }
+    }
+    eprintln!("post ray direction and legacy near-point control pixels checked");
+}
+
 /// A pass writing `hist` (R-relative, adding a quarter to last frame's), one writing the
 /// `r32float` `acc`, and the last showing `hist_previous`, `hist`'s alpha (the pass's, not 1)
 /// and `acc` as red, green, blue.

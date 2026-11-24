@@ -601,6 +601,9 @@ pub fn markdown() -> String {
         }
         if kind == StageKind::Post {
             out += "- `fn depth_at(uv: vec2<f32>) -> f32`: the world's depth at `uv`.\n\
+                    - `fn horizon_view_direction(uv: vec2<f32>) -> vec3<f32>`: the outward unit ray through `uv`, in\n  \
+                    world axes, including view rotations but not their translations. It works at sky pixels and\n  \
+                    doesn't sample depth. No conflict with a pack's own `view_direction`.\n\
                     - `fn view_position(uv: vec2<f32>, depth: f32) -> vec3<f32>`: the camera-relative position, in blocks, of\n  \
                     the point at `uv` and `depth`. With view bob or nausea spin active, the ray through this point need not\n  \
                     pass through `(0, 0, 0)`. Get its direction from two positions at the same `uv` and different depths;\n  \
