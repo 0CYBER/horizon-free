@@ -1,5 +1,5 @@
 // The Horizon server panel (docs/server.md, section 6). It polls the control API once a second through the
-// panel's session; every change carries the X-Horizon header. Text from the server is only ever set with
+// panel's session, sent in the X-Horizon-Session header; every request carries the X-Horizon header too. Text from the server is only ever set with
 // textContent, never as HTML.
 "use strict";
 
@@ -9,13 +9,46 @@ const $ = (id) => document.getElementById(id);
 
 class SignedOut extends Error {}
 
+// The session: the login page hands it over once, then this tab keeps it (sessionStorage is per origin, so
+// per port too) and sends it with each request. No cookie carries it.
+const SESSION_KEY = "horizon-session";
+let session = null;
+
+function takeSession() {
+  const handed = document.querySelector('meta[name="horizon-session"]');
+  if (handed) {
+    session = handed.content;
+    handed.remove();
+    try {
+      sessionStorage.setItem(SESSION_KEY, session);
+    } catch (e) {}
+    // The login link is spent: a reload opens the panel itself.
+    window.history.replaceState(null, "", "/");
+    return;
+  }
+  try {
+    session = sessionStorage.getItem(SESSION_KEY);
+  } catch (e) {}
+}
+
+function dropSession() {
+  session = null;
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch (e) {}
+}
+
+function headers(extra) {
+  return { "X-Horizon": "1", ...(session ? { "X-Horizon-Session": session } : {}), ...extra };
+}
+
 async function api(method, path, body) {
   let response;
   try {
     response = await fetch(path, {
       method,
-      credentials: "same-origin",
-      headers: { "X-Horizon": "1", "Content-Type": "application/json" },
+      credentials: "omit",
+      headers: headers({ "Content-Type": "application/json" }),
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
@@ -514,7 +547,7 @@ function renderCrashes() {
 
 async function readCrash(name) {
   try {
-    const response = await fetch(`/api/v1/crash-reports/read?name=${encodeURIComponent(name)}`, { credentials: "same-origin", headers: { "X-Horizon": "1" } });
+    const response = await fetch(`/api/v1/crash-reports/read?name=${encodeURIComponent(name)}`, { credentials: "omit", headers: headers() });
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `error ${response.status}`);
     crashShown = name;
     $("crash-name").textContent = name;
@@ -603,6 +636,7 @@ async function poll() {
 // --- Wiring ---------------------------------------------------------------------------------------------
 
 function setUp() {
+  takeSession();
   window.addEventListener("hashchange", route);
   window.addEventListener("resize", renderCharts);
 
@@ -625,7 +659,8 @@ function setUp() {
     }
   });
   $("sign-out").addEventListener("click", async () => {
-    await fetch("/logout", { method: "POST", credentials: "same-origin", headers: { "X-Horizon": "1" } }).catch(() => {});
+    await fetch("/logout", { method: "POST", credentials: "omit", headers: headers() }).catch(() => {});
+    dropSession();
     show("signed-out");
   });
 

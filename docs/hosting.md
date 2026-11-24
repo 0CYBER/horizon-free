@@ -531,7 +531,8 @@ so, with an Update button that runs `horizon-server update` (section 5), and sho
 horizon-server panel
 ```
 
-prints a login link that works once, for 10 minutes. The panel listens on `127.0.0.1:8130`, this computer
+prints a login link that works once, for 10 minutes. A sign-in lasts for its browser tab, until it goes 12
+hours unused or for 7 days at most; then make a new link. The panel listens on `127.0.0.1:8130`, this computer
 only. To reach it from your other devices:
 
 - put your tailnet address in `[panel] bind` (for example `bind = "100.101.102.103:8130"`), or

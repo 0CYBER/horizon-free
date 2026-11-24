@@ -3,8 +3,11 @@
 //! uses the control API's routes with a browser session instead of the token.
 //!
 //! - **Login.** `horizon-server panel` asks the API for a link with a one-time code, good for 10 minutes;
-//!   opening it swaps the code for an `HttpOnly; SameSite=Strict` session cookie. Anyone who can read the
-//!   server folder's token can make a link, and no one else can. Sessions end when the supervisor does.
+//!   opening it swaps the code for a session the page keeps for its tab (`sessionStorage`, which a browser
+//!   keeps per origin, port included) and sends in the `X-Horizon-Session` header. There is no cookie, so only
+//!   the panel's own page ever holds or sends the session. Anyone who can read the server
+//!   folder's token can make a link, and no one else can. A session ends on sign-out, after 12 hours unused, 7 days
+//!   after sign-in, or when the supervisor stops.
 //! - **Rebinding and CSRF.** The `Host` header must name the panel's own address (`localhost` too on
 //!   loopback, a MagicDNS name on a tailnet, any IP address when bound to every interface). Every POST needs the `X-Horizon: 1` header, which a page from
 //!   another site can't send without the browser asking first.
@@ -21,12 +24,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-const COOKIE: &str = "horizon_panel";
+/// The header that carries the session on every request the page makes.
+const SESSION_HEADER: &str = "x-horizon-session";
 /// How long a login link works.
 const LINK_LIFE: Duration = Duration::from_secs(600);
 /// Failed logins allowed per minute before the panel refuses them for a while.
 const FAILURES_PER_MINUTE: usize = 10;
 const SESSIONS: usize = 32;
+/// A session unused this long ends: an open page polls every second, so this ends closed tabs and asleep machines.
+const SESSION_IDLE: Duration = Duration::from_secs(12 * 60 * 60);
+/// A session ends this long after sign-in however much it is used: an open tab needs a new link once a week.
+const SESSION_LIFE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 const PAGE: &str = include_str!("../panel/index.html");
 const SCRIPT: &str = include_str!("../panel/panel.js");
@@ -77,12 +85,26 @@ fn asset(content_type: &'static str, body: &'static [u8]) -> Response {
     response
 }
 
+/// A signed-in browser tab: its token, when it signed in and when it last made a request.
+struct Session {
+    token: String,
+    signed_in: Instant,
+    used: Instant,
+}
+
+impl Session {
+    fn live(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.used) < SESSION_IDLE
+            && now.saturating_duration_since(self.signed_in) < SESSION_LIFE
+    }
+}
+
 /// The panel's address, its pending login codes and its sessions.
 #[derive(Default)]
 pub struct Auth {
     address: Option<SocketAddr>,
     codes: Vec<(String, Instant)>,
-    sessions: VecDeque<String>,
+    sessions: VecDeque<Session>,
     failures: VecDeque<Instant>,
 }
 
@@ -121,23 +143,49 @@ impl Auth {
             ));
         };
         self.codes.remove(i);
-        let session = api::random_token();
+        Ok(self.open_session(Instant::now()))
+    }
+
+    /// A new session signed in at `now`; expired ones go first, so they never push out a live one.
+    fn open_session(&mut self, now: Instant) -> String {
+        self.sessions.retain(|s| s.live(now));
         if self.sessions.len() == SESSIONS {
             self.sessions.pop_front();
         }
-        self.sessions.push_back(session.clone());
-        Ok(session)
+        let token = api::random_token();
+        self.sessions.push_back(Session {
+            token: token.clone(),
+            signed_in: now,
+            used: now,
+        });
+        token
     }
 
-    fn signed_in(&self, request: &Request) -> bool {
+    /// Whether `token` is a live session at `now`; using it restarts its idle time, never its life.
+    fn use_session(&mut self, token: &str, now: Instant) -> bool {
+        self.sessions.retain(|s| s.live(now));
+        match self
+            .sessions
+            .iter_mut()
+            .find(|s| api::same_token(&s.token, token))
+        {
+            Some(session) => {
+                session.used = now;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn signed_in(&mut self, request: &Request) -> bool {
         request
-            .cookie(COOKIE)
-            .is_some_and(|s| self.sessions.iter().any(|t| api::same_token(t, s)))
+            .header(SESSION_HEADER)
+            .is_some_and(|s| self.use_session(s, Instant::now()))
     }
 
     fn sign_out(&mut self, request: &Request) {
-        if let Some(s) = request.cookie(COOKIE) {
-            self.sessions.retain(|t| !api::same_token(t, s));
+        if let Some(s) = request.header(SESSION_HEADER) {
+            self.sessions.retain(|t| !api::same_token(&t.token, s));
         }
     }
 }
@@ -250,12 +298,16 @@ fn handle(shared: &Arc<Shared>, address: SocketAddr, request: &Request) -> Respo
         ("GET", "/login") => {
             let code = request.param("code").unwrap_or_default();
             return match shared.panel.lock().unwrap().redeem(code) {
-                Ok(session) => Response::text(303, "text/plain", "")
-                    .with("Location", "/")
-                    .with(
-                        "Set-Cookie",
-                        format!("{COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/"),
+                // The page itself, carrying the new session for panel.js to keep (never cached).
+                Ok(session) => Response::text(
+                    200,
+                    "text/html; charset=utf-8",
+                    PAGE.replacen(
+                        "<head>",
+                        &format!("<head>\n<meta name=\"horizon-session\" content=\"{session}\">"),
+                        1,
                     ),
+                ),
                 Err(response) => response,
             };
         }
@@ -266,10 +318,7 @@ fn handle(shared: &Arc<Shared>, address: SocketAddr, request: &Request) -> Respo
     }
     if (method, path) == ("POST", "/logout") {
         shared.panel.lock().unwrap().sign_out(request);
-        return Response::json(200, &serde_json::json!({ "ok": true })).with(
-            "Set-Cookie",
-            format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
-        );
+        return Response::json(200, &serde_json::json!({ "ok": true }));
     }
     if !path.starts_with("/api/v1/") {
         return Response::error(404, "no such page");
@@ -326,6 +375,48 @@ mod tests {
         // ...and failures older than a minute no longer count.
         auth.failures = (0..FAILURES_PER_MINUTE).map(|_| ago(61)).collect();
         assert_eq!(status(auth.redeem("nope")), Err(403));
+    }
+
+    /// docs/server.md section 6: a session ends "after 12 hours unused or 7 days after sign-in".
+    #[test]
+    fn a_session_unused_for_twelve_hours_ends() {
+        let t0 = Instant::now();
+        let mut auth = Auth::default();
+        let token = auth.open_session(t0);
+        let other = auth.open_session(t0);
+        assert!(auth.use_session(&token, t0 + SESSION_IDLE - Duration::from_secs(1)));
+        // The other one was never used again: twelve hours on, it is gone, and pruned.
+        assert!(!auth.use_session(&other, t0 + SESSION_IDLE));
+        assert_eq!(auth.sessions.len(), 1);
+    }
+
+    #[test]
+    fn a_session_ends_seven_days_after_sign_in_however_much_it_is_used() {
+        let t0 = Instant::now();
+        let mut auth = Auth::default();
+        let token = auth.open_session(t0);
+        // Used every hour for a week, it lives until the seventh day and no longer.
+        let hour = Duration::from_secs(3600);
+        let mut now = t0;
+        while now + hour < t0 + SESSION_LIFE {
+            now += hour;
+            assert!(auth.use_session(&token, now));
+        }
+        assert!(!auth.use_session(&token, t0 + SESSION_LIFE));
+        assert!(auth.sessions.is_empty());
+    }
+
+    #[test]
+    fn using_a_session_restarts_its_idle_time() {
+        let t0 = Instant::now();
+        let eleven_hours = Duration::from_secs(11 * 3600);
+        let mut auth = Auth::default();
+        let token = auth.open_session(t0);
+        // Two uses eleven hours apart keep it alive 22 hours on, past one idle window from sign-in...
+        assert!(auth.use_session(&token, t0 + eleven_hours));
+        assert!(auth.use_session(&token, t0 + 2 * eleven_hours));
+        // ...but a full idle window after the last use ends it.
+        assert!(!auth.use_session(&token, t0 + 2 * eleven_hours + SESSION_IDLE));
     }
 
     #[test]
@@ -393,6 +484,14 @@ mod tests {
         (head.to_owned(), body.to_owned())
     }
 
+    /// The session a login page hands to panel.js.
+    fn handed_session(body: &str) -> Option<String> {
+        let rest = body
+            .split_once("<meta name=\"horizon-session\" content=\"")?
+            .1;
+        Some(rest.split_once('"')?.0.to_owned())
+    }
+
     #[test]
     #[ignore = "daily"]
     fn sign_in_with_a_link() {
@@ -415,6 +514,7 @@ mod tests {
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
         assert!(head.contains("Content-Security-Policy"));
         assert!(body.contains("panel.js"));
+        assert_eq!(handed_session(&body), None);
         assert!(get("/api/v1/status", "").0.starts_with("HTTP/1.1 401"));
         let rebound = send(
             address,
@@ -424,17 +524,12 @@ mod tests {
         // A link works once.
         let url = shared.panel.lock().unwrap().login_link().unwrap();
         let path = url.split_once(&address.to_string()).unwrap().1.to_owned();
-        let (head, _) = get(&path, "");
-        assert!(head.starts_with("HTTP/1.1 303"), "{head}");
-        let cookie = head
-            .lines()
-            .find_map(|l| l.strip_prefix("Set-Cookie: "))
-            .unwrap();
-        assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
-        let session = cookie.split(';').next().unwrap().to_owned();
+        let (head, body) = get(&path, "");
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let session = handed_session(&body).unwrap();
         assert!(get(&path, "").0.starts_with("HTTP/1.1 403"));
-        let with_cookie = format!("Cookie: other=1; {session}\r\n");
-        let (head, body) = get("/api/v1/status", &with_cookie);
+        let with_session = format!("X-Horizon-Session: {session}\r\n");
+        let (head, body) = get("/api/v1/status", &with_session);
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
         assert!(body.contains("\"phase\":\"starting\""));
         // Changes need the header a foreign page can't send.
@@ -442,7 +537,7 @@ mod tests {
             send(
                 address,
                 &format!(
-                    "POST /api/v1/restart HTTP/1.1\r\n{host}{with_cookie}{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                    "POST /api/v1/restart HTTP/1.1\r\n{host}{with_session}{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
                 ),
             )
             .0
@@ -456,7 +551,7 @@ mod tests {
             send(
                 address,
                 &format!(
-                    "POST /api/v1/panel/login HTTP/1.1\r\n{host}{with_cookie}X-Horizon: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    "POST /api/v1/panel/login HTTP/1.1\r\n{host}{with_session}X-Horizon: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 ),
             )
             .0
@@ -470,8 +565,68 @@ mod tests {
         // A real link still signs in while the wrong ones are refused.
         let url = shared.panel.lock().unwrap().login_link().unwrap();
         let path = url.split_once(&address.to_string()).unwrap().1.to_owned();
-        assert!(get(&path, "").0.starts_with("HTTP/1.1 303"));
+        assert!(get(&path, "").0.starts_with("HTTP/1.1 200"));
         assert!(get("/login?code=nope", "").0.starts_with("HTTP/1.1 429"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_request_with_only_the_cookie_is_refused() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-panel-session-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shared = Shared::new(&dir);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        start(shared.clone(), address).unwrap();
+        let request = |method: &str, path: &str, extra: &str| {
+            send(
+                address,
+                &format!(
+                    "{method} {path} HTTP/1.1\r\nHost: {address}\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+            )
+        };
+        let url = shared.panel.lock().unwrap().login_link().unwrap();
+        let path = url.split_once(&address.to_string()).unwrap().1.to_owned();
+        let (head, body) = request("GET", &path, "");
+        // Signing in sets no cookie: the session comes in the page, for panel.js to send itself.
+        assert!(!head.to_ascii_lowercase().contains("set-cookie"), "{head}");
+        let session = handed_session(&body).unwrap();
+        let restarted = || shared.restart.load(std::sync::atomic::Ordering::SeqCst);
+        // The session as a cookie authorises nothing, reads or changes.
+        let cookie = format!("Cookie: horizon_panel={session}\r\nX-Horizon: 1\r\n");
+        assert!(
+            request("GET", "/api/v1/status", &cookie)
+                .0
+                .starts_with("HTTP/1.1 401")
+        );
+        assert!(
+            request("POST", "/api/v1/restart", &cookie)
+                .0
+                .starts_with("HTTP/1.1 401")
+        );
+        assert!(!restarted());
+        // The session in its header does.
+        let header = format!("X-Horizon-Session: {session}\r\nX-Horizon: 1\r\n");
+        let (head, _) = request("POST", "/api/v1/restart", &header);
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(restarted());
+        // Signing out ends it on the server.
+        assert!(
+            request("POST", "/logout", &header)
+                .0
+                .starts_with("HTTP/1.1 200")
+        );
+        assert!(
+            request("GET", "/api/v1/status", &header)
+                .0
+                .starts_with("HTTP/1.1 401")
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -37,16 +37,6 @@ impl Request {
             .find(|(k, _)| *k == key)
             .map(|(_, v)| v)
     }
-    /// One cookie the browser sent.
-    pub fn cookie(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .filter(|(k, _)| k.eq_ignore_ascii_case("cookie"))
-            .flat_map(|(_, v)| v.split(';'))
-            .filter_map(|c| c.trim().split_once('='))
-            .find(|(k, _)| *k == name)
-            .map(|(_, v)| v)
-    }
 }
 
 pub struct Response {

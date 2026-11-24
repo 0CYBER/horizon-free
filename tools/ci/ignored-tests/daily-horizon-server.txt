@@ -26,6 +26,7 @@ horizon-server management::tests::the_games_events_become_the_notifications_vani
 horizon-server management::tests::the_heartbeat_interval_can_change_while_the_server_runs lib daily slow
 horizon-server mcp::tests::protocol_and_tool_contracts_match_goldens lib daily child-process
 horizon-server mcp::tests::the_protocol_answers_without_a_server lib daily child-process
+horizon-server panel::tests::a_request_with_only_the_cookie_is_refused lib daily network
 horizon-server panel::tests::login_links_name_an_address_a_browser_can_open lib daily network
 horizon-server panel::tests::sign_in_with_a_link lib daily network
 horizon-server query::tests::a_listener_on_a_real_socket_answers_the_handshake_and_both_stats lib daily network
