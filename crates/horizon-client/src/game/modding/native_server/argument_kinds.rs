@@ -39,6 +39,10 @@ pub(super) const KINDS: [&str; 19] = [
 /// and properties as `vec3()`, so the report format cannot tell them apart.
 pub(super) const UNCENTERED: &str = "uncentered";
 
+/// The tree key marking a custom argument of `CommandArgumentKind::Token`: the wire parser is a
+/// Brigadier word, so the server's own dispatcher type is told apart by this key.
+pub(super) const TOKEN: &str = "token";
+
 /// The custom argument types the mods registered, by namespaced id, for the command tree being
 /// built and its server dispatcher.
 pub(in super::super) type CommandArguments = HashMap<String, Arc<dyn mod_api::CommandArgumentType>>;
@@ -313,6 +317,8 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
         // Use the validated tree property rather than calling mod code again.
         let kind = if node["properties"]["type"] == "greedy" {
             horizon_client::command::CustomArgumentKind::Greedy
+        } else if node[TOKEN] == true {
+            horizon_client::command::CustomArgumentKind::Token
         } else {
             horizon_client::command::CustomArgumentKind::Word
         };

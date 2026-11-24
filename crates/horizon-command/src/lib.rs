@@ -265,6 +265,15 @@ impl<'a> Reader<'a> {
         }
         &self.string[start..self.cursor]
     }
+    /// Every character up to the next space or the end of the line: a token that may hold `*`,
+    /// `:` or `/`. Empty when the reader is at a space or at the end.
+    pub fn read_token(&mut self) -> &'a str {
+        let start = self.cursor;
+        while self.can_read() && self.peek() != ' ' {
+            self.skip();
+        }
+        &self.string[start..self.cursor]
+    }
     pub fn read_string_until(&mut self, terminator: char) -> CmdResult<String> {
         let mut out = String::new();
         let mut escaped = false;

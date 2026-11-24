@@ -18,6 +18,8 @@ pub enum CustomArgumentKind {
     Word,
     /// The rest of the line, spaces included.
     Greedy,
+    /// One token: every character up to the next space or the end of the line, at least one.
+    Token,
 }
 
 /// One completion a registered custom argument offers.
@@ -1923,6 +1925,17 @@ impl ArgType {
                         let text = reader.remaining().to_owned();
                         reader.cursor = reader.string.len();
                         text
+                    }
+                    CustomArgumentKind::Token => {
+                        let token = reader.read_token().to_owned();
+                        if token.is_empty() {
+                            return Err(CommandError::tr_at(
+                                "parsing.expected",
+                                &[&"a token"],
+                                reader,
+                            ));
+                        }
+                        token
                     }
                 };
                 match (custom.parse)(&text) {

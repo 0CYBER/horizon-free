@@ -207,8 +207,13 @@ ones, and completes the choices that start with the typed text.
 
 `CommandArgumentKind::Word` takes one word of ASCII letters, digits and `_ - . +`; the
 word ends at the first other character, a space included, so a value with `:` or `/`
-needs `Greedy`, which takes the rest of the line. `suggest` receives that text as typed so
-far: one word, or the whole tail of the line up to the cursor. Players whose client does not know
+needs `Greedy`, which takes the rest of the line, or the `token:` form of a `Word` type:
+`<who:token:mymod:account>` reads the registered type `mymod:account` as every character up to the
+next space and lets more arguments follow (`eco give * 5`, `eco give ** 5`, an id such as
+`mod:acct/1`). A token is never empty and takes no quotes; a vanilla client that does not know
+the type parses it as a word and may show a `*` in red, while the server takes it as written.
+`suggest` receives that text as typed so far: one word or token, or the whole tail of the line
+up to the cursor. Players whose client does not know
 the type parse and complete the command: the server sends the argument as a Brigadier string
 of that shape with `minecraft:ask_server`, and their chat asks the server for the
 suggestions.

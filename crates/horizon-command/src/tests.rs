@@ -1628,6 +1628,64 @@ fn a_greedy_custom_argument_takes_the_rest_of_the_line() {
 }
 
 #[test]
+fn a_token_custom_argument_takes_one_space_free_token_and_the_arguments_after_it_still_parse() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:account",
+        CustomArgumentKind::Token,
+        |input| Ok(input.to_owned()),
+        |_, _| Vec::new(),
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let eco = dispatcher.literal(0, "eco");
+    let give = dispatcher.literal(eco, "give");
+    let who = dispatcher.argument(give, "who", argument);
+    let amount = dispatcher.argument(
+        who,
+        "amount",
+        ArgType::Integer {
+            min: 0,
+            max: i32::MAX,
+        },
+    );
+    dispatcher.executes(amount, "test");
+
+    let registries = reg();
+    for (line, token) in [
+        ("eco give * 5", "*"),
+        ("eco give ** 5", "**"),
+        ("eco give mod:acct/1 5", "mod:acct/1"),
+    ] {
+        let parsed = dispatcher.parse(line, &registries);
+        let (context, _) = parsed.executable().unwrap_or_else(|_| panic!("{line}"));
+        assert_eq!(
+            context.get("who"),
+            Some(&Arg::Custom {
+                kind: "example:account".into(),
+                value: token.into(),
+            }),
+            "{line}"
+        );
+        assert_eq!(context.get("amount"), Some(&Arg::Int(5)), "{line}");
+    }
+    // A missing token is not a command.
+    assert!(
+        dispatcher
+            .parse("eco give ", &registries)
+            .executable()
+            .is_err()
+    );
+}
+
+#[test]
+fn read_token_stops_at_a_space_and_is_empty_at_one() {
+    let mut reader = Reader::new("a*:/b rest");
+    assert_eq!(reader.read_token(), "a*:/b");
+    assert_eq!(reader.cursor, 5);
+    assert_eq!(reader.read_token(), "");
+    assert_eq!(reader.cursor, 5);
+}
+
+#[test]
 fn an_ask_server_node_replies_with_the_token_range_when_it_has_no_suggestion_of_its_own() {
     // The free `id` node: vanilla's identifier parser with `minecraft:ask_server`. It computes
     // nothing locally, so the range the server sends must still be the token being typed: the
