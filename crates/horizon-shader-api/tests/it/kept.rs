@@ -1,7 +1,7 @@
 //! Shader API 0.2's kept resources (#16011 item 4): every manifest rule of `[kept]`,
 //! `[[resource]]`, a kept `output` and options' `resets`.
 use horizon_shader_api::kept::{Element, Format, Keep, Shape};
-use horizon_shader_api::{MANIFEST, Manifest, Pack, check};
+use horizon_shader_api::{MANIFEST, Manifest, Pack, StageKind, check, compose};
 
 const HEAD: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n";
 /// The pass that draws the picture, after every other entry.
@@ -453,6 +453,41 @@ fn an_output_writes_a_kept_texture_at_its_size() {
         last.unwrap_err()
             .contains("the last [[post]] pass draws the picture")
     );
+}
+
+/// A pass with an `output` keeps its alpha, whether it writes a target of the pack's own or a kept
+/// texture: the pack reads the data it stores there back. The pass that draws the next `previous`
+/// (and the last, which draws the picture) still gets alpha 1.
+#[test]
+fn an_output_keeps_the_pass_s_alpha() {
+    // `tex` is rgba16float here, not RES's r32float, so the alpha it keeps is a channel it has.
+    let tex =
+        "[[resource]]\nname = \"tex\"\nformat = \"rgba16float\"\nsize = [4, 4]\nkeep = \"view\"\n";
+    let manifest = format!(
+        "{HEAD}{tex}[[post]]\nfile = \"own.wgsl\"\noutput = \"own\"\n\
+         [[post]]\nfile = \"kept.wgsl\"\noutput = \"tex\"\n\
+         [[post]]\nfile = \"chain.wgsl\"\n{LAST}"
+    );
+    let post = "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n";
+    let mut files = std::collections::BTreeMap::new();
+    files.insert(MANIFEST.to_owned(), manifest.into_bytes());
+    for file in ["own.wgsl", "kept.wgsl", "chain.wgsl", "last.wgsl"] {
+        files.insert(file.to_owned(), post.as_bytes().to_vec());
+    }
+    let pack = Pack::from_files(files).unwrap();
+    check(&pack).unwrap();
+    let kept = "return post(PostInput(in.uv, in.position.xy, color, depth_at(in.uv)));";
+    let opaque = ").rgb, 1.0);";
+    for (file, keeps) in [
+        ("own.wgsl", true),
+        ("kept.wgsl", true),
+        ("chain.wgsl", false),
+        ("last.wgsl", false),
+    ] {
+        let text = compose(&pack, StageKind::Post, file).text;
+        assert_eq!(text.contains(kept), keeps, "{file}");
+        assert_eq!(text.contains(opaque), !keeps, "{file}");
+    }
 }
 
 #[test]

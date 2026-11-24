@@ -131,7 +131,7 @@ by Horizon: a pack changes how things look, not how they are drawn.
 | `[material]` | `fn material(input: MaterialInput) -> Surface` | the lit colour of each point of a block's surface, before the alpha test and fog: every terrain section and distant tile, solid, cutout and translucent (not entities, block entities or particles) |
 | `[entity]` | `fn entity(input: EntityInput) -> Surface` | the lit colour of each point of an entity or a block entity (mobs, players, armour, chests, banners), before the alpha test, the enchantment glint and fog; `input.kind` says which. Items and particles keep Horizon's lighting for now |
 | `[weather]` | `fn weather(input: WeatherInput) -> vec4<f32>` | the colour of each point of a rain or snow streak, blended over the world with its alpha; Horizon's light and fog aren't applied, so the pack applies its own |
-| `[[post]]` | `fn post(input: PostInput) -> vec4<f32>` | a full-screen pass over the world's picture (up to 12, in order), under the hand and HUD; its alpha is ignored |
+| `[[post]]` | `fn post(input: PostInput) -> vec4<f32>` | a full-screen pass over the world's picture (up to 12, in order), under the hand and HUD; its alpha is ignored, but for a pass with an `output`, whose target keeps it |
 | `[tonemap]` | `fn tonemap(input: TonemapInput) -> vec3<f32>` | the post chain's picture for the display, from 0 to `frame.headroom`; without it Horizon's curve runs |
 
 A pack has at least one stage; a stage it leaves out keeps vanilla's look. Each input says what vanilla would draw

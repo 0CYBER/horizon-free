@@ -185,7 +185,8 @@ keeps drawing. What a pack works with:
 - **Linear light.** Every colour a stage reads or returns is linear light, 1.0 at paper white and more brighter. Horizon
   decodes vanilla's values with a 2.2 power and encodes the results the frame stores. Depth, normals, light levels,
   `emission`, the LabPBR maps and `[[textures]]` stay data. `[[lights]]` and `[[particle_lights]]` colours are still
-  written in vanilla's gamma, and Horizon decodes them. Alpha is coverage only, and a post pass's alpha is ignored.
+  written in vanilla's gamma, and Horizon decodes them. Alpha is coverage only, and a post pass's alpha is ignored
+  unless the pass has an `output`, whose target keeps it.
 - **The display in `Frame`:** `hdr`, `headroom`, `paper_white`, `peak` and `black_level`, after `shadow_center_texel`.
   With HDR on, where the device keeps the HUD on a layer of its own, they are the display's, and the pack's picture is
   shown in HDR, with the HUD laid over it as without a pack. Otherwise they are SDR's (`hdr` 0, `headroom` 1,
@@ -253,7 +254,7 @@ step = true                # optional, default false: `trace_step`, a ray query 
 
 API 0.1, the gamma line before it, is retired. To move a pack over, set `api = "0.2"` and treat every colour as
 linear light: decode a constant written for display values with a 2.2 power, compute luminance with
-`frame.luminance`, and stop returning `input.color.a` from post passes (their alpha is ignored). The example pack,
+`frame.luminance`, and stop returning `input.color.a` from post passes (their alpha is ignored, but for one with an `output`). The example pack,
 `crates/horizon-shader-api/packs/golden_hour`, was moved this way. `packs/traced_shadows` and
 `packs/traced_water` are the smallest packs that trace rays, from a post pass and from the material stage
 ([the guide](../shaders.md#ray-tracing)); `packs/traced_lights` lights a post pass with the block light sources. `packs/horizon_hdr` is Horizon's own HDR look as a pack, from the look file
@@ -303,6 +304,8 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-24: API 0.2 (fix, experimental): a post pass with an `output`, a target of the pack's own or a kept
+  texture, keeps the alpha it returns; before, only a kept texture's did (#20563).
 - API 0.2 (addition): `post_opaque = true` lets native post passes read the pre-translucent
   color and depth. They reuse the material stage's capture, and only packs that read it request
   that capture (#3734).
