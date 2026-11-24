@@ -190,7 +190,7 @@ def check_fixture_files(root):
     fixtures = root / FIXTURES
     for folder in FOLDERS:
         for path in sorted((fixtures / folder).glob("*.rs")):
-            rel = path.relative_to(root)
+            rel = path.relative_to(root).as_posix()
             owners.setdefault(path.stem, []).append(rel)
             named = [n for n in map(item_name, top_level(strip(path.read_text()))) if n]
             if named != [path.stem]:
@@ -203,16 +203,17 @@ def check_fixture_files(root):
                             "different types to the generated dispatch. Keep one and re-export it with `use` "
                             "from the other scope.")
     shared = fixtures / "shared.rs"
+    shared_rel = shared.relative_to(root).as_posix()
     text = strip(shared.read_text())
     stubs = module_body(text, "stubs")
     if stubs is not None:
         for item in top_level(stubs):
             name = item_name(item)
             if name:
-                problems.append(f"{shared.relative_to(root)}: `mod stubs` defines `{name}`; only `use` lines "
+                problems.append(f"{shared_rel}: `mod stubs` defines `{name}`; only `use` lines "
                                 f"stay there. Move it to {FIXTURES}/stubs/{name}.rs.")
     if module_body(text, "api") is not None:
-        problems.append(f"{shared.relative_to(root)}: `mod api` is back; each API stand-in has its own file, "
+        problems.append(f"{shared_rel}: `mod api` is back; each API stand-in has its own file, "
                         f"{FIXTURES}/api/<Name>.rs.")
     return problems
 
@@ -251,7 +252,7 @@ def check_hook_types(root):
             generics = set(re.findall(r"\b([A-Z]\w*)", match.group(2) or ""))
             for name in re.findall(r"\b([A-Z]\w*)", signature(text, match.end())):
                 if name not in known and name not in generics:
-                    missing.setdefault(name, []).append((match.group(1), path.relative_to(root)))
+                    missing.setdefault(name, []).append((match.group(1), path.relative_to(root).as_posix()))
     return [f"{hooks[0][1]}: hook `{hooks[0][0]}` names type `{name}`, which has no dispatch-test stand-in"
             + (f" (also hooks {', '.join(f'`{h}`' for h, _ in hooks[1:])})" if len(hooks) > 1 else "")
             + f". Add {FIXTURES}/api/{name}.rs (a mod_api type; stubs/{name}.rs if the generated code names an "
@@ -280,7 +281,7 @@ def vocab_traits(root):
                 head = re.match(r"(?:unsafe\s+)?(fn|type|const)\s+([A-Za-z_]\w*)", item)
                 if head and item.endswith(";") and not (head.group(1) != "fn" and "=" in item):
                     required.add(head.group(2))
-            entry = (path.relative_to(root), required, "host_area" in attributes)
+            entry = (path.relative_to(root).as_posix(), required, "host_area" in attributes)
             traits[name] = None if name in traits else entry
     return traits
 
@@ -309,7 +310,7 @@ def check_loopback(root, loopback=LOOPBACK):
     problems, impls = [], []
     for path in files:
         text = strip(path.read_text())
-        rel = path.relative_to(root)
+        rel = path.relative_to(root).as_posix()
         local = {m.group(1) for m in re.finditer(r"\btrait\s+([A-Za-z_]\w*)", text)}
         for match in IMPL.finditer(text):
             prefix, name, target = match.groups()
