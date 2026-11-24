@@ -192,6 +192,27 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[impl AsRef<str>])
     out
 }
 
+/// A `textures` property's value for `textures`: the base64 JSON payload [`unpack`] reads
+/// back. It names only the texture URLs, no profile id or name, and carries no signature.
+pub fn pack(textures: &Textures) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut entries = serde_json::Map::new();
+    if let Some(url) = &textures.skin {
+        let mut skin = serde_json::json!({ "url": url });
+        if textures.slim {
+            skin["metadata"] = serde_json::json!({ "model": "slim" });
+        }
+        entries.insert("SKIN".into(), skin);
+    }
+    if let Some(url) = &textures.cape {
+        entries.insert("CAPE".into(), serde_json::json!({ "url": url }));
+    }
+    if let Some(url) = &textures.elytra {
+        entries.insert("ELYTRA".into(), serde_json::json!({ "url": url }));
+    }
+    STANDARD.encode(serde_json::json!({ "textures": entries }).to_string())
+}
+
 /// The skin URL of a `minecraft:profile` component's property list. Player
 /// heads and mannequins read their profile this way, and `SkinManager` lets
 /// those textures be unsigned (`getInsecureSkinInformation`).
@@ -1532,6 +1553,26 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn packed_textures_unpack_to_themselves() {
+        let textures = super::Textures {
+            skin: Some("https://textures.minecraft.net/texture/skin1".into()),
+            slim: true,
+            cape: Some("https://textures.minecraft.net/texture/cape2".into()),
+            elytra: None,
+            signed: false,
+        };
+        let value = super::pack(&textures);
+        let back = super::unpack(&value, super::Signature::Unsigned, &super::TEXTURE_URIS);
+        assert_eq!(back, textures);
+        // No skin, no cape: nothing to name.
+        let none = super::pack(&super::Textures::default());
+        assert_eq!(
+            super::unpack(&none, super::Signature::Unsigned, &super::TEXTURE_URIS),
+            super::Textures::default()
+        );
+    }
+
     #[test]
     fn an_invalid_name_is_answered_without_being_cached() {
         let mut resolver = super::Resolver::new();

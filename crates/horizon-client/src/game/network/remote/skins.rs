@@ -117,7 +117,13 @@ impl Game<'_> {
         }
     }
     pub(super) fn poll_own_profile_body(&mut self) {
-        let auth = self.auth();
+        // A standalone replay shows the recording's textures: the viewing account's profile is
+        // not fetched for it.
+        let auth = if self.replay.standalone {
+            None
+        } else {
+            self.auth()
+        };
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -184,6 +190,10 @@ impl Game<'_> {
 
     pub(super) fn update_remote_skins_body(&mut self) {
         let local = self.remote.as_ref().map(|r| r.profile);
+        // The standalone replay's own session: its player wears what the recording kept, not
+        // the viewing account's skin and cape or the launcher's offline ones. (The session's
+        // brand is no marker: a server names its own.)
+        let replay = self.replay.standalone;
         self.poll_own_profile();
         let Some(r) = self.remote.as_mut() else {
             return;
@@ -201,17 +211,9 @@ impl Game<'_> {
         // Minecraft.profileFuture: the signed-in account's active skin and cape
         // from `/minecraft/profile` when the server sent none (single player) or
         // only a skin without the equipped cape.
-        if let Some(own) = own {
+        if let Some(own) = own.filter(|_| !replay) {
             if let Some((_, t)) = entries.iter_mut().find(|(u, _)| *u == local) {
-                if t.skin.is_none() {
-                    t.skin = own.skin.clone();
-                    if own.skin.is_some() {
-                        t.slim = own.slim;
-                    }
-                }
-                if t.cape.is_none() {
-                    t.cape = own.cape.clone();
-                }
+                fill_from_account(t, &own);
             } else if own.skin.is_some() || own.cape.is_some() {
                 entries.retain(|(u, _)| *u != local);
                 entries.push((local, own));
@@ -243,7 +245,8 @@ impl Game<'_> {
         }
         // An offline name's skin from the launcher, where neither the server
         // nor an account gives the local player one.
-        if !resolved.iter().any(|(u, _)| *u == local)
+        if !replay
+            && !resolved.iter().any(|(u, _)| *u == local)
             && let Some((rgba, is_slim)) = horizon_client::skins::offline_skin()
         {
             const OFFLINE: &str = "horizon/offline_skin";
@@ -256,7 +259,8 @@ impl Game<'_> {
             resolved.push((local, OFFLINE.into()));
         }
         // An offline name's cape from the launcher, where the profile has none.
-        if !capes.contains_key(&local)
+        if !replay
+            && !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
         {
             const OFFLINE: &str = "capes/offline";
@@ -482,5 +486,60 @@ impl Game<'_> {
         };
         let chat_type = r.registries.data("minecraft:chat_type", bound.chat_type);
         comp_text(&chat_type_decorate(chat_type, decoration, bound, content))
+    }
+}
+
+/// `Minecraft.profileFuture`: where the server's textures for the local player name no skin
+/// (single player sends none) or no cape, the signed-in account's own fill them in, the skin
+/// with its model. What live rendering draws, and so what a recording keeps of the player.
+pub(super) fn fill_from_account(
+    textures: &mut horizon_client::skins::Textures,
+    account: &horizon_client::skins::Textures,
+) {
+    if textures.skin.is_none() {
+        textures.skin = account.skin.clone();
+        if account.skin.is_some() {
+            textures.slim = account.slim;
+        }
+    }
+    if textures.cape.is_none() {
+        textures.cape = account.cape.clone();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fill_from_account;
+    use horizon_client::skins::Textures;
+
+    #[test]
+    fn the_account_fills_only_what_the_server_names_none_of() {
+        let account = Textures {
+            skin: Some("account-skin".into()),
+            slim: false,
+            cape: Some("account-cape".into()),
+            ..Textures::default()
+        };
+        // A server skin keeps its model; only the missing cape comes from the account.
+        let mut textures = Textures {
+            skin: Some("server-skin".into()),
+            slim: true,
+            ..Textures::default()
+        };
+        fill_from_account(&mut textures, &account);
+        assert_eq!(textures.skin.as_deref(), Some("server-skin"));
+        assert!(textures.slim);
+        assert_eq!(textures.cape.as_deref(), Some("account-cape"));
+
+        // A server cape stays too; a missing skin takes the account's with its model.
+        let mut textures = Textures {
+            slim: true,
+            cape: Some("server-cape".into()),
+            ..Textures::default()
+        };
+        fill_from_account(&mut textures, &account);
+        assert_eq!(textures.skin.as_deref(), Some("account-skin"));
+        assert!(!textures.slim);
+        assert_eq!(textures.cape.as_deref(), Some("server-cape"));
     }
 }

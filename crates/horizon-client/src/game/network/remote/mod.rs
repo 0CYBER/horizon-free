@@ -737,7 +737,7 @@ pub(super) struct Remote {
     /// body draws it until the local pose changes.
     pub(super) own_pose: Option<(crate::pose::Pose, crate::pose::Pose)>,
     /// The local player's profile UUID (always in the level).
-    pub(super) profile: u128,
+    pub(in crate::game) profile: u128,
     /// The local player's profile name: its score holder and team member.
     pub(super) profile_name: String,
     /// `MultiPlayerGameMode.destroyBlockPos`, `.destroyProgress` and the face last sent: the block

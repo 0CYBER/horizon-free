@@ -680,7 +680,7 @@ impl Game<'_> {
             own_stingers: 0,
             own_shoulders: [None; 2],
             own_pose: None,
-            profile: 0,
+            profile: horizon_client::studio::recorder::RECORDER_UUID,
             profile_name: String::new(),
             destroying: None,
             destroying_item: None,
