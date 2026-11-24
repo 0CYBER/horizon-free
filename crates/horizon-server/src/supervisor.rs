@@ -18,7 +18,11 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::Path,
     process::{Child, ExitStatus},
-    sync::{Arc, atomic::Ordering, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -263,7 +267,11 @@ pub fn run(dir: &Path) -> Result<(), String> {
     check_updates(shared.clone());
     // `[proxy]` is decided here, once: its listener lives as long as the supervisor.
     let game_port = start_proxy(&shared, dir, &config)?;
-    let console = console_lines();
+    let force_stop = Arc::new(AtomicBool::new(false));
+    let console = console_lines(force_stop.clone());
+    // Announce only after the control channel is ready. Hosting panels use this
+    // to distinguish this protocol from older supervisors.
+    println!("[horizon] force-stop-v1");
     let mut crashes: Vec<Instant> = Vec::new();
     let mut watch: Option<Watch> = None;
     let (mut program, mut resources) = (program, resources);
@@ -299,6 +307,10 @@ pub fn run(dir: &Path) -> Result<(), String> {
             ),
         );
         shared.set_phase(Phase::Starting);
+        if force_stop.load(Ordering::SeqCst) {
+            handle_force_stop(&shared);
+            return Ok(());
+        }
         let transfers = config.transfer.engine_arg();
         // The claims on the folders the game leases live as long as the game: the next start takes
         // them again on the release `current` points at then.
@@ -426,6 +438,12 @@ pub fn run(dir: &Path) -> Result<(), String> {
         shared.set_phase(Phase::Restarting);
         let until = Instant::now() + wait;
         while Instant::now() < until {
+            // The supervise loop is not running during backoff: a panel's force-stop must
+            // still end the supervisor here instead of starting another engine.
+            if force_stop.load(Ordering::SeqCst) {
+                handle_force_stop(&shared);
+                return Ok(());
+            }
             if signals::requests() > 0 || shared.stop.load(Ordering::SeqCst) {
                 shared.proxy(|p| p.game_exited(true));
                 return Ok(());
@@ -640,13 +658,16 @@ fn backoff(crashes: usize) -> Duration {
 }
 
 /// The supervisor's own stdin, line by line (nothing when it has none, as under a service manager).
-fn console_lines() -> mpsc::Receiver<String> {
+fn console_lines(force_stop: Arc<AtomicBool>) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
     let _ = thread::Builder::new()
         .name("console".into())
         .spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
+                if line.trim().trim_start_matches('/') == "horizon:force-stop" {
+                    force_stop.store(true, Ordering::SeqCst);
+                }
                 if tx.send(line).is_err() {
                     break;
                 }
@@ -825,7 +846,7 @@ fn supervise(
     if let Some(err) = child.stderr.take() {
         pump(shared, pid, err, true);
     }
-    let mut stdin = child.stdin.take();
+    let mut stdin = EngineWriter::new(child.stdin.take());
     let mut stopping: Option<Instant> = None;
     let mut restart = false;
     let mut not_up = false;
@@ -853,6 +874,20 @@ fn supervise(
         }
         while let Ok(line) = console.try_recv() {
             let command = line.trim().trim_start_matches('/');
+            if command == "horizon:force-stop" {
+                handle_force_stop(shared);
+                restart = false;
+                not_up = false;
+                stopping = Some(Instant::now());
+                if let Err(error) = child.kill() {
+                    note(
+                        shared,
+                        "WARN",
+                        &format!("Could not force-stop the game: {error}"),
+                    );
+                }
+                continue;
+            }
             // `stop` on the supervisor's own stdin (`run` in a terminal, a hosting panel's console) ends the
             // supervisor too, as before: such hosts wait for the process to exit. A `stop` that reaches the game
             // another way (in game, RCON, `horizon-server cmd`) leaves the supervisor and its API up.
@@ -865,13 +900,7 @@ fn supervise(
                 shared.set_phase(Phase::Stopping);
                 crate::management::stopping(shared);
             }
-            if let Some(input) = stdin.as_mut()
-                && writeln!(input, "{line}")
-                    .and_then(|()| input.flush())
-                    .is_err()
-            {
-                stdin = None;
-            }
+            stdin.send(shared, &line);
         }
         let requests = signals::requests();
         let signal = requests > handled;
@@ -888,7 +917,7 @@ fn supervise(
             stopping = Some(Instant::now());
             shared.set_phase(Phase::Restarting);
             crate::management::stopping(shared);
-            send_stop(&mut stdin);
+            stdin.send(shared, "stop");
         }
         if asked {
             restart = false;
@@ -898,7 +927,7 @@ fn supervise(
                 stopping = Some(Instant::now());
                 shared.set_phase(Phase::Stopping);
                 crate::management::stopping(shared);
-                send_stop(&mut stdin);
+                stdin.send(shared, "stop");
             } else if signal {
                 // A second Ctrl-C (or signal) from a person: at once. A repeated API or management
                 // stop does nothing more, as vanilla's second halt does: the game is saving.
@@ -948,7 +977,7 @@ fn wait_stopped(shared: &Arc<Shared>, console: &mpsc::Receiver<String>) -> bool 
     loop {
         while let Ok(line) = console.try_recv() {
             match line.trim().trim_start_matches('/') {
-                "stop" => shared.shutdown.store(true, Ordering::SeqCst),
+                "stop" | "horizon:force-stop" => shared.shutdown.store(true, Ordering::SeqCst),
                 "start" => shared.restart.store(true, Ordering::SeqCst),
                 _ => note(
                     shared,
@@ -971,9 +1000,68 @@ fn wait_stopped(shared: &Arc<Shared>, console: &mpsc::Receiver<String>) -> bool 
     }
 }
 
-fn send_stop(stdin: &mut Option<std::process::ChildStdin>) {
-    if let Some(input) = stdin.as_mut() {
-        let _ = writeln!(input, "stop").and_then(|()| input.flush());
+/// The shared effect of a panel's force-stop. The caller kills the engine child; there is no
+/// point waiting for it to save when the panel asked for an immediate stop.
+fn handle_force_stop(shared: &Arc<Shared>) {
+    shared.shutdown.store(true, Ordering::SeqCst);
+    shared.restart.store(false, Ordering::SeqCst);
+    shared.set_phase(Phase::Stopping);
+    crate::management::stopping(shared);
+}
+
+/// Writes console lines to the engine on a separate thread with a bounded queue. A full pipe
+/// must never hold up the supervise loop, which is the only place that reads force-stop.
+struct EngineWriter {
+    sender: Option<mpsc::SyncSender<String>>,
+    warned_full: bool,
+}
+
+impl EngineWriter {
+    fn new(stdin: Option<std::process::ChildStdin>) -> Self {
+        let Some(stdin) = stdin else {
+            return Self {
+                sender: None,
+                warned_full: false,
+            };
+        };
+        let (sender, receiver) = mpsc::sync_channel(64);
+        thread::Builder::new()
+            .name("engine-stdin".into())
+            .spawn(move || {
+                let mut stdin = stdin;
+                for line in receiver {
+                    if writeln!(stdin, "{line}")
+                        .and_then(|()| stdin.flush())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn the engine stdin writer");
+        Self {
+            sender: Some(sender),
+            warned_full: false,
+        }
+    }
+
+    fn send(&mut self, shared: &Arc<Shared>, line: &str) {
+        let Some(sender) = self.sender.as_ref() else {
+            return;
+        };
+        match sender.try_send(line.to_owned()) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) if !self.warned_full => {
+                self.warned_full = true;
+                note(
+                    shared,
+                    "WARN",
+                    "The game is not reading stdin; dropping console input",
+                );
+            }
+            Err(mpsc::TrySendError::Full(_)) => {}
+            Err(mpsc::TrySendError::Disconnected(_)) => self.sender = None,
+        }
     }
 }
 
@@ -1258,6 +1346,46 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "daily"]
+    fn panel_force_stop_reaps_an_unresponsive_engine() {
+        let shared = Shared::with_install(Path::new("."), None);
+        let mut child = game("exec sleep 30");
+        let (sender, console) = mpsc::channel();
+        sender.send("horizon:force-stop".to_string()).unwrap();
+        let start = Instant::now();
+        assert!(matches!(
+            supervise(&shared, &mut child, &console, &mut None),
+            Exit::Stopped
+        ));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(child.try_wait().unwrap().is_some());
+        assert!(shared.shutdown.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "daily"]
+    fn panel_force_stop_reaps_an_unresponsive_engine_with_a_full_stdin_pipe() {
+        let shared = Shared::with_install(Path::new("."), None);
+        let mut child = game("exec sleep 30");
+        let (sender, console) = mpsc::channel();
+        // `sleep` never reads stdin. Fill the pipe and the writer's queue before asking for a
+        // force-stop: the supervise loop must reach it without waiting on a full pipe.
+        for _ in 0..200 {
+            sender.send("x".repeat(4096)).unwrap();
+        }
+        sender.send("horizon:force-stop".to_string()).unwrap();
+        let start = Instant::now();
+        assert!(matches!(
+            supervise(&shared, &mut child, &console, &mut None),
+            Exit::Stopped
+        ));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[cfg(unix)]
