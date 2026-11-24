@@ -280,6 +280,16 @@ impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
     fn can_float_while_ridden(&mut self) -> Result<bool> {
         Ok(false)
     }
+    fn fluid_travel_listened(&self) -> bool {
+        crate::native_client_hooks::living_fluid_travel_listened()
+    }
+    fn edit_fluid_travel(
+        &mut self,
+        lava_deep: Option<bool>,
+        values: &mut horizon_world::living_fluid::FluidTravelValues,
+    ) {
+        self.edit_player_fluid_travel(lava_deep, values);
+    }
 }
 impl PlayerMotion {
     /// `Entity.getFluidJumpThreshold`: 0.4, or 0 under eyes lower than that.

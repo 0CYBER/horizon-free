@@ -22,3 +22,14 @@ The entity reads the block at its feet and, when that gives 1.0 (and, for speed,
 The player, every mob's ground and jump path, boats and minecarts read the factors where vanilla does. Both hooks fire on both sides and on the client's replayed ticks: register the mod on both and keep each method a pure function of its inputs, or prediction and the server disagree. To affect entities on every block, use `living_speed` and `living_jump_power` instead.
 
 See [the hook notes](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/block_factors.rs) for the cost and the details.
+
+## Player swimming and fluid travel
+
+Use `can_swim_in_fluid` to change the player's swim, dive, and swim-sprint permission for a
+fluid. `living_fluid_travel` can tune the existing water or lava travel path without replacing it:
+acceleration, drag, falling adjustment, extra gravity, and the climb impulse. Both events identify
+the actual source or flowing fluid and report whether the player has Fire Resistance. They do not
+change the underlying fluid registry, damage, or the game's dry-land movement.
+
+Register the same policy on client and server. Movement prediction and replay use these hooks too,
+so derive the answer from the event rather than changing state or drawing randomness in a listener.

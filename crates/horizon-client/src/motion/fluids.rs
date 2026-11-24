@@ -87,6 +87,8 @@ pub struct PlayerFluids {
     pub was_touching_water: bool,
     /// `Entity.wasEyeInWater`.
     pub was_eye_in_water: bool,
+    /// Edited admission for the previous eye sample, or the vanilla answer when absent.
+    previous_swimmable_eye: Option<bool>,
     /// `Entity.firstTick`: no splash, and no lava, until the first base tick ends.
     pub first_tick: bool,
     /// The dimension's `FAST_LAVA` (the Nether), set by the game.
@@ -108,6 +110,7 @@ impl Default for PlayerFluids {
             interaction: EntityFluidInteraction::new([WATER, LAVA]),
             was_touching_water: false,
             was_eye_in_water: false,
+            previous_swimmable_eye: None,
             first_tick: true,
             fast_lava: false,
             boat: None,
@@ -348,31 +351,126 @@ impl MotionWorld<'_, '_, '_> {
         }
         true
     }
+
+    fn can_swim_in(&self, fluid: FluidKind) -> bool {
+        let mut allowed = is_tagged(fluid, WATER);
+        native_can_swim_in_fluid(
+            self.loop_context,
+            self.player.entity_id as u32,
+            "minecraft:player",
+            fluid.name(),
+            self.player.status.fire_resistance,
+            &mut allowed,
+        );
+        allowed
+    }
+
+    pub(super) fn touching_swimmable_fluid(&self) -> bool {
+        let fluids = &self.player.fluids;
+        let trackers = fluids.interaction.trackers();
+        if trackers.is_empty() || !crate::native_client_hooks::can_swim_in_fluid_listened() {
+            return fluids.was_touching_water;
+        }
+        trackers.iter().any(|tracker| {
+            tracker.height > 0.0
+                && (!is_tagged(tracker.fluid, WATER) || fluids.was_touching_water)
+                && self.can_swim_in(tracker.fluid)
+        })
+    }
+
+    pub(super) fn eyes_in_swimmable_fluid(&self) -> bool {
+        self.player
+            .fluids
+            .previous_swimmable_eye
+            .unwrap_or(self.player.is_under_water())
+    }
+
+    fn feet_fluid(&self) -> FluidKind {
+        self.fluid_at(BlockPos::containing(self.player.position))
+            .kind()
+    }
+
+    fn sample_swimmable_eyes(&self, starting: bool) -> Option<(bool, bool)> {
+        let trackers = self.player.fluids.interaction.trackers();
+        if trackers.is_empty() || !crate::native_client_hooks::can_swim_in_fluid_listened() {
+            return None;
+        }
+        let feet = starting.then(|| self.feet_fluid());
+        let mut eye_allowed = false;
+        let mut can_start = false;
+        for tracker in trackers.iter().filter(|tracker| tracker.eyes_inside) {
+            let eye = tracker.fluid;
+            if self.can_swim_in(eye) {
+                eye_allowed = true;
+                can_start |= feet.is_some_and(|feet| {
+                    feet.same_family(eye) && (feet == eye || self.can_swim_in(feet))
+                });
+            }
+        }
+        Some((eye_allowed, can_start))
+    }
+
+    pub(super) fn edit_player_fluid_travel(
+        &self,
+        lava_deep: Option<bool>,
+        values: &mut horizon_world::living_fluid::FluidTravelValues,
+    ) {
+        let tag = if lava_deep.is_some() { LAVA } else { WATER };
+        let Some(tracker) = self
+            .player
+            .fluids
+            .interaction
+            .trackers()
+            .iter()
+            .filter(|tracker| tracker.height > 0.0 && is_tagged(tracker.fluid, tag))
+            .max_by(|a, b| a.height.total_cmp(&b.height))
+        else {
+            return;
+        };
+        let deep = lava_deep.unwrap_or_else(|| tracker.height > self.player.fluid_jump_threshold());
+        native_living_fluid_travel(LivingFluidTravelCall {
+            context: self.loop_context,
+            values: mod_api::__private::LivingFluidTravelCall {
+                entity: self.player.entity_id as u32,
+                kind: "minecraft:player",
+                fluid: tracker.fluid.name(),
+                deep,
+                fire_resistance: self.player.status.fire_resistance,
+                acceleration: &mut values.acceleration,
+                horizontal_drag: &mut values.horizontal_drag,
+                vertical_drag: &mut values.vertical_drag,
+                falling_adjustment: &mut values.falling_adjustment,
+                extra_gravity_factor: &mut values.extra_gravity_factor,
+                climb_impulse: &mut values.climb_impulse,
+            },
+        });
+    }
+
     /// `Entity.baseTick`'s fluid phase: `wasEyeInWater`, `updateFluidInteraction`,
     /// swimming and remaining fire, lava's fall halving, then the first-tick clear.
     pub fn fluid_base_tick(&mut self) -> Result<()> {
         if self.is_dry_air_fast() {
+            self.player.fluids.previous_swimmable_eye = None;
             return Ok(());
         }
         self.player.fluids.was_eye_in_water = self.player.is_eye_in_fluid(WATER);
+        let wants_swim = !self.player.flying && !self.player.is_passenger && self.player.sprinting;
+        let swim_eyes = self.sample_swimmable_eyes(wants_swim && !self.player.swimming);
+        self.player.fluids.previous_swimmable_eye = swim_eyes.map(|(allowed, _)| allowed);
         self.update_fluids()?;
         // `Player.updateSwimming`'s flying guard over `Entity.updateSwimming`,
         // whose both branches need `!isPassenger()`: a rider keeps no swim, so
         // the server's copy of a guest who boards a boat while swimming is not
         // left in the swimming box (eye 0.4) in the seat, at the waterline,
         // where the boat drowned and suffocated them (#4427).
-        self.player.swimming = !self.player.flying
-            && !self.player.is_passenger
-            && self.player.sprinting
+        self.player.swimming = wants_swim
             && if self.player.swimming {
-                self.player.fluids.was_touching_water
+                self.touching_swimmable_fluid()
             } else {
-                self.player.is_under_water()
-                    && is_tagged(
-                        self.fluid_at(BlockPos::containing(self.player.position))
-                            .kind(),
-                        WATER,
-                    )
+                swim_eyes.map_or_else(
+                    || self.player.is_under_water() && is_tagged(self.feet_fluid(), WATER),
+                    |(_, can_start)| can_start,
+                )
             };
         self.tick_remaining_fire()?;
         if self.player.is_in_lava() {

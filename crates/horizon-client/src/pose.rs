@@ -205,9 +205,13 @@ impl PlayerMotion {
     /// ended still holds, so the tick after an elytra lands moves at sneaking
     /// speed (#8295).
     pub fn moving_slowly(&self) -> bool {
+        self.moving_slowly_in(self.fluids.was_touching_water)
+    }
+
+    pub(crate) fn moving_slowly_in(&self, swimmable_fluid: bool) -> bool {
         let visually_swimming =
             self.pose == Pose::Swimming || (!self.fall_flying && self.pose == Pose::FallFlying);
-        self.local_crouching || (visually_swimming && !self.fluids.was_touching_water)
+        self.local_crouching || (visually_swimming && !swimmable_fluid)
     }
 }
 impl MotionWorld<'_, '_, '_> {

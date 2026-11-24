@@ -6,6 +6,9 @@ use horizon_world::registry::BlockStateId;
 use mod_api::{BlockSoundCause, BlockSoundType};
 use std::sync::OnceLock;
 
+type CanSwimInFluid = fn(&LoopContext, u32, &str, &str, bool, &mut bool);
+type LivingFluidTravel = fn(crate::motion::LivingFluidTravelCall<'_>);
+
 /// Client-library hooks, installed before any menu, entity or recipe is used.
 pub struct NativeClientHooks {
     pub menu_still_valid: fn(&LoopContext, u128, &str, [i32; 3], [f64; 3], &mut bool),
@@ -28,6 +31,10 @@ pub struct NativeClientHooks {
     pub living_jump_power: fn(&LoopContext, u32, &str, &mut f32),
     pub living_speed: fn(&LoopContext, u32, &str, &mut f32),
     pub living_flying_speed: fn(&LoopContext, u32, &str, &mut f32),
+    pub can_swim_in_fluid_listened: fn() -> bool,
+    pub can_swim_in_fluid: CanSwimInFluid,
+    pub living_fluid_travel_listened: fn() -> bool,
+    pub living_fluid_travel: LivingFluidTravel,
     pub block_jump_factor: fn(&LoopContext, BlockStateId, &mut f32),
     pub block_speed_factor: fn(&LoopContext, BlockStateId, &mut f32),
     pub is_ladder: fn(&LoopContext, u32, BlockPos, BlockStateId, &mut bool),
@@ -228,6 +235,26 @@ pub(crate) fn living_flying_speed(context: &LoopContext, entity: u32, kind: &str
     if let Some(hooks) = HOOKS.get() {
         (hooks.living_flying_speed)(context, entity, kind, speed);
     }
+}
+
+pub(crate) fn can_swim_in_fluid_listened() -> bool {
+    HOOKS
+        .get()
+        .is_some_and(|hooks| (hooks.can_swim_in_fluid_listened)())
+}
+
+pub(crate) fn can_swim_in_fluid() -> Option<CanSwimInFluid> {
+    HOOKS.get().map(|hooks| hooks.can_swim_in_fluid)
+}
+
+pub(crate) fn living_fluid_travel_listened() -> bool {
+    HOOKS
+        .get()
+        .is_some_and(|hooks| (hooks.living_fluid_travel_listened)())
+}
+
+pub(crate) fn living_fluid_travel() -> Option<LivingFluidTravel> {
+    HOOKS.get().map(|hooks| hooks.living_fluid_travel)
 }
 
 pub(crate) fn block_jump_factor(context: &LoopContext, state: BlockStateId, factor: &mut f32) {

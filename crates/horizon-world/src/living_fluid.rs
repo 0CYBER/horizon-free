@@ -8,6 +8,17 @@ pub enum TravelFluidTag {
     Lava,
     EntityFloatable,
 }
+
+/// The tunable inputs to the existing water and lava travel steps.
+pub struct FluidTravelValues {
+    pub acceleration: f32,
+    pub horizontal_drag: f64,
+    pub vertical_drag: f64,
+    pub falling_adjustment: bool,
+    pub extra_gravity_factor: f64,
+    pub climb_impulse: Option<f64>,
+}
+
 pub trait LivingFluidWorld: LivingAirWorld {
     fn in_water(&mut self) -> Result<bool, Self::Error>;
     fn sprinting(&mut self) -> Result<bool, Self::Error>;
@@ -19,6 +30,12 @@ pub trait LivingFluidWorld: LivingAirWorld {
     fn is_free(&mut self, offset: Vec3) -> Result<bool, Self::Error>;
     fn is_vehicle(&mut self) -> Result<bool, Self::Error>;
     fn can_float_while_ridden(&mut self) -> Result<bool, Self::Error>;
+    fn fluid_travel_listened(&self) -> bool {
+        false
+    }
+    /// Water passes `None` for depth; an editor that needs it may read its water immersion.
+    /// Lava passes `Some(deep)`, the depth used to choose its defaults.
+    fn edit_fluid_travel(&mut self, _lava_deep: Option<bool>, _values: &mut FluidTravelValues) {}
 }
 
 pub fn fluid_falling_adjusted_movement<W: LivingFluidWorld>(
@@ -79,19 +96,27 @@ pub fn travel_in_water<W: LivingFluidWorld>(
     if world.dolphins_grace()? {
         slowdown = 0.96;
     }
-    move_relative(world, input, speed)?;
-    world.move_self(gate, world.velocity())?;
-    let mut velocity = world.velocity();
-    if world.horizontal_collision() && world.on_climbable()? {
-        velocity.y = 0.2;
+    let mut values = FluidTravelValues {
+        acceleration: speed,
+        horizontal_drag: f64::from(slowdown),
+        vertical_drag: f64::from(0.8f32),
+        falling_adjustment: true,
+        extra_gravity_factor: 0.0,
+        climb_impulse: Some(0.2),
+    };
+    if world.fluid_travel_listened() {
+        world.edit_fluid_travel(None, &mut values);
     }
-    velocity = Vec3::new(
-        velocity.x * f64::from(slowdown),
-        velocity.y * f64::from(0.8f32),
-        velocity.z * f64::from(slowdown),
-    );
-    let velocity = fluid_falling_adjusted_movement(world, gravity, falling, velocity)?;
+    move_relative(world, input, values.acceleration)?;
+    world.move_self(gate, world.velocity())?;
+    let velocity = dragged_velocity(world, &values)?;
+    let velocity = if values.falling_adjustment {
+        fluid_falling_adjusted_movement(world, gravity, falling, velocity)?
+    } else {
+        velocity
+    };
     world.set_velocity(velocity)?;
+    add_extra_gravity(world, gravity, values.extra_gravity_factor)?;
     jump_out_of_fluid(world, old_y)
 }
 pub fn travel_in_lava<W: LivingFluidWorld>(
@@ -102,31 +127,82 @@ pub fn travel_in_lava<W: LivingFluidWorld>(
     falling: bool,
     old_y: f64,
 ) -> Result<(), W::Error> {
-    move_relative(world, input, 0.02)?;
+    let defaults = |deep| FluidTravelValues {
+        acceleration: 0.02,
+        horizontal_drag: 0.5,
+        vertical_drag: if deep { 0.5 } else { f64::from(0.8f32) },
+        falling_adjustment: !deep,
+        extra_gravity_factor: 0.25,
+        climb_impulse: None,
+    };
+    let mut edited = None;
+    if world.fluid_travel_listened() {
+        // The policy needs the tracked depth before acceleration. Without a
+        // listener keep vanilla's depth read after the move.
+        let shallow = world.fluid_height(TravelFluidTag::Lava)? <= world.fluid_jump_threshold()?;
+        let deep = !shallow;
+        let mut values = defaults(deep);
+        world.edit_fluid_travel(Some(deep), &mut values);
+        edited = Some(values);
+    }
+    move_relative(
+        world,
+        input,
+        edited.as_ref().map_or(0.02, |values| values.acceleration),
+    )?;
     world.move_self(gate, world.velocity())?;
-    let height = world.fluid_height(TravelFluidTag::Lava)?;
-    if height <= world.fluid_jump_threshold()? {
-        let velocity = world.velocity();
-        world.set_velocity(Vec3::new(
-            velocity.x * 0.5,
-            velocity.y * f64::from(0.8f32),
-            velocity.z * 0.5,
-        ))?;
+    let values = match edited {
+        Some(values) => values,
+        None => {
+            let shallow =
+                world.fluid_height(TravelFluidTag::Lava)? <= world.fluid_jump_threshold()?;
+            defaults(!shallow)
+        }
+    };
+    let velocity = dragged_velocity(world, &values)?;
+    world.set_velocity(velocity)?;
+    if values.falling_adjustment {
         let velocity = fluid_falling_adjusted_movement(world, gravity, falling, world.velocity())?;
         world.set_velocity(velocity)?;
-    } else {
-        world.set_velocity(world.velocity().scale(0.5))?;
     }
-    if gravity != 0.0 {
+    add_extra_gravity(world, gravity, values.extra_gravity_factor)?;
+    jump_out_of_fluid(world, old_y)
+}
+
+fn dragged_velocity<W: LivingFluidWorld>(
+    world: &mut W,
+    values: &FluidTravelValues,
+) -> Result<Vec3, W::Error> {
+    let mut velocity = world.velocity();
+    if let Some(impulse) = values.climb_impulse
+        && world.horizontal_collision()
+        && world.on_climbable()?
+    {
+        velocity.y = impulse;
+    }
+    Ok(Vec3::new(
+        velocity.x * values.horizontal_drag,
+        velocity.y * values.vertical_drag,
+        velocity.z * values.horizontal_drag,
+    ))
+}
+
+fn add_extra_gravity<W: LivingFluidWorld>(
+    world: &mut W,
+    gravity: f64,
+    factor: f64,
+) -> Result<(), W::Error> {
+    if factor != 0.0 && gravity != 0.0 {
         let velocity = world.velocity();
         world.set_velocity(Vec3::new(
             velocity.x + 0.0,
-            velocity.y + -gravity / 4.0,
+            velocity.y + -gravity * factor,
             velocity.z + 0.0,
         ))?;
     }
-    jump_out_of_fluid(world, old_y)
+    Ok(())
 }
+
 pub fn float_in_liquid_while_ridden<W: LivingFluidWorld>(
     world: &mut W,
     tag: TravelFluidTag,

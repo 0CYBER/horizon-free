@@ -81,6 +81,36 @@ pub fn native_living_flying_speed(context: &LoopContext, entity: u32, kind: &str
     crate::native_client_hooks::living_flying_speed(context, entity, kind, speed);
 }
 
+/// The player's swim admission for a fluid being tested by the movement loop.
+#[inline(never)]
+pub fn native_can_swim_in_fluid(
+    context: &LoopContext,
+    entity: u32,
+    kind: &str,
+    fluid: &str,
+    fire_resistance: bool,
+    can_swim: &mut bool,
+) {
+    if let Some(hook) = crate::native_client_hooks::can_swim_in_fluid() {
+        hook(context, entity, kind, fluid, fire_resistance, can_swim);
+    }
+}
+
+/// A fluid travel invocation: the game context and the generated borrowed event arguments.
+#[doc(hidden)]
+pub struct LivingFluidTravelCall<'a> {
+    pub context: &'a LoopContext,
+    pub values: mod_api::__private::LivingFluidTravelCall<'a>,
+}
+
+/// The player's existing water or lava travel is about to consume these values.
+#[inline(never)]
+pub fn native_living_fluid_travel(call: LivingFluidTravelCall<'_>) {
+    if let Some(hook) = crate::native_client_hooks::living_fluid_travel() {
+        hook(call);
+    }
+}
+
 /// The player's crouch edge backoff asks whether it is staying on the ground surface
 /// (`Player.isStayingOnGroundSurface`; beyond NeoForge: there is no counterpart). Mods may change it.
 /// Fires on replayed ticks too, so a listener must be a pure function of its inputs.
@@ -890,6 +920,13 @@ impl PlayerMotion {
         self.run_sprint_tick(keys, conditions, sprint_window)
     }
     fn sprint_conditions(&self) -> crate::sprint::Conditions {
+        self.sprint_conditions_for_swim(self.fluids.was_touching_water, self.is_under_water())
+    }
+    fn sprint_conditions_for_swim(
+        &self,
+        in_water: bool,
+        under_water: bool,
+    ) -> crate::sprint::Conditions {
         crate::sprint::Conditions {
             sprinting: self.sprinting,
             mobility_restricted: self.mobility_restricted,
@@ -897,15 +934,15 @@ impl PlayerMotion {
             may_fly: self.may_fly,
             flying: self.flying,
             // Entity.isInShallowWater.
-            shallow_water: self.fluids.was_touching_water && !self.is_under_water(),
+            shallow_water: in_water && !under_water,
             fall_flying: self.fall_flying,
             on_ground: self.ground.on_ground,
             horizontal_collision: self.collision.horizontal,
             minor_horizontal_collision: self.collision.minor,
             slow_item: self.item_use_slows_sprint,
-            moving_slowly: self.moving_slowly(),
-            in_water: self.fluids.was_touching_water,
-            under_water: self.is_under_water(),
+            moving_slowly: self.moving_slowly_in(in_water),
+            in_water,
+            under_water,
             swimming: self.swimming,
             ..Default::default()
         }
@@ -1142,10 +1179,7 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         // LocalPlayer.goDownInWater, before LivingEntity.aiStep's velocity cleanup.
-        if self.player.fluids.was_touching_water
-            && self.player.shift_key_down
-            && !self.player.flying
-        {
+        if self.player.shift_key_down && !self.player.flying && self.touching_swimmable_fluid() {
             self.player.velocity.y += f64::from(-0.04f32);
         }
         if self.player.flying {
@@ -1228,8 +1262,13 @@ impl MotionWorld<'_, '_, '_> {
         keys: crate::sprint::Keys,
         sprint_window: i32,
     ) -> Result<()> {
-        self.local_tick(keys, |player, keys| {
-            player.sprint_input_tick_with_window(keys, sprint_window)
+        self.local_tick(keys, |world, keys, in_water| {
+            let conditions = world
+                .player
+                .sprint_conditions_for_swim(in_water, world.eyes_in_swimmable_fluid());
+            world
+                .player
+                .run_sprint_tick(keys, conditions, sprint_window)
         })
     }
     /// A client's tick played again by the server's movement prediction: the
@@ -1239,11 +1278,11 @@ impl MotionWorld<'_, '_, '_> {
         self.player.replaying = true;
         let result = match self.try_fast_stationary_replayed_tick(keys, sprinting) {
             Ok(true) => Ok(()),
-            Ok(false) => self.local_tick(keys, |player, _| {
-                if player.sprinting == sprinting {
+            Ok(false) => self.local_tick(keys, |world, _, _| {
+                if world.player.sprinting == sprinting {
                     Ok(())
                 } else {
-                    player.set_sprinting(sprinting)
+                    world.player.set_sprinting(sprinting)
                 }
             }),
             Err(err) => Err(err),
@@ -1573,7 +1612,7 @@ impl MotionWorld<'_, '_, '_> {
     fn local_tick(
         &mut self,
         keys: crate::sprint::Keys,
-        sprint: impl FnOnce(&mut PlayerMotion, crate::sprint::Keys) -> Result<()>,
+        sprint: impl FnOnce(&mut Self, crate::sprint::Keys, bool) -> Result<()>,
     ) -> Result<()> {
         // The base tick (fluids, swimming) precedes LocalPlayer.aiStep.
         self.player.health.advance_clock();
@@ -1587,12 +1626,13 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_jump_time -= 1;
             keys.jump = true;
         }
-        sprint(self.player, keys)?;
+        let in_water = self.touching_swimmable_fluid();
+        sprint(self, keys, in_water)?;
         self.player.shift_key_down = keys.shift;
         let direction = keys.direction();
         self.player.move_vector = direction;
         let sneak = if direction[0] * direction[0] + direction[1] * direction[1] != 0.0
-            && self.player.moving_slowly()
+            && self.player.moving_slowly_in(in_water)
         {
             Some(self.player.attribute("minecraft:sneaking_speed")? as f32)
         } else {
