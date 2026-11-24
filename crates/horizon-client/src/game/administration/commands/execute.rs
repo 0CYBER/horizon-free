@@ -140,7 +140,7 @@ impl Game<'_> {
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)
-                .map_or([0.0; 2], |a| [a.yaw, 0.0]),
+                .map_or([0.0; 2], |a| [a.yaw, a.pitch]),
             Target::Boat(id) => self
                 .boats
                 .iter()

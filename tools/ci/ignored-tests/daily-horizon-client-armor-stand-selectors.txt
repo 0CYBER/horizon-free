@@ -1,0 +1,2 @@
+horizon-client game::stand_pitch_tests::x_rotation_selects_an_armor_stand_by_its_pitch lib daily resources
+horizon-client game::marker_bounds_tests::a_marker_stand_is_a_point_for_the_selector_box lib daily resources
