@@ -569,17 +569,19 @@ pub fn resource_root_with_conditions(
     }
     let mut stamp = stamp(base, jar_store, mods, inventory)?;
     // Code-only roots never read the conditions, so they keep one root per stamp.
-    if has_content && conditions.has_registered() {
+    if has_content && (conditions.has_registered() || conditions.feature_flags().is_some()) {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         stamp.hash(&mut hash);
         conditions.hash(&mut hash);
-        // Handlers can read config that has no persistent fingerprint. Give each
-        // build a fresh root, leaving every previously usable root untouched.
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
-            .hash(&mut hash);
+        if conditions.has_registered() {
+            // Handlers can read config that has no persistent fingerprint. Give each
+            // build a fresh root, leaving every previously usable root untouched.
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+                .hash(&mut hash);
+        }
         stamp = format!("{:016x}{stamp}", hash.finish());
     }
     let roots = cache.join("mod-content");

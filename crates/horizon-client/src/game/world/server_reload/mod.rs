@@ -80,7 +80,7 @@ impl Game<'_> {
         let inventory = horizon_mod_package::enabled::EnabledMods::read(resources)
             .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
         let conditions = self
-            .registered_load_conditions(&inventory)
+            .registered_load_conditions(&inventory, stack)
             .map_err(ReloadStageError::DataSource)?;
         // Nobody listens: no registration graph, only the vanilla function library.
         if !mod_api::__private::listened(mod_api::HookId::AddServerReloadListeners) {

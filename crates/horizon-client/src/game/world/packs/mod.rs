@@ -469,6 +469,7 @@ impl Game<'_> {
     pub(super) fn apply_staged_pack(&mut self, staged: StagedPack) -> horizon_client::Result<()> {
         let StagedPack {
             root,
+            root_feature_flags,
             client_applies,
             gui,
             pack,
@@ -549,6 +550,7 @@ impl Game<'_> {
             level.portal_sections.clear();
         }
         self.options.resources = root.clone();
+        self.mods.root_feature_flags = root_feature_flags;
         self.falling_vertices.get_mut().clear();
         self.pack = pack;
         let skip = self
@@ -765,6 +767,7 @@ pub(super) fn stage_pack(
     progress.set(3);
     Ok(StagedPack {
         root,
+        root_feature_flags: mod_sources.candidate_feature_flags(),
         client_applies,
         gui,
         pack,
@@ -784,6 +787,7 @@ pub(super) fn stage_pack(
 /// it on the render thread).
 pub(super) struct StagedPack {
     pub root: PathBuf,
+    root_feature_flags: Option<Arc<[String]>>,
     pub waypoint_styles: horizon_client::locator_bar::WaypointStyles,
     pub armor_stand_assets: super::armor_stands::ArmorStandAssets,
     pub frame_models: [super::frames::FrameModel; 4],

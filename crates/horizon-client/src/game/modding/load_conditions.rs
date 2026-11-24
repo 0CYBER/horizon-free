@@ -18,7 +18,7 @@ impl Game<'_> {
             let inventory = horizon_mod_package::enabled::EnabledMods::read(resources)
                 .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
             self.mods.load_condition_candidate = Some(
-                conditions_for_mods(&self.mods, &inventory)
+                conditions_for_mods(&self.mods, &inventory, Some(&stack.feature_flags))
                     .map_err(ReloadStageError::DataSource)?,
             );
         }
@@ -37,11 +37,13 @@ impl Game<'_> {
 
     pub(super) fn stage_condition_inventory(
         &mut self,
+        features: &[String],
     ) -> horizon_client::Result<Option<horizon_assets::resource_source::ResourceRoot>> {
         self.protect_condition_root();
         self.mods.load_condition_candidate = None;
         let inventory = horizon_mod_package::enabled::EnabledMods::read(&self.options.resources)?;
-        self.mods.load_condition_candidate = Some(conditions_for_mods(&self.mods, &inventory)?);
+        self.mods.load_condition_candidate =
+            Some(conditions_for_mods(&self.mods, &inventory, Some(features))?);
         self.stage_enabled_inventory()
     }
 
@@ -55,7 +57,10 @@ impl Game<'_> {
         self.mods
             .load_condition_candidate
             .as_ref()
-            .is_some_and(|view| view.has_registered())
+            .is_some_and(|view| {
+                view.has_registered()
+                    || self.mods.root_feature_flags.as_ref() != view.feature_flags()
+            })
             && (!self.mods.selected.is_empty()
                 || !self.mods.dev.is_empty()
                 || !self.mods.native.packages().is_empty())
@@ -64,14 +69,24 @@ impl Game<'_> {
     pub(super) fn registered_load_conditions(
         &self,
         inventory: &horizon_mod_package::enabled::EnabledMods,
+        stack: &super::functions::PackStack,
     ) -> Result<horizon_world::conditions::LoadConditions, String> {
-        conditions_for_mods(&self.mods, inventory)
+        conditions_for_mods(&self.mods, inventory, Some(&stack.feature_flags))
+    }
+}
+
+impl super::mods::ModsState {
+    pub(super) fn candidate_feature_flags(&self) -> Option<Arc<[String]>> {
+        self.load_condition_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.feature_flags().cloned())
     }
 }
 
 pub(super) fn conditions_for_mods(
     sources: &super::mods::ModsState,
     inventory: &horizon_mod_package::enabled::EnabledMods,
+    features: Option<&[String]>,
 ) -> Result<horizon_world::conditions::LoadConditions, String> {
     if let Some(candidate) = &sources.load_condition_candidate {
         return Ok(candidate.with_mod_inventory(inventory.server_ids()));
@@ -90,7 +105,13 @@ pub(super) fn conditions_for_mods(
                 .map_err(|error| error.message)
         })
         .clone()?;
-    let conditions = horizon_world::conditions::LoadConditions::new(inventory.server_ids());
+    let conditions = match features {
+        Some(features) => horizon_world::conditions::LoadConditions::for_features(
+            inventory.server_ids(),
+            features,
+        ),
+        None => horizon_world::conditions::LoadConditions::new(inventory.server_ids()),
+    };
     if table.is_empty() {
         return Ok(conditions);
     }
@@ -133,7 +154,7 @@ pub(super) fn content_root_with_conditions(
     inventory: &horizon_mod_package::enabled::EnabledMods,
     sources: &super::mods::ModsState,
 ) -> horizon_client::Result<std::path::PathBuf> {
-    let conditions = conditions_for_mods(sources, inventory)?;
+    let conditions = conditions_for_mods(sources, inventory, None)?;
     horizon_client::mod_content::resource_root_with_conditions(
         root,
         jars,

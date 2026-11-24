@@ -76,6 +76,8 @@ pub(super) struct CodeSwitches {
 pub(super) struct ModsState {
     pub(super) active_condition_root: Option<Arc<horizon_client::mod_content::RootHold>>,
     pub(super) load_condition_candidate: Option<horizon_world::conditions::LoadConditions>,
+    /// Flags under which the currently installed content root was prepared.
+    pub(super) root_feature_flags: Option<Arc<[String]>>,
     pub(super) load_conditions:
         Arc<std::sync::OnceLock<Result<crate::game::load_conditions::ConditionTable, String>>>,
     pub(super) profession_declarations:
@@ -1742,6 +1744,7 @@ impl Game<'_> {
             return;
         }
         let root = self.options.resources.clone();
+        let root_feature_flags = self.mods.root_feature_flags.clone();
         let data_source = self.pack.data_source.clone();
         let data_changes = self.pack.data_changes.clone();
         let additional_data = self.pack.additional_data.clone();
@@ -1751,6 +1754,7 @@ impl Game<'_> {
         let reload = move |g: &mut Game<'_>| {
             let at = std::time::Instant::now();
             g.options.resources = root;
+            g.mods.root_feature_flags = root_feature_flags;
             g.pack.data_source = data_source;
             g.pack.data_changes = data_changes;
             g.pack.additional_data = additional_data;

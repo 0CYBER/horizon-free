@@ -212,6 +212,7 @@ pub(super) struct PackStack {
     pub(super) content: DataPack,
     pub packs: Vec<Arc<DataPack>>,
     pub enabled: Vec<String>,
+    pub(super) feature_flags: Box<[String]>,
     /// The predicate tags `PackStack::validate` bound (loading.rs).
     tags: std::sync::OnceLock<registry_graph::BoundTags>,
 }
@@ -242,6 +243,7 @@ pub(super) fn pack_stack(
         builtin,
         packs: packs.into_iter().map(Arc::new).collect(),
         enabled,
+        feature_flags: enabled_features.into(),
         tags: Default::default(),
     }
 }
@@ -389,7 +391,7 @@ impl Game<'_> {
             )
         })?;
         let next_root = self
-            .stage_condition_inventory()
+            .stage_condition_inventory(enabled_features)
             .map_err(|error| ReloadStageError::DataSource(error.to_string()))?;
         let resources = next_root
             .as_ref()
@@ -441,6 +443,7 @@ impl Game<'_> {
             self.options.resources = root.prepared().to_owned();
             self.pack.data_source = root.data().clone();
             self.pack.data_changes = root.data_changes().clone();
+            self.mods.root_feature_flags = self.mods.candidate_feature_flags();
             self.mods.data_switched = true;
         }
         self.install_loop_context(context);

@@ -5,14 +5,18 @@
 //! sense to load when that mod's data is in the root.
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-/// Enabled package IDs captured by the engine for one owning data load.
-/// Readers share this immutable view; they never recover IDs from namespaces.
+const VANILLA_FEATURE: &str = "minecraft:vanilla";
+
+/// Package IDs and feature flags captured by the engine for one owning data load.
+/// Readers share this immutable view instead of inferring it from resource namespaces.
 /// Resource selection happens before evaluating ordinary JSON files. Stacked
 /// tags and data maps instead evaluate each layer before merge or replace.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LoadConditions {
     mods: Vec<String>,
+    features: Option<Arc<[String]>>,
     registered: Option<RegisteredLookup>,
     diagnostics: Diagnostics,
 }
@@ -22,6 +26,7 @@ impl LoadConditions {
     pub const fn vanilla() -> Self {
         Self {
             mods: Vec::new(),
+            features: None,
             registered: None,
             diagnostics: Diagnostics::new(),
         }
@@ -39,9 +44,26 @@ impl LoadConditions {
         mods.dedup();
         Self {
             mods,
+            features: None,
             registered: None,
             diagnostics: Diagnostics::default(),
         }
+    }
+
+    /// Capture an owning world's feature flags before registration and resource evaluation.
+    /// World-less loads use the built-in vanilla flag through [`Self::new`].
+    pub fn for_features<'a>(ids: impl IntoIterator<Item = &'a str>, features: &[String]) -> Self {
+        Self {
+            // An empty list is a save's default: vanilla's flag alone.
+            features: (!features.is_empty() && features != [VANILLA_FEATURE])
+                .then(|| features.into()),
+            ..Self::new(ids)
+        }
+    }
+
+    /// Explicit flags when the data load differs from vanilla's default feature set.
+    pub fn feature_flags(&self) -> Option<&Arc<[String]>> {
+        self.features.as_ref()
     }
 
     /// Use the recipe source's inventory while retaining this candidate's
@@ -188,6 +210,7 @@ impl LoadConditions {
             let answer = evaluate(
                 file,
                 &loaded,
+                self.features.as_deref(),
                 items,
                 &|_, _| None,
                 &BTreeMap::new(),
@@ -201,6 +224,7 @@ impl LoadConditions {
             let _ = evaluate(
                 file,
                 &loaded,
+                self.features.as_deref(),
                 items,
                 &|_, _| None,
                 &BTreeMap::new(),
@@ -228,6 +252,7 @@ impl LoadConditions {
             let result = evaluate(
                 file,
                 &loaded,
+                self.features.as_deref(),
                 items,
                 &*registered.0.lookup,
                 &registered.0.owned,
@@ -392,6 +417,32 @@ fn resource_id(id: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+fn feature_enabled(flags: Option<&[String]>, namespace: &str, path: &str) -> bool {
+    flags.map_or_else(
+        || namespace == "minecraft" && path == "vanilla",
+        |flags| {
+            flags
+                .iter()
+                .any(|flag| flag.split_once(':') == Some((namespace, path)))
+        },
+    )
+}
+
+fn feature_id(id: &str) -> Option<(&str, &str)> {
+    let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    let namespace = if namespace.is_empty() {
+        "minecraft"
+    } else {
+        namespace
+    };
+    let valid = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_.-".contains(&c);
+    (!path.is_empty()
+        && namespace != ".."
+        && namespace.bytes().all(valid)
+        && path.bytes().all(|c| valid(c) || c == b'/'))
+    .then_some((namespace, path))
+}
+
 /// Evaluate built-in conditions with an empty registration lookup.
 pub fn conditions_hold(v: &Value, loaded: &ModLoaded) -> bool {
     conditions_hold_with_lookup(v, loaded, &|_, _| None, &BTreeMap::new())
@@ -406,12 +457,13 @@ pub fn conditions_hold_with_lookup(
     lookup: &ConditionLookup,
     owned: &BTreeMap<String, String>,
 ) -> Result<bool, String> {
-    evaluate(v, loaded, None, lookup, owned, &mut |_| {})
+    evaluate(v, loaded, None, None, lookup, owned, &mut |_| {})
 }
 
 fn evaluate(
     v: &Value,
     loaded: &ModLoaded,
+    features: Option<&[String]>,
     items: Option<&dyn ItemFacts>,
     lookup: &ConditionLookup,
     owned: &BTreeMap<String, String>,
@@ -420,6 +472,7 @@ fn evaluate(
     fn hold(
         c: &Value,
         loaded: &ModLoaded,
+        features: Option<&[String]>,
         items: Option<&dyn ItemFacts>,
         lookup: &ConditionLookup,
         owned: &BTreeMap<String, String>,
@@ -439,8 +492,17 @@ fn evaluate(
             Some("neoforge:mod_loaded") => Some(c["modid"].as_str().is_some_and(loaded)),
             Some("neoforge:true") => Some(true),
             Some("neoforge:false") => Some(false),
+            Some("neoforge:feature_flags_enabled") => c["flags"]
+                .as_array()
+                .filter(|flags| !flags.is_empty())
+                .and_then(|flags| {
+                    flags.iter().try_fold(true, |all, flag| {
+                        let (namespace, path) = feature_id(flag.as_str()?)?;
+                        Some(all & feature_enabled(features, namespace, path))
+                    })
+                }),
             Some("neoforge:not") => {
-                hold(&c["value"], loaded, items, lookup, owned, unknown)?.map(|v| !v)
+                hold(&c["value"], loaded, features, items, lookup, owned, unknown)?.map(|v| !v)
             }
             Some(kind @ ("neoforge:and" | "neoforge:or")) => {
                 // Visit every child: an unknown node invalidates the whole file,
@@ -448,7 +510,7 @@ fn evaluate(
                 let mut answer = kind == "neoforge:and";
                 let mut known = true;
                 for child in c["values"].as_array().into_iter().flatten() {
-                    match hold(child, loaded, items, lookup, owned, unknown)? {
+                    match hold(child, loaded, features, items, lookup, owned, unknown)? {
                         Some(value) => {
                             if kind == "neoforge:and" {
                                 answer &= value;
@@ -481,7 +543,8 @@ fn evaluate(
     }
     let mut allowed = true;
     for condition in v["neoforge:conditions"].as_array().into_iter().flatten() {
-        allowed &= hold(condition, loaded, items, lookup, owned, unknown)?.unwrap_or(false);
+        allowed &=
+            hold(condition, loaded, features, items, lookup, owned, unknown)?.unwrap_or(false);
     }
     Ok(allowed)
 }
@@ -528,6 +591,16 @@ mod tests {
             LoadConditions::new(["minecraft"]),
             LoadConditions::vanilla()
         );
+    }
+
+    /// A save with no enabled_features list runs vanilla's default set.
+    #[test]
+    fn an_empty_feature_list_is_vanilla() {
+        let conditions = LoadConditions::for_features(["gem"], &[]);
+        assert!(conditions.feature_flags().is_none());
+        assert!(conditions.allows(&json!({"neoforge:conditions":[{
+            "type":"neoforge:feature_flags_enabled", "flags":["minecraft:vanilla"]
+        }]})));
     }
 
     struct GemItems;

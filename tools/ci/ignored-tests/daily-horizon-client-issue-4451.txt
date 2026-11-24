@@ -943,6 +943,7 @@ horizon-client game::living_attributes::tests::a_stand_the_dragon_and_a_player_t
 horizon-client game::living_attributes::tests::a_zombie_reads_its_defaults lib daily resources
 horizon-client game::living_attributes::tests::gear_knockback_is_read_again_only_when_the_gear_changes lib daily resources
 horizon-client game::living_attributes::tests::the_mob_attribute_packet_is_the_live_maps_instances lib daily resources
+horizon-client game::load_conditions::tests::feature_flag_conditions_use_world_and_reload_features_for_recipes_and_carvers lib daily resources
 horizon-client game::load_conditions::tests::load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes lib daily resources
 horizon-client game::loot_kill_guest_tests::an_empty_handed_guest_is_the_killer_and_a_missing_one_is_not lib daily resources
 horizon-client game::loot_kill_guest_tests::loot_kill_as_a_guest_is_killed_by_that_player lib daily resources

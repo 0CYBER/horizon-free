@@ -32,6 +32,10 @@ A recipe can use the registered name alongside the built-in conditions:
 }
 ```
 
+The built-in `neoforge:feature_flags_enabled` condition accepts a nonempty
+`flags` array of feature IDs. Every flag must be enabled in the world whose
+data is loading. Preparation without a world uses only `minecraft:vanilla`.
+
 The handler receives a borrowed raw JSON value: the condition's object without
 `type`. It reads and validates its own arguments, retaining JSON booleans,
 numbers, strings, lists and objects. Invalid mod input must return
