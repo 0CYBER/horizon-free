@@ -5,7 +5,7 @@ use crate::{
     launch::{self, Launch},
 };
 use horizon_platform::mod_package::{
-    manifest::{collect_jar_requirements, JarConflict},
+    manifest::{jar_requirements_for, JarConflict},
     mod_list::ModList,
     packages,
     selection::{self, LaunchArguments},
@@ -79,7 +79,9 @@ pub fn prepare_launch(
         &args.context.dev_mods,
     )
     .collect();
-    let jars = collect_jar_requirements(
+    // A dedicated server or headless run never fetches a jar that takes no `data/`.
+    let jars = jar_requirements_for(
+        args.jar_side(),
         native
             .iter()
             .map(|p| &p.manifest)

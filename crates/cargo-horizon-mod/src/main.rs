@@ -22,7 +22,8 @@
 //! - `fits [<file.hmod>] [--build <name>]…`: whether the mod fits each build; exit 0 when all
 //!   do, 1 when one does not, 2 when it cannot be told.
 //! - `registry build|review|check|list`: the registry repository's CI.
-//! - `use-jar <path>`: list an exact original Java jar as a passive asset/data source.
+//! - `use-jar <path> [--take <prefix>]...`: list an exact original Java jar as a passive asset/data
+//!   source, optionally layering only the `assets/` and `data/` prefixes it takes.
 use horizon_mod_package::{Content, Manifest, Package, manifest::MANIFEST};
 mod bounded;
 mod check;
@@ -114,7 +115,7 @@ fn main() -> ExitCode {
                 })
                 .map(|()| println!("Run `cargo horizon-mod check`."))
         }
-        _ => Err("usage: cargo horizon-mod new <path> [--name \"Name\"] [--template content|native|wasm [--horizon <build>]] | update [--horizon <build>] | internals sync [--repo <path>] | internals add <path>… [--kind <kind>] | build [--wasm] | wasm-std <out.wasm> | run [--game <horizon-client>] [-- <game args>] | check [--uses] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | hooks <text> [--all] | sdk diff <build> <build> | fits [<file.hmod>] [--build <name>]… | registry build|review|check|list | use-jar <path>".into()),
+        _ => Err("usage: cargo horizon-mod new <path> [--name \"Name\"] [--template content|native|wasm [--horizon <build>]] | update [--horizon <build>] | internals sync [--repo <path>] | internals add <path>… [--kind <kind>] | build [--wasm] | wasm-std <out.wasm> | run [--game <horizon-client>] [-- <game args>] | check [--uses] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | hooks <text> [--all] | sdk diff <build> <build> | fits [<file.hmod>] [--build <name>]… | registry build|review|check|list | use-jar <path> [--take <prefix>]...".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

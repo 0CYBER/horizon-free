@@ -465,3 +465,53 @@ fn information_requests_do_not_read_packages_or_create_a_cache() {
         assert!(!root.0.join("cache").exists());
     }
 }
+
+#[test]
+fn a_dedicated_server_never_fetches_a_jar_that_takes_no_data_while_play_does() {
+    use horizon_platform::mod_package::mod_list::{DIR, FILE};
+    use std::process::Command;
+    let root = Scratch::new();
+    let game = root.0.join("game");
+    let program = root.0.join("horizon-client");
+    fs::write(&program, b"synthetic executable placeholder: never run").unwrap();
+    let (jar, _) = source(b"assets only");
+    let path = package(&game.join(DIR), "art", Vec::new(), false);
+    let manifest = path.join("horizon-mod.toml");
+    let mut text = fs::read_to_string(&manifest).unwrap();
+    text.push_str(&format!(
+        "[[jar]]\nid='{}'\nversion='{}'\nsha512='{}'\ntake=['assets/example']\n",
+        jar.id(),
+        jar.version(),
+        jar.sha512()
+    ));
+    fs::write(&manifest, text).unwrap();
+    fs::write(game.join(FILE), "mod.art:true\n").unwrap();
+    let command = |args: &[&str]| {
+        let mut command = Command::new(&program);
+        command
+            .current_dir(&game)
+            .env("HORIZON_HOME", root.0.join("cache"))
+            .args(args);
+        command
+    };
+    for args in [&["--dedicated", "--nogui"][..], &["--headless"]] {
+        prepare_launch(
+            &mut command(args),
+            &Default::default(),
+            Permission::headless(false),
+        )
+        .unwrap();
+    }
+    assert!(!root.0.join("cache/jars").exists());
+    let error = prepare_launch(
+        &mut command(&[]),
+        &Default::default(),
+        Permission::headless(false),
+    )
+    .unwrap_err();
+    let LaunchError::Prepare(PrepareError::Refused { missing }) = error else {
+        panic!("expected play to need the client-only jar, got {error:?}");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].jar, jar);
+}

@@ -45,7 +45,8 @@ cargo horizon-mod check target/horizon-mod/my_mod.hmod   # the registry's checks
   with `--key <public key> --signature <file>.minisig`. It reads `.hmod`, `.hpack`, resource pack `.zip`
   and `.hshader` files.
 - `registry build|review|check|list|release|page` is the registry repository's CI ([the registry index](../reference/registry-index.md)).
-- `use-jar <path>` records an original Java jar as an external asset/data source, without copying it into the mod
+- `use-jar <path> [--take <prefix>]...` records an original Java jar as an external asset/data source, without
+  copying it into the mod, optionally layering only the prefixes it takes
   ([Java jars as external assets](#java-jars-as-external-assets)).
 
 ## Declare content in code
@@ -138,6 +139,17 @@ The original manifest text, comments and existing list order are preserved. List
 leaves the file byte-for-byte unchanged; a hash already listed with another ID or version is an error to correct,
 not another entry. Use `[[jar]]` tables rather than an inline `jar = [...]` array when adding further jars with the command.
 The list is ordered: new references are appended, not sorted.
+
+To layer only part of the jar, name the prefixes it takes:
+
+```sh
+cargo horizon-mod use-jar /path/to/original-mod.jar --take assets/original_mod --take assets/minecraft/atlases
+```
+
+Each `--take` is checked as the manifest's `take` is, and also against the jar itself: an entry that matches no
+file in it is refused. A jar that takes no `data/` is client-only: servers and headless runs never fetch it
+([Taking part of a jar](../reference/manifest.md#original-java-jar-layers)). Listing a jar already listed with
+another `take` is an error; edit its entry instead.
 
 Jar bytes stay external. The launcher finds the exact hash locally or asks before downloading that exact file from
 Modrinth. Its `assets/` and `data/` are passive pack layers below the Horizon mod's own files; a player-local runtime

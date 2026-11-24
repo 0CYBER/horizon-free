@@ -8,7 +8,7 @@ pub mod mixin;
 mod wasm;
 pub use jar::{
     JarConflict, JarInputsError, JarRef, JarRequirement, MissingJar, collect_jar_requirements,
-    missing_jars,
+    jar_requirements_for, missing_jars,
 };
 pub use wasm::{MAX_WASM, Wasm, WasmError, sha512_of};
 

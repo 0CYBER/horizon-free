@@ -71,6 +71,22 @@ impl LaunchArguments {
         }
     }
 
+    /// Which original jars this run needs ([`crate::manifest::JarRequirement::needed_on`]):
+    /// [`Side::Server`](crate::manifest::Side::Server) for a dedicated server and a
+    /// `--headless` run, which load no client assets, so a jar taking no `data/` is neither
+    /// fetched nor opened; [`Side::Client`](crate::manifest::Side::Client) otherwise.
+    pub fn jar_side(&self) -> crate::manifest::Side {
+        let headless = self
+            .rest
+            .iter()
+            .any(|argument| matches!(argument, Argument::Switch(name) if name == "--headless"));
+        if headless {
+            crate::manifest::Side::Server
+        } else {
+            self.installation_side()
+        }
+    }
+
     /// Snapshot a managed game command before shell/overlay wrappers are applied.
     /// These commands inherit the parent environment, with explicit overrides and removals.
     pub fn for_command(command: &std::process::Command) -> std::io::Result<Self> {
@@ -319,5 +335,23 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.to_string(), "missing value after --dev-mod");
+    }
+
+    #[test]
+    fn dedicated_and_headless_runs_need_only_the_jars_a_server_needs() {
+        use crate::manifest::Side;
+        assert_eq!(parse(&["--creative"], None).jar_side(), Side::Client);
+        assert_eq!(
+            parse(&["--headless", "--world", "w"], None).jar_side(),
+            Side::Server
+        );
+        assert_eq!(
+            parse(&["--dedicated", "--world", "w"], None).jar_side(),
+            Side::Server
+        );
+        assert_eq!(
+            parse(&["--world", "--headless"], None).jar_side(),
+            Side::Client
+        );
     }
 }

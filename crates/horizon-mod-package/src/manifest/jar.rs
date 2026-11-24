@@ -5,13 +5,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use super::Side;
+
 /// An original Java jar used as a passive asset/data layer, in manifest order.
+///
+/// `take` lists the path prefixes of the jar the mod layers, each `assets/<namespace>` or
+/// `data/<namespace>`, optionally deeper; without it the whole jar is layered. A jar whose
+/// `take` names no `data/` prefix is client-only ([`JarRef::side`]).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(try_from = "Fields")]
 pub struct JarRef {
     id: String,
     version: String,
     sha512: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    take: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -20,22 +28,32 @@ struct Fields {
     id: String,
     version: String,
     sha512: String,
+    #[serde(default)]
+    take: Option<Vec<String>>,
 }
 
 impl TryFrom<Fields> for JarRef {
     type Error = String;
 
     fn try_from(fields: Fields) -> Result<Self, Self::Error> {
-        Self::new(fields.id, fields.version, fields.sha512)
+        let jar = Self::new(fields.id, fields.version, fields.sha512)?;
+        match fields.take {
+            Some(take) => jar.with_take(take),
+            None => Ok(jar),
+        }
     }
 }
 
 /// One exact file and every Horizon mod requiring it, in load order.
+///
+/// `side` is the widest of its owners' jar sides: [`Side::Client`] only when every owner's
+/// `take` leaves out `data/`. The jar is the exact file's identity, without any owner's `take`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(try_from = "RequirementFields")]
 pub struct JarRequirement {
     pub owners: Vec<String>,
     pub jar: JarRef,
+    pub side: Side,
 }
 
 #[derive(Deserialize)]
@@ -43,12 +61,36 @@ pub struct JarRequirement {
 struct RequirementFields {
     owners: Vec<String>,
     jar: JarRef,
+    #[serde(default = "both_sides")]
+    side: Side,
+}
+
+fn both_sides() -> Side {
+    Side::Both
+}
+
+impl JarRequirement {
+    /// Whether an installation of `side` needs this file: a client needs every jar, a
+    /// server (a dedicated server, the server export, a headless run) only those whose side
+    /// is [`Side::Both`].
+    pub fn needed_on(&self, side: Side) -> bool {
+        side != Side::Server || self.side == Side::Both
+    }
 }
 
 impl TryFrom<RequirementFields> for JarRequirement {
     type Error = String;
 
     fn try_from(fields: RequirementFields) -> Result<Self, Self::Error> {
+        if !matches!(fields.side, Side::Client | Side::Both) {
+            return Err(format!("invalid jar side: {:?}", fields.side));
+        }
+        if fields.jar.take.is_some() {
+            return Err(format!(
+                "jar {}: a requirement names no take",
+                fields.jar.id
+            ));
+        }
         let unique: std::collections::BTreeSet<_> = fields.owners.iter().collect();
         if fields.owners.is_empty()
             || fields.owners.iter().any(|id| !super::valid_mod_id(id))
@@ -59,6 +101,7 @@ impl TryFrom<RequirementFields> for JarRequirement {
         Ok(Self {
             owners: fields.owners,
             jar: fields.jar,
+            side: fields.side,
         })
     }
 }
@@ -149,18 +192,28 @@ impl std::error::Error for JarConflict {}
 
 /// Collect exact files once, preserving all owning mod ids in input load order.
 /// The returned hash order is for preparation only; pack layers stay per mod.
+/// Owners may take different parts of one file; the requirement's side is the widest.
 pub fn collect_jar_requirements<'a>(
     mods: impl IntoIterator<Item = (&'a str, &'a [JarRef])>,
+) -> Result<Vec<JarRequirement>, JarConflict> {
+    collect(mods)
+}
+
+fn collect<'a, J: IntoIterator<Item = &'a JarRef>>(
+    mods: impl IntoIterator<Item = (&'a str, J)>,
 ) -> Result<Vec<JarRequirement>, JarConflict> {
     let mut hashes: BTreeMap<&str, JarRequirement> = BTreeMap::new();
     for (owner, jars) in mods {
         for jar in jars {
             if let Some(first) = hashes.get_mut(jar.sha512()) {
-                if first.jar != *jar {
+                if first.jar != jar.identity() {
                     return Err(JarConflict {
                         first: Box::new(first.jar.clone()),
-                        second: Box::new(jar.clone()),
+                        second: Box::new(jar.identity()),
                     });
+                }
+                if jar.side() == Side::Both {
+                    first.side = Side::Both;
                 }
                 if !first.owners.iter().any(|id| id == owner) {
                     first.owners.push(owner.to_owned());
@@ -170,13 +223,27 @@ pub fn collect_jar_requirements<'a>(
                     jar.sha512(),
                     JarRequirement {
                         owners: vec![owner.to_owned()],
-                        jar: jar.clone(),
+                        jar: jar.identity(),
+                        side: jar.side(),
                     },
                 );
             }
         }
     }
     Ok(hashes.into_values().collect())
+}
+
+/// The requirements an installation of `side` needs. Each declaration is filtered by
+/// [`JarRef::needed_on`] before owners are gathered, so a mod whose take of a shared file
+/// the installation skips neither owns that file's requirement nor conflicts over it.
+pub fn jar_requirements_for<'a>(
+    side: Side,
+    mods: impl IntoIterator<Item = (&'a str, &'a [JarRef])>,
+) -> Result<Vec<JarRequirement>, JarConflict> {
+    collect(
+        mods.into_iter()
+            .map(move |(owner, jars)| (owner, jars.iter().filter(move |jar| jar.needed_on(side)))),
+    )
 }
 
 /// Missing exact files in a jar cache, with every requiring mod retained.
@@ -243,7 +310,93 @@ impl JarRef {
             id,
             version,
             sha512,
+            take: None,
         })
+    }
+
+    /// This jar layering only the files under `take`'s prefixes, validated as a manifest's
+    /// `take` is: each entry is `assets/<namespace>` or `data/<namespace>`, optionally deeper,
+    /// with no empty, `.` or `..` segment, no `\` or glob character, and none repeated or
+    /// already covered by another entry. The list may not be empty.
+    pub fn with_take(mut self, take: Vec<String>) -> Result<Self, String> {
+        let id = &self.id;
+        if take.is_empty() {
+            return Err(format!(
+                "jar {id}: take is empty; leave it out to take the whole jar"
+            ));
+        }
+        for entry in &take {
+            let segments: Vec<&str> = entry.split('/').collect();
+            if !matches!(segments[0], "assets" | "data") || segments.len() < 2 {
+                return Err(format!(
+                    "jar {id}: take entry {entry:?} must start with assets/<namespace> or data/<namespace>"
+                ));
+            }
+            if segments
+                .iter()
+                .any(|segment| segment.is_empty() || matches!(*segment, "." | ".."))
+                || entry.contains(['\\', '*', '?', '[', ']', '{', '}'])
+            {
+                return Err(format!(
+                    "jar {id}: take entry {entry:?} must be a plain path prefix: no leading, trailing or doubled '/', '.' or '..' segments, '\\' or glob characters"
+                ));
+            }
+        }
+        for (index, entry) in take.iter().enumerate() {
+            for (other_index, other) in take.iter().enumerate() {
+                if index == other_index {
+                    continue;
+                }
+                if entry == other {
+                    return Err(format!("jar {id}: take lists {entry:?} twice"));
+                }
+                if prefix_covers(other, entry) {
+                    return Err(format!(
+                        "jar {id}: take entry {entry:?} is already covered by {other:?}"
+                    ));
+                }
+            }
+        }
+        self.take = Some(take);
+        Ok(self)
+    }
+
+    /// The path prefixes this jar layers, or `None` for the whole jar.
+    pub fn take(&self) -> Option<&[String]> {
+        self.take.as_deref()
+    }
+
+    /// Whether the layer keeps the jar's file `path`: every file without `take`, else a file
+    /// at or under one of its entries, compared whole segment by whole segment and case
+    /// sensitively, so `assets/create` keeps `assets/create/lang/en_us.json` but not
+    /// `assets/create_extra/...`.
+    pub fn takes(&self, path: &str) -> bool {
+        self.take
+            .as_ref()
+            .is_none_or(|take| take.iter().any(|entry| prefix_covers(entry, path)))
+    }
+
+    /// Which installations need this jar: [`Side::Client`] when its `take` names no `data/`
+    /// prefix, so dedicated servers, the server export and headless runs never fetch or open
+    /// it; [`Side::Both`] without `take` or with any `data/` entry.
+    pub fn side(&self) -> Side {
+        match &self.take {
+            Some(take) if !take.iter().any(|entry| entry.starts_with("data/")) => Side::Client,
+            _ => Side::Both,
+        }
+    }
+
+    /// Whether a run of `side` layers this jar: see [`JarRequirement::needed_on`].
+    pub fn needed_on(&self, side: Side) -> bool {
+        side != Side::Server || self.side() == Side::Both
+    }
+
+    /// The exact file's identity, without the `take` of the mod listing it.
+    pub fn identity(&self) -> Self {
+        Self {
+            take: None,
+            ..self.clone()
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -257,6 +410,12 @@ impl JarRef {
     pub fn sha512(&self) -> &str {
         &self.sha512
     }
+}
+
+/// Whether `prefix` names `path` itself or a folder holding it, segment by segment.
+fn prefix_covers(prefix: &str, path: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 #[cfg(test)]
@@ -362,5 +521,143 @@ mod tests {
             let text = format!("id = 'good'\nversion = '1'\nsha512 = {bad_hash:?}\n");
             assert!(toml::from_str::<JarRef>(&text).is_err());
         }
+    }
+
+    fn with_take(take: &str) -> Result<JarRef, String> {
+        toml::from_str(&format!(
+            "id = 'original'\nversion = '1'\nsha512 = '{}'\ntake = {take}\n",
+            "a".repeat(128)
+        ))
+        .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn take_keeps_whole_segments_under_its_prefixes_and_roundtrips() {
+        let jar =
+            with_take("['assets/create', 'assets/minecraft/atlases', 'data/c/tags/item/x.json']")
+                .unwrap();
+        for kept in [
+            "assets/create",
+            "assets/create/lang/en_us.json",
+            "assets/minecraft/atlases/blocks.json",
+            "data/c/tags/item/x.json",
+        ] {
+            assert!(jar.takes(kept), "{kept}");
+        }
+        for left in [
+            "assets/create_extra/lang/en_us.json",
+            "assets/Create/lang/en_us.json",
+            "assets/minecraft/models/block/stone.json",
+            "assets/minecraft/atlases.json",
+            "data/c/tags/item/x.json5",
+            "data/create/recipe/a.json",
+            "META-INF/MANIFEST.MF",
+            "pack.mcmeta",
+        ] {
+            assert!(!jar.takes(left), "{left}");
+        }
+        assert_eq!(
+            toml::from_str::<JarRef>(&toml::to_string(&jar).unwrap()).unwrap(),
+            jar
+        );
+        let whole = JarRef::new("original".into(), "1".into(), "a".repeat(128)).unwrap();
+        assert!(whole.takes("META-INF/MANIFEST.MF"));
+        assert!(!toml::to_string(&whole).unwrap().contains("take"));
+    }
+
+    #[test]
+    fn take_refuses_what_is_not_a_plain_asset_or_data_prefix() {
+        for bad in [
+            "[]",
+            "['assets']",
+            "['data/']",
+            "['/assets/create']",
+            "['assets/create/']",
+            "['assets//create']",
+            "['assets/./create']",
+            "['assets/../data/create']",
+            "['assets\\\\create']",
+            "['assets/create/*.json']",
+            "['assets/cre?te']",
+            "['assets/[ab]']",
+            "['assets/{a,b}']",
+            "['META-INF/services']",
+            "['pack.mcmeta']",
+            "['Assets/create']",
+            "['assets/create', 'assets/create']",
+            "['assets/create', 'assets/create/lang']",
+            "['assets/create/lang', 'assets/create']",
+        ] {
+            assert!(with_take(bad).is_err(), "{bad}");
+        }
+        assert!(with_take("['assets/create', 'assets/create_extra']").is_ok());
+    }
+
+    #[test]
+    fn a_jar_taking_no_data_is_client_only_and_a_shared_file_takes_the_widest_side() {
+        let assets = with_take("['assets/create']").unwrap();
+        let data = with_take("['assets/create', 'data/create']").unwrap();
+        let whole = assets.identity();
+        assert_eq!(assets.side(), Side::Client);
+        assert_eq!(data.side(), Side::Both);
+        assert_eq!(whole.side(), Side::Both);
+
+        let client = collect_jar_requirements([("alpha", std::slice::from_ref(&assets))]).unwrap();
+        assert_eq!(client[0].side, Side::Client);
+        assert_eq!(client[0].jar, whole);
+        assert!(client[0].needed_on(Side::Client));
+        assert!(!client[0].needed_on(Side::Server));
+        assert!(
+            jar_requirements_for(Side::Server, [("alpha", std::slice::from_ref(&assets))])
+                .unwrap()
+                .is_empty()
+        );
+
+        let shared = collect_jar_requirements([
+            ("alpha", std::slice::from_ref(&assets)),
+            ("beta", std::slice::from_ref(&data)),
+        ])
+        .unwrap();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].owners, ["alpha", "beta"]);
+        assert_eq!(shared[0].side, Side::Both);
+        assert!(shared[0].needed_on(Side::Server));
+        let on_server = jar_requirements_for(
+            Side::Server,
+            [
+                ("alpha", std::slice::from_ref(&assets)),
+                ("beta", std::slice::from_ref(&data)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(on_server.len(), 1);
+        assert_eq!(on_server[0].owners, ["beta"]);
+        let on_client = jar_requirements_for(
+            Side::Client,
+            [
+                ("alpha", std::slice::from_ref(&assets)),
+                ("beta", std::slice::from_ref(&data)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(on_client[0].owners, ["alpha", "beta"]);
+
+        let recorded = serde_json::to_value(&client[0]).unwrap();
+        assert_eq!(recorded["side"], "client");
+        assert_eq!(
+            serde_json::from_value::<JarRequirement>(recorded).unwrap(),
+            client[0]
+        );
+        let mut earlier = serde_json::to_value(&shared[0]).unwrap();
+        earlier.as_object_mut().unwrap().remove("side");
+        assert_eq!(
+            serde_json::from_value::<JarRequirement>(earlier)
+                .unwrap()
+                .side,
+            Side::Both
+        );
+        let mut server = serde_json::to_value(&shared[0]).unwrap();
+        server["side"] = serde_json::json!("server");
+        assert!(serde_json::from_value::<JarRequirement>(server).is_err());
     }
 }

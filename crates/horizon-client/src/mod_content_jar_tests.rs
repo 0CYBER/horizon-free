@@ -1,6 +1,6 @@
 use super::*;
 use crate::datapack::{self, DataPack, DataStore};
-use horizon_mod_package::manifest::MissingJar;
+use horizon_mod_package::manifest::{MissingJar, Side};
 use std::io::Write as _;
 
 struct Fixture(PathBuf);
@@ -265,7 +265,7 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
             .clone();
     assert_ne!(shortened, reversed);
     assert_eq!(shortened_source.read(path).unwrap(), b"b");
-    check_jars(&shortened, &store).unwrap();
+    check_jars(&shortened, &store, Side::Client).unwrap();
     let relabeled = JarRef::new(b.id().into(), "2".into(), b.sha512().into()).unwrap();
     mods[0].jars[0] = relabeled.clone();
     let versioned = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
@@ -287,7 +287,7 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
     assert_eq!(missing.path, b.cache_path(&store));
     assert_eq!(fs::read_dir(&cache).unwrap().count(), before);
     assert_eq!(shortened_source.read(path).unwrap(), b"b");
-    let error = check_jars(&shortened, &store).unwrap_err();
+    let error = check_jars(&shortened, &store, Side::Client).unwrap_err();
     let JarInputsError::Missing(accepted_missing) = error else {
         panic!("expected typed missing accepted input, got {error:?}");
     };
@@ -298,13 +298,93 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
 }
 
 #[test]
+fn a_jar_take_list_keeps_only_its_prefixes_from_both_packs_and_a_server_skips_a_client_only_jar() {
+    let f = Fixture::new("take");
+    let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:dirt","count":1}}"#;
+    let whole = f.jar(
+        "original",
+        'a',
+        &[
+            ("assets/original/lang/en_us.json", r#"{"a":"b"}"#),
+            ("assets/original_extra/lang/en_us.json", r#"{"c":"d"}"#),
+            ("assets/minecraft/atlases/blocks.json", r#"{"sources":[]}"#),
+            ("assets/minecraft/models/block/stone.json", "{}"),
+            ("data/original/recipe/probe.json", recipe),
+            ("data/foreign/recipe/probe.json", recipe),
+            ("data/c/tags/item/ingots.json", r#"{"values":[]}"#),
+        ],
+    );
+    let assets_only = whole
+        .clone()
+        .with_take(vec![
+            "assets/original".into(),
+            "assets/minecraft/atlases".into(),
+        ])
+        .unwrap();
+    let base = f.0.join("base");
+    let store = f.0.join("jars");
+    let cache = f.0.join("cache");
+    let mut mods = vec![f.content("alpha", &[], vec![assets_only.clone()])];
+    let root = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
+    let resources = resolved_resources(&base, root.clone(), &store, &mods, cache.clone()).unwrap();
+    let assets = resources.source();
+    assert!(assets.contains("assets/original/lang/en_us.json"));
+    assert!(assets.contains("assets/minecraft/atlases/blocks.json"));
+    assert!(!assets.contains("assets/original_extra/lang/en_us.json"));
+    assert!(!assets.contains("assets/minecraft/models/block/stone.json"));
+    for path in [
+        "data/original/recipe/probe.json",
+        "data/foreign/recipe/probe.json",
+        "data/c/tags/item/ingots.json",
+    ] {
+        assert!(!resources.data().contains(path), "{path}");
+        assert!(!assets.contains(path), "{path}");
+    }
+
+    // Taking one data namespace layers it in the data pack, and nothing else of `data/`;
+    // the changed list builds a new root.
+    mods[0].jars[0] = whole
+        .clone()
+        .with_take(vec!["assets/original".into(), "data/original".into()])
+        .unwrap();
+    let with_data = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
+    assert_ne!(with_data, root);
+    let resources =
+        resolved_resources(&base, with_data.clone(), &store, &mods, cache.clone()).unwrap();
+    assert!(resources.data().contains("data/original/recipe/probe.json"));
+    assert!(!resources.data().contains("data/foreign/recipe/probe.json"));
+    assert!(
+        !resources
+            .source()
+            .contains("assets/minecraft/atlases/blocks.json")
+    );
+
+    // The accepted inputs record the client-only side; a server's reload check, which never
+    // needed the file, ignores it gone, while a client's still refuses.
+    let accepted: Vec<horizon_mod_package::manifest::JarRequirement> =
+        serde_json::from_slice(&fs::read(root.join(JAR_INPUTS)).unwrap()).unwrap();
+    assert_eq!(accepted[0].side, Side::Client);
+    assert_eq!(accepted[0].jar, whole);
+    fs::remove_file(whole.cache_path(&store)).unwrap();
+    check_jars(&root, &store, Side::Server).unwrap();
+    assert!(matches!(
+        check_jars(&root, &store, Side::Client),
+        Err(JarInputsError::Missing(_))
+    ));
+    assert!(matches!(
+        check_jars(&with_data, &store, Side::Server),
+        Err(JarInputsError::Missing(_))
+    ));
+}
+
+#[test]
 fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries() {
     let fixture = Fixture::new("accepted-input-errors");
     let root = fixture.0.join("accepted");
     let store = fixture.0.join("jars");
     fixture.write(&format!("accepted/{MARKER}"), "{}");
     let path = root.join(JAR_INPUTS);
-    let error = check_jars(&root, &store).unwrap_err();
+    let error = check_jars(&root, &store, Side::Client).unwrap_err();
     assert!(matches!(
         error,
         JarInputsError::Io { path: failed, source }
@@ -313,7 +393,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
 
     fixture.write(&format!("accepted/{JAR_INPUTS}"), "[");
     assert!(matches!(
-        check_jars(&root, &store).unwrap_err(),
+        check_jars(&root, &store, Side::Client).unwrap_err(),
         JarInputsError::Invalid { path: failed, .. } if failed == path
     ));
 
@@ -321,6 +401,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
     let requirements = [horizon_mod_package::manifest::JarRequirement {
         owners: vec!["alpha".into(), "beta".into()],
         jar: jar.clone(),
+        side: Side::Both,
     }];
     fixture.write(
         &format!("accepted/{JAR_INPUTS}"),
@@ -328,7 +409,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
     );
     fs::create_dir_all(jar.cache_path(&store)).unwrap();
     assert!(matches!(
-        check_jars(&root, &store).unwrap_err(),
+        check_jars(&root, &store, Side::Client).unwrap_err(),
         JarInputsError::Io { path: failed, source }
             if failed == store && source.kind() == std::io::ErrorKind::InvalidInput
     ));

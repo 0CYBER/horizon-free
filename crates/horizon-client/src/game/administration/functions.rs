@@ -384,6 +384,7 @@ impl Game<'_> {
         horizon_client::mod_content::check_jars(
             &self.options.resources,
             &horizon_client::logging::game_home().join("jars"),
+            self.options.mods.jar_side,
         )
         .map_err(|error| {
             ReloadStageError::OriginalJars(

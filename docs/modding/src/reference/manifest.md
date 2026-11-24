@@ -228,10 +228,38 @@ earlier recipe at the same id. A jar may use any namespace. Only its passive
 `assets/` and `data/` participate: Java classes and the jar's own pack metadata are
 not loaded.
 
+**Taking part of a jar.** A `[[jar]]` table may add `take`, a list of path prefixes, to layer only those
+files of the jar:
+
+```toml
+[[jar]]
+id = "original_mod"
+version = "6.0.10"
+sha512 = "…"
+take = ["assets/original_mod", "assets/minecraft/atlases"]
+```
+
+Without `take` the whole jar is layered. With it, only files at or under one of its entries reach the
+asset pack and the data pack; the rest of the jar (another version's `data/`, foreign namespaces) never
+loads. Entries are compared case-sensitively and whole segment by whole segment, so `assets/create` keeps
+`assets/create/lang/en_us.json` but not `assets/create_extra/`. Each entry starts with `assets/` or `data/`,
+names at least a namespace, and may go deeper, down to a single file. The manifest is refused for an empty
+list, a leading, trailing or doubled `/`, a `.` or `..` segment, `\`, a glob character (`*`, `?`, `[`, `]`,
+`{`, `}`), a repeated entry or one another entry already covers. There are no globs and no excludes.
+`use-jar --take` also refuses an entry that matches no file in the jar; the game, which trusts the hash,
+only logs one. Two mods listing the same file each layer their own `take`.
+
+**Client-only jars.** A jar whose `take` names no `data/` prefix is needed on clients only. Dedicated
+servers, `--headless` runs (headless game tests among them) and the launcher's `server`, the server export
+and their `--allow-jar-downloads` paths leave it out: they never fetch, open or name it in an error. A
+client still refuses to load without it. A jar without `take`, or with any `data/` entry, is needed on both
+sides. A file shared by several mods is client-only only when every owner's `take` leaves out `data/`. There
+is no separate side key.
+
 Original jars stay in `<game home>/jars/<sha512>.jar`; no bytes are copied into a
 mod. The launcher checks and supplies exact files, and the existing ZIP readers
 write only the decoded resource cache. The complete ordered reference list,
-including version, contributes to the composed root's stamp, so changing it
+including version and `take`, contributes to the composed root's stamp, so changing it
 rebuilds on the next resource load. Server `/reload` uses the accepted inputs of
 that composed root, not another package scan.
 

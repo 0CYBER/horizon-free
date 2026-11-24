@@ -3378,7 +3378,10 @@ struct ModLayer<'a> {
 
 impl<'a> ModLayer<'a> {
     fn new(id: String, source: crate::packs::Source, jar: Option<&'a JarRef>) -> Result<Self> {
-        let source = source.open()?;
+        let mut source = source.open()?;
+        if let Some(jar) = jar.filter(|jar| jar.take().is_some()) {
+            source = taken(&id, source, jar);
+        }
         let data = crate::datapack::DataPack::from_source(id.clone(), source.clone());
         Ok(Self {
             assets: crate::packs::Pack::mod_layer(id, crate::packs::Source::Opened(source)),
@@ -3386,6 +3389,34 @@ impl<'a> ModLayer<'a> {
             jar,
         })
     }
+}
+
+/// A jar's view holding only the files its `take` keeps, so its asset pack and its data
+/// pack never see the rest. An entry that keeps nothing is logged, not refused: the
+/// jar's hash pins its files, and `cargo horizon-mod use-jar --take` already checked them.
+fn taken(
+    layer: &str,
+    source: horizon_assets::resource_source::ResourceSource,
+    jar: &JarRef,
+) -> horizon_assets::resource_source::ResourceSource {
+    use horizon_assets::resource_source::{Resource, ResourceSource};
+    let names = source.list("");
+    for entry in jar.take().unwrap_or_default() {
+        let within = |name: &String| {
+            name.strip_prefix(entry.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        };
+        if !names.iter().any(within) {
+            log::warn!("Horizon: mod layer {layer}: take entry {entry} matches no file in the jar");
+        }
+    }
+    ResourceSource::indexed(
+        names
+            .into_iter()
+            .filter(|name| jar.takes(name))
+            .map(|name| (name.clone(), Resource::file(source.clone(), name)))
+            .collect(),
+    )
 }
 
 struct ModLayers<'a> {
@@ -3630,7 +3661,12 @@ const JAR_INPUTS: &str = "horizon-mod-jar-inputs.json";
 
 /// Check the accepted inputs of a composed resource root before server reload.
 /// This reads no candidate packages and never reopens or rehashes an archive.
-pub fn check_jars(root: &Path, jar_store: &Path) -> std::result::Result<(), JarInputsError> {
+/// A run of `side` checks only the jars it needs: a server's never names a client-only jar.
+pub fn check_jars(
+    root: &Path,
+    jar_store: &Path,
+    side: horizon_mod_package::manifest::Side,
+) -> std::result::Result<(), JarInputsError> {
     let marker = root.join(MARKER);
     if !marker.try_exists().map_err(|source| JarInputsError::Io {
         path: marker,
@@ -3643,9 +3679,10 @@ pub fn check_jars(root: &Path, jar_store: &Path) -> std::result::Result<(), JarI
         path: path.clone(),
         source,
     })?;
-    let requirements: Vec<horizon_mod_package::manifest::JarRequirement> =
+    let mut requirements: Vec<horizon_mod_package::manifest::JarRequirement> =
         serde_json::from_slice(&bytes)
             .map_err(|source| JarInputsError::Invalid { path, source })?;
+    requirements.retain(|requirement| requirement.needed_on(side));
     let missing = missing_jars(jar_store, &requirements).map_err(|source| JarInputsError::Io {
         path: jar_store.to_owned(),
         source,

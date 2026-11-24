@@ -2248,7 +2248,9 @@ fn pipeline(
         }
     }
     if target == Target::Server {
-        let jars = horizon_platform::mod_package::manifest::collect_jar_requirements(
+        // The server export never carries a jar that takes no `data/`: no server opens it.
+        let jars = horizon_platform::mod_package::manifest::jar_requirements_for(
+            horizon_platform::mod_package::manifest::Side::Server,
             mods.iter()
                 .map(|bundle| (bundle.manifest.id.as_str(), bundle.manifest.jar.as_slice())),
         )
