@@ -382,11 +382,11 @@ impl Chart {
                 }
             }
             Chart::Tps { mspt } => {
-                let tps = 1000.0 / mspt;
+                let tps = horizon_core::java_number::format_fixed(f64::from(1000.0 / mspt), 1);
                 shaded(
                     out,
                     font,
-                    &format!("{tps:.1} tps"),
+                    &format!("{tps} tps"),
                     left + 1,
                     bottom - CHART_HEIGHT + 1,
                 );
@@ -438,9 +438,15 @@ impl Chart {
 /// `BandwidthDebugChart.toDisplayStringInternal`.
 fn bandwidth_display(bytes_per_second: f64) -> String {
     if bytes_per_second >= MEGABYTE {
-        format!("{:.1} MiB/s", bytes_per_second / MEGABYTE)
+        format!(
+            "{} MiB/s",
+            horizon_core::java_number::format_fixed(bytes_per_second / MEGABYTE, 1)
+        )
     } else if bytes_per_second >= 1024.0 {
-        format!("{:.1} KiB/s", bytes_per_second / 1024.0)
+        format!(
+            "{} KiB/s",
+            horizon_core::java_number::format_fixed(bytes_per_second / 1024.0, 1)
+        )
     } else {
         format!("{} B/s", bytes_per_second.floor() as i64)
     }
@@ -630,6 +636,7 @@ mod tests {
         assert_eq!(Chart::Ping.display(12.4), "12 ms");
         assert_eq!(Chart::Bandwidth.display(3.0), "60 B/s");
         assert_eq!(Chart::Bandwidth.display(100.0), "2.0 KiB/s");
+        assert_eq!(bandwidth_display(1.25 * 1024.0), "1.3 KiB/s");
         assert_eq!(bandwidth_display(MEGABYTE), "1.0 MiB/s");
     }
 

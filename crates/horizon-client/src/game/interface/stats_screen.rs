@@ -2,7 +2,6 @@
 //! the player's statistics, with the Done button.
 use super::{Game, Screen};
 use horizon_client::{hud::HudBatch, items::ItemStack, text::Text, ui};
-use std::fmt::Write as _;
 use winit::keyboard::KeyCode;
 
 /// `Stats.CUSTOM` in registration order with its formatter.
@@ -94,6 +93,7 @@ enum Format {
     Time,
 }
 fn two(v: f64) -> String {
+    // `DecimalFormat("########0.00")`: HALF_EVEN on the exact binary value, as `{:.2}` does.
     format!("{v:.2}")
 }
 /// `StatFormatter`.
@@ -140,9 +140,7 @@ fn format(f: Format, v: i32) -> String {
                 format!("{} min", two(min))
             } else {
                 // Java's double + " s".
-                let mut t = String::new();
-                let _ = write!(t, "{s:?}");
-                format!("{t} s")
+                format!("{} s", horizon_core::java_number::double_to_string(s))
             }
         }
     }
@@ -992,5 +990,13 @@ mod tests {
         assert!(ui.key(Tab, true, false, [true, true, true]));
         assert_eq!(ui.tab, 1);
         assert_eq!(ui.scroll.amount, 0.0);
+    }
+
+    /// `StatFormatter`'s seconds are Java's `double + " s"`; its decimals are
+    /// `DecimalFormat` on the binary value, so `1.005 km` (just below the midpoint) is `"1.00 km"`.
+    #[test]
+    fn stat_formatter_matches_java_number_text() {
+        assert_eq!(format(Format::Distance, 100_500), "1.00 km");
+        assert_eq!(format(Format::Time, 20), "1.0 s");
     }
 }
