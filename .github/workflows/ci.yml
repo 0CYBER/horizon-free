@@ -453,12 +453,38 @@ jobs:
             cargo +stable test --locked --workspace --lib --bins --tests --no-run $TIMINGS
             exit 0
           fi
-          cargo +stable test --locked --workspace --lib --bins --tests $TIMINGS
-          # The full content-root tests (#[ignore]d: minutes each on a laptop). The same build as above; they need the
-          # prepared vanilla data, so without it they pass at once. Keep the target selection identical to avoid
+          cargo +stable test --locked --workspace --lib --bins --tests --no-run $TIMINGS
+          # The build is done and Cargo holds no lock while tests run, so the three test phases share the 16 cores
+          # (the build leaves them ~70% idle, and one binary at a time left them idle again: horizon-world's unit
+          # tests alone ran 48 s with the other binaries waiting). The unit and integration binaries run 4 at a time
+          # (tools/ci/run_test_binaries.py, which lists them with the same arguments, nothing compiles); the content-root
+          # tests (#[ignore]d: minutes each on a laptop; they need the prepared vanilla data, so without it they pass at
+          # once) and the doc tests run beside them. The target selection stays identical to the build's, to avoid
           # recompiling the workspace with a different dependency graph.
-          cargo +stable test --locked --workspace --lib --bins --tests mod_content::tests:: -- --ignored
-          cargo +stable test --locked --workspace --doc
+          logs="$RUNNER_TEMP/test-phases"
+          mkdir -p "$logs"
+          python3 tools/ci/run_test_binaries.py --jobs 4 -- cargo +stable test --locked --workspace --lib --bins --tests \
+            > "$logs/unit.log" 2>&1 &
+          unit=$!
+          cargo +stable test --locked --workspace --lib --bins --tests mod_content::tests:: -- --ignored \
+            > "$logs/content-root.log" 2>&1 &
+          content=$!
+          cargo +stable test --locked --workspace --doc > "$logs/doc.log" 2>&1 &
+          doc=$!
+          status=0
+          for phase in unit:$unit content-root:$content doc:$doc; do
+            name=${phase%%:*}
+            if wait "${phase#*:}"; then
+              echo "::group::$name tests passed"
+              cat "$logs/$name.log"
+              echo "::endgroup::"
+            else
+              echo "::error::The $name tests failed"
+              cat "$logs/$name.log"
+              status=1
+            fi
+          done
+          exit $status
       - name: Upload the cargo build timings
         # Also after a failed test: the build, and so its timings, finished before the tests ran.
         if: "!cancelled() && github.ref == 'refs/heads/main'"
