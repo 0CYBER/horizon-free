@@ -1,3 +1,7 @@
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::wire::{Id, ResourceCodec, ResourceScope, WireError, Writer};
 use std::{
     any::{Any, TypeId},

@@ -1,5 +1,9 @@
 //! Public area macros must expand from outside the API crate, including recursion.
 
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 struct Host;
 impl mod_api::Host for Host {}
 mod_api::impl_host_areas!(Host);

@@ -1,4 +1,9 @@
 //! A separate process owns this deliberately conflicting once-only installation.
+
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::wire::{ResourceAccess, WireError};
 
 #[test]

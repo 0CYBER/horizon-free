@@ -1,4 +1,9 @@
 //! The engine can dispatch without the platform ever loading mods.
+
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 #[test]
 fn dispatch_before_initialization_is_inert_and_seals_the_socket() {
     let guard = mod_vocab::__private::enter("unloaded", "client_tick_pre");

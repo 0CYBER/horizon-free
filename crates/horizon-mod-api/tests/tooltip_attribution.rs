@@ -1,4 +1,9 @@
 #![cfg(feature = "testing")]
+
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::prelude::ItemsHost;
 use mod_api::*;
 use std::sync::Arc;

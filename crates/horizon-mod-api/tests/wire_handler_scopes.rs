@@ -1,3 +1,7 @@
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 #[cfg(test)]
 mod tests {
     use mod_api::wire::*;

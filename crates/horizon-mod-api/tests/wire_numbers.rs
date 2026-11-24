@@ -1,3 +1,7 @@
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::wire::{Reader, Wire, WireError, Writer};
 
 fn check<T: Wire>(values: Vec<T>, expected: &[u8]) {

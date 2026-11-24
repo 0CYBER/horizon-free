@@ -1,4 +1,9 @@
 //! Public payload callback results use the canonical Wire codec on both targets.
+
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::wire::{Reader, WireError, Writer};
 use mod_api::{PayloadBusy, PayloadBytes, PayloadHandleError};
 use std::sync::Arc;

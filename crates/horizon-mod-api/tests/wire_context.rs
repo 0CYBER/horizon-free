@@ -1,3 +1,7 @@
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::wire;
 #[test]
 fn resource_context_is_scoped_and_encoding_keeps_first_error() {

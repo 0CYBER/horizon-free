@@ -1,4 +1,9 @@
 //! Intentionally uninitialized dispatch belongs in its own process, not the lib tests.
+
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::__private::game::RegistrationContextNew;
 
 #[test]

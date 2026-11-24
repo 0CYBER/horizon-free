@@ -1,4 +1,9 @@
 //! Worker reads cross the actual API metadata adapter without TLS table lookup or allocation.
+
+#[cfg(feature = "wasm-guest")]
+#[path = "support/no_hooks.rs"]
+mod no_hooks;
+
 use mod_api::{BlockMetadata, BlockState};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
