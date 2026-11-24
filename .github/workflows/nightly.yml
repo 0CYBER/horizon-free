@@ -83,7 +83,8 @@ jobs:
         if: steps.when.outputs.run == 'true' && always() && steps.audit.outputs.since
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/ci/parity_issues.py --since "${{ steps.audit.outputs.since }}" ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
+        # exit is written only when every harness ran: a cancelled or timed-out audit leaves mass issues open.
+        run: python3 tools/ci/parity_issues.py --since "${{ steps.audit.outputs.since }}" ${{ steps.audit.outputs.exit && '--complete' || '' }} ${{ inputs.dry_run && '--dry-run' || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Logs of the failed harnesses
         if: steps.when.outputs.run == 'true' && (steps.audit.outputs.exit != '0' || steps.audit.outputs.known == 'failed')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

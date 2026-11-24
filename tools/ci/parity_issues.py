@@ -15,7 +15,11 @@ shards merged into their harness, and compares them with the previous audit (.lo
 
 When more than MASS_FAILURE harnesses newly fail at once (a commit that does not build, a broken runner), they get
 one issue titled "Nightly audit: N harnesses newly fail" instead of one each (2026-11-06: a main commit that did not
-compile opened 421), and their previous results are kept so the next audit compares them again.
+compile opened 421), and their previous results are kept so the next audit compares them again. When an audit has no
+mass failure, every open "Nightly audit: " issue is closed: two duplicates were open at once (#17343 and #17794, for
+the same 57 harnesses), so the audit closes all of them instead of leaving one to be closed by hand. Only an audit that
+ran to the end (--complete) and has a previous audit to compare with closes them: a first audit opens nothing, and a
+cancelled or timed-out one did not run the harnesses that still fail.
 
 The first audit only records the results. Needs the gh CLI; --dry-run prints what it would do.
 """
@@ -67,9 +71,30 @@ def mass_failure(actions):
     return opened if len(opened) > MASS_FAILURE else []
 
 
+def mass_issues(listed):
+    """Every open mass-failure issue's number. listed: open issues with the label."""
+    return [issue["number"] for issue in listed if issue["title"].startswith(MASS_TITLE)]
+
+
 def mass_issue(listed):
     """The open mass-failure issue to add a night's mass failure to, or None. listed: open issues with the label."""
-    return min((issue["number"] for issue in listed if issue["title"].startswith(MASS_TITLE)), default=None)
+    return min(mass_issues(listed), default=None)
+
+
+def should_close_mass(previous, complete):
+    """Whether an audit without a mass failure shows the mass failure is over: it compared against a previous audit
+    and every harness ran (a first audit opens nothing; a cancelled or timed-out one skipped harnesses)."""
+    return previous is not None and complete
+
+
+def close_mass_issues(listed, commit, run, call=None, dry_run=False):
+    """Close all open mass-failure issues: with no mass failure this audit, they are all stale (#17343/#17794)."""
+    call = call or gh
+    closed = mass_issues(listed)
+    for number in closed:
+        call("issue", "close", str(number), "--comment",
+             f"No mass failure in the audit of `{commit[:12]}` ({run}).", dry_run=dry_run)
+    return closed
 
 
 def first_errors(lines=40):
@@ -102,6 +127,8 @@ def gh(*arguments, dry_run=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--since", required=True, help="the audit's start (the state's local time format)")
+    parser.add_argument("--complete", action="store_true",
+                        help="the audit ran every harness (not cancelled or timed out): only then are mass issues closed")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     now = results(json.loads(STATE.read_text()), args.since)
@@ -141,6 +168,11 @@ def main():
                "--body", f"{len(mass)} harnesses passed in the previous nightly audit, or are new, and fail in the "
                f"audit of `{commit[:12]}` ({run}): usually a commit that does not build or a broken runner, so they "
                f"get this one issue instead of one each.\n\n{listing}", dry_run=args.dry_run)
+    elif should_close_mass(previous, args.complete):
+        # No mass failure in a finished audit: every open mass issue is stale, so close them all (two duplicates can be
+        # open at once, and closing only the lowest-numbered one would leave the other for a human).
+        for number in close_mass_issues(listed, commit, run, dry_run=args.dry_run):
+            print(f"close: #{number}, the mass failure is over")
     for kind, harness in actions:
         details = (f"Nightly audit of `{commit[:12]}` ({run}).\n\n"
                    f"Reproduce: `python3 tools/parity.py {harness}`\n\n<details><summary>End of the log</summary>\n\n"
