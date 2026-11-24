@@ -625,6 +625,10 @@ impl Game<'_> {
         if !self.mobs[index].alive() {
             return None;
         }
+        // Entity.interact: the lead-attach branch excludes a leash already
+        // held by any player (getLeashHolder() instanceof Player), not just
+        // by the acting one. Mirrors boat_leads.rs's taken_by_player guard.
+        let taken_by_player = self.mobs[index].extra.leash == Some(Holder::Player);
         // Sneaking with mobs in hand: tie them to this one.
         if sneaking && leash::can_be_leashed(&self.mobs[index]) && !self.mobs[index].is_baby() {
             let b = self.mobs[index].bounds();
@@ -681,7 +685,7 @@ impl Game<'_> {
             self.lead_sound("untied", at);
             return Some(LeashInteraction::WithoutItem);
         }
-        if item == "minecraft:lead" {
+        if item == "minecraft:lead" && !taken_by_player {
             let center = self.player_center();
             if self.can_attach_lead(index, center) {
                 if self.mobs[index].extra.leash.is_some() {
@@ -1363,6 +1367,40 @@ mod attach_tests {
             (lo.y + hi.y) / 2.0,
             (lo.z + hi.z) / 2.0,
         )
+    }
+
+    /// `Entity.interact`: a lead held by any player cannot be taken with
+    /// another lead — only its holder can untie it.
+    #[test]
+    #[ignore = "daily"]
+    fn another_player_cannot_take_a_mobs_lead_with_a_lead() {
+        use crate::items::ItemStack;
+        use horizon_client::lan::playerdata::uuid_ints;
+        use horizon_client::mobs::Mob;
+        use horizon_client::mobs::leash::Holder as LeashHolder;
+
+        let mut resources = None;
+        let mut game = game(&mut resources);
+        let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+        game.mobs
+            .push(Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0));
+        let other = uuid_ints(456);
+        game.mobs[0].extra.leash = Some(LeashHolder::Player);
+        game.mobs[0].extra.leash_player = Some(other);
+        game.inventory[game.selected] = Some(ItemStack::new("minecraft:lead", 1));
+        game.lan_acting_uuid = Some(123); // a different player
+
+        assert!(!game.interact_leash(0, "minecraft:lead"));
+        assert_eq!(game.mobs[0].extra.leash, Some(LeashHolder::Player));
+        assert_eq!(game.mobs[0].extra.leash_player, Some(other));
+        assert!(
+            game.inventory[game.selected].is_some(),
+            "the other player's lead is not spent"
+        );
+        assert!(!game
+            .dropped
+            .iter()
+            .any(|d| &*d.stack.item == "minecraft:lead"));
     }
 
     /// `Leashable.canHaveALeashAttachedTo` measures with the leashee's own

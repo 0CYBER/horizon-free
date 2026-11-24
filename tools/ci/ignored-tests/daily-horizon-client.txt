@@ -80,6 +80,7 @@ horizon-client game::lan_actions::pickup_xp_tests::a_guest_picks_an_orb_with_the
 horizon-client game::lan_entities::tests::glowing_display_metadata_reaches_the_model_silhouettes lib daily resources
 horizon-client game::last_hurt_by_player_tests::a_death_without_a_causing_entity_is_no_murder lib daily resources
 horizon-client game::launch_api::tests::developer_offline_never_consumes_inherited_sessions lib daily child-process
+horizon-client game::leads::attach_tests::another_player_cannot_take_a_mobs_lead_with_a_lead lib daily resources
 horizon-client game::levels::tests::a_closed_idle_levels_scheduled_ticks_come_back_at_their_deadlines lib daily resources
 horizon-client game::levels::tests::a_level_keeps_its_portal_palettes_while_another_ticks lib daily resources
 horizon-client game::levels::tests::a_ticket_while_an_idle_close_waits_keeps_the_level lib daily resources
