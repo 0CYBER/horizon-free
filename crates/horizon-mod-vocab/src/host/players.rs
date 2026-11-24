@@ -183,6 +183,19 @@ pub trait PlayersClientHost {
     /// came yet.
     #[access(WorldOnly)]
     fn last_passage_refusal(&self) -> Option<(PassageId, PassageCrossRefusal)>;
+    /// Side: client.
+    /// For a client mod: sets the local player's velocity, in blocks a tick, without sending
+    /// any network packet (for predicted pushes such as conveyor belts and hover boots,
+    /// typically called from `player_tick_pre`). Non-finite values, a spectator, or no local
+    /// player leave the velocity unchanged.
+    #[access(WorldOnly)]
+    fn set_local_player_velocity(&mut self, velocity: [f64; 3]);
+    /// Side: client.
+    /// For a client mod: sets the local player's on-ground flag without sending any network
+    /// packet (for predicted movement such as hover boots or conveyor lifts, typically called
+    /// from `player_tick_pre`). A spectator or no local player is left alone.
+    #[access(WorldOnly)]
+    fn set_local_player_on_ground(&mut self, on_ground: bool);
 }
 /// The handles' reads of the `players` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
