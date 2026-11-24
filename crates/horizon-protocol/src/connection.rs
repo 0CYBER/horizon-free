@@ -693,6 +693,10 @@ impl ConnWriter {
                 .collect()),
         }
     }
+    /// The client is of this release: its bodies go out as they are ([`Self::for_client`]).
+    pub fn for_client_is_plain(&self) -> bool {
+        self.older_client.is_none()
+    }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         if self.older_client.is_some() {
@@ -718,6 +722,49 @@ impl ConnWriter {
         self.frame_into(contents, &mut framed);
         self.stream.write_all(&framed)?;
         Ok(())
+    }
+    /// [`Self::frame_into`] of what `frame::contents` makes of a body shorter than the
+    /// compression threshold (a zero for the uncompressed size, then the body), written at
+    /// once: no vector of its own, one copy of the body instead of two. The caller checked
+    /// the threshold (`Framing::Network(Some(t))`, `body.len() < t`) and that the body is shorter
+    /// than `frame::MAX_FRAME`, which `contents` refuses.
+    pub fn frame_small_into(&mut self, body: &[u8], out: &mut Vec<u8>) {
+        let written = self.frame_small_uncounted(body, out);
+        self.count_frames(1, written);
+    }
+    /// [`Self::frame_small_into`] without the counters (two atomic adds for each packet): the
+    /// caller adds up what it framed and gives it to [`Self::count_frames`] once.
+    pub fn frame_small_uncounted(&mut self, body: &[u8], out: &mut Vec<u8>) -> i64 {
+        let at = out.len();
+        debug_assert!(
+            !self.memory
+                && self.threshold.is_some_and(|t| body.len() < t)
+                && body.len() < crate::frame::MAX_FRAME
+        );
+        // The frame's length (the uncompressed-size zero and the body), a VarInt, and the
+        // zero: written from the stack, with one check of the buffer's room.
+        let (mut head, mut n, mut v) = ([0u8; 6], 0, body.len() as u32 + 1);
+        while v > 0x7F {
+            head[n] = (v as u8 & 0x7F) | 0x80;
+            v >>= 7;
+            n += 1;
+        }
+        head[n] = v as u8;
+        n += 2;
+        out.reserve(n + body.len());
+        out.extend_from_slice(&head[..n]);
+        out.extend_from_slice(body);
+        if let Some(c) = &mut self.encrypt {
+            c.encrypt(&mut out[at..]);
+        }
+        (out.len() - at) as i64
+    }
+    /// What `frames` frames of `bytes` bytes add to the connection's counters.
+    pub fn count_frames(&self, frames: i64, bytes: i64) {
+        if frames != 0 {
+            self.counters.sent.fetch_add(frames as _, Ordering::Relaxed);
+            self.counters.bytes_out.fetch_add(bytes, Ordering::Relaxed);
+        }
     }
     /// The bytes [`Self::send_contents`] writes, appended to `out` instead: a
     /// detached writer's, written later, in the order framed (the cipher
@@ -767,6 +814,97 @@ mod tests {
                 a("[2001:db8::2]:25565"),
             ]
         );
+    }
+
+    fn writer(encrypted: bool) -> ConnWriter {
+        ConnWriter {
+            memory: false,
+            stream: Stream::Detached,
+            encrypt: encrypted.then(|| Cfb8::new(&[7; 16], &[9; 16])),
+            threshold: Some(256),
+            counters: Arc::default(),
+            adapter: None,
+            older_client: None,
+        }
+    }
+
+    /// A body under the compression threshold framed in place is the frame the general path
+    /// makes of it (`contents`, then `frame_into`), byte for byte, encrypted or not, with the
+    /// counters of the same frames, across the lengths where the VarInt grows a byte.
+    #[test]
+    fn a_small_body_framed_in_place_is_its_general_frame() {
+        for encrypted in [false, true] {
+            let (mut general, mut small) = (writer(encrypted), writer(encrypted));
+            let (mut want, mut got) = (Vec::new(), Vec::new());
+            for len in [0, 1, 5, 62, 63, 64, 126, 127, 128, 200, 254, 255] {
+                let body: Vec<u8> = (0..len).map(|i| (i * 7 + len) as u8).collect();
+                let contents = general.contents(&body).unwrap();
+                general.frame_into(&contents, &mut want);
+                small.frame_small_into(&body, &mut got);
+                assert_eq!(got, want, "length {len}, encrypted {encrypted}");
+            }
+            let counted = |w: &ConnWriter| {
+                (
+                    w.counters.sent.load(Ordering::Relaxed),
+                    w.counters.bytes_out.load(Ordering::Relaxed),
+                )
+            };
+            assert_eq!(counted(&small), counted(&general));
+            // A run framed with its counters given once adds up to the same.
+            let mut tallied = writer(encrypted);
+            let (mut bytes, mut frames, mut out) = (0, 0, Vec::new());
+            for len in [3, 130, 3] {
+                bytes += tallied.frame_small_uncounted(&vec![1; len], &mut out);
+                frames += 1;
+            }
+            tallied.count_frames(frames, bytes);
+            assert_eq!(
+                tallied.counters.bytes_out.load(Ordering::Relaxed),
+                out.len() as i64
+            );
+            assert_eq!(tallied.counters.sent.load(Ordering::Relaxed), 3);
+        }
+    }
+
+    /// What a small frame costs by each path, for the pull request's numbers: run with
+    /// `cargo test --release -p horizon-protocol --lib -- --ignored --nocapture frame_cost`.
+    #[test]
+    #[ignore = "daily"]
+    fn frame_cost() {
+        let body = vec![0x2Fu8; 50];
+        let n = 2_000_000;
+        let time = |name: &str, f: &mut dyn FnMut(&mut ConnWriter, &mut Vec<u8>)| {
+            let mut w = writer(false);
+            let mut out = Vec::new();
+            let start = Instant::now();
+            for i in 0..n {
+                if i % 4096 == 0 {
+                    out.clear();
+                }
+                f(&mut w, &mut out);
+            }
+            println!(
+                "{name}: {:.1} ns a frame",
+                start.elapsed().as_nanos() as f64 / n as f64
+            );
+        };
+        time("general (contents, then frame_into)", &mut |w, out| {
+            let contents = w.contents(&body).unwrap();
+            w.frame_into(&contents, out);
+        });
+        time("in place (frame_small_into)", &mut |w, out| {
+            w.frame_small_into(&body, out);
+        });
+        // Counted once for each run of 256 frames, as `frame_drain` does.
+        let mut tally = (0, 0);
+        time("in place, counted once a run", &mut |w, out| {
+            tally.1 += w.frame_small_uncounted(&body, out);
+            tally.0 += 1;
+            if tally.0 == 256 {
+                w.count_frames(tally.0, tally.1);
+                tally = (0, 0);
+            }
+        });
     }
 
     fn peer(c: &Connection) -> SocketAddr {

@@ -7,6 +7,7 @@ horizon-protocol connection::tests::connects_to_ipv4_although_the_resolver_lists
 horizon-protocol connection::tests::encrypted_bytes_read_before_enabling_encryption lib daily network
 horizon-protocol connection::tests::every_failure_reports_the_first_address lib daily network
 horizon-protocol connection::tests::falls_back_to_ipv6_when_ipv4_refuses lib daily network
+horizon-protocol connection::tests::frame_cost lib daily slow
 horizon-protocol connection::tests::loopback_with_compression_and_encryption lib daily network
 horizon-protocol connection::tests::packets_of_every_size_arrive_whole lib daily slow
 horizon-protocol connection::tests::tcp_stream_enables_nodelay_and_keepalive lib daily network
