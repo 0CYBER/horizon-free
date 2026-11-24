@@ -2,6 +2,7 @@
 //! snapshots are prepared in small batches and the region workers drain.
 use super::{ClientQuit, Game, loading_frame};
 use horizon_client::{Result, hud::HudBatch, text::Text};
+use mod_api::{ClosingSaveOperation, ClosingSaveStage};
 use std::{
     collections::{HashSet, VecDeque},
     time::{Duration, Instant},
@@ -307,10 +308,10 @@ impl Game<'_> {
     }
 
     pub(super) fn render_closing_save(&mut self) -> Result<()> {
-        if matches!(
-            self.pending_save.as_ref().map(|save| &save.stage),
-            Some(Stage::Quit)
-        ) {
+        let Some(save) = &self.pending_save else {
+            return Ok(());
+        };
+        if matches!(save.stage, Stage::Quit) {
             return Ok(());
         }
         // disconnectWithSavingScreen: a GenericMessageScreen, its title and
@@ -322,26 +323,54 @@ impl Game<'_> {
             )
             .without_navigation()
         });
-        let Some(renderer) = &mut self.renderer else {
+        let Some(renderer) = &self.renderer else {
             return Ok(());
         };
         let mut hud = HudBatch::new(
             [renderer.config.width, renderer.config.height],
             self.settings.gui_scale_inputs(),
         );
-        let progress = match self.pending_save.as_ref().map(|save| &save.stage) {
-            Some(Stage::Chunks(_)) => 0.25,
-            Some(Stage::Entities(_)) => 0.5,
-            Some(Stage::Writes) => 0.9,
-            _ => 0.0,
+        let progress = match save.stage {
+            Stage::Chunks(_) => Some(0.25),
+            Stage::Entities(_) => Some(0.5),
+            Stage::Writes => Some(0.9),
+            _ => None,
         };
-        horizon_client::level_loading::draw_progress(
-            &mut hud,
-            &self.gui.atlas,
-            "Saving world...",
-            progress,
-        );
-        renderer.render(&loading_frame(&hud))?;
+        let mut replacement = None;
+        if !renderer.suspended && mod_api::__private::listened(mod_api::HookId::ClosingSaveScreenDraw)
+        {
+            let operation = if !save.close {
+                ClosingSaveOperation::ExplicitSave
+            } else if save.quit {
+                ClosingSaveOperation::QuitClient
+            } else {
+                ClosingSaveOperation::LeaveWorld
+            };
+            let stage = match save.stage {
+                Stage::Generation => ClosingSaveStage::Generation,
+                Stage::Chunks(_) => ClosingSaveStage::Chunks,
+                Stage::Entities(_) => ClosingSaveStage::Entities,
+                Stage::Writes => ClosingSaveStage::Writes,
+                Stage::Server => ClosingSaveStage::Server,
+                Stage::Quit => unreachable!("quit without a saving screen"),
+            };
+            self.native_closing_save_screen_draw(
+                operation,
+                stage,
+                progress,
+                &mut hud,
+                &mut replacement,
+            );
+        }
+        if replacement.is_none() {
+            horizon_client::level_loading::draw_progress(
+                &mut hud,
+                &self.gui.atlas,
+                "Saving world...",
+                progress.unwrap_or(0.0),
+            );
+        }
+        self.renderer.as_mut().unwrap().render(&loading_frame(&hud))?;
         Ok(())
     }
 

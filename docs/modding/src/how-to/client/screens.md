@@ -89,6 +89,33 @@ dispatch returns. This includes saving and stopping an open integrated server.
 It returns `false` if a quit is already queued or underway, or when the host cannot quit
 the primary window, for example on a headless client or a splitscreen guest.
 
+## Replacing the saving-world screen
+
+Native and wasm client mods can use `Hooks::closing_save_screen_draw` when the
+window prepares a drawable saving-world frame, separately from ordinary
+screen, HUD and frame hooks. It does not run on a suspended renderer, startup
+or resource-reload frames, leaving a remote server, quitting from the title
+without a save, or headless saves.
+
+The event reports `ClosingSaveOperation::LeaveWorld` when closing a local world,
+`QuitClient` when saving to exit, and `ExplicitSave` for control-socket `save` and
+`save-all` only when they take the client-owned pending-save path and show this
+screen. An explicit save already underway stays `ExplicitSave` even if a quit
+is queued behind it. Integrated-server saves requested directly by those
+commands do not show this screen.
+
+`ClosingSaveStage` reports `Generation`, `Chunks`, `Entities`, `Writes`, or
+`Server` (the client is waiting for the integrated server to save and stop).
+`event.progress` is the default screen's coarse `[0, 1]` phase marker for
+`Chunks`, `Entities`, and `Writes`. It is `None` during `Generation` and
+`Server`: there is no measured progress for those waits.
+
+Draw the entire replacement with `event.draw` in GUI pixels and return
+`Some(())` to suppress the default drawing. Return `None` without drawing to
+leave the decision to the next listener or Horizon. The first replacement
+wins. This affects only the frame: mods cannot cancel, complete, or reschedule
+the save through this hook. The default widget screen ID remains `saving`.
+
 ## Taking a screenshot
 
 `ClientHost::request_screenshot()` takes a screenshot as the screenshot key (F2) does. The next

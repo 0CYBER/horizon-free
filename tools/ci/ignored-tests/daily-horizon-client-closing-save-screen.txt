@@ -1,0 +1,2 @@
+# Prepared resources, Winit and a GPU adapter (Xvfb on headless Linux).
+horizon-client game::native_hooks::closing_save_screen_draw::tests::leaving_and_quitting_can_replace_the_presented_save_but_not_the_write lib daily child-process
