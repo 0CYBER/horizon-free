@@ -224,6 +224,22 @@ class RefusalTests(unittest.TestCase):
             self.assertFalse(ns.guarded(path, PATTERNS), path)
         self.assertTrue(ns.guarded("tools/ci/x.py", ns.guarded_patterns("")))  # even without CODEOWNERS
 
+    def test_the_sdk_and_self_update_code_and_the_build_setup_are_guarded(self):
+        # Siblings of the single files CODEOWNERS named first: they verify SDKs, install the launcher's own
+        # update, resolve what is downloaded, or set how the release archives are built.
+        for path in ("launcher/src/backend/release_selection.rs", "launcher/src/update_handoff.rs",
+                     "launcher/src/native_mods/sdk_cache.rs", "crates/cargo-horizon-mod/src/sdk_fetch.rs",
+                     "xtask/src/main.rs", ".cargo/config.toml"):
+            self.assertTrue(ns.guarded(path, ns.guarded_patterns("")), path)  # even if CODEOWNERS lost it
+            # The real CODEOWNERS names the council for it: read here, apart from the fallback list.
+            owned = [line.split() for line in (ROOT / ".github/CODEOWNERS").read_text().splitlines()
+                     if line.strip() and not line.lstrip().startswith("#")]
+            self.assertTrue(any(owners[1:] == ["@horizon-rust/council"] and (
+                path == owners[0].lstrip("/") or (owners[0].endswith("/") and path.startswith(owners[0].lstrip("/"))))
+                for owners in owned), f"CODEOWNERS gives {path} no council rule")
+        for path in ("launcher/src/backend/settings.rs", "launcher/src/nightly.rs"):
+            self.assertFalse(ns.guarded(path, PATTERNS), path)
+
     def test_wildcard_and_slashless_directory_patterns_guard_descendants(self):
         patterns = ns.guarded_patterns('/packages/** @council\n/council-only @council\n/scripts/*.py @council\n')
         self.assertTrue(ns.guarded('packages/x/y.rs', patterns))

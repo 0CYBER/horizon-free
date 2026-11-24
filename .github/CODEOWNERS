@@ -2,7 +2,8 @@
 # (tools/ci/protect_pipeline.sh, docs/security.md). They are what builds, signs and ships releases, the code that
 # checks downloads before installing them (backend.rs downloads, installs and updates the launcher itself; links.json
 # says where from; the Cargo.toml files pick the crates that do it), and this file. Everything else merges as soon as
-# `verify` passes.
+# `verify` passes. Also listed: the code that fetches and verifies SDKs, the launcher's self-update installer, the
+# download-URL resolution and the build configuration (`.cargo/`, `xtask/`, which packs the release archives).
 /.github/                                @horizon-rust/council
 /tools/ci/                               @horizon-rust/council
 # Test-inventory rows (plain text lists of #[ignore]d Rust tests, not CI scripts) only need Horizon Team review.
@@ -14,5 +15,11 @@
 /launcher/src/signed.rs                  @horizon-rust/council
 /launcher/src/backend.rs                 @horizon-rust/council
 /launcher/links.json                     @horizon-rust/council
+/launcher/src/backend/release_selection.rs @horizon-rust/council
+/launcher/src/update_handoff.rs          @horizon-rust/council
+/launcher/src/native_mods/sdk_cache.rs   @horizon-rust/council
+/crates/cargo-horizon-mod/src/sdk_fetch.rs @horizon-rust/council
+/xtask/                                  @horizon-rust/council
+/.cargo/                                 @horizon-rust/council
 /launcher/Cargo.toml                     @horizon-rust/council
 /packaging/                              @horizon-rust/council

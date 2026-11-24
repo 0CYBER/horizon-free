@@ -48,7 +48,9 @@ COUNCIL = ".github/council.txt"
 CODEOWNERS = ".github/CODEOWNERS"
 # What CODEOWNERS guards today, refused even if the file moved: what builds, signs and checks releases.
 ALWAYS_GUARDED = ["/.github/", "/tools/ci/", "/crates/horizon-release-sign/", "/crates/horizon-server/src/update.rs",
-                  "/launcher/src/backend.rs", "/launcher/links.json"]
+                  "/launcher/src/backend.rs", "/launcher/links.json", "/launcher/src/backend/release_selection.rs",
+                  "/launcher/src/update_handoff.rs", "/launcher/src/native_mods/sdk_cache.rs",
+                  "/crates/cargo-horizon-mod/src/sdk_fetch.rs", "/xtask/", "/.cargo/"]
 STATE_BRANCH = "nightly-state"
 BUILD_PREFIX = "nightly/build-"
 MAX_PRS = 30
