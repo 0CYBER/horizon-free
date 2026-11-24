@@ -248,11 +248,28 @@ pub fn piglin_pickups<L: PiglinLevel + ?Sized>(l: &mut L) {
         }
         let m = &l.mobs()[i];
         let pos = m.position;
+        let dropped = l.dropped();
+        // `Mob.aiStep`: takes any wanted item in reach with no pickup delay,
+        // without a line-of-sight check (#20557).
+        let reach = m.bounds().inflate(Vec3::new(1.0, 0.0, 1.0));
+        let in_reach = dropped
+            .iter()
+            .enumerate()
+            .filter(|&(j, e)| {
+                reach.intersects(e.bounds())
+                    && e.pickup_delay == 0
+                    && l.piglin_wants(m, &dropped[j].stack)
+            })
+            .min_by(|(_, a), (_, b)| {
+                a.position
+                    .distance_squared(pos)
+                    .total_cmp(&b.position.distance_squared(pos))
+            })
+            .map(|(j, _)| j);
         // NearestItemSensor: the nearest wanted item within 32 that the piglin
         // sees (eye to eye); GoToWantedItem then walks to it within 9 blocks.
         let w = l.mob_world();
         let eye = Vec3::new(pos.x, m.eye_y(), pos.z);
-        let dropped = l.dropped();
         let nearest = dropped
             .iter()
             .enumerate()
@@ -268,17 +285,14 @@ pub fn piglin_pickups<L: PiglinLevel + ?Sized>(l: &mut L) {
             .min_by(|a, b| a.1.total_cmp(&b.1));
         let loved = nearest.is_some_and(|(j, _)| l.piglin_loved(&dropped[j].stack.item));
         l.admire_seen_item(i, nearest.map(|(_, d)| d), loved);
-        let best = nearest.filter(|(_, d)| *d <= 81.0);
-        let Some((j, _)) = best else {
+        let target = in_reach.or_else(|| nearest.filter(|(_, d)| *d <= 81.0).map(|(j, _)| j));
+        let Some(j) = target else {
             l.parts().mobs[i].extra.point = None;
             continue;
         };
         let p = l.parts();
         let e = &p.dropped[j];
-        let close = (e.position.x - pos.x).abs() <= 1.3
-            && (e.position.z - pos.z).abs() <= 1.3
-            && (e.position.y - pos.y).abs() <= 1.0;
-        if !close || e.pickup_delay > 0 {
+        if !reach.intersects(e.bounds()) || e.pickup_delay > 0 {
             p.mobs[i].extra.point = Some([e.position.x, e.position.y, e.position.z]);
             continue;
         }

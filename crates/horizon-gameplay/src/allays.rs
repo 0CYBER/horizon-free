@@ -48,19 +48,32 @@ pub fn tick_allays<L: AllayLevel + ?Sized>(l: &mut L) {
             })
         };
         let reach = allay::pickup_reach(mobs[i].bounds());
-        // GoToWantedItem: a stack it considers equal within 32 that the
-        // allay sees (NearestItemSensor's hasLineOfSight, eye to eye). The
-        // sensor is the brain's, so without AI only `Mob.aiStep`'s looting
-        // loop runs: it takes an equal drop already in `getPickupReach`.
-        let wanted = if !wants {
+        // `Mob.aiStep`: takes an equal drop in reach without a line-of-sight check (#20557).
+        let in_reach = if !wants {
             None
-        } else if mobs[i].no_ai {
-            dropped.iter().position(|e| {
-                e.pickup_delay == 0
-                    && allay::considers_item_equal(&held, &e.stack)
-                    && room(&e.stack) > 0
-                    && reach.contains(e.position)
-            })
+        } else {
+            dropped
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    reach.intersects(e.bounds())
+                        && e.pickup_delay == 0
+                        && allay::considers_item_equal(&held, &e.stack)
+                        && room(&e.stack) > 0
+                })
+                .min_by(|(_, a), (_, b)| {
+                    a.position
+                        .distance_squared(pos)
+                        .total_cmp(&b.position.distance_squared(pos))
+                })
+                .map(|(j, _)| j)
+        };
+        // GoToWantedItem: a stack it considers equal within 32 that the
+        // allay sees (NearestItemSensor's hasLineOfSight, eye to eye).
+        let target = if let Some(j) = in_reach {
+            Some(j)
+        } else if !wants || mobs[i].no_ai {
+            None
         } else {
             let w = l.mob_world();
             let eye = Vec3::new(pos.x, mobs[i].eye_y(), pos.z);
@@ -90,7 +103,7 @@ pub fn tick_allays<L: AllayLevel + ?Sized>(l: &mut L) {
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(j, _)| j)
         };
-        let Some(j) = wanted else {
+        let Some(j) = target else {
             let p = l.parts();
             p.mobs[i].extra.point = None;
             // `GiveInventoryToLookTargetPlayer` is the brain's too.
@@ -101,7 +114,7 @@ pub fn tick_allays<L: AllayLevel + ?Sized>(l: &mut L) {
         };
         let p = l.parts();
         let e = &p.dropped[j];
-        if reach.contains(e.position) {
+        if reach.intersects(e.bounds()) {
             let (item, id) = (e.clone(), p.mobs[i].id);
             let max = p.mobs[i].kind.inventory_stack_limit(&e.stack);
             let take = p.mobs[i]

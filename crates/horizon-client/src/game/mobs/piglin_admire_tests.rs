@@ -3,6 +3,7 @@ use horizon_client::{
     items::ItemStack,
     mobs::finalize::{OFFHAND, item_stack},
 };
+use horizon_gameplay::mob_level::MobLevel;
 
 fn stack(sword: bool) -> ItemStack {
     horizon_items::item_data::parse_stack(if sword {
@@ -117,3 +118,52 @@ fn piglin_admire_hit_keeps_baby_gold_and_cancels_adult_barter() {
         })
     });
 }
+
+/// A piglin picks up a wanted item within reach even without line of sight (#20557).
+#[test]
+#[ignore = "daily"]
+fn piglin_picks_up_wanted_item_in_reach_without_line_of_sight() {
+    mod_platform::testing::with_mods(Vec::new().into(), || {
+        with_game(|g| {
+            g.build_registries();
+            g.set_allow_commands(true);
+            g.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
+            g.mobs.clear();
+            g.dropped.clear();
+            assert!(
+                g.run_command("summon minecraft:piglin 1.5 64 1.5 {IsImmuneToZombification:1b}")
+            );
+            g.mobs[0].extra.set_main_hand(None);
+            let id = g.mobs[0].id;
+            g.creatures.ticked.insert(id);
+
+            // Block line of sight with a stone pillar between the piglin and the item.
+            let stone = g.pack.assets.registry.default_state("minecraft:stone").unwrap();
+            g.world.set(1, 64, 1, stone).unwrap();
+            g.world.set(1, 65, 1, stone).unwrap();
+
+            // Spawn gold ingot at 0.875, 65.0, 0.875 (within 1.3 reach of 1.5, 64.0, 1.5).
+            g.spawn_item(
+                ItemStack::new("minecraft:gold_ingot", 1),
+                [0.875, 65.0, 0.875],
+                [0.0; 3],
+                0,
+            );
+
+            // Verify line of sight from piglin eye to item is obstructed.
+            let w = g.mob_world();
+            let eye = horizon_core::geometry::Vec3::new(1.5, g.mobs[0].eye_y(), 1.5);
+            let at = horizon_core::geometry::Vec3::new(0.875, 65.0 + 0.2125, 0.875);
+            assert!(!w.line_of_sight(eye, at), "line of sight should be obstructed");
+
+            // Piglin should still pick up the item because it is in reach (#20557).
+            g.piglin_pickups();
+            assert!(item_stack(&g.mobs[0], OFFHAND).is_some());
+            assert!(g.dropped.is_empty());
+        })
+    });
+}
+

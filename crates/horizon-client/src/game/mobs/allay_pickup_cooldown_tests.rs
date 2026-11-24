@@ -7,6 +7,7 @@ use horizon_client::chunk::Chunk;
 use horizon_client::mobs::allay;
 use horizon_core::nbt::Tag;
 use horizon_core::position::ChunkPos;
+use horizon_gameplay::mob_level::MobLevel;
 use std::sync::Arc;
 
 const SUPPLIED: &str = "00006096-0000-0000-0000-000000000001";
@@ -217,4 +218,70 @@ fn the_saved_pickup_cooldown_follows_the_model() {
         Some(Tag::compound([("value", Tag::Int(30))])),
         "NoAI keeps it"
     );
+}
+
+/// An allay picks up a wanted item within reach even without line of sight (#20557).
+#[test]
+#[ignore = "daily"]
+fn an_allay_picks_up_wanted_item_in_reach_without_line_of_sight() {
+    let mut resources = None;
+    let mut game = game(&mut resources);
+    assert!(game.run_command(
+        "summon allay 1.5 101 1.5 {PersistenceRequired:1b,NoGravity:1b,UUID:[I;24726,0,0,4]}"
+    ));
+    let i = match game.target_with_uuid([24726, 0, 0, 4]) {
+        Some(super::commands::Target::Mob(id)) => {
+            game.mobs.iter().position(|m| m.id == id).unwrap()
+        }
+        other => panic!("{other:?}"),
+    };
+    game.mobs[i]
+        .extra
+        .set_main_hand_stack(Some(ItemStack::new("minecraft:diamond", 1)));
+    let id = game.mobs[i].id;
+    game.creatures.ticked.insert(id);
+
+    // Place stone at 1, 101, 1 to obstruct line of sight.
+    let stone = game
+        .pack
+        .assets
+        .registry
+        .default_state("minecraft:stone")
+        .unwrap();
+    game.world.set(1, 101, 1, stone).unwrap();
+
+    // Spawn diamond at 0.275, 101.0, 0.875 (anchor position is outside reach,
+    // but item AABB intersects reach).
+    game.spawn_item(
+        ItemStack::new("minecraft:diamond", 1),
+        [0.275, 101.0, 0.875],
+        [0.0; 3],
+        0,
+    );
+
+    // Verify boundary condition: item position is outside reach, but its bounding box intersects reach.
+    let reach = allay::pickup_reach(game.mobs[i].bounds());
+    let drop = &game.dropped[0];
+    assert!(
+        !reach.contains(drop.position),
+        "item position should be outside reach"
+    );
+    assert!(
+        reach.intersects(drop.bounds()),
+        "item bounding box should intersect reach"
+    );
+
+    // Line of sight is obstructed.
+    let w = game.mob_world();
+    let eye = horizon_core::geometry::Vec3::new(1.5, game.mobs[i].eye_y(), 1.5);
+    let at = horizon_core::geometry::Vec3::new(0.275, 101.0 + 0.2125, 0.875);
+    assert!(
+        !w.line_of_sight(eye, at),
+        "line of sight should be obstructed"
+    );
+
+    // The allay picks up the item because it is in reach (#20557).
+    game.tick_allays();
+    assert_eq!(allay::inventory(&game.mobs[i]).map(|s| s.count), Some(1));
+    assert!(game.dropped.is_empty());
 }
