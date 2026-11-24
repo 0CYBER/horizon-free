@@ -362,7 +362,8 @@ impl Game<'_> {
         }
         rows
     }
-    /// Exercise `FishingHook.tick` in a still-water block on the server.
+    /// Exercise server `FishingHook.tick` in still water and client prediction on stone.
+    /// Each sampled hook is retired between seeds; only the player's original hook is restored.
     pub(super) fn fishing_bobbing_reference(&mut self) -> Vec<serde_json::Value> {
         let old_position = self.player.as_ref().unwrap().position;
         let block = [
@@ -407,12 +408,13 @@ impl Game<'_> {
             hook.random.set_seed(seed);
             self.install_fishing_hook(hook);
             self.tick_fishing();
-            let mut hook = self.hook.extract().expect("bobbing hook removed");
+            let hook = self.hook.as_mut().expect("bobbing hook removed");
             rows.push(serde_json::json!({
                 "seed": seed,
                 "vx": hook.velocity.x.to_bits() as i64, "vy": hook.velocity.y.to_bits() as i64,
                 "vz": hook.velocity.z.to_bits() as i64, "nibble": hook.nibble, "next": hook.random.next_long(),
             }));
+            self.hook.discard();
         }
         // The client must take the same block hit before moving as the server;
         // otherwise it lands farther away and slides back on the next update.
@@ -442,7 +444,6 @@ impl Game<'_> {
                 }));
             }
         }
-        self.hook.discard();
         if let Some(hook) = old_hook {
             self.hook.put_back(hook);
         }

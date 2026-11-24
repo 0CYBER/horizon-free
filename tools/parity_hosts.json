@@ -97,7 +97,6 @@
   "dedicated_server": "#18133: extra config custom_payload horizon:payloads and one extra recipe_book_add entry",
   "dispenser": "#18133: container-entity slot0 and sapling-growth `set` records missing",
   "dragon_render": "#18133: dragon tests exit 101; Rust log not in the artifact",
-  "fishing_rng": "#18133: test fixture leaves 5 hooks extracted (UnbalancedPass)",
   "mob_ai": "#18133: enderman hurt twice in a tick teleports differently",
   "portal_cooldown": "#18133: cooldown test fails; Rust log not in the artifact",
   "save_roundtrip": "#18133: level.dat gains fml and horizon keys",
