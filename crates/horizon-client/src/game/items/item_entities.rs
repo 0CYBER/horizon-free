@@ -71,6 +71,24 @@ pub(super) fn touching_orbs(
 }
 
 impl Game<'_> {
+    /// `Player.aiStep`'s `pickupArea`, shared by item and orb pickup:
+    /// standing, the player's box inflated by (1, 0.5, 1); riding, the union
+    /// with the vehicle's box inflated by (1, 0, 1).
+    fn pickup_area(&self, p: &horizon_client::motion::PlayerMotion) -> Aabb {
+        let w = f64::from(p.dimensions.width) / 2.0;
+        let own = Aabb::new(
+            Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
+            Vec3::new(
+                p.position.x + w,
+                p.position.y + f64::from(p.dimensions.height),
+                p.position.z + w,
+            ),
+        );
+        match self.riding_box() {
+            Some(vehicle) => own.union_bounds(vehicle).inflate(Vec3::new(1.0, 0.0, 1.0)),
+            None => own.inflate(Vec3::new(1.0, 0.5, 1.0)),
+        }
+    }
     pub(super) fn tick_items(&mut self) -> FxHashMap<u32, Vec3> {
         let mut round = self.item_update_round();
         let original_moves = self.tick_dropped_items(&mut round);
@@ -368,19 +386,9 @@ impl Game<'_> {
             self.spawn_destroyed_contents(destroyed);
             return original_moves;
         }
-        let w = f64::from(p.dimensions.width) / 2.0;
-        let (min, max) = (
-            [
-                p.position.x - w - 1.0,
-                p.position.y - 0.5,
-                p.position.z - w - 1.0,
-            ],
-            [
-                p.position.x + w + 1.0,
-                p.position.y + f64::from(p.dimensions.height) + 0.5,
-                p.position.z + w + 1.0,
-            ],
-        );
+        let area = self.pickup_area(p);
+        let (lo, hi) = (area.min_position(), area.max_position());
+        let (min, max) = ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
         let feet = [p.position.x, p.position.y, p.position.z];
         let own = self.level.ensure_player_uuid();
         self.native_player_pickups(&mut items, (min, max), feet, own);
@@ -648,21 +656,7 @@ impl Game<'_> {
         // Player.aiStep: standing, the pickup area is the player's box
         // inflated by (1, 0.5, 1); riding, the union with the vehicle's box
         // inflated by (1, 0, 1).
-        let bounds = player.map(|p| {
-            let w = f64::from(p.dimensions.width) / 2.0;
-            let own = Aabb::new(
-                Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
-                Vec3::new(
-                    p.position.x + w,
-                    p.position.y + f64::from(p.dimensions.height),
-                    p.position.z + w,
-                ),
-            );
-            match self.riding_box() {
-                Some(vehicle) => own.union_bounds(vehicle).inflate(Vec3::new(1.0, 0.0, 1.0)),
-                None => own.inflate(Vec3::new(1.0, 0.5, 1.0)),
-            }
-        });
+        let bounds = player.map(|p| self.pickup_area(p));
         let mut orbs = self.orbs.lift();
         #[cfg(test)]
         crate::game::entity::taken_pass_tests::after_take(self);
@@ -1284,5 +1278,43 @@ mod orb_pickup_tests {
             game.player.as_mut().unwrap().random.next_int(),
             -1_690_734_402
         );
+    }
+}
+
+#[cfg(test)]
+mod pickup_area_tests {
+    use crate::game::game_tests::tests::server_game;
+    use horizon_core::geometry::Vec3;
+
+    /// `Player.aiStep`: riding, an item beside the mount is inside the pickup
+    /// area (the union with the vehicle's box, inflated by (1, 0, 1)); standing,
+    /// the same spot is outside the player's box inflated by (1, 0.5, 1).
+    #[test]
+    #[ignore = "daily"]
+    fn an_item_beside_the_mount_is_in_reach_only_while_riding() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world.chunks.insert(
+            (0, 0),
+            std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+        );
+        let feet = Vec3::new(8.5, 70.0, 8.5);
+        game.player = Some(horizon_client::motion::PlayerMotion::new(game.motion, feet).unwrap());
+        assert!(game.run_command("summon horse 8.5 70 8.5 {NoAI:1b,Silent:1b}"));
+        let horse = game
+            .mobs
+            .iter()
+            .find(|m| &*m.kind.id == "minecraft:horse")
+            .unwrap()
+            .id;
+        // The horse is 1.3965 wide, so its box starts at x 7.80: riding reaches
+        // x 6.80, standing (the player is 0.6 wide) only x 7.2.
+        let beside = Vec3::new(7.0, 70.5, 8.5);
+        let player = game.player.clone().unwrap();
+        assert!(!game.pickup_area(&player).contains(beside));
+        game.riding = Some(horse);
+        assert!(game.pickup_area(&player).contains(beside));
     }
 }

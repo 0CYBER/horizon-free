@@ -1,0 +1,2 @@
+# A rider's item pickup area takes in the mount's box (Player.aiStep pickupArea).
+horizon-client game::item_entities::pickup_area_tests::an_item_beside_the_mount_is_in_reach_only_while_riding lib daily resources
