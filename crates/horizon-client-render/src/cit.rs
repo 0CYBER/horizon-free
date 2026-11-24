@@ -12,6 +12,7 @@ use horizon_core::nbt::{JavaString, Tag, parse_snbt};
 use horizon_items::item_data::{canon_tag, encode_components};
 use horizon_items::items::ItemStack;
 use horizon_optifine::cit::{ComponentTest, Source, ValueTest};
+use horizon_optifine::random::NbtTest;
 use horizon_optifine::{Properties, properties_files_in};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -286,7 +287,25 @@ fn cache_key(query: (u8, Kind, Hand), stack: &ItemStack, max: u32, comps: Option
 }
 
 fn prepare(test: &ComponentTest) -> Prepared {
-    let ValueTest::Literal(lit) = &test.value else {
+    prepare_value(&test.value)
+}
+
+/// Whether an OptiFine random entity rule's `nbt.<n>.<path>` test passes on `entity`, the
+/// entity's saved NBT, before the test's `!`. Its values read as Custom Item Textures' do;
+/// `CustomName` is a text component.
+pub fn entity_nbt_test(test: &NbtTest, entity: &Tag) -> bool {
+    if let ValueTest::Exists(want) = test.value {
+        return walk(entity, &test.path, 0, &mut |_, _| true) == want;
+    }
+    let lit = prepare_value(&test.value);
+    let is_text = test.path.first().is_some_and(|p| p == "CustomName");
+    walk(entity, &test.path, 0, &mut |tag, depth| {
+        value_test(&test.value, &lit, tag, is_text && depth == 1)
+    })
+}
+
+fn prepare_value(value: &ValueTest) -> Prepared {
+    let ValueTest::Literal(lit) = value else {
         return Prepared::default();
     };
     let text = lit.text.trim();

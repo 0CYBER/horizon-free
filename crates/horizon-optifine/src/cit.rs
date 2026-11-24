@@ -299,7 +299,8 @@ impl Literal {
 }
 
 impl ValueTest {
-    fn parse(value: &str) -> Option<(Self, bool)> {
+    /// A test's right-hand side and whether it starts with `!`; `None` when it doesn't parse.
+    pub fn parse(value: &str) -> Option<(Self, bool)> {
         let (negate, value) = match value.strip_prefix('!') {
             Some(rest) => (true, rest),
             None => (false, value),

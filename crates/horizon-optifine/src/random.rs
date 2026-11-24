@@ -8,13 +8,16 @@
 //!
 //! Conditions: `biomes`, `heights` (and the legacy `minHeight`/`maxHeight`), `name` (and ETF's
 //! `names`), `professions`, `colors` (`collarColors`), `baby`, `health` (in points or percent),
-//! `moonPhase`, `dayTime`, `weather`, `sizes` and `blocks`. The spawn-time ones (biome, height,
-//! block, moon, time, weather) are the caller's to fix when the entity is first seen; the others
-//! can change, and [`Rules::updates`] says whether a rule file reads any of them.
+//! `moonPhase`, `dayTime`, `weather`, `sizes`, `blocks` and `nbt.<n>.<path>` (a value in the
+//! entity's saved NBT, in the same forms as Custom Item Textures' `nbt.` tests). The spawn-time
+//! ones (biome, height, block, moon, time, weather) are the caller's to fix when the entity is
+//! first seen; the others can change, and [`Rules::updates`] says whether a rule file reads any
+//! of them.
 //!
-//! Written from OptiFine's `random_entities.properties` and ETF's `RANDOM_GUIDE.md` and
-//! `random_entities.properties` docs; no mod's source was read.
+//! Written from OptiFine's `random_entities.properties` and `cit.properties` docs and ETF's
+//! `RANDOM_GUIDE.md` and `random_entities.properties` docs; no mod's source was read.
 
+use crate::cit::ValueTest;
 use crate::matchers::{BlockMatch, Name, RangeList, namespaced};
 use crate::properties::Properties;
 
@@ -49,6 +52,29 @@ pub struct Facts<'a> {
     pub weather: Option<Weather>,
     /// Slime, magma cube or phantom size as the docs number it: 0 small, 1 medium, 3 big.
     pub size: Option<i32>,
+    /// Answers an `nbt.<n>` test against the entity's saved NBT, before the test's `!`. `None`
+    /// when the caller has no NBT for the entity, which fails every `nbt` rule.
+    pub nbt: Option<Nbt<'a>>,
+}
+
+/// One `nbt.<n>.<path>=<value>` condition.
+#[derive(Clone, Debug)]
+pub struct NbtTest {
+    /// Compound keys and list indexes, as in Custom Item Textures (`*` any, `count` a length).
+    pub path: Vec<String>,
+    pub value: ValueTest,
+    /// A leading `!`: the test passes when the value does not match.
+    pub negate: bool,
+}
+
+/// How a caller answers an [`NbtTest`] for one entity.
+#[derive(Clone, Copy)]
+pub struct Nbt<'a>(pub &'a dyn Fn(&NbtTest) -> bool);
+
+impl std::fmt::Debug for Nbt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Nbt(..)")
+    }
 }
 
 /// A block and the values of its state properties.
@@ -93,10 +119,11 @@ struct Rule {
     weather: Option<Vec<Weather>>,
     sizes: Option<RangeList>,
     blocks: Vec<(BlockMatch, bool)>,
+    nbt: Vec<NbtTest>,
 }
 
-/// The conditions a rule may hold, as `<key>.<n>`. A rule with any other (`nbt.<n>.*`, ETF's
-/// `teams`, `items`...) is skipped rather than applied to every entity.
+/// The conditions a rule may hold, as `<key>.<n>` (`nbt.<n>.<path>`). A rule with any other
+/// (ETF's `teams`, `items`...) is skipped rather than applied to every entity.
 const KEYS: &[&str] = &[
     "textures",
     "skins",
@@ -119,6 +146,7 @@ const KEYS: &[&str] = &[
     "weather",
     "sizes",
     "blocks",
+    "nbt",
 ];
 
 impl Rules {
@@ -155,7 +183,7 @@ impl Rules {
     }
 
     /// Whether any rule reads a fact that changes while the entity lives (name, profession,
-    /// colour, baby, health), so the choice should be checked again now and then.
+    /// colour, baby, health, NBT), so the choice should be checked again now and then.
     pub fn updates(&self) -> bool {
         self.rules.iter().any(|r| {
             !r.names.is_empty()
@@ -163,7 +191,13 @@ impl Rules {
                 || r.colors.is_some()
                 || r.baby.is_some()
                 || r.health.is_some()
+                || !r.nbt.is_empty()
         })
+    }
+
+    /// Whether any rule tests the entity's NBT, which the caller then has to build.
+    pub fn reads_nbt(&self) -> bool {
+        self.rules.iter().any(|r| !r.nbt.is_empty())
     }
 
     /// The highest variant index any rule lists (at most [`MAX_INDEX`]).
@@ -182,21 +216,45 @@ impl Rule {
     fn parse(props: &Properties, n: u32) -> Option<Self> {
         // This rule's keys, `<key>.<n>` or `nbt.<n>.<path>` (a path may end in a list index:
         // `nbt.2.Tags.1`): one unknown, or an empty condition (`biomes.1=`), skips the rule. An
-        // empty `weights` is only no weights.
+        // empty `weights` is only no weights. So does an `nbt` test numbered otherwise (`nbt.01.`):
+        // the prefix below would never collect it, and the rule would match every entity.
         let unusable = props.entries.iter().any(|(key, value)| {
             let mut parts = key.splitn(3, '.');
             let (Some(head), Some(index)) = (parts.next(), parts.next()) else {
                 return false;
             };
             index.parse::<u32>() == Ok(n)
-                && (!KEYS.contains(&head)
+                && ((head == "nbt" && index != n.to_string())
+                    || !KEYS.contains(&head)
                     || (value.is_empty() && !matches!(head, "textures" | "skins" | "weights")))
         });
         let get = |key: &str| props.get(&format!("{key}.{n}"));
-        // ETF's `seedSource`: only the entity's own seed is read.
-        if unusable || get("seedSource").is_some_and(|v| v != "entity") {
+        // ETF's `seedSource`: only the entity's own seed is read. `nbt.<n>` needs a path.
+        if unusable || get("seedSource").is_some_and(|v| v != "entity") || get("nbt").is_some() {
             return None;
         }
+        let nbt = props
+            .with_prefix(&format!("nbt.{n}."))
+            .map(|(path, value)| {
+                // `~` is the minecraft namespace where it starts a segment, as in CIT's paths.
+                let path: Vec<String> = path
+                    .split('.')
+                    .map(|s| match s.strip_prefix('~') {
+                        Some(rest) => format!("minecraft:{rest}"),
+                        None => s.to_owned(),
+                    })
+                    .collect();
+                if path.iter().any(String::is_empty) {
+                    return None;
+                }
+                let (value, negate) = ValueTest::parse(value)?;
+                Some(NbtTest {
+                    path,
+                    value,
+                    negate,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
         // `Some(None)` for a missing key, `None` for one that doesn't parse.
         fn read<T>(
             value: Option<&str>,
@@ -286,10 +344,18 @@ impl Rule {
                     .collect()
             })?
             .unwrap_or_default(),
+            nbt,
         })
     }
 
     fn matches(&self, f: &Facts) -> bool {
+        self.matches_facts(f)
+            && (self.nbt.is_empty()
+                || f.nbt
+                    .is_some_and(|Nbt(test)| self.nbt.iter().all(|t| test(t) != t.negate)))
+    }
+
+    fn matches_facts(&self, f: &Facts) -> bool {
         let ranged = |list: &Option<RangeList>, fact: Option<i32>| {
             list.as_ref()
                 .is_none_or(|l| fact.is_some_and(|v| l.contains(v)))
@@ -752,7 +818,14 @@ mod tests {
             "name.1=regex:(",
             "names.1=Bob regex:(",
             "minHeight.1=low",
+            // No NBT given, then malformed ones.
             "nbt.1.CustomName=Bob",
+            "nbt.1.CustomName=regex:(",
+            "nbt.1.CustomName=",
+            "nbt.1..x=1",
+            "nbt.1=Bob",
+            // A number that isn't spelt `1` would leave its condition unread.
+            "nbt.01.CustomName=Rex",
             "teams.1=red",
             "seedSource.1=vehicle",
             "biomes.1=",
@@ -785,6 +858,51 @@ mod tests {
         // Another rule's nbt path ending in a list index leaves rule 1 alone.
         let r = rules("textures.1=2\nseedSource.1=entity\ntextures.2=3\nnbt.2.Tags.1=foo");
         assert_eq!(r.select(&Facts::default(), 0), 2);
+    }
+
+    #[test]
+    fn nbt_rules_ask_the_caller_and_honour_their_negation() {
+        let r = rules(
+            "skins.1=2\nnbt.1.variant=minecraft:chestnut\n\
+             skins.2=3\nnbt.2.Owner=!exists:true\nnbt.2.variant=pattern:*:ashen",
+        );
+        assert!(r.updates() && r.reads_nbt());
+        assert!(!rules("skins.1=2\nbaby.1=true").reads_nbt());
+        // A wolf's saved NBT, read as the caller would: only literals and `exists` here.
+        let wolf = |variant: &'static str, owned: bool| {
+            move |t: &NbtTest| match (t.path.as_slice(), &t.value) {
+                ([p], ValueTest::Literal(l)) if p == "variant" => l.text == variant,
+                ([p], ValueTest::Text(n)) if p == "variant" => n.matches(variant),
+                ([p], ValueTest::Exists(want)) if p == "Owner" => owned == *want,
+                _ => false,
+            }
+        };
+        let pick = |variant, owned| {
+            let test = wolf(variant, owned);
+            let facts = Facts {
+                nbt: Some(Nbt(&test)),
+                ..Default::default()
+            };
+            r.matching(&facts, 0)
+        };
+        assert_eq!(pick("minecraft:chestnut", true), Some(2));
+        assert_eq!(pick("minecraft:ashen", false), Some(3));
+        // `!exists:true` fails for a tamed one.
+        assert_eq!(pick("minecraft:ashen", true), None);
+        assert_eq!(pick("minecraft:pale", false), None);
+        // Without the entity's NBT no nbt rule matches.
+        assert_eq!(r.matching(&Facts::default(), 0), None);
+        // `~` names the minecraft namespace, as in CIT: `~home` is `minecraft:home`.
+        let r = rules(
+            "skins.1=2
+nbt.1.Brain.memories.~home=exists:true",
+        );
+        let home = |t: &NbtTest| t.path == ["Brain", "memories", "minecraft:home"];
+        let facts = Facts {
+            nbt: Some(Nbt(&home)),
+            ..Default::default()
+        };
+        assert_eq!(r.matching(&facts, 0), Some(2));
     }
 
     #[test]

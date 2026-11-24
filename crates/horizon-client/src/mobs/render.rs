@@ -4407,6 +4407,7 @@ mod emissive_tests {
                     &Default::default(),
                     Some(seen()),
                     0,
+                    &|_| None,
                 );
             }
             let v = drawn(&m, &data, &atlas);
@@ -4548,6 +4549,7 @@ mod random_texture_tests {
                 &Default::default(),
                 Some(seen),
                 0,
+                &|_| None,
             );
         }
         let both = |name: &str| match name {

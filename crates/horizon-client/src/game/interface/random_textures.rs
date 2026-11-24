@@ -26,11 +26,21 @@ impl Game<'_> {
                 continue;
             }
             let m = &self.mobs[i];
-            let seed = seed(m, self.persist.uuids.get(&id).copied());
+            let uuid = self.persist.uuids.get(&id).copied();
+            let seed = seed(m, uuid);
             let seen = (!m.random_textures.has_seen()).then(|| self.seen_at(m.position));
             // The tables on their own: `choose` takes the mob mutably after.
             let worn = worn_equipment_layers(m, self.res.items(), &self.armor_stand_assets);
-            choose(&mut self.mobs[i], &textures, res.mob_data(), &worn, seen, seed);
+            let uuids = &self.persist.uuids;
+            choose(
+                &mut self.mobs[i],
+                &textures,
+                res.mob_data(),
+                &worn,
+                seen,
+                seed,
+                &|id| uuids.get(&id).copied(),
+            );
         }
     }
 
