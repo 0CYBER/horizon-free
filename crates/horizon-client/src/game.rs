@@ -7396,8 +7396,9 @@ impl Game<'_> {
     }
     /// `Player.getVehicle().getBoundingBox()` for the local player's vehicle
     /// (`riding`): a mob, one of `object_target`'s kinds (boat, cart, armour
-    /// stand, item frame, painting) or a tracked special — the same chain
-    /// `guest_target_box` resolves a guest's vehicle through.
+    /// stand, item frame, painting, the level's own `minecraft:interaction`) or a
+    /// tracked special — the same chain `guest_target_box` resolves a guest's
+    /// vehicle through.
     fn riding_box(&self) -> Option<Aabb> {
         let id = self.riding?;
         if let Some(m) = self.mobs.iter().find(|m| m.id == id) {

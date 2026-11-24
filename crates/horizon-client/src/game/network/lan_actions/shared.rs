@@ -3387,6 +3387,10 @@ mod bundle_slot_tests;
 mod crack_feedback_tests;
 
 #[cfg(test)]
+#[path = "tests/interaction_target_box_tests.rs"]
+mod interaction_target_box_tests;
+
+#[cfg(test)]
 #[path = "tests/menu_still_valid_tests.rs"]
 mod menu_still_valid_tests;
 

@@ -157,6 +157,14 @@ impl Game<'_> {
             return Some((lo, hi, at(i.position)));
         }
         let id = u32::try_from(id).ok()?;
+        // The level's own `minecraft:interaction`: on a server this game holds the
+        // entity itself, with the width and height it was summoned with.
+        if let Some(o) = self.others.iter().find(|o| o.id == id)
+            && let Some(state) = o.interaction
+        {
+            let (lo, hi) = corners(state.bounds(o.position));
+            return Some((lo, hi, at(o.position)));
+        }
         if let Some(b) = self.boats.iter().find(|b| b.id == id) {
             let (lo, hi) = corners(b.bounds());
             return Some((lo, hi, at(b.position)));

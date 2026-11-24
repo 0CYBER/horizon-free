@@ -7,6 +7,22 @@ use super::Game;
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::entity_data::Value;
 
+/// `Interaction.makeBoundingBox`: `getDimensions().makeBoundingBox(pos)`, whose
+/// width is a square about the position's x and z and whose height rises from
+/// it (the position is the box's bottom centre, not the model's). The settings
+/// are synced ones (`DATA_WIDTH`, `DATA_HEIGHT`) or the saved `width`/`height`.
+fn box_at(position: Vec3, width: f32, height: f32) -> Aabb {
+    let half = f64::from(width) / 2.0;
+    Aabb::new(
+        Vec3::new(position.x - half, position.y, position.z - half),
+        Vec3::new(
+            position.x + half,
+            position.y + f64::from(height.max(0.0)),
+            position.z + half,
+        ),
+    )
+}
+
 /// `Interaction`'s synced data and box: `DATA_WIDTH` (8), `DATA_HEIGHT` (9)
 /// and `DATA_RESPONSE` (10), from its `defineSynchedData`.
 pub(super) struct RemoteInteraction {
@@ -38,16 +54,7 @@ impl RemoteInteraction {
     /// x and z, from its feet up `height` (its position is the box's bottom
     /// centre, not the model's).
     pub fn bounds(&self) -> Aabb {
-        let half = f64::from(self.width) / 2.0;
-        let p = self.position;
-        Aabb::new(
-            Vec3::new(p.x - half, p.y, p.z - half),
-            Vec3::new(
-                p.x + half,
-                p.y + f64::from(self.height.max(0.0)),
-                p.z + half,
-            ),
-        )
+        box_at(self.position, self.width, self.height)
     }
     pub fn metadata(&mut self, values: &[(u8, i32, Value)]) {
         for (index, _, value) in values {
@@ -168,6 +175,12 @@ pub(super) struct InteractionState {
 }
 
 impl InteractionState {
+    /// The box these settings make for an entity at `position`: the server's own
+    /// `minecraft:interaction` is kept as its saved data, so its box comes from
+    /// there rather than from synced data.
+    pub fn bounds(&self, position: Vec3) -> Aabb {
+        box_at(position, self.width, self.height)
+    }
     /// `Interaction.readAdditionalSaveData`: the dimensions, optional action records and response.
     pub fn from_tag(tag: &horizon_core::nbt::Tag) -> Self {
         let float = |key| horizon_client::save::float(tag.get(key)).unwrap_or(1.0) as f32;
