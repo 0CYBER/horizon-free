@@ -28,6 +28,141 @@ impl ShapeOp {
     }
 }
 
+const INLINE_MERGER_CAP: usize = 16;
+
+struct InlineMerger {
+    len: usize,
+    first: [i8; INLINE_MERGER_CAP],
+    second: [i8; INLINE_MERGER_CAP],
+}
+
+/// Stack-allocated index-only equivalent of [`merge`] for [`VoxelShape::join_is_not_empty`].
+/// Returns `Ok(None)` when the merged axis exceeds `INLINE_MERGER_CAP` cells so the caller
+/// falls back to the general heap-backed [`merge`].
+#[allow(clippy::too_many_arguments)]
+fn merge_inline(
+    multiplier: usize,
+    a: &[f64],
+    b: &[f64],
+    a_cube: bool,
+    b_cube: bool,
+    only_first: bool,
+    only_second: bool,
+) -> Result<Option<InlineMerger>, ShapeError> {
+    let na = a.len() - 1;
+    let nb = b.len() - 1;
+    if a_cube && b_cube {
+        let g = gcd(na, nb);
+        let lcm = (na / g).checked_mul(nb).ok_or(ShapeError::TooLarge)?;
+        if multiplier
+            .checked_mul(lcm)
+            .is_some_and(|volume| volume <= 256)
+        {
+            if lcm > INLINE_MERGER_CAP {
+                return Ok(None);
+            }
+            let mut first = [0i8; INLINE_MERGER_CAP];
+            let mut second = [0i8; INLINE_MERGER_CAP];
+            let step_a = nb / g;
+            let step_b = na / g;
+            for i in 0..lcm {
+                first[i] = (i / step_a) as i8;
+                second[i] = (i / step_b) as i8;
+            }
+            return Ok(Some(InlineMerger {
+                len: lcm,
+                first,
+                second,
+            }));
+        }
+    }
+    if a[na] < b[0] - COLLISION_EPSILON {
+        return Ok(disjoint_inline(a.len(), b.len(), false));
+    }
+    if b[nb] < a[0] - COLLISION_EPSILON {
+        return Ok(disjoint_inline(b.len(), a.len(), true));
+    }
+    if a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x == y) {
+        if na > INLINE_MERGER_CAP {
+            return Ok(None);
+        }
+        let mut first = [0i8; INLINE_MERGER_CAP];
+        let mut second = [0i8; INLINE_MERGER_CAP];
+        for i in 0..na {
+            first[i] = i as i8;
+            second[i] = i as i8;
+        }
+        return Ok(Some(InlineMerger {
+            len: na,
+            first,
+            second,
+        }));
+    }
+    if a.len() + b.len() > INLINE_MERGER_CAP {
+        return Ok(None);
+    }
+    let mut first = [0i8; INLINE_MERGER_CAP];
+    let mut second = [0i8; INLINE_MERGER_CAP];
+    let mut count = 0usize;
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut last = f64::NAN;
+    while i < a.len() || j < b.len() {
+        let a_end = i == a.len();
+        let b_end = j == b.len();
+        let choose_a = !a_end && (b_end || a[i] < b[j] + COLLISION_EPSILON);
+        if choose_a {
+            i += 1;
+            if !only_first && (j == 0 || b_end) {
+                continue;
+            }
+        } else {
+            j += 1;
+            if !only_second && (i == 0 || a_end) {
+                continue;
+            }
+        }
+        let ai = i as i8 - 1;
+        let bj = j as i8 - 1;
+        let value = if choose_a { a[i - 1] } else { b[j - 1] };
+        if !matches!(
+            last.partial_cmp(&(value - COLLISION_EPSILON)),
+            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+        ) {
+            first[count] = ai;
+            second[count] = bj;
+            count += 1;
+            last = value;
+        } else {
+            let n = count - 1;
+            first[n] = ai;
+            second[n] = bj;
+        }
+    }
+    let len = count.saturating_sub(1);
+    Ok(Some(InlineMerger { len, first, second }))
+}
+
+fn disjoint_inline(nl: usize, nu: usize, swap: bool) -> Option<InlineMerger> {
+    let len = nl + nu - 1;
+    if len > INLINE_MERGER_CAP {
+        return None;
+    }
+    let mut first = [0i8; INLINE_MERGER_CAP];
+    let mut second = [0i8; INLINE_MERGER_CAP];
+    for i in 0..nl {
+        first[i] = i as i8;
+        second[i] = -1;
+    }
+    for i in 0..nu - 1 {
+        first[nl + i] = nl as i8 - 1;
+        second[nl + i] = i as i8;
+    }
+    if swap {
+        std::mem::swap(&mut first, &mut second);
+    }
+    Some(InlineMerger { len, first, second })
+}
+
 struct Merger {
     coords: Vec<f64>,
     first: Vec<i32>,
@@ -125,6 +260,27 @@ impl VoxelShape {
                 return Ok(only_first || only_second);
             }
         }
+        if let Some(mergers) = self.inline_mergers(other, only_first, only_second)? {
+            let sizes = std::array::from_fn(|i| mergers[i].len);
+            volume(sizes)?;
+            for x in 0..sizes[0] {
+                let ax = i32::from(mergers[0].first[x]);
+                let bx = i32::from(mergers[0].second[x]);
+                for y in 0..sizes[1] {
+                    let ay = i32::from(mergers[1].first[y]);
+                    let by = i32::from(mergers[1].second[y]);
+                    for z in 0..sizes[2] {
+                        if operation.apply(
+                            self.is_full(ax, ay, i32::from(mergers[2].first[z])),
+                            other.is_full(bx, by, i32::from(mergers[2].second[z])),
+                        ) {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+            return Ok(false);
+        }
         let mergers = self.mergers(other, only_first, only_second)?;
         let sizes = std::array::from_fn(|i| mergers[i].coords.len() - 1);
         volume(sizes)?;
@@ -149,6 +305,53 @@ impl VoxelShape {
             }
         }
         Ok(false)
+    }
+    fn inline_mergers(
+        &self,
+        other: &Self,
+        only_first: bool,
+        only_second: bool,
+    ) -> Result<Option<[InlineMerger; 3]>, ShapeError> {
+        let a_cubes = self.cube_coordinate_axes();
+        let b_cubes = other.cube_coordinate_axes();
+        let Some(x) = merge_inline(
+            1,
+            self.coordinates(Axis::X),
+            other.coordinates(Axis::X),
+            a_cubes[0],
+            b_cubes[0],
+            only_first,
+            only_second,
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(y) = merge_inline(
+            x.len,
+            self.coordinates(Axis::Y),
+            other.coordinates(Axis::Y),
+            a_cubes[1],
+            b_cubes[1],
+            only_first,
+            only_second,
+        )?
+        else {
+            return Ok(None);
+        };
+        let multiplier = x.len.checked_mul(y.len).ok_or(ShapeError::TooLarge)?;
+        let Some(z) = merge_inline(
+            multiplier,
+            self.coordinates(Axis::Z),
+            other.coordinates(Axis::Z),
+            a_cubes[2],
+            b_cubes[2],
+            only_first,
+            only_second,
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some([x, y, z]))
     }
     fn mergers(
         &self,
@@ -474,6 +677,92 @@ mod tests {
                     found
                 };
                 assert_eq!(fast, expected, "pair ({i}, {j})");
+            }
+        }
+    }
+
+    #[test]
+    fn inline_mergers_match_heap_mergers_across_multi_cell_shapes_and_ops() {
+        let stair = VoxelShape::from_grid(
+            [vec![0.0, 0.5, 1.0], vec![0.0, 0.5, 1.0], vec![0.0, 1.0]],
+            &[true, false, true, true],
+        )
+        .unwrap();
+        let fence = VoxelShape::from_grid(
+            [
+                vec![0.0, 0.375, 0.625, 1.0],
+                vec![0.0, 1.5],
+                vec![0.0, 0.375, 0.625, 1.0],
+            ],
+            &[false, true, false, true, true, true, false, true, false],
+        )
+        .unwrap();
+        let cube2 = VoxelShape::from_cube(
+            [2, 2, 2],
+            &[true, false, false, true, true, true, false, true],
+        )
+        .unwrap();
+        let player = VoxelShape::from_box(Aabb::new(
+            Vec3::new(0.2, 0.4, 0.2),
+            Vec3::new(0.8, 2.2, 0.8),
+        ))
+        .unwrap();
+        let shapes = [
+            stair.clone(),
+            stair.moved(Vec3::new(0.5, 0.0, 0.0)),
+            stair.moved(Vec3::new(1.0 - 0.5 * COLLISION_EPSILON, 0.0, 0.0)),
+            fence.clone(),
+            fence.moved(Vec3::new(0.1, -0.25, 0.3)),
+            cube2.clone(),
+            player.clone(),
+            player.moved(Vec3::new(0.3, 0.1, -0.1)),
+        ];
+        let ops = [
+            ShapeOp::FALSE,
+            ShapeOp::AND,
+            ShapeOp::OR,
+            ShapeOp::XOR,
+            ShapeOp::ONLY_FIRST,
+            ShapeOp::ONLY_SECOND,
+        ];
+        for (i, a) in shapes.iter().enumerate() {
+            for (j, b) in shapes.iter().enumerate() {
+                for op in ops {
+                    let got = a.join_is_not_empty(b, op).unwrap();
+                    let expected = if a.same_identity(b) {
+                        op.apply(true, true)
+                    } else {
+                        let only_first = op.apply(true, false);
+                        let only_second = op.apply(false, true);
+                        let mergers = a.mergers(b, only_first, only_second).unwrap();
+                        let sizes: [usize; 3] =
+                            std::array::from_fn(|k| mergers[k].coords.len() - 1);
+                        let mut found = false;
+                        'outer: for x in 0..sizes[0] {
+                            for y in 0..sizes[1] {
+                                for z in 0..sizes[2] {
+                                    if op.apply(
+                                        a.is_full(
+                                            mergers[0].first[x],
+                                            mergers[1].first[y],
+                                            mergers[2].first[z],
+                                        ),
+                                        b.is_full(
+                                            mergers[0].second[x],
+                                            mergers[1].second[y],
+                                            mergers[2].second[z],
+                                        ),
+                                    ) {
+                                        found = true;
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                        }
+                        found
+                    };
+                    assert_eq!(got, expected, "pair ({i}, {j}) op {op:?}");
+                }
             }
         }
     }
