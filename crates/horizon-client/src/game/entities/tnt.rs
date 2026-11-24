@@ -210,6 +210,13 @@ impl Game<'_> {
             entities,
         )?;
         let (id, snow) = (t.id, (t.previous, t.position, t.bounds(), t.velocity));
+        // Entity.applyEffectsFromBlocks: TNT is fire immune, so it is never
+        // `isOnFire` and its fire ticks are set to `-getFireImmuneTicks()`, 0.
+        if let Some(horizon_core::nbt::Tag::Compound(raw)) = self.persist.raw.get_mut(&id)
+            && let Some(fire) = raw.get_mut(&"Fire".into())
+        {
+            *fire = horizon_core::nbt::Tag::Short(0);
+        }
         // Entity.checkFallDamage: fallOn and HIT_GROUND after a fall, during the move.
         if let Some(fall) = landed {
             self.non_living_fall_on(id, snow.1, snow.2, fall);
@@ -285,7 +292,7 @@ impl Game<'_> {
         let uuid = self.uuid_for(id);
         let owner = self.tnt_owner_uuid(self.tnts[i].owner, self.tnts[i].guest);
         let t = &self.tnts[i];
-        horizon_client::entity_nbt::tnt_to_nbt(
+        let mut tag = horizon_client::entity_nbt::tnt_to_nbt(
             t.position,
             t.velocity,
             t.on_ground,
@@ -297,7 +304,10 @@ impl Game<'_> {
             uuid,
             owner,
             self.persist.raw.get(&id),
-        )
+        );
+        // Entity.saveWithoutId: the live `PortalCooldown`.
+        self.save_portal_cooldown(id, &mut tag);
+        tag
     }
     /// `EntityReference.of(owner)`: the UUID of the player or mob that lit it.
     fn tnt_owner_uuid(&mut self, owner: Option<Who>, guest: Option<u32>) -> Option<[i32; 4]> {

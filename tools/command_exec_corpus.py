@@ -8414,6 +8414,47 @@ def text_component_key_order():
     return ops + setup('/tick unfreeze', '/data remove storage horizon:key_order name', f'/kill @e[type=!player,x={x0},y={y0 - 8},z={z0},dx=16,dy=24,dz=16]',
                        f'/forceload remove {x0} {z0}')
 
+def primed_tnt_base_fields():
+    """PrimedTnt keeps Entity's own fields: Entity.load sets the saved Rotation (setXRot clamps xRot % 360 to
+    +-90, then setRot takes both % 360), PrimedTnt.tick's handlePortal counts PortalCooldown down, and
+    applyEffectsFromBlocks sets a fire immune entity's Fire to -getFireImmuneTicks(), 0, every tick
+    (PrimedTnt.tick never runs baseTick). Read before a tick, after /data merge, after a tick, and after the
+    chunk is unloaded and loaded again."""
+    x0, y0, z0 = 5664, 250, 5664
+    chunk = [[(x0 >> 4) + dx, (z0 >> 4) + dz] for dx in range(-2, 3) for dz in range(-2, 3)]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256)]
+    cases = ['Rotation:[-170.5f,-90.0f],Fire:40s,PortalCooldown:1200',
+             'Rotation:[45.0f,135.0f],Fire:-20s,PortalCooldown:3',
+             'Rotation:[400.0f,-400.0f],HasVisualFire:1b']
+    for n, extra in enumerate(cases, 1):
+        ops.append(cmd(f'/summon tnt {x0 + 3 * n}.5 {y0} {z0 + 8}.5 {{UUID:[I;16530,0,{n},1],fuse:400,{extra}}}',
+                       expect_result=1))
+
+    def reads():
+        for n, _ in enumerate(cases, 1):
+            for key in ('Rotation', 'Fire', 'PortalCooldown'):
+                ops.append(cmd(f'/data get entity 00004092-0000-0000-0000-{n:04x}00000001 {key}'))
+
+    reads()
+    # /data merge runs Entity.load on the live TNT: the same angles, and the merged PortalCooldown, from a portal
+    # state or none.
+    ops.append(cmd('/data merge entity 00004092-0000-0000-0000-000100000001 {PortalCooldown:0}'))
+    ops.append(cmd('/data merge entity 00004092-0000-0000-0000-000300000001 {Rotation:[400.0f,135.0f],PortalCooldown:50}'))
+    # getIntOr takes any numeric tag, on a live portal state (TNT 2) or none (TNT 1).
+    ops.append(cmd('/data merge entity 00004092-0000-0000-0000-000200000001 {PortalCooldown:40s}'))
+    ops.append(cmd('/data merge entity 00004092-0000-0000-0000-000100000001 {PortalCooldown:7.9d}'))
+    reads()
+    ops.append({'op': 'tick', 'n': 1})
+    reads()
+    ops.extend([cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+                cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1),
+                cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}])
+    reads()
+    return ops + setup(f'/kill @e[type=tnt,x={x0},y={y0 - 8},z={z0},dx=16,dy=24,dz=16]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 4} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
 def orb_fall_distance():
     """#14440: an experience orb's fall (`Entity.fallDistance`). `Entity.move` casts a move of a block or
     more over fall-resetting blocks and water, then `checkFallDamage` adds the drop outside water and on
@@ -9075,6 +9116,7 @@ def groups():
         ('vehicle saved ground and fall', vehicle_saved_ground_and_fall()),
         ('ravager saved movement speed', ravager_saved_movement_speed()),
         ('text component key order', text_component_key_order()),
+        ('primed tnt base fields', primed_tnt_base_fields()),
         # Last: it leaves the player in other food than it found.
         (player_food.GROUP, player_food.cases(cmd, setup)),
     ]

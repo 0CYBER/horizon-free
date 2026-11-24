@@ -393,6 +393,38 @@ fn a_horses_unknown_coat_and_markings_wrap() {
     assert_eq!(saved(9, Some(5)), Some(5));
 }
 
+/// `Entity.load`: `setYRot`/`setXRot`, then `setRot`'s `% 360`.
+#[test]
+fn a_loaded_rotation_wraps_and_clamps_as_entity_load_does() {
+    let rot = |r: &str| {
+        let tag = horizon_core::nbt::parse_snbt(&format!("{{Rotation:{r}}}"))
+            .unwrap()
+            .0;
+        loaded_rotation(&tag)
+    };
+    assert_eq!(rot("[-170.5f,-90.0f]"), [-170.5, -90.0]);
+    assert_eq!(rot("[45.0f,135.0f]"), [45.0, 90.0]);
+    assert_eq!(rot("[400.0f,-400.0f]"), [40.0, -40.0]);
+    assert_eq!(rot("[-725.0f,370.0f]"), [-5.0, 10.0]);
+    assert_eq!(rot("[1.0f]"), [0.0, 0.0]);
+    // On a live entity a non-finite angle (only binary NBT holds one; SNBT
+    // has no NaN, and an unreadable Rotation is Vec2.ZERO) keeps the
+    // previous one.
+    let nan = Tag::compound([(
+        "Rotation",
+        Tag::List(vec![
+            Tag::Float(f32::NAN.to_bits()),
+            Tag::Float(135.0_f32.to_bits()),
+        ]),
+    )]);
+    assert_eq!(loaded_rotation_over(&nan, [12.0, 3.0]), [12.0, 90.0]);
+    assert_eq!(rot("[\"NaNf\",135.0f]"), [0.0, 0.0]);
+    let tag = horizon_core::nbt::parse_snbt("{Rotation:[400.0f,135.0f]}")
+        .unwrap()
+        .0;
+    assert_eq!(loaded_rotation_over(&tag, [12.0, 3.0]), [40.0, 90.0]);
+}
+
 /// `LivingEntity.readAdditionalSaveData` reads `HurtTime` and `DeathTime`
 /// with `getShortOr`: an int tag is narrowed (`(short)(value & 65535)`),
 /// so 40000 is -25536 and never counts down.

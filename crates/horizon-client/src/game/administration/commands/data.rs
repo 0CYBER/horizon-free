@@ -755,7 +755,7 @@ impl Game<'_> {
                 tnt.position = position;
                 tnt.previous = position;
                 tnt.velocity = entity_nbt::motion(&tag);
-                tnt.rotation = entity_nbt::rotation(&tag);
+                tnt.rotation = entity_nbt::loaded_rotation_over(&tag, tnt.rotation);
                 tnt.fuse = super::super::persist::tnt_fuse(&tag);
                 tnt.on_ground = entity_nbt::flag(&tag, "OnGround");
                 tnt.fall_distance =
@@ -763,6 +763,7 @@ impl Game<'_> {
                 tnt.no_gravity = entity_nbt::flag(&tag, "NoGravity");
                 tnt.power = entity_nbt::tnt_power(&tag);
                 tnt.block_state = block_state;
+                self.reload_portal_cooldown(id, &tag);
                 // Runtime id/join, owner binding and guest attribution stay live.
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
@@ -790,16 +791,7 @@ impl Game<'_> {
                 orb.health = new.health;
                 orb.no_gravity = new.no_gravity;
                 orb.fall_distance = new.fall_distance;
-                // Entity.load reads portalCooldown and leaves the portal
-                // process as it is.
-                if let Some(portal) = self.portals.entities.get_mut(&id) {
-                    portal.cooldown = tag
-                        .get("PortalCooldown")
-                        .and_then(horizon_client::nbt_path::int_value)
-                        .unwrap_or(0);
-                } else {
-                    self.restore_portal_cooldown(id, &tag);
-                }
+                self.reload_portal_cooldown(id, &tag);
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }
             Target::Trident(id) => {

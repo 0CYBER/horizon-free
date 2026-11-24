@@ -960,6 +960,18 @@ impl Game<'_> {
             }
         }
     }
+    /// `Entity.load` on a live entity (`/data merge`): `getIntOr("PortalCooldown", 0)`
+    /// takes any numeric tag and leaves the portal process as it is.
+    pub(super) fn reload_portal_cooldown(&mut self, id: u32, tag: &Tag) {
+        if let Some(portal) = self.portals.entities.get_mut(&id) {
+            portal.cooldown = tag
+                .get("PortalCooldown")
+                .and_then(horizon_client::nbt_path::int_value)
+                .unwrap_or(0);
+        } else {
+            self.restore_portal_cooldown(id, tag);
+        }
+    }
     /// `Entity.saveWithoutId` writes the live `PortalCooldown`: the countdown
     /// `Entity.processPortalCooldown` ticks down, not the value the entity was
     /// loaded with. Every entity that can stand in a portal takes it from the

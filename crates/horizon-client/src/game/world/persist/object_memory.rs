@@ -342,10 +342,26 @@ impl Game<'_> {
             // getShortOr uses NumericTag.shortValue: floor floating values
             // to int before short narrowing; integer tags narrow directly.
             let fuse = tnt_fuse(&tag);
+            // A fresh load: Entity.load's angles. A portal arrival:
+            // teleportSetPosition's `setYRot`/`setXRot` of the turned angles,
+            // with no `% 360` on the yaw.
+            let rotation = if used_portal {
+                let [yaw, pitch] = entity_nbt::rotation(&tag);
+                [
+                    if yaw.is_finite() { yaw } else { 0.0 },
+                    if pitch.is_finite() {
+                        (pitch % 360.0).clamp(-90.0, 90.0)
+                    } else {
+                        0.0
+                    },
+                ]
+            } else {
+                entity_nbt::loaded_rotation(&tag)
+            };
             self.tnts.push(crate::game::tnt::PrimedTnt {
                 used_portal,
                 attachment_lifetime: Default::default(),
-                rotation: [0.0, 0.0],
+                rotation,
                 join: Default::default(),
                 no_gravity: entity_nbt::flag(&tag, "NoGravity"),
                 id,
@@ -366,7 +382,9 @@ impl Game<'_> {
                     .get("block_state")
                     .and_then(|v| entity_nbt::state_from_nbt(self.pack.assets.registry, v)),
             });
-            // `Entity.load`: the `PortalCooldown` of one that just came through.
+            // `Entity.load`: the `PortalCooldown` of one that just came through,
+            // which `handlePortal` counts down every tick.
+            self.restore_portal_cooldown(id, &tag);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(id, state);
             }
