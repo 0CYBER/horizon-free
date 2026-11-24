@@ -5254,7 +5254,21 @@ impl Game<'_> {
             }
         }
         if keep {
-            self.add_projectile(arrow);
+            self.return_projectile(arrow);
+        }
+    }
+    /// Puts a projectile that never left the level (such as a bounced or dodged arrow) back at its
+    /// original join-order slot without firing `projectile_launch` again.
+    fn return_projectile(&mut self, p: Projectile) {
+        if p.join.is_joined() {
+            let join = p.join;
+            let at = self
+                .creatures
+                .projectiles
+                .partition_point(|q| q.join < join);
+            self.creatures.projectiles.insert(at, p);
+        } else {
+            self.creatures.projectiles.push(p);
         }
     }
     /// `ThrownEnderpearl.onHit` for a living non-player owner: the same hook,

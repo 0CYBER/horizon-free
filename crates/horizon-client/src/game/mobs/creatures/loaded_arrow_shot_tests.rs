@@ -837,3 +837,54 @@ fn a_bullet_a_mob_shot_saves_its_owner() {
         assert_eq!(owner_of(tag), Some(ints([5, 6, 7, 8])));
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn bounced_arrow_keeps_tick_order_without_refiring_projectile_launch() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct LaunchCounter(Arc<AtomicUsize>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for LaunchCounter {
+        fn projectile_launch(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            _: &mut mod_api::ProjectileLaunchEvent<'_>,
+        ) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let launches = Arc::new(AtomicUsize::new(0));
+    let mods = vec![mod_api::ModEntry::new(
+        "launch_counter",
+        Box::new(LaunchCounter(launches.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            assert!(game.run_command(
+                "summon arrow 6.5 201.5 10.5 {NoGravity:1b,Motion:[0d,0d,1d]}"
+            ));
+            assert!(game.run_command(
+                "summon arrow 8.5 201.5 10.5 {NoGravity:1b,Motion:[0d,0d,1d]}"
+            ));
+            let ids: Vec<u32> = game.creatures.projectiles.iter().map(|p| p.id).collect();
+            assert_eq!(ids.len(), 2);
+            let (first_id, second_id) = (ids[0], ids[1]);
+            let before_bounce = launches.load(Ordering::Relaxed);
+
+            // Simulate the first arrow bouncing off an entity: it must stay ahead of the second
+            // projectile and must not fire `projectile_launch` again.
+            let first = game.creatures.projectiles.remove(0);
+            game.finish_arrow_hit(first, super::EntityHit::Deflected);
+
+            let after_ids: Vec<u32> = game.creatures.projectiles.iter().map(|p| p.id).collect();
+            assert_eq!(after_ids, vec![first_id, second_id]);
+            assert_eq!(launches.load(Ordering::Relaxed), before_bounce);
+        });
+    });
+}
