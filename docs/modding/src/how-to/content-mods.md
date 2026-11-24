@@ -276,6 +276,12 @@ takes one value per declared property too, so a block's default is exactly one
 state of its own. Every combination has to fit in the states a world holds
 (2^20), so a declaration that would not is refused when the mods load.
 
+A `minecraft:simple_block` worldgen feature uses the template's placement rules.
+For example, a block based on `minecraft:sunflower` gets its own lower and upper
+halves when the feature names its lower half. The `minecraft:pale_moss_carpet`
+template follows vanilla's carpet placement routine, which writes vanilla pale
+moss carpet rather than the candidate block.
+
 A block with template `minecraft:farmland` may set `"base_block": "namespace:block"` to choose the block it becomes when it dries out, is trampled, or has a solid block placed above it. The ID must name a registered block; without the key, the template's dirt base is used.
 
 A block whose template is one of vanilla's signs is a sign, whatever its name: it has vanilla's sign block

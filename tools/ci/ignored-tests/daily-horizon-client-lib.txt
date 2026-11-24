@@ -381,6 +381,7 @@ horizon-client-lib mobs::world::missing_data_report_tests::missing_mob_data_repo
 horizon-client-lib mobs::world::scaffolding_sight_tests::scaffolding_blocks_sight_only_from_above lib daily resources
 horizon-client-lib mod_content::tests::registered_conditions_tests::failed_condition_build_removes_generated_staging lib daily resources
 horizon-client-lib mod_content::tests::registered_conditions_tests::registered_conditions_select_content_root_tags_and_structure_modifiers lib daily resources
+horizon-client-lib mod_content::tests::worldgen_tests::content_root_inherits_simple_block_template_placement lib daily resources
 horizon-client-lib motion::exclusions::tests::an_excluded_block_has_no_inside_effect_and_its_neighbour_still_does lib daily resources
 horizon-client-lib motion::tests::a_burning_player_melts_powder_snow lib daily resources
 horizon-client-lib motion::tests::a_client_over_an_unloaded_chunk_falls_at_a_tenth lib daily resources

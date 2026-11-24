@@ -349,6 +349,120 @@ fn a_superflat_world_runs_its_structure_sets_on_flat_ground() {
     );
 }
 
+/// Exercise `SimpleBlockFeature.place` through decoration of a content biome.
+#[test]
+#[ignore = "daily"]
+fn content_root_inherits_simple_block_template_placement() {
+    use crate::streaming::ChunkGenerator;
+    use horizon_world::worldgen::generator::FlatSettings;
+
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let vanilla_biomes: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(base.join("worldgen/biomes.json")).unwrap()).unwrap();
+    let mut meadow: serde_json::Value =
+        serde_json::from_str(&vanilla_biomes["minecraft:plains"]).unwrap();
+    meadow["features"] =
+        serde_json::json!([["meadow:flower", "meadow:vanilla_flower", "meadow:carpet"]]);
+    let m = folder_mod(
+        &scratch.path().join("meadow"),
+        &[
+            ("horizon-mod.toml", &manifest("meadow", "")),
+            (
+                "data/meadow/horizon/block/flower.json",
+                r#"{"template":"minecraft:sunflower","state_properties":{"bloom":{"type":"boolean"}}}"#,
+            ),
+            (
+                "data/meadow/horizon/block/carpet.json",
+                r#"{"template":"minecraft:pale_moss_carpet"}"#,
+            ),
+            (
+                "data/meadow/worldgen/biome/meadow.json",
+                &meadow.to_string(),
+            ),
+            (
+                "data/meadow/worldgen/feature/flower.json",
+                r#"{"type":"minecraft:simple_block","to_place":{"id":"meadow:flower","properties":{"half":"lower","bloom":"true"}}}"#,
+            ),
+            (
+                "data/meadow/worldgen/feature/carpet.json",
+                r#"{"type":"minecraft:simple_block","to_place":{"id":"meadow:carpet","properties":{"bottom":"true"}}}"#,
+            ),
+            (
+                "data/meadow/worldgen/placed_feature/flower.json",
+                r#"{"feature":"meadow:flower","placement":[{"type":"minecraft:offset","x":0,"y":1,"z":0}]}"#,
+            ),
+            (
+                "data/meadow/worldgen/placed_feature/vanilla_flower.json",
+                r#"{"feature":"minecraft:sunflower","placement":[{"type":"minecraft:offset","x":4,"y":1,"z":0}]}"#,
+            ),
+            (
+                "data/meadow/worldgen/placed_feature/carpet.json",
+                r#"{"feature":"meadow:carpet","placement":[{"type":"minecraft:offset","x":8,"y":1,"z":0}]}"#,
+            ),
+        ],
+    );
+    let root =
+        resource_root_fixture(&base, Path::new(""), &[m], &scratch.path().join("cache")).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let biomes = crate::biome::Biomes::load(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+    )
+    .unwrap();
+    let item_data =
+        crate::test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
+    let terrain = crate::vanillagen::VanillaTerrain::for_flat(
+        crate::vanillagen::TerrainResources {
+            data: None,
+            dir: &root.join("worldgen"),
+            registry: assets.registry,
+            biomes: &biomes,
+            item_data: &item_data,
+        },
+        &Default::default(),
+        1234,
+        &FlatSettings {
+            layers: vec![("minecraft:grass_block".into(), 1)],
+            biome: "meadow:meadow".into(),
+            structure_overrides: Some(vec![]),
+            features: true,
+            lakes: false,
+        },
+        false,
+    )
+    .unwrap();
+    let mut worker = terrain.worker();
+    let mut region: [_; 9] =
+        std::array::from_fn(|i| terrain.proto(&mut worker, i as i32 % 3 - 1, i as i32 / 3 - 1));
+    terrain.decorate(&mut worker, &mut region);
+    let [_, _, _, _, center, ..] = region;
+    let chunk = terrain.finish(center);
+    let y = chunk.min_y() + 1;
+    for (dy, half) in [(0, "lower"), (1, "upper")] {
+        for (x, name) in [(0, "meadow:flower"), (4, "minecraft:sunflower")] {
+            let state = assets.registry.state(chunk.block(x, y + dy, 0)).unwrap();
+            assert_eq!(state.name, name);
+            assert_eq!(state.properties["half"], half);
+            if x == 0 {
+                assert_eq!(state.properties["bloom"], "true");
+            }
+        }
+    }
+    // `MossyCarpetBlock.placeAt` uses the vanilla pale moss carpet even
+    // when the candidate is a subclass. With no side support, it has no topper.
+    let moss = assets
+        .registry
+        .default_state("minecraft:pale_moss_carpet")
+        .unwrap();
+    assert_eq!(chunk.block(8, y, 0), moss);
+    assert_eq!(
+        chunk.block(8, y + 1, 0),
+        assets.registry.default_state("minecraft:air").unwrap()
+    );
+}
+
 /// `adjustGenerationSettings`: the Overworld preset decorates its plains with grass,
 /// flowers and trees even with no structure set (`structure_overrides: []`, or
 /// `generate_structures` off), and without `features` the same layers stay bare.

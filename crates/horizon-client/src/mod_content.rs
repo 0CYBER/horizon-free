@@ -2190,6 +2190,24 @@ impl<'a> Plan<'a> {
                 }
             }
             "worldgen/blocks/survival-rules.json" => self.names(doc, false),
+            "worldgen/blocks/placement-definitions.json" => {
+                // `SimpleBlockFeature.place` dispatches by block class to
+                // `DoublePlantBlock.placeAt` or `MossyCarpetBlock.placeAt`.
+                // Content blocks inherit that dispatch from their template.
+                for key in ["double_plants", "mossy_carpets"] {
+                    if let Some(J::Arr(names)) = doc.get_mut(key) {
+                        let vanilla_count = names.len();
+                        for b in &self.blocks {
+                            if names[..vanilla_count]
+                                .iter()
+                                .any(|name| name.as_str() == Some(b.decl.template.as_str()))
+                            {
+                                names.push(J::Str(b.decl.id.clone()));
+                            }
+                        }
+                    }
+                }
+            }
             "worldgen/blocks/survival-extra-definitions.json" => {
                 if let Some(map) = doc.at("ignition_odds") {
                     self.names(map, false);
@@ -2522,7 +2540,7 @@ impl<'a> Plan<'a> {
 }
 
 /// The JSON and NBT tables rewritten for new blocks and items.
-const JSON_TABLES: [&str; 16] = [
+const JSON_TABLES: [&str; 17] = [
     "facts.json",
     "entity-types.json",
     "creative-inventory.json",
@@ -2539,6 +2557,7 @@ const JSON_TABLES: [&str; 16] = [
     "worldgen/blocks/structure-blocks.json",
     "worldgen/blocks/survival-rules.json",
     "worldgen/blocks/survival-extra-definitions.json",
+    "worldgen/blocks/placement-definitions.json",
 ];
 const NBT_TABLES: [&str; 6] = [
     "occlusion.nbt",
