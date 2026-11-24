@@ -52,8 +52,12 @@ pub trait Env {
 pub fn err(key: &str, args: &[&dyn std::fmt::Display]) -> CommandError {
     CommandError::tr(key, args)
 }
-/// `ComponentUtils.formatList` with the gray ", " separator.
-pub fn format_list(items: Vec<Text>) -> Text {
+/// `ComponentUtils.formatList` with the gray ", " separator: one item is that item
+/// itself (`formatList`'s `size() == 1` branch), not a component wrapping it.
+pub fn format_list(mut items: Vec<Text>) -> Text {
+    if items.len() == 1 {
+        return items.remove(0);
+    }
     let mut out = Text::empty();
     for (i, t) in items.into_iter().enumerate() {
         if i > 0 {

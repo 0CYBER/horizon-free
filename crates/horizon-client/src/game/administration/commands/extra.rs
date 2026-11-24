@@ -714,7 +714,7 @@ impl Game<'_> {
         };
         // EntityArgument.getPlayers runs before the published check.
         let host = self.entities(ctx, "targets", true).unwrap_or_default();
-        let guests: Vec<(u32, String)> = match (&self.lan, &selector) {
+        let guests: Vec<(u32, String, u128)> = match (&self.lan, &selector) {
             (Some(lan), Some(s)) => lan
                 .hub
                 .guests
@@ -727,7 +727,7 @@ impl Game<'_> {
                     Some(name) => g.name.eq_ignore_ascii_case(name),
                     None => s.kind == 'a' || s.kind == 'e',
                 })
-                .map(|g| (g.conn, g.name.clone()))
+                .map(|g| (g.conn, g.name.clone(), g.uuid))
                 .collect(),
             _ => Vec::new(),
         };
@@ -753,13 +753,14 @@ impl Game<'_> {
             )]),
         };
         let mut count = 0;
-        for (conn, name) in guests {
+        for (conn, name, uuid) in guests {
             if let Some(lan) = self.lan.as_mut() {
                 lan.hub.kick(conn, tag.clone());
             }
+            // `KickCommand.kickPlayers` names them by `Player.getDisplayName`.
             self.feedback(Text::translate(
                 "commands.kick.success",
-                &[Text::literal(name), reason.clone()],
+                &[self.player_text(&name, uuid), reason.clone()],
             ));
             count += 1;
         }

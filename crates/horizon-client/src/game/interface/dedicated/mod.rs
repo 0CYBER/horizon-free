@@ -967,9 +967,9 @@ fn save_all_reply(saved: bool) -> Text {
 }
 
 /// `BanIpCommands.banIp`'s `commands.banip.info`: the count of affected players and
-/// `EntitySelector.joinNames` of them (a gray ", " between names). None when no one is affected,
-/// as vanilla sends no line then.
-fn ban_ip_info(names: &[&str]) -> Option<Text> {
+/// `EntitySelector.joinNames` of them (their `Player.getDisplayName`, a gray ", " between
+/// them). None when no one is affected, as vanilla sends no line then.
+fn ban_ip_info(names: &[Text]) -> Option<Text> {
     if names.is_empty() {
         return None;
     }
@@ -977,12 +977,7 @@ fn ban_ip_info(names: &[&str]) -> Option<Text> {
         "commands.banip.info",
         &[
             Text::literal(names.len().to_string()),
-            horizon_client::scoreboard_cmd::format_list(
-                names
-                    .iter()
-                    .map(|n| Text::literal((*n).to_owned()))
-                    .collect(),
-            ),
+            horizon_client::scoreboard_cmd::format_list(names.to_vec()),
         ],
     ))
 }
@@ -2238,7 +2233,10 @@ impl Game<'_> {
                             .collect()
                     })
                     .unwrap_or_default();
-                let names: Vec<&str> = banned.iter().map(|(_, n)| n.as_str()).collect();
+                let names: Vec<Text> = banned
+                    .iter()
+                    .map(|(uuid, name)| self.player_text(name, *uuid))
+                    .collect();
                 if let Some(info) = ban_ip_info(&names) {
                     self.console_reply(info);
                 }
@@ -2325,10 +2323,11 @@ impl Game<'_> {
                     translatable("multiplayer.disconnect.kicked", &[])
                 };
                 self.kick_uuid(user.id, reason);
+                // `KickCommand.kickPlayers` names them by `Player.getDisplayName`.
                 self.console_reply(Text::translate(
                     "commands.kick.success",
                     &[
-                        lit(&user.name),
+                        self.player_text(&user.name, user.id),
                         if rest.len() > 1 {
                             lit(&rest[1..].join(" "))
                         } else {
@@ -2897,11 +2896,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(super::ban_ip_info(&[]).is_none());
-        let one = super::ban_ip_info(&["Alex"]).unwrap();
+        let name = |n| super::Text::literal(n).with_color(horizon_client::text::RED);
+        let one = super::ban_ip_info(&[name("Alex")]).unwrap();
         assert_eq!(one.translation_key(), Some("commands.banip.info"));
         let a = args(&one);
         assert!(a[0].contains('1') && a[1].contains("Alex"), "{a:?}");
-        let two = super::ban_ip_info(&["Alex", "Steve"]).unwrap();
+        let two = super::ban_ip_info(&[name("Alex"), name("Steve")]).unwrap();
         let a = args(&two);
         assert!(a[0].contains('2'), "{a:?}");
         assert!(

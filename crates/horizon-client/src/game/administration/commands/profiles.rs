@@ -299,7 +299,9 @@ impl Game<'_> {
             }
             let removed = {
                 let mut l = lists.lock().unwrap();
-                l.ip_bans.get(&target).is_some() && l.ip_bans.remove(&target)
+                // `IpBanList.isBanned` is `StoredUserList.contains`: an entry that has
+                // expired still counts until it is removed here.
+                l.ip_bans.contains(&target) && l.ip_bans.remove(&target)
             };
             if !removed {
                 return Err(err("commands.pardonip.failed", &[]));
@@ -325,7 +327,7 @@ impl Game<'_> {
         let Some(ip) = ip else {
             return Err(err("commands.banip.invalid", &[]));
         };
-        if lists.lock().unwrap().ip_bans.get(&ip).is_some() {
+        if lists.lock().unwrap().ip_bans.contains(&ip) {
             return Err(err("commands.banip.failed", &[]));
         }
         let players: Vec<(u128, String)> = self
@@ -358,10 +360,18 @@ impl Game<'_> {
             &[lit(&ip), Self::reason_message(reason.as_deref())],
         ));
         if !players.is_empty() {
-            let names: Vec<&str> = players.iter().map(|(_, n)| n.as_str()).collect();
+            // `EntitySelector.joinNames`: `ComponentUtils.formatList(players,
+            // Entity::getDisplayName)`, the gray ", " between them.
+            let names = players
+                .iter()
+                .map(|(uuid, name)| self.player_text(name, *uuid))
+                .collect();
             self.feedback(Text::translate(
                 "commands.banip.info",
-                &[lit(&players.len().to_string()), lit(&names.join(", "))],
+                &[
+                    lit(&players.len().to_string()),
+                    horizon_client::scoreboard_cmd::format_list(names),
+                ],
             ));
         }
         for (uuid, _) in &players {
@@ -463,6 +473,10 @@ impl Game<'_> {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "kick_ban_names_tests.rs"]
+mod kick_ban_names_tests;
 
 #[cfg(test)]
 #[path = "save_all_command_tests.rs"]

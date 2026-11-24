@@ -1,0 +1,4 @@
+# #16608: kick/ban display names and expired IP-ban membership, with the prepared 26.3 data.
+horizon-client game::commands::profiles::kick_ban_names_tests::kick_names_the_player_as_their_team_does lib daily resources
+horizon-client game::commands::profiles::kick_ban_names_tests::ban_ip_names_the_players_it_kicks_as_their_team_does lib daily resources
+horizon-client game::commands::profiles::kick_ban_names_tests::an_expired_ip_ban_still_bans_the_address_until_it_is_removed lib daily resources
