@@ -21,6 +21,17 @@ pub trait DrawClientHost {
     /// @API:model_layers@.
     #[access(ClientSetup)]
     fn bake_layer(&self, layer: &str) -> Option<ModelPart>;
+    /// Side: client.
+    /// The local player's first-person arm appearance: `(sprite, slim)`.
+    /// Pass `sprite` directly to [`BlockEntityDrawContext::model_part`]; use
+    /// `minecraft:player_slim#main` when `slim` is true, `minecraft:player#main`
+    /// otherwise. Both hands use the same appearance.
+    /// The sprite falls back to Steve when the player's skin is not in the atlas;
+    /// that fallback does not change the arm width. `None` with no local player
+    /// or if neither sprite is available. Read it when drawing, since a skin
+    /// download or resource reload can change the answer.
+    #[access(ClientSetup)]
+    fn local_player_arm_skin(&self) -> Option<(&str, bool)>;
 }
 /// What the HUD, screen and tooltip hooks draw with, in GUI pixels: one per hook call.
 pub trait DrawContext {

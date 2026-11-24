@@ -791,6 +791,7 @@ horizon-client game::item_use::interact_vibration_tests::cake_context_uses_can_e
 horizon-client game::item_use::interact_vibration_tests::fishing_cast_and_reel_post_player_vibrations lib daily resources
 horizon-client game::item_use::interact_vibration_tests::thrown_eye_posts_projectile_shoot_at_eye_from_player lib daily resources
 horizon-client game::item_use::tests::a_mod_draws_in_a_hand_that_holds_an_item lib daily resources
+horizon-client game::item_use::tests::both_held_hands_can_draw_the_resolved_player_skin lib daily resources
 horizon-client game::item_use::tests::item_animation_dispatches_vanilla_parts_and_refuses_invalid_spears lib daily resources
 horizon-client game::item_use::tests::patched_bow_keeps_vanilla_animation_without_listener lib daily resources
 horizon-client game::item_void_tests::items_fall_to_each_dimensions_own_void_floor lib daily resources

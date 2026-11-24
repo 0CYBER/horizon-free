@@ -198,6 +198,22 @@ Typed humanoid parts have separate storage, so all twelve fit alongside the eigh
   `getParentModel()` layers do: a villager's type, profession and level, a spider's eyes. The
   armour, held items and other layers keep every part, and the cape, a layer of its own, stays.
 
+## Drawing the player's arms with a held item
+
+In `render_hand`, call `host.local_player_arm_skin()` to get `(sprite, slim)` for
+the local player. The key is the current first-person arm's atlas sprite: pass it
+directly to `event.draw.model_part(part, sprite, 0xFFFFFF)`. If the player's skin
+isn't in the atlas, the key uses the same Steve fallback as the ordinary arm
+without changing `slim`. Skip drawing if the call returns `None`; read it again
+when drawing rather than caching the key across frames.
+
+Bake `minecraft:player_slim#main` and `minecraft:player#main` once with `bake_layer`
+and choose the layer by `slim`. `event.render.hand` distinguishes the main and off
+hand; the main arm is left when `host.gui_options().main_hand_left` is true,
+and the off arm is the opposite. Pose the part in the draw context's hand space
+(blocks, +x right, +y up, -z away). Return `Flow::Continue` to keep the default
+held item in addition to the arm you drew.
+
 ## Text and animation in block entities
 
 `BlockEntityDrawContext::text` draws a component under the current pose in font pixels,

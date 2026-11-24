@@ -1021,6 +1021,89 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
+    fn both_held_hands_can_draw_the_resolved_player_skin() {
+        use mod_api::prelude::DrawClientHost;
+        use mod_api::{ClientHost, Flow, Hand, Hooks, ModEntry, ModelPart, Mods, RenderHandEvent};
+        use std::sync::OnceLock;
+
+        const ALEX: &str = "entity/player/slim/alex";
+        const STEVE: &str = "entity/player/wide/steve";
+
+        struct Mod(OnceLock<ModelPart>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Mod {
+            fn render_hand(
+                &self,
+                host: &dyn ClientHost,
+                event: &mut RenderHandEvent<'_, '_>,
+            ) -> Flow {
+                assert!(event.render.stack.is_some());
+                let (sprite, slim) = host.local_player_arm_skin().unwrap();
+                assert!(slim, "an atlas fallback must not widen a slim arm");
+                let model = self
+                    .0
+                    .get_or_init(|| host.bake_layer("minecraft:player_slim#main").unwrap());
+                let arm_name = match event.render.hand {
+                    Hand::Main => "right_arm",
+                    Hand::Off => "left_arm",
+                };
+                let arm = model.get_child(arm_name).unwrap();
+                assert!(event.draw.model_part(arm, sprite, 0xFFFFFF));
+                Flow::Continue
+            }
+        }
+
+        let mods: Mods = vec![ModEntry::new("hands", Box::new(Mod(OnceLock::new())))].into();
+        crate::game::api_values::install_parts(&mods).unwrap();
+        mod_platform::testing::with_mods(mods, || {
+            super::super::native_entity_refs::tests::with_client_game(|game| {
+                assert_eq!(DrawClientHost::local_player_arm_skin(game), None);
+                game.player = Some(
+                    horizon_client::motion::PlayerMotion::new(
+                        game.motion,
+                        horizon_core::geometry::Vec3::ZERO,
+                    )
+                    .unwrap(),
+                );
+                let stack = horizon_client::items::ItemStack::new("minecraft:iron_sword", 1);
+                game.inventory[game.selected] = Some(stack.clone());
+                game.offhand = Some(stack.clone());
+                game.visible_hands[0].1 = Some(stack.clone());
+                game.visible_hands[1].1 = Some(stack);
+                game.tick_player_model();
+                let model = game.player_model.as_mut().unwrap();
+                model.skin = Some(ALEX.into());
+                model.slim = true;
+
+                for sprite in [ALEX, STEVE] {
+                    let rect = game.gui.atlas.sprites[sprite];
+                    assert_eq!(
+                        DrawClientHost::local_player_arm_skin(game),
+                        Some((sprite, true))
+                    );
+                    let (vertices, runs) = game.hand_geometry(0.0);
+                    let &[(main_arm, _), (main_item, _), (off_arm, _), (off_item, _)] =
+                        runs.as_slice()
+                    else {
+                        panic!("expected two arm/item pairs, got {runs:?}");
+                    };
+                    assert!(main_arm < main_item && main_item < off_arm);
+                    assert!(off_arm < off_item && (off_item as usize) < vertices.len());
+                    for (start, end) in [(main_arm, main_item), (off_arm, off_item)] {
+                        assert!(vertices[start as usize..end as usize].iter().all(|v| {
+                            (rect.u0..=rect.u1).contains(&v.uv[0])
+                                && (rect.v0..=rect.v1).contains(&v.uv[1])
+                        }));
+                    }
+                    game.gui.atlas.sprites.remove(sprite);
+                }
+                assert_eq!(DrawClientHost::local_player_arm_skin(game), None);
+            });
+        });
+    }
+
+    #[test]
     fn a_use_runs_out_on_its_last_tick() {
         // a 32 tick food: ticks 0 to 30 go on, the 32nd tick finishes it.
         assert_eq!(count_down(0, 32), Some(1));

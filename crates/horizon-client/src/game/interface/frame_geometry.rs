@@ -124,6 +124,27 @@ impl Game<'_> {
             (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
         (out, stars)
     }
+    /// The atlas entry and model width that the first-person arms use, including
+    /// the fallback when the player's skin has not reached the atlas.
+    fn first_person_arm_skin(&self) -> Option<(&str, &horizon_client::hud::Rect, bool)> {
+        let model = self.player_model.as_ref();
+        let slim = model.is_some_and(|m| m.slim);
+        let sprites = &self.gui.atlas.sprites;
+        let (sprite, rect) = model
+            .and_then(|m| m.skin.as_deref())
+            .and_then(|skin| sprites.get_key_value(skin))
+            .or_else(|| sprites.get_key_value("entity/player/wide/steve"))?;
+        Some((sprite.as_str(), rect, slim))
+    }
+
+    pub(in crate::game) fn local_player_arm_skin(&self) -> Option<(&str, bool)> {
+        if !self.native_window() || self.player.is_none() {
+            return None;
+        }
+        self.first_person_arm_skin()
+            .map(|(sprite, _, slim)| (sprite, slim))
+    }
+
     /// `renderPlayerHand` (`AvatarRenderer.renderHand`): the player's own
     /// `left` or right arm with its skin at pose `m`, in its rest pose
     /// turned 0.1 radians outwards. Mods are asked first (`RenderArmEvent`)
@@ -161,20 +182,10 @@ impl Game<'_> {
                 return;
             }
         }
-        let slim = self.player_model.as_ref().is_some_and(|m| m.slim);
-        let Some(arm) = self.res.player_arm(slim, left).as_ref() else {
+        let Some((_, r, slim)) = self.first_person_arm_skin() else {
             return;
         };
-        // The player's own skin, as the inventory's model shows it.
-        let sprites = &self.gui.atlas.sprites;
-        let Some(r) = self
-            .player_model
-            .as_ref()
-            .and_then(|m| m.skin.as_deref())
-            .and_then(|skin| sprites.get(skin))
-            .or_else(|| sprites.get("entity/player/wide/steve"))
-            .copied()
-        else {
+        let Some(arm) = self.res.player_arm(slim, left).as_ref() else {
             return;
         };
         let z_rot = if left { -0.1 } else { 0.1 };
