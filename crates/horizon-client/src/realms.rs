@@ -1664,7 +1664,8 @@ fn reset_tile(cx: f32, top: f32, i: usize) -> (f32, f32) {
     (cx - 122.0 + column * 92.0, top + row * 85.0)
 }
 
-/// `Unit.humanReadable`: binary units, a tenth at GB (`mco.upload.failed.too_big`).
+/// `Unit.humanReadable`: binary units, a tenth at GB (`mco.upload.failed.too_big`), rounded
+/// half-up with Java's fixed-point formatter.
 fn human_readable(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     if bytes < 1024 {
@@ -1676,11 +1677,17 @@ fn human_readable(bytes: u64) -> String {
         value /= 1024.0;
         unit += 1;
     }
-    if unit == UNITS.len() - 1 {
-        format!("{value:.1} {}", UNITS[unit])
-    } else {
-        format!("{value:.0} {}", UNITS[unit])
-    }
+    let decimals = usize::from(unit == UNITS.len() - 1);
+    format!(
+        "{} {}",
+        horizon_core::java_number::format_fixed(value, decimals),
+        UNITS[unit]
+    )
+}
+
+/// Realms upload/download percentage text (`String.format(Locale.ROOT, "%.1f", fraction * 100.0)`).
+fn transfer_percent(fraction: f64) -> String {
+    horizon_core::java_number::format_fixed(fraction * 100.0, 1)
 }
 
 /// The row `y` falls on in a list that starts at `top` and has scrolled `offset` pixels.
@@ -8488,7 +8495,7 @@ impl Screen {
                         15.0,
                         0xFF80_8080,
                     );
-                    let percent = format!("{:.1}", percentage * 100.0);
+                    let percent = transfer_percent(percentage);
                     centered(
                         batch,
                         atlas,
@@ -10994,7 +11001,7 @@ impl Screen {
                         15.0,
                         0xFF80_8080,
                     );
-                    let percent = format!("{:.1}", percentage * 100.0);
+                    let percent = transfer_percent(percentage);
                     centered(
                         batch,
                         atlas,

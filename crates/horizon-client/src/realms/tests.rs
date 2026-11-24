@@ -1338,3 +1338,13 @@ fn cancelling_a_restore_aborts_its_worker() {
         }
     ));
 }
+
+/// Transfer percentages and byte sizes round decimal midpoints half-up like Java's
+/// `String.format(Locale.ROOT, ...)`.
+#[test]
+fn transfer_captions_round_decimal_midpoints_half_up() {
+    assert_eq!(transfer_percent(0.0125), "1.3");
+    assert_eq!(human_readable(512), "512 B");
+    assert_eq!(human_readable(2560), "3 KB");
+    assert_eq!(human_readable(1_342_177_280), "1.3 GB");
+}
