@@ -1,0 +1,2 @@
+# A sign's editor is checked before the chat filter: the test needs prepared resources.
+horizon-client game::sign_update_tests::a_refused_text_from_another_player_keeps_the_editor lib daily resources

@@ -586,6 +586,16 @@ impl Game<'_> {
         };
         let (uuid, name) = (g.uuid, g.name.clone());
         let key = (p.pos[0], p.pos[1], p.pos[2]);
+        // SignBlockEntity.updateSignText: only the sign's allowed editor may write on it. This
+        // comes before the filter, whose refusal closes the editor: another player's rejected
+        // text must not close the editor of the player who is writing.
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
+            return;
+        };
+        if sign.waxed || sign.allowed_editor != Some(uuid) {
+            log::warn!("{name} just tried to change non-editable sign");
+            return;
+        }
         let lines = p.lines.join(" ");
         if !self.chat_filter_text(
             conn,
@@ -596,13 +606,6 @@ impl Game<'_> {
             self.world.block_entities.set_sign_editor(key, None);
             // The player's client shows the text it sent: the sign as it is, again.
             self.mark_block_entity_updated(key);
-            return;
-        }
-        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&key) else {
-            return;
-        };
-        if sign.waxed || sign.allowed_editor != Some(uuid) {
-            log::warn!("{name} just tried to change non-editable sign");
             return;
         }
         // Everything vanilla checks has passed: the mods hear what is about to

@@ -11887,6 +11887,10 @@ impl Game<'_> {
 mod sign_chain_tests;
 
 #[cfg(test)]
+#[path = "game/interface/tests/sign_update_tests.rs"]
+mod sign_update_tests;
+
+#[cfg(test)]
 #[path = "game/interface/tests/sign_use_tests.rs"]
 mod sign_use_tests;
 
