@@ -43,7 +43,9 @@ fn horizon_material_covers(in: HorizonMaterialOut, color: vec4<f32>, cutoff: f32
     return horizon_terrain_sprite(in.uv, in.layer & 0x7fffu).a >= cutoff;
 }
 struct HorizonMaterialOut {
-    @builtin(position) clip: vec4<f32>,
+    // Invariant: the depth pre-pass and the solid entries after it, testing equal, find the
+    // same depth (`DepthPipelines`).
+    @builtin(position) @invariant clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) layer: u32,
     // rgb the vertex colour (vanilla's product of the tint, the shade and the ambient
@@ -268,6 +270,23 @@ fn horizon_material_solid_sampled(in: HorizonMaterialOut, multisampled: bool) ->
     out.surface = bitcast<vec4<u32>>(vec4(horizon_surface.xyz, in.clip.z));
     return out;
 }
+// The solid terrain's depth pre-pass (`DepthPipelines`): the solid entries' own cuts without
+// the material, which then shades only the nearest point of each pixel. Under
+// `[material] coverage = engine` alone, where the texture's alpha cuts the holes.
+@fragment fn horizon_material_fs_depth(in: HorizonMaterialOut) -> HorizonMaterialSolid {
+    if length(in.base) < horizon_displace_distance - 0.05 && horizon_displaced_layer(in.layer) {
+        discard;
+    }
+    if horizon_terrain_sprite(in.uv, in.layer & 0x7fffu).a < 0.5 && (in.layer & 0x8000u) == 0u {
+        discard;
+    }
+    return HorizonMaterialSolid(vec4(0.0), vec4(0u));
+}
+@fragment fn horizon_material_fs_depth_msaa(in: HorizonMaterialOut) -> HorizonMaterialMsaa {
+    let alpha = horizon_terrain_sprite(in.uv, in.layer & 0x7fffu).a;
+    let coverage = horizon_terrain_cutout_coverage(alpha, (in.layer & 0x8000u) != 0u);
+    return HorizonMaterialMsaa(vec4(0.0), vec4(0u), coverage);
+}
 @fragment fn horizon_material_fs_translucent(in: HorizonMaterialOut) -> @location(0) vec4<f32> {
     let color = horizon_material_faded(in, horizon_material_color(in, true));
     if !horizon_material_covers(in, color, 0.01) { discard; }
@@ -382,6 +401,30 @@ pub struct MaterialPipelines {
     pub msaa: Option<(wgpu::RenderPipeline, Option<wgpu::RenderPipeline>)>,
     /// `[displacement]`'s grid of the solid terrain near the camera (gfx/displace.rs).
     pub displaced: Option<wgpu::RenderPipeline>,
+    /// The solid terrain's depth pre-pass, where it has one: `solid`, the flat solid pipeline
+    /// and `msaa`'s then test depth equal to what it wrote and don't write it themselves, so
+    /// the material shades each pixel once, not once a layer of terrain behind it.
+    pub depth: Option<DepthPipelines>,
+}
+
+/// The depth pre-pass of a material's solid terrain (`MaterialPipelines::depth`): the solid
+/// pipelines' draws with their cuts (the texture's alpha, `[displacement]`'s grid) and no
+/// material, each drawn over the same calls before its solid pipeline. Only under
+/// `[material] coverage = engine`: where the stage's own alpha cuts, the cut needs the stage.
+pub struct DepthPipelines {
+    pub solid: wgpu::RenderPipeline,
+    pub flat: Option<wgpu::RenderPipeline>,
+    /// As `MaterialPipelines::msaa`, there where those are.
+    pub msaa: Option<(wgpu::RenderPipeline, Option<wgpu::RenderPipeline>)>,
+}
+
+/// How a terrain pipeline tests and writes depth: the shaded draws without a pre-pass and the
+/// pre-pass itself test greater-or-equal (reversed depth) and write it; the solid ones after a
+/// pre-pass test equal and leave it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Depth {
+    Write,
+    Equal,
 }
 
 /// A pack's material stage: its terrain pipelines, and for a stage that calls `trace` or
@@ -814,7 +857,8 @@ impl NativeMaterial {
                         buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
                         fragment: &str,
                         blend: Option<wgpu::BlendState>,
-                        samples: u32| {
+                        samples: u32,
+                        depth: Depth| {
             let mut constants = constants.clone();
             if staged {
                 let translucent = fragment == "horizon_material_fs_translucent";
@@ -827,16 +871,22 @@ impl NativeMaterial {
                 constants: &constants,
                 ..Default::default()
             };
+            // The pre-pass draws into the same targets, writing none of them.
+            let writes = if fragment.starts_with("horizon_material_fs_depth") {
+                wgpu::ColorWrites::empty()
+            } else {
+                wgpu::ColorWrites::ALL
+            };
             let solid_targets = [
                 Some(wgpu::ColorTargetState {
                     format: shape.format,
                     blend,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: writes,
                 }),
                 Some(wgpu::ColorTargetState {
                     format: SURFACE_FORMAT,
                     blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: writes,
                 }),
             ];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -854,8 +904,11 @@ impl NativeMaterial {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    depth_write_enabled: Some(depth == Depth::Write),
+                    depth_compare: Some(match depth {
+                        Depth::Write => wgpu::CompareFunction::GreaterEqual,
+                        Depth::Equal => wgpu::CompareFunction::Equal,
+                    }),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -882,7 +935,11 @@ impl NativeMaterial {
         let paged = shape.flat.map(|group| layout(Some(group)));
         let origins = [None, Some(instances)];
         // The solid draws' pipeline, single-sampled or 4x MSAA's (`horizon_material_fs_msaa`).
-        let solid_with = |fragment: &str, samples: u32| match &paged {
+        // Under `coverage = engine`, the solid draws go through a depth pre-pass
+        // (`DepthPipelines`) and test equal to it after.
+        let prepass = !pack;
+        let shaded = if prepass { Depth::Equal } else { Depth::Write };
+        let solid_with = |fragment: &str, samples: u32, depth: Depth| match &paged {
             Some(paged) => pipeline(
                 paged,
                 "horizon_material_vs_section",
@@ -890,6 +947,7 @@ impl NativeMaterial {
                 fragment,
                 None,
                 samples,
+                depth,
             ),
             None => pipeline(
                 &instanced,
@@ -898,19 +956,22 @@ impl NativeMaterial {
                 fragment,
                 None,
                 samples,
+                depth,
             ),
         };
-        let flat_with = |layout: &wgpu::PipelineLayout, fragment: &str, samples: u32| {
-            pipeline(
-                layout,
-                "horizon_material_vs_section_flat",
-                &[],
-                fragment,
-                None,
-                samples,
-            )
-        };
-        let solid = solid_with("horizon_material_fs_solid", 1);
+        let flat_with =
+            |layout: &wgpu::PipelineLayout, fragment: &str, samples: u32, depth: Depth| {
+                pipeline(
+                    layout,
+                    "horizon_material_vs_section_flat",
+                    &[],
+                    fragment,
+                    None,
+                    samples,
+                    depth,
+                )
+            };
+        let solid = solid_with("horizon_material_fs_solid", 1, shaded);
         let translucent = pipeline(
             &instanced,
             "horizon_material_vs",
@@ -918,11 +979,12 @@ impl NativeMaterial {
             "horizon_material_fs_translucent",
             blend,
             1,
+            Depth::Write,
         );
         let flat = paged.as_ref().map(|layout| {
             let buffers = [Some(vertices.clone())];
             (
-                flat_with(layout, "horizon_material_fs_solid", 1),
+                flat_with(layout, "horizon_material_fs_solid", 1, shaded),
                 pipeline(
                     layout,
                     "horizon_material_vs_flat",
@@ -930,18 +992,23 @@ impl NativeMaterial {
                     "horizon_material_fs_translucent",
                     blend,
                     1,
+                    Depth::Write,
                 ),
             )
         });
         // A driver that refuses them costs the pack 4x MSAA, not its load.
         let msaa_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let msaa_internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let msaa = (shape.msaa && displaced.is_none()).then(|| {
-            let solid = solid_with("horizon_material_fs_msaa", super::msaa::SAMPLES);
-            let flat = paged
-                .as_ref()
-                .map(|layout| flat_with(layout, "horizon_material_fs_msaa", super::msaa::SAMPLES));
+        let samples = super::msaa::SAMPLES;
+        let msaa_with = |fragment: &str, depth: Depth| {
+            let solid = solid_with(fragment, samples, depth);
+            let flat = (paged.as_ref()).map(|layout| flat_with(layout, fragment, samples, depth));
             (solid, flat)
+        };
+        let msaa = (shape.msaa && displaced.is_none()).then(|| {
+            let colour = msaa_with("horizon_material_fs_msaa", shaded);
+            let depth = prepass.then(|| msaa_with("horizon_material_fs_depth_msaa", Depth::Write));
+            (colour, depth)
         });
         let msaa_internal = pollster::block_on(msaa_internal.pop());
         let msaa = match msaa_internal.or(pollster::block_on(msaa_scope.pop())) {
@@ -954,6 +1021,7 @@ impl NativeMaterial {
             }
             None => msaa,
         };
+        let (msaa, msaa_depth) = msaa.map_or((None, None), |(shaded, depth)| (Some(shaded), depth));
         // The grid's corners come from its group 1, not from vertex buffers.
         let displaced = displaced.map(|d| {
             pipeline(
@@ -963,7 +1031,14 @@ impl NativeMaterial {
                 "horizon_material_fs_displaced",
                 None,
                 1,
+                Depth::Write,
             )
+        });
+        let depth = prepass.then(|| DepthPipelines {
+            solid: solid_with("horizon_material_fs_depth", 1, Depth::Write),
+            flat: (paged.as_ref())
+                .map(|layout| flat_with(layout, "horizon_material_fs_depth", 1, Depth::Write)),
+            msaa: msaa_depth,
         });
         Ok(MaterialPipelines {
             solid,
@@ -971,6 +1046,7 @@ impl NativeMaterial {
             flat,
             msaa,
             displaced,
+            depth,
         })
     }
 }
@@ -1034,6 +1110,14 @@ impl super::native_pack::NativePack {
             flat: pipelines.flat.as_ref(),
             displaced: (pipelines.displaced.as_ref()).filter(|_| self.displacement.is_some()),
             msaa: pipelines.msaa.as_ref(),
+            depth: pipelines
+                .depth
+                .as_ref()
+                .map(|d| super::external::SolidDepth {
+                    solid: &d.solid,
+                    flat: d.flat.as_ref(),
+                    msaa: d.msaa.as_ref(),
+                }),
             surface: m.writes_surface.then_some(&self.frame.surface_view),
             reads_opaque: self.frame.reads_opaque,
             frame,
@@ -1237,10 +1321,28 @@ mod tests {
             "horizon_material_vs_section",
             "horizon_material_vs_section_flat",
             "horizon_material_fs_solid",
+            "horizon_material_fs_depth",
+            "horizon_material_fs_depth_msaa",
             "horizon_material_fs_translucent",
         ] {
             assert!(entries.contains(&entry), "{entry}");
         }
+        // The depth pre-pass and the equal-testing colour pass must find the same depth.
+        let invariant = module.types.iter().any(|(_, ty)| match &ty.inner {
+            naga::TypeInner::Struct { members, .. } => {
+                ty.name.as_deref() == Some("HorizonMaterialOut")
+                    && members.iter().any(|m| {
+                        matches!(
+                            m.binding,
+                            Some(naga::Binding::BuiltIn(naga::BuiltIn::Position {
+                                invariant: true
+                            }))
+                        )
+                    })
+            }
+            _ => false,
+        });
+        assert!(invariant, "the clip position is invariant");
         drop(info);
         assert_eq!(
             present_constants(&module, &[("gain".into(), 1.5), ("other".into(), 1.0)]),
@@ -1334,17 +1436,18 @@ mod tests {
             let reads = scene
                 .iter()
                 .any(|&g| !info.get_entry_point(i)[g].is_empty());
-            // The material's fragment entries; no vertex entry, and none of terrain.wgsl's own,
-            // copied with its section, which don't call `material`.
-            let material = entry.name.starts_with("horizon_material_fs");
+            // The material's fragment entries; no vertex entry, none of terrain.wgsl's own,
+            // copied with its section, which don't call `material`, and not the depth pre-pass.
+            let material = entry.name.starts_with("horizon_material_fs")
+                && !entry.name.starts_with("horizon_material_fs_depth");
             assert_eq!(reads, material, "{}", entry.name);
         }
         let fragments = module
             .entry_points
             .iter()
             .filter(|e| e.name.starts_with("horizon_material_fs"));
-        // Solid, 4x MSAA's solid, translucent and the displaced grid.
-        assert_eq!(fragments.count(), 4);
+        // Solid, 4x MSAA's solid, translucent, the displaced grid and the two depth pre-passes.
+        assert_eq!(fragments.count(), 6);
     }
 
     /// A pack's own text that happens to hold a `lit_tint` mark's spelling keeps it.
@@ -1418,9 +1521,9 @@ mod tests {
                         .filter(|i| i.entry.starts_with("horizon_material_"))
                         .map(|i| i.total())
                         .collect();
-                    // Four vertex entries, the solid, translucent and 4x MSAA fragments, and
-                    // the displaced grid's two.
-                    assert_eq!(counts.len(), 7 + 2 * usize::from(displaced));
+                    // Four vertex entries, the solid, translucent and 4x MSAA fragments, their
+                    // two depth pre-passes, and the displaced grid's two.
+                    assert_eq!(counts.len(), 9 + 2 * usize::from(displaced));
                     (counts.into_iter().max().unwrap(), text)
                 };
                 let case = format!("vertex {vertex}, displaced {displaced}");

@@ -1359,7 +1359,13 @@ file = \"material.wgsl\"
             Option<&'a wgpu::TextureView>,
             Option<&'a wgpu::BindGroup>,
         );
-        let draws: [Draw<'_>; 4] = [
+        // The solid terrain's depth pre-pass, which `[material] coverage = engine` has, before
+        // the solid entry that tests equal against it.
+        let depth_pass = layers
+            .depth
+            .expect("the engine's coverage has a depth pre-pass");
+        let draws: [Draw<'_>; 5] = [
+            (depth_pass.solid, Some(&color), None),
             (layers.solid, Some(&color), None),
             (layers.translucent, Some(&color), None),
             (&shadow.solid, None, Some(&shadow.group)),
@@ -1596,14 +1602,21 @@ file = \"material.wgsl\"
                     }),
                     ..Default::default()
                 });
-                pass.set_pipeline(layers.solid);
                 pass.set_bind_group(0, &terrain, &[]);
                 pass.set_bind_group(super::super::looks::GROUP, looks, &[]);
                 layers.bind(&mut pass);
                 pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_vertex_buffer(1, origins.slice(..));
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..6, 0, 0..1);
+                // As the world pass draws it: the depth pre-pass, then the shading that tests
+                // equal against it, which must still cover every pixel.
+                let depth_pass = layers
+                    .depth
+                    .expect("the engine's coverage has a depth pre-pass");
+                for pipeline in [depth_pass.solid, layers.solid] {
+                    pass.set_pipeline(pipeline);
+                    pass.draw_indexed(0..6, 0, 0..1);
+                }
             }
             let buffer = crate::gfx::copy_frame(&device, &mut encoder, &target, [4, 4]);
             queue.submit([encoder.finish()]);

@@ -344,6 +344,10 @@ pub struct TerrainLayers<'a> {
     pub displaced: Option<&'a wgpu::RenderPipeline>,
     /// The solid layers for 4x MSAA (instanced, then flat draws), when the pack's material got them.
     pub msaa: Option<&'a (wgpu::RenderPipeline, Option<wgpu::RenderPipeline>)>,
+    /// The solid layers' depth pre-pass (instanced, then flat draws), and 4x MSAA's, where they
+    /// have one: drawn over the same draws before each solid layer, which then tests depth
+    /// equal to it and doesn't write it.
+    pub depth: Option<SolidDepth<'a>>,
     /// The solid layers' second target, which they write beside the world's colour.
     pub surface: Option<&'a wgpu::TextureView>,
     /// The layers read the world before translucent terrain: the renderer stops there for
@@ -351,6 +355,14 @@ pub struct TerrainLayers<'a> {
     pub reads_opaque: bool,
     /// What the layers read beside the terrain's groups (`bind`).
     pub frame: &'a wgpu::BindGroup,
+}
+
+/// `TerrainLayers::depth`.
+#[derive(Clone, Copy)]
+pub struct SolidDepth<'a> {
+    pub solid: &'a wgpu::RenderPipeline,
+    pub flat: Option<&'a wgpu::RenderPipeline>,
+    pub msaa: Option<&'a (wgpu::RenderPipeline, Option<wgpu::RenderPipeline>)>,
 }
 
 impl TerrainLayers<'_> {
