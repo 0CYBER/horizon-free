@@ -90,7 +90,6 @@
  },
  "known_failing": {
   "block_removal": "#18133: keeps banner_patterns:[] on dropped banners; no `set` record when a block-entity block is replaced",
-  "boat_void": "#18133: a boat removed in the void leaves 5 item entities that vanilla doesn't",
   "command_parse": "#18133: SNBT error text and empty-suggestion ranges differ from Brigadier",
   "crafter": "#18133: hopper minecart slot0 record missing",
   "datafix": "#18133: runner's .local resolves into shared-local, so every shard refuses its default root",

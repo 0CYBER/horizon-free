@@ -84,8 +84,9 @@ def main():
         parent = Path(tempfile.mkdtemp(prefix='boat-void-', dir=driver.lab.LOCAL))
         sys.argv += ['--work-dir', str(parent / 'run')]
     work = Path(sys.argv[sys.argv.index('--work-dir') + 1]).resolve()
-    driver.corpus_module.groups = lambda: [('Boat load and void removal', program())]
-    sys.argv.append('--allow-gaps')
+    for flag in ('--boat-void-fixture', '--loaded-fixture', '--allow-gaps'):
+        if flag not in sys.argv:
+            sys.argv.append(flag)
     driver.main()
     if '--reference-only' in sys.argv:
         return
