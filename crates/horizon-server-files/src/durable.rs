@@ -4,7 +4,8 @@
 //! A file's contents are made durable by writing a temporary sibling,
 //! `sync_all`ing it, and moving it over the destination with
 //! `MoveFileExW(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)` on
-//! Windows — which returns only once the rename metadata is flushed — or
+//! Windows — which returns only once the rename metadata is flushed, and is
+//! made again while another handle holds the file for a moment — or
 //! `rename` plus an `fsync` of the directory on Unix. Every API failure is
 //! an error; nothing silently falls back to a weaker write.
 //!
@@ -30,7 +31,8 @@ fn sync_dir(path: &Path) -> io::Result<()> {
 }
 
 /// Moves `from` onto `to` durably. Both must live in the same directory;
-/// `to` may not exist yet.
+/// `to` may not exist yet. On Windows, a move refused while another handle
+/// holds either file for a moment is made again ([`retry_busy`]).
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
@@ -48,22 +50,49 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
         let to = fs::canonicalize(parent_dir(to))?.join(to.file_name().unwrap());
         let from: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
         let to: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-        // Both paths are owned, nul-terminated buffers valid for this
-        // synchronous call.
-        if unsafe {
-            MoveFileExW(
-                from.as_ptr(),
-                to.as_ptr(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
+        retry_busy(&BUSY_WAITS_MS, || {
+            // Both paths are owned, nul-terminated buffers valid for this
+            // synchronous call.
+            if unsafe {
+                MoveFileExW(
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            } == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        })?;
     }
     #[cfg(not(windows))]
     fs::rename(from, to)?;
     sync_dir(parent_dir(to))
+}
+
+/// How long [`retry_busy`] waits before each new try, in milliseconds: about 2 s in all.
+#[cfg(windows)]
+const BUSY_WAITS_MS: [u64; 11] = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+
+/// `attempt`, made again after each of `waits_ms` while Windows refuses it because another handle
+/// holds one of the files: access denied (OS error 5) while the file being replaced is open, a
+/// sharing violation (OS error 32) while the one being moved is open without sharing its deletion.
+/// Another save of the same file, or a scanner or indexer reading one just written, lets go within
+/// moments. Once the waits are spent, the refusal is the error, so a file that stays refused (a
+/// read-only one, also access denied) still fails; any other error is returned at once.
+#[cfg(windows)]
+fn retry_busy(waits_ms: &[u64], mut attempt: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    let mut waits = waits_ms.iter();
+    loop {
+        match attempt() {
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32)) => match waits.next() {
+                Some(&ms) => std::thread::sleep(std::time::Duration::from_millis(ms)),
+                None => return Err(error),
+            },
+            done => return done,
+        }
+    }
 }
 
 /// The directory `path` is in: `.` for a bare file name, whose `parent` is empty (and an empty path
@@ -569,6 +598,40 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A move Windows refuses while another handle holds the file is made again until it goes
+    /// through; one still refused once the waits are spent fails with the refusal, and any other
+    /// error at once.
+    #[cfg(windows)]
+    #[test]
+    fn a_busy_move_is_made_again_and_gives_up_after_its_waits() {
+        let refused = |code: i32| -> io::Result<()> { Err(io::Error::from_raw_os_error(code)) };
+        let mut tries = 0;
+        let moved = retry_busy(&[0, 0, 0], || {
+            tries += 1;
+            match tries {
+                1 => refused(5),
+                2 => refused(32),
+                _ => Ok(()),
+            }
+        });
+        assert!(moved.is_ok(), "{moved:?}");
+        assert_eq!(tries, 3);
+        tries = 0;
+        let error = retry_busy(&[0, 0], || {
+            tries += 1;
+            refused(5)
+        })
+        .unwrap_err();
+        assert_eq!((error.raw_os_error(), tries), (Some(5), 3));
+        tries = 0;
+        let error = retry_busy(&[0, 0], || {
+            tries += 1;
+            refused(2)
+        })
+        .unwrap_err();
+        assert_eq!((error.raw_os_error(), tries), (Some(2), 1));
     }
 
     /// A bare file name (the lists' defaults, in the working directory) has an empty parent.
