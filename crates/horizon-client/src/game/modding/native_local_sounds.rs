@@ -1,5 +1,6 @@
-//! Client mods' own sounds (`play_local_sound`) and their `SoundRef` handles: what each is
-//! doing, stopping and fading it, and the sounds and devices the client has.
+//! Client mods' own sounds (`play_local_sound`, and their own samples: `play_local_pcm`) and
+//! their `SoundRef` handles: what each is doing, stopping, fading and moving it, and the sounds
+//! and devices the client has.
 use super::Game;
 use horizon_client::sound_engine::InstanceId;
 use horizon_core::identifier::Identifier;
@@ -7,12 +8,18 @@ use mod_api::__private::game::*;
 use mod_api::{SoundPlay, SoundRef, SoundState};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// The most samples one `play_local_pcm` call plays: ten minutes of mono at 48 kHz (an emote's
+/// song at most), five of stereo.
+pub(in crate::game) const MAX_PCM_SAMPLES: usize = 48_000 * 60 * 10;
 
 /// What a mod asked of one of its sounds, applied at the next audio update.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Change {
     Stop,
     Fade { volume: f32, ticks: u32 },
+    Position([f64; 3]),
 }
 impl Change {
     /// It ends the sound when applied: a stop, or a fade to 0 at once.
@@ -20,6 +27,7 @@ impl Change {
         match self {
             Change::Stop => true,
             Change::Fade { volume, ticks } => ticks == 0 && volume <= 0.0,
+            Change::Position(_) => false,
         }
     }
 }
@@ -32,7 +40,10 @@ pub(super) struct ModSounds {
     /// Sounds asked for (`play_local_sound`), with their handle and the ticks each
     /// waits, until the next audio update plays them (`apply_mod_sounds`).
     pub(super) queued: RefCell<Vec<(u64, SoundPlay, u32)>>,
-    /// Stops and fades asked for since the last audio update, in order.
+    /// The samples of the queued plays that are a mod's own (`play_local_pcm`), by handle:
+    /// interleaved, -1 to 1, their rate, channels and first frame.
+    pcm: RefCell<HashMap<u64, (Arc<Vec<f32>>, u32, u16, u64)>>,
+    /// Stops, fades and moves asked for since the last audio update, in order.
     changes: RefCell<Vec<(u64, Change)>>,
     /// Each started sound's engine instance, until the engine lets it go.
     started: HashMap<u64, InstanceId>,
@@ -42,6 +53,7 @@ impl Default for ModSounds {
         Self {
             last: Cell::new(0),
             queued: RefCell::default(),
+            pcm: RefCell::default(),
             changes: RefCell::default(),
             started: HashMap::new(),
         }
@@ -55,11 +67,29 @@ impl ModSounds {
         self.queued.borrow_mut().push((id, sound.clone(), after));
         sound_ref(id)
     }
+    /// Queues a mod's own samples to play as `sound` says at the next audio update, as `queue`.
+    pub(in crate::game) fn queue_pcm(
+        &self,
+        sound: &SoundPlay,
+        samples: Vec<f32>,
+        rate: u32,
+        channels: u16,
+        start: u64,
+        after: u32,
+    ) -> SoundRef {
+        let handle = self.queue(sound, after);
+        let id = handle.fields().id;
+        self.pcm
+            .borrow_mut()
+            .insert(id, (Arc::new(samples), rate, channels, start));
+        handle
+    }
     /// Forgets every mod sound: the queued plays, the changes asked of them and the started
     /// ones' instances, as a level change stops every sound. Their handles read `Stopped`;
     /// handles are still never reused.
     pub(super) fn clear(&mut self) {
         self.queued.get_mut().clear();
+        self.pcm.get_mut().clear();
         self.changes.get_mut().clear();
         self.started.clear();
     }
@@ -80,10 +110,22 @@ impl Game<'_> {
             .map(|&(id, _)| id)
             .collect();
         for (id, sound, after) in sounds.queued.get_mut().drain(..) {
+            let pcm = sounds.pcm.get_mut().remove(&id);
             if stopped.contains(&id) {
                 continue;
             }
-            let instance = self.audio.play_mod_sound(&sound, after);
+            let instance = match pcm {
+                Some((samples, rate, channels, start)) => {
+                    log::debug!(
+                        "Horizon: a client mod plays {} samples at {rate} Hz ({}), from frame {start}",
+                        samples.len(),
+                        sound.identifier
+                    );
+                    self.audio
+                        .play_mod_pcm(&sound, samples, rate, channels, start, after)
+                }
+                None => self.audio.play_mod_sound(&sound, after),
+            };
             sounds.started.insert(id, instance);
         }
         for (id, change) in sounds.changes.get_mut().drain(..) {
@@ -95,6 +137,7 @@ impl Game<'_> {
                 Change::Fade { volume, ticks } => {
                     self.audio.fade_mod_sound(instance, volume, ticks)
                 }
+                Change::Position(at) => self.audio.move_mod_sound(instance, at),
             }
             if change.stops() {
                 sounds.started.remove(&id);
@@ -158,6 +201,19 @@ impl Game<'_> {
             return false;
         }
         self.change_mod_sound(sound, Change::Fade { volume, ticks })
+    }
+    /// For a client mod: from the next audio update, its sound plays at `position`, as a sound
+    /// following its entity moves (a relative sound's is an offset from the listener). False,
+    /// changing nothing, for a position that isn't finite, a sound that is already over, and on
+    /// a server.
+    pub(super) fn sound_set_position(&self, sound: SoundRef, position: [f64; 3]) -> bool {
+        if !position
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= 30_000_000.0)
+        {
+            return false;
+        }
+        self.change_mod_sound(sound, Change::Position(position))
     }
     fn change_mod_sound(&self, sound: SoundRef, change: Change) -> bool {
         match self.sound_state(sound) {

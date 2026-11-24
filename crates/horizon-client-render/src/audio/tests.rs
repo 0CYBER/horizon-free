@@ -768,6 +768,8 @@ fn another_players_copy_of_a_sound_is_dropped() {
         owner,
         world: 0,
         shares: shares.clone(),
+        mod_pcm: HashMap::new(),
+        mod_pcm_next: 0,
     };
     let (mut p1, mut p2) = (backend(0), backend(1));
     // P2 is listening (its camera is in the mixer), so two players share the speakers.
@@ -1139,6 +1141,59 @@ fn a_repeating_mod_sound_waits_between_its_repeats_and_plays_again() {
     audio.stop_mod_sound(sound);
     audio.tick(false, &ctx);
     assert_eq!(audio.mod_sound_state(sound), Stopped);
+}
+
+/// A mod's own samples (`play_mod_pcm`) need no file: they start at once from the frame
+/// asked, follow `move_mod_sound`, repeat from the first frame after a loop's delay, and are
+/// let go once the play is over.
+#[test]
+fn a_mod_pcm_play_starts_where_asked_follows_and_is_let_go() {
+    use mod_api::SoundState::*;
+    let mut audio = live_audio();
+    let ctx = TickContext::default();
+    let samples = Arc::new((0..4800).map(|i| i as f32 / 4800.0).collect::<Vec<_>>());
+    let play = mod_api::SoundPlay::at(
+        "mymod:song",
+        mod_api::SoundSource::Players,
+        [1.0, 64.0, 2.0],
+    )
+    .looping(2);
+    let song = audio.play_mod_pcm(&play, samples, 48_000, 1, 1200, 0);
+    assert_eq!(audio.mod_sound_state(song), Playing);
+    let channel = |audio: &Audio| {
+        let m = audio.backend.mixer.lock().unwrap();
+        m.channels.values().find(|c| c.samples.is_some()).map(|c| {
+            let (samples, rate, channels) = c.samples.as_ref().unwrap();
+            (c.state, c.position, c.at, samples.len(), *rate, *channels)
+        })
+    };
+    assert_eq!(
+        channel(&audio),
+        Some((State::Playing, 1200.0, [1.0, 64.0, 2.0], 4800, 48_000, 1))
+    );
+    audio.move_mod_sound(song, [5.0, 70.0, -3.0]);
+    audio.tick(false, &ctx);
+    assert_eq!(channel(&audio).map(|c| c.2), Some([5.0, 70.0, -3.0]));
+    // The clip ends; after the loop's delay it plays again from its first frame.
+    for channel in audio.backend.mixer.lock().unwrap().channels.values_mut() {
+        channel.state = State::Stopped;
+    }
+    let mut states = Vec::new();
+    for _ in 0..30 {
+        audio.tick(false, &ctx);
+        states.push(audio.mod_sound_state(song));
+    }
+    assert_eq!(states.last(), Some(&Playing), "repeated: {states:?}");
+    assert_eq!(
+        channel(&audio).map(|c| (c.0, c.1)),
+        Some((State::Playing, 0.0))
+    );
+    assert_eq!(audio.backend.mod_pcm.len(), 1, "kept for its repeats");
+    audio.stop_mod_sound(song);
+    audio.tick(false, &ctx);
+    assert_eq!(audio.mod_sound_state(song), Stopped);
+    audio.tick(false, &ctx);
+    assert!(audio.backend.mod_pcm.is_empty(), "let go");
 }
 
 /// A mod sound at volume 0 starts silent and keeps its handle, so a fade raises it.

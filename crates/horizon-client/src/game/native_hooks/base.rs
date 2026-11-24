@@ -4503,6 +4503,39 @@ impl Game<'_> {
         }
         Some(self.mod_sounds.queue(sound, after))
     }
+    /// Plays a client mod's own samples for this player only, as `play_local_sound` plays an
+    /// event: signed 16-bit PCM, interleaved, `channels` (1 or 2) to a frame at `rate` frames a
+    /// second (8000 to 192000), beginning `start` frames in. `sound` says how it plays; its event
+    /// names the play and isn't loaded. None, with nothing played, on a server, for a value out of
+    /// range, an empty clip, a `start` past its end or more than `MAX_PCM_SAMPLES` samples.
+    pub(in crate::game) fn play_local_pcm(
+        &self,
+        sound: &SoundPlay,
+        samples: &[i16],
+        rate: u32,
+        channels: u16,
+        start: u32,
+        after: u32,
+    ) -> Option<SoundRef> {
+        use crate::game::native_local_sounds::MAX_PCM_SAMPLES;
+        let frames = samples.len() / usize::from(channels.max(1));
+        if !self.native_window()
+            || !local_sound_ok(sound, after)
+            || !(1..=2).contains(&channels)
+            || !(8_000..=192_000).contains(&rate)
+            || samples.is_empty()
+            || samples.len() > MAX_PCM_SAMPLES
+            || !samples.len().is_multiple_of(usize::from(channels))
+            || start as usize >= frames
+        {
+            return None;
+        }
+        let samples = samples.iter().map(|&s| f32::from(s) / 32768.0).collect();
+        Some(
+            self.mod_sounds
+                .queue_pcm(sound, samples, rate, channels, u64::from(start), after),
+        )
+    }
     /// The particles alive in the client's level (`ParticleEngine.countParticles`): 0 once
     /// a clear is asked, and on a server.
     pub(in crate::game) fn particle_count(&self) -> u32 {
