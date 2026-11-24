@@ -1,0 +1,2 @@
+# Mid-pass wake ordering test boots Game with mods in a fresh child process.
+horizon-client game::block_entity_ticks::own_block_entity_tests::waking_a_later_sleeping_ticker_runs_it_in_the_same_pass lib daily child-process

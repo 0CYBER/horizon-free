@@ -346,10 +346,37 @@ impl Game<'_> {
         this.trial_spawner_tick_positions.clear();
         this.item_columns = Some(Default::default());
         this.pass_mobs = Some(Default::default());
-        let tickers = this.world.block_entity_tickers();
+        let awake = this.world.awake_block_entity_tickers();
+        let wake_epoch = this.world.block_entities.wake_epoch();
+        // Once something wakes mid-pass, the rest of the pass walks the full ticker list from
+        // where it got to, skipping sleepers below: one switch, not a rebuild per wake.
+        let mut all: Option<std::sync::Arc<Vec<(Pos, u32)>>> = None;
         let mut last_chunk = (i32::MIN, i32::MIN);
         let mut last_chunk_ticking = false;
-        for ticker in tickers.iter().copied() {
+        let mut idx = 0usize;
+        let mut last_order: Option<u64> = None;
+        loop {
+            let ticker = if let Some(all) = &all {
+                let Some(&ticker) = all.get(idx) else {
+                    break;
+                };
+                idx += 1;
+                ticker
+            } else {
+                if let Some(prev) = last_order
+                    && this.world.block_entities.wake_epoch() != wake_epoch
+                {
+                    all = Some(this.world.block_entities.ticker_slots());
+                    idx = this.world.block_entities.ticker_index_after(prev);
+                    continue;
+                }
+                let Some(&(pos, ticker_slot, order)) = awake.get(idx) else {
+                    break;
+                };
+                idx += 1;
+                last_order = Some(order);
+                (pos, ticker_slot)
+            };
             let pos = ticker.0;
             let chunk = (pos.0 >> 4, pos.2 >> 4);
             let chunk_ticking = if chunk == last_chunk {
@@ -1869,6 +1896,69 @@ mod own_block_entity_tests {
             assert_eq!(swap.after, [a, c]);
             assert_eq!(ticks_of(game, a), [2]);
             assert_eq!(ticks_of(game, c), [1, 1]);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn waking_a_later_sleeping_ticker_runs_it_in_the_same_pass() {
+        if run_fresh_cases(
+            "game::block_entity_ticks::own_block_entity_tests::waking_a_later_sleeping_ticker_runs_it_in_the_same_pass",
+            "HORIZON_OWN_BLOCK_ENTITIES_CHILD",
+            &["run"],
+        ) {
+            return;
+        }
+        struct WakeLater {
+            a: Pos,
+            wake: Vec<Pos>,
+            woke: bool,
+            seen: Vec<Pos>,
+        }
+        impl BlockEntityTickSlot for WakeLater {
+            fn before(&mut self, tick: &mut BlockEntityTick<'_, '_>) -> LoopFlow {
+                self.seen.push(tick.pos);
+                if tick.pos == self.a && !self.woke {
+                    self.woke = true;
+                    for &pos in &self.wake {
+                        let _ = tick.game.world.block_entities.get_mut(&pos);
+                    }
+                }
+                LoopFlow::Continue
+            }
+        }
+        let mods: Mods = vec![ModEntry::new("own_a", Box::new(Machines::new(A, None)))].into();
+        let (early, a, b, c) = ((1, 64, 1), (3, 64, 1), (5, 64, 1), (7, 64, 1));
+        with_machines(mods, &[(early, A), (a, A), (b, A), (c, A)], |game| {
+            // First pass initializes states and promotes slots in placement order (early < a < b < c).
+            game.tick_block_entities().unwrap();
+            game.world.block_entities.sleep(early);
+            game.world.block_entities.sleep(b);
+            game.world.block_entities.sleep(c);
+
+            // Visiting a wakes both early (slot < a) and b (slot > a); b runs in this same pass in
+            // slot order, early waits until the next pass, and c stays skipped.
+            let mut slot = WakeLater {
+                a,
+                wake: vec![early, b],
+                woke: false,
+                seen: Vec::new(),
+            };
+            game.tick_block_entities_with(&mut slot).unwrap();
+            assert_eq!(slot.seen, [a, b]);
+            assert_eq!(ticks_of(game, early), [1]);
+            assert_eq!(ticks_of(game, a), [1, 1]);
+            assert_eq!(ticks_of(game, b), [1, 1]);
+            assert_eq!(ticks_of(game, c), [1]);
+            assert!(game.world.block_entities.is_asleep(&c));
+
+            slot.seen.clear();
+            game.tick_block_entities_with(&mut slot).unwrap();
+            assert_eq!(slot.seen, [early, a, b]);
+            assert_eq!(ticks_of(game, early), [1, 1]);
+            assert_eq!(ticks_of(game, a), [1, 1, 1]);
+            assert_eq!(ticks_of(game, b), [1, 1, 1]);
+            assert_eq!(ticks_of(game, c), [1]);
         });
     }
 }

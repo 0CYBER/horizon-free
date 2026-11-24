@@ -776,6 +776,18 @@ impl World {
                 .0
         })
     }
+    /// Awake subset of [`Self::block_entity_tickers`], cached until tickers or sleep set changes.
+    pub fn awake_block_entity_tickers(
+        &mut self,
+    ) -> std::sync::Arc<Vec<(crate::block_entities::Pos, u32, u64)>> {
+        let (chunks, air) = (&self.chunks, self.air);
+        self.block_entities.awake_tickers(|(x, y, z)| {
+            chunks
+                .get_chunk(x >> 4, z >> 4)
+                .map_or(air, |chunk| chunk.block(x & 15, y, z & 15))
+                .0
+        })
+    }
     #[inline(always)]
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
         match self.chunks.get_chunk(x >> 4, z >> 4) {

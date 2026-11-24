@@ -104,6 +104,10 @@ pub struct BlockEntities {
     retiring: Option<Vec<(Pos, u64, Attachments)>>,
     /// `Level.blockEntityTickers`: positions and the slot each was given.
     tickers: Arc<Vec<(Pos, u32)>>,
+    /// Monotonic insertion order aligned 1:1 with `tickers` so mid-pass wakes resume by
+    /// list order even when `u32` slot IDs wrap.
+    ticker_orders: Vec<u64>,
+    next_order: u64,
     /// `LevelChunk.tickersInLevel`: the live slot of each ticking position.
     live: FxHashMap<Pos, u32>,
     /// Positions that may need a slot, in the order vanilla would have made
@@ -159,6 +163,10 @@ pub struct BlockEntities {
     /// set), so the level's tick checks those alone instead of every sign.
     sign_editors: FxHashSet<Pos>,
     asleep: FxHashSet<Pos>,
+    /// Cached awake subset of `tickers` with monotonic order keys, invalidated on change.
+    awake_tickers: Option<Arc<Vec<(Pos, u32, u64)>>>,
+    /// Monotonic counter bumped whenever any sleeping entity wakes so active loops pick it up.
+    wake_epoch: u64,
     /// The block entities moving pistons carry, by the moving piston's
     /// position (`carry`): out of the map until they land.
     carried: FxHashMap<Pos, carry::Carried>,
@@ -526,9 +534,22 @@ impl BlockEntities {
         self.pending.insert(pos, token);
         self.added.push((pos, token));
     }
+    fn wake(&mut self, pos: &Pos) {
+        if self.asleep.remove(pos) {
+            self.awake_tickers = None;
+            self.wake_epoch = self.wake_epoch.wrapping_add(1);
+        }
+    }
+    fn wake_all(&mut self) {
+        if !self.asleep.is_empty() {
+            self.asleep.clear();
+            self.awake_tickers = None;
+            self.wake_epoch = self.wake_epoch.wrapping_add(1);
+        }
+    }
     /// `removeBlockEntityTicker`: no slot, made or pending.
     fn cancel(&mut self, pos: &Pos) {
-        self.asleep.remove(pos);
+        self.wake(pos);
         self.freed |= self.live.remove(pos).is_some();
         self.pending.remove(pos);
     }
@@ -801,7 +822,7 @@ impl BlockEntities {
         self.map.get(pos)
     }
     pub fn get_mut(&mut self, pos: &Pos) -> Option<&mut BlockEntity> {
-        self.asleep.remove(pos);
+        self.wake(pos);
         let entity = self.map.get_mut(pos)?;
         if matches!(entity, BlockEntity::Sign(_)) {
             self.sign_revision.0 = next_sign_revision();
@@ -809,18 +830,18 @@ impl BlockEntities {
         Some(entity)
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Pos, &mut BlockEntity)> {
-        self.asleep.clear();
+        self.wake_all();
         self.bump_sign_revision();
         self.map.iter_mut()
     }
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut BlockEntity> {
-        self.asleep.clear();
+        self.wake_all();
         self.bump_sign_revision();
         self.map.values_mut()
     }
     pub fn sleep(&mut self, pos: Pos) {
-        if self.map.contains_key(&pos) {
-            self.asleep.insert(pos);
+        if self.map.contains_key(&pos) && self.asleep.insert(pos) {
+            self.awake_tickers = None;
         }
     }
     pub fn is_asleep(&self, pos: &Pos) -> bool {
@@ -865,7 +886,7 @@ impl BlockEntities {
         let new_box = shows_box(&entity);
         self.note_sign_editor(pos, &entity);
         note_listed(&mut self.listed, pos, Some(&entity));
-        self.asleep.remove(&pos);
+        self.wake(&pos);
         index_chunk(&mut self.by_chunk, pos);
         let old = self.map.insert(pos, entity);
         if new_is_sign || matches!(old, Some(BlockEntity::Sign(_))) {
@@ -904,7 +925,7 @@ impl BlockEntities {
             self.boxes.remove(&pos);
             self.add(pos);
         }
-        self.asleep.remove(&pos);
+        self.wake(&pos);
         index_chunk(&mut self.by_chunk, pos);
         let entity = self.map.entry(pos).or_insert_with(make);
         if absent && matches!(entity, BlockEntity::Mod(_)) {
@@ -960,7 +981,7 @@ impl BlockEntities {
         self.out.remove(pos);
         self.retire(*pos);
         self.generations.remove(pos);
-        self.asleep.remove(pos);
+        self.wake(pos);
         self.cancel(pos);
         let removed = self.map.remove(pos);
         if matches!(removed, Some(BlockEntity::Sign(_))) {
@@ -976,7 +997,7 @@ impl BlockEntities {
     /// The block entity at `pos`, out of the map for a while: its slot stays
     /// for `put` to bring it back (a tick working on it).
     pub fn take(&mut self, pos: &Pos) -> Option<(BlockEntityLease, BlockEntity)> {
-        self.asleep.remove(pos);
+        self.wake(pos);
         let entity = self.map.remove(pos)?;
         if matches!(entity, BlockEntity::Sign(_)) {
             self.bump_sign_revision();
@@ -1016,7 +1037,7 @@ impl BlockEntities {
             return false;
         }
         self.out.remove(&pos);
-        self.asleep.remove(&pos);
+        self.wake(&pos);
         if matches!(entity, BlockEntity::Mod(_)) {
             self.mods.entry(chunk_of(pos)).or_default().insert(pos);
         }
@@ -1057,6 +1078,7 @@ impl BlockEntities {
         self.asleep = asleep;
         let map = &self.map;
         self.asleep.retain(|p| map.contains_key(p));
+        self.awake_tickers = None;
     }
     /// Removes the block entities `keep` refuses, and their slots
     /// (`clearAllBlockEntities` of unloaded chunks).
@@ -1068,6 +1090,7 @@ impl BlockEntities {
         mut keep: impl FnMut(&Pos, &mut BlockEntity) -> bool,
         may_mutate_kept: bool,
     ) {
+        self.wake_all();
         let (live, pending, freed, attachments) = (
             &mut self.live,
             &mut self.pending,
@@ -1080,7 +1103,6 @@ impl BlockEntities {
         let observer = self.attachment_observer.as_ref();
         let sign_editors = &mut self.sign_editors;
         let mut sign_changed = false;
-        self.asleep.clear();
         self.map.retain(|p, e| {
             let was_sign = matches!(e, BlockEntity::Sign(_));
             let kept = keep(p, e);
@@ -1139,7 +1161,7 @@ impl BlockEntities {
             forget_listed(&mut self.listed, p);
             unindex_chunk(&mut self.by_chunk, p);
             self.sign_editors.remove(p);
-            self.asleep.remove(p);
+            self.wake(p);
         }
         if removed_sign {
             self.bump_sign_revision();
@@ -1159,8 +1181,10 @@ impl BlockEntities {
             set.clear();
         }
         self.sign_editors.clear();
-        self.asleep.clear();
+        self.wake_all();
+        self.awake_tickers = None;
         self.tickers = Arc::default();
+        self.ticker_orders.clear();
         self.live.clear();
         self.added.clear();
         self.pending.clear();
@@ -1188,7 +1212,7 @@ impl BlockEntities {
                 &p,
             );
             self.new_generation(p);
-            self.asleep.remove(&p);
+            self.wake(&p);
             let new_is_mod = matches!(e, BlockEntity::Mod(_));
             let new_is_sign = matches!(e, BlockEntity::Sign(_));
             self.note_box(p, Some(&e));
@@ -1219,7 +1243,7 @@ impl BlockEntities {
     /// `LevelChunk.setBlockState` on a block entity's position, from state
     /// `old` to `new`: a ticker made, kept or dropped.
     pub fn state_changed(&mut self, pos: Pos, old: u32, new: u32) {
-        self.asleep.remove(&pos);
+        self.wake(&pos);
         if self.states.is_empty() || !self.map.contains_key(&pos) {
             return;
         }
@@ -1240,6 +1264,7 @@ impl BlockEntities {
     /// Returns the slots to tick, in order; check each with `is_live` before
     /// ticking it, as the ticks before it can free it.
     pub fn tickers(&mut self, state: impl Fn(Pos) -> u32) -> Arc<Vec<(Pos, u32)>> {
+        let mut tickers_changed = false;
         for (pos, token) in std::mem::take(&mut self.added) {
             if self.pending.get(&pos) != Some(&token) {
                 continue;
@@ -1252,8 +1277,12 @@ impl BlockEntities {
                 continue;
             }
             let slot = self.next();
+            let order = self.next_order;
+            self.next_order += 1;
             self.live.insert(pos, slot);
             Arc::make_mut(&mut self.tickers).push((pos, slot));
+            self.ticker_orders.push(order);
+            tickers_changed = true;
         }
         for pos in std::mem::take(&mut self.replaced) {
             if self.live.contains_key(&pos) && self.ticking(state(pos)) != Ticking::Yes {
@@ -1261,19 +1290,65 @@ impl BlockEntities {
             }
         }
         if !std::mem::take(&mut self.freed) && self.out.is_empty() {
+            if tickers_changed {
+                self.awake_tickers = None;
+            }
             return Arc::clone(&self.tickers);
         }
         self.retire_taken(|_| true);
         self.freed = false;
-        let (live, map) = (&mut self.live, &self.map);
+        let (live, map, orders) = (&mut self.live, &self.map, &mut self.ticker_orders);
+        let mut read = 0usize;
+        let mut write = 0usize;
         Arc::make_mut(&mut self.tickers).retain(|(p, slot)| {
+            let order = orders[read];
+            read += 1;
             let mine = live.get(p) == Some(slot);
             if mine && !map.contains_key(p) {
                 live.remove(p);
             }
-            mine && map.contains_key(p)
+            let keep = mine && map.contains_key(p);
+            if keep {
+                orders[write] = order;
+                write += 1;
+            }
+            keep
         });
+        self.ticker_orders.truncate(write);
+        self.awake_tickers = None;
         Arc::clone(&self.tickers)
+    }
+    /// Monotonic counter bumped whenever any sleeping entity wakes (`wake` / `wake_all`).
+    pub fn wake_epoch(&self) -> u64 {
+        self.wake_epoch
+    }
+    /// Awake subset of already-promoted ticker slots `(pos, slot, order)`, cached until tickers or sleep set changes.
+    /// Does not promote pending slots, so it is safe to call mid-pass after a wake.
+    pub fn awake_ticker_slots(&mut self) -> Arc<Vec<(Pos, u32, u64)>> {
+        if let Some(cached) = &self.awake_tickers {
+            return Arc::clone(cached);
+        }
+        let awake: Arc<Vec<(Pos, u32, u64)>> = Arc::new(
+            self.tickers
+                .iter()
+                .zip(self.ticker_orders.iter())
+                .filter(|((pos, _), _)| !self.asleep.contains(pos))
+                .map(|(&(pos, slot), &order)| (pos, slot, order))
+                .collect(),
+        );
+        self.awake_tickers = Some(Arc::clone(&awake));
+        awake
+    }
+    /// Promotes pending slots via [`Self::tickers`] and returns [`Self::awake_ticker_slots`].
+    pub fn awake_tickers(&mut self, state: impl Fn(Pos) -> u32) -> Arc<Vec<(Pos, u32, u64)>> {
+        let _ = self.tickers(state);
+        self.awake_ticker_slots()
+    }
+    /// The index in [`Self::ticker_slots`] of the first ticker promoted after the one of `order`
+    /// (an order from [`Self::awake_ticker_slots`]): where a pass resumes once a wake has made
+    /// its awake list stale. Slot ids wrap; orders don't.
+    pub fn ticker_index_after(&self, order: u64) -> usize {
+        self.ticker_orders.partition_point(|&o| o <= order)
     }
     /// The ticker list as it stands, without promoting pending slots.
     pub fn ticker_slots(&self) -> Arc<Vec<(Pos, u32)>> {
@@ -1425,6 +1500,150 @@ mod tests {
         b.sleep(p);
         b.clear();
         assert!(!b.is_asleep(&p));
+    }
+
+    #[test]
+    fn awake_tickers_track_sleep_and_every_wake_path() {
+        let mut b = level();
+        let (p0, p1, p2) = ((1, 64, 1), (2, 64, 1), (3, 64, 1));
+        for pos in [p0, p1, p2] {
+            b.insert(pos, hopper());
+        }
+        assert_eq!(
+            b.awake_tickers(|_| 1)
+                .iter()
+                .map(|(p, _, _)| *p)
+                .collect::<Vec<_>>(),
+            [p0, p1, p2]
+        );
+
+        // Sleep p1: cache returns [p0, p2] in slot order and reuses the same Arc allocation.
+        b.sleep(p1);
+        let first = b.awake_tickers(|_| 1);
+        let second = b.awake_tickers(|_| 1);
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            first.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(),
+            [p0, p2]
+        );
+
+        // Unloading an unrelated chunk keeps p1 asleep; awake_tickers remains valid.
+        b.insert((32, 64, 1), hopper());
+        assert_eq!(
+            b.awake_tickers(|_| 1)
+                .iter()
+                .map(|(p, _, _)| *p)
+                .collect::<Vec<_>>(),
+            [p0, p2, (32, 64, 1)]
+        );
+        b.unload(|pos| pos.0 >> 4 == 2);
+        assert!(b.is_asleep(&p1));
+        assert_eq!(
+            b.awake_tickers(|_| 1)
+                .iter()
+                .map(|(p, _, _)| *p)
+                .collect::<Vec<_>>(),
+            [p0, p2]
+        );
+
+        // Every single wake path must bump wake_epoch, invalidate cache, and restore p1.
+        let wakes: [&dyn Fn(&mut BlockEntities); 9] = [
+            &|b| {
+                b.get_mut(&p1);
+            },
+            &|b| {
+                b.insert(p1, hopper());
+            },
+            &|b| {
+                b.get_or_insert_with(p1, hopper);
+            },
+            &|b| {
+                let (lease, held) = b.take(&p1).unwrap();
+                assert!(b.put(lease, held));
+            },
+            &|b| {
+                b.state_changed(p1, 1, 1);
+            },
+            &|b| {
+                b.iter_mut().count();
+            },
+            &|b| {
+                b.values_mut().count();
+            },
+            &|b| b.retain(|_, _| true),
+            &|b| b.load_chunk(vec![(p1, hopper())]),
+        ];
+        for wake in wakes {
+            b.sleep(p1);
+            assert_eq!(
+                b.awake_tickers(|_| 1)
+                    .iter()
+                    .map(|(p, _, _)| *p)
+                    .collect::<Vec<_>>(),
+                [p0, p2]
+            );
+            let epoch_before = b.wake_epoch();
+            wake(&mut b);
+            assert_ne!(b.wake_epoch(), epoch_before);
+            let _ = b.awake_tickers(|_| 1);
+            assert_eq!(
+                b.awake_ticker_slots()
+                    .iter()
+                    .map(|(p, _, _)| *p)
+                    .collect::<Vec<_>>(),
+                [p0, p1, p2]
+            );
+        }
+
+        // Remove also clears sleep state and bumps wake_epoch.
+        b.sleep(p1);
+        let epoch_before = b.wake_epoch();
+        assert!(b.remove(&p1).is_some());
+        assert_ne!(b.wake_epoch(), epoch_before);
+        assert!(!b.is_asleep(&p1));
+        assert_eq!(
+            b.awake_tickers(|_| 1)
+                .iter()
+                .map(|(p, _, _)| *p)
+                .collect::<Vec<_>>(),
+            [p0, p2]
+        );
+
+        // Sleep p0 then clear: cache and sleep set reset cleanly.
+        b.sleep(p0);
+        let epoch_before = b.wake_epoch();
+        b.clear();
+        assert_ne!(b.wake_epoch(), epoch_before);
+        assert!(b.awake_tickers(|_| 1).is_empty());
+    }
+
+    #[test]
+    fn waking_post_wrap_slot_resumes_in_insertion_order() {
+        let mut b = level();
+        let (p0, p1, p2) = ((1, 64, 1), (2, 64, 1), (3, 64, 1));
+        for pos in [p0, p1, p2] {
+            b.insert(pos, hopper());
+        }
+        // Set next_slot right before promotion so promoted slot IDs wrap across u32::MAX -> 0 -> 1.
+        b.next_slot = u32::MAX;
+        let initial = b.awake_tickers(|_| 1);
+        assert_eq!(initial[0], (p0, u32::MAX, 0));
+        assert_eq!(initial[1], (p1, 0, 1));
+        assert_eq!(initial[2], (p2, 1, 2));
+
+        b.sleep(p2);
+        let before_wake = b.awake_tickers(|_| 1);
+        assert_eq!(before_wake.as_slice(), [(p0, u32::MAX, 0), (p1, 0, 1)]);
+        let prev_order = before_wake[0].2;
+
+        // Waking p2 (slot 1 < prev slot u32::MAX) must still resume after p0 via insertion order.
+        let _ = b.get_mut(&p2);
+        let all = b.ticker_slots();
+        let idx = b.ticker_index_after(prev_order);
+        assert_eq!(
+            all[idx..].iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            [p1, p2]
+        );
     }
     #[test]
     fn mod_block_entities_are_listed_by_chunk_until_they_go() {
