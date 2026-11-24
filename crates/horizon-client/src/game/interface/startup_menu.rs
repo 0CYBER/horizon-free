@@ -1523,6 +1523,179 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
+    fn title_splash_reads_the_selected_text_through_native_and_wasm_render_hooks() {
+        use mod_api::{
+            __private::{ModPhase, PhaseOwner},
+            ClientHost, Flow, Hooks, ModEntry, ScreenRenderPostEvent, ScreenRenderPreEvent,
+        };
+        use std::sync::Mutex;
+
+        type Observations = Arc<Mutex<Vec<(&'static str, Option<String>)>>>;
+        struct Replacement {
+            guest: horizon_mod_wasm::WasmMod,
+            seen: Observations,
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for Replacement {
+            fn screen_render_pre(
+                &self,
+                host: &dyn ClientHost,
+                event: &mut ScreenRenderPreEvent<'_>,
+            ) -> Flow {
+                self.seen.lock().unwrap().push(("pre", host.title_splash()));
+                let flow = self.guest.screen_render_pre(host, event);
+                if flow != Flow::Cancel {
+                    self.seen.lock().unwrap().push(("wasm read failed", None));
+                }
+                flow
+            }
+
+            fn screen_render_post(&self, host: &dyn ClientHost, _: &mut ScreenRenderPostEvent<'_>) {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push(("post", host.title_splash()));
+            }
+        }
+
+        crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
+            let scratch = tempfile::tempdir().unwrap();
+            let title = Title::new(
+                scratch.path().join("saves"),
+                scratch.path(),
+                "Selected splash!",
+            );
+            // Keep the actual choice even on a special date; the guest compares its exact
+            // bytes, not just presence. The game's current pool below differs from this one.
+            let chosen = title.visible_splash(false).unwrap().to_owned();
+            let guest = splash_replacement_guest(&chosen);
+            let seen = Observations::default();
+            let replacement = Replacement {
+                guest,
+                seen: seen.clone(),
+            };
+            mod_platform::testing::with_mods(
+                vec![ModEntry::new("splash_replacement", Box::new(replacement))].into(),
+                || {
+                    crate::game::native_entity_refs::tests::with_client_game(|game| {
+                        use horizon_client::{options_file::V, title::Mode};
+
+                        let draw = |game: &mut Game<'_>, expected: Option<&str>| {
+                            let _ = game.hud_layers([640, 480]);
+                            assert_eq!(
+                                std::mem::take(&mut *seen.lock().unwrap()),
+                                [
+                                    ("pre", expected.map(str::to_owned)),
+                                    ("post", expected.map(str::to_owned)),
+                                ],
+                            );
+                        };
+                        game.gui.splashes = "Not the selected splash".into();
+                        game.screen = Screen::Playing;
+                        game.settings.file.set("hideSplashTexts", V::Bool(false));
+                        {
+                            let _setup = PhaseOwner::scope(ModPhase::Setup);
+                            StartupMenu {
+                                title: Some(title),
+                                ..Default::default()
+                            }
+                            .handoff(game);
+                            draw(game, Some(&chosen));
+                            draw(game, Some(&chosen));
+                        }
+
+                        let _world = PhaseOwner::scope(ModPhase::World);
+                        game.settings.file.set("hideSplashTexts", V::Bool(true));
+                        draw(game, None);
+                        game.settings.file.set("hideSplashTexts", V::Bool(false));
+                        game.title.as_mut().unwrap().mode = Mode::Select {
+                            worlds: Vec::new(),
+                            selected: None,
+                        };
+                        draw(game, None);
+
+                        let mut returned_title = game.title.take().unwrap();
+                        let host: &dyn ClientHost = game;
+                        assert_eq!(host.title_splash(), None);
+                        returned_title.mode = Mode::Main;
+                        game.show_title(returned_title);
+                        draw(game, Some(&chosen));
+                    });
+                },
+            );
+        });
+    }
+
+    /// The real Wasm pre-hook adapter runs this guest. It cancels drawing only after
+    /// the named import returns the exact serialized Option expected on this frame.
+    fn splash_replacement_guest(chosen: &str) -> horizon_mod_wasm::WasmMod {
+        use mod_api::wire::Writer;
+
+        fn data(bytes: &[u8]) -> String {
+            bytes.iter().map(|byte| format!("\\{byte:02x}")).collect()
+        }
+
+        let calls = [("ClientHost", "title_splash")];
+        let read = horizon_mod_wasm::fixture::import_id(calls[0].0, calls[0].1).unwrap();
+        let mut shown = Writer::new();
+        shown.put(&Some(chosen.to_owned()));
+        let mut hidden = Writer::new();
+        hidden.put(&None::<String>);
+        let mut cancel = Writer::new();
+        cancel.put(&mod_api::Flow::Cancel);
+        cancel.put(&false); // The event's mutable `cancelled` field; Flow requests the cancel.
+        let bytes = wat::parse_str(horizon_mod_wasm::fixture::by_name(
+            &format!(
+                r#"(module
+                    (@custom "dylink.0" "\01\04\00\00\00\00")
+                    (import "env" "memory" (memory 1))
+                    (import "env" "__indirect_function_table" (table 1 funcref))
+                    (import "horizon" "host" (func $host (param i32 i32 i32 i32 i32) (result i32)))
+                    (data (i32.const 4096) "{shown}")
+                    (data (i32.const 4352) "{hidden}")
+                    (data (i32.const 4608) "{cancel}")
+                    (global $frame (mut i32) (i32.const 0))
+                    (func (export "horizon_layout") (result i64) i64.const {layout})
+                    (func (export "horizon_in") (param i32) (result i32) i32.const 512)
+                    (func (export "horizon_hook") (param i32) (result i64)
+                        (local $expected i32) (local $len i32) (local $i i32)
+                        global.get $frame i32.const 2 i32.lt_u
+                        global.get $frame i32.const 4 i32.eq i32.or
+                        if
+                            i32.const 4096 local.set $expected
+                            i32.const {shown_len} local.set $len
+                        else
+                            i32.const 4352 local.set $expected
+                            i32.const {hidden_len} local.set $len
+                        end
+                        global.get $frame i32.const 1 i32.add global.set $frame
+                        i32.const {read} i32.const 0 i32.const 0 i32.const 8192 i32.const 256 call $host
+                        local.get $len i32.ne if unreachable end
+                        block $done loop $next
+                            local.get $i local.get $len i32.eq br_if $done
+                            i32.const 8192 local.get $i i32.add i32.load8_u
+                            local.get $expected local.get $i i32.add i32.load8_u
+                            i32.ne if unreachable end
+                            local.get $i i32.const 1 i32.add local.set $i
+                            br $next
+                        end end
+                        i64.const {reply}))"#,
+                shown = data(shown.bytes()),
+                hidden = data(hidden.bytes()),
+                cancel = data(cancel.bytes()),
+                layout = *mod_api::wire::LAYOUT,
+                shown_len = shown.bytes().len(),
+                hidden_len = hidden.bytes().len(),
+                reply = (4608u64 << 32) | cancel.bytes().len() as u64,
+            ),
+            &calls,
+        ))
+        .unwrap();
+        horizon_mod_wasm::fixture::module(&bytes).unwrap()
+    }
+
+    #[test]
     fn a_server_joined_at_start_is_kept_in_the_server_list() {
         let root = std::env::temp_dir().join(format!("horizon-quick-play-{}", std::process::id()));
         let saves = root.join("saves");

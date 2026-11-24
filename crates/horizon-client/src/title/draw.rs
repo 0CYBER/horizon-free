@@ -128,7 +128,7 @@ impl Title {
             Mode::Main => {
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 draw_logo(atlas, batch, w);
-                if !hide_splash && let Some(splash) = self.splash.as_deref() {
+                if let Some(splash) = self.splash_text(hide_splash) {
                     let tw = HudBatch::text_width(atlas, splash);
                     let start = batch.vertices.len();
                     batch.text(

@@ -160,4 +160,11 @@ pub trait ScreensClientHost {
     /// wasm alike.
     #[access(ClientSetup)]
     fn request_screenshot(&mut self) -> Result<(), ScreenshotError>;
+    /// Side: client.
+    /// The already selected splash text on the main title screen. None on other
+    /// screens, when Hide Splash Texts is enabled, or if no splash was selected.
+    /// Still available in the title's render hooks if Pre cancels stock drawing.
+    #[access(ClientSetup)]
+    #[default_on_unavailable]
+    fn title_splash(&self) -> Option<String>;
 }

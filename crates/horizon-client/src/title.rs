@@ -885,6 +885,27 @@ impl Title {
         }
         self
     }
+    /// The selected splash, if the main title is showing and splash text is enabled.
+    pub fn visible_splash(&self, hide_splash: bool) -> Option<&str> {
+        let splash = self.splash_text(hide_splash)?;
+        if !matches!(self.mode, Mode::Main)
+            || self.preparing
+            || self.rules.borrow().is_some()
+            || self.confirm_experiments.borrow().is_some()
+            || self.experiments.borrow().is_some()
+        {
+            return None;
+        }
+        Some(splash)
+    }
+
+    fn splash_text(&self, hide_splash: bool) -> Option<&str> {
+        if hide_splash {
+            return None;
+        }
+        self.splash.as_deref()
+    }
+
     /// `splashes` is the pool `crate::splashes::pool` built for the current resources.
     pub fn new(saves: PathBuf, resources: &Path, splashes: &str) -> Self {
         use chrono::Datelike;

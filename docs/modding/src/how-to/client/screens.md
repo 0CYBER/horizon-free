@@ -40,6 +40,18 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## Replacing the title splash
+
+Native and Wasm mods can call `host.title_splash()` from the title's screen render hooks
+(`event.screen.id == "title"`). It returns the exact text the client already picked, including
+special-date and player-name splashes. It does not pick a new line each frame. If you cancel
+`screen_render_pre` to replace the stock title drawing, you can still read the same text in
+`screen_render_post`.
+The loading frontend does not run screen render hooks until it hands the title to the game.
+
+The result is `None` while another screen is active, when the player enables Hide Splash Texts, or
+when no splash was selected.
+
 ## GUI-only in-world frames
 
 A full-screen map can return `Flow::Cancel` from `render_frame` while `host.mod_screen()` is its

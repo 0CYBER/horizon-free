@@ -2505,6 +2505,7 @@ horizon-client game::stand_equipment_change_tests::a_stands_body_and_saddle_writ
 horizon-client game::startup_menu::tests::live_gui_scale_uses_the_current_owner lib daily resources
 horizon-client game::startup_menu::tests::queued_creation_is_reconciled_at_handoff lib daily resources
 horizon-client game::startup_menu::tests::resource_pack_drops_import_from_startup_and_game_options lib daily resources
+horizon-client game::startup_menu::tests::title_splash_reads_the_selected_text_through_native_and_wasm_render_hooks lib daily resources
 horizon-client game::state_at_viewpoint_tests::the_camera_reads_the_state_a_block_part_says_it_sees lib daily resources
 horizon-client game::stateful_block_entity_tests::stateful_creation_uses_actual_state_and_preserves_existing_entity lib daily resources
 horizon-client game::stations::anvil::remote_anvil_tests::a_servers_custom_enchantment_book_gives_an_anvil_result lib daily resources
