@@ -60,6 +60,12 @@ pub fn sound_source(event: &str) -> usize {
     if e == "block.potent_sulfur.noxious_gas" {
         // PotentSulfurBlock.animateTick, its only caller, plays it as AMBIENT.
         index("ambient")
+    } else if e == "item.bottle.fill_dragonbreath" {
+        // BottleItem.use: SoundSource.NEUTRAL, even though the id starts with `item.`.
+        index("neutral")
+    } else if e == "item.bottle.empty" {
+        // PotionItem / CauldronInteractions / DispenseItemBehavior: SoundSource.BLOCKS.
+        index("block")
     } else if e == "item.llama_carpet.unequip" {
         // Equippable.shearingSound, played by Mob.playSound on the llama's NEUTRAL.
         index("neutral")
@@ -983,6 +989,24 @@ mod tests {
             horizon_narrator::Status::Off
         );
     }
+
+    /// `BottleItem.use` and `PotionItem` name their sounds `item.*` but play
+    /// them on NEUTRAL and BLOCKS. The name-family rule alone puts both on
+    /// PLAYER, so muting `soundCategory_player` would silence sounds vanilla
+    /// keeps audible.
+    #[test]
+    fn bottle_sounds_keep_their_vanilla_category() {
+        assert_eq!(
+            super::sound_source("minecraft:item.bottle.fill_dragonbreath"),
+            6
+        );
+        assert_eq!(super::sound_source("item.bottle.fill_dragonbreath"), 6);
+        assert_eq!(super::sound_source("minecraft:item.bottle.empty"), 4);
+        assert_eq!(super::sound_source("item.bottle.empty"), 4);
+        // Another `item.*` sound still follows the family rule.
+        assert_eq!(super::sound_source("minecraft:item.book.page_turn"), 7);
+    }
+
     /// `Equippable.shearingSound` for a llama carpet is played by `Mob.playSound`
     /// on the llama's NEUTRAL source, not on PLAYER like most `item.*` ids.
     #[test]
