@@ -990,13 +990,18 @@ impl Mob {
             self.fall_distance = 0.0;
         }
     }
+    /// `LivingEntity.getAttributeValue(Attributes.SAFE_FALL_DISTANCE)`: the
+    /// mob's attribute store with Jump Boost's `+1` per level `ADD_VALUE`
+    /// modifier applied.
+    pub fn safe_fall_distance(&self) -> f64 {
+        super::armor::safe_fall_distance(self)
+    }
     /// The block particles `LivingEntity.checkFallDamage` sends up from the
     /// block a mob lands on, by the power of the fall.
     fn landing_dust(&self, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let pos = self.block_on_legacy(w);
         let state = w.world.block(pos[0], pos[1], pos[2]);
-        let Some(count) = landing_dust_count(self.fall_distance, self.kind.safe_fall_distance)
-        else {
+        let Some(count) = landing_dust_count(self.fall_distance, self.safe_fall_distance()) else {
             return;
         };
         if w.facts.is_air(state) {
@@ -1457,7 +1462,7 @@ impl Mob {
             self.mod_block_fall(level, contact, landed, 0.0);
             return false;
         }
-        let power = distance + 1.0e-6 - self.kind.safe_fall_distance;
+        let power = distance + 1.0e-6 - self.safe_fall_distance();
         let mut damage = (power * f64::from(modifier) * self.kind.fall_damage_multiplier).floor();
         // Frog.calculateFallDamage: five points less than the base damage;
         // Goat.calculateFallDamage: ten, so a long jump down a ledge is safe.
@@ -3897,6 +3902,112 @@ mod tests {
         assert_eq!(m.flying_speed(context), 0.02, "unsaddled");
         m.extra.set_saddled(true);
         assert_eq!(m.flying_speed(context), 0.3_f32 * 0.1);
+    }
+
+    #[test]
+    fn jump_boost_and_attribute_store_control_mob_safe_fall_distance() {
+        use horizon_world::attributes::{Modifier, Operation, entity::Catalog};
+        use std::sync::Arc;
+
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:pig".into();
+        ty.safe_fall_distance = 3.0;
+
+        // Without Jump Boost, a 4-block fall hurts by 1 and throws landing dust.
+        let mut plain = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
+        plain.attrs.max_health = 10.0;
+        plain.health = 10.0;
+        let context = crate::test_resources::server_loop_context();
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
+        let mut events = Vec::new();
+        assert_eq!(plain.safe_fall_distance(), 3.0);
+        assert!(landing_dust_count(4.0, plain.safe_fall_distance()).is_some());
+        assert!(plain.cause_fall_damage_at(
+            context,
+            level,
+            4.0,
+            1.0,
+            &mut events,
+            None,
+            super::super::DamageKind::Fall,
+        ));
+        assert_eq!(plain.health, 9.0);
+
+        // With Jump Boost I (amp 0, +1 safe_fall_distance), a 4-block fall is safe
+        // (no damage and no landing dust), while a 5-block fall hurts by 1.
+        let mut boosted = Mob::new(2, kind.clone(), Vec3::ZERO, 0.0);
+        boosted.attrs.max_health = 10.0;
+        boosted.health = 10.0;
+        boosted.add_effect("minecraft:jump_boost", 200, 0);
+        assert_eq!(boosted.safe_fall_distance(), 4.0);
+        assert!(landing_dust_count(4.0, boosted.safe_fall_distance()).is_none());
+        assert!(!boosted.cause_fall_damage_at(
+            context,
+            level,
+            4.0,
+            1.0,
+            &mut events,
+            None,
+            super::super::DamageKind::Fall,
+        ));
+        assert_eq!(boosted.health, 10.0);
+        assert!(boosted.cause_fall_damage_at(
+            context,
+            level,
+            5.0,
+            1.0,
+            &mut events,
+            None,
+            super::super::DamageKind::Fall,
+        ));
+        assert_eq!(boosted.health, 9.0);
+
+        // Attribute store base + multiplicative modifier combines with Jump Boost's
+        // ADD_VALUE bonus before multiplication: (5.0 + 2.0) * (1.0 + 0.5) = 10.5.
+        let bits = |v: f64| format!("{:016x}", v.to_bits());
+        let catalog = Arc::new(
+            Catalog::from_json(&serde_json::json!({
+                "data_version": horizon_world::DATA_VERSION,
+                "attributes": [{
+                    "id": "minecraft:safe_fall_distance",
+                    "default": bits(3.0),
+                    "min": bits(-1024.0),
+                    "max": bits(1024.0),
+                    "syncable": true
+                }],
+                "entities": {"minecraft:pig": {"minecraft:safe_fall_distance": bits(3.0)}}
+            }))
+            .unwrap(),
+        );
+        let mut map = catalog.create("minecraft:pig").unwrap();
+        let key = catalog.id("minecraft:safe_fall_distance").unwrap();
+        map.edit(key, |value, observer| {
+            value.set_base_value(5.0, observer).unwrap();
+            value
+                .add_permanent(
+                    Modifier::new("test:mul", 0.5, Operation::AddMultipliedTotal).unwrap(),
+                    observer,
+                )
+                .unwrap();
+        });
+        let mut custom = Mob::new(3, kind, Vec3::ZERO, 0.0);
+        custom.attrs.max_health = 10.0;
+        custom.health = 10.0;
+        custom.extra.armor_attributes = Some(Box::new(map));
+        custom.add_effect("minecraft:jump_boost", 200, 1);
+        assert_eq!(custom.safe_fall_distance(), 10.5);
+        assert!(!custom.cause_fall_damage_at(
+            context,
+            level,
+            10.0,
+            1.0,
+            &mut events,
+            None,
+            super::super::DamageKind::Fall,
+        ));
+        assert_eq!(custom.health, 10.0);
     }
 }
 

@@ -55,6 +55,28 @@ fn effective(map: Option<&EntityAttributes>, name: &str, base: f64, bonus: f64) 
     Some(definition.sanitize(map.base_value(key).unwrap_or(base) + bonus))
 }
 
+/// Same as [`effective`], over a built [`crate::living_attributes::Live`] map.
+fn effective_live(
+    live: &crate::living_attributes::Live,
+    name: &str,
+    base: f64,
+    bonus: f64,
+) -> Option<f64> {
+    let key = live.key(name)?;
+    if let Some(handle) = live.lookup(Some(&key))
+        && let Ok(source) = live.instance(&handle)
+    {
+        let mut value = source.clone();
+        value
+            .set_base_value(source.base_value() + bonus, &mut Calculation)
+            .unwrap();
+        return Some(value.value());
+    }
+    let definition = live.catalog().attribute(key.attribute()).definition;
+    let base = live.value(Some(key), ValueKind::Base).unwrap_or(base);
+    Some(definition.sanitize(base + bonus))
+}
+
 /// LivingEntity.getArmorValue floors the effective double before converting
 /// its integer result to float. Toughness converts its effective double directly.
 ///
@@ -126,6 +148,53 @@ pub fn max_absorption(mob: &Mob) -> f32 {
                 .attribute_bounds
                 .sanitize_max_absorption(default + bonus)
         }) as f32
+}
+
+/// Jump Boost's `safe_fall_distance` modifier (`MobEffects.JUMP_BOOST`:
+/// +1 per level, `ADD_VALUE`) for the effects a mob has.
+pub fn jump_boost_safe_fall_bonus(effects: &[super::StoredEffect]) -> f64 {
+    effects
+        .iter()
+        .find(|e| e.id == "minecraft:jump_boost")
+        .map_or(0.0, |e| f64::from(e.amplifier + 1))
+}
+
+/// `getAttributeValue(Attributes.SAFE_FALL_DISTANCE)` from a mob's attribute
+/// map and Jump Boost's `ADD_VALUE` modifier.
+pub fn safe_fall_distance_of(map: &EntityAttributes, default: f64, bonus: f64) -> Option<f64> {
+    effective(Some(map), "minecraft:safe_fall_distance", default, bonus)
+}
+
+/// A mob's effective `minecraft:safe_fall_distance`, reading its live attribute
+/// map first when built (the same precedence as [`values`]: mod/equipment
+/// modifiers and synced attributes), falling back to a save's or spawn-time
+/// `armor_attributes` map and then the mob type's default, with Jump Boost's
+/// `+1 * (amplifier + 1)` `ADD_VALUE` modifier applied.
+pub fn safe_fall_distance(mob: &Mob) -> f64 {
+    let default = mob
+        .kind
+        .attributes
+        .get("minecraft:safe_fall_distance")
+        .copied()
+        .unwrap_or(mob.kind.safe_fall_distance);
+    let bonus = jump_boost_safe_fall_bonus(&mob.extra.effects);
+    if let Some(value) = mob
+        .extra
+        .live
+        .built()
+        .and_then(|live| effective_live(live, "minecraft:safe_fall_distance", default, bonus))
+    {
+        return value;
+    }
+    if let Some(value) = mob
+        .extra
+        .armor_attributes
+        .as_deref()
+        .and_then(|map| safe_fall_distance_of(map, default, bonus))
+    {
+        return value;
+    }
+    (default + bonus).clamp(-1024.0, 1024.0)
 }
 
 #[cfg(test)]
@@ -340,5 +409,62 @@ mod tests {
             big_before - big.health,
             small_before - small.health
         );
+    }
+
+    #[test]
+    fn safe_fall_distance_prefers_live_map_over_stored_armor_attributes() {
+        let bits = |v: f64| format!("{:016x}", v.to_bits());
+        let catalog = Arc::new(
+            Catalog::from_json(&serde_json::json!({
+                "data_version": horizon_world::DATA_VERSION,
+                "attributes": [{
+                    "id": "minecraft:safe_fall_distance",
+                    "default": bits(3.0),
+                    "min": bits(-1024.0),
+                    "max": bits(1024.0),
+                    "syncable": true
+                }],
+                "entities": {"minecraft:pig": {"minecraft:safe_fall_distance": bits(3.0)}}
+            }))
+            .unwrap(),
+        );
+        let key = catalog.id("minecraft:safe_fall_distance").unwrap();
+
+        // Stored armor_attributes holds an older base of 3.0.
+        let mut stored = catalog.create("minecraft:pig").unwrap();
+        stored.edit(key, |value, observer| {
+            value.set_base_value(3.0, observer).unwrap();
+        });
+
+        // Live map holds a newer base of 5.0 and a live-only +0.5 total multiplier.
+        let mut live = crate::living_attributes::LivingAttributes::default();
+        live.edit(
+            &catalog,
+            "minecraft:pig",
+            "minecraft:safe_fall_distance",
+            true,
+            Vec::new,
+            |value, observer| {
+                value.set_base_value(5.0, observer)?;
+                value.add_transient(
+                    Modifier::new("test:live_mul", 0.5, Operation::AddMultipliedTotal).unwrap(),
+                    observer,
+                )
+            },
+        )
+        .unwrap();
+
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let ty = Arc::make_mut(&mut kind);
+        ty.id = "minecraft:pig".into();
+        ty.safe_fall_distance = 3.0;
+
+        let mut mob = Mob::new(1, kind, Vec3::ZERO, 0.0);
+        mob.extra.armor_attributes = Some(Box::new(stored));
+        mob.extra.live = live;
+        mob.add_effect("minecraft:jump_boost", 200, 1); // +2 ADD_VALUE
+
+        // Live map wins over stored armor_attributes: (5.0 + 2.0) * (1.0 + 0.5) = 10.5.
+        assert_eq!(safe_fall_distance(&mob), 10.5);
     }
 }
