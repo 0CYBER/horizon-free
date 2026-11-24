@@ -1,0 +1,2 @@
+# A broken named boat drops its named item, using prepared vanilla resources.
+horizon-client game::boats::drop_tests::a_broken_boat_drops_its_item_under_its_name lib daily resources

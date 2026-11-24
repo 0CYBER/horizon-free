@@ -1548,6 +1548,19 @@ impl Game<'_> {
         );
     }
 
+    /// `VehicleEntity.destroy(level, dropItem)`: the boat's item, carrying
+    /// the vehicle's `CustomName` as `DataComponents.CUSTOM_NAME`, like
+    /// the minecart's `cart_drop`.
+    fn boat_drop(&self, id: u32, item: &str) -> ItemStack {
+        let mut stack = ItemStack::new(item, 1);
+        if let Some(name) = self.persist_raw(id).and_then(|raw| raw.get("CustomName")) {
+            let text = horizon_client::entity_nbt::name_text(name);
+            stack.data_mut().custom_name =
+                Some(horizon_client::scoreboard::component_tag(&text.component()));
+        }
+        stack
+    }
+
     pub(super) fn hurt_boat_result(
         &mut self,
         i: usize,
@@ -1644,16 +1657,7 @@ impl Game<'_> {
                     .bool_at(horizon_client::gamerules::vanilla::ENTITY_DROPS)
             {
                 let item = b.entity_type();
-                self.spawn_item_own(
-                    ItemStack {
-                        item: Arc::from(item.as_str()),
-                        count: 1,
-                        damage: 0,
-                        extra: None,
-                    },
-                    at,
-                    10,
-                );
+                self.spawn_item_own(self.boat_drop(id, item.as_str()), at, 10);
                 // AbstractChestBoat.destroy: `chestVehicleDestroyed` drops the
                 // emptied chest again, which only draws each slot's spot.
                 if b.chest {
@@ -2228,6 +2232,33 @@ mod cobweb_tests {
             "powder snow's down multiplier: {} against {}",
             moved.y,
             free_moved.y
+        );
+    }
+}
+#[cfg(test)]
+mod drop_tests {
+    use crate::game::game_tests::tests::server_game;
+
+    /// `VehicleEntity.destroy`: a broken boat drops its item under the
+    /// vehicle's `CustomName` (`DataComponents.CUSTOM_NAME`).
+    #[test]
+    #[ignore = "daily"]
+    fn a_broken_boat_drops_its_item_under_its_name() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        game.build_registries();
+        game.set_allow_commands(true);
+        assert!(game.run_command(r#"summon oak_boat 8.5 64 8.5 {CustomName:"Raft"}"#));
+        assert_eq!(game.boats.len(), 1);
+        assert_eq!(game.hurt_boat_result(0, 100.0, false, None), Some(true));
+        assert!(game.boats.is_empty(), "the boat is broken");
+        assert_eq!(game.dropped.len(), 1, "the boat item alone");
+        let stack = &game.dropped[0].stack;
+        assert_eq!(&*stack.item, "minecraft:oak_boat");
+        assert_eq!(
+            stack.custom_name().as_deref(),
+            Some("Raft"),
+            "the drop is named as the boat was"
         );
     }
 }
