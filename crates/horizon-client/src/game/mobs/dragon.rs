@@ -4281,7 +4281,8 @@ impl Game<'_> {
         let room = Aabb::new(Vec3::new(x, y, z), Vec3::new(x + 1.0, y + 2.0, z + 1.0));
         !self.entity_in(room)
     }
-    /// `EndCrystalItem.useOn`: on obsidian or bedrock with room above.
+    /// `EndCrystalItem.useOn`: on obsidian or bedrock with a free cell above
+    /// holding no entity (its FAIL is a `false`).
     pub(super) fn place_end_crystal(
         &mut self,
         hit: &super::Hit,
@@ -4346,31 +4347,34 @@ impl Game<'_> {
             self.entity_killed_event([c.position.x, c.position.y, c.position.z], false);
         }
     }
-    /// Any entity touching `room` (`Level.getEntities(null, box)`).
+    /// Any entity touching `room` (`Level.getEntities(null, box)`): every kind,
+    /// no spectators, none removed (`Entity.setRemoved` leaves the level at once).
     fn entity_in(&self, room: Aabb) -> bool {
-        let touches = |lo: Vec3, hi: Vec3| {
-            let (a, b) = (room.min_position(), room.max_position());
-            lo.x < b.x && hi.x > a.x && lo.y < b.y && hi.y > a.y && lo.z < b.z && hi.z > a.z
+        use super::entity::{Entity as _, with_entity};
+        let touches = |b: Aabb| b.intersects(room);
+        let extents = |(lo, hi): ([f64; 3], [f64; 3])| {
+            Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            )
         };
-        // Level.getEntities: the host's player and every guest in the level.
-        let player = self
-            .fight_players()
-            .iter()
-            .any(|p| !p.spectator && touches(p.bounds.min_position(), p.bounds.max_position()));
-        player
-            || self.crystals.iter().any(|c| {
-                touches(
-                    Vec3::new(c.position.x - 1.0, c.position.y, c.position.z - 1.0),
-                    Vec3::new(c.position.x + 1.0, c.position.y + 2.0, c.position.z + 1.0),
-                )
+        // A remote dragon's copy in the mob list is never moved (`move_entity`
+        // leaves the dragon to its own state), so it would hold a box where it
+        // spawned for ever: the dragon's own boxes are checked above instead.
+        let dragon = self.dragon.as_ref().map(|d| d.id).filter(|id| *id != 0);
+        self.fight_players().iter().any(|p| !p.spectator && touches(p.bounds))
+            || self.crystals.iter().any(|c| touches(c.bounds()))
+            // Level.getEntities also checks each dragon part separately.
+            || self.dragon.as_ref().is_some_and(|d| {
+                touches(d.whole_box()) || (0..8).any(|i| touches(d.part_box(i)))
             })
-            || self.mobs.iter().any(|m| {
-                let w = f64::from(m.width()) / 2.0;
-                let h = f64::from(m.height());
-                touches(
-                    Vec3::new(m.position.x - w, m.position.y, m.position.z - w),
-                    Vec3::new(m.position.x + w, m.position.y + h, m.position.z + w),
-                )
+            || self.paintings.iter().any(|p| touches(extents(p.bounds())))
+            || self.item_frames.iter().any(|f| touches(extents(f.bounds())))
+            || self.cushions.iter().any(|c| touches(extents(c.bounds())))
+            || self.entity_handles().any(|h| {
+                with_entity!(self, h, e => !e.is_removed()
+                    && Some(e.id()) != dragon
+                    && touches(e.bounds()))
             })
     }
     /// `EnderDragonFight.tryRespawn`: a crystal on each side of the portal.

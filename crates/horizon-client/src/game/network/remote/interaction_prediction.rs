@@ -460,8 +460,10 @@ impl Game<'_> {
                     .as_ref()
                     .is_some_and(|s| &*s.item == "minecraft:end_crystal")
             {
-                // EndCrystalItem.useOn consumes the click whether it fits or fails.
+                // EndCrystalItem.useOn consumes the click whether it fits or fails:
+                // SUCCESS spends the crystal and swings this hand, a FAIL does neither.
                 if self.end_crystal_fits(&hit) {
+                    self.with_hand(hand, Game::consume_held);
                     self.with_hand(hand, Game::swing_arm);
                 }
                 return true;

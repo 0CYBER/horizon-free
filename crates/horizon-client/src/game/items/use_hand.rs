@@ -569,9 +569,19 @@ impl Game<'_> {
                 || self.use_lodestone_compass(hit, &stack, before)
                 || self.use_map_on_banner(hit, &stack, before)
                 || self.place_armor_stand(hit, &stack)
-                || self.place_cushion(hit, &stack)
-                || self.place_end_crystal(hit, &stack))
+                || self.place_cushion(hit, &stack))
         {
+            return Ok(true);
+        }
+        // EndCrystalItem.useOn: its FAIL (another block, no free cell above, an
+        // entity in the cell) ends the click, so the off hand gets no turn.
+        if let Some(hit) = block_hit
+            && self.may_use_on(hit.pos)
+            && &*stack.item == "minecraft:end_crystal"
+        {
+            if !self.place_end_crystal(hit, &stack) {
+                self.use_failed = true;
+            }
             return Ok(true);
         }
         if self.use_ender_eye(&stack, block_hit.is_some())? {

@@ -1369,7 +1369,7 @@ impl Game<'_> {
     fn remote_break_restricted(&self, pos: [i32; 3]) -> bool {
         self.remote_break_restricted_body(pos)
     }
-    fn remote_use_block(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_block(&mut self, hand: Hand) -> bool {
         self.remote_use_block_body(hand)
     }
     pub(in crate::game) fn predict_item_on_block(
