@@ -162,20 +162,14 @@ impl Run {
     /// world onto `made`. Whether there is a made frame.
     fn frame(&mut self, pixels: &[[f32; 4]], made: &wgpu::TextureView) -> bool {
         let (device, queue) = (&self.device, &self.queue);
-        let world = self.fg.world(device, &self.post, &self.config, FLOAT);
+        let world = self.fg.world(device, &self.config, FLOAT);
         let mut encoder = device.create_command_encoder(&Default::default());
         let source = upload(device, queue, pixels);
         self.post
             .finish_with(&mut encoder, &world, &self.post.bind(device, &source), None);
-        let made = self.fg.generate(
-            device,
-            queue,
-            &mut encoder,
-            &self.post,
-            made,
-            &self.camera,
-            Some(PEAK),
-        );
+        let made = self
+            .fg
+            .generate(device, queue, &mut encoder, made, &self.camera, Some(PEAK));
         queue.submit([encoder.finish()]);
         self.camera.reproject = Some(Mat4::IDENTITY);
         made

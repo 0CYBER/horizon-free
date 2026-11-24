@@ -8617,23 +8617,63 @@ impl Renderer {
         laps.lap("r_prepare");
         // Frame generation: its present thread acquires and presents, this frame draws
         // into frames of its own. Not over menus that blur the frame, a shader pack's own post
-        // passes, HDR output without the HUD's layer (or the float frame HDR was started
-        // with) or the title screen.
+        // passes (an Iris-style pack's; a native pack draws inside the frame's passes, so the
+        // offscreen frames carry it and it is allowed unless HORIZON_FRAMEGEN_NATIVE_PACK=0),
+        // HDR output without the HUD's layer (or the float frame HDR was started with) or
+        // the title screen.
         let fg = !frame.gui_only
             && self.frame_export.is_none()
             && self.frame_gen.on
             && !(self.frame_gen.paused || self.frame_gen.refused || self.frame_gen.no_room)
+            // Without HDR, the frame is the surface's format, except a native pack's float
+            // frame, which draws through a readback stand-in.
             && (self.hdr.as_ref()).map_or(
-                self.output.frame.format == self.config.format.remove_srgb_suffix(),
+                self.executor.is_some()
+                    || self.output.frame.format == self.config.format.remove_srgb_suffix(),
                 hdr::Hdr::layered,
             )
             && !frame.title
             && frame.menu_blur.is_none()
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.executor.is_none()
+            && (self.executor.is_none() || frame_gen::native_pack_allowed())
             && (self.surface.is_none()
                 || self.config.usage.contains(wgpu::TextureUsages::COPY_DST));
-        if !fg {
+        // Why frame generation stayed off while the player asked for it, once per
+        // condition change: a wrong-looking refusal is otherwise invisible.
+        if !fg && self.frame_gen.on && self.frame_export.is_none() && !frame.title {
+            let reason =
+                if self.frame_gen.paused || self.frame_gen.refused || self.frame_gen.no_room {
+                    None // Its own state; it said so when it changed.
+                } else if self.hdr.as_ref().is_some_and(|h| !h.layered()) {
+                    Some("HDR output without the HUD's layer")
+                } else if self.hdr.is_none()
+                    && self.executor.is_none()
+                    && self.output.frame.format != self.config.format.remove_srgb_suffix()
+                {
+                    Some("the float frame HDR was started with")
+                } else if frame.menu_blur.is_some() {
+                    None // Transient: the pause menu's blur.
+                } else if self.pack_post.as_ref().is_some_and(|p| p.1.is_some()) {
+                    Some("a shaders/ pack's own post passes")
+                } else if self.executor.is_some() && !frame_gen::native_pack_allowed() {
+                    Some("HORIZON_FRAMEGEN_NATIVE_PACK=0")
+                } else if !(self.surface.is_none()
+                    || self.config.usage.contains(wgpu::TextureUsages::COPY_DST))
+                {
+                    Some("the surface cannot be copied to")
+                } else {
+                    None
+                };
+            if let Some(reason) = reason
+                && self.frame_gen.logged_refusal.as_deref() != Some(reason)
+            {
+                log::info!("Horizon renderer: frame generation off while enabled ({reason})");
+                self.frame_gen.logged_refusal = Some(reason.to_owned());
+            }
+        }
+        if fg {
+            self.frame_gen.logged_refusal = None;
+        } else {
             self.frame_gen.stop();
         }
         // Waits for the submit thread since the last frame's present (this frame's uploads).
@@ -8643,6 +8683,9 @@ impl Renderer {
         // for them (#13624) frame generation is off until the surface is configured again.
         let fg_frames = if fg {
             let config = self.surface_config();
+            // The world target takes the frame's format: a pack's output pass draws
+            // its composed picture onto it directly, and the engine's resolve does
+            // the same without a pack.
             let format = self.output.frame.format;
             let (device, frame_gen) = (&self.device, &mut self.frame_gen);
             let made = frame_targets::made(device, frame_targets::Kind::FrameGeneration, || {
@@ -8655,7 +8698,7 @@ impl Renderer {
                     &config,
                 );
                 if frames.is_some() {
-                    frame_gen.world(device, &self.world_post, &self.config, format);
+                    frame_gen.world(device, &config, format);
                 }
                 frames
             });
@@ -8724,7 +8767,10 @@ impl Renderer {
         let size = [self.config.width, self.config.height];
         let target_texture = match (&surface_frame, &mut self.hdr) {
             (_, Some(hdr)) => hdr.frame(&self.device, size),
-            _ if let Some((real, _)) = &fg_frames => real.clone(),
+            _ if let Some((real, _)) = &fg_frames => self
+                .readback
+                .target(&self.device, real, self.output.frame.format, false)
+                .unwrap_or_else(|| real.clone()),
             // A screenshot of a swapchain without COPY_SRC (OpenGL), and a float frame
             // with HDR off, draw into a texture of their own, then onto the swapchain or
             // the offscreen target.
@@ -10930,8 +10976,11 @@ impl Renderer {
             };
             section_draw_calls = mesh_calls + translucent_calls;
         }
+        // The frame draws into whatever `target_texture` gave: the surface's image,
+        // a readback stand-in in the frame's format (a 0.2 pack's float frame, with
+        // frame generation too), or HDR's own frame. The view is in its format.
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.output.frame.format),
+            format: Some(target_texture.format().remove_srgb_suffix()),
             ..Default::default()
         });
         if let Some(timer) = &mut self.gpu_timer {
@@ -12889,6 +12938,7 @@ impl Renderer {
             }
         } else if let Some((color, depth)) = &scaled
             && native_post
+            && fg_frames.is_none() // frame generation's branch runs the chain itself
             && let Some(native) = &mut self.external
         {
             native.run_post(external::WorldPost {
@@ -12935,7 +12985,22 @@ impl Renderer {
                 screen: &view_target,
                 resolved: resolved.as_ref(),
             });
-        } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
+        } else if let (Some((_, generated)), Some((color, depth))) = (&fg_frames, &scaled) {
+            // Frame generation owns this frame; the branch above (the ordinary native
+            // one) is skipped for it. A native pack's post chain runs here as without
+            // frame generation, and its output is composed by draw_generated: onto the
+            // readback stand-in at the frame's format, finished onto the real frame.
+            if native_post && let Some(native) = self.external.as_mut() {
+                native.run_post(external::WorldPost {
+                    device: &self.device,
+                    encoder: &mut encoder,
+                    world: (color, depth),
+                    size: self.world_post.size().unwrap_or([1, 1]),
+                    display: self.world_post.resolved_size().unwrap_or([1, 1]),
+                    window: [target_texture.width(), target_texture.height()],
+                    scene: self.ray_scene.as_ref().map(|s| (s, frame.camera)),
+                });
+            }
             let camera = frame_gen::Camera {
                 jittered,
                 view_proj,
@@ -13069,11 +13134,14 @@ impl Renderer {
             world,
         } = present;
         // A 0.2 pack in SDR: its picture finishes on 8 bits before the hand, the camera overlays
-        // and the HUD draw over it (`overlay_format`).
+        // and the HUD draw over it (`overlay_format`). With frame generation the finish lands
+        // on its real frame, whose format is the surface's.
         let finished = (self.output.frame.overlay_format != self.output.frame.format)
             .then(|| {
                 let image = surface_frame.as_ref().map(|f| &f.texture);
-                image.or(self.offscreen.as_ref())
+                image
+                    .or(fg_frames.as_ref().map(|f| &f.0))
+                    .or(self.offscreen.as_ref())
             })
             .flatten()
             .and_then(|image| {
