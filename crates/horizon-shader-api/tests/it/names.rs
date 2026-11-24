@@ -397,6 +397,37 @@ fn motion_brings_the_post_stage_only_the_motion_names() {
     check(&pack).unwrap();
 }
 
+/// `[entity] surface = true` brings the entity stage `set_surface`, `entity_surface.txt`, and no
+/// other stage anything; without the key an entity stage that calls it doesn't compile.
+#[test]
+fn entity_surface_brings_the_entity_stage_only_set_surface() {
+    let surfaced = pack_with("surface = true\n", None);
+    for kind in StageKind::ALL {
+        let composed = compose(&surfaced, kind, &format!("{}.wgsl", kind.name()));
+        let have: BTreeSet<String> = declared(&composed.text[composed.parts[0].1.clone()])
+            .into_iter()
+            .filter(|n| !n.starts_with("horizon_"))
+            .collect();
+        let mut expected = listed(kind.name());
+        if kind == StageKind::Entity {
+            expected.extend(listed("entity_surface"));
+        }
+        assert_eq!(have, expected, "{kind:?}");
+    }
+    check(&surfaced).unwrap();
+    let calls = (
+        "entity.wgsl",
+        "fn entity(input: EntityInput) -> Surface {\n    \
+         set_surface(input.normal, 0.5, 1.0);\n    return Surface(input.albedo);\n}\n",
+    );
+    check(&pack_with("surface = true\n", Some(calls))).unwrap();
+    let problems = check(&pack(Some(calls))).unwrap_err();
+    assert!(
+        problems.iter().any(|p| p.message.contains("set_surface")),
+        "{problems:?}"
+    );
+}
+
 /// `[[resource]]` brings the frame's epochs and the reasons' constants to every stage of the pack
 /// that keeps resources, and to no other pack.
 #[test]

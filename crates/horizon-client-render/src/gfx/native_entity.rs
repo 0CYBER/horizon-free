@@ -308,6 +308,49 @@ pub(super) fn shader_source(source: &str, fog: Fog, light: bool) -> String {
     )
 }
 
+/// The fragment header of `ENTRIES`, which `surfaced` renames into the colour's function.
+const FRAGMENT: &str =
+    "@fragment fn horizon_entity_fs(in: horizon_entity_out, @builtin(front_facing) front: bool)
+    -> @location(0) vec4<f32> {";
+
+/// Under `[entity] surface = true` the entries' fragment is a function of the colour, and the
+/// entry point around it also writes the surface target, as the material stage's solid terrain
+/// does: `set_surface`'s value (the triangle's normal, 0 and 0 where the stage leaves it
+/// unset) and the fragment's depth, which the post stage's `surface_at` compares with the final
+/// depth. A quad Horizon draws itself writes none (`w` 0, which `surface_at` reads as absent).
+const SURFACE: &str = "struct horizon_entity_surfaced {
+    @location(0) color: vec4<f32>,
+    // Its four floats' bits (`SURFACE_FORMAT` is an integer format).
+    @location(1) surface: vec4<u32>,
+}
+@fragment fn horizon_entity_fs(in: horizon_entity_out, @builtin(front_facing) front: bool)
+    -> horizon_entity_surfaced {
+    // In uniform control flow, before the colour's discards.
+    let normal = horizon_entity_normal(in.proj.xyz);
+    horizon_surface = vec4(0.0);
+    var out: horizon_entity_surfaced;
+    out.color = horizon_entity_color(in, front);
+    if ((in.flags >> 3u) & 7u) != 0u {
+        if horizon_surface.w == 0.0 {
+            set_surface(normal, 0.0, 0.0);
+        }
+        out.surface = bitcast<vec4<u32>>(vec4(horizon_surface.xyz, in.clip.z));
+    }
+    return out;
+}
+";
+
+/// `shader_source`'s shader writing the surface target too (`SURFACE`), for a pack's
+/// `[entity] surface = true`.
+pub(super) fn surfaced(text: &str) -> String {
+    let colour = "fn horizon_entity_color(in: horizon_entity_out, front: bool) -> vec4<f32> {";
+    assert!(
+        text.contains(FRAGMENT),
+        "the entries' fragment header moved"
+    );
+    text.replacen(FRAGMENT, colour, 1) + SURFACE
+}
+
 /// The entities' group 0 (gfx.rs's entity draws, the native shadow pass's): their globals, the
 /// atlas, the lightmap and the glint, each with its sampler after it, and the armour glint.
 pub(super) fn entity_entries() -> [wgpu::BindGroupLayoutEntry; 8] {
@@ -324,6 +367,8 @@ pub struct EntityPipelines {
 /// The pack's entity stage: its pipelines, and for a stage that calls a trace function, where
 /// the device takes the scene, the same against the scene.
 pub struct NativeEntity {
+    /// `[entity] surface = true`: the pipelines write the surface target too.
+    pub(super) writes_surface: bool,
     /// Built with a `trace` that misses: every device, every frame without the scene.
     pipelines: EntityPipelines,
     pub(super) scene: Option<StageTrace<EntityPipelines>>,
@@ -373,6 +418,7 @@ impl NativeEntity {
             StageTrace::new(device, frame, scene, reads, |group| build(source, group))
         });
         Ok(Self {
+            writes_surface: manifest.entity_surface,
             pipelines,
             scene,
             kept,
@@ -404,7 +450,10 @@ impl NativeEntity {
         constants: &[(String, f64)],
         manifest: &horizon_shader_api::Manifest,
     ) -> Result<EntityPipelines, String> {
-        let text = shader_source(source, manifest.fog, stage.light_source());
+        let mut text = shader_source(source, manifest.fog, stage.light_source());
+        if manifest.entity_surface {
+            text = surfaced(&text);
+        }
         let module = naga::front::wgsl::parse_str(&text)
             .map_err(|e| format!("{}: {}", stage.file, e.emit_to_string(&text)))?;
         let mut constants = present_constants(&module, constants);
@@ -478,13 +527,21 @@ impl NativeEntity {
                     module: &module,
                     entry_point: Some("horizon_entity_fs"),
                     compilation_options: options,
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: retained
-                            .is_none()
-                            .then_some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &[
+                        Some(wgpu::ColorTargetState {
+                            format,
+                            blend: retained
+                                .is_none()
+                                .then_some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                        // `[entity] surface`: the surface target, the frontmost point's.
+                        Some(wgpu::ColorTargetState {
+                            format: super::native_material::SURFACE_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                    ][..1 + usize::from(manifest.entity_surface)],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -508,10 +565,12 @@ impl super::native_pack::NativePack {
     /// they read (`entities`: the frame's, or this frame's version of its kept resources).
     pub fn entity_layers(&self) -> Option<EntityLayers<'_>> {
         let (stage, frame) = self.entities()?;
+        let writes = self.entity.as_ref().is_some_and(|e| e.writes_surface);
         Some(EntityLayers {
             entities: &stage.entities,
             retained: &stage.retained,
             frame,
+            surface: writes.then_some(&self.frame.surface_view),
         })
     }
 }

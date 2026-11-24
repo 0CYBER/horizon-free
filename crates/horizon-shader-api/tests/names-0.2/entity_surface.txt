@@ -1,0 +1,3 @@
+# `[entity] surface = true`'s names: the entity prelude of a pack with the key gets them, on top
+# of entity.txt's, and a pack without it none (2026-11-22).
+set_surface

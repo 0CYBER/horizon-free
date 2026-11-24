@@ -122,6 +122,18 @@ ignored, and `entity`, and every function it calls, may not `discard`: the check
 fades entities itself sets `coverage = "pack"`: the returned alpha is then cut below 0.1 and blends, and the stage
 may `discard`. Horizon's own cuts run under either.
 
+## `[entity] surface`
+
+What the post stage's `surface_at` reads is solid terrain's alone unless the pack asks for entities too. Under
+`surface = true` the entity stage gets `set_surface` (the same helper as `material`'s), and every point of an entity
+the stage draws stores the normal, smoothness and data it last set there, or the normal its triangle faces and 0, 0
+where it set none; `surface_at` then reads that point as `present` where it is the frontmost thing, like terrain. A
+translucent entity stores its frontmost point; the quads Horizon draws itself (beacon beams, End portals) and the
+models mods prepare store none. In a frame where a mod draws prepared models, Horizon draws the other entities and
+the moving block entities with its own pipeline too (the entity stage doesn't run for them), so of all that only the
+block entities at rest that the block entity cache keeps store a surface. Without the key (the default) nothing
+changes: `set_surface` isn't in the entity prelude and entities read as not `present`.
+
 ## Stages
 
 | Stage | In `horizon-shaders.toml` | Your function |
@@ -331,7 +343,7 @@ Resources (bind group 3):
 | 7 | `var shadow_sampler: sampler_comparison` | Depth comparison, bilinear (2×2 percentage-closer filtering): `textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy, p.z)` is 1 where the point is lit, 0 in shadow. |
 | 9 | `var shadow_map_translucent: texture_depth_2d` | `shadow_map` with the translucent terrain (water, stained glass, ice) the light passes through drawn in too, read with `shadow_sampler` the same way: a point lit in `shadow_map` but not here lies under such a surface, which `shadow_color` gives the colour of. |
 | 10 | `var shadow_color: texture_2d<f32>` | The texture colour times the vertex colour (rgb: the tint, the face's directional shade and ambient occlusion) of the nearest translucent surface the light passes through at each texel of `shadow_map_translucent`, white where there is none; alpha is 1 on a fluid (water) and the texture's alpha, at most 0.99, on anything else. Read it with `textureLoad` at `shadow_position`'s xy times `textureDimensions(shadow_color)`. |
-| 11 | `var scene_surface: texture_2d<u32>` | What the material stage's `set_surface` stored for the solid terrain at each pixel, unfiltered (`textureLoad`; its texels are the bits of floats, so `bitcast<vec4<f32>>` them): read it through the prelude's `surface_at`, which knows its layout and where it no longer shows. Blank without a material stage that calls `set_surface`. |
+| 11 | `var scene_surface: texture_2d<u32>` | What the material stage's `set_surface` stored for the solid terrain at each pixel (and under `[entity] surface = true` the entity stage's for entities), unfiltered (`textureLoad`; its texels are the bits of floats, so `bitcast<vec4<f32>>` them): read it through the prelude's `surface_at`, which knows its layout and where it no longer shows. Blank without a material stage that calls `set_surface` or `[entity] surface = true`. |
 
 Helpers:
 
@@ -354,7 +366,7 @@ Helpers:
   ```
 
   An orthographic projection has no finite optical origin (`optical_h.w == 0.0`); do not divide by zero.
-- `fn surface_at(texel: vec2<i32>) -> SurfaceData`: the solid terrain's surface at a pixel, as the material stage's `set_surface` left it: `present` (false where the sky, an entity, water, glass or a particle shows instead), `normal` (world axes), `smoothness` and `data`.
+- `fn surface_at(texel: vec2<i32>) -> SurfaceData`: the solid terrain's surface at a pixel, as the material stage's `set_surface` left it, and under `[entity] surface = true` an entity's, as the entity stage's left it: `present` (false where the sky, water, glass, a particle or an entity without the key shows instead), `normal` (world axes), `smoothness` and `data`.
 - `fn shadow_position(position: vec3<f32>) -> vec3<f32>`: where the camera-relative point `position` is
   stored in the shadow map, for `textureSampleCompareLevel`.
 - `fn shadow_distort(xy: vec2<f32>) -> vec2<f32>`: the map's distortion of a point at shadow clip `xy`.
@@ -493,8 +505,9 @@ named as one of these functions.
 In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share
 its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.
 A ray in `material` is paid for every terrain fragment drawn, overdraw included; a ray in a post pass once a
-pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn't `present` behind water,
-glass or entities) and has no albedo, so direct light that must be right there is traced in `material`. With
+pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn't `present` behind water or
+glass, nor on entities without `[entity] surface = true`) and has no albedo, so direct light that must be
+right there is traced in `material`. With
 `[material] reads`, a pack can also trace in a compute or `[[before_world]]` pass and apply the result in
 `material`.
 
@@ -777,6 +790,7 @@ Resources (bind group 3):
 Helpers:
 
 - `fn block_light_color(position: vec3<f32>) -> vec4<f32>`: the colour of the block light at the camera-relative `position` (rgb) and how strongly it reaches it (a), as the material stage's.
+- `fn set_surface(normal: vec3<f32>, smoothness: f32, data: f32)`, under `[entity] surface = true` only: what the post stage's `surface_at` reads for this point of an entity, as the material stage's (`data` the pack's own; the normal the triangle faces and 0, 0 unset). Its translucent entities store their frontmost point; the quads Horizon draws itself (beacon beams, End portals) store none.
 - `fn shadow_position(position: vec3<f32>) -> vec3<f32>`: where the camera-relative point `position` is
   stored in the shadow map, for `textureSampleCompareLevel`.
 - `fn shadow_distort(xy: vec2<f32>) -> vec2<f32>`: the map's distortion of a point at shadow clip `xy`.

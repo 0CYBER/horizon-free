@@ -29,8 +29,9 @@ const READER: &str = "fn post(input: PostInput) -> vec4<f32> {\n\
                       return select(input.color, vec4<f32>(1.0), m.kind == MOTION_OBJECT);\n}\n";
 
 /// The 0.2 post stage `PLAIN` composed as before `[motion]` (`origin/main` at a51b2d4105), but
-/// for the frame's fog fields and `history`, gone since for every pack.
-const STAGE_SHA: &str = "eed847af4f4dd435f5c5294805fe2f1731a2f3008a86a55172e644eca3ae5040";
+/// for the frame's fog fields and `history`, gone since for every pack, and `surface_at`'s
+/// wider depth tolerance.
+const STAGE_SHA: &str = "f9f2287354deb6794e247ae9d1491a4a0c518bc45d52a4ebda762466a76e1cd2";
 
 #[test]
 fn a_pack_without_motion_composes_as_before() {

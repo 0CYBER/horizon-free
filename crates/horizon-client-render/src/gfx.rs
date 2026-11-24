@@ -12065,6 +12065,15 @@ impl Renderer {
                 pack_frame(&mut pass);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             }
+            // `[entity] surface`: the stage's entities write the surface target too, over the
+            // material stage's solid terrain or into a cleared one. The mods' prepared draws
+            // are Horizon's own pipeline throughout, which writes the colour alone.
+            let entity_surface = entity_stage.and_then(|e| e.surface);
+            let prepared = !self.prepared_draws.is_empty();
+            if let Some(target) = entity_surface {
+                drop(pass);
+                pass = terrain_pass(&mut encoder, target, surface.is_none());
+            }
             if static_entity_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "static block entities");
                 external::set_entity_pipeline(
@@ -12093,12 +12102,16 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if entity_surface.is_some() && prepared {
+                drop(pass);
+                pass = plain_pass(&mut encoder);
+            }
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            if entity_quads > 0 || !self.prepared_draws.is_empty() {
+            if entity_quads > 0 || prepared {
                 pass.stage(self.own_timing.as_mut(), "entities");
                 external::set_entity_pipeline(
                     &mut pass,
-                    entity_stage,
+                    entity_stage.filter(|e| !prepared || e.surface.is_none()),
                     &self.entity_pipeline,
                     false,
                 );
@@ -12121,6 +12134,11 @@ impl Renderer {
                     );
                 }
                 pass.set_bind_group(0, &self.group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            }
+            if entity_surface.is_some() && !prepared {
+                drop(pass);
+                pass = plain_pass(&mut encoder);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             }
             if entity_stage.is_some() {

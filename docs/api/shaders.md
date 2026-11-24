@@ -240,6 +240,7 @@ coverage = "engine"        # optional: engine (default) or pack, when the materi
 [entity]                   # optional: the colour of entities and block entities (items and particles later)
 file = "entity.wgsl"
 coverage = "engine"        # optional: engine (default) or pack, when the stage cuts or fades entities itself
+surface = true             # optional, default false: the stage gets `set_surface`, and `surface_at` reads entities too
 
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
@@ -309,6 +310,13 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 - API 0.2 (addition): `post_opaque = true` lets native post passes read the pre-translucent
   color and depth. They reuse the material stage's capture, and only packs that read it request
   that capture (#3734).
+- 2026-11-22: API 0.2 (addition, preview; first build: Nightly `TBD`): `[entity] surface = true` (off by default)
+  gives the entity stage `set_surface`, the material stage's, and the entities it lights write the surface target the
+  post stage's `surface_at` and `scene_surface` read: where an entity shows, `present` is true and holds its normal
+  (the triangle's where `entity` leaves it unset), smoothness and `data`, so traced light, denoisers and probes can
+  treat entities like solid terrain. Translucent entities store their frontmost point; quads Horizon draws itself
+  (beacon beams, End portals) and mods' prepared models store none. A pack without the key is drawn and checked as
+  before, its prelude has no new name, and the surface target stays 1x1 unless its material calls `set_surface`.
 
 - 2026-11-22: API 0.2 (addition, preview): `[sky] sun_path_rotation`, degrees from -90 to 90 (0 when absent): the
   tilt of the sun's and moon's path, as `shaders/` packs' `sunPathRotation`. It turns `sun_direction`,

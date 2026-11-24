@@ -400,8 +400,8 @@ if input.translucent && frame.has_ray_tracing == 1u {
 
 - **Where a ray is paid.** A ray in `material` is paid for every terrain fragment drawn, hidden ones included where
   the depth test hasn't rejected them yet; a ray in a post pass once a pixel. But a post pass knows only the solid
-  terrain's surface (`surface_at` isn't `present` behind water, glass or entities) and has no albedo, so direct light
-  that must be right there is traced in `material`. With `[material] reads`, a pack can also trace in a compute or
+  terrain's surface (`surface_at` isn't `present` behind water or glass, nor on entities without
+  `[entity] surface = true`) and has no albedo, so direct light that must be right there is traced in `material`. With `[material] reads`, a pack can also trace in a compute or
   `[[before_world]]` pass and apply the result in `material`.
 - **Only `material` itself traces.** `displacement` and the `[vertex]` file run in vertex shaders: the check refuses a
   pack whose `displacement` or `vertex` reaches a trace function.

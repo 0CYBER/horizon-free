@@ -285,8 +285,9 @@ fn ray_tracing() -> String {
          In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share\n\
          its module, run in vertex shaders, and the check refuses a pack where either reaches a trace function.\n\
          A ray in `material` is paid for every terrain fragment drawn, overdraw included; a ray in a post pass once a\n\
-         pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn't `present` behind water,\n\
-         glass or entities) and has no albedo, so direct light that must be right there is traced in `material`. With\n\
+         pixel. But a post pass knows only the solid terrain's surface (`surface_at` isn't `present` behind water or\n\
+         glass, nor on entities without `[entity] surface = true`) and has no albedo, so direct light that must be\n\
+         right there is traced in `material`. With\n\
          `[material] reads`, a pack can also trace in a compute or `[[before_world]]` pass and apply the result in\n\
          `material`.\n\n\
          In the entity stage `entity` traces as `material` does, in the world's colour pass only (the shadow map's\n\
@@ -424,6 +425,18 @@ dissolve masks, back-face culling and the rest of Horizon's cuts stay Horizon's.
 ignored, and `entity`, and every function it calls, may not `discard`: the check refuses it. A pack that cuts or
 fades entities itself sets `coverage = \"pack\"`: the returned alpha is then cut below 0.1 and blends, and the stage
 may `discard`. Horizon's own cuts run under either.
+
+## `[entity] surface`
+
+What the post stage's `surface_at` reads is solid terrain's alone unless the pack asks for entities too. Under
+`surface = true` the entity stage gets `set_surface` (the same helper as `material`'s), and every point of an entity
+the stage draws stores the normal, smoothness and data it last set there, or the normal its triangle faces and 0, 0
+where it set none; `surface_at` then reads that point as `present` where it is the frontmost thing, like terrain. A
+translucent entity stores its frontmost point; the quads Horizon draws itself (beacon beams, End portals) and the
+models mods prepare store none. In a frame where a mod draws prepared models, Horizon draws the other entities and
+the moving block entities with its own pipeline too (the entity stage doesn't run for them), so of all that only the
+block entities at rest that the block entity cache keeps store a surface. Without the key (the default) nothing
+changes: `set_surface` isn't in the entity prelude and entities read as not `present`.
 
 ";
 
@@ -594,8 +607,9 @@ pub fn markdown() -> String {
 \n  \
                     An orthographic projection has no finite optical origin (`optical_h.w == 0.0`); do not divide by zero.\n\
                     - `fn surface_at(texel: vec2<i32>) -> SurfaceData`: the solid terrain's surface at a pixel, as the \
-                    material stage's `set_surface` left it: `present` (false where the sky, an entity, water, glass or a \
-                    particle shows instead), `normal` (world axes), `smoothness` and `data`.\n";
+                    material stage's `set_surface` left it, and under `[entity] surface = true` an entity's, as the entity \
+                    stage's left it: `present` (false where the sky, water, glass, a particle or an entity without the key \
+                    shows instead), `normal` (world axes), `smoothness` and `data`.\n";
         }
         if kind == StageKind::Material {
             out += "- `fn block_texture(uv: vec2<f32>) -> vec4<f32>`: the surface's block texture at `uv`, anywhere on \
@@ -618,6 +632,10 @@ pub fn markdown() -> String {
         if kind == StageKind::Entity {
             out += "- `fn block_light_color(position: vec3<f32>) -> vec4<f32>`: the colour of the block light at the \
                     camera-relative `position` (rgb) and how strongly it reaches it (a), as the material stage's.\n";
+            out += "- `fn set_surface(normal: vec3<f32>, smoothness: f32, data: f32)`, under `[entity] surface = true` \
+                    only: what the post stage's `surface_at` reads for this point of an entity, as the material stage's \
+                    (`data` the pack's own; the normal the triangle faces and 0, 0 unset). Its translucent entities store \
+                    their frontmost point; the quads Horizon draws itself (beacon beams, End portals) store none.\n";
         }
         if kind != StageKind::Sky {
             out += "- `fn shadow_position(position: vec3<f32>) -> vec3<f32>`: where the camera-relative point `position` is\n  \

@@ -713,7 +713,8 @@ impl NativePack {
     }
 
     /// Binds the water mirror the renderer drew this frame, and outside the title screen
-    /// fits the opaque copies and the material stage's surface target to its targets.
+    /// fits the opaque copies, and the surface target (the material's or the entity stage's), to
+    /// its targets.
     pub fn prepare_world_targets(&mut self, world: WorldTargets<'_>) {
         let WorldTargets {
             device,
@@ -731,7 +732,8 @@ impl NativePack {
         if self.frame.fit_opaque(device, depth, color) {
             self.post.refresh_opaque(&self.frame);
         }
-        let writes = self.material.as_ref().is_some_and(|m| m.writes_surface);
+        let writes = self.material.as_ref().is_some_and(|m| m.writes_surface)
+            || self.entity.as_ref().is_some_and(|e| e.writes_surface);
         let size = if writes {
             [depth.width(), depth.height()]
         } else {

@@ -873,6 +873,19 @@ fn the_frame_tonemap_and_entity_keys_are_read() {
     assert_eq!(m.files(), ["light.wgsl", "e.wgsl"]);
 }
 
+/// `[entity] surface`: off unless the entity stage sets it.
+#[test]
+fn the_entity_surface_key_is_read() {
+    let surface = |keys: &str| {
+        let text = format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\n{keys}");
+        Manifest::parse(&text).unwrap().entity_surface
+    };
+    assert!(!Manifest::parse(SMALLEST).unwrap().entity_surface);
+    assert!(!surface(""));
+    assert!(!surface("surface = false\n"));
+    assert!(surface("surface = true\n"));
+}
+
 #[test]
 fn the_frame_tonemap_and_entity_keys_are_checked() {
     let cases = [
@@ -903,6 +916,14 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         (
             format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\ncoverage = \"pack\"\n"),
             "`coverage` is a key of [material] and [entity] only",
+        ),
+        (
+            format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\nsurface = true\n"),
+            "`surface` is a key of [entity] only",
+        ),
+        (
+            format!("{SMALLEST}[[post]]\nfile = \"b.wgsl\"\nsurface = false\n"),
+            "`surface` is a key of [entity] only",
         ),
         (
             format!("{SMALLEST}[frame]\nfog = \"none\"\n"),

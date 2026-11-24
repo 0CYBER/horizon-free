@@ -1,4 +1,4 @@
-use super::{EntityKind, EntityRuns, kind_bits, shader_source};
+use super::{EntityKind, EntityRuns, kind_bits, shader_source, surfaced};
 use crate::mesher::Vertex;
 
 /// Vanilla's own as a pack writes it (docs/api/shaders-reference-0.2.md): the flash over the
@@ -89,8 +89,11 @@ fn the_renderers_names_are_reserved() {
 #[test]
 fn the_packs_entity_shader_validates() {
     let entities = [VANILLA.to_owned(), OWN_NAMES.to_owned() + VANILLA];
-    for (entity, more) in entities.iter().flat_map(|e| [(e, ""), (e, OWN_FOG)]) {
+    let surface = "surface = true\n";
+    let fogs = [("", false), (OWN_FOG, false), (surface, true)];
+    for (entity, (more, surfaces)) in entities.iter().flat_map(|e| fogs.map(|f| (e, f))) {
         let source = shader_with(entity, more);
+        let source = if surfaces { surfaced(&source) } else { source };
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
@@ -457,4 +460,256 @@ fn runs_end_and_give_way_where_the_geometry_was_cut_back() {
     // Cut back to before every run, with nothing named after.
     runs.push(2..2, EntityKind::Entity);
     assert_eq!(bits(&runs), [0; 6]);
+}
+
+/// Under `[entity] surface = true` an entity's point is `present` to the post stage's
+/// `surface_at`: the depth its fragment writes to the surface target is the one the depth
+/// test kept within `surface_at`'s tolerance, through the entity pipeline's depth bias, at
+/// near and far depths alike. A pixel no entity covers keeps the clear.
+#[test]
+fn an_entity_s_surface_is_present_where_its_depth_is() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let instance = crate::gfx::test_gpu::instance();
+    // Every adapter: whether the fragment's depth holds the bias is the driver's.
+    for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())) {
+        let name = format!(
+            "{} ({:?})",
+            adapter.get_info().name,
+            adapter.get_info().backend
+        );
+        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&Default::default()))
+        else {
+            continue;
+        };
+        let entity = "fn entity(input: EntityInput) -> Surface {\n    \
+        return Surface(vec4<f32>(1.0, 0.0, 0.0, 1.0));\n}\n";
+        // Reversed depth: 1 is the near plane.
+        let depths = [0.9f32, 0.5, 0.1, 0.01, 1e-3, 1e-4, 1e-5];
+        let n = depths.len();
+        let list: Vec<String> = depths.iter().map(|d| format!("{d:e}")).collect();
+        // A flat triangle a depth that covers only its own texel's centre (64 texels a row).
+        let source = surfaced(&shader_with(entity, "surface = true\n"))
+            + &format!(
+                "
+@vertex fn test_vs(@builtin(vertex_index) v: u32) -> horizon_entity_out {{
+    var depths = array<f32, {n}>({list});
+    let i = v / 3u;
+    let corner = v % 3u;
+    let layer = {kind}u;
+    var out = horizon_entity_vertex(vec3(0.0, 0.0, -2.0), vec2(0.5), layer, vec4(1.0),
+        vec4(240u), vec4(0.0, 1.0, 0.0, 1.0), vec2(0.0), (layer >> horizon_entity_kind_shift) & 7u);
+    let w = 2.0 / 64.0;
+    let left = f32(i) * w - 1.0;
+    let x = select(left, left + 1.6 * w, corner == 1u);
+    let y = select(-1.0, 3.0, corner == 2u);
+    out.clip = vec4(x, y, depths[i], 1.0);
+    out.proj = vec4(f32(corner == 1u), f32(corner == 2u), 0.0, 1.0);
+    return out;
+}}
+",
+                list = list.join(", "),
+                kind = kind_bits(EntityKind::Entity),
+            );
+        let entities = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &super::entity_entries(),
+        });
+        let frame = super::super::native_post::NativeFrame::new(
+            &device,
+            None,
+            Vec::new(),
+            Default::default(),
+            None,
+            false,
+        );
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let sampler = device.create_sampler(&Default::default());
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16384,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+        let entries: Vec<_> = (0..=7)
+            .map(|binding| wgpu::BindGroupEntry {
+                binding,
+                resource: match binding {
+                    0 => uniform.as_entire_binding(),
+                    2 | 4 | 6 => wgpu::BindingResource::Sampler(&sampler),
+                    _ => wgpu::BindingResource::TextureView(&view),
+                },
+            })
+            .collect();
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &entities,
+            entries: &entries,
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&entities), None, None, Some(&frame.layout)],
+            ..Default::default()
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+        });
+        let constants = [
+            ("horizon_vanilla_HDR_WRITE_LIGHT", 0.0),
+            ("horizon_vanilla_FRAME_LINEAR", 0.0),
+            ("horizon_entity_coverage_pack", 1.0),
+        ];
+        let options = wgpu::PipelineCompilationOptions {
+            constants: &constants,
+            ..Default::default()
+        };
+        let surface_format = super::super::native_material::SURFACE_FORMAT;
+        // The entity pipeline's (`NativeEntity::pipelines`): its depth test and its bias.
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("test_vs"),
+                compilation_options: options.clone(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 128,
+                    ..Default::default()
+                },
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("horizon_entity_fs"),
+                compilation_options: options,
+                targets: &[
+                    Some(wgpu::TextureFormat::Rgba8Unorm.into()),
+                    Some(surface_format.into()),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let target = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: usage | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let attach = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let color = target(wgpu::TextureFormat::Rgba8Unorm, attach);
+        let surface = target(surface_format, attach);
+        let depth = target(wgpu::TextureFormat::Depth32Float, attach);
+        let views = [&color, &surface, &depth].map(|t| t.create_view(&Default::default()));
+        // 64 texels of 16 bytes (the surface), then 64 of 4 (the depth).
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 1024 + 256,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let clear = |view| {
+            Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[clear(&views[0]), clear(&views[1])],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &views[2],
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(3, &frame.group, &[]);
+        pass.draw(0..3 * n as u32, 0..1);
+        drop(pass);
+        let all = wgpu::TextureAspect::All;
+        let depth_only = wgpu::TextureAspect::DepthOnly;
+        for (texture, aspect, offset, bytes_per_row) in
+            [(&surface, all, 0, 1024), (&depth, depth_only, 1024, 256)]
+        {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    aspect,
+                    ..texture.as_image_copy()
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &read,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: None,
+                    },
+                },
+                texture.size(),
+            );
+        }
+        queue.submit([encoder.finish()]);
+        read.slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let bytes = read.slice(..).get_mapped_range().unwrap().to_vec();
+        let surfaces: Vec<[f32; 4]> = bytemuck::pod_collect_to_vec(&bytes[..1024]);
+        let kept: Vec<f32> = bytemuck::pod_collect_to_vec(&bytes[1024..]);
+        for (i, want) in depths.iter().enumerate() {
+            let (w, depth) = (surfaces[i][3], kept[i]);
+            assert!(
+                depth >= *want,
+                "texel {i}: the bias brings the entity nearer"
+            );
+            // `surface_at`'s `present` (horizon-shader-api's post prelude).
+            assert!(
+                w > 0.0 && (w - depth).abs() <= w * 2e-5,
+                "{name}, texel {i}: the surface's depth {w:e} for the kept {depth:e} (drawn at {want:e})"
+            );
+        }
+        assert_eq!(surfaces[n], [0.0; 4], "{name}: a texel no entity covers");
+        eprintln!("{name}: every depth present");
+    }
 }

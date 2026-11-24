@@ -128,6 +128,9 @@ pub struct Manifest {
     pub material_coverage: Coverage,
     /// `[entity] coverage`.
     pub entity_coverage: Coverage,
+    /// 0.2, `[entity] surface`: the entity stage gets `set_surface` and writes the post stage's
+    /// `scene_surface` where an entity shows, as the material stage does for solid terrain.
+    pub entity_surface: bool,
     /// `[frame] fog`.
     pub fog: Fog,
     pub options: Vec<PackOption>,
@@ -435,6 +438,10 @@ pub struct Stage {
     /// `Manifest::material_coverage` and `Manifest::entity_coverage`.
     #[serde(default)]
     pub coverage: Option<String>,
+    /// 0.2, the entity stage only: whether it gets `set_surface` and writes the post stage's
+    /// `scene_surface` where an entity shows (false when absent), `Manifest::entity_surface`.
+    #[serde(default)]
+    pub surface: Option<bool>,
     /// The sky stage only: whether Minecraft's clouds still draw (true when absent); false for
     /// a pack whose sky draws its own.
     #[serde(default)]
@@ -889,6 +896,20 @@ impl Manifest {
             .iter()
             .chain(&raw.material)
             .chain(&raw.vertex)
+            .chain(&raw.weather)
+            .chain(&raw.post)
+            .chain(&raw.tonemap)
+            .chain(&raw.before_world)
+            .any(|s| s.surface.is_some())
+        {
+            return Err(err("`surface` is a key of [entity] only".into()));
+        }
+        let entity_surface = raw.entity.as_ref().and_then(|s| s.surface) == Some(true);
+        if raw
+            .sky
+            .iter()
+            .chain(&raw.material)
+            .chain(&raw.vertex)
             .chain(&raw.tonemap)
             .chain(&raw.entity)
             .chain(&raw.before_world)
@@ -1329,6 +1350,7 @@ impl Manifest {
             primaries,
             material_coverage,
             entity_coverage,
+            entity_surface,
             fog,
             options,
             pages,

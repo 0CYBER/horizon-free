@@ -406,6 +406,9 @@ pub struct EntityLayers<'a> {
     /// Their group 3: the pack's frame, with this frame's version of the kept resources the
     /// stage reads where it reads any.
     pub frame: &'a wgpu::BindGroup,
+    /// `[entity] surface = true`: the surface target both pipelines write beside the colour,
+    /// the one the material stage's solid terrain writes.
+    pub surface: Option<&'a wgpu::TextureView>,
 }
 
 /// A section the grid may draw from this frame: its arena page, the base vertex of its solid
