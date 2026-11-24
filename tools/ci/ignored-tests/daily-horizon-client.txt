@@ -63,6 +63,8 @@ horizon-client game::machines::brewing_fuel_transfer_tests::a_rising_item_clears
 horizon-client game::machines::brewing_fuel_transfer_tests::a_westbound_item_between_hoppers_goes_into_the_east_hopper lib daily resources
 horizon-client game::machines::brewing_fuel_transfer_tests::an_enabled_hopper_catches_an_item_overlapping_a_disabled_hopper lib daily resources
 horizon-client game::maps::tests::map_on_banner_in_adventure_mode_honours_can_place_on lib daily game-boot
+horizon-client game::mob_zero_damage_tests::a_blow_with_no_attack_damage_takes_nothing_and_posts_no_damage_event lib daily resources
+horizon-client game::mob_zero_damage_tests::two_hits_in_one_tick_each_post_a_damage_vibration lib daily resources
 horizon-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_refuses_each_content_mod_row lib daily child-process
 horizon-client game::mods::tests::content_overlay_validates_dependencies_and_orders_layers lib daily child-process
 horizon-client game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection lib daily child-process

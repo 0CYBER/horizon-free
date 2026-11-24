@@ -20,6 +20,11 @@ pub struct Entry {
 pub struct Tracker {
     pub entries: Vec<Entry>,
     last_damage_time: u32,
+    /// Health-taking hits recorded so far. Each `CombatTracker.recordDamage`
+    /// call sits inside `actuallyHurt`'s `if (dmg != 0.0F)` and raises one
+    /// `GameEvent.ENTITY_DAMAGE`, so this count is the number of vibrations
+    /// the hit has due.
+    damage_count: u64,
     pub in_combat: bool,
     taking_damage: bool,
 }
@@ -33,10 +38,16 @@ impl Tracker {
         let living_cause = entry.source.attacker.is_some();
         self.entries.push(entry);
         self.last_damage_time = tick;
+        self.damage_count += 1;
         self.taking_damage = true;
         if !self.in_combat && living_cause {
             self.in_combat = true;
         }
+    }
+    /// How many health-taking hits this tracker has recorded, monotonically:
+    /// the sculk scan posts one vibration per count it has not posted yet.
+    pub fn damage_count(&self) -> u64 {
+        self.damage_count
     }
     /// `CombatTracker.recheckStatus`: 100 ticks without a hit (300 in a
     /// fight) forget them all. Vanilla also forgets them once the mob is
@@ -108,9 +119,6 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
             ambient: false,
         }),
         _ => {}
-    }
-    if amount <= 0.0 {
-        amount = 1.0;
     }
     // The held weapon's enchantments: Sharpness, Smite, Bane of Arthropods,
     // Fire Aspect and Knockback.

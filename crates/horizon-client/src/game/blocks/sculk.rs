@@ -99,7 +99,8 @@ pub(super) struct SculkState {
     falling_items: HashSet<u32>,
     /// The vehicle each rider had last tick and where it stood.
     mounts: FxHashMap<Who, (u32, [f64; 3])>,
-    damaged: FxHashMap<u32, i64>,
+    /// How many health-taking hits were already posted for each mob.
+    damaged: FxHashMap<u32, u64>,
     /// Set while the mobs' events are posted (`tick_mob_sculk_events`).
     mob_slots: Option<MobSlots>,
     last_health: Option<f32>,
@@ -886,14 +887,14 @@ impl Game<'_> {
         self.post_game_event(event, center((pos[0], pos[1], pos[2])), ctx);
     }
     /// `LivingEntity.actuallyHurt`'s damage vibration, heard as the hit lands;
-    /// the end-of-tick scan then knows this damage.
+    /// the end-of-tick scan then knows this hit was posted.
     pub(super) fn mob_damage_event(&mut self, id: u32) {
-        if let Some(t) = self
+        if let Some(count) = self
             .mob_index
             .get(&self.mobs, id)
-            .and_then(|m| m.last_damage.map(|(_, t)| t))
+            .map(|m| m.combat.damage_count())
         {
-            self.sculk.damaged.insert(id, t);
+            self.sculk.damaged.insert(id, count);
         }
         self.post_entity_event("minecraft:entity_damage", Who::Mob(id));
     }
@@ -2249,14 +2250,14 @@ impl Game<'_> {
         }))
     }
 
-    fn tick_mob_sculk_events(&mut self) {
+    pub(super) fn tick_mob_sculk_events(&mut self) {
         let snapshot: Vec<(
             u32,
             [f64; 3],
             bool,
             bool,
             Species,
-            Option<i64>,
+            u64,
             Option<u32>,
             u32,
             bool,
@@ -2271,7 +2272,7 @@ impl Game<'_> {
                     m.on_ground,
                     m.fluids.in_water,
                     m.species(),
-                    m.last_damage.map(|(_, t)| t),
+                    m.combat.damage_count(),
                     m.extra.mount,
                     m.age,
                     m.species() == Species::Bat && horizon_client::mobs::bat::resting(m),
@@ -2350,11 +2351,19 @@ impl Game<'_> {
                     }
                 }
             }
-            if let Some(t) = damaged
-                && self.sculk.damaged.get(&id) != Some(&t)
-            {
-                self.sculk.damaged.insert(id, t);
-                self.post_entity_event("minecraft:entity_damage", Who::Mob(id));
+            let seen = self.sculk.damaged.get(&id).copied().unwrap_or(0);
+            // A fresh tracker under a reused id starts from zero: all of its
+            // hits are new.
+            let fresh = if damaged >= seen {
+                damaged - seen
+            } else {
+                damaged
+            };
+            if fresh > 0 {
+                self.sculk.damaged.insert(id, damaged);
+                for _ in 0..fresh {
+                    self.post_entity_event("minecraft:entity_damage", Who::Mob(id));
+                }
             }
         }
         self.sculk.mob_slots = None;
@@ -3132,10 +3141,7 @@ mod command_damage_listener_tests {
                     Some(horizon_client_core::who::EventSource::Mob(id))
                 );
                 assert_eq!(tick, before);
-                assert_eq!(
-                    game.sculk.damaged.get(&id).copied(),
-                    mob.last_damage.map(|(_, tick)| tick)
-                );
+                assert_eq!(game.sculk.damaged.get(&id).copied(), Some(1));
             } else {
                 assert!(selected(&game, origin).is_none());
                 assert!(!game.sculk.damaged.contains_key(&id));

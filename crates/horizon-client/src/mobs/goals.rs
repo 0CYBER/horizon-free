@@ -1499,9 +1499,9 @@ impl Goal for MeleeAttack {
             self.until_attack = adjusted(true, interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
+            // `Fox.this.playSound(FOX_BITE, 1.0F, 1.0F)`: `Entity.playSound`, skipped when silent.
             if let Some(sound) = self.bite {
-                let at = [m.position.x, m.position.y, m.position.z];
-                cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
+                m.sound(sound, cx.events);
             }
         }
         if self.zombie {
