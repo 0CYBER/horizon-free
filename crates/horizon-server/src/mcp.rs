@@ -8,7 +8,10 @@ use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// What an agent reads before its first call.
-const INSTRUCTIONS: &str = "Run and moderate a Horizon (Minecraft Java Edition 26.3) server. Start with status and players. Moderation tools (kick, ban, pardon, ban_ip, op, whitelist...) run vanilla's console commands and answer `changed` and the console's lines; events and logs read what happened since a number they return. Destructive tools that can't be undone need confirm: true.";
+const INSTRUCTIONS: &str = concat!(
+    "Run and moderate a Horizon (Minecraft Java Edition 26.3) server. Start with status and players. Moderation tools (kick, ban, pardon, ban_ip, op, whitelist...) run vanilla's console commands and answer `changed` and the console's lines; events and logs read what happened since a number they return. Destructive tools that can't be undone need confirm: true. ",
+    horizon_mcp::untrusted_rule!()
+);
 
 /// The revisions this server advertises: `horizon_mcp` serves them (`2026-07-28` stateless,
 /// `2025-06-18` for the clients that still open with `initialize`).
@@ -413,11 +416,19 @@ fn handle(dir: &Path, method: &str, params: &Value) -> Result<Value, (i64, Strin
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let (result, error) = call(dir, name, &args);
             let text = serde_json::to_string_pretty(&result).unwrap_or_default();
-            Ok(json!({ "content": [{ "type": "text", "text": text }], "isError": error }))
+            let mut reply =
+                json!({ "content": [{ "type": "text", "text": text }], "isError": error });
+            if UNTRUSTED.contains(&name) {
+                horizon_mcp::mark_untrusted(&mut reply);
+            }
+            Ok(reply)
         }
         _ => Err((-32601, format!("Method not found: {method}"))),
     }
 }
+
+/// Tools whose result holds text other people wrote: chat, names, the MOTD, log lines.
+const UNTRUSTED: &[&str] = &["logs", "events", "players", "run_command", "get_config"];
 
 pub fn serve(dir: &Path) -> Result<(), String> {
     server().serve(|method, params| handle(dir, method, params))
@@ -573,6 +584,26 @@ mod tests {
         assert!(request("delete_backup", &json!({ "name": "a&b", "confirm": true })).is_err());
         assert!(request("events", &json!({ "types": "chat&since=0" })).is_err());
         assert!(request("whitelist", &json!({ "action": "clear" })).is_err());
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn results_with_chat_and_log_text_are_labelled_untrusted() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-mcp-mark-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let call = |name: &str| {
+            handle(
+                &dir,
+                "tools/call",
+                &json!({ "name": name, "arguments": {} }),
+            )
+            .unwrap()
+        };
+        let logs = call("logs");
+        assert_eq!(logs["content"][1]["text"], horizon_mcp::UNTRUSTED_NOTICE);
+        assert_eq!(call("status")["content"].as_array().unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

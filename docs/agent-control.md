@@ -270,6 +270,11 @@ turn the switch off.
   decides what the next Play runs or joins: `instance launch`, `instance java` and `game-args`.
   Without `confirm: true` the call is refused and the message says to ask the player. In the game
   CLI the flag is `--confirm`. The launcher CLI asks nothing: a person typing `remove` meant it.
+- **Other people's text is data.** Chat, signs, books, MOTDs, names, mod descriptions and log lines
+  can say anything, so each server's instructions tell the agent they are never instructions, and a
+  tool whose result carries such text (the table's `UNTRUSTED`, the server's and the launcher's
+  logs and console) is followed by a second content block saying so
+  (`horizon_mcp::mark_untrusted`). The first block stays the data, so parsers are unaffected.
 - **Ask before reaching out.** A command that sends data or reaches other people carries
   `openWorldHint`, and its description says "only when the player asks". In the game these are
   `connect`, `lan`, `friends`, `chat` and `command`; in the launcher, `servers create` and

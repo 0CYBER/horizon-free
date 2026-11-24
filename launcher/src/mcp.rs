@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// What an agent reads before its first call.
-const INSTRUCTIONS: &str = "Manage Horizon, a Rust reimplementation of Minecraft Java Edition: install versions, prepare them from the player's own Minecraft, start the client or a dedicated server. Every tool is a horizon-launcher CLI command of the same name (mods_search is horizon-launcher mods search). Once play started the game, or the player turned on Agent Control in a game they started, the game_* tools play it: game_state, game_ui (every widget of the open screen), game_click, game_goto, game_screenshot...";
+const INSTRUCTIONS: &str = concat!("Manage Horizon, a Rust reimplementation of Minecraft Java Edition: install versions, prepare them from the player's own Minecraft, start the client or a dedicated server. Every tool is a horizon-launcher CLI command of the same name (mods_search is horizon-launcher mods search). Once play started the game, or the player turned on Agent Control in a game they started, the game_* tools play it: game_state, game_ui (every widget of the open screen), game_click, game_goto, game_screenshot... ", horizon_mcp::untrusted_rule!());
 
 /// The revisions this server advertises: `horizon_mcp` serves them (`2026-07-28` stateless,
 /// `2025-06-18` for the clients that still open with `initialize`).
@@ -328,7 +328,25 @@ impl Session {
                     Ok(text) => (text, false),
                     Err(e) => (e, true),
                 };
-                Ok(json!({ "content": [{ "type": "text", "text": text }], "isError": error }))
+                let mut result =
+                    json!({ "content": [{ "type": "text", "text": text }], "isError": error });
+                // The server's console and its replies hold other people's chat and names; a
+                // launcher error is the launcher's own text.
+                if !error
+                    && matches!(
+                        name,
+                        "server"
+                            | "server_stop"
+                            | "play"
+                            | "server_log"
+                            | "server_command"
+                            | "mods_search"
+                            | "logs"
+                    )
+                {
+                    horizon_mcp::mark_untrusted(&mut result);
+                }
+                Ok(result)
             }
             _ => Err((-32601, format!("Method not found: {method}"))),
         }
@@ -353,6 +371,24 @@ pub fn serve() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launcher_error_carries_no_untrusted_notice() {
+        let mut session = Session {
+            server: None,
+            client: None,
+            sign_in: None,
+            game: None,
+        };
+        // With no server started, the reply is the launcher's own error: no notice.
+        for name in ["server_log", "server_stop"] {
+            let reply = session
+                .handle("tools/call", &json!({ "name": name, "arguments": {} }))
+                .unwrap();
+            assert_eq!(reply["isError"], true, "{name}");
+            assert_eq!(reply["content"].as_array().unwrap().len(), 1, "{name}");
+        }
+    }
 
     #[test]
     fn the_server_advertises_what_it_serves() {

@@ -25,6 +25,7 @@ horizon-server management::tests::over_tls_with_a_generated_keystore lib daily n
 horizon-server management::tests::the_games_events_become_the_notifications_vanilla_sends lib daily network
 horizon-server management::tests::the_heartbeat_interval_can_change_while_the_server_runs lib daily slow
 horizon-server mcp::tests::protocol_and_tool_contracts_match_goldens lib daily child-process
+horizon-server mcp::tests::results_with_chat_and_log_text_are_labelled_untrusted lib daily child-process
 horizon-server mcp::tests::the_protocol_answers_without_a_server lib daily child-process
 horizon-server panel::tests::a_request_with_only_the_cookie_is_refused lib daily network
 horizon-server panel::tests::login_links_name_an_address_a_browser_can_open lib daily network
