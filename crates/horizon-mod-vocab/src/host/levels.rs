@@ -266,6 +266,15 @@ pub trait LevelsBackend {
     #[access(WorldOnly)]
     fn chunk_watchers(&self, chunk: ChunkRef) -> Option<Vec<PlayerRef>>;
     /// Side: server.
+    /// The section Y coordinates (bottom up, `min_y / 16` upward) of this loaded chunk
+    /// whose palette may contain any state of `block` (`PalettedContainer.maybeHas`).
+    /// Lets mods skip sections that cannot hold `block` without reading every block.
+    /// A section whose palette is global or retains an unused entry for `block` may be
+    /// included even if no block in it currently has that state. Returns `None` on a
+    /// client, for a stale handle, or when the chunk is not loaded.
+    #[access(WorldOnly)]
+    fn chunk_sections_with_block(&self, chunk: ChunkRef, block: BlockKey) -> Option<Vec<i32>>;
+    /// Side: server.
     /// Match and assemble through the engine's recipe matcher, without consuming inputs.
     /// Covers minecraft:crafting, smelting, blasting, smoking, campfire_cooking,
     /// stonecutting and smithing, including data-pack recipes of those types.
