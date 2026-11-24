@@ -1819,6 +1819,7 @@ horizon-client game::native_makes_piglins_neutral_tests::without_parts_a_calm_pi
 horizon-client game::native_makes_piglins_neutral_tests::without_parts_the_piglin_safe_armor_tag_decides lib daily resources
 horizon-client game::native_menu_refs::tests::a_server_closes_a_guests_menu_and_sets_their_selected_slot lib daily resources
 horizon-client game::native_menu_refs::tests::a_stack_is_thrown_from_the_eyes_as_player_drop_does lib daily resources
+horizon-client game::native_menu_refs::tests::container_screen_reports_live_hover_and_capacity_in_menu_order lib daily resources
 horizon-client game::native_menu_refs::tests::inventory_boxes_follow_menu_indices_and_the_input_layout lib daily resources
 horizon-client game::native_menu_refs::tests::menus_read_storage_and_invalidate_on_replacement_wrap_and_reconnect lib daily resources
 horizon-client game::native_menus::tests::a_menu_opened_in_place_sends_no_close_returns_the_cursor_and_ignores_the_old_window lib daily resources

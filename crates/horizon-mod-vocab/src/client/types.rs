@@ -795,6 +795,28 @@ pub struct ScreenView<'a> {
     pub partial_tick: f32,
 }
 
+/// Mouse input about to be handled by a container screen.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+pub enum ContainerMouseInput {
+    /// A press or release. Buttons use GLFW indices: 0 left, 1 right, 2 middle.
+    Button {
+        /// The GLFW button index.
+        button: i32,
+        /// `true` for a press, `false` for a release.
+        pressed: bool,
+    },
+    /// Scrolling in x and y, with the same scaling as `screen_mouse_scrolled_pre`.
+    Scroll([f64; 2]),
+    /// A pointer movement with a held button.
+    Drag {
+        /// The GLFW button index.
+        button: i32,
+        /// The pointer movement in GUI pixels.
+        delta: [f32; 2],
+    },
+}
+
 /// A camera-local visual light, with no gameplay light or shadow writes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]

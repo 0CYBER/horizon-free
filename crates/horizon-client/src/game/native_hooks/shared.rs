@@ -62,7 +62,7 @@ impl Game<'_> {
         }
         let screen = self.screen;
         if screen != Screen::Playing {
-            return Some((screen.id(), self.screen_menu(screen)));
+            return Some((screen.id(), self.screen_menu_name(screen)));
         }
         self.title.as_ref().map(|title| (title.mode.id(), None))
     }
@@ -213,7 +213,7 @@ impl Game<'_> {
         let none = screen == Screen::Playing;
         ScreenView::from(mod_api::__private::built::ScreenView {
             id: screen.id(),
-            menu: self.screen_menu(screen),
+            menu: self.screen_menu_name(screen),
             title: self
                 .remote
                 .as_ref()
@@ -914,7 +914,7 @@ impl Game<'_> {
     }
 
     /// Only the inventory screen renders a server-opened container.
-    fn screen_menu(&self, screen: Screen) -> Option<&str> {
+    fn screen_menu_name(&self, screen: Screen) -> Option<&str> {
         if screen == Screen::Inventory {
             self.remote_menu_type().filter(|menu| !menu.is_empty())
         } else {
@@ -928,7 +928,7 @@ impl Game<'_> {
     pub(super) fn screen_view_at(&self, screen: Screen, rect: [f32; 4]) -> ScreenView<'_> {
         ScreenView::from(mod_api::__private::built::ScreenView {
             id: screen.id(),
-            menu: self.screen_menu(screen),
+            menu: self.screen_menu_name(screen),
             title: self.remote.as_ref().and_then(|r| r.menu_title_snapshot()),
             rect,
             slots: self.slot_count(),

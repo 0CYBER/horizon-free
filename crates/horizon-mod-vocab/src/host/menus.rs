@@ -65,6 +65,12 @@ pub trait MenusClientHost {
     /// The local player in a logged-in client world.
     #[access(ClientSetup)]
     fn local_player(&self) -> Option<PlayerRef>;
+    /// Side: client.
+    /// The live menu shown by the current container screen (including the normal player
+    /// inventory), or `None` without a supported open container screen. The creative
+    /// screen is excluded: its tab slots cannot be addressed by normal menu clicks.
+    #[access(WorldOnly)]
+    fn screen_menu(&self) -> Option<MenuRef>;
 }
 /// The handles' reads of the `menus` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -102,10 +108,12 @@ pub trait MenusBackend {
     /// or a mod's chest menu's.
     #[access(WorldOnly)]
     fn menu_slot_backing(&self, menu: MenuRef, slot: usize) -> Option<MenuSlotBacking>;
-    /// Side: server.
-    /// How many of `stack` menu slot `slot` holds (`Slot.mayPlace`, then `Slot.getMaxStackSize`):
-    /// a furnace's fuel slot one bucket, an armour slot one piece that fits it, a crafting result
-    /// none.
+    /// Side: both.
+    /// Total capacity for `stack` in menu slot `slot` (`Slot.mayPlace` and
+    /// `Slot.getMaxStackSize`), including the item's own stack cap. This is not
+    /// remaining space. `Some(0)` means insertion is refused, not necessarily
+    /// that the slot is a result. `None` means unavailable or out of range; on
+    /// the client this is a prediction for the open container screen.
     #[access(WorldOnly)]
     fn menu_slot_holds(&self, menu: MenuRef, slot: usize, stack: &ItemStack) -> Option<u32>;
     /// Side: server.
@@ -139,6 +147,13 @@ pub trait MenusClientBackend {
     /// Built per call with one Vec allocation and a table lookup; cache for the menu.
     #[access(WorldOnly)]
     fn menu_slot_kinds(&self, menu: MenuRef) -> Option<Vec<MenuSlotKind>>;
+    /// Side: client.
+    /// The menu index under the current GUI pointer, using the screen's own hit test
+    /// (`AbstractContainerScreen.getHoveredSlot`). Hidden slots, creative tabs,
+    /// a menu covered by the recipe book, and stale or foreign menus return `None`.
+    /// Works whether the slot holds a stack or not.
+    #[access(WorldOnly)]
+    fn menu_hovered_slot(&self, menu: MenuRef) -> Option<usize>;
     /// Side: client.
     /// The local player's open merchant menu's offers, copied in display order
     /// (`MerchantMenu.getOffers`): the latest `ClientboundMerchantOffersPacket` the server

@@ -1,0 +1,2 @@
+ids = ["method:prelude::MenusClientHost::screen_menu", "handle:MenuRef::hovered_slot", "hook:container_mouse_input_pre", "method:Hooks::container_mouse_input_pre", "type:ContainerMouseInputPreEvent", "type:ContainerMouseInput"]
+why = "Client mods can get the live menu shown by a container screen, ask its canonical hovered slot and predicted insertion capacity, and submit ordinary predicted menu clicks from a mutable mouse input hook. Existing screen hooks and their wire payloads are unchanged."

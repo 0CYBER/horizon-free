@@ -214,6 +214,134 @@ impl Game<'_> {
         }
         done
     }
+
+    /// The same slot model used for prediction, without running the click or
+    /// recomputing recipes. Populate the rule context only if a part reads it.
+    pub(super) fn inventory_menu_slot_holds(
+        &self,
+        name: &str,
+        slot: usize,
+        stack: &ItemStack,
+    ) -> Option<u32> {
+        use horizon_client::menu::{Env, SlotRules};
+        let kind = self.screen_menu_kind()?;
+        let mut menu = self.screen_menu_model(kind);
+        (slot < menu.slot_count()).then_some(())?;
+        // A mod screen's hidden slots (`native_screen_slots`) are not in the
+        // menu the server keeps either: nothing can go there.
+        if let horizon_client::menu::Kind::Mod(_) = kind
+            && let Some(internal) = i32::try_from(slot)
+                .ok()
+                .and_then(|s| Self::inventory_screen_slot(name, s))
+            && !self.slots().contains(&internal)
+        {
+            menu.hide_slot(slot);
+        }
+        if kind == horizon_client::menu::Kind::CrafterBlock
+            && let Some(BlockEntity::Crafter(c)) = self.container_kind()
+        {
+            for (i, off) in c.disabled.iter().enumerate() {
+                menu.data[i] = i32::from(*off);
+            }
+        }
+        if menu.registry_id().is_some_and(|id| self.listens(id)) {
+            for (i, internal) in (0..)
+                .map_while(|s| Self::inventory_screen_slot(name, s))
+                .take(menu.slot_count())
+                .enumerate()
+            {
+                // The rule context contains the menu's own containers, not the player's.
+                if internal >= 100 && !(500..=504).contains(&internal) {
+                    menu.load_slot(i, self.slot_view(internal));
+                }
+            }
+        }
+        let can_equip = self.menu_can_equip();
+        let env = Env {
+            enchantments: self.item_enchantments(),
+            can_equip: Some(&can_equip),
+            ..self.menu_env()
+        };
+        Some(menu.slot_holds(&env, slot, stack))
+    }
+
+    fn screen_menu_kind(&self) -> Option<horizon_client::menu::Kind> {
+        use horizon_client::menu::Kind;
+        if self.creative_tab_open() {
+            return Some(Kind::ItemPicker);
+        }
+        if let Some(columns) = self
+            .mount_menu_columns()
+            .filter(|_| self.remote.is_some() && self.mount_active())
+        {
+            return Some(Kind::Mount(columns));
+        }
+        let station = self.station.as_ref().map(|s| s.kind);
+        if station == Some(stations::Kind::Merchant) {
+            return Some(Kind::Merchant);
+        }
+        if matches!(self.container_kind(), Some(BlockEntity::Crafter(_))) {
+            return Some(Kind::CrafterBlock);
+        }
+        Some(match station {
+            Some(stations::Kind::Loom) => Kind::Loom,
+            Some(stations::Kind::Stonecutter) => Kind::Stonecutter,
+            Some(stations::Kind::Grindstone) => Kind::Grindstone,
+            Some(stations::Kind::Cartography) => Kind::Cartography,
+            Some(stations::Kind::Anvil) => Kind::Anvil,
+            Some(stations::Kind::Smithing) => Kind::Smithing,
+            Some(stations::Kind::Enchanting) => Kind::Enchanting,
+            Some(stations::Kind::Beacon) => Kind::Beacon,
+            _ if self.container.is_some() => match self.container_kind()? {
+                BlockEntity::Chest(_) => match self.open_container_size() {
+                    5 => Kind::Hopper,
+                    9 => Kind::Dispenser,
+                    27 if self.container.is_some_and(|(x, y, z)| {
+                        let id = self.world.block(x, y, z);
+                        storage::is_shulker_box(&self.res.facts().get(id).name)
+                    }) =>
+                    {
+                        Kind::Shulker
+                    }
+                    n => Kind::Chest((n / 9).clamp(1, 6)),
+                },
+                BlockEntity::Brewing(_) => Kind::Brewing,
+                BlockEntity::Mod(_) => Kind::Mod(horizon_client::containers::mod_menu_type(
+                    self.remote_menu_type()?,
+                )?),
+                BlockEntity::Furnace(f) => {
+                    Kind::Furnace(match f.kind.recipe_type().trim_start_matches("minecraft:") {
+                        "blasting" => "blasting",
+                        "smoking" => "smoking",
+                        _ => "smelting",
+                    })
+                }
+                _ => return None,
+            },
+            None if !self.mount_active() && self.craft_size == 3 => Kind::Crafting,
+            None if !self.mount_active() => Kind::Inventory,
+            _ => return None,
+        })
+    }
+
+    fn screen_menu_model(&self, kind: horizon_client::menu::Kind) -> horizon_client::menu::Menu {
+        use horizon_client::menu::{Kind, Menu};
+        let mut menu = Menu::new(kind);
+        let menu_id = if matches!(kind, Kind::Mount(_)) {
+            Some("horizon:mount_inventory")
+        } else if matches!(kind, Kind::Inventory | Kind::ItemPicker) {
+            None
+        } else {
+            self.remote_menu_type()
+        };
+        menu.set_registry_id(menu_id);
+        menu.set_block_pos(self.container.map(|(x, y, z)| [x, y, z]));
+        if matches!(kind, Kind::Mount(_)) {
+            menu.mount = self.mount_menu_entity();
+        }
+        menu
+    }
+
     /// The open menu as the verified engine (`horizon_client::menu`): the
     /// game's slots are copied in, `run` acts on it, and the slots, carried
     /// stack, menu data and drops are copied back when it returns Some(true)
@@ -227,7 +355,7 @@ impl Game<'_> {
             &dyn Fn(usize) -> Option<usize>,
         ) -> Option<bool>,
     ) -> bool {
-        use horizon_client::menu::{Env, Kind, Menu};
+        use horizon_client::menu::{Env, Kind};
         #[derive(Clone, Copy)]
         struct Map {
             container: usize,
@@ -285,197 +413,77 @@ impl Game<'_> {
                 }
             }
         }
+        let Some(kind) = self.screen_menu_kind() else {
+            return false;
+        };
+        let mut menu = self.screen_menu_model(kind);
+        let anvil_open = kind == Kind::Anvil;
+        let merchant_open = kind == Kind::Merchant;
         // Menu slot -> game slot, for every menu slot.
         let mut plain_map = None;
-        let crafter_open = matches!(self.container_kind(), Some(BlockEntity::Crafter(_)));
-        let loom_open = self
-            .station
-            .as_ref()
-            .is_some_and(|s| s.kind == stations::Kind::Loom);
-        let merchant_open = self
-            .station
-            .as_ref()
-            .is_some_and(|s| s.kind == stations::Kind::Merchant);
-        let stonecutter_open = self
-            .station
-            .as_ref()
-            .is_some_and(|s| s.kind == stations::Kind::Stonecutter);
-        let station_kind = self.station.as_ref().map(|s| s.kind);
-        let grindstone_open = station_kind == Some(stations::Kind::Grindstone);
-        let cartography_open = station_kind == Some(stations::Kind::Cartography);
-        let anvil_open = station_kind == Some(stations::Kind::Anvil);
-        let smithing_open = station_kind == Some(stations::Kind::Smithing);
-        let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
-        let beacon_open = station_kind == Some(stations::Kind::Beacon);
-        let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
-            // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
-            let mut v = vec![None; 45];
-            v.extend((0..9).map(Some));
-            (Kind::ItemPicker, v)
-        } else if let Some(columns) = self
-            .mount_menu_columns()
-            .filter(|_| self.remote.is_some() && self.mount_active())
-        {
-            // A server's HorseInventoryMenu: the saddle, the body armour,
-            // the chest, then the inventory.
-            let mut v = vec![Some(mount_menu::SADDLE), Some(mount_menu::ARMOR)];
-            v.extend((0..columns * 3).map(|i| Some(mount_menu::CHEST + i)));
-            v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Mount(columns), v)
-        } else if merchant_open {
-            // MerchantMenu: two payment slots, the result, then the inventory.
-            let mut v: Vec<Option<usize>> = vec![
-                Some(stations::INPUT),
-                Some(stations::INPUT + 1),
-                Some(stations::RESULT),
-            ];
-            v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Merchant, v)
-        } else if crafter_open {
-            // CrafterMenu: the grid, the inventory, then the result.
-            let mut v: Vec<Option<usize>> = (300..309).map(Some).collect();
-            v.extend((9..36).chain(0..9).map(Some));
-            v.push(None);
-            (Kind::CrafterBlock, v)
-        } else if loom_open {
-            // LoomMenu: banner, dye, pattern, result, then the inventory.
-            let mut v: Vec<Option<usize>> = (0..3).map(|i| Some(stations::INPUT + i)).collect();
-            v.push(Some(stations::RESULT));
-            v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Loom, v)
-        } else if stonecutter_open {
-            // StonecutterMenu: the input, the result, then the inventory.
-            let mut v = vec![Some(stations::INPUT), Some(stations::RESULT)];
-            v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Stonecutter, v)
-        } else if grindstone_open || cartography_open {
-            // GrindstoneMenu and CartographyTableMenu: the two inputs, the
-            // result, then the inventory.
-            let mut v = vec![
-                Some(stations::INPUT),
-                Some(stations::INPUT + 1),
-                Some(stations::RESULT),
-            ];
-            v.extend((9..36).chain(0..9).map(Some));
-            let kind = if grindstone_open {
-                Kind::Grindstone
-            } else {
-                Kind::Cartography
-            };
-            (kind, v)
-        } else if enchanting_open {
-            // EnchantmentMenu: the item, the lapis, then the inventory.
-            let mut v = vec![Some(stations::INPUT), Some(stations::INPUT + 1)];
-            v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Enchanting, v)
-        } else if beacon_open {
-            // BeaconMenu: the payment, then the inventory.
-            let mut v = vec![Some(stations::INPUT)];
-            v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Beacon, v)
-        } else if anvil_open || smithing_open {
-            // ItemCombinerMenu: the inputs, the result, then the inventory.
-            let inputs = if anvil_open { 2 } else { 3 };
-            let mut v: Vec<Option<usize>> =
-                (0..inputs).map(|i| Some(stations::INPUT + i)).collect();
-            v.push(Some(stations::RESULT));
-            v.extend((9..36).chain(0..9).map(Some));
-            (
-                if anvil_open {
-                    Kind::Anvil
-                } else {
-                    Kind::Smithing
-                },
-                v,
-            )
-        } else {
-            let (kind, map) = if self.container.is_some() {
-                let size = self.open_container_size();
-                let (kind, count) = match self.container_kind() {
-                    Some(BlockEntity::Chest(_)) => {
-                        let shulker = self.container.is_some_and(|k| {
-                            let id = self.world.block(k.0, k.1, k.2);
-                            storage::is_shulker_box(&self.res.facts().get(id).name)
-                        });
-                        let kind = match size {
-                            5 => Kind::Hopper,
-                            9 => Kind::Dispenser,
-                            27 if shulker => Kind::Shulker,
-                            n => Kind::Chest((n / 9).clamp(1, 6)),
-                        };
-                        (kind, size)
-                    }
-                    Some(BlockEntity::Brewing(_)) => (Kind::Brewing, 5),
-                    Some(BlockEntity::Mod(_)) => {
-                        match self
-                            .remote_menu_type()
-                            .and_then(horizon_client::containers::mod_menu_type)
-                        {
-                            Some(t) => (Kind::Mod(t), t.slots),
-                            None => return false,
-                        }
-                    }
-                    Some(BlockEntity::Furnace(f)) => (
-                        Kind::Furnace(
-                            match f.kind.recipe_type().trim_start_matches("minecraft:") {
-                                "blasting" => "blasting",
-                                "smoking" => "smoking",
-                                _ => "smelting",
-                            },
-                        ),
-                        3,
-                    ),
-                    _ => return false,
+        let game_of: Vec<Option<usize>> = match kind {
+            Kind::ItemPicker => {
+                // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
+                (0..45).map(|_| None).chain((0..9).map(Some)).collect()
+            }
+            Kind::Mount(columns) => [Some(mount_menu::SADDLE), Some(mount_menu::ARMOR)]
+                .into_iter()
+                .chain((0..columns * 3).map(|i| Some(mount_menu::CHEST + i)))
+                .chain((9..36).chain(0..9).map(Some))
+                .collect(),
+            Kind::CrafterBlock => (300..309)
+                .chain(9..36)
+                .chain(0..9)
+                .map(Some)
+                .chain([None])
+                .collect(),
+            Kind::Merchant
+            | Kind::Loom
+            | Kind::Stonecutter
+            | Kind::Grindstone
+            | Kind::Cartography
+            | Kind::Enchanting
+            | Kind::Beacon
+            | Kind::Anvil
+            | Kind::Smithing => {
+                let (inputs, result) = match kind {
+                    Kind::Stonecutter => (1, Some(stations::RESULT)),
+                    Kind::Beacon => (1, None),
+                    Kind::Enchanting => (2, None),
+                    Kind::Loom | Kind::Smithing => (3, Some(stations::RESULT)),
+                    _ => (2, Some(stations::RESULT)),
                 };
+                (stations::INPUT..stations::INPUT + inputs)
+                    .chain(result)
+                    .chain(9..36)
+                    .chain(0..9)
+                    .map(Some)
+                    .collect()
+            }
+            _ => {
+                let plain = matches!(kind, Kind::Inventory | Kind::Crafting);
                 let map = Map {
-                    container: count,
-                    table: false,
-                    cells: 0,
-                    plain: false,
-                };
-                (kind, map)
-            } else if self.station.is_none() && !self.mount_active() {
-                let table = self.craft_size == 3;
-                let map = Map {
-                    container: 0,
-                    table,
-                    cells: self.craft_size * self.craft_size,
-                    plain: true,
-                };
-                (
-                    if table {
-                        Kind::Crafting
-                    } else {
-                        Kind::Inventory
+                    container: match kind {
+                        Kind::Brewing => 5,
+                        Kind::Furnace(_) => 3,
+                        Kind::Mod(t) => t.slots,
+                        _ if plain => 0,
+                        _ => self.open_container_size(),
                     },
-                    map,
-                )
-            } else {
-                return false;
-            };
-            let total = Menu::new(kind).slot_count();
-            plain_map = Some(map);
-            (kind, (0..total).map(|i| map.to_game(i)).collect())
+                    table: kind == Kind::Crafting,
+                    cells: self.craft_size * self.craft_size,
+                    plain,
+                };
+                plain_map = Some(map);
+                (0..menu.slot_count()).map(|i| map.to_game(i)).collect()
+            }
         };
         // The plain map also takes the crafting result slot (a shift-click on it).
         let to_menu = |g: usize| match plain_map {
             Some(map) => map.to_menu(g),
             None => game_of.iter().position(|x| *x == Some(g)),
         };
-        let mut menu = Menu::new(kind);
-        let menu_id = if matches!(kind, Kind::Mount(_)) {
-            Some("horizon:mount_inventory")
-        } else if matches!(kind, Kind::Inventory | Kind::ItemPicker) {
-            None
-        } else {
-            self.remote_menu_type()
-        };
-        menu.set_registry_id(menu_id);
-        menu.set_block_pos(self.container.map(|(x, y, z)| [x, y, z]));
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
-        if matches!(kind, Kind::Mount(_)) {
-            menu.mount = self.mount_menu_entity();
-        }
         let total = menu.slot_count();
         let before: Vec<Option<ItemStack>> = game_of
             .iter()

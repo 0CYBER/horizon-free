@@ -40,6 +40,84 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## Reading and interacting with a container
+
+`host.screen_menu()` returns the live menu only when its container screen is open, including the
+normal player inventory but not creative tabs. In `container_mouse_input_pre`, `event.menu` is that
+same handle. Button presses and releases, held-button movement and wheel scroll arrive after the
+existing read-only screen Pre hook and before the screen acts. This hook has a mutable `ClientHost`.
+Returning `Flow::Cancel` replaces the screen's handling of that input, including its usual Post
+hook. If you take over a press and its drag, handle the matching release too; don't swallow the
+release of a drag the screen itself started.
+
+Use menu-order indices throughout. `menu.slot_count(host)` is the count, `menu.slot(host, index)`
+and `menu.carried(host)` read live stacks (`Some(None)` is empty, outer `None` means unavailable),
+and `menu.hovered_slot(host)` gives the screen's actual click target, even when empty. It follows
+the game's hit margin, layout offsets and hidden slots; a narrow recipe book covering the menu
+returns no hover. `menu.slot_kinds(host)` identifies known result slots, such as inventory
+crafting slot 0. `menu.slot_holds(host, index, &candidate)` instead gives the maximum count the
+slot can hold for that stack, including its components and the slot's own restrictions.
+`Some(0)` means it won't accept that stack (e.g. stone into head armour, or into a result slot);
+it does not identify the slot's role. This is not remaining space or a server promise.
+
+```rust
+use mod_api::{
+    ClientHost, ContainerMouseInput, ContainerMouseInputPreEvent, Flow, Hooks, MenuClick,
+    ScreenRenderPostEvent,
+};
+
+#[derive(Default)]
+struct ContainerHelper;
+
+#[mod_api::horizon_mod]
+impl Hooks for ContainerHelper {
+    fn container_mouse_input_pre(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut ContainerMouseInputPreEvent,
+    ) -> Flow {
+        // Example gesture: Alt + wheel up shift-clicks the hovered slot.
+        if event.modifiers & 4 == 0
+            || !matches!(event.input, ContainerMouseInput::Scroll([_, y]) if y > 0.0)
+        {
+            return Flow::Continue;
+        }
+        let menu = event.menu;
+        let Some(slot) = menu.hovered_slot(host) else {
+            return Flow::Continue;
+        };
+        if menu.click(host, &[MenuClick::QuickMove { slot }]) {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
+    }
+
+    fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+        let Some(menu) = host.screen_menu() else { return };
+        let Some(index) = menu.hovered_slot(host) else { return };
+        let Some(boxes) = menu.slot_boxes(host) else { return };
+        if let Some(&Some(rect)) = boxes.get(index) {
+            event.draw.fill(rect, 0x66ff_a000);
+        }
+    }
+}
+```
+
+For a move plan, submit `Pickup` with `MouseButton::Left` or `Right`, `QuickMove` for
+Shift-click, or `PickupAll` to collect matching stacks onto a stack already carried (the
+ordinary double-click action). `Drag` submits a complete quick-craft gesture. These are the
+ordinary predicted menu operations and server packets, not synthetic mouse input. A successful
+submission is not acknowledgement. Reread `slot` and `carried` immediately to see prediction and
+again on the next input or tick to see server corrections, rather than assuming the plan's state
+is still current. Reacquire the handle and discard a pending plan if the screen closes, its handle
+changes, or a read becomes unavailable. A stale handle cannot act on a replacement menu, even
+when the server reuses the same window id.
+
+`screen_render_post` already composites above the game's screen. Use the slot boxes in GUI
+pixels to draw markers for locked slots as well as the highlight above. A hidden slot has no
+box; while a narrow recipe book covers the menu there are no boxes to draw.
+
 ## Replacing the title splash
 
 Native and Wasm mods can call `host.title_splash()` from the title's screen render hooks

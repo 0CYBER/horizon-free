@@ -85,6 +85,34 @@ impl Game<'_> {
             && self.remote_button_click(button)
     }
 
+    fn container_screen_visible(&self) -> bool {
+        self.screen == super::Screen::Inventory
+            && self.remote.as_ref().is_some_and(|remote| remote.has_level())
+            && !self.screen_over_playing()
+            && !self.remote_loading()
+    }
+
+    pub(super) fn screen_menu(&self) -> Option<MenuRef> {
+        self.container_screen_visible().then_some(())?;
+        self.local_client_menu()
+    }
+
+    pub(super) fn menu_hovered_slot(&self, menu: MenuRef) -> Option<usize> {
+        let renderer = self.renderer.as_ref()?;
+        let batch = super::HudBatch::new(
+            [renderer.config.width, renderer.config.height],
+            self.settings.gui_scale_inputs(),
+        );
+        self.inventory_menu_hovered_slot(menu, &batch)
+    }
+
+    fn inventory_menu_hovered_slot(&self, menu: MenuRef, batch: &super::HudBatch) -> Option<usize> {
+        self.container_screen_visible().then_some(())?;
+        let name = self.native_client_menu_name(menu)?;
+        let slot = self.slot_at(batch, self.cursor.0, self.cursor.1)?;
+        Self::menu_slot_index(name, slot)
+    }
+
     pub(super) fn menu_slot_boxes(&self, menu: MenuRef) -> Option<Vec<Option<[f32; 4]>>> {
         if self.screen != super::Screen::Inventory || !self.screen_hooks_open() {
             return None;
@@ -146,6 +174,17 @@ impl Game<'_> {
         self.player(remote.profile)
     }
 
+    fn local_client_menu(&self) -> Option<MenuRef> {
+        let remote = self.remote.as_ref()?;
+        let open = remote.menu.as_ref();
+        Self::inventory_screen_slot(open.map_or("inventory", |entry| entry.1.as_str()), 0)?;
+        Some(mod_api::__private::game::menu_ref(
+            self.local_player()?,
+            open.map_or(0, |entry| entry.0),
+            remote.menu.generation,
+        ))
+    }
+
     fn native_menu_guest(&self, menu: MenuRef) -> Option<&Guest> {
         let super::native_server::PlayerRead::Guest(guest) =
             self.player_handle_read(menu.fields().player)?
@@ -172,23 +211,13 @@ impl Game<'_> {
         }
     }
 
-    /// A player's current supported menu. Refuses crafting tables, merchants,
-    /// workstations, lecterns, mounts and menus with hidden slots; also refuses
-    /// clients, stale players and players whose state is swapped out.
+    /// A player's current supported menu. On a client only the local player has one;
+    /// on a server, not every guest menu has backing that can be addressed here.
     pub(super) fn player_container_menu(&self, player: PlayerRef) -> Option<MenuRef> {
         if self.remote.is_some() {
-            let remote = self.remote.as_ref()?;
-            (self.local_player()? == player).then_some(())?;
-            let name = remote
-                .menu
-                .as_ref()
-                .map_or("inventory", |entry| entry.1.as_str());
-            Self::inventory_screen_slot(name, 0)?;
-            return Some(mod_api::__private::game::menu_ref(
-                player,
-                remote.menu.as_ref().map_or(0, |entry| entry.0),
-                remote.menu.generation,
-            ));
+            return self
+                .local_client_menu()
+                .filter(|menu| menu.fields().player == player);
         }
         let super::native_server::PlayerRead::Guest(guest) = self.player_handle_read(player)?
         else {
@@ -332,6 +361,12 @@ impl Game<'_> {
         slot: usize,
         stack: &ItemStack,
     ) -> Option<u32> {
+        if self.remote.is_some() {
+            let name = self.native_client_menu_name(menu)?;
+            Self::inventory_screen_slot(name, i32::try_from(slot).ok()?)?;
+            self.container_screen_visible().then_some(())?;
+            return self.inventory_menu_slot_holds(name, slot, stack);
+        }
         let rules = self.native_menu_rules(menu, slot)?;
         Some(rules.slot_holds(&self.menu_env(), slot, stack))
     }
@@ -517,6 +552,80 @@ mod tests {
                 game.inventory_menu_slot_boxes("unsupported", &batch)
                     .is_none()
             );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn container_screen_reports_live_hover_and_capacity_in_menu_order() {
+        use super::super::{HudBatch, Screen, native_entity_refs::tests::with_client_game};
+        use horizon_client::motion::PlayerMotion;
+        use horizon_core::{geometry::Vec3, nbt::Tag};
+        use horizon_protocol::packets::play::{self, Clientbound};
+
+        with_client_game(|game| {
+            let (client, _server) = horizon_protocol::connection::Pipe::pair();
+            game.connect_local(client, "ContainerScreenTest").unwrap();
+            let remote = game.remote.as_mut().unwrap();
+            remote.logged_in = true;
+            remote.entity_id = 7;
+            remote.profile = 42;
+            let chest_id = remote
+                .builtin
+                .get("minecraft:menu")
+                .unwrap()
+                .id("minecraft:generic_9x3")
+                .unwrap();
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            assert_eq!(game.screen_menu(), None);
+            game.screen = Screen::Inventory;
+            game.settings.gui_scale = 1;
+            let wide = HudBatch::new([800, 600], game.settings.gui_scale_inputs());
+            let narrow = HudBatch::new([320, 260], game.settings.gui_scale_inputs());
+            let inventory = game.screen_menu().unwrap();
+            let [x, y, _, _] = game.inventory_menu_slot_boxes("inventory", &wide).unwrap()[0]
+                .unwrap();
+            // The screen expands its hit box past the visible slot rectangle.
+            game.cursor = (x - 0.5, y + 8.0);
+            assert_eq!(game.inventory_menu_hovered_slot(inventory, &wide), Some(0));
+            game.level.recipe_book.open[0] = true;
+            assert_eq!(game.inventory_menu_hovered_slot(inventory, &wide), None);
+            game.cursor.0 += game.recipe_book_shift(wide.width);
+            assert_eq!(game.inventory_menu_hovered_slot(inventory, &wide), Some(0));
+            let (ox, oy) = game.inventory_origin(&narrow);
+            let (sx, sy) = game.slot_position(200);
+            game.cursor = (ox + sx + 8.0, oy + sy + 8.0);
+            assert_eq!(game.inventory_menu_hovered_slot(inventory, &narrow), None);
+
+            let mut stone = ItemStack::new("minecraft:stone", 1);
+            stone
+                .data_mut()
+                .set_other("minecraft:max_stack_size", Some(Tag::Int(16)));
+            assert_eq!(game.menu_slot_holds(inventory, 9, &stone), Some(16));
+            assert_eq!(game.menu_slot_holds(inventory, 0, &stone), Some(0));
+            assert_eq!(game.menu_slot_holds(inventory, 5, &stone), Some(0));
+            let helmet = ItemStack::new("minecraft:iron_helmet", 1);
+            assert_eq!(game.menu_slot_holds(inventory, 5, &helmet), Some(1));
+
+            game.screen = Screen::Creative;
+            assert_eq!(game.screen_menu(), None);
+            assert_eq!(game.inventory_menu_hovered_slot(inventory, &wide), None);
+            game.handle_packet(Clientbound::OpenScreen(play::OpenScreen {
+                container: 7,
+                menu: chest_id,
+                title: Tag::String("Chest".into()),
+            }))
+            .unwrap();
+            let chest = game.screen_menu().unwrap();
+            let [x, y, _, _] = game
+                .inventory_menu_slot_boxes("minecraft:generic_9x3", &wide)
+                .unwrap()[0]
+                .unwrap();
+            game.cursor = (x + 8.0, y + 8.0);
+            assert_eq!(game.inventory_menu_hovered_slot(chest, &wide), Some(0));
+            assert_eq!(game.menu_slot_holds(chest, 0, &stone), Some(16));
+            assert_eq!(game.inventory_menu_hovered_slot(inventory, &wide), None);
+            assert_eq!(game.menu_slot_holds(inventory, 0, &stone), None);
         });
     }
 
