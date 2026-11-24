@@ -237,28 +237,22 @@ impl Game<'_> {
                 if let Some(result) = crate::game::native_hooks::block_use_result(answer) {
                     (result, DryUse::default())
                 } else if hand == Hand::Main {
-                    self.remote_block_template(&hit, held.as_ref(), true)
+                    self.remote_block_template_hand(hand, &hit, held.as_ref(), true)
                 } else {
                     (InteractionResult::Pass, DryUse::default())
                 }
-            } else if hand == Hand::Main && !spectator && vanilla_block {
-                self.remote_block_reacts(&hit, held.as_ref())
+            } else if !spectator && vanilla_block {
+                // useItemOn runs for either hand; useWithoutItem (inside
+                // `remote_block_reacts`) for the main hand only.
+                self.remote_block_reacts_hand(hand, &hit, held.as_ref())
             } else {
-                // useItemOn runs for the off hand too (useWithoutItem doesn't):
-                // RespawnAnchorBlock.useItemOn charges an anchor with its
-                // glowstone, SUCCESS.
-                let charges = vanilla_block && self.anchor_takes(hit.pos, held.as_ref());
-                let result = if charges {
-                    InteractionResult::Success
-                } else {
-                    InteractionResult::Pass
-                };
-                (result, DryUse::default())
+                (InteractionResult::Pass, DryUse::default())
             };
             // AbstractCauldronBlock.useItemOn, either hand: CauldronInteractions
             // answers on the client as on the server and only the server acts,
             // so a bucket the cauldron takes is not used again (UseItem).
-            // The main-hand path already asked above; only the off-hand fallback asks here.
+            // `remote_block_reacts` asks for either hand too; a Pass here is the
+            // same answer, and a use that consumed the click skipped it above.
             let result =
                 if result.consumes_action() || spectator || !vanilla_block || hand == Hand::Main {
                     result
@@ -270,11 +264,11 @@ impl Game<'_> {
                         horizon_client::cauldron::Outcome::Pass => result,
                     }
                 };
-            // useItemOn on this client, unless a sneak with something in hand
-            // skips it: RedStoneOreBlock's dust, and the wick smoke of a lit
-            // candle an empty hand snuffs (CandleBlock.useItemOn) or a lit
-            // candle cake (CandleCakeBlock.useItemOn).
-            if hand == Hand::Main && !spectator && vanilla_block {
+            // useItemOn on this client, for either hand, unless a sneak with
+            // something in hand skips it: RedStoneOreBlock's dust, and the wick
+            // smoke of a lit candle an empty hand snuffs (CandleBlock.useItemOn)
+            // or a lit candle cake (CandleCakeBlock.useItemOn).
+            if !spectator && vanilla_block {
                 self.redstone_ore_particles(hit.pos);
                 let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
                 let name = self.block_name(hit.pos);

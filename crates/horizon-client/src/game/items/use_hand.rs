@@ -174,9 +174,10 @@ impl Game<'_> {
                     .or_else(|| self.use_decorated_pot(hit.pos, state, held.as_ref(), ItemOn))
                     .or_else(|| self.use_chiseled_bookshelf(hit, state, held.as_ref(), ItemOn));
             }
-            // TRY_WITH_EMPTY_HAND: only the main hand's turn uses the block itself (useWithoutItem). The block's item behaviour hears both hands.
-            if !anchor_passed && !chains_sign && (self.hand == Hand::Main || block_answer.is_some())
-            {
+            // `ServerPlayerGameMode.useItemOn` runs `BlockState.useItemOn` for
+            // either hand; only the main hand follows its TRY_WITH_EMPTY_HAND
+            // with `useWithoutItem`.
+            if !anchor_passed && !chains_sign {
                 let face = match hit.face {
                     [0, 1, 0] => Direction::Up,
                     [0, -1, 0] => Direction::Down,
@@ -505,13 +506,17 @@ impl Game<'_> {
             || self.use_empty_map(&stack)
                 || self.use_book(&stack)
                 // KnowledgeBookItem.use: the recipes it names become known.
-                || self.use_knowledge_book(&stack)
-                // Block items (heads, carved pumpkins) aimed at a block are
-                // placed first (useItemOn before useItem).
-                || (!(info.block.is_some() && block_hit.is_some())
-                    && self.equip_from_hand(&stack)))
+                || self.use_knowledge_book(&stack))
         {
             return Ok(true);
+        }
+        // Block items (heads, carved pumpkins) aimed at a block are placed
+        // first (useItemOn before useItem).
+        if !on_block
+            && !(info.block.is_some() && block_hit.is_some())
+            && let Some(ends) = self.equip_use(&stack)
+        {
+            return Ok(ends);
         }
         if !on_block && &*stack.item == "minecraft:spyglass" {
             self.use_spyglass();

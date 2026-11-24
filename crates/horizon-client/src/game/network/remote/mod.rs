@@ -1410,6 +1410,15 @@ impl Game<'_> {
     ) -> (InteractionResult, DryUse) {
         self.remote_block_reacts_body(hit, held)
     }
+    fn remote_block_reacts_hand(
+        &mut self,
+        hand: Hand,
+        hit: &super::Hit,
+        held: Option<&ItemStack>,
+    ) -> (InteractionResult, DryUse) {
+        self.remote_block_reacts_hand_body(hand, hit, held)
+    }
+    #[allow(dead_code)] // the mod API's point; the hand-aware one is what the game calls
     pub(super) fn remote_block_template(
         &mut self,
         hit: &super::Hit,
@@ -1417,6 +1426,15 @@ impl Game<'_> {
         without_item: bool,
     ) -> (InteractionResult, DryUse) {
         self.remote_block_template_body(hit, held, without_item)
+    }
+    pub(super) fn remote_block_template_hand(
+        &mut self,
+        hand: Hand,
+        hit: &super::Hit,
+        held: Option<&ItemStack>,
+        without_item: bool,
+    ) -> (InteractionResult, DryUse) {
+        self.remote_block_template_hand_body(hand, hit, held, without_item)
     }
     fn predict_place(&mut self, (pos, changes): &DryPlace, seq: i32) {
         self.predict_place_body((pos, changes), seq)

@@ -32,14 +32,23 @@ impl Game<'_> {
         )
     }
 
-    /// Whether the block hit takes a main-hand right click with `held`
-    /// (`BlockState.useItemOn`, then `useWithoutItem`), once the caller let
-    /// the block react (no sneaking with full hands): a door, a button, a
-    /// container, and the blocks it changed. Vanilla's client runs it on its
-    /// own level first; this runs it on a copy, and `predict_use` keeps the
-    /// changes it predicts.
+    /// `remote_block_reacts` for one hand.
     pub(super) fn remote_block_reacts_body(
         &mut self,
+        hit: &super::super::Hit,
+        held: Option<&ItemStack>,
+    ) -> (InteractionResult, DryUse) {
+        self.remote_block_reacts_hand_body(Hand::Main, hit, held)
+    }
+
+    /// Whether the block hit takes a right click with `held` in `hand`
+    /// (`BlockState.useItemOn`, then `useWithoutItem` for the main hand only):
+    /// a door, a button, a container, and the blocks it changed. Vanilla's
+    /// client runs it on its own level first; this runs it on a copy, and
+    /// `predict_use` keeps the changes it predicts.
+    pub(super) fn remote_block_reacts_hand_body(
+        &mut self,
+        hand: Hand,
         hit: &super::super::Hit,
         held: Option<&ItemStack>,
     ) -> (InteractionResult, DryUse) {
@@ -53,10 +62,14 @@ impl Game<'_> {
         if self.jukebox_takes(hit.pos, held) {
             return (InteractionResult::Success, DryUse::default());
         }
-        // RespawnAnchorBlock.useItemOn: PASS when the off hand's glowstone is to
-        // charge the anchor, so useWithoutItem doesn't run and the off hand's turn
-        // comes (glowstone in this hand charges it in `use_item_on`).
-        if !self.anchor_takes(hit.pos, held) && self.anchor_takes(hit.pos, self.offhand.as_ref()) {
+        // RespawnAnchorBlock.useItemOn: PASS when the main hand's turn leaves the
+        // off hand's glowstone to charge the anchor, so useWithoutItem doesn't run
+        // and the off hand's turn comes (glowstone in this hand charges it in
+        // `use_item_on`).
+        if hand == Hand::Main
+            && !self.anchor_takes(hit.pos, held)
+            && self.anchor_takes(hit.pos, self.offhand.as_ref())
+        {
             return (InteractionResult::Pass, DryUse::default());
         }
         // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
@@ -75,13 +88,26 @@ impl Game<'_> {
         if self.composter_takes(hit.pos, held) {
             return (InteractionResult::Success, DryUse::default());
         }
-        self.remote_block_template(hit, held, false)
+        self.remote_block_template_hand_body(hand, hit, held, false)
+    }
+
+    /// `remote_block_template` for one hand.
+    #[allow(dead_code)] // the mod API's point; the hand-aware one is what the game calls
+    pub(super) fn remote_block_template_body(
+        &mut self,
+        hit: &super::super::Hit,
+        held: Option<&ItemStack>,
+        without_item: bool,
+    ) -> (InteractionResult, DryUse) {
+        self.remote_block_template_hand_body(Hand::Main, hit, held, without_item)
     }
 
     /// The shared dry-level boundary for a normal block use or the empty
-    /// method requested by a canceled `BLOCK` phase's `TryWithEmptyHand`.
-    pub(super) fn remote_block_template_body(
+    /// method requested by a canceled `BLOCK` phase's `TryWithEmptyHand`, for
+    /// one hand.
+    pub(super) fn remote_block_template_hand_body(
         &mut self,
+        hand: Hand,
         hit: &super::super::Hit,
         held: Option<&ItemStack>,
         without_item: bool,
@@ -113,8 +139,22 @@ impl Game<'_> {
                 use horizon_world::level::LevelAccess as _;
                 let state = level.block_state(hit.block);
                 b.use_without_item(&mut level, &mut ticks, state, hit, player)
-            } else {
+            } else if hand == Hand::Main {
                 b.use_item_on(&mut level, &mut ticks, hit, player, held.map(|s| &*s.item))
+            } else {
+                // `ServerPlayerGameMode.useItemOn`: only the main hand follows a
+                // TRY_WITH_EMPTY_HAND with `useWithoutItem`.
+                use horizon_world::level::LevelAccess as _;
+                let state = level.block_state(hit.block);
+                b.block_use_item_on(
+                    &mut level,
+                    &mut ticks,
+                    state,
+                    hit,
+                    player,
+                    held.map(|s| &*s.item),
+                )
+                .unwrap_or(InteractionResult::Pass)
             };
             (result, (level.changed.into_iter().collect(), level.sounds))
         })

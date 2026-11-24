@@ -41,11 +41,9 @@ impl Game<'_> {
         // Item.use: Equippable.swapWithEquipmentSlot runs on this client too, so
         // the armor slot and the hand change at once (the server confirms).
         if crate::game::armor_stands::hand_equip_slot(&held, self.items()).is_some()
-            && self.with_hand(hand, |g| g.equip_from_hand(&held))
+            && let Some(ends) = self.with_hand(hand, |g| g.equip_use(&held))
         {
-            // Equippable.swapWithEquipmentSlot's SUCCESS (SwingSource.CLIENT).
-            self.with_hand(hand, Game::swing_arm);
-            return true;
+            return ends;
         }
         // `ItemStack.use` runs on this client too: a bucket's own ray and its
         // pick/empty contents decide whether the click succeeds (a failed

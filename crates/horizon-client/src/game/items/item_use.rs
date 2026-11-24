@@ -1471,7 +1471,7 @@ pub(super) mod interact_vibration_tests {
                     point: [0.5, 65.0, 0.5],
                     inside: false,
                 };
-                let (result, _) = game.remote_block_template(&hit, None, true);
+                let (result, _) = game.remote_block_template_hand(Hand::Main, &hit, None, true);
                 assert_eq!(result, horizon_world::level::InteractionResult::Success);
                 assert_eq!(
                     calls.load(Ordering::Relaxed),
