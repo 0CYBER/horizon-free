@@ -722,6 +722,9 @@ pub(super) struct Remote {
     pub(super) glowing: std::collections::HashSet<i32>,
     /// The player's own shared flag 5 (`Entity.isInvisible`) as the server last set it.
     pub(super) own_invisible: bool,
+    /// The player's own shared flag 6 (`Entity.isCurrentlyGlowing` on a client) as the
+    /// server last set it: its Glowing tag or effect.
+    pub(super) own_glowing: bool,
     /// The player's own shared flag 0 (`Entity.isOnFire`) as the server last
     /// set it: its fire (blaze fireballs, fire aspect, lightning) never
     /// reaches the window's own `fire_ticks` otherwise.
