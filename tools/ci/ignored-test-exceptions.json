@@ -770,6 +770,14 @@
   {
     "package": "horizon-client-render",
     "target": "lib",
+    "test": "level_loading::styled_loading_overlay_blends_both_logo_halves_on_gpu",
+    "path": "crates/horizon-client-render/src/level_loading.rs",
+    "reason": "requires a software Vulkan adapter",
+    "rationale": "Explicit software Vulkan test in tools/ci/ignored-tests/manual-horizon-client-render.txt; asserts both logo halves and the stock and styled progress bar on the real HUD pipeline."
+  },
+  {
+    "package": "horizon-client-render",
+    "target": "lib",
     "test": "particles::tick_bench::particle_tick_cost",
     "path": "crates/horizon-client-render/src/particles/tick_bench.rs",
     "reason": "a measurement, not a check",

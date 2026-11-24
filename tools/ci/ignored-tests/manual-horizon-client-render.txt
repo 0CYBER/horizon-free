@@ -2,6 +2,7 @@
 horizon-client-render authored_defaults_render_and_runtime_values_override_including_zero by-hand manual # requires a host GPU; run with --ignored --nocapture
 horizon-client-render component_qualified_outputs_write_their_own_channels by-hand manual # requires a host GPU; run with --ignored --nocapture
 horizon-client-render gfx::pack_post::indirect_tests::an_unsupported_indirect_device_keeps_the_direct_and_render_passes by-hand manual # requires a real GPU and explicit capability control; HORIZON_SHADER_PACK_WITHOUT=indirect cargo test --locked -p horizon-client-render --lib gfx::pack_post::indirect_tests::an_unsupported_indirect_device_keeps_the_direct_and_render_passes -- --ignored --exact --nocapture
+horizon-client-render level_loading::styled_loading_overlay_blends_both_logo_halves_on_gpu by-hand manual # needs a software Vulkan adapter (Mesa lavapipe); run with --ignored --exact
 horizon-client-render reads_of_atomic_members_see_the_atomic_updates by-hand manual # requires a host GPU; run with --ignored --nocapture
 horizon-client-render sunrise_sectors_match_reference_on_real_gpu by-hand manual # requires a host GPU; run with --ignored --nocapture
 horizon-client-render texture_matrix_is_the_identity_in_the_vertex_stage_and_zero_in_the_fragment_stage by-hand manual # requires a host GPU; run with --ignored --nocapture

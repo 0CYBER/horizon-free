@@ -54,6 +54,12 @@ struct Out {
     if c.a < 0.004 { discard; }
     return c;
 }
+
+// Keep even very small texture alpha * delta alpha products. Fully transparent
+// samples already contribute nothing through the source-alpha blend factor.
+@fragment fn fs_channel_delta(in: Out) -> @location(0) vec4<f32> {
+    return textureSample(atlas, atlas_sampler, in.uv) * in.color;
+}
 // OptiFine CIT glint layers (hud/cit_glint.rs): every rule's texture in one array, the slot in
 // the vertex colour's red and the layer's intensity in its alpha. Masked by the item's texture
 // as the vanilla glint is, then blended by the pipeline the rule's `blend` asks for.

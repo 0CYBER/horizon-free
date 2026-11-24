@@ -628,6 +628,7 @@ struct Game {
 }
 impl Game {
     fn scripted_run(&self) -> bool { self.scripted }
+    fn loading_overlay_preview_active(&self) -> bool { false }
     // The input trace records the motion; it does not change the turn.
     fn note_input(&mut self, _: input_trace::InputOrigin, _: input_trace::TraceKind) {}
     // Handing input back from the controller does not change the turn either.

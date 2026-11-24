@@ -101,6 +101,18 @@ pub trait ScreensClientHost {
     #[access(ClientSetup)]
     #[default_on_unavailable]
     fn request_client_quit(&self) -> bool;
+    /// Shows the branded loading overlay over the current screen for `desired_ms` milliseconds
+    /// starting with its first frame. Its progress runs from zero to full, then the underlying
+    /// screen is shown again, without loading resources or a world. Escape or the controller's
+    /// Back/Start button dismisses it early.
+    /// Returns false for a zero duration, an existing preview, a real load, scripted run or
+    /// shutdown, or without the primary window's client (including headless and server contexts).
+    ///
+    /// Not on wasm: this previews the native loading-overlay style hook. The unavailable host
+    /// default is false.
+    #[access(ClientSetup)]
+    #[default_on_unavailable]
+    fn preview_loading_overlay(&self, desired_ms: u32) -> bool;
     /// Side: client.
     /// Opens the player's inventory as the inventory key does: locally, with
     /// no packet (the player menu is always open on the server). Riding a

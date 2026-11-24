@@ -106,6 +106,13 @@ pub(super) fn pipeline(
             wgpu::BlendFactor::One
         )
     ) && blend.operation == wgpu::BlendOperation::Add;
+    // Like additive light, a signed channel delta changes the existing HUD
+    // color, not its coverage. In particular, transparent logo texels must
+    // not mark the whole logo rectangle as opaque.
+    let color_only = additive
+        || (blend.src_factor == wgpu::BlendFactor::SrcAlpha
+            && blend.dst_factor == wgpu::BlendFactor::One
+            && blend.operation == wgpu::BlendOperation::ReverseSubtract);
     wrap(&mut module, fragment.entry_point?, blend)?;
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: desc.label,
@@ -124,7 +131,7 @@ pub(super) fn pipeline(
                 color: over,
                 alpha: over,
             }),
-            write_mask: if additive {
+            write_mask: if color_only {
                 wgpu::ColorWrites::empty()
             } else {
                 wgpu::ColorWrites::RED

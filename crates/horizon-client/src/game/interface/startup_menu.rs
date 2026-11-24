@@ -1373,12 +1373,13 @@ impl Loading {
             }
         }
         if self.menu.pending.is_some() {
-            horizon_client::level_loading::draw_loading_overlay(
+            Game::draw_native_loading_overlay(
                 batch,
                 &gui.atlas,
                 self.progress.line(),
                 self.progress.fraction(),
                 self.settings.file.bool("darkMojangStudiosBackground"),
+                mod_api::LoadingOverlayPhase::Startup,
             );
             let (bars, lines) = super::startup_progress::shown();
             horizon_client::level_loading::draw_mod_progress(batch, &gui.atlas, &bars, &lines);

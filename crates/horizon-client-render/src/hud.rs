@@ -1991,6 +1991,10 @@ pub enum Blend {
     Invert,
     /// `BlendFunction.ADDITIVE` (`RenderPipelines.GUI_TEXT_HIGHLIGHT`).
     Additive,
+    /// `SRC_ALPHA, ONE` for color; leave destination alpha unchanged.
+    AlphaAdd,
+    /// `dst - src * src_alpha` for color; leave destination alpha unchanged.
+    AlphaSubtract,
     /// Alpha blending with an isolated depth buffer and a pixel scissor.
     Depth([u32; 4]),
     /// The glint over the `Depth` run before it with the same scissor, in its
@@ -3416,6 +3420,8 @@ pub struct HudRenderer {
     /// `RenderPipelines.CROSSHAIR`.
     invert_pipeline: Pipeline,
     additive_pipeline: Pipeline,
+    alpha_add_pipeline: Pipeline,
+    alpha_subtract_pipeline: Pipeline,
     depth_pipeline: Pipeline,
     depth_overlay_pipeline: Pipeline,
     through_walls_overlay_pipeline: Pipeline,
@@ -3641,6 +3647,30 @@ impl HudRenderer {
         let invert_pipeline = create("HUD crosshair", GUI_INVERT, "fs_crosshair", None);
         let additive_pipeline = create("HUD text highlight", GUI_ADDITIVE, "fs_main", None);
         let add = GUI_ADD;
+        let channel_delta = |label, operation| {
+            create(
+                label,
+                wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::Zero,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                },
+                "fs_channel_delta",
+                None,
+            )
+        };
+        let alpha_add_pipeline = channel_delta("HUD add channels", wgpu::BlendOperation::Add);
+        let alpha_subtract_pipeline = channel_delta(
+            "HUD subtract channels",
+            wgpu::BlendOperation::ReverseSubtract,
+        );
         // RenderPipelines.GLINT tests depth EQUAL and writes none; the faces are
         // the model's own, so LEQUAL passes the same pixels.
         let depth_glint_pipeline = create(
@@ -3691,6 +3721,8 @@ impl HudRenderer {
             pipeline,
             invert_pipeline,
             additive_pipeline,
+            alpha_add_pipeline,
+            alpha_subtract_pipeline,
             depth_pipeline,
             depth_overlay_pipeline,
             through_walls_overlay_pipeline,
@@ -3980,6 +4012,8 @@ impl HudRenderer {
                     Blend::Alpha => &self.pipeline,
                     Blend::Invert => &self.invert_pipeline,
                     Blend::Additive => &self.additive_pipeline,
+                    Blend::AlphaAdd => &self.alpha_add_pipeline,
+                    Blend::AlphaSubtract => &self.alpha_subtract_pipeline,
                     Blend::Depth(_) | Blend::DepthScene { overlay: None, .. } => {
                         &self.depth_pipeline
                     }

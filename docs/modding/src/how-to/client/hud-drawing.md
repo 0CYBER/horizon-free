@@ -139,3 +139,34 @@ vanilla's corner arguments: `top` stays on the `y0` edge and `bottom` on the `y1
   Zero-area calls are culled here; vanilla can retain their layering bounds without drawing pixels.
 - **Cost.** One quad on the GUI batch, as `fill`; nothing is drawn or kept when a mod doesn't call it.
 - **Wire layout.** `GuiDraw` gained the `FillGradient` variant: rebuild wasm mods against the new SDK.
+
+## Branded loading overlay (native client)
+
+Implement `ModHooks::loading_overlay_style` to change the branded startup,
+resource-pack reload, or settings preview. `LoadingOverlayStyleEvent` carries the
+phase, normalized progress, and the mutable style for that frame. The hook is
+not called for the unbranded bootstrap or world-joining screens.
+
+```rust,ignore
+fn loading_overlay_style(&self, event: &mut LoadingOverlayStyleEvent<'_>) {
+    event.style.background = 0xFF10_1420;
+    event.style.bar_background = Some(0xFF1A_2234);
+    event.style.bar_fill = 0xFF85_D7FF;
+    event.style.bar_border = 0xFFB4_D8F5;
+    event.style.logo = LoadingOverlayLogo::ChannelDeltas {
+        darken: 0xFF00_0010,
+        lighten: 0xFF50_759B,
+    };
+}
+```
+
+Colors are straight-alpha ARGB. The two logo sprites keep their original
+positions and UVs. `ChannelDeltas` subtracts RGB first, then adds RGB; each pass
+is scaled by the texel and the supplied alpha. `Tint` uses ordinary alpha
+blending, `Hidden` omits the logo, and `Original` leaves it unchanged.
+
+From an in-game settings callback, call `host.preview_loading_overlay(ms)` to
+show the same overlay with synthetic progress. It returns `false` when a preview
+cannot start, for example when a real reload is underway. Its lifetime is
+bounded; Escape or the controller's Back action dismisses it and returns to the
+underlying settings screen. A preview does not reload resources or save settings.

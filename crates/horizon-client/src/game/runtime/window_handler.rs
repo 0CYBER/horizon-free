@@ -23,6 +23,85 @@ impl Game<'_> {
         true
     }
 
+    fn loading_overlay_preview_blocks_key(&self, event: &winit::event::KeyEvent) -> bool {
+        if self.loading_overlay_preview_active() {
+            return true;
+        }
+        let keys = &self.loading_overlay_preview_input.keys;
+        if keys.is_empty() {
+            return false;
+        }
+        let mut key = event.physical_key;
+        follow_named_keymap(&event.logical_key, &mut key);
+        matches!(key, PhysicalKey::Code(key) if keys.contains(&key))
+    }
+
+    /// Takes input before the raw mod hooks or the screen beneath the overlay can see it.
+    fn loading_overlay_preview_takes(&mut self, event: &WindowEvent) -> bool {
+        let active = self.loading_overlay_preview_active();
+        if active {
+            self.prepare_loading_overlay_preview_input();
+        }
+        if self.pad_synthetic_input() && matches!(event, WindowEvent::MouseInput { .. }) {
+            return active;
+        }
+        let input = &mut self.loading_overlay_preview_input;
+        if !active && input.keys.is_empty() && input.buttons.is_empty() {
+            return false;
+        }
+        match event {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
+                let PhysicalKey::Code(key) = event.physical_key else {
+                    return active;
+                };
+                match event.state {
+                    ElementState::Pressed if active => {
+                        input.keys.insert(key);
+                        if key == KeyCode::Escape && !event.repeat && !*is_synthetic {
+                            self.dismiss_loading_overlay_preview();
+                        }
+                        true
+                    }
+                    ElementState::Pressed => input.keys.contains(&key),
+                    ElementState::Released => input.keys.remove(&key) || active,
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => match state {
+                ElementState::Pressed if active => {
+                    input.buttons.insert(*button);
+                    true
+                }
+                ElementState::Pressed => input.buttons.contains(button),
+                ElementState::Released => input.buttons.remove(button) || active,
+            },
+            WindowEvent::Focused(false) => {
+                input.keys.clear();
+                input.buttons.clear();
+                false
+            }
+            WindowEvent::CursorMoved { position, .. } if active => {
+                // Keep the pointer current for the returning screen without moving its widgets.
+                if let Some(r) = &self.renderer {
+                    let scale = HudBatch::new(
+                        [r.config.width, r.config.height],
+                        self.settings.gui_scale_inputs(),
+                    )
+                    .scale;
+                    self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
+                }
+                true
+            }
+            WindowEvent::MouseWheel { .. } | WindowEvent::Ime(_) | WindowEvent::DroppedFile(_) => {
+                active
+            }
+            _ => false,
+        }
+    }
+
     /// A run that a person's stray key, click or mouse move would spoil: a screenshot sequence, a
     /// `HORIZON_TICK_SCRIPT` scenario or a `record-replay`. While one runs, the keyboard, mouse
     /// and pad at this computer don't reach the game (`locks_out`, `poll_pads`), the window's
@@ -223,6 +302,9 @@ impl Game<'_> {
         // window's own keys, never the ones the socket made up.
         if !locked {
             self.trace_window_event(origin, &event);
+        }
+        if self.loading_overlay_preview_takes(&event) {
+            return;
         }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
@@ -534,13 +616,16 @@ impl ApplicationHandler for Game<'_> {
                 is_synthetic: false,
                 ..
             } = &event
+            && !self.loading_overlay_preview_blocks_key(event)
         {
             Some((event.clone(), glfw_modifiers(self.modifiers)))
         } else {
             None
         };
         self.handle_window_event(event_loop, id, event, input_trace::InputOrigin::User);
-        if let Some((event, modifiers)) = key {
+        if let Some((event, modifiers)) = key
+            && !self.loading_overlay_preview_active()
+        {
             let name = match event.physical_key {
                 PhysicalKey::Code(code) => horizon_client::keybinds::key_name(code),
                 PhysicalKey::Unidentified(_) => None,
@@ -572,6 +657,7 @@ impl ApplicationHandler for Game<'_> {
         // A composited view renders offscreen but its keyboard/mouse owner still
         // controls a visible native window. A headless offscreen run never does.
         if self.pending_save.is_none()
+            && !self.loading_overlay_preview_active()
             && !self.scripted_run()
             && !self.unclaimed_window
             && self.captured
@@ -629,6 +715,154 @@ mod tests {
             self.exit_requested.set(true);
         }
         fn set_control_flow(&self, _: ControlFlow) {}
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn native_loading_overlay_preview_styles_frames_and_restores_options() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_client_game};
+        use crate::game::native_hooks::particle_count_tests::frame_scene;
+        use mod_api::{
+            ClientHost, ClientSetupEvent, Hooks, LoadingOverlayLogo, LoadingOverlayPhase,
+            LoadingOverlayStyleEvent, ModEntry,
+        };
+        use std::sync::Mutex;
+
+        let name = concat!(
+            module_path!(),
+            "::native_loading_overlay_preview_styles_frames_and_restores_options"
+        )
+        .split_once("::")
+        .unwrap()
+        .1;
+        if run_fresh_cases(name, "HORIZON_LOADING_OVERLAY_PREVIEW_CHILD", &["frames"]) {
+            return;
+        }
+        const PREVIEW_MS: u32 = 60_000;
+        // Equal red and blue so ARGB and the HUD vertex's RGBA encoding match.
+        const BACKGROUND: u32 = 0xff2c_732c;
+        const FILL: u32 = 0xffeb_31eb;
+
+        struct Preview(Arc<Mutex<Vec<(LoadingOverlayPhase, f32)>>>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Preview {
+            fn client_setup(&self, host: &mut dyn ClientHost, _: &mut ClientSetupEvent) {
+                assert!(!host.preview_loading_overlay(0));
+                assert!(host.preview_loading_overlay(PREVIEW_MS));
+                assert!(!host.preview_loading_overlay(PREVIEW_MS));
+            }
+
+            fn loading_overlay_style(&self, event: &mut LoadingOverlayStyleEvent<'_>) {
+                self.0.lock().unwrap().push((event.phase, event.progress));
+                event.style.background = BACKGROUND;
+                event.style.bar_fill = FILL;
+                event.style.logo = LoadingOverlayLogo::Hidden;
+            }
+        }
+
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let mods = vec![ModEntry::new("preview", Box::new(Preview(heard.clone())))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                game.options.headless = true;
+                assert!(!(game as &dyn ClientHost).preview_loading_overlay(PREVIEW_MS));
+                game.options.headless = false;
+                game.native_client_setup(); // No renderer yet; the preview must not start.
+                assert!(matches!(
+                    game.loading_overlay_preview.get(),
+                    Some(LoadingOverlayPreview::Queued(_))
+                ));
+                let _event_loop = frame_scene(game);
+                game.title = Some(game.new_title(game.save.root.clone()));
+                game.open_options(true);
+                let pack = game.pack.assets.clone();
+                let save = game.save.clone();
+                let position = game.player.as_ref().unwrap().position;
+
+                let preview_frame = |game: &mut Game<'_>| {
+                    let mut width = 0.0;
+                    assert!(
+                        game.render_with(|renderer, frame| {
+                            assert_eq!(frame.hud.vertices[0].color, BACKGROUND);
+                            let (left, right) =
+                                frame.hud.vertices.iter().filter(|v| v.color == FILL).fold(
+                                    (f32::INFINITY, f32::NEG_INFINITY),
+                                    |(left, right), v| (left.min(v.pos[0]), right.max(v.pos[0])),
+                                );
+                            width = (right - left).max(0.0);
+                            renderer.render(frame)
+                        })
+                        .unwrap()
+                    );
+                    width
+                };
+                // As in the stock bar, sorting the two fill corners leaves two texels at zero.
+                assert_eq!(preview_frame(game), 2.0);
+                let press = |state| WindowEvent::MouseInput {
+                    device_id: DeviceId::dummy(),
+                    state,
+                    button: MouseButton::Left,
+                };
+                assert!(game.loading_overlay_preview_takes(&press(ElementState::Pressed)));
+
+                // Move the monotonic start back rather than relying on scheduler sleep.
+                let duration = Duration::from_millis(u64::from(PREVIEW_MS));
+                let [middle, full] = [duration / 2, duration].map(|elapsed| {
+                    game.loading_overlay_preview
+                        .set(Some(LoadingOverlayPreview::Showing {
+                            start: Instant::now() - elapsed,
+                            duration,
+                        }));
+                    preview_frame(game)
+                });
+                assert!(0.0 < middle && middle < full);
+                {
+                    let heard = heard.lock().unwrap();
+                    assert_eq!(heard.len(), 3);
+                    assert_eq!(heard[0], (LoadingOverlayPhase::Preview, 0.0));
+                    assert_eq!(heard[1].0, LoadingOverlayPhase::Preview);
+                    assert!((0.5..1.0).contains(&heard[1].1));
+                    assert_eq!(heard[2], (LoadingOverlayPhase::Preview, 1.0));
+                }
+                assert!(
+                    game.render_with(|renderer, frame| {
+                        assert_ne!(frame.hud.vertices[0].color, BACKGROUND);
+                        renderer.render(frame)
+                    })
+                    .unwrap()
+                );
+                assert!(game.screen == Screen::Options);
+                assert!(game.loading_overlay_preview.get().is_none());
+                assert!(game.loading_overlay_preview_takes(&press(ElementState::Released)));
+                assert!(!game.loading_overlay_preview_takes(&press(ElementState::Pressed)));
+                assert!(game.pack_reload.is_none());
+                assert!(Arc::ptr_eq(&game.pack.assets, &pack));
+                assert!(Arc::ptr_eq(&game.save, &save));
+                assert_eq!(game.player.as_ref().unwrap().position, position);
+
+                // A real pack worker takes priority even over a queued preview.
+                assert!((game as &dyn ClientHost).preview_loading_overlay(PREVIEW_MS));
+                game.spawn_pack_reload(packs::ReloadKind::Selection)
+                    .unwrap();
+                assert!(!(game as &dyn ClientHost).preview_loading_overlay(PREVIEW_MS));
+                game.render_with(|renderer, frame| {
+                    assert_eq!(frame.hud.vertices[0].color, BACKGROUND);
+                    renderer.render(frame)
+                })
+                .unwrap();
+                assert!(game.loading_overlay_preview.get().is_none());
+                assert_eq!(
+                    heard.lock().unwrap().last().unwrap().0,
+                    LoadingOverlayPhase::Reload
+                );
+                let started = Instant::now();
+                while game.pack_reload.is_some() {
+                    assert!(started.elapsed() < Duration::from_secs(300));
+                    std::thread::sleep(Duration::from_millis(20));
+                    game.drive_pack_reload();
+                }
+            });
+        });
     }
 
     #[test]

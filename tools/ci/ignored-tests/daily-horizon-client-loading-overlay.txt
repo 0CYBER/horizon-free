@@ -1,0 +1,2 @@
+# The native loading-overlay preview exercises game rendering and a real pack reload.
+horizon-client game::window_handler::tests::native_loading_overlay_preview_styles_frames_and_restores_options lib daily resources

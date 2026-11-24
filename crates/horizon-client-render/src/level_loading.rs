@@ -1,7 +1,9 @@
 //! LevelLoadingScreen: "Loading terrain..." over the chunk status map and
 //! the server's load progress while a world opens or a portal is crossed.
+use mod_api::{LoadingOverlayLogo, LoadingOverlayStyle};
+
 use crate::{
-    hud::{HudAtlas, HudBatch},
+    hud::{Blend, HudAtlas, HudBatch},
     text::Text,
 };
 use mod_api::DimensionTransitionCause;
@@ -466,13 +468,7 @@ fn fill_corners(batch: &mut HudBatch, atlas: &HudAtlas, [x0, y0, x1, y1]: [i32; 
     batch.fill(atlas, left as f32, top as f32, w, h, color);
 }
 
-/// `LoadingOverlay.extractRenderState`: fills the frame with `BRAND_BACKGROUND`
-/// (Mojang red, or black when `darkMojangStudiosBackground` is set), draws the
-/// Mojang Studios logo as its two halves side by side, and the progress bar
-/// at 83.25% of the height (`extractProgressBar`, unfaded), with the stage's
-/// line above it. The logo's `MOJANG_LOGO` pipeline adds it (`SRC_ALPHA, ONE`):
-/// its texels are white, which alpha blending matches but for the red channel
-/// of the logo's soft edges, a 16/255 difference at most.
+/// Draw the branded loading overlay with its stock colors and logo.
 pub fn draw_loading_overlay(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -480,10 +476,34 @@ pub fn draw_loading_overlay(
     progress: f32,
     dark: bool,
 ) {
+    draw_loading_overlay_with_style(batch, atlas, line, progress, &stock_style(dark));
+}
+
+/// The stock overlay's style, its colors in public ARGB.
+pub fn stock_style(dark: bool) -> LoadingOverlayStyle {
+    LoadingOverlayStyle::new(swap_red_blue(brand_background(dark)))
+}
+
+/// Convert between public ARGB and the HUD vertex's little-endian RGBA.
+const fn swap_red_blue(color: u32) -> u32 {
+    (color & 0xFF00_FF00) | (color & 0xFF) << 16 | (color >> 16 & 0xFF)
+}
+
+/// `LoadingOverlay.extractRenderState`: background, two logo halves, the
+/// progress bar at 83.25% of the height, then the stage text above it.
+pub fn draw_loading_overlay_with_style(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    line: &str,
+    progress: f32,
+    style: &LoadingOverlayStyle,
+) {
     let (w, h) = (batch.width, batch.height);
-    batch.fill(atlas, 0.0, 0.0, w, h, brand_background(dark));
+    batch.fill(atlas, 0.0, 0.0, w, h, swap_red_blue(style.background));
     let (x, y, half_width, logo_height) = logo_layout(w, h);
-    if let Some(r) = atlas.sprites.get(MOJANG_STUDIOS_LOGO).copied() {
+    if !matches!(&style.logo, LoadingOverlayLogo::Hidden)
+        && let Some(r) = atlas.sprites.get(MOJANG_STUDIOS_LOGO).copied()
+    {
         // blit(.., u, v, width, height, 120, 60, 120, 120): the left half
         // samples the texture's top half from u = -0.0625, the right half its
         // bottom half from u = 0.0625 (clamped, as the logo's sampler is).
@@ -491,19 +511,44 @@ pub fn draw_loading_overlay(
             let (u, v) = ((u / 120.0).clamp(0.0, 1.0), v / 120.0);
             (r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v)
         };
-        for (i, (u, v)) in [(-0.0625, 0.0), (0.0625, 60.0)].into_iter().enumerate() {
+        let halves = [(-0.0625, 0.0), (0.0625, 60.0)].map(|(u, v)| {
             let (u0, v0) = at(u, v);
             let (u1, v1) = at(u + 120.0, v + 60.0);
-            let half = crate::hud::Rect {
+            crate::hud::Rect {
                 u0,
                 v0,
                 u1,
                 v1,
                 ..r
-            };
-            let left = x + i as i32 * half_width;
-            let (lw, lh) = (half_width as f32, logo_height as f32);
-            batch.rect_uv(left as f32, y as f32, lw, lh, half, u32::MAX);
+            }
+        });
+        let mut draw_logo = |color, blend| {
+            let start = batch.vertices.len();
+            for (i, half) in halves.into_iter().enumerate() {
+                let left = x + i as i32 * half_width;
+                batch.rect_uv(
+                    left as f32,
+                    y as f32,
+                    half_width as f32,
+                    logo_height as f32,
+                    half,
+                    swap_red_blue(color),
+                );
+            }
+            batch.blend_since(start, blend);
+        };
+        match &style.logo {
+            LoadingOverlayLogo::Original => draw_logo(u32::MAX, Blend::Alpha),
+            LoadingOverlayLogo::Hidden => {}
+            LoadingOverlayLogo::Tint(color) => draw_logo(*color, Blend::Alpha),
+            LoadingOverlayLogo::ChannelDeltas { darken, lighten } => {
+                if darken >> 24 != 0 {
+                    draw_logo(*darken, Blend::AlphaSubtract);
+                }
+                if lighten >> 24 != 0 {
+                    draw_logo(*lighten, Blend::AlphaAdd);
+                }
+            }
         }
     }
     let bar_y = (f64::from(h) * 0.8325) as i32;
@@ -515,12 +560,27 @@ pub fn draw_loading_overlay(
         bar_y + 5,
     ];
     let filled = (((x1 - x0) - 2) as f32 * progress.clamp(0.0, 1.0)).ceil() as i32;
-    let white = u32::MAX;
-    fill_corners(batch, atlas, [x0 + 2, y0 + 2, x0 + filled, y1 - 2], white);
-    fill_corners(batch, atlas, [x0 + 1, y0, x1 - 1, y0 + 1], white);
-    fill_corners(batch, atlas, [x0 + 1, y1, x1 - 1, y1 - 1], white);
-    fill_corners(batch, atlas, [x0, y0, x0 + 1, y1], white);
-    fill_corners(batch, atlas, [x1, y0, x1 - 1, y1], white);
+    if let Some(background) = style.bar_background
+        && x1 - x0 > 2
+    {
+        fill_corners(
+            batch,
+            atlas,
+            [x0 + 1, y0 + 1, x1 - 1, y1 - 1],
+            swap_red_blue(background),
+        );
+    }
+    fill_corners(
+        batch,
+        atlas,
+        [x0 + 2, y0 + 2, x0 + filled, y1 - 2],
+        swap_red_blue(style.bar_fill),
+    );
+    let border = swap_red_blue(style.bar_border);
+    fill_corners(batch, atlas, [x0 + 1, y0, x1 - 1, y0 + 1], border);
+    fill_corners(batch, atlas, [x0 + 1, y1, x1 - 1, y1 - 1], border);
+    fill_corners(batch, atlas, [x0, y0, x0 + 1, y1], border);
+    fill_corners(batch, atlas, [x1, y0, x1 - 1, y1], border);
     let text = Text::literal(line);
     let tw = atlas.font.width_text(&text) as i32;
     let text_top = (y0 - 9 - 3) as f32;
@@ -529,9 +589,71 @@ pub fn draw_loading_overlay(
         &text,
         (x_center - tw / 2) as f32,
         text_top,
-        white,
+        u32::MAX,
         true,
     );
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires a software Vulkan adapter"]
+fn styled_loading_overlay_blends_both_logo_halves_on_gpu() {
+    use crate::{gfx::entity_pixel_test::render_hud, resource_source::ResourceSource};
+    use std::fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let title = dir.path().join("assets/minecraft/textures/gui/title");
+    fs::create_dir_all(&title).unwrap();
+    let file = fs::File::create(title.join("mojangstudios.png")).unwrap();
+    let mut encoder = png::Encoder::new(file, 120, 120);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    let mut texels = [200, 100, 50, 128].repeat(120 * 60);
+    texels.extend([100, 200, 250, 255].repeat(120 * 60));
+    writer.write_image_data(&texels).unwrap();
+    writer.finish().unwrap();
+    let atlas = HudAtlas::build(&ResourceSource::directory(dir.path().to_owned())).unwrap();
+    assert!(atlas.sprites.contains_key(MOJANG_STUDIOS_LOGO));
+
+    let size = [320, 240];
+    let assert_pixel = |pixels: &[u8], x: usize, y: usize, expected: [u8; 4]| {
+        let offset = (y * size[0] as usize + x) * 4;
+        let rgba = &pixels[offset..offset + 4];
+        assert!(
+            rgba.iter().zip(expected).all(|(&a, b)| a.abs_diff(b) <= 1),
+            "pixel ({x}, {y}): got {rgba:?}, expected {expected:?}"
+        );
+    };
+    let mut styled = HudBatch::scratch(size);
+    let mut style = LoadingOverlayStyle::new(0xFF18_648C);
+    style.bar_background = Some(0xFF30_4050);
+    style.bar_fill = 0xFFA0_B0C0;
+    style.bar_border = 0xFF01_0203;
+    style.logo = LoadingOverlayLogo::ChannelDeltas {
+        darken: 0xC0FF_80C8,
+        lighten: 0x80A0_C85A,
+    };
+    draw_loading_overlay_with_style(&mut styled, &atlas, "", 0.5, &style);
+    let pixels = render_hud(&styled, &atlas, size).expect("styled overlay software Vulkan draw");
+    // Each pass scales the color delta by texel RGB, texel alpha, and delta alpha.
+    // Red darkens to zero on both halves before the lighten pass can add to it.
+    assert_pixel(&pixels, 100, 120, [32, 101, 130, 255]);
+    assert_pixel(&pixels, 220, 120, [32, 103, 44, 255]);
+    assert_pixel(&pixels, 5, 5, [24, 100, 140, 255]);
+    assert_pixel(&pixels, 200, 199, [48, 64, 80, 255]);
+    assert_pixel(&pixels, 100, 199, [160, 176, 192, 255]);
+    assert_pixel(&pixels, 200, 194, [1, 2, 3, 255]);
+
+    let mut original = HudBatch::scratch(size);
+    draw_loading_overlay(&mut original, &atlas, "", 0.5, false);
+    let pixels = render_hud(&original, &atlas, size).expect("stock overlay software Vulkan draw");
+    assert_pixel(&pixels, 100, 120, [219, 75, 55, 255]);
+    assert_pixel(&pixels, 220, 120, [100, 200, 250, 255]);
+    assert_pixel(&pixels, 5, 5, [239, 50, 61, 255]);
+    assert_pixel(&pixels, 200, 199, [239, 50, 61, 255]);
+    assert_pixel(&pixels, 100, 199, [255; 4]);
+    assert_pixel(&pixels, 200, 194, [255; 4]);
 }
 
 /// Mods' startup bars under the stage bar, newest first, each with its label above it, as many
@@ -805,6 +927,12 @@ mod tests {
     fn file_fixer_cancel_sits_below_the_centre() {
         assert_eq!(file_fixer_cancel(427.0, 240.0), (113.0, 220.0));
         assert_eq!(file_fixer_cancel(426.0, 241.0), (113.0, 220.0));
+    }
+
+    #[test]
+    fn the_stock_style_hands_mods_mojang_red_as_argb() {
+        assert_eq!(stock_style(false).background, 0xFFEF_323D);
+        assert_eq!(stock_style(true).background, 0xFF00_0000);
     }
 
     #[test]

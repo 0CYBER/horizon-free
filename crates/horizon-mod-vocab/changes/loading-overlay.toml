@@ -1,0 +1,3 @@
+ids = ["hook:loading_overlay_style", "method:prelude::ScreensClientHost::preview_loading_overlay", "type:LoadingOverlayPhase", "type:LoadingOverlayStyle", "type:LoadingOverlayLogo"]
+why = "Lets a native client mod style the branded startup and resource-reload overlay, and show a preview without reloading resources."
+migrate = "Additive. Without a listener the stock overlay is unchanged; the hook and preview are not available to Wasm."

@@ -395,7 +395,9 @@ impl Game<'_> {
             self.pad.state = PadState::default();
             self.pad.in_use = false;
             // The keyboard's menu focus follows its widget all the same.
-            self.pad_menu_frame(event_loop);
+            if !self.loading_overlay_preview_active() {
+                self.pad_menu_frame(event_loop);
+            }
             return;
         }
         let hardware = match self.pad.feed {
@@ -432,6 +434,25 @@ impl Game<'_> {
         self.ui.options.pad_glyphs = Glyphs::of(&self.settings.controller, self.pad.style);
         self.ui.options.pad_driving = self.pad.in_use && self.pad_focus_mode();
         let mut state = hardware.merge(&self.pad.injected);
+        for button in std::mem::take(&mut self.pad.taps) {
+            self.pad.injected.set(button, false);
+        }
+        let threshold = self.settings.controller.trigger_threshold;
+        if self.loading_overlay_preview_active() {
+            self.pad.state = state;
+            self.pad_cancel_inputs(event_loop);
+            let edges = self.pad.edges.update(&state, threshold);
+            // A press that began here must not act when the underlying screen returns.
+            self.pad.edges.cancel();
+            if self.pad_focused()
+                && edges
+                    .into_iter()
+                    .any(|(button, down)| down && matches!(button, Button::East | Button::Start))
+            {
+                self.dismiss_loading_overlay_preview();
+            }
+            return;
+        }
         let activity = self.pad.activity.observe(&state, &self.settings.controller);
         for (i, (stick, deadzone)) in [
             (&mut state.left, self.settings.controller.move_deadzone),
@@ -448,10 +469,6 @@ impl Game<'_> {
                 self.pad.peaks[i] = [0.0; 2];
             }
         }
-        for button in std::mem::take(&mut self.pad.taps) {
-            self.pad.injected.set(button, false);
-        }
-        let threshold = self.settings.controller.trigger_threshold;
         let edges = self.pad.edges.update(&state, threshold);
         if activity && self.pad_focused() {
             self.last_input = Instant::now();
@@ -492,6 +509,10 @@ impl Game<'_> {
                 radial_play::PollStep::Edge(button, down) => (button, down),
             };
             self.pad_edge(event_loop, button, down);
+            if self.loading_overlay_preview_active() {
+                self.pad_cancel_inputs(event_loop);
+                return;
+            }
             let context = self.pad_context();
             if let Some(old) = self.pad.context.filter(|old| *old != context) {
                 if old.screen != context.screen {
