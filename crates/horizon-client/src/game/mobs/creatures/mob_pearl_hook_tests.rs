@@ -80,6 +80,39 @@ impl Hooks for PlayerPearlProbe {
     }
 }
 
+/// `ThrownEnderpearl.onHit` emits 32 PORTAL particles before the owner and
+/// teleport checks, so even an ownerless pearl bursts at its impact point.
+#[test]
+#[ignore = "daily"]
+fn a_landed_ender_pearl_bursts_into_portal_particles() {
+    with_game(|game| {
+        game.ui.difficulty = 0;
+        game.particles.requested = Some(Vec::new());
+        let pearl = Projectile::new(
+            ProjectileKind::EnderPearl,
+            Vec3::new(6.0, 75.0, 6.0),
+            None,
+        );
+        let hit = Hit::Block {
+            pos: [6, 75, 6],
+            at: pearl.position,
+            face: [0, 1, 0],
+        };
+        game.projectile_hit(&pearl, hit).unwrap();
+        let portals = game
+            .particles
+            .requested
+            .take()
+            .unwrap_or_default()
+            .iter()
+            .filter(|(options, _, _)| {
+                options.ty == horizon_client::particles::ParticleType::Portal
+            })
+            .count();
+        assert_eq!(portals, 32, "the impact must burst into 32 portal sparks");
+    });
+}
+
 #[test]
 #[ignore = "daily"]
 fn player_pearl_keeps_acting_context_cancellation_and_mutable_damage() {

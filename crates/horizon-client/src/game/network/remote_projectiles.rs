@@ -140,11 +140,39 @@ fn remote_bullet_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
 
 /// A server's client ticks a projectile itself: it flies on between the
 /// tracker's updates (10 to 20 ticks apart) with its own gravity and drag,
-/// and a block stops it there; only the server decides what it hits.
-pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
-    if !matches!(p.tick_remote(w).1, Hit::None) {
-        p.velocity = Vec3::ZERO;
+/// and a block stops it there; only the server decides what it hits. Returns
+/// the PORTAL sparks of an ender pearl that landed: `ThrownEnderpearl.onHit`
+/// runs on the client too and draws them there, while the server's
+/// `addParticle` sends nothing.
+pub(super) fn remote_projectile_tick(
+    p: &mut Projectile,
+    w: &impl ProjectileWorld,
+) -> Vec<([f64; 3], [f64; 3])> {
+    if matches!(p.tick_remote(w).1, Hit::None) {
+        return Vec::new();
     }
+    p.velocity = Vec3::ZERO;
+    if p.kind != ProjectileKind::EnderPearl {
+        return Vec::new();
+    }
+    let at = p.position;
+    ender_pearl_sparks(at, p.entity_random())
+}
+
+/// `ThrownEnderpearl.onHit`: 32 PORTAL particles at the impact, at
+/// (x, y + nextDouble() * 2, z) with a speed of (nextGaussian, 0,
+/// nextGaussian), drawn from the pearl's own random.
+pub(in crate::game) fn ender_pearl_sparks(
+    at: Vec3,
+    random: &mut impl RandomSource,
+) -> Vec<([f64; 3], [f64; 3])> {
+    (0..32)
+        .map(|_| {
+            let position = [at.x, at.y + random.next_double() * 2.0, at.z];
+            let speed = [random.next_gaussian(), 0.0, random.next_gaussian()];
+            (position, speed)
+        })
+        .collect()
 }
 
 /// `Entity.getRandomX(0.5)` / `getRandomY` / `getRandomZ(0.5)` for a shulker
@@ -794,6 +822,7 @@ impl Game<'_> {
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Trident);
         let mut arrow_events = Vec::new();
+        let mut pearl_sparks = Vec::new();
         let rain = self.arrow_rain();
         let arrow_scene = self.arrow_scene(&rain);
         {
@@ -815,7 +844,7 @@ impl Game<'_> {
                     }
                 }
                 ProjectileKind::ShulkerBullet { .. } => remote_bullet_tick(p, &world),
-                _ => remote_projectile_tick(p, &world),
+                _ => pearl_sparks.extend(remote_projectile_tick(p, &world)),
             });
             for t in &mut tridents {
                 t.remote_tick(&world, self.remote_eye(t.owner));
@@ -832,6 +861,10 @@ impl Game<'_> {
         );
         for (at, event) in arrow_events {
             self.arrow_event(at, event);
+        }
+        let portal = ParticleOptions::simple(ParticleType::Portal);
+        for (at, speed) in pearl_sparks {
+            self.particles.add(&portal, at, speed);
         }
         self.arrow_effect_particles();
         let trails: Vec<Vec3> = self
@@ -1109,6 +1142,44 @@ mod tests {
         }
     }
 
+    /// A floor whose top is at y = 100, under the whole world.
+    struct Floor;
+    impl ProjectileWorld for Floor {
+        fn clip(&self, from: Vec3, to: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
+            (from.y >= 100.0 && to.y < 100.0)
+                .then(|| (Vec3::new(to.x, 100.0, to.z), [0, 99, 0], [0, 1, 0]))
+        }
+        fn in_water(&self, _: Aabb) -> bool {
+            false
+        }
+        fn targets(&self) -> &[(Who, Aabb)] {
+            &[]
+        }
+    }
+
+    /// `ThrownEnderpearl.onHit` runs on a client too: a server's pearl that
+    /// lands there bursts into its 32 PORTAL sparks, which no packet carries.
+    /// A pearl in flight and another thrown item that lands draw none.
+    #[test]
+    fn a_remote_ender_pearl_bursts_where_it_lands() {
+        let mut pearl = thrown(ProjectileKind::EnderPearl);
+        pearl.velocity = Vec3::new(0.0, -1.0, 0.0);
+        pearl.position = Vec3::new(0.0, 100.5, 0.0);
+        assert!(remote_projectile_tick(&mut pearl.clone(), &Empty).is_empty());
+        let sparks = remote_projectile_tick(&mut pearl, &Floor);
+        assert_eq!(sparks.len(), 32);
+        assert!(
+            sparks
+                .iter()
+                .all(|(at, speed)| (100.0..102.0).contains(&at[1]) && speed[1] == 0.0),
+            "{sparks:?}"
+        );
+        let mut egg = thrown(ProjectileKind::Egg);
+        egg.velocity = Vec3::new(0.0, -1.0, 0.0);
+        egg.position = Vec3::new(0.0, 100.5, 0.0);
+        assert!(remote_projectile_tick(&mut egg, &Floor).is_empty());
+    }
+
     #[test]
     fn a_thrown_item_falls_and_drags_like_a_throwable_projectile() {
         // ThrowableProjectile.tick: gravity 0.03, then the air drag 0.99F
@@ -1137,7 +1208,9 @@ mod tests {
         remote_projectile_power(&mut list, 12, 0.5);
         assert_eq!(list[0].acceleration, 0.5);
         // AbstractHurtingProjectile.applyInertia: (1.5 + 0.5) * (double) 0.95f.
-        list.update(0, |p| remote_projectile_tick(p, &Empty));
+        list.update(0, |p| {
+            remote_projectile_tick(p, &Empty);
+        });
         assert_eq!(list[0].velocity.x, 1.899_999_976_158_142);
     }
 

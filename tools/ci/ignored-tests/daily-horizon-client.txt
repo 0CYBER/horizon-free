@@ -21,6 +21,7 @@ horizon-client game::container_loot::tests::seeds_and_fill_listeners lib daily c
 horizon-client game::container_loot::tests::transfers_between_containers lib daily child-process
 horizon-client game::crafting_recipe_kind_tests::registered_crafting_remainder_drops_through_server_item_toss lib daily resources
 horizon-client game::crafting_recipe_kind_tests::unregistered_serializer_failed_reload_preserves_previous_recipes lib daily resources
+horizon-client game::creatures::mob_pearl_hook_tests::a_landed_ender_pearl_bursts_into_portal_particles lib daily resources
 horizon-client game::dedicated::tests::console_logging_survives_closed_stdout lib daily child-process
 horizon-client game::dispenser::decision_tests::crown_is_prepared_once_for_three_and_eight_dispenser_candidates lib daily resources
 horizon-client game::dragon::tests::a_fireballs_breath_cloud_starts_at_its_hit_position lib daily resources
