@@ -107,6 +107,7 @@ pub(crate) struct TestLevel {
     /// `ShulkerBoxBlockEntity.isClosed` at a position: `true` for a shut lid,
     /// `false` for an open box. Positions not listed have no block entity.
     pub shulker_closed: HashMap<BlockPos, bool>,
+    pub shulker_progress: HashMap<BlockPos, f32>,
     /// The containers `container_open` reports as open.
     pub opened: HashSet<BlockPos>,
     /// `Level.getWorldBorder`, for `within_world_border`: centred on the
@@ -156,6 +157,7 @@ impl TestLevel {
             note_players: std::cell::RefCell::new(Vec::new()),
             refuse_portals: false,
             shulker_closed: HashMap::new(),
+            shulker_progress: HashMap::new(),
             opened: HashSet::new(),
             border: horizon_core::geometry::border::BorderGeometry::new(
                 [0.0, 0.0],
@@ -191,6 +193,9 @@ impl LevelAccess for TestLevel {
     }
     fn shulker_is_closed(&self, pos: BlockPos) -> Option<bool> {
         self.shulker_closed.get(&pos).copied()
+    }
+    fn shulker_lid_progress(&self, pos: BlockPos) -> Option<f32> {
+        self.shulker_progress.get(&pos).copied()
     }
     fn adjust_has_analog_output(&self, state: BlockStateId, vanilla: bool) -> bool {
         vanilla || self.analog_states.contains(&state)
@@ -3567,7 +3572,7 @@ fn open_shulker_box_supports_only_through_its_base_plate() {
 }
 
 #[test]
-fn an_open_shulker_box_stops_conducting_redstone_but_a_closed_one_and_stone_do() {
+fn a_shulker_box_stops_conducting_redstone_when_its_lid_moves() {
     let mut w = world!();
     let box_pos = BlockPos::new(0, 1, 0);
     let stone_pos = BlockPos::new(2, 1, 0);
@@ -3588,15 +3593,16 @@ fn an_open_shulker_box_stops_conducting_redstone_but_a_closed_one_and_stone_do()
         );
     }
     w.level.shulker_closed.insert(box_pos, false);
-    let sim = w.b().sim(&mut w.level, &mut w.ticks);
-    assert!(
-        !sim.is_redstone_conductor(box_state, box_pos),
-        "an open lid takes the box out of the full cube"
-    );
-    assert!(
-        sim.is_redstone_conductor(stone_state, stone_pos),
-        "the open box does not change its neighbours"
-    );
+    for (progress, conducts) in [(0.0, true), (0.1, false), (1.0, false)] {
+        w.level.shulker_progress.insert(box_pos, progress);
+        let sim = w.b().sim(&mut w.level, &mut w.ticks);
+        assert_eq!(
+            sim.is_redstone_conductor(box_state, box_pos),
+            conducts,
+            "shulker lid progress {progress}"
+        );
+        assert!(sim.is_redstone_conductor(stone_state, stone_pos));
+    }
 }
 
 #[test]

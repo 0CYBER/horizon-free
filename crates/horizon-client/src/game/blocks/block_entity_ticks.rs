@@ -528,12 +528,14 @@ impl Game<'_> {
             {
                 continue;
             }
-            let tick = self
-                .be_anims
-                .shulkers
-                .get_mut(&pos)
-                .map(|shulker| shulker.tick(pos, facing));
-            let Some(tick) = tick else { continue };
+            let Some(shulker) = self.be_anims.shulkers.get_mut(&pos) else {
+                continue;
+            };
+            let tick = shulker.tick(pos, facing);
+            if tick.neighbor_updates != 0 {
+                // The neighbour updates need the collision shape for this tick.
+                self.world.shulkers.insert(pos, shulker.clone());
+            }
             // `ShulkerBoxBlockEntity.doNeighborUpdates` at the start and the
             // end of an opening or closing lid: the box's collision shape
             // moved, so the neighbours' shapes and their redstone updates run.

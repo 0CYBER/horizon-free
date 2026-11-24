@@ -1340,6 +1340,10 @@ pub trait LevelAccess: BlockEntityNeighbors {
     fn shulker_is_closed(&self, _pos: BlockPos) -> Option<bool> {
         None
     }
+    /// The current lid progress used by the box's collision shape.
+    fn shulker_lid_progress(&self, _pos: BlockPos) -> Option<f32> {
+        None
+    }
     /// Load saved block-entity data into the block entity of the block just
     /// placed at `pos` (`BlockEntity.loadWithComponents`): a bee nest a grown
     /// tree placed gets its bees. Levels without block entities drop it.

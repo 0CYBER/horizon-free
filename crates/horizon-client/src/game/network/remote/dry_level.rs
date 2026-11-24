@@ -72,6 +72,12 @@ impl horizon_world::level::LevelAccess for DryLevel<'_> {
         }
         self.base.shulker_is_closed(pos)
     }
+    fn shulker_lid_progress(&self, pos: horizon_core::position::BlockPos) -> Option<f32> {
+        if self.changed.contains_key(&pos) {
+            return None;
+        }
+        self.base.shulker_lid_progress(pos)
+    }
     fn min_y(&self) -> i32 {
         self.base.min_y()
     }

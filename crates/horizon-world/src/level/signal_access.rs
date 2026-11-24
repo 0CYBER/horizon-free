@@ -11,6 +11,10 @@ pub trait SignalAccess {
     fn block_state(&self, pos: BlockPos) -> BlockStateId;
     /// The current shulker lid state used by wire support checks.
     fn shulker_is_closed(&self, pos: BlockPos) -> Option<bool>;
+    /// The current lid progress used by the box's collision shape.
+    fn shulker_lid_progress(&self, _pos: BlockPos) -> Option<f32> {
+        None
+    }
     /// The block's signal-source answer after its Part.
     fn adjust_signal_source(&self, state: BlockStateId, vanilla: bool) -> bool;
     /// Whether weak-power queries have a subscribed Part.
@@ -52,6 +56,9 @@ impl<L: LevelAccess + ?Sized> SignalAccess for L {
     }
     fn shulker_is_closed(&self, pos: BlockPos) -> Option<bool> {
         LevelAccess::shulker_is_closed(self, pos)
+    }
+    fn shulker_lid_progress(&self, pos: BlockPos) -> Option<f32> {
+        LevelAccess::shulker_lid_progress(self, pos)
     }
     fn adjust_signal_source(&self, state: BlockStateId, vanilla: bool) -> bool {
         LevelAccess::adjust_signal_source(self, state, vanilla)

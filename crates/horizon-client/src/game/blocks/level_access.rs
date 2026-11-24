@@ -1120,6 +1120,12 @@ impl LevelAccess for GameLevel<'_> {
             .get(&[pos.x, pos.y, pos.z])
             .map(|s| s.status == horizon_client::block_entity_anim::ShulkerStatus::Closed)
     }
+    fn shulker_lid_progress(&self, pos: BlockPos) -> Option<f32> {
+        self.world
+            .shulkers
+            .get(&[pos.x, pos.y, pos.z])
+            .map(|s| s.progress)
+    }
     fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
         if let Some(change) = &mut self.command_block_transition
             && change.preserve(self.world, pos, old)

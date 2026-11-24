@@ -18,6 +18,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.ShulkerBoxBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.levelgen.LegacyRandomSource;
@@ -702,6 +703,13 @@ public final class VanillaBlockUpdateOracle {
                 if (state.isRandomlyTicking()) state.randomTick(w, p, w.rng);
                 FluidState fs = state.getFluidState();
                 if (fs.isRandomlyTicking()) fs.randomTick(w, p, w.rng);
+            }
+            case "shulker_conductor" -> {
+                var box = (ShulkerBoxBlockEntity) w.getBlockEntity(p);
+                box.triggerEvent(1, 1);
+                float progress = f.get("lid_progress").getAsFloat();
+                if (progress != 0.0f) set(ShulkerBoxBlockEntity.class, box, "progress", progress);
+                result.append("conductor ").append(state.isRedstoneConductor(w, p)).append('\n');
             }
             case "piston_event" -> state.triggerEvent(w, p, f.get("event").getAsInt(), f.get("dir").getAsInt());
             case "tick" -> state.tick(w, p, w.rng);

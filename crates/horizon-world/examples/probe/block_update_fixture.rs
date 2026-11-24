@@ -38,6 +38,7 @@ struct Cells {
     thundering: bool,
     events: Vec<LevelEvent>,
     command_blocks: HashMap<BlockPos, bool>,
+    opening_shulker: Option<(BlockPos, f32)>,
     lecterns_with_books: std::rc::Rc<std::collections::HashSet<BlockStateId>>,
     /// `preRemoveSideEffects` of each state's block entity.
     removals: std::rc::Rc<Vec<PreRemove>>,
@@ -86,6 +87,16 @@ impl LevelAccess for Cells {
             self.command_blocks.insert(pos, powered).unwrap_or(false),
             false,
         ))
+    }
+    fn shulker_is_closed(&self, pos: BlockPos) -> Option<bool> {
+        self.opening_shulker
+            .filter(|&(at, _)| at == pos)
+            .map(|_| false)
+    }
+    fn shulker_lid_progress(&self, pos: BlockPos) -> Option<f32> {
+        self.opening_shulker
+            .filter(|&(at, _)| at == pos)
+            .map(|(_, progress)| progress)
     }
     fn random(&mut self) -> &mut LegacyRandom {
         &mut self.random
@@ -284,6 +295,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(false),
             events: Vec::new(),
             command_blocks: HashMap::new(),
+            opening_shulker: None,
             lecterns_with_books: lecterns_with_books.clone(),
             removals: removals.clone(),
         };
@@ -296,6 +308,13 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut result = format!("case {index}\n");
         let origin = pos_of(&case["pos"]);
         match case["mode"].as_str().unwrap() {
+            "shulker_conductor" => {
+                let progress = case["lid_progress"].as_f64().unwrap() as f32;
+                level.opening_shulker = Some((origin, progress));
+                let signals = behaviours.signals(&level, &ticks);
+                let conducts = signals.is_redstone_conductor(level.block_state(origin), origin);
+                writeln!(result, "conductor {conducts}").unwrap();
+            }
             "piston_event" => {
                 behaviours.client_block_event(
                     &mut level,

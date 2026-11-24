@@ -59,6 +59,13 @@ impl SignalAccess for ReadLevel<'_, '_> {
             .get(&[pos.x, pos.y, pos.z])
             .map(|s| s.status == horizon_client::block_entity_anim::ShulkerStatus::Closed)
     }
+    fn shulker_lid_progress(&self, pos: BlockPos) -> Option<f32> {
+        self.game
+            .be_anims
+            .shulkers
+            .get(&[pos.x, pos.y, pos.z])
+            .map(|s| s.progress)
+    }
     fn adjust_signal_source(&self, state: BlockStateId, vanilla: bool) -> bool {
         if !super::api_values::block_state::block_listens(mod_api::HookId::IsSignalSource, state) {
             return vanilla;

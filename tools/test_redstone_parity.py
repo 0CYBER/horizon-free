@@ -11,8 +11,10 @@ also execute piston extension/retraction events and compare the changed blocks.
 Repeated pulses also drive a torch's burnout: a redstone torch extinguished
 eight times within 60 game ticks emits level event 1502 and stays dark for 160
 ticks, while a slower pulse train (more than 60 ticks for eight), one faster
-than the 2-tick delay, or only seven extinguishings does not. `--no-burnout` leaves that family out and
-reproduces the corpus before it, byte for byte.
+than the 2-tick delay, or only seven extinguishings does not. `--no-burnout` leaves that family out.
+
+Shulker boxes are checked after the opening event at zero lid progress, then
+with a partly and fully raised lid.
 """
 import random
 try:
@@ -136,12 +138,15 @@ def cases(facts, count, seed, only, burnout=True):
         ]}
         case.pop('raining', None)
         yield case
+    for progress in (0.0, 0.1, 1.0):
+        yield dict(seed=1, mode='shulker_conductor', pos=[0, 64, 0], lid_progress=progress,
+                   cells=[[0, 64, 0, facts.defaults['minecraft:shulker_box']]])
 
 
 def main():
     parser = h.argument_parser(__doc__)
     parser.add_argument('--no-burnout', action='store_true',
-                        help='leave out the repeated-pulse torch burnout family, as the corpus was before it')
+                        help='leave out the repeated-pulse torch burnout cases')
     args = parser.parse_args()
     args.count = min(args.count, 4000) if args.count == 40000 else args.count
     facts = h.load_facts()
