@@ -452,10 +452,14 @@ mod tests {
         use std::{fs, process::Command};
 
         let scratch = tempfile::tempdir().unwrap();
-        let sdk = scratch.path().join("sdk");
+        // Resolved, as `cargo metadata` resolves the folder it runs in when it names manifests:
+        // macOS's temporary folder is reached through a link (`/var` is `/private/var`), and a
+        // staged mod's unresolved path would match no package's `manifest_path`.
+        let root = crate::backend::plain(scratch.path().canonicalize().unwrap());
+        let sdk = root.join("sdk");
         let patch = sdk.join("patched library");
         let dev_only = sdk.join("dev-only");
-        let stage = scratch.path().join("stage");
+        let stage = root.join("stage");
         let mods = ["first", "second"];
         for name in mods {
             let dir = stage.join(name);
