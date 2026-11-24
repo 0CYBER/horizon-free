@@ -1095,7 +1095,7 @@ impl Game<'_> {
         };
         startup::time("server.lan_host", || self.lan_host(settings, net, config))?;
         let commands = self.allow_commands();
-        let pipe = {
+        {
             let host = self
                 .lan
                 .as_mut()
@@ -1108,8 +1108,7 @@ impl Game<'_> {
                 uuid: owner,
                 saved: Some(saved),
             });
-            host.hub.lan.connect_local()?
-        };
+        }
         self.serving = Some(Serving {
             flags: flags.clone(),
             tasks,
@@ -1123,6 +1122,15 @@ impl Game<'_> {
         view.start(Stage::LoadInitialChunks, 0);
         startup::time("server.prepare_levels", || self.prepare_levels())?;
         view.finish(Stage::LoadInitialChunks);
+        // The local login timer starts with the connection. Don't start it while
+        // saved tickets are still loading and the client has no pipe to use.
+        let pipe = self
+            .lan
+            .as_ref()
+            .ok_or("the integrated server did not start")?
+            .hub
+            .lan
+            .connect_local()?;
         let _ = ready.send(Ok((pipe, self.level.name.clone())));
         startup::time("server.settle_spawn", || self.settle_spawn())
     }

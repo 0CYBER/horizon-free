@@ -55,8 +55,10 @@ clients mesh chunks and show loading progress; a client never runs a simulation 
 Connecting or disconnecting changes `remote`, independently of the execution role.
 
 The server thread has a hub without a host player. The window joins it through memory as one
-more player. It still sets `options.dedicated` for gameplay checks outside the role migration's
-startup/world-loading scope. Everything above serves both servers, and `server_dimension_players`
+more player. The server loads the chunks held by saved tickets before opening the owner's memory
+connection, so this work does not run down the login timeout. The server thread still sets
+`options.dedicated` for gameplay checks outside the role migration's startup/world-loading scope.
+Everything above serves both servers, and `server_dimension_players`
 (vanilla clients on Horizon's dedicated server) and `lan_e2e` (Horizon clients on the
 server thread) check it from the two sides.
 
