@@ -65,7 +65,8 @@ pub fn save_all(host: &mut dyn ProfilesHost) -> R<i32> {
     if host.guest_turn_active() {
         // The acting guest's record holds the game's state until their
         // turn ends: saving now would write it to their file.
-        // shortcut: the other operators aren't told of a guest's save, add it if anyone asks.
+        // The save and its feedback (the source's line, the other operators'
+        // admin line) wait for the turn's end (`finish_deferred_save_all`).
         host.save_after_guest_turn();
         return Ok(1);
     }

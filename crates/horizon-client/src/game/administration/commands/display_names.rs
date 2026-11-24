@@ -24,6 +24,15 @@ impl Game<'_> {
             other => self.target_name(other).plain(),
         }
     }
+    /// `CommandSourceStack.getDisplayName`: the entity the command runs as
+    /// (`execute as`), or the server's own source, "Server".
+    pub(in crate::game) fn admin_who(&self) -> Text {
+        match self.command_source.and_then(|s| s.entity) {
+            Some(entity) => self.target_name(entity),
+            None if self.console_broadcast.is_some() => self.server_name(),
+            None => self.player_display_name(),
+        }
+    }
     /// `Entity.getDisplayName` for the mob `id`: `PlayerTeam.formatNameForTeam`
     /// of `getName()`, then `withHoverEvent(createHoverEvent())` (a `ShowEntity`
     /// of the type, UUID and name) and `withInsertion(getStringUUID())`. A mob

@@ -49,6 +49,23 @@ use horizon_world::registry::BlockStateId;
 
 pub(super) type R<T> = Result<T, CommandError>;
 
+/// One execution of a guest's `/save-all`, deferred to the end of their turn:
+/// the feedback decisions `CommandSourceStack.sendSuccess` and
+/// `broadcastToAdmins` make when the command runs, which is not when the save
+/// happens.
+pub(in crate::game) struct DeferredSaveAll {
+    /// `getDisplayName` of the source that ran it, for its admin line.
+    pub who: Text,
+    /// `withSuppressedOutput`: the source hears nothing and tells nobody.
+    pub silent: bool,
+    /// `CommandSource.acceptsSuccess()`: the source takes the success line.
+    pub to_source: bool,
+    /// `GameRules.SEND_COMMAND_FEEDBACK`: the other operators hear it.
+    pub to_operators: bool,
+    /// `GameRules.LOG_ADMIN_COMMANDS`: a dedicated server's console logs it.
+    pub to_console: bool,
+}
+
 /// An entity a selector found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Target {
@@ -413,6 +430,38 @@ impl Game<'_> {
     /// server the console when `log_admin_commands`. Queued while the
     /// command runs; `send_admin_feedback` sends it.
     pub(super) fn broadcast_to_admins(&mut self, message: Text) {
+        let who = self.admin_who();
+        let (to_operators, to_console) = self.admin_broadcast_rules(self.lan_acting.is_some());
+        self.broadcast_to_admins_read(who, to_operators, to_console, message);
+    }
+    /// The two game rules `broadcastToAdmins` reads, and whether a player's
+    /// command logs to a dedicated server's console: `player` is
+    /// `this.source != this.server`.
+    fn admin_broadcast_rules(&self, player: bool) -> (bool, bool) {
+        let ops = self
+            .ui
+            .rules
+            .bool_at(horizon_client::gamerules::vanilla::SEND_COMMAND_FEEDBACK);
+        // MinecraftServer.sendSystemMessage, unless the server is the source.
+        let console = self.console_broadcast.is_none()
+            && player
+            && self.is_dedicated_server()
+            && self
+                .ui
+                .rules
+                .bool_at(horizon_client::gamerules::vanilla::LOG_ADMIN_COMMANDS);
+        (ops, console)
+    }
+    /// `broadcast_to_admins` with the two game rules read when the command ran:
+    /// a guest's `/save-all` reports with the rules of its command, not of the
+    /// end of the turn.
+    pub(super) fn broadcast_to_admins_read(
+        &mut self,
+        who: Text,
+        to_operators: bool,
+        to_console: bool,
+        message: Text,
+    ) {
         let informs = match self.console_broadcast {
             Some(broadcast) => broadcast,
             None => self.lan_acting.is_some() || self.lan.is_some(),
@@ -424,32 +473,27 @@ impl Game<'_> {
         {
             return;
         }
-        let ops = self
-            .ui
-            .rules
-            .bool_at(horizon_client::gamerules::vanilla::SEND_COMMAND_FEEDBACK);
-        // MinecraftServer.sendSystemMessage, unless the server is the source.
-        let console = self.console_broadcast.is_none()
-            && self.lan_acting.is_some()
-            && self.is_dedicated_server()
-            && self
-                .ui
-                .rules
-                .bool_at(horizon_client::gamerules::vanilla::LOG_ADMIN_COMMANDS);
-        if !ops && !console {
+        if !to_operators && !to_console {
             return;
         }
-        // getDisplayName: the entity the command runs as (`execute as`), or
-        // the server's own source, "Server".
-        let who = match self.command_source.and_then(|s| s.entity) {
-            Some(entity) => self.target_name(entity),
-            None if self.console_broadcast.is_some() => self.server_name(),
-            None => self.player_display_name(),
-        };
         let line = Text::translate("chat.type.admin", &[who, message])
             .with_color(text::GRAY)
             .italic();
-        self.admin_feedback.push((line, ops, console));
+        self.admin_feedback
+            .push((line, to_operators, to_console));
+    }
+    /// What a guest's `/save-all` reports once their turn ends, read while the
+    /// source that ran it is current: `CommandSourceStack.sendSuccess` and
+    /// `broadcastToAdmins` decide from these the moment the command runs.
+    pub(super) fn deferred_save_all(&self) -> DeferredSaveAll {
+        let (to_operators, to_console) = self.admin_broadcast_rules(self.lan_acting.is_some());
+        DeferredSaveAll {
+            who: self.admin_who(),
+            silent: self.command_source.is_some_and(|s| s.silent),
+            to_source: self.accepts_success(),
+            to_operators,
+            to_console,
+        }
     }
     /// Player.getDisplayName: the name (team-formatted), suggesting a
     /// `/tell`, showing the player on hover, inserting the name.

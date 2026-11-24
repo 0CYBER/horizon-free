@@ -6,6 +6,10 @@ horizon-client game::api_values::read_stack_tests::read_consumers_forward_nonres
 horizon-client game::big_dripleaf_tests::a_leaf_stays_flat_under_an_entity_that_cannot_tilt_it lib daily resources
 horizon-client game::big_dripleaf_tests::a_leaf_tilts_under_a_mob_an_item_a_boat_a_minecart_and_a_trident lib daily resources
 horizon-client game::commands::modprofile::tests::modprofile_state_and_report_side_effects lib daily child-process
+horizon-client game::commands::profiles::save_all_command_tests::a_failed_save_fails_at_the_source_only lib daily resources
+horizon-client game::commands::profiles::save_all_command_tests::a_guests_save_all_reaches_the_other_operators lib daily resources
+horizon-client game::commands::profiles::save_all_command_tests::a_save_all_keeps_the_feedback_rule_of_its_command lib daily resources
+horizon-client game::commands::profiles::save_all_command_tests::every_source_of_a_guests_save_all_keeps_its_feedback lib daily resources
 horizon-client game::commands::selector_bounds_tests::actual_selector_uses_body_overlap_but_distance_stays_at_the_origin lib daily game-boot
 horizon-client game::commands::world_cmds::allay_owner_damage_tests::allay_owner_adapters_compare_the_actual_player_uuid lib daily game-boot
 horizon-client game::container_loot::tests::commands_clone_and_structures lib daily child-process

@@ -164,7 +164,7 @@ impl Game<'_> {
         let swap = self.enter_guest(c.conn)?;
         self.chat_capture = Some(Vec::new());
         let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-        let ok = if self.perform_native_command(c.conn, c.permission, &c.command) {
+        let mut ok = if self.perform_native_command(c.conn, c.permission, &c.command) {
             true
         } else if c.quiet {
             self.run_command_quietly(&c.command)
@@ -174,8 +174,9 @@ impl Game<'_> {
         self.ui.registries.permission = level;
         let mut lines = self.chat_capture.take().unwrap_or_default();
         self.leave_guest(swap);
-        if std::mem::take(&mut self.save_after_guest_turn) {
-            lines.push(self.save_all_reply());
+        if !self.save_after_guest_turn.is_empty() {
+            let deferred = std::mem::take(&mut self.save_after_guest_turn);
+            ok = self.finish_deferred_save_all(deferred, &mut lines) && ok;
         }
         if let Some(host) = self.lan.as_mut() {
             host.hub.sync_all_effects();

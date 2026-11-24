@@ -40,7 +40,13 @@ impl ProfilesHost for ListsTarget<'_, '_> {
         self.game.lan_acting.is_some()
     }
     fn save_after_guest_turn(&mut self) {
-        self.game.save_after_guest_turn = true;
+        // The save and its feedback run once the turn ends
+        // (`finish_deferred_save_all`), still with the source that ran the
+        // command: its admin line's display name, its silence and the feedback
+        // rules, read now, while it is current. Each execution is kept: one
+        // turn can run `/save-all` for several sources.
+        let deferred = self.game.deferred_save_all();
+        self.game.save_after_guest_turn.push(deferred);
     }
     fn save_game(&mut self) -> Result<(), String> {
         Game::save_game(self.game).map_err(|e| e.to_string())
