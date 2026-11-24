@@ -1512,6 +1512,27 @@ impl PropertyAdditions {
         self.get(key).is_some_and(|set| set.contains(item))
     }
 }
+fn check_recipe_types<'a>(
+    entries: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Result<Vec<Option<mod_kinds::Reading>>> {
+    let mut readings = Vec::new();
+    let mut errors = Vec::new();
+    for (name, serializer) in entries {
+        match serializer {
+            Some(serializer) => match mod_kinds::recipe_type(name, serializer) {
+                Ok(reading) => readings.push(Some(reading)),
+                Err(err) => errors.push(err),
+            },
+            None => readings.push(None),
+        }
+    }
+    if errors.is_empty() {
+        Ok(readings)
+    } else {
+        Err(errors.join("\n").into())
+    }
+}
+
 impl ResolvedSources {
     pub(crate) fn station_recipes(
         &self,
@@ -1564,11 +1585,11 @@ impl ResolvedSources {
     ) -> Result<Self> {
         // Every consumer keeps vanilla's resource-file registration order.
         sources.sort_by_cached_key(|(name, _)| registration_key(name));
-        for (name, file) in &sources {
-            if let Some(serializer) = file["type"].as_str() {
-                mod_kinds::recipe_type(name, serializer)?;
-            }
-        }
+        check_recipe_types(
+            sources
+                .iter()
+                .map(|(name, file)| (name.as_str(), file["type"].as_str())),
+        )?;
         let listened = mod_api::__private::listened(mod_api::HookId::Ingredient);
         let recipes = sources
             .into_iter()
@@ -1704,33 +1725,41 @@ impl Recipes {
         overlay: &PackOverlay,
         sources: &ResolvedSources,
     ) -> Result<Self> {
-        for recipe in &sources.recipes {
-            if let Some(serializer) = recipe.file["type"].as_str() {
-                mod_kinds::recipe_type(&recipe.name, serializer)?;
-            }
-        }
+        let readings = check_recipe_types(
+            sources
+                .recipes
+                .iter()
+                .map(|recipe| (recipe.name.as_str(), recipe.file["type"].as_str())),
+        )?;
         let mut mod_read_only = Vec::new();
         let mut crafting = Vec::new();
         let mut cooking = Vec::new();
         let mut by_type: HashMap<String, Vec<crate::crafting::RecipeSnapshot>> = HashMap::new();
         let mut meta = HashMap::new();
         for (
-            ResolvedRecipe {
-                name,
-                file: json,
-                resolved,
-            },
-            station,
-        ) in sources.recipes.iter().zip(sources.station_recipes(items))
+            (
+                ResolvedRecipe {
+                    name,
+                    file: json,
+                    resolved,
+                },
+                station,
+            ),
+            reading,
+        ) in sources
+            .recipes
+            .iter()
+            .zip(sources.station_recipes(items))
+            .zip(readings)
         {
             let mut entry = None;
-            if let Some(serializer) = json["type"].as_str() {
+            if let (Some(serializer), Some(reading)) = (json["type"].as_str(), reading) {
                 let id = if name.contains(':') {
                     name.clone()
                 } else {
                     format!("minecraft:{name}")
                 };
-                match mod_kinds::recipe_type(name, serializer)? {
+                match reading {
                     mod_kinds::Reading::Type(kind) => {
                         entry = Some(crate::crafting::RecipeSnapshot::new(id, kind, json.clone()));
                     }
@@ -3509,5 +3538,63 @@ mod crafting_remainder_tests {
             .unwrap();
         assert_eq!(written.generation, 1);
         assert_eq!(written.pages, ["page"]);
+    }
+
+    #[test]
+    fn multiple_invalid_recipe_types_are_reported_together() {
+        let context = horizon_world::native_load_context::LoadContext::new(
+            horizon_world::native_load_context::DataLoadOrigin::ServerDataLoad,
+            Arc::new(horizon_world::native_load_context::LoadInputs::new(
+                Default::default(),
+                Default::default(),
+            )),
+            [],
+        );
+        let sources = vec![
+            (
+                "alpha:bad_one".to_owned(),
+                serde_json::json!({"type": "minecraft:unknown_one"}),
+            ),
+            (
+                "alpha:good".to_owned(),
+                serde_json::json!({"type": "minecraft:crafting_shapeless"}),
+            ),
+            (
+                "beta:bad_two".to_owned(),
+                serde_json::json!({"type": "minecraft:unknown_two"}),
+            ),
+        ];
+        let err = ResolvedSources::resolve(sources, &context)
+            .err()
+            .expect("expected combined recipe error")
+            .to_string();
+        assert!(err.contains("alpha/recipe/bad_one.json"), "{err}");
+        assert!(err.contains("minecraft:unknown_one"), "{err}");
+        assert!(err.contains("beta/recipe/bad_two.json"), "{err}");
+        assert!(err.contains("minecraft:unknown_two"), "{err}");
+
+        let resolved = ResolvedSources {
+            recipes: vec![
+                ResolvedRecipe {
+                    name: "alpha:bad_one".into(),
+                    file: Arc::new(serde_json::json!({"type": "minecraft:unknown_one"})),
+                    resolved: Arc::new(serde_json::json!({"type": "minecraft:unknown_one"})),
+                },
+                ResolvedRecipe {
+                    name: "beta:bad_two".into(),
+                    file: Arc::new(serde_json::json!({"type": "minecraft:unknown_two"})),
+                    resolved: Arc::new(serde_json::json!({"type": "minecraft:unknown_two"})),
+                },
+            ],
+            ..ResolvedSources::default()
+        };
+        let items = Items::for_tests(HashMap::new());
+        let err =
+            Recipes::from_resolved(&std::env::temp_dir(), &items, &PackOverlay::NONE, &resolved)
+                .err()
+                .expect("expected combined recipe error")
+                .to_string();
+        assert!(err.contains("alpha/recipe/bad_one.json"), "{err}");
+        assert!(err.contains("beta/recipe/bad_two.json"), "{err}");
     }
 }
