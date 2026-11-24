@@ -287,19 +287,18 @@ impl Game<'_> {
                 }
             });
         }
-        for chunk in &unloaded {
-            self.world.modified.unloaded(&(chunk.x, chunk.z));
-        }
         horizon_client::spans::time("unload_entities", || self.unload_entities(&unloaded));
         if !unloaded.is_empty() {
             let _span = horizon_client::spans::guard("unload_block_entities");
-            let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
-                unloaded.iter().map(|c| (c.x, c.z)).collect();
-            let gone_chunks: Vec<(i32, i32)> = gone.iter().copied().collect();
+            let gone_chunks: Vec<(i32, i32)> = unloaded.iter().map(|c| (c.x, c.z)).collect();
             self.world.block_entities.unload_chunks(&gone_chunks);
-            self.world
-                .block_names
-                .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
+            if !self.world.block_names.is_empty() {
+                let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
+                    gone_chunks.iter().copied().collect();
+                self.world
+                    .block_names
+                    .retain(|p, _| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
+            }
         }
         // LevelChunk.registerTickContainerInLevel: a chunk that became
         // resident has its tick containers before a command can schedule into
@@ -353,20 +352,8 @@ impl Game<'_> {
                 // mesh of a waiting section replaces it, and sections of
                 // chunks no longer loaded are dropped.
                 let pending = &mut self.pending_uploads;
-                let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
-                    uploads.iter().map(|(k, _)| *k).collect();
                 let chunks = &self.world.chunks;
-                let loaded = |k: &(i32, i32, i32)| chunks.contains_key(&(k.0, k.2));
-                let mut spent: Vec<_> = pending
-                    .extract_if(.., |(k, _)| fresh.contains(k) || !loaded(k))
-                    .collect();
-                for upload in uploads {
-                    if loaded(&upload.0) {
-                        pending.push(upload);
-                    } else {
-                        spent.push(upload);
-                    }
-                }
+                let mut spent = Vec::new();
                 let centre = self.streaming.center;
                 // Section keys count from the world's bottom (`origin`'s min_y + y * 16).
                 let bottom = f64::from(self.world.bottom_y());
@@ -374,10 +361,7 @@ impl Game<'_> {
                     .player
                     .as_ref()
                     .map_or(4, |p| ((p.position.y - bottom) / 16.0).floor() as i32);
-                let far = |k: &(i32, i32, i32)| {
-                    (k.0 - centre.0).pow(2) + (k.1 - cam_y).pow(2) + (k.2 - centre.1).pow(2)
-                };
-                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                pending.push_batch_for_chunks(uploads, chunks, (centre, cam_y), &mut spent);
                 let (limit, budget) = if budgeted {
                     (
                         g.chunk_updates as usize,
@@ -394,19 +378,20 @@ impl Game<'_> {
                 let auto = (!budgeted).then(|| self.upload_pace.budget(pending.len(), arriving));
                 let started = Instant::now();
                 let upload_span = horizon_client::spans::guard("upload_queue");
-                while let Some((_, mesh)) = pending.last() {
-                    if auto.is_some_and(|time| count > 0 && started.elapsed() >= time) {
-                        break;
-                    }
-                    let size = ((mesh.solid.len() + mesh.translucent.len())
-                        * std::mem::size_of::<horizon_client::mesher::TerrainVertex>())
-                        as u64;
+                while !pending.is_empty() {
                     if (limit > 0 && count >= limit)
-                        || (budget > 0 && bytes > 0 && bytes + size > budget)
+                        || auto.is_some_and(|time| count > 0 && started.elapsed() >= time)
                     {
                         break;
                     }
-                    let (key, mesh) = pending.pop().expect("checked above");
+                    let Some((_, mesh)) = pending.peek_nearest() else {
+                        break;
+                    };
+                    let size = horizon_client::streaming::upload_mesh_bytes(mesh);
+                    if budget > 0 && bytes > 0 && bytes + size > budget {
+                        break;
+                    }
+                    let (key, mesh) = pending.pop_nearest().expect("checked above");
                     renderer.upload(key, &mesh);
                     spent.push((key, mesh));
                     count += 1;
@@ -518,13 +503,10 @@ impl Game<'_> {
         if uploads.is_empty() {
             return;
         }
-        let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
-            uploads.iter().map(|(k, _)| *k).collect();
-        let spent: Vec<_> = self
-            .pending_uploads
-            .extract_if(.., |(k, _)| fresh.contains(k))
-            .collect();
-        if !spent.is_empty() {
+        if !self.pending_uploads.is_empty() {
+            let mut spent = Vec::new();
+            self.pending_uploads
+                .remove_keys(uploads.iter().map(|(k, _)| *k), &mut spent);
             self.streaming.free(spent);
         }
         self.lod_observe_later(uploads.iter().map(|(key, _)| (key.0, key.2)));

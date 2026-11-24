@@ -1,7 +1,10 @@
 //! The world, renderer and mesher state a section-readiness test reads, borrowed field by field.
 use crate::occlusion_culling::opaque;
 use horizon_client::{
-    blocks::BlockFacts, gfx::Renderer, mesher::SectionMesh, streaming::Streaming, world::World,
+    blocks::BlockFacts,
+    gfx::Renderer,
+    streaming::{PendingUploads, Streaming},
+    world::World,
 };
 
 #[derive(Clone, Copy)]
@@ -10,7 +13,7 @@ pub struct SectionScene<'a> {
     pub facts: &'a BlockFacts,
     pub renderer: Option<&'a Renderer>,
     pub streaming: &'a Streaming,
-    pub pending_uploads: &'a [((i32, i32, i32), SectionMesh)],
+    pub pending_uploads: &'a PendingUploads,
 }
 
 impl SectionScene<'_> {
@@ -32,6 +35,6 @@ impl SectionScene<'_> {
             .is_some_and(|renderer| renderer.has_section(section))
             && !self.world.dirty_sections.contains(&section)
             && !self.streaming.is_meshing(section)
-            && !self.pending_uploads.iter().any(|(key, _)| *key == section)
+            && !self.pending_uploads.contains(&section)
     }
 }

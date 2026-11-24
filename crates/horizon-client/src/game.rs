@@ -1707,7 +1707,7 @@ struct Game<'a> {
     /// The mod whose own screen is open (`Screen::Mod`).
     native_mod_screen: Option<String>,
     /// Meshed sections waiting for an upload budget (Horizon settings).
-    pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
+    pending_uploads: horizon_client::streaming::PendingUploads,
     upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::JoinedFrusta>,
@@ -11215,7 +11215,7 @@ impl<'a> Game<'a> {
             view_frustum: None,
             occlusion: Default::default(),
             async_particle_culler: RefCell::new(Default::default()),
-            pending_uploads: Vec::new(),
+            pending_uploads: horizon_client::streaming::PendingUploads::new(),
             upload_pace: Default::default(),
             frame_graph: Default::default(),
             extras: Default::default(),

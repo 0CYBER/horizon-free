@@ -651,6 +651,9 @@ impl SectionMesh {
     /// is removed here so the renderer can compare the actual atlas layer.
     pub fn note_sprite_layer(&mut self, layer: u16) {
         let layer = layer & !crate::mesher::OPAQUE_LAYER;
+        if self.sprite_layers.last() == Some(&layer) {
+            return;
+        }
         if !self.sprite_layers.contains(&layer) {
             self.sprite_layers.push(layer);
         }
@@ -3477,5 +3480,18 @@ mod quarter_tests {
         assert_eq!(standard_uv(D::North, [1.0, 1.0, 0.0]), [0.0, 0.0]);
         assert_eq!(standard_uv(D::East, [1.0, 0.0, 1.0]), [0.0, 1.0]);
         assert_eq!(standard_uv(D::Down, [0.0, 0.0, 1.0]), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn note_sprite_layer_dedups_consecutive_and_nonconsecutive_layers() {
+        let mut mesh = SectionMesh::default();
+        mesh.note_sprite_layer(7);
+        mesh.note_sprite_layer(7);
+        mesh.note_sprite_layer(7 | OPAQUE_LAYER);
+        mesh.note_sprite_layer(3 | OPAQUE_LAYER);
+        mesh.note_sprite_layer(3);
+        mesh.note_sprite_layer(7);
+        mesh.note_sprite_layer(12);
+        assert_eq!(mesh.sprite_layers, [7, 3, 12]);
     }
 }

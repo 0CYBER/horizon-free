@@ -306,8 +306,7 @@ impl Game<'_> {
     /// discarded, then every loaded section is rebuilt.
     pub(super) fn all_sections_changed(&mut self) {
         self.clear_lod();
-        self.streaming
-            .free(std::mem::take(&mut self.pending_uploads));
+        self.streaming.free(self.pending_uploads.take_all());
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.clear_sections(self.world.layout());
         }
