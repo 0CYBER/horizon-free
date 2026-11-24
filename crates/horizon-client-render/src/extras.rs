@@ -115,8 +115,6 @@ pub struct Extras {
     /// Positional sounds leave a few static sound channels free for UI sounds
     /// and others played to the listener (`sound_engine::HEARD_RESERVE`).
     pub ui_sound_reserve: bool,
-    /// The player's own name tag over its model in third person.
-    pub own_name_tag: bool,
     /// NeoForge's `skipModdedSplashesIfVanillaModified`, on by default: a
     /// pack's own `minecraft` splashes replace every namespace's
     /// (`horizon_client::splashes::pool`). No Extras page entry.
@@ -207,7 +205,6 @@ impl Default for Extras {
             minimap_rotate: false,
             auto_reconnect: false,
             ui_sound_reserve: false,
-            own_name_tag: false,
             skip_modded_splashes_if_vanilla_modified: true,
             hide_block_particles: false,
             mouse_tweaks: false,
@@ -362,7 +359,6 @@ impl Extras {
                 "minimapRotate" => e.minimap_rotate = flag(e.minimap_rotate),
                 "autoReconnect" => e.auto_reconnect = flag(e.auto_reconnect),
                 "uiSoundReserve" => e.ui_sound_reserve = flag(e.ui_sound_reserve),
-                "ownNameTag" => e.own_name_tag = flag(e.own_name_tag),
                 "skipModdedSplashesIfVanillaModified" => {
                     e.skip_modded_splashes_if_vanilla_modified =
                         flag(e.skip_modded_splashes_if_vanilla_modified)
@@ -407,7 +403,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "packBrowser:{}\npregen:{}\nfullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nlodZoomDetail:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nuiSoundReserve:{}\nownNameTag:{}\nskipModdedSplashesIfVanillaModified:{}\nhideBlockParticles:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\nchatAnimation:{}\nchatIndicator:{}\n{}:{}\nagentControl:{}\nreproKeys:{}\nsplitscreen:{}\nsplitscreenTwo:{}\nsplitscreenThree:{}\nsplitscreenNames:{}\nwheelCyclesListSettings:{}\nmusicOff:{}\nmusicPage:{}\n{}:{}\nspyglassPolarLook:{}\n",
+            "packBrowser:{}\npregen:{}\nfullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nlodZoomDetail:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nuiSoundReserve:{}\nskipModdedSplashesIfVanillaModified:{}\nhideBlockParticles:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\nchatAnimation:{}\nchatIndicator:{}\n{}:{}\nagentControl:{}\nreproKeys:{}\nsplitscreen:{}\nsplitscreenTwo:{}\nsplitscreenThree:{}\nsplitscreenNames:{}\nwheelCyclesListSettings:{}\nmusicOff:{}\nmusicPage:{}\n{}:{}\nspyglassPolarLook:{}\n",
             bool_text(self.pack_browser),
             bool_text(self.pregen),
             bool_text(self.fullbright),
@@ -437,7 +433,6 @@ impl Extras {
             bool_text(self.minimap_rotate),
             bool_text(self.auto_reconnect),
             bool_text(self.ui_sound_reserve),
-            bool_text(self.own_name_tag),
             bool_text(self.skip_modded_splashes_if_vanilla_modified),
             bool_text(self.hide_block_particles),
             bool_text(self.mouse_tweaks),
@@ -622,7 +617,6 @@ pub enum Item {
     SpyglassPolarLook,
     Fullbright,
     DynamicLights,
-    OwnNameTag,
     HideBlockParticles,
     AutoReconnect,
     UiSoundReserve,
@@ -660,8 +654,8 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
     vec![
         Err("horizon.extras.header.look"),
         Ok(SpyglassPolarLook),
+        // The own name tag's row (horizon-name-tag, a section: `horizon_hooks::pages`).
         Err("horizon.extras.header.third_person"),
-        Ok(OwnNameTag),
         Err("horizon.extras.header.inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
@@ -689,7 +683,6 @@ impl Item {
             Item::SpyglassPolarLook => "horizon.extras.spyglass_polar_look",
             Item::Fullbright => "horizon.extras.fullbright",
             Item::DynamicLights => "horizon.extras.dynamic_lights",
-            Item::OwnNameTag => "horizon.extras.own_name_tag",
             Item::HideBlockParticles => "horizon.extras.hide_block_particles",
             Item::AutoReconnect => "horizon.extras.auto_reconnect",
             Item::UiSoundReserve => "horizon.extras.ui_sound_reserve",
@@ -716,7 +709,6 @@ impl Item {
             Item::SpyglassPolarLook => "horizon.extras.spyglass_polar_look.tooltip",
             Item::Fullbright => "horizon.extras.fullbright.tooltip",
             Item::DynamicLights => "horizon.extras.dynamic_lights.tooltip",
-            Item::OwnNameTag => "horizon.extras.own_name_tag.tooltip",
             Item::HideBlockParticles => "horizon.extras.hide_block_particles.tooltip",
             Item::AutoReconnect => "horizon.extras.auto_reconnect.tooltip",
             Item::UiSoundReserve => "horizon.extras.ui_sound_reserve.tooltip",
@@ -752,7 +744,6 @@ impl Item {
             Item::SpyglassPolarLook => "Spyglass look at the poles",
             Item::Fullbright => "Fullbright",
             Item::DynamicLights => "Dynamic lights",
-            Item::OwnNameTag => "Own name tag",
             Item::HideBlockParticles => "Hide block-break particles",
             Item::AutoReconnect => "Auto-reconnect",
             Item::UiSoundReserve => "Keep channels for UI sounds",
@@ -782,7 +773,7 @@ impl Item {
             SortKey => Sort,
             ChatIndicator => ChatAnimation,
             Pvp(o) => return o.parent().map(Pvp),
-            Fullbright | DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
+            Fullbright | DynamicLights | HideBlockParticles | MouseTweaks | Sort
             | AutoReconnect | NoAi | AgentControl | ReproKeys | Splitscreen | ChatAnimation
             | WheelCyclesSettings | MusicPage | PackBrowser | Pregen | SpyglassPolarLook => {
                 return None;
@@ -801,9 +792,6 @@ impl Item {
             Item::Fullbright => "Show blocks and entities at full light, even in dark areas.",
             Item::DynamicLights => {
                 "Torches and other light sources held, dropped or on fire light the blocks around them."
-            }
-            Item::OwnNameTag => {
-                "Shows your name above your head in third person, as other players see it. Hidden when the server hides your team's names or you're invisible."
             }
             Item::HideBlockParticles => {
                 "Hides the debris particles that burst from a broken block and crumble off the one you mine. Other particles stay."
@@ -863,8 +851,7 @@ impl Item {
             Item::MusicPage => Some(Cost::None),
             Item::DynamicLights => Some(Cost::Low),
             Item::ChatAnimation => Some(Cost::None),
-            Item::OwnNameTag
-            | Item::HideBlockParticles
+            Item::HideBlockParticles
             | Item::AutoReconnect
             | Item::MouseTweaks
             | Item::Sort
@@ -881,7 +868,6 @@ impl Item {
             Item::SpyglassPolarLook => e.spyglass_polar_look,
             Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
-            Item::OwnNameTag => e.own_name_tag,
             Item::HideBlockParticles => e.hide_block_particles,
             Item::AutoReconnect => e.auto_reconnect,
             Item::UiSoundReserve => e.ui_sound_reserve,
@@ -920,7 +906,6 @@ impl Item {
             Item::SpyglassPolarLook => e.spyglass_polar_look = !e.spyglass_polar_look,
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
-            Item::OwnNameTag => e.own_name_tag = !e.own_name_tag,
             Item::HideBlockParticles => e.hide_block_particles = !e.hide_block_particles,
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::UiSoundReserve => e.ui_sound_reserve = !e.ui_sound_reserve,
@@ -1021,7 +1006,7 @@ mod tests {
         let d = Extras::default();
         assert!(!d.fullbright && !d.dynamic_lights);
         assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
-        assert!(!d.mouse_tweaks && !d.sort && !d.own_name_tag && !d.ui_sound_reserve);
+        assert!(!d.mouse_tweaks && !d.sort && !d.ui_sound_reserve);
         assert!(!d.hide_block_particles && !d.pregen);
         assert!(!d.music_page && d.music_off.is_empty());
         assert!(!d.wheel_cycles_settings);
@@ -1049,14 +1034,12 @@ mod tests {
         e.auto_reconnect = true;
         Item::Pregen.cycle(&mut e, false);
         assert_eq!(Item::Pregen.switch(&e), Some(true));
-        Item::OwnNameTag.cycle(&mut e, false);
-        assert_eq!(Item::OwnNameTag.switch(&e), Some(true));
         assert_eq!(Item::HideBlockParticles.switch(&e), Some(false));
         Item::HideBlockParticles.cycle(&mut e, false);
         assert!(e.hide_block_particles);
         assert_eq!(Item::HideBlockParticles.switch(&e), Some(true));
         let only = Extras::parse("hideBlockParticles:true\n");
-        assert!(only.hide_block_particles && !only.own_name_tag);
+        assert!(only.hide_block_particles && !only.pregen);
         e.mouse_tweaks = true;
         e.mouse_tweaks_wheel = false;
         e.sort = true;

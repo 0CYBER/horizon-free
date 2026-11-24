@@ -364,6 +364,8 @@ pub trait Store: Sync {
     fn file(&self) -> &'static str;
     /// Whether a `key:value` line of that file is this store's (a fixed list, or a `<name>.` prefix).
     fn owns(&self, key: &str) -> bool;
+    /// Back to the defaults, for the player whose turn it is, before each load. Nothing by default.
+    fn defaults(&self) {}
     /// One of its lines, as the game loads its settings. Unknown values keep the default.
     fn load(&self, key: &str, value: &str);
     /// Its lines, as the game saves its settings.
@@ -375,7 +377,8 @@ pub trait Store: Sync {
 
 - The engine routes lines in `Settings::load` and `Settings::save`: once per load or save, never per frame.
   Each file is read once. A store's lines come after the engine's own in a shared file. A line nobody owns
-  is kept as it was.
+  is kept as it was. Every store's `defaults` runs first, so a key the file lacks (a splitscreen player's
+  other profile, an older file, no file) loads as its default, as the engine's own extras do.
 - A setting that moves out of `extras.rs` keeps its key and file, so players keep their choice. The engine's
   `Extras` stops reading and writing the key in the same PR.
 - A page that changes a store's setting (below) needs nothing else: the options screen saves on close, as

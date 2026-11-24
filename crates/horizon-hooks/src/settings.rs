@@ -19,6 +19,11 @@ pub trait Store: Sync {
     fn file(&self) -> &'static str;
     /// Whether a line's key is this store's.
     fn owns(&self, key: &str) -> bool;
+    /// Puts its settings back to their defaults, for the player whose turn it is: the engine calls
+    /// it on every store before each load, so a key missing from the file (another splitscreen
+    /// profile's, an older file, no file at all) reads as its default, as the engine's own extras
+    /// do. Nothing by default.
+    fn defaults(&self) {}
     /// One of its lines (key and value trimmed), as the game loads the settings. A value it can't
     /// read keeps the setting as it was.
     fn load(&self, key: &str, value: &str);
@@ -83,6 +88,9 @@ fn lines(text: &str) -> impl Iterator<Item = (&str, &str, &str)> {
 }
 
 fn load_into(stores: &[&dyn Store], read: &mut dyn FnMut(&str) -> Option<String>) {
+    for store in stores {
+        store.defaults();
+    }
     for file in files(stores) {
         let Some(text) = read(file) else {
             continue;
@@ -170,6 +178,9 @@ mod tests {
         fn owns(&self, key: &str) -> bool {
             key == self.key
         }
+        fn defaults(&self) {
+            self.set(false);
+        }
         fn load(&self, _key: &str, value: &str) {
             match value {
                 "true" => self.set(true),
@@ -214,6 +225,22 @@ mod tests {
             ["horizon-extras.txt", "horizon-pad.txt"],
             "each file read once"
         );
+    }
+
+    /// A load starts from the defaults: a key the file doesn't have (another profile's file, or
+    /// no file) doesn't keep the value the last load gave it.
+    #[test]
+    fn a_key_missing_from_the_file_loads_as_its_default() {
+        let zoom = Switch::new("horizon-extras.txt", "zoom");
+        let pad = Switch::new("horizon-pad.txt", "rumble");
+        let stores: [&dyn Store; 2] = [&zoom, &pad];
+        load_into(&stores, &mut |_| Some("zoom:true\nrumble:true\n".into()));
+        assert!(zoom.on() && pad.on());
+        load_into(&stores, &mut |file| {
+            (file == "horizon-extras.txt").then(|| "fps:true\n".into())
+        });
+        assert!(!zoom.on(), "its key isn't in this file");
+        assert!(!pad.on(), "its file doesn't exist");
     }
 
     #[test]

@@ -1,0 +1,17 @@
+[package]
+name = "horizon-name-tag"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Own name tag: your name over your head in third person, as other players see it (docs/extras.md)"
+
+[dependencies]
+horizon-platform = { path = "../horizon-platform" }
+
+[dev-dependencies]
+# The splitscreen seat a test plays as.
+horizon-hooks = { path = "../horizon-hooks" }
+
+[lints]
+workspace = true

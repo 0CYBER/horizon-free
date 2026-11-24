@@ -189,11 +189,12 @@ impl Game<'_> {
         }
         out
     }
-    /// Horizon's own name tag extra (`ownNameTag`): the player's own model and
-    /// name, while that model shows in third person. Vanilla never names the
-    /// camera entity (`LivingEntityRenderer.shouldShowName`).
+    /// Horizon's own name tag extra (a crate above the engine answers
+    /// `horizon_hooks::Hooks::own_name_tag`): the player's own model and name,
+    /// while that model shows in third person. Vanilla never names the camera
+    /// entity (`LivingEntityRenderer.shouldShowName`).
     fn own_name_tag(&self) -> Option<(&Mob, String)> {
-        if !self.settings.extras.own_name_tag
+        if !horizon_hooks::engine::own_name_tag()
             || self.camera_type.is_first_person()
             || self.sleeping.is_some()
             || self.spectator()

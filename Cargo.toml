@@ -11,6 +11,7 @@ members = [
     "crates/horizon-game",
     "crates/horizon-official",
     "crates/horizon-heartbeat",
+    "crates/horizon-name-tag",
 
     "crates/horizon-core",
     "crates/horizon-platform",
