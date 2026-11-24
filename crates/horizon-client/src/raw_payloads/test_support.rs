@@ -70,3 +70,84 @@ pub(crate) fn delivery(
         incoming,
     })
 }
+
+pub(crate) const CLIENT_MAIN_CHANNEL: &str = "bundle_probe:main";
+pub(crate) const CLIENT_NETWORK_CHANNEL: &str = "bundle_probe:network";
+
+/// Records which bundled payloads its receiving executor ran, in order.
+#[derive(Default)]
+pub(crate) struct ClientProbe {
+    calls: std::sync::Mutex<Vec<u8>>,
+}
+impl ClientProbe {
+    pub(crate) fn calls(&self) -> Vec<u8> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+impl IPayloadHandler for ClientProbe {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(bytes.0.first().copied().unwrap_or_default());
+        Ok(())
+    }
+}
+struct ClientRegistration {
+    main: Arc<ClientProbe>,
+    network: Arc<ClientProbe>,
+}
+#[mod_api::__subscriptions]
+impl Hooks for ClientRegistration {
+    fn register(&self, registrar: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+        let mut handlers = registrar.payload_handlers();
+        let view = handlers.registrar("1");
+        view.executes_on(mod_api::HandlerThread::Main)
+            .play_to_client(
+                PayloadId(CLIENT_MAIN_CHANNEL.into()),
+                Some(self.main.clone()),
+            );
+        view.executes_on(mod_api::HandlerThread::Network)
+            .play_to_client(
+                PayloadId(CLIENT_NETWORK_CHANNEL.into()),
+                Some(self.network.clone()),
+            );
+    }
+}
+/// A client installation with one MAIN and one NETWORK receiving handler,
+/// negotiated and frozen exactly as `Session::start` does for a real session.
+pub(crate) fn with_client_peer<R>(
+    run: impl FnOnce(Arc<Transport>, Arc<ClientProbe>, Arc<ClientProbe>) -> R,
+) -> R {
+    let main = Arc::new(ClientProbe::default());
+    let network = Arc::new(ClientProbe::default());
+    let registration = ClientRegistration {
+        main: main.clone(),
+        network: network.clone(),
+    };
+    mod_platform::testing::with_mods(
+        vec![ModEntry::new("bundle_probe", Box::new(registration))].into(),
+        || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
+            let transport = Transport::capture(Side::Client).unwrap();
+            assert!(
+                transport.local.owns(CLIENT_MAIN_CHANNEL),
+                "fixture main declaration was not installed"
+            );
+            assert!(
+                transport.local.owns(CLIENT_NETWORK_CHANNEL),
+                "fixture network declaration was not installed"
+            );
+            transport
+                .accept(transport.local.manifest.entries())
+                .unwrap();
+            transport.finish_configuration().unwrap();
+            run(transport, main, network)
+        },
+    )
+}

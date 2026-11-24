@@ -8,7 +8,7 @@ PacketUtils.makeReportedException	skip:debug		crash report wrapper
 PacketUtils.fillCrashReport	skip:debug		crash report details
 ProtocolCodecBuilder.add	skip:java		codec registration builder
 ProtocolInfoBuilder.addPacket	skip:java		protocol registration; packet ids are static in ids.rs
-ProtocolInfoBuilder.withBundlePacket	missing		minor: bundle delimiter is a no-op (net.rs BundleDelimiter arm); bundled packets are applied one by one
+ProtocolInfoBuilder.withBundlePacket	inline	crates/horizon-client/src/net.rs::receive_play	the play protocol has no separate bundler object; receive_play gathers the delimited packets itself
 ProtocolInfoBuilder.buildPacketCodec	skip:java		codec construction
 ProtocolInfoBuilder.buildUnbound	skip:java		protocol construction; enum variants in packet_enum!
 ProtocolInfoBuilder.protocol	skip:java		protocol builder entry point

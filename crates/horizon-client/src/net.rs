@@ -29,7 +29,7 @@ pub use queued_writer::{PreparedPacket, PreparedPayload};
 #[cfg(test)]
 use std::sync::mpsc::channel;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -148,10 +148,24 @@ pub enum Event {
         key: Option<String>,
         from_server: bool,
     },
+    /// A closed server bundle. These travel as one channel item so
+    /// `Session::poll` never hands the game a prefix, and the receiving loop
+    /// applies every contained event before it can process anything after it.
+    Bundle(Box<[Event]>),
 }
 
+/// The play ingress byte budget. Bundle staging (raw payloads and decoded
+/// packets between delimiters) is charged against what is still free here
+/// before it is accepted, so staging cannot grow past the connection budget.
+const INGRESS_BUDGET: usize = 96 << 20;
+
 fn event_channel() -> (ingress::Producer<Event>, ingress::Consumer<Event>) {
-    ingress::channel(96 << 20, Event::ingress_charge).expect("positive incoming byte budget")
+    event_channel_with_capacity(INGRESS_BUDGET)
+}
+fn event_channel_with_capacity(
+    capacity: usize,
+) -> (ingress::Producer<Event>, ingress::Consumer<Event>) {
+    ingress::channel(capacity, Event::ingress_charge).expect("positive incoming byte budget")
 }
 impl Event {
     fn ingress_charge(&self) -> usize {
@@ -197,6 +211,13 @@ impl Event {
                 key,
                 from_server: _,
             } => reason.capacity().saturating_add(key.owned_heap_bytes()),
+            Self::Bundle(events) => {
+                let mut bytes = events.len().saturating_mul(size_of::<Self>());
+                for event in events.iter() {
+                    bytes = bytes.saturating_add(event.ingress_charge());
+                }
+                bytes
+            }
         };
         // Layout-derived allowance for a frozen receiving vector, actor backlog,
         // decoder marker and retained receipt, including vector spare capacity.
@@ -1199,6 +1220,68 @@ fn run(
     )
 }
 
+/// One still-open bundle packet: wire id, raw frame bytes and the decoded value.
+type BundleEntry = (i32, Vec<u8>, play::Clientbound);
+
+/// Bytes an open bundle retains per packet: the raw frame, the decoded packet,
+/// the entry slot and the event the packet will become. The final `Event::Bundle`
+/// is charged the sum of its events' [`Event::ingress_charge`]s, so this keeps
+/// the pre-acceptance check on the same order as the channel's own accounting.
+fn bundle_entry_bytes(payload_capacity: usize, packet: &play::Clientbound) -> usize {
+    use std::mem::size_of;
+    payload_capacity
+        .saturating_add(size_of::<play::Clientbound>())
+        .saturating_add(packet.owned_heap_bytes())
+        .saturating_add(size_of::<Event>())
+        .saturating_add(size_of::<BundleEntry>())
+        .saturating_add(8 * size_of::<(Event, ingress::ReceiveLease<Event>, usize, usize)>())
+}
+
+/// Route one game event either straight to the channel or into the open
+/// bundle. A bundle is published once, after its closing delimiter, so the
+/// game can only ever receive it whole.
+fn emit(send: &ingress::Producer<Event>, batch: &mut Option<Vec<Event>>, event: Event) -> bool {
+    match batch {
+        Some(events) => {
+            events.push(event);
+            true
+        }
+        None => send.send(event).is_ok(),
+    }
+}
+
+fn bundle_refusal(refused: ingress::Refused<Event>) -> Reason {
+    match refused.reason {
+        ingress::Refusal::Pressure => Reason::plain("bundle exceeds the incoming byte budget"),
+        ingress::Refusal::Closed => Reason::plain("Disconnected"),
+    }
+}
+
+/// Route one event the game must not lose: into the open bundle, or waiting
+/// for room outside one, as `deliver` does (#18380).
+fn emit_waiting(
+    send: &ingress::Producer<Event>,
+    lang: &Language,
+    batch: &mut Option<Vec<Event>>,
+    event: Event,
+) -> Result<(), Reason> {
+    match batch {
+        Some(events) => {
+            events.push(event);
+            Ok(())
+        }
+        None => deliver(send, lang, event),
+    }
+}
+
+/// Publish a closed bundle as one channel item. Waiting for room keeps a
+/// stalled game from turning a bundle into a connection failure (#18380); a
+/// refusal still means the game never received it.
+fn publish_bundle(send: &ingress::Producer<Event>, events: Vec<Event>) -> Result<(), Reason> {
+    send.send_waiting(Event::Bundle(events.into_boxed_slice()))
+        .map_err(bundle_refusal)
+}
+
 fn receive_play(
     reader: &mut ConnReader,
     shared_writer: &Arc<Mutex<Option<QueuedWriter>>>,
@@ -1211,37 +1294,85 @@ fn receive_play(
     recorder: &RecorderSlot,
     payloads: &Arc<crate::raw_payloads::Transport>,
 ) -> Result<Reason, Reason> {
+    // PacketBundlePacker.decode / BundlerInfo.startPacketBundling: a delimiter
+    // opens a bundle, and the closing one hands every packet between them on
+    // together. Vanilla holds at most 4096 sub-packets. While a bundle is open
+    // its raw payloads and decoded packets are outside the ingress channel, so
+    // they are counted against the channel's remaining budget before they are
+    // kept; the closed bundle then travels as one channel item.
+    let mut pending: VecDeque<BundleEntry> = VecDeque::new();
+    let mut bundling: Option<Vec<BundleEntry>> = None;
+    let mut bundle_bytes = 0usize;
+    let mut batch: Option<Vec<Event>> = None;
+    let mut batch_left = 0usize;
     loop {
-        let (id, payload) = reader
-            .recv()
-            .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
-        if id == EXPORT_FENCE && reader.is_memory() && payload.len() == size_of::<u64>() {
-            deliver(
-                send,
-                lang,
-                Event::Packet(Box::new(play::Clientbound::Unknown(id, payload))),
-            )?;
-            continue;
-        }
-        let packet = match play::Clientbound::decode_with_payload_codecs(
-            id,
-            &payload,
-            &payloads.local.codecs,
-        ) {
-            Ok(p) => p,
-            Err(err) => {
-                if id == horizon_protocol::ids::play::clientbound::CUSTOM_PAYLOAD {
-                    return Err(Reason::plain(format!("custom play payload refused: {err}")));
-                }
-                let name = horizon_protocol::ids::name(
-                    horizon_protocol::State::Play,
-                    horizon_protocol::Direction::Clientbound,
-                    id,
-                )
-                .unwrap_or("?");
-                let _ = send.send(Event::DecodeError(format!("{name}: {err}")));
+        let (id, payload, packet) = if let Some(packet) = pending.pop_front() {
+            packet
+        } else {
+            let (id, payload) = reader
+                .recv()
+                .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
+            if id == EXPORT_FENCE && reader.is_memory() && payload.len() == size_of::<u64>() {
+                deliver(
+                    send,
+                    lang,
+                    Event::Packet(Box::new(play::Clientbound::Unknown(id, payload))),
+                )?;
                 continue;
             }
+            let packet = match play::Clientbound::decode_with_payload_codecs(
+                id,
+                &payload,
+                &payloads.local.codecs,
+            ) {
+                Ok(p) => p,
+                Err(err) => {
+                    if id == horizon_protocol::ids::play::clientbound::CUSTOM_PAYLOAD {
+                        return Err(Reason::plain(format!("custom play payload refused: {err}")));
+                    }
+                    let name = horizon_protocol::ids::name(
+                        horizon_protocol::State::Play,
+                        horizon_protocol::Direction::Clientbound,
+                        id,
+                    )
+                    .unwrap_or("?");
+                    let _ = send.send(Event::DecodeError(format!("{name}: {err}")));
+                    continue;
+                }
+            };
+            if matches!(&packet, play::Clientbound::BundleDelimiter(_)) {
+                match bundling.take() {
+                    Some(bundle) if bundle.is_empty() => {}
+                    Some(bundle) => {
+                        batch = Some(Vec::with_capacity(bundle.len()));
+                        batch_left = bundle.len();
+                        pending.extend(bundle);
+                    }
+                    None => bundling = Some(Vec::new()),
+                }
+                bundle_bytes = 0;
+                continue;
+            }
+            if let Some(bundle) = bundling.as_mut() {
+                // BundlerInfo.verifyNonTerminalPacket: a terminal packet would
+                // leave the rest of the bundle unapplied. For this client the
+                // only terminal play packet is StartConfiguration.
+                if matches!(&packet, play::Clientbound::StartConfiguration(_)) {
+                    return Err(Reason::plain("terminal packet in a bundle"));
+                }
+                let entry = bundle_entry_bytes(payload.capacity(), &packet);
+                let retained = send.stats().reserved_bytes.saturating_add(bundle_bytes);
+                if retained.saturating_add(entry) > send.capacity() {
+                    return Err(Reason::plain("bundle exceeds the incoming byte budget"));
+                }
+                if bundle.len() >= 4096 {
+                    return Err(Reason::plain("Too many packets in a bundle"));
+                }
+                bundle_bytes = bundle_bytes.saturating_add(entry);
+                bundle.push((id, payload, packet));
+                continue;
+            }
+            (id, payload, packet)
         };
         if let Some(rec) = recorder.lock().unwrap().as_ref()
             && rec.is_active()
@@ -1255,12 +1386,11 @@ fn receive_play(
         };
         match packet {
             play::Clientbound::KeepAlive(k) => reply(play::Serverbound::KeepAlive(k)),
-            play::Clientbound::BundleDelimiter(_) => {}
             play::Clientbound::ResourcePackPush(p) => {
-                let _ = send.send(Event::PackPush(p));
+                let _ = emit(send, &mut batch, Event::PackPush(p));
             }
             play::Clientbound::ResourcePackPop(p) => {
-                let _ = send.send(Event::PackPop(p.id));
+                let _ = emit(send, &mut batch, Event::PackPop(p.id));
             }
             play::Clientbound::StartConfiguration(_) => {
                 payloads.begin_configuration();
@@ -1312,20 +1442,64 @@ fn receive_play(
                 cookies.lock().unwrap().insert(p.key, p.payload);
             }
             play::Clientbound::ServerLinks(p) => {
-                let _ = send.send(Event::ServerLinks(p.links));
+                let _ = emit(send, &mut batch, Event::ServerLinks(p.links));
             }
             // ClientCommonPacketListenerImpl.handleTransfer: the connection
             // ends and the game connects to the other address.
             play::Clientbound::Transfer(p) => {
-                let _ = send.send(Event::Transfer {
+                // The transfer is the last event the game sees on this
+                // connection. A closed bundle's events are still staged on
+                // `batch` until its final packet is handled, so publish them
+                // together with the transfer here; the terminal return would
+                // otherwise drop them. Outside a bundle the transfer stays a
+                // standalone event.
+                let transfer = Event::Transfer {
                     host: p.host,
                     port: p.port,
-                });
+                };
+                match batch.take() {
+                    Some(mut events) => {
+                        events.push(transfer);
+                        // A refused bundle did not deliver a transfer target.
+                        // Do not report a successful handoff in that case.
+                        publish_bundle(send, events)?;
+                    }
+                    None => {
+                        let _ = send.send(transfer);
+                    }
+                }
                 return Ok(Reason::keyed("disconnect.transfer", lang));
             }
-            play::Clientbound::Disconnect(d) => return Ok(Reason::tag(&d.reason, lang)),
+            play::Clientbound::Disconnect(d) => {
+                // The disconnect is the last event the game sees on this
+                // connection. A closed bundle's events are still staged on
+                // `batch` until its final packet is handled, so publish them
+                // together with the disconnect here; the terminal return would
+                // otherwise drop them. Outside a bundle the disconnect stays
+                // the standalone event the session publishes after this
+                // returns.
+                let reason = Reason::tag(&d.reason, lang);
+                if let Some(mut events) = batch.take() {
+                    events.push(Event::Disconnected {
+                        reason: reason.text.clone(),
+                        key: reason.key.clone(),
+                        from_server: true,
+                    });
+                    publish_bundle(send, events)?;
+                }
+                return Ok(reason);
+            }
             play::Clientbound::CustomPayload(p) if p.channel == "minecraft:brand" => {
-                receive_brand(&p, send);
+                // A brand packet inside a closed bundle belongs to the
+                // bundle's batch so it keeps its packet order; a brand outside
+                // a bundle is still published directly.
+                if batch.is_some() {
+                    if let Some(event) = brand_event(&p) {
+                        let _ = emit(send, &mut batch, event);
+                    }
+                } else {
+                    receive_brand(&p, send);
+                }
             }
             // A far tile, straight to the sampler waiting for it.
             play::Clientbound::CustomPayload(p) if p.channel == crate::lod_net::CHANNEL => {
@@ -1338,20 +1512,54 @@ fn receive_play(
                     payloads.clone(),
                     send.clone(),
                 );
-                if let Some(payload) = receive_application(
+                // A bundle owns its application payloads: a MAIN payload
+                // becomes the bundle's own `RawPayload` event, and what a
+                // NETWORK handler publishes on main is staged into the batch.
+                // Either way it travels inside `Event::Bundle`, in packet
+                // order, never as its own ingress item ahead of the bundle.
+                let staged = batch.is_some().then(|| Arc::new(Mutex::new(Vec::new())));
+                let delivered = match receive_application(
                     &endpoint,
                     horizon_protocol::payload_negotiation::Phase::Play,
                     payload,
                     send,
-                )? {
-                    deliver(
-                        send,
-                        lang,
-                        Event::Packet(Box::new(play::Clientbound::CustomPayload(payload))),
-                    )?;
+                    staged.as_ref(),
+                ) {
+                    Ok(delivered) => delivered,
+                    // The payload ends the connection. A closed bundle's
+                    // events before it are still staged on `batch`, so
+                    // publish them first, as the Transfer and Disconnect
+                    // arms do; the error return would otherwise drop them.
+                    Err(reason) => {
+                        if let Some(events) = batch.take()
+                            && !events.is_empty()
+                        {
+                            publish_bundle(send, events)?;
+                        }
+                        return Err(reason);
+                    }
+                };
+                if let Some(staged) = staged
+                    && let Some(batch) = batch.as_mut()
+                {
+                    batch.extend(std::mem::take(&mut *staged.lock().unwrap()));
+                }
+                if let Some(payload) = delivered.map(|payload| {
+                    Event::Packet(Box::new(play::Clientbound::CustomPayload(payload)))
+                }) {
+                    emit_waiting(send, lang, &mut batch, payload)?;
                 }
             }
-            other => deliver(send, lang, Event::Packet(Box::new(other)))?,
+            other => emit_waiting(send, lang, &mut batch, Event::Packet(Box::new(other)))?,
+        }
+        if batch_left > 0 {
+            batch_left -= 1;
+            if batch_left == 0 {
+                let events = batch.take().unwrap_or_default();
+                if !events.is_empty() {
+                    publish_bundle(send, events)?;
+                }
+            }
         }
     }
 }
@@ -1395,6 +1603,7 @@ fn receive_application(
     phase: horizon_protocol::payload_negotiation::Phase,
     payload: cfg::CustomPayload,
     send: &ingress::Producer<Event>,
+    bundle: Option<&Arc<Mutex<Vec<Event>>>>,
 ) -> Result<Option<cfg::CustomPayload>, Reason> {
     let classified =
         match crate::raw_payloads::Incoming::classify(endpoint.transport(), phase, payload) {
@@ -1424,11 +1633,33 @@ fn receive_application(
     match classified {
         crate::raw_payloads::Classified::Other(payload) => Ok(Some(payload)),
         crate::raw_payloads::Classified::Application(incoming) => {
-            crate::raw_payloads::dispatch(
-                incoming,
-                endpoint.clone(),
-                crate::raw_payloads::MainQueue::Client(send.clone()),
-            );
+            match bundle {
+                // A bundled MAIN handler is applied by the game inside the
+                // group; its payload event is the bundle's own, so the handler
+                // never runs on the network executor and never publishes on
+                // the ordinary stream.
+                Some(staged)
+                    if matches!(&incoming.body, crate::raw_payloads::Body::Payload(_))
+                        && incoming.receiver.thread == mod_api::HandlerThread::Main =>
+                {
+                    staged
+                        .lock()
+                        .unwrap()
+                        .push(Event::RawPayload(Box::new(incoming)));
+                }
+                // A NETWORK handler still runs on this executor, in sub-packet
+                // order, but everything it enqueues on main joins the bundle.
+                Some(staged) => crate::raw_payloads::dispatch(
+                    incoming,
+                    endpoint.clone(),
+                    crate::raw_payloads::MainQueue::client_bundled(send.clone(), staged.clone()),
+                ),
+                None => crate::raw_payloads::dispatch(
+                    incoming,
+                    endpoint.clone(),
+                    crate::raw_payloads::MainQueue::Client(send.clone()),
+                ),
+            }
             Ok(None)
         }
         // Raw channels are server-side: a client's table has none.
@@ -1560,6 +1791,7 @@ fn configure(
                     horizon_protocol::payload_negotiation::Phase::Configuration,
                     p,
                     send,
+                    None,
                 )?
                 else {
                     continue;
@@ -1725,20 +1957,31 @@ fn negotiation_refused(initial: bool, server_build: Option<&str>, error: &str) -
     }
 }
 
-#[horizon_mod_api_macros::replaceable]
-fn receive_brand(payload: &cfg::CustomPayload, send: &ingress::Producer<Event>) {
+/// The event a custom payload carries, or none for an unrelated or malformed
+/// payload. `receive_brand` publishes it directly; a closed bundle stages it
+/// with its other events instead.
+fn brand_event(payload: &cfg::CustomPayload) -> Option<Event> {
     if payload.channel == "minecraft:brand"
         && let Ok(brand) = horizon_protocol::buf::Reader::new(&payload.data).string(32767)
     {
-        let _ = send.send(Event::Brand(brand));
+        Some(Event::Brand(brand))
     } else if payload.channel == horizon_protocol::quiet::CHANNEL {
-        let _ = send.send(Event::QuietCommands);
+        Some(Event::QuietCommands)
     } else if payload.channel == horizon_protocol::custom_book::CHANNEL {
-        let _ = send.send(Event::CustomBooks);
+        Some(Event::CustomBooks)
     } else if payload.channel == crate::lod_net::CHANNEL
         && let Some(offer) = crate::lod_net::Offer::decode(&payload.data)
     {
-        let _ = send.send(Event::FarTerrain(offer));
+        Some(Event::FarTerrain(offer))
+    } else {
+        None
+    }
+}
+
+#[horizon_mod_api_macros::replaceable]
+fn receive_brand(payload: &cfg::CustomPayload, send: &ingress::Producer<Event>) {
+    if let Some(event) = brand_event(payload) {
+        let _ = send.send(event);
     }
 }
 
@@ -2237,6 +2480,7 @@ mod tests {
                     horizon_protocol::payload_negotiation::Phase::Play,
                     attachment_sync(),
                     &send,
+                    None,
                 ),
                 Ok(None)
             ));
@@ -2337,6 +2581,7 @@ mod tests {
             horizon_protocol::payload_negotiation::Phase::Play,
             attachment_sync(),
             &send,
+            None,
         ) else {
             panic!("unnegotiated payload admitted from a server that answered");
         };
@@ -4088,5 +4333,611 @@ mod tests {
         assert!(reg.entries[2].data.is_none());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn a_bundle_is_dispatched_only_when_its_closing_delimiter_arrives() {
+        let (root, data) = empty_item_data("bundle");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel();
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        let ping = |id| play::Clientbound::Ping(cfg::Ping { id }).encode();
+        server.send(&delimiter).unwrap();
+        server.send(&ping(7)).unwrap();
+        server.send(&ping(8)).unwrap();
+        // PacketBundlePacker holds the sub-packets until the closing delimiter.
+        let timeout = Duration::from_millis(200);
+        assert!(
+            events.recv_timeout_owned(timeout).is_err(),
+            "a bundled packet was handled before the bundle closed"
+        );
+        server.send(&delimiter).unwrap();
+        let timeout = Duration::from_secs(5);
+        let (event, _credit) = events.recv_timeout_owned(timeout).unwrap().into_parts();
+        let Event::Bundle(bundle) = event else {
+            panic!("a closed bundle must be dispatched as one unit");
+        };
+        assert_eq!(bundle.len(), 2, "a bundle lost or gained a packet");
+        assert!(
+            matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        assert!(
+            matches!(&bundle[1], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 8 }))
+        );
+        assert!(
+            events.try_recv_owned().is_err(),
+            "the bundle was split across publications"
+        );
+        writer.lock().unwrap().take().unwrap().shutdown();
+        assert!(thread.join().unwrap().is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_carries_a_brand_event_in_packet_order() {
+        let (root, data) = empty_item_data("bundle-brand");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel();
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        let ping = |id| play::Clientbound::Ping(cfg::Ping { id }).encode();
+        let brand_payload = play::Clientbound::CustomPayload(cfg::CustomPayload {
+            channel: "minecraft:brand".into(),
+            data: brand(),
+        })
+        .encode();
+        server.send(&delimiter).unwrap();
+        server.send(&ping(7)).unwrap();
+        server.send(&brand_payload).unwrap();
+        server.send(&ping(8)).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            events.take_turn().is_empty(),
+            "a bundled brand was published before the bundle closed"
+        );
+        server.send(&delimiter).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while events.stats().queued_items == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let turn = events.take_turn();
+        assert_eq!(turn.len(), 1, "the brand was published outside its bundle");
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        let Event::Bundle(bundle) = event else {
+            panic!("a closed bundle must stay one polled unit");
+        };
+        assert_eq!(bundle.len(), 3, "the bundle lost or gained an event");
+        assert!(
+            matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        assert!(
+            matches!(&bundle[1], Event::Brand(brand) if brand.as_str() == "vanilla"),
+            "the brand is not in packet order inside the bundle"
+        );
+        assert!(
+            matches!(&bundle[2], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 8 }))
+        );
+        assert!(
+            events.take_turn().is_empty(),
+            "the brand was also published separately"
+        );
+        // A brand outside a bundle is still published directly.
+        server.send(&brand_payload).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while events.stats().queued_items == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let turn = events.take_turn();
+        assert_eq!(turn.len(), 1);
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        assert!(matches!(event, Event::Brand(brand) if brand == "vanilla"));
+        writer.lock().unwrap().take().unwrap().shutdown();
+        assert!(thread.join().unwrap().is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_transfer_inside_a_closed_bundle_publishes_the_events_staged_before_it() {
+        let (root, data) = empty_item_data("bundle-transfer");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel();
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        let ping = |id| play::Clientbound::Ping(cfg::Ping { id }).encode();
+        let transfer = play::Clientbound::Transfer(cfg::Transfer {
+            host: "example.net".into(),
+            port: 25566,
+        })
+        .encode();
+        server.send(&delimiter).unwrap();
+        server.send(&ping(7)).unwrap();
+        server.send(&ping(8)).unwrap();
+        server.send(&transfer).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(events.take_turn().is_empty(), "an open bundle was polled");
+        server.send(&delimiter).unwrap();
+        // The transfer is the terminal return. The events staged before it
+        // in the closed bundle must already be published when it happens.
+        assert!(thread.join().unwrap().is_ok());
+        let turn = events.take_turn();
+        assert_eq!(
+            turn.len(),
+            1,
+            "the transfer dropped the staged events instead of publishing them"
+        );
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        let Event::Bundle(bundle) = event else {
+            panic!("a closed bundle must stay one polled unit");
+        };
+        assert_eq!(
+            bundle.len(),
+            3,
+            "the staged events or the transfer were lost"
+        );
+        assert!(
+            matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        assert!(
+            matches!(&bundle[1], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 8 }))
+        );
+        assert!(
+            matches!(&bundle[2], Event::Transfer { host, port: 25566 } if host == "example.net"),
+            "the transfer is not after the events it closed"
+        );
+        assert!(
+            events.take_turn().is_empty(),
+            "the transfer was also published separately"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_disconnect_inside_a_closed_bundle_publishes_the_events_staged_before_it() {
+        let (root, data) = empty_item_data("bundle-disconnect");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel();
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        let ping = |id| play::Clientbound::Ping(cfg::Ping { id }).encode();
+        let disconnect = play::Clientbound::Disconnect(cfg::Disconnect {
+            reason: Tag::String("Closed by the server".into()),
+        })
+        .encode();
+        server.send(&delimiter).unwrap();
+        server.send(&ping(7)).unwrap();
+        server.send(&ping(8)).unwrap();
+        server.send(&disconnect).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(events.take_turn().is_empty(), "an open bundle was polled");
+        server.send(&delimiter).unwrap();
+        // The disconnect is the terminal return. The events staged before it
+        // in the closed bundle must already be published when it happens.
+        let Ok(reason) = thread.join().unwrap() else {
+            panic!("the server's disconnect was reported as an error");
+        };
+        assert_eq!(reason.text, "Closed by the server");
+        let turn = events.take_turn();
+        assert_eq!(
+            turn.len(),
+            1,
+            "the disconnect dropped the staged events instead of publishing them"
+        );
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        let Event::Bundle(bundle) = event else {
+            panic!("a closed bundle must stay one polled unit");
+        };
+        assert_eq!(
+            bundle.len(),
+            3,
+            "the staged events or the disconnect were lost"
+        );
+        assert!(
+            matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        assert!(
+            matches!(&bundle[1], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 8 }))
+        );
+        assert!(
+            matches!(
+                &bundle[2],
+                Event::Disconnected { reason, key: None, from_server: true }
+                    if reason == "Closed by the server"
+            ),
+            "the disconnect is not after the events it closed"
+        );
+        assert!(
+            events.take_turn().is_empty(),
+            "the disconnect was also published separately"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_payload_error_inside_a_closed_bundle_publishes_the_events_staged_before_it() {
+        let (root, data) = empty_item_data("bundle-payload-error");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel();
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        let ping = play::Clientbound::Ping(cfg::Ping { id: 7 }).encode();
+        // The negotiation channel with nothing negotiated: classification
+        // fails, which ends the connection.
+        let unnegotiated = play::Clientbound::CustomPayload(cfg::CustomPayload {
+            channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
+            data: vec![0],
+        })
+        .encode();
+        server.send(&delimiter).unwrap();
+        server.send(&ping).unwrap();
+        server.send(&unnegotiated).unwrap();
+        server.send(&delimiter).unwrap();
+        assert!(
+            thread.join().unwrap().is_err(),
+            "an unnegotiated payload was admitted"
+        );
+        let turn = events.take_turn();
+        assert_eq!(
+            turn.len(),
+            1,
+            "the payload error dropped the staged events instead of publishing them"
+        );
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        let Event::Bundle(bundle) = event else {
+            panic!("a closed bundle must stay one polled unit");
+        };
+        assert_eq!(bundle.len(), 1, "the staged ping was lost");
+        assert!(
+            matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bundled_transfer_refused_by_ingress_is_not_a_successful_handoff() {
+        let (root, data) = empty_item_data("bundle-transfer-refused");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel();
+        // The connection may still receive the bundle after its game consumer
+        // has closed. Successful decoding does not mean the target was delivered.
+        drop(events);
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        server.send(&delimiter).unwrap();
+        server
+            .send(&play::Clientbound::Ping(cfg::Ping { id: 7 }).encode())
+            .unwrap();
+        server
+            .send(
+                &play::Clientbound::Transfer(cfg::Transfer {
+                    host: "example.net".into(),
+                    port: 25566,
+                })
+                .encode(),
+            )
+            .unwrap();
+        server.send(&delimiter).unwrap();
+        let Err(reason) = thread.join().unwrap() else {
+            panic!("a refused bundled transfer was reported as a successful handoff");
+        };
+        assert_eq!(reason.text, "Disconnected");
+        writer.lock().unwrap().take().unwrap().shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn poll_returns_a_whole_bundle_and_never_a_prefix() {
+        let (root, data) = empty_item_data("bundle-poll");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        let (send, events) = event_channel_with_capacity(1 << 20);
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        let ping = |id| play::Clientbound::Ping(cfg::Ping { id }).encode();
+        server.send(&delimiter).unwrap();
+        server.send(&ping(7)).unwrap();
+        server.send(&ping(8)).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        // `Session::poll` is `take_turn`: a bundle that is still open is not
+        // visible, and a closed one is never visible in parts.
+        assert!(events.take_turn().is_empty(), "an open bundle was polled");
+        server.send(&delimiter).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while events.stats().queued_items == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let turn = events.take_turn();
+        assert_eq!(turn.len(), 1, "poll returned a prefix of the bundle");
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        let Event::Bundle(bundle) = event else {
+            panic!("a closed bundle must be one polled unit");
+        };
+        assert_eq!(bundle.len(), 2);
+        assert!(
+            matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        assert!(
+            matches!(&bundle[1], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 8 }))
+        );
+        // A packet outside delimiters is still its own polled event.
+        server.send(&ping(9)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while events.stats().queued_items == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let turn = events.take_turn();
+        assert_eq!(turn.len(), 1);
+        let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+        assert!(
+            matches!(event, Event::Packet(p) if *p == play::Clientbound::Ping(cfg::Ping { id: 9 }))
+        );
+        writer.lock().unwrap().take().unwrap().shutdown();
+        assert!(thread.join().unwrap().is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_over_the_ingress_budget_is_rejected() {
+        let (root, data) = empty_item_data("bundle-budget");
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+        // A tiny budget keeps the test allocation small; the check itself is
+        // the production one, against the channel's capacity.
+        let (send, _events) = event_channel_with_capacity(4 << 10);
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &Arc::new(AtomicBool::new(false)),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
+                &data,
+                &Arc::new(Mutex::new(None)),
+                &crate::raw_payloads::Transport::empty(),
+            )
+        });
+        let mut server = Connection::local(server);
+        let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+        server.send(&delimiter).unwrap();
+        // Retained raw payload plus decoded packet exceeds the 4 KiB budget,
+        // long before the 4096-packet cap.
+        server
+            .send(
+                &play::Clientbound::CustomPayload(cfg::CustomPayload {
+                    channel: "horizon:test-large-bundle".into(),
+                    data: vec![0; 8 << 10],
+                })
+                .encode(),
+            )
+            .unwrap();
+        let Err(error) = thread.join().unwrap() else {
+            panic!("a bundle over the retained budget was accepted");
+        };
+        assert!(
+            error.text.contains("byte budget"),
+            "unexpected rejection reason: {}",
+            error.text
+        );
+        writer.lock().unwrap().take().unwrap().shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bundle_owns_a_registered_application_payload() {
+        use crate::raw_payloads::test_support::{CLIENT_MAIN_CHANNEL, CLIENT_NETWORK_CHANNEL};
+        let (root, data) = empty_item_data("bundle-application");
+        crate::raw_payloads::test_support::with_client_peer(|payloads, main, network| {
+            let (client, server) = horizon_protocol::connection::Pipe::pair();
+            let (mut reader, writer) = Connection::local(client).split();
+            let writer = Arc::new(Mutex::new(Some(QueuedWriter::new(writer).unwrap())));
+            let (send, events) = event_channel();
+            let thread_writer = writer.clone();
+            let thread = std::thread::spawn(move || {
+                receive_play(
+                    &mut reader,
+                    &thread_writer,
+                    &Arc::new(AtomicBool::new(false)),
+                    &Language::new(),
+                    &send,
+                    &Cookies::default(),
+                    &crate::lod_net::Inbox::default(),
+                    &data,
+                    &Arc::new(Mutex::new(None)),
+                    &payloads,
+                )
+            });
+            let mut server = Connection::local(server);
+            let delimiter = play::Clientbound::BundleDelimiter(Empty).encode();
+            let ping = |id| play::Clientbound::Ping(cfg::Ping { id }).encode();
+            let application = |channel: &str, byte: u8| {
+                play::Clientbound::CustomPayload(cfg::CustomPayload {
+                    channel: channel.into(),
+                    data: vec![byte],
+                })
+                .encode()
+            };
+            server.send(&delimiter).unwrap();
+            server.send(&ping(7)).unwrap();
+            server.send(&application(CLIENT_MAIN_CHANNEL, 1)).unwrap();
+            server
+                .send(&application(CLIENT_NETWORK_CHANNEL, 2))
+                .unwrap();
+            server
+                .send(&application(CLIENT_NETWORK_CHANNEL, 3))
+                .unwrap();
+            server.send(&ping(8)).unwrap();
+            // An open bundle neither runs a registered handler nor publishes.
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(events.take_turn().is_empty(), "an open bundle was polled");
+            assert!(
+                network.calls().is_empty(),
+                "a bundled handler ran before the closing delimiter"
+            );
+            assert!(
+                main.calls().is_empty(),
+                "a bundled MAIN handler ran on the network thread"
+            );
+            server.send(&delimiter).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while events.stats().queued_items == 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // No `Event::RawPayload` was published on its own: the closed bundle
+            // is the only receipt, and it carries the payload in packet order.
+            let turn = events.take_turn();
+            assert_eq!(
+                turn.len(),
+                1,
+                "an application payload was published outside its bundle"
+            );
+            let (event, _credit) = turn.into_iter().next().unwrap().into_parts();
+            let Event::Bundle(bundle) = event else {
+                panic!("a closed bundle must stay one polled unit");
+            };
+            assert_eq!(bundle.len(), 3, "the bundle lost or gained an event");
+            assert!(
+                matches!(&bundle[0], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+            );
+            assert!(
+                matches!(&bundle[1], Event::RawPayload(incoming) if incoming.id.0 == CLIENT_MAIN_CHANNEL),
+                "the registered payload is not owned by the bundle"
+            );
+            assert!(
+                matches!(&bundle[2], Event::Packet(p) if **p == play::Clientbound::Ping(cfg::Ping { id: 8 }))
+            );
+            // The NETWORK handlers ran in bundle order, inside the group.
+            assert_eq!(network.calls(), vec![2, 3]);
+            // A MAIN handler executes only when the game applies the payload.
+            assert!(main.calls().is_empty());
+            assert!(
+                events.take_turn().is_empty(),
+                "the payload was also published separately"
+            );
+            writer.lock().unwrap().take().unwrap().shutdown();
+            assert!(thread.join().unwrap().is_err());
+            std::fs::remove_dir_all(root).unwrap();
+        });
     }
 }

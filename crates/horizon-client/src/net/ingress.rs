@@ -8,12 +8,14 @@ use std::{cell::Cell, fmt, marker::PhantomData, sync::mpsc::TryRecvError};
 pub struct Producer<T> {
     sender: byte_channel::Sender<T>,
     charge: fn(&T) -> usize,
+    capacity: usize,
 }
 impl<T> Clone for Producer<T> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
             charge: self.charge,
+            capacity: self.capacity,
         }
     }
 }
@@ -58,6 +60,13 @@ impl<T> Prepared<T> {
             value,
         })
     }
+    /// Take the prepared value back without publishing it. The reservation is
+    /// released for the caller to re-charge the value wherever it is staged.
+    pub fn defuse(self) -> T {
+        let Self { value, permit } = self;
+        drop(permit);
+        value
+    }
 }
 pub fn channel<T>(
     capacity: usize,
@@ -65,7 +74,11 @@ pub fn channel<T>(
 ) -> Result<(Producer<T>, Consumer<T>), byte_channel::InvalidCapacity> {
     let (sender, receiver) = byte_channel::channel(capacity)?;
     Ok((
-        Producer { sender, charge },
+        Producer {
+            sender,
+            charge,
+            capacity,
+        },
         Consumer {
             receiver,
             _single: PhantomData,
@@ -113,6 +126,12 @@ impl<T> Producer<T> {
     }
     pub fn stats(&self) -> Stats {
         self.sender.stats()
+    }
+    /// The channel's byte budget. Retained staging that has not been published
+    /// yet (a play bundle's packets) is bounded by what this budget still has
+    /// free, so the budget stays meaningful across the staging step.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 }
 impl<T> Consumer<T> {

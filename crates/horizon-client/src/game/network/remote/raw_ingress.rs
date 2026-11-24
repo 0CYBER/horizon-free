@@ -1,4 +1,5 @@
 //! Receiving-provider credit follows ordered events and decoder placeholders.
+use super::super::raw_backlog::BundlePart;
 use super::*;
 use crate::game::export::ExportIngress;
 
@@ -19,16 +20,41 @@ impl Remote {
         let now = Instant::now();
         for receipt in self.session.poll() {
             let (event, credit) = receipt.into_parts();
-            let received = match event {
-                Event::Packet(p) if matches!(*p, C::LevelChunkWithLight(_)) => {
-                    match self.decoder.submit(self.chunk_format.clone(), p) {
-                        None => Received::Chunk(self.chunk_format.clone(), credit),
-                        Some(p) => Received::Event(Event::Packet(p), credit),
+            events.push_back((self.received(event, credit), now));
+        }
+    }
+
+    /// Turn one delivered event into backlog slots. A closed bundle becomes a
+    /// single `Received::Bundle`: its chunks are queued on the decoder, and the
+    /// whole group is released by the frame only when all of them can decode.
+    fn received(
+        &self,
+        event: Event,
+        credit: horizon_client::net::ingress::ReceiveLease<Event>,
+    ) -> Received {
+        match event {
+            Event::Bundle(bundle) => {
+                let mut parts = Vec::with_capacity(bundle.len());
+                for event in Vec::from(bundle) {
+                    match event {
+                        Event::Packet(p) if matches!(*p, C::LevelChunkWithLight(_)) => {
+                            match self.decoder.submit(self.chunk_format.clone(), p) {
+                                None => parts.push(BundlePart::Chunk(self.chunk_format.clone())),
+                                Some(p) => parts.push(BundlePart::Event(Event::Packet(p))),
+                            }
+                        }
+                        event => parts.push(BundlePart::Event(event)),
                     }
                 }
-                event => Received::Event(event, credit),
-            };
-            events.push_back((received, now));
+                Received::Bundle(parts, credit)
+            }
+            Event::Packet(p) if matches!(*p, C::LevelChunkWithLight(_)) => {
+                match self.decoder.submit(self.chunk_format.clone(), p) {
+                    None => Received::Chunk(self.chunk_format.clone(), Some(credit)),
+                    Some(p) => Received::Event(Event::Packet(p), Some(credit)),
+                }
+            }
+            event => Received::Event(event, Some(credit)),
         }
     }
 }
@@ -91,7 +117,43 @@ impl Game<'_> {
         // teleport at 32 chunks) is forgotten at once, before whatever follows it.
         let mut forgotten = horizon_client::fast_hash::FxHashSet::default();
         let mut forgotten_credits = Vec::new();
+        // C1..CN below belong to one closed bundle; while it is non-zero the
+        // frame may not stop at a chunk budget or reorder its items.
+        let mut group_left = 0usize;
         while let Some((item, queued_at)) = events.pop_front() {
+            let item = match item {
+                Received::Bundle(parts, credit) => {
+                    let chunk_count = parts
+                        .iter()
+                        .filter(|part| matches!(part, BundlePart::Chunk(_)))
+                        .count();
+                    let ready = self
+                        .remote
+                        .as_ref()
+                        .map_or(0, |r| r.decoder.ready_run(chunk_count));
+                    if ready < chunk_count {
+                        events.push_front((Received::Bundle(parts, credit), queued_at));
+                        break;
+                    }
+                    let last = parts.len().saturating_sub(1);
+                    let mut credit = Some(credit);
+                    group_left = parts.len();
+                    for (index, part) in parts.into_iter().enumerate().rev() {
+                        let lease = if index == last { credit.take() } else { None };
+                        let item = match part {
+                            BundlePart::Event(event) => Received::Event(event, lease),
+                            BundlePart::Chunk(format) => Received::Chunk(format, lease),
+                        };
+                        events.push_front((item, queued_at));
+                    }
+                    continue;
+                }
+                other => other,
+            };
+            let in_bundle = group_left > 0;
+            if in_bundle {
+                group_left -= 1;
+            }
             if let Received::Event(Event::Packet(packet), _) = &item
                 && let C::ForgetLevelChunk(p) = &**packet
             {
@@ -106,6 +168,7 @@ impl Game<'_> {
             forgotten_credits.clear();
             let chunk = matches!(item, Received::Chunk(_, _));
             if chunk
+                && !in_bundle
                 && chunks >= CHUNK_PACKETS_PER_FRAME
                 && !backlog_item_overdue(queued_at, Instant::now())
             {
@@ -131,6 +194,10 @@ impl Game<'_> {
                     let (packet, column) = match next {
                         Next::Ready(decoded) => decoded,
                         Next::Decoding => {
+                            debug_assert!(
+                                !in_bundle,
+                                "a bundle was released before all its chunks could decode"
+                            );
                             events.push_front((Received::Chunk(format, credit), queued_at));
                             break;
                         }
@@ -147,6 +214,9 @@ impl Game<'_> {
                     }
                     chunks += started.map_or(Duration::ZERO, |t| t.elapsed());
                     continue;
+                }
+                Received::Bundle(..) => {
+                    unreachable!("bundles are expanded before this match")
                 }
             };
             match event {
@@ -320,6 +390,9 @@ impl Game<'_> {
                 }
                 Event::RawPayload(mut incoming) => {
                     if !self.receive_client_payload(&mut incoming)? {
+                        // A bundled payload's main root can defer (a busy guest).
+                        // It stays at the head, so the rest of the group follows
+                        // it in order once the root commits.
                         events.push_front((
                             Received::Event(Event::RawPayload(incoming), _credit),
                             queued_at,
@@ -333,6 +406,9 @@ impl Game<'_> {
                     }
                     packet => self.handle_packet(packet)?,
                 },
+                Event::Bundle(_) => {
+                    unreachable!("bundles are not transported inside bundles")
+                }
             }
             chunks += started.map_or(Duration::ZERO, |t| t.elapsed());
             if self.remote.is_none() {
@@ -370,7 +446,7 @@ mod tests {
         let collect = |backlog: &mut VecDeque<_>| {
             backlog.extend(receive.take_turn().into_iter().map(|receipt| {
                 let (event, lease) = receipt.into_parts();
-                (Received::Event(event, lease), Instant::now())
+                (Received::Event(event, Some(lease)), Instant::now())
             }));
         };
 
@@ -426,7 +502,7 @@ mod tests {
         let add = |backlog: &mut VecDeque<_>, event| {
             send.send(event).unwrap();
             let (event, lease) = recv.try_recv_owned().unwrap().into_parts();
-            backlog.push_back((Received::Event(event, lease), Instant::now()));
+            backlog.push_back((Received::Event(event, Some(lease)), Instant::now()));
         };
         add(&mut backlog, packet(11));
         add(&mut backlog, marker(8));
