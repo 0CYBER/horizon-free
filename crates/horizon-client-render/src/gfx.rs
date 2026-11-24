@@ -7259,6 +7259,13 @@ impl Renderer {
         if let Some((_, Some(post))) = &mut self.pack_post {
             post.reset_history(&self.device);
         }
+        // `[frame] jitter` advances TAA's Halton phase: a restarted pack starts it again.
+        self.world_post.reset_temporal_sequence();
+    }
+    /// Whether the running Horizon pack moves the world by TAA's offset under its own post
+    /// chain (`[frame] jitter`), the player's TAA on or off.
+    pub fn pack_jitters(&self) -> bool {
+        self.executor.is_some_and(|c| c.jitter)
     }
     /// The running shader pack's kind: `iris` (a `shaders/` pack) or `native` (one of
     /// Horizon's own).
@@ -8867,9 +8874,12 @@ impl Renderer {
             hdr_gain,
             hdr_settings,
         ));
+        // A pack that resolves its own world may still ask for TAA's offset (`[frame] jitter`).
+        let pack_jitter = !frame.title && self.executor.is_some_and(|c| c.jitter);
         let jitter = self.world_post.jitter(
             [self.config.width, self.config.height],
             taa,
+            pack_jitter,
             view_proj,
             frame.camera,
         );
@@ -11161,13 +11171,8 @@ impl Renderer {
                 let mut fog_ends = globals.fog_ends;
                 fog_ends[3] = plane;
                 // Water samples the mirror at its jittered screen position: the mirror takes the
-                // world's jitter, while TAA runs.
-                let mirrored = view::mirror_view_projection(view_proj, plane);
-                let mirrored = if taa && self.world_post.taa {
-                    jitter * mirrored
-                } else {
-                    mirrored
-                };
+                // world's jitter (TAA's or the pack's; identity while the world is still).
+                let mirrored = jitter * view::mirror_view_projection(view_proj, plane);
                 let mirror_globals = Globals {
                     view_proj: mirrored.to_cols_array_2d(),
                     inverse_view,

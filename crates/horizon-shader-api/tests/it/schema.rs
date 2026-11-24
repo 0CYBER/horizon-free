@@ -805,8 +805,9 @@ const SMALLEST: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\na
 
 #[test]
 fn the_frame_tonemap_and_entity_keys_are_read() {
-    use horizon_shader_api::{Blend, Coverage, Fog, Primaries};
+    use horizon_shader_api::{Blend, Coverage, Fog, Jitter, Primaries};
     let m = Manifest::parse(SMALLEST).unwrap();
+    assert_eq!(m.jitter, Jitter::Off);
     assert_eq!((m.blend, m.tonemap.is_none()), (Blend::Gamma, true));
     assert_eq!(m.primaries, Primaries::Bt709);
     let named = format!("{SMALLEST}[frame]\nprimaries = \"bt709\"\n");
@@ -852,6 +853,16 @@ fn the_frame_tonemap_and_entity_keys_are_read() {
     assert_eq!(Manifest::parse(&own).unwrap().fog, Fog::Pack);
     let engine = format!("{both}[frame]\nfog = \"engine\"\n");
     assert_eq!(Manifest::parse(&engine).unwrap().fog, Fog::Engine);
+    // The world's sub-pixel offset under the pack's own post chain: always, or while an
+    // option is on.
+    let jitter = |value: &str, options: &str| {
+        let text = format!("{SMALLEST}{options}[frame]\njitter = {value}\n");
+        Manifest::parse(&text).unwrap().jitter
+    };
+    assert_eq!(jitter("true", ""), Jitter::On);
+    assert_eq!(jitter("false", ""), Jitter::Off);
+    let taa = "[[options]]\nid = \"taa\"\nname = \"TAA\"\ntype = \"bool\"\ndefault = true\n";
+    assert_eq!(jitter("\"taa\"", taa), Jitter::While("taa".into()));
     let tonemap = format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
@@ -928,6 +939,10 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         (
             format!("{SMALLEST}[frame]\nfog = \"none\"\n"),
             "frame.fog \"none\": engine or pack",
+        ),
+        (
+            format!("{SMALLEST}[frame]\njitter = \"taa\"\n"),
+            "frame.jitter: `taa` is no option",
         ),
         (
             format!(

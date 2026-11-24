@@ -96,6 +96,19 @@ scatters, a little denser in the middle tones. A post pass fogs what the stages 
 (`vanilla_fog(view_position(uv, depth))`), and traced hits from `hit.position`, which Horizon never fogs.
 `[material] fog`, from before, is gone: the check refuses it and names `[frame] fog`.
 
+## `[frame] jitter`
+
+`jitter = false` (the default): while the pack's `[[post]]` chain draws the frame, the world's projection stands still
+(Anti-aliasing, below). With `jitter = true` Horizon moves it every frame by TAA's sub-pixel offset, a Halton (2, 3)
+sequence over 8 frames at the size the world draws at, and says it in `frame.jitter` and `frame.previous_jitter`, so
+that a temporal pass in `[[post]]` gathers what falls between pixels. `jitter = "<option>"` does that while the option
+is not 0 (a bool on, a number other than 0), so the offset stops with the pack's own pass. Horizon adds no resolve,
+history or upscaling of its own: a pack that turns it on without a pass that undoes it shows the world shaking by half
+a pixel. Rebuild points from `scene_depth` with `vec4<f32>(ndc.xy - frame.jitter, depth, 1.0)` (the post prelude's
+`view_position` leaves the offset in, half a pixel at most), and reproject with `frame.previous_jitter`. Motion vectors
+stay unjittered. Under a pack the renderer resolves (no `[[post]]`, gamma light) the key changes nothing: the player's
+TAA jitters the world already.
+
 A stage is a function your WGSL defines, with the signature below; Horizon puts the prelude (these structs, the
 resources and helpers) before your files and calls the function from its own pass. Your files declare no
 bindings and no entry points, and no names starting with `horizon_`.
@@ -872,14 +885,15 @@ The frame, as `frame` in every stage. Positions and directions are in world axes
 ## Anti-aliasing
 
 While a pack's `[[post]]` chain draws the frame, the player's anti-aliasing settings do not run: `taa`, `fxaa`
-and `upscaling` in `horizon-graphics.txt` have no effect, and the frame's projection is never jittered, because the
-last post pass draws the picture itself and Horizon's own resolve, which does TAA, FXAA and TAA upscaling, is the
-step it replaces. The world is still rendered at `resolutionScale` before the pack reads it.
+and `upscaling` in `horizon-graphics.txt` have no effect, and the frame's projection is not jittered unless the
+pack asks (`[frame] jitter`), because the last post pass draws the picture itself and Horizon's own resolve, which
+does TAA, FXAA and TAA upscaling, is the step it replaces. The world is still rendered at `resolutionScale` before the pack reads it.
 
 A pack that wants smooth edges draws them itself, in a post pass: a spatial filter (FXAA, SMAA and the like) works on
 `previous` as it is. A temporal pass cannot do what TAA does here, even though a kept resource and
 `frame.previous_view_projection` give it the last frame: nothing moves the camera by a fraction of a texel from one
 frame to the next, so a still camera gives it the same picture twice and there is no sub-pixel detail to gather.
+`[frame] jitter` gives it that motion: TAA's offset, in `frame.jitter`.
 
 A pack without `[[post]]` whose frame holds gamma light (not `blend = "linear"` on the float frame) gets the
 player's FXAA or TAA: with `fxaa` or `taa` on, Horizon anti-aliases the world, FXAA at its size, in the frame's

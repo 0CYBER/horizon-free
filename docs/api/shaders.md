@@ -223,6 +223,11 @@ keeps drawing. What a pack works with:
   coverage: the texture's alpha times the layer's opacity is cut below 0.1 and blends, the returned alpha is ignored,
   and the check refuses a `discard` reachable from `entity`. Under `"pack"` the returned alpha is cut and blends, and
   the stage may `discard`. Dissolve masks and culling are Horizon's under either.
+- **`[frame] jitter`**: `false` (the default), `true`, or an option's id (on while it isn't 0). While the pack's
+  `[[post]]` chain draws the frame, Horizon moves the world's projection every frame by TAA's Halton offset and says
+  it in `frame.jitter` and `frame.previous_jitter`, for a temporal pass of the pack's own; Horizon adds no resolve,
+  history or upscaling for it. Under a pack the renderer resolves it changes nothing
+  ([reference](shaders-reference-0.2.md#frame-jitter)).
 - **`[frame] fog`**: `"engine"` (the default) or `"pack"`, which fogs what its stages draw itself. Under `"pack"`
   Horizon skips its fog on what `material` and `entity` return, and every stage gets `vanilla_fog(position)`,
   vanilla's fog at a point, with the frame's two fog distances it reads (`fog_environment`, `fog_render`), so a pack
@@ -246,6 +251,7 @@ surface = true             # optional, default false: the stage gets `set_surfac
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 fog = "engine"             # optional: engine (default) or pack, when the pack fogs what its stages draw
+jitter = false             # optional: true (or an option's id) moves the world by TAA's offset under the pack's [[post]] chain
 
 [ray_tracing]              # optional, needs [[post]], [[before_world]], [material] or [entity]: the post stage gets `trace` and `trace_any`, other supported stages get them where they call them
 lights = true              # optional, default false: the light sources (`ray_lights_near`, `ray_light`) in the stages that name them
@@ -305,6 +311,10 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
 
 ## Changelog
 
+- 2026-11-24: API 0.2 (addition, experimental): `[frame] jitter` (off by default), `true` or an option's id: under
+  the pack's own `[[post]]` chain the world moves by TAA's sub-pixel offset every frame, read in `frame.jitter` and
+  `frame.previous_jitter`, so a temporal pass has sub-pixel detail to gather (#20296). A pack without the key is
+  unchanged. Older 0.2 builds refuse unknown `[frame]` keys, so a pack that sets it doesn't load there.
 - 2026-11-24: API 0.2 (fix, experimental): a post pass with an `output`, a target of the pack's own or a kept
   texture, keeps the alpha it returns; before, only a kept texture's did (#20563).
 - API 0.2 (addition): `post_opaque = true` lets native post passes read the pre-translucent

@@ -8734,7 +8734,10 @@ impl Game<'_> {
         };
         self.view_frustum =
             self.world_view_frustum(camera, [fov_degrees, yaw, pitch], bob * spin, depth_far);
-        let billboard_frustum = if self.settings.horizon.taa {
+        // The world is jittered by the player's TAA or by a pack's `[frame] jitter`.
+        let jittered =
+            self.settings.horizon.taa || self.renderer.as_ref().is_some_and(|r| r.pack_jitters());
+        let billboard_frustum = if jittered {
             self.renderer.as_ref().map(|r| {
                 r.camera_frustum_with_jitter(fov_degrees, yaw, pitch, bob * spin, depth_far)
             })

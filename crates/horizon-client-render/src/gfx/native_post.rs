@@ -3090,7 +3090,7 @@ api = \"0.2\"
         let screen = sized(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
         let screen_view = screen.create_view(&Default::default());
         let mut show = |pixels: &[u8]| {
-            world_post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+            world_post.jitter(window, true, false, Mat4::IDENTITY, DVec3::ZERO);
             let (color, depth) = world_post.prepare(&device, window, true, false).unwrap();
             queue.write_texture(
                 source.as_image_copy(),
@@ -3198,7 +3198,7 @@ api = \"0.2\"
         const WINDOW: u32 = 8;
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let window = [WINDOW, WINDOW];
-        world_post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+        world_post.jitter(window, true, false, Mat4::IDENTITY, DVec3::ZERO);
         let (color, depth) = world_post.prepare(device, window, true, false).unwrap();
         let size = world_post.size().unwrap();
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;

@@ -14,8 +14,8 @@ pub mod stages;
 pub use check::{Problem, Report, check};
 pub use inputs::Frame;
 pub use manifest::{
-    API, Blend, Coverage, Fog, LightColor, MANIFEST, Manifest, Material, OptionKind, OptionPage,
-    PackOption, PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
+    API, Blend, Coverage, Fog, Jitter, LightColor, MANIFEST, Manifest, Material, OptionKind,
+    OptionPage, PackOption, PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
 };
 pub use package::{Declared, EXTENSION, Pack};
 pub use stages::{Composed, StageKind, compose, compose_scene};

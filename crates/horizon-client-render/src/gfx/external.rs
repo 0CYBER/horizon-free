@@ -208,6 +208,10 @@ pub struct Capabilities {
     /// Besides `engine_resolve`, TAA upscales its world and sharpens it as without a pack: its
     /// `[tonemap]`, if it has one, never reads `previous`, which is then larger than the world.
     pub engine_upscale: bool,
+    /// Without `engine_resolve`, the renderer still moves the world's projection by TAA's
+    /// sub-pixel offset every frame and says it in `frame.jitter` (`[frame] jitter`), for the
+    /// pack's own temporal pass; it doesn't resolve, upscale or keep a history for it.
+    pub jitter: bool,
 }
 
 /// What the renderer hands the pack's post stage (`ExternalPipeline::run_post`).

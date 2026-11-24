@@ -631,12 +631,12 @@ mod tests {
             for index in 0..3 {
                 for _ in 0..settling_frames {
                     if Readbacks::draw_allowed(Some(&readbacks)) {
-                        post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+                        post.jitter(window, true, false, Mat4::IDENTITY, DVec3::ZERO);
                     }
                 }
                 assert!(readbacks.try_arm(index).unwrap());
                 assert!(Readbacks::draw_allowed(Some(&readbacks)));
-                matrices.push(post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO));
+                matrices.push(post.jitter(window, true, false, Mat4::IDENTITY, DVec3::ZERO));
                 readbacks.reserved = readbacks.armed.take().map(|(_, buffer)| buffer);
             }
             matrices

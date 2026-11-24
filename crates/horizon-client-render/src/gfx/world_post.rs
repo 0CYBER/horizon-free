@@ -171,6 +171,9 @@ pub struct Post {
     /// TAA runs this frame (`jitter`): not on the title screen, under a `shaders/` pack, or
     /// under a native one the renderer doesn't resolve (`Capabilities::engine_resolve`).
     taa_on: bool,
+    /// The world is jittered this frame: with `taa_on`, or for a native pack that resolves its
+    /// own (`Capabilities::jitter`), which reads the offset in `frame.jitter`.
+    jitter_on: bool,
     target: Option<WorldTarget>,
     taa_resources: Option<TaaResources>,
     /// Frames jittered so far (the Halton index), and which history the next resolve writes.
@@ -372,6 +375,7 @@ impl Post {
             upscale: 1.0,
             upscale_held: false,
             taa_on: false,
+            jitter_on: false,
             target: None,
             taa_resources,
             taa_frame: 0,
@@ -457,11 +461,21 @@ impl Post {
     }
 
     /// TAA's sub-pixel jitter this frame, as a clip-space matrix to multiply into the
-    /// world's projection (identity while `on` is false); `view_proj` is the unjittered
-    /// projection, relative to `camera`. Call it before `prepare`, once per frame.
-    pub fn jitter(&mut self, window: [u32; 2], on: bool, view_proj: Mat4, camera: DVec3) -> Mat4 {
+    /// world's projection (identity while neither `on`, TAA, nor `pack` is); `view_proj` is the
+    /// unjittered projection, relative to `camera`. `pack`: a native pack resolves the world
+    /// itself and asks for the offset alone (`Capabilities::jitter`), at the world's size, with
+    /// no resolve or history of TAA's. Call it before `prepare`, once per frame.
+    pub fn jitter(
+        &mut self,
+        window: [u32; 2],
+        on: bool,
+        pack: bool,
+        view_proj: Mat4,
+        camera: DVec3,
+    ) -> Mat4 {
         self.taa_on = on && self.taa && self.taa_resources.is_some();
-        if !self.taa_on {
+        self.jitter_on = self.taa_on || pack;
+        if !self.jitter_on {
             self.taa_previous = None;
             return Mat4::IDENTITY;
         }
@@ -469,11 +483,19 @@ impl Post {
         let (size, _) = self.sizes(window, false);
         // Halton (2, 3) over 8 frames per output pixel (FSR's count), in rendered
         // pixels around the centre.
-        let upscale = self.taa_upscale();
+        let upscale = if self.taa_on { self.taa_upscale() } else { 1.0 };
         let phases = (8.0 * upscale * upscale).ceil() as u32;
         let i = self.taa_frame % phases + 1;
         let offset = Vec2::new(halton(i, 2), halton(i, 3)) - 0.5;
         let jitter = offset * 2.0 / Vec2::new(size[0] as f32, size[1] as f32);
+        if !self.taa_on {
+            self.taa_previous = None;
+            self.taa_this_frame = TaaUniform {
+                reproject: Mat4::IDENTITY.to_cols_array_2d(),
+                jitter: [jitter.x, jitter.y, 1.0, 0.0],
+            };
+            return Mat4::from_translation(jitter.extend(0.0));
+        }
         let current = view_proj.as_dmat4();
         let (reproject, reset) = match self.taa_previous {
             Some((previous, previous_camera)) => (
@@ -491,16 +513,20 @@ impl Post {
     }
 
     /// This frame's jitter in clip space, the translation `jitter` multiplies into the
-    /// projection (`frame.jitter` of a 0.2 pack); zero without TAA.
+    /// projection (`frame.jitter` of a 0.2 pack); zero while the world isn't jittered.
     pub fn jitter_clip(&self) -> [f32; 2] {
         let j = self.taa_this_frame.jitter;
-        if self.taa_on { [j[0], j[1]] } else { [0.0; 2] }
+        if self.jitter_on {
+            [j[0], j[1]]
+        } else {
+            [0.0; 2]
+        }
     }
 
     /// This frame's jitter in rendered pixels, y down (FSR's `jitterOffset`); zero
-    /// without TAA.
+    /// while the world isn't jittered.
     pub fn jitter_pixels(&self) -> [f32; 2] {
-        let Some(size) = self.size().filter(|_| self.taa_on) else {
+        let Some(size) = self.size().filter(|_| self.jitter_on) else {
             return [0.0; 2];
         };
         let j = self.taa_this_frame.jitter;
@@ -1090,7 +1116,7 @@ mod tests {
         post.hold_upscale(true);
         assert_eq!(post.taa_render_size(window), scaled);
         assert_eq!(post.pack_render_size(window, false), scaled);
-        post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter(window, true, false, Mat4::IDENTITY, DVec3::ZERO);
         let _ = post.prepare(&device, window, true, false);
         assert_eq!(post.size(), Some(scaled));
         let history = post.target.as_ref().and_then(|t| t.taa.as_ref());
@@ -1122,7 +1148,7 @@ mod tests {
         post.scale = 0.5;
         let resolve = |post: &mut Post, upscale| {
             post.upscale = upscale;
-            post.jitter(window, true, Mat4::IDENTITY, DVec3::ZERO);
+            post.jitter(window, true, false, Mat4::IDENTITY, DVec3::ZERO);
             let _ = post.prepare(&device, window, true, false);
             let mut encoder = device.create_command_encoder(&Default::default());
             let resolved = post.resolve_taa(&device, &queue, &mut encoder, None);
@@ -1143,6 +1169,51 @@ mod tests {
         assert_eq!(history, (scaled, HISTORY_FORMAT));
     }
 
+    /// A native pack that resolves its own world and asks for the offset (`[frame] jitter`)
+    /// gets TAA's Halton offset at the world's size, the player's TAA on or off, and says it in
+    /// `frame.jitter`, without TAA's history, upscaling or resolve.
+    #[test]
+    fn a_pack_that_resolves_its_world_gets_the_jitter_alone() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, _)) = test_device() else {
+            eprintln!("pack jitter GPU skipped: no test device");
+            return;
+        };
+        let mut post = Post::new(&device, wgpu::TextureFormat::Rgba16Float);
+        let (window, scaled) = ([1281, 721], [641, 361]);
+        post.scale = 0.5;
+        post.upscale = 2.0;
+        for taa in [false, true] {
+            post.taa = taa;
+            post.forget_history();
+            let mut seen = Vec::new();
+            for _ in 0..8 {
+                let m = post.jitter(window, false, true, Mat4::IDENTITY, DVec3::ZERO);
+                let clip = post.jitter_clip();
+                assert_eq!(m, Mat4::from_translation(Vec2::from(clip).extend(0.0)));
+                // Within half a pixel of the scaled window's, the size the world draws at.
+                assert!(clip[0].abs() <= 1.0 / scaled[0] as f32);
+                assert!(clip[1].abs() <= 1.0 / scaled[1] as f32);
+                assert!(!post.taa_on);
+                seen.push(clip);
+            }
+            seen.dedup();
+            assert_eq!(seen.len(), 8, "a new offset every frame");
+            let _ = post.prepare(&device, window, true, false);
+            assert_eq!(post.size(), Some(scaled));
+            assert!(post.target.as_ref().is_some_and(|t| t.taa.is_none()));
+            assert!(post.taa_frame().is_none());
+            assert_ne!(post.jitter_pixels(), [0.0; 2]);
+        }
+        // Without the pack's ask the world stands still.
+        assert_eq!(
+            post.jitter(window, false, false, Mat4::IDENTITY, DVec3::ZERO),
+            Mat4::IDENTITY
+        );
+        assert_eq!(post.jitter_clip(), [0.0; 2]);
+        assert_eq!(post.jitter_pixels(), [0.0; 2]);
+    }
+
     #[test]
     fn baked_light_changes_and_returning_from_a_pack_reject_taa_history() {
         let _gpu = crate::gfx::test_gpu::lock();
@@ -1159,38 +1230,38 @@ mod tests {
         let key = [5.0, 4.0, 1.0, 0.0];
         for gain in [true, false, true] {
             post.baked_light(LightKey::engine(gain, key));
-            post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+            post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], 1.0);
             post.baked_light(LightKey::engine(gain, key));
-            post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+            post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], 0.0);
         }
         for field in 0..4 {
             let mut changed = key;
             changed[field] += 0.01;
             post.baked_light(LightKey::engine(true, changed));
-            post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+            post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], 1.0);
         }
         post.baked_light(LightKey::engine(false, key));
-        post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 1.0);
         post.baked_light(LightKey::engine(false, [0.0; 4]));
-        post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 0.0);
         // A pack disables TAA even when the light settings stay the same. Its first
         // world frame after the pack is dropped must not reuse the pre-pack history.
-        post.jitter([32, 32], false, Mat4::IDENTITY, DVec3::ZERO);
-        post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter([32, 32], false, false, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 1.0);
-        post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 0.0);
         // A pack the renderer resolves keeps TAA on: its install, the display's values and
         // the return to no pack each drop the history, and its frames alone keep it.
         let display = super::super::output::DisplayValues::SDR;
         post.forget_history();
         post.baked_light(LightKey::engine(false, [0.0; 4]));
-        post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+        post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 1.0);
         for (key, reset) in [
             (LightKey::Pack(display), 1.0),
@@ -1205,7 +1276,7 @@ mod tests {
             (LightKey::engine(false, [0.0; 4]), 1.0),
         ] {
             post.baked_light(key);
-            post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
+            post.jitter([32, 32], true, false, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], reset, "{key:?}");
         }
         eprintln!(
