@@ -138,3 +138,54 @@ fn sleeping_in_a_straw_bed_awards_its_own_statistic() {
     assert_eq!(game.stats.get("custom", "minecraft:sleep_in_bed"), 1);
     assert_eq!(game.stats.get("custom", "minecraft:sleep_in_straw_bed"), 1);
 }
+
+/// `ServerPlayer.startSleepInBed` fires `slept_in_bed` only when the bed's rule
+/// can set the respawn point (`canSetSpawn`). A straw bed never sets it, so the
+/// player sleeps there without the trigger; an ordinary bed fires it.
+#[test]
+#[ignore = "daily"]
+fn only_a_bed_that_can_set_the_spawn_triggers_slept_in_bed() {
+    use horizon_client::advancements::Tree;
+    use horizon_world::loot::PackOverlay;
+    use std::sync::Arc;
+
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
+    game.options.dedicated = None;
+    let files = vec![(
+        "advancement/parity:slept".into(),
+        vec![br#"{"criteria":{"slept":{"trigger":"minecraft:slept_in_bed"}}}"#.to_vec()],
+    )];
+    game.adv.tree = Arc::new(Tree::load_with(
+        &game.options.resources.join("data"),
+        &PackOverlay {
+            files: &files,
+            ..PackOverlay::NONE
+        },
+    ));
+    game.adv.loaded = true;
+    let slept = game.adv.tree.by_id["parity:slept"];
+    // `Level.isDarkOutside`: midnight, so both beds may be slept in.
+    game.world.day_time = 18000;
+    let straw = place_bed(&mut game, 2, "minecraft:straw_bed");
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 3.5)).unwrap());
+    game.try_sleep(straw);
+    assert_eq!(
+        game.sleeping,
+        Some(straw),
+        "the player lay in the straw bed"
+    );
+    assert!(
+        !game.adv.progress.done(&game.adv.tree.list[slept]),
+        "a straw bed can't set the spawn, so it doesn't fire slept_in_bed"
+    );
+    game.wake_up(true, true);
+    let red = place_bed(&mut game, 4, "minecraft:red_bed");
+    game.player.as_mut().unwrap().position = Vec3::new(4.5, 64.0, 3.5);
+    game.try_sleep(red);
+    assert_eq!(game.sleeping, Some(red), "the player lay in the red bed");
+    assert!(
+        game.adv.progress.done(&game.adv.tree.list[slept]),
+        "an ordinary bed fires slept_in_bed"
+    );
+}

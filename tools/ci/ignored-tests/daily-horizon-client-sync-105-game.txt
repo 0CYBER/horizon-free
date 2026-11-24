@@ -72,4 +72,5 @@ horizon-client game::stations::brewing_tick_tests::a_brewed_remainder_ignores_th
 horizon-client game::stations::brewing_tick_tests::a_fuel_item_with_no_uses_marks_the_chunk lib daily resources
 horizon-client game::stats::player_stat_award_tests::a_ground_jump_awards_the_jump_statistic lib daily resources
 horizon-client game::stats::player_stat_award_tests::a_worn_out_helmet_awards_the_broken_statistic lib daily resources
+horizon-client game::stats::player_stat_award_tests::only_a_bed_that_can_set_the_spawn_triggers_slept_in_bed lib daily resources
 horizon-client game::stats::player_stat_award_tests::sleeping_in_a_straw_bed_awards_its_own_statistic lib daily resources

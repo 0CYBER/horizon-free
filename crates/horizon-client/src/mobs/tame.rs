@@ -206,13 +206,11 @@ fn baby_turtle_on_land(s: &super::Seen) -> bool {
 fn wolf_prey(s: &super::Seen) -> bool {
     matches!(s.species, Species::Sheep | Species::Rabbit | Species::Fox)
 }
-/// `NeutralMob.isAngryAt(player)`: the player the anger names, or, with the
-/// `universal_anger` rule on and no anger target left, any player. Creative and
-/// spectator players are dropped first (`isValidPlayerTarget`), by the goal's
-/// `can_target_player`.
+/// Whether the mob is angry at the player (`neutral_anger::angry_at_player`)
+/// under the world's `universal_anger` rule. Creative and spectator players are
+/// dropped first (`isValidPlayerTarget`), by the goal's `can_target_player`.
 pub(super) fn angry_at_player(m: &Mob, w: &MobWorld) -> bool {
-    m.extra.angry_at == Some(Who::Player)
-        || (w.universal_anger && m.extra.anger > 0 && m.extra.angry_at.is_none())
+    super::neutral_anger::angry_at_player(m, w.universal_anger)
 }
 /// `Wolf.isAngry`.
 pub fn angry(m: &Mob) -> bool {

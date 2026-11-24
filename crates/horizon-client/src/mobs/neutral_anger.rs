@@ -1,7 +1,17 @@
 //! `NeutralMob`'s persistent anger: the absolute end time vanilla saves
 //! (`anger_end_time`) beside Horizon's per-tick countdown (`Extra::anger`).
 
-use super::{Mob, Species};
+use super::{Mob, Species, Who};
+
+/// `NeutralMob.isAngryAt(player)` for a player it may attack (`canAttack`,
+/// `isValidPlayerTarget`): the player is its persistent anger target
+/// (`angry_at`), or, with the `universal_anger` rule on
+/// (`isAngryAtAllPlayers`), it is still angry with no anger target left.
+/// Whatever it targets right now does not count.
+pub fn angry_at_player(m: &Mob, universal_anger: bool) -> bool {
+    m.extra.angry_at == Some(Who::Player)
+        || (universal_anger && m.extra.anger > 0 && m.extra.angry_at.is_none())
+}
 
 /// `NeutralMob.readPersistentAngerSaveData`: the anger runs until its end
 /// time, so a mob that is loaded again is angry for what is left of it.
@@ -73,10 +83,12 @@ pub fn init(m: &mut Mob) {
         m.extra.anger_end = -1;
     }
 }
-/// `NeutralMob.stopBeingAngry`'s anger: no countdown, end time -1.
+/// `NeutralMob.stopBeingAngry`'s anger: no countdown, end time -1, and no
+/// anger target (`setPersistentAngerTarget(null)`).
 pub fn stop(m: &mut Mob) {
     m.extra.anger = 0;
     m.extra.anger_end = -1;
+    m.extra.angry_at = None;
 }
 /// One tick of a mob: a `NeutralMob`'s countdown resumes from its end time
 /// before, and the end time is settled after.
@@ -231,6 +243,44 @@ mod tests {
         tick(&mut m, 101);
         m.extra.anger = 0;
         assert_eq!(settle_anger_end(&mut m, 101), -1);
+    }
+    /// `NeutralMob.isAngryAt(player)`, which `ZombifiedPiglin.isPreventingPlayerRest`
+    /// asks: the persistent anger target decides, not the mob's current target;
+    /// `universal_anger` takes in every player while it is angry at no one.
+    #[test]
+    fn anger_at_the_player_follows_the_persistent_target() {
+        let mut m = neutral(Species::ZombifiedPiglin, "minecraft:zombified_piglin");
+        // Angry at a mob and chasing it: not at the player, rule or not.
+        m.extra.anger = 400;
+        m.extra.angry_at = Some(Who::Mob(7));
+        m.ai.target = Some(Who::Mob(7));
+        assert!(!angry_at_player(&m, false));
+        assert!(!angry_at_player(&m, true));
+        // Angry at the player, who it lost sight of.
+        m.extra.angry_at = Some(Who::Player);
+        m.ai.target = None;
+        assert!(angry_at_player(&m, false));
+        // Angry at no one in particular: at every player under the rule only.
+        m.extra.angry_at = None;
+        assert!(!angry_at_player(&m, false));
+        assert!(angry_at_player(&m, true));
+        // Calm: at no one.
+        m.extra.anger = 0;
+        assert!(!angry_at_player(&m, true));
+    }
+    /// `NeutralMob.stopBeingAngry` also forgets the anger target
+    /// (`setPersistentAngerTarget(null)`). A zombified piglin whose anger at a
+    /// player stopped (they went into creative: `updatePersistentAnger`) is not
+    /// angry at them once they are back, so it no longer keeps them awake.
+    #[test]
+    fn stopped_anger_forgets_its_target() {
+        let mut m = neutral(Species::ZombifiedPiglin, "minecraft:zombified_piglin");
+        m.extra.anger = 400;
+        m.extra.angry_at = Some(Who::Player);
+        stop(&mut m);
+        assert_eq!(m.extra.angry_at, None);
+        assert!(!angry_at_player(&m, false));
+        assert!(!angry_at_player(&m, true));
     }
     /// The constructors: a wolf's synched data starts at -1, the plain long
     /// field of the other `NeutralMob`s at 0.

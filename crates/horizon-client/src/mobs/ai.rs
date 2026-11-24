@@ -3808,7 +3808,9 @@ pub fn forgives_dead_player(m: &Mob) -> bool {
     match m.species() {
         Species::Bee => super::bee::get(m).and_then(|bee| bee.angry_at) == Some(Who::Player),
         Species::PolarBear => m.extra.flag2,
-        Species::Enderman | Species::ZombifiedPiglin => m.ai.target == Some(Who::Player),
+        Species::Enderman | Species::ZombifiedPiglin => {
+            m.ai.target == Some(Who::Player) || m.extra.angry_at == Some(Who::Player)
+        }
         _ => m.extra.angry_at == Some(Who::Player),
     }
 }
@@ -3831,14 +3833,16 @@ pub fn forgive_dead_player(m: &mut Mob) {
     match m.species() {
         Species::Bee => super::bee::forgive_dead_player(m),
         Species::PolarBear => super::polar_bear::forgive_dead_player(m),
-        // The enderman's and zombified piglin's persistent anger is the
-        // target they hold (the stare goal, the hurt-by path): vanilla's
-        // `NeutralMob.playerDied` ends it through `stopBeingAngry` when it
-        // is the player who died, the last hurt by with it.
+        // The enderman's and zombified piglin's anger is the target they hold
+        // (the stare goal, the hurt-by path) and the anger target and timer
+        // that outlast it: vanilla's `NeutralMob.playerDied` ends all of it
+        // through `stopBeingAngry` when it is the player who died, the last
+        // hurt by with it.
         Species::Enderman | Species::ZombifiedPiglin => {
-            if m.ai.target == Some(Who::Player) {
+            if forgives_dead_player(m) {
                 m.ai.forget_hurt_by(m.age as i32);
                 m.ai.target = None;
+                super::neutral_anger::stop(m);
             }
         }
         // The iron golem keeps its anger's target as a wolf does
@@ -5881,6 +5885,29 @@ mod forgiveness_tests {
             m.ai.target = Some(Who::Mob(7));
             forgive_dead_player(&mut m);
             assert_eq!(m.ai.target, Some(Who::Mob(7)), "{species:?}");
+        }
+    }
+
+    /// Their anger target and timer (`updatePersistentAnger`) outlast the
+    /// target they hold: `NeutralMob.playerDied` ends both through
+    /// `stopBeingAngry` when they name the dying player, chased or out of
+    /// sight, so the mob is not angry at them once they respawn.
+    #[test]
+    fn a_dying_player_ends_the_anger_target_and_timer() {
+        for species in [Species::Enderman, Species::ZombifiedPiglin] {
+            for target in [Some(Who::Player), None] {
+                let mut m = mob(species);
+                m.extra.anger = 400;
+                m.extra.angry_at = Some(Who::Player);
+                m.ai.target = target;
+                assert!(forgives_dead_player(&m), "{species:?} {target:?}");
+                forgive_dead_player(&mut m);
+                assert_eq!(m.ai.target, None, "{species:?} {target:?}");
+                assert!(
+                    !crate::mobs::neutral_anger::angry_at_player(&m, true),
+                    "{species:?} {target:?}"
+                );
+            }
         }
     }
 

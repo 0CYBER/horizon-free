@@ -7615,8 +7615,10 @@ impl Game<'_> {
         // RespawnConfig(the head, the player's yaw), not forced). It replaces
         // an anchor or a spawnpoint; respawning checks the bed is still there
         // and finds where to stand up (findRespawnAndUseSpawnBlock).
-        // Straw beds never set it (`straw_bed_rule`).
-        if problem.is_none() && self.bed_sets_spawn(state) {
+        // Straw beds never set it (`straw_bed_rule`). `canSetSpawn` is read once,
+        // up front, and also gates the `slept_in_bed` trigger below.
+        let can_set_spawn = self.bed_sets_spawn(state);
+        if problem.is_none() && can_set_spawn {
             let config = respawn_anchor::RespawnConfig::wrapped(self.dim, head, yaw, false);
             // ServerPlayer.setRespawnPosition: the chat message only when the
             // point moved (`isSamePosition`).
@@ -7648,15 +7650,20 @@ impl Game<'_> {
         if problem.is_none() && !self.bed_can_sleep_now() {
             problem = Some("not_possible_now");
         }
+        let universal_anger = self
+            .ui
+            .rules
+            .bool_at(horizon_client::gamerules::vanilla::UNIVERSAL_ANGER);
         // Creative players skip the monster check (`!this.isCreative()`).
         if problem.is_none()
             && !self.creative
             && self.mobs.iter().any(|m| {
                 // `Monster.class` entities that `isPreventingPlayerRest`: a
-                // zombified piglin only while it is angry.
+                // zombified piglin only while it is angry at the sleeper
+                // (`ZombifiedPiglin.isPreventingPlayerRest`: `isAngryAt`).
                 horizon_client::mobs::ai::is_monster(m.species())
                     && (m.species() != horizon_client::mobs::Species::ZombifiedPiglin
-                        || (m.extra.anger > 0 && m.ai.target.is_some()))
+                        || horizon_client::mobs::neutral_anger::angry_at_player(m, universal_anger))
                     && m.alive()
                     && beds::near_bed(head, m.bounds())
             })
@@ -7719,7 +7726,11 @@ impl Game<'_> {
         if self.lie_in_bed(head) {
             let bed = self.world.block(head[0], head[1], head[2]);
             self.award_custom_stat(self.slept_in_bed_stat(bed), 1);
-            self.trigger_player("minecraft:slept_in_bed");
+            // ServerPlayer.startSleepInBed: the trigger only where the bed rule
+            // can set the respawn point, so not in a straw bed.
+            if can_set_spawn {
+                self.trigger_player("minecraft:slept_in_bed");
+            }
             self.stats.reset("custom", "minecraft:time_since_rest");
         }
     }
