@@ -181,6 +181,8 @@ fn windows_managed_paths_are_matched_without_case_sensitive_prefixes() {
 /// list isn't UTF-8 on any of them.
 #[cfg(windows)]
 #[test]
+// Horizon-free: the process is killed below; clippy's lint only looks for `wait()`.
+#[allow(clippy::zombie_processes)]
 fn a_non_ascii_command_line_does_not_stop_the_process_check() {
     let mut other = process::command("powershell.exe")
         .args([

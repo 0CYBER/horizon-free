@@ -568,7 +568,8 @@ impl Launcher {
             let session = if horizon_launcher::developer_offline::enabled(&tag) {
                 Ok(None)
             } else {
-                account::session_for_game(&backend::game_home()).map(Some)
+                // Horizon-free: no owner is needed to start the game.
+                account::session_for_game(&backend::game_home(), backend::OFFLINE_PLAY).map(Some)
             };
             say("starting the game", tr("Starting the game…"));
             let _ = tx.send(Msg::Session(session));
@@ -586,8 +587,15 @@ impl Launcher {
 
     pub(crate) fn load_profile_heads(&mut self) {
         let resources = self.game_resources();
+        // Offline names wear their own skin's face, or the default skin of their offline UUID.
+        let offline: Vec<String> = self
+            .players()
+            .into_iter()
+            .filter(|(who, _, _)| !matches!(who, account::Player::Microsoft(_)))
+            .map(|(_, name, _)| name)
+            .collect();
         self.profile_heads
-            .request(&self.accounts.accounts, resources, &self.tx);
+            .request(&self.accounts.accounts, &offline, resources, &self.tx);
     }
 
     pub(crate) fn begin_auth_job(&mut self, uuid: &str) -> Option<u64> {

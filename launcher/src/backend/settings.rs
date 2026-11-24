@@ -77,6 +77,10 @@ pub struct Settings {
     pub instance: Option<String>,
     pub minecraft_dir: Option<PathBuf>,
     pub server_dir: Option<PathBuf>,
+    /// Horizon-free: the folder the game keeps its saves and options.txt in (`game_home`), where
+    /// vanilla's launcher has "Game directory". Unset is the default game home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_dir: Option<PathBuf>,
     /// Unset means on: only a player who turned it off has `false` here. 0.1.1 wrote its
     /// `auto_install` (off by default) for everyone, so this is a new key and that one is ignored.
     #[serde(default)]
@@ -181,6 +185,12 @@ pub struct Settings {
     /// move even when the system asks for less.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduce_motion: Option<bool>,
+    /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
+    /// offline names play without an account that owns the game, in the window only
+    /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
+    /// comes from the player's own install. Off by default, and absent from the file while off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dev_offline: bool,
 }
 
 impl Settings {
@@ -248,6 +258,12 @@ impl Settings {
     /// selection is then judged against `installed` (read only for such a file).
     fn from_saved(text: &str, installed: impl FnOnce() -> Vec<String>) -> (Self, bool) {
         let mut settings = Self::parse(text);
+        // Horizon-free: offline play works without a Microsoft account, in the window and the CLI.
+        settings.dev_offline = OFFLINE_PLAY;
+        // Horizon-free: no sponsor, so the partner plate is off and cannot be turned back on.
+        if !PARTNER_BANNERS {
+            settings.partner_hidden = true;
+        }
         if text.is_empty() {
             // A fresh launcher has no global pick to absorb.
             settings.instance_versions_migrated = true;
@@ -427,6 +443,8 @@ impl Settings {
             let _ = fs::remove_file(&tmp);
             return Err(format!("{}: {e}", path.display()));
         }
+        // Horizon-free: `game_home` reads `game_dir` from the file just replaced.
+        *super::GAME_DIR.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
 }

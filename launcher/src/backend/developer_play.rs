@@ -2,7 +2,7 @@
 use super::*;
 
 /// [`client`], playing as `who` for this launch only (`play --account`).
-pub fn client_as(tag: &str, who: Option<&str>) -> Result<Command, String> {
+pub fn client_as(tag: &str, who: Option<&account::Player>) -> Result<Command, String> {
     if let Some(error) = game_architecture_launch_error(tag) {
         return Err(error);
     }
@@ -13,7 +13,8 @@ pub fn client_as(tag: &str, who: Option<&str>) -> Result<Command, String> {
         None
     } else {
         Some(match who {
-            None => account::session_for_game(&game_home()).map_err(|refused| {
+            // Horizon-free: no owner is needed to start the game.
+            None => account::session_for_game(&game_home(), OFFLINE_PLAY).map_err(|refused| {
                 // A keyring that didn't answer isn't a missing sign-in (#12179).
                 match refused.keyring {
                     Some(why) => why,

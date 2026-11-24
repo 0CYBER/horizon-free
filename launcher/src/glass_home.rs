@@ -313,9 +313,8 @@ impl Launcher {
                     ],
                 ),
                 // Signed out, the button says "Sign in to play": the line says the same.
-                None if self.owner == Some(false)
-                    && !horizon_launcher::developer_offline::selected() =>
-                {
+                // Horizon-free has no sign-in, and its Play prepares and plays (`owner_shown`).
+                None if self.owner_shown() == Some(false) => {
                     tr("You haven't played this one yet. Sign in to start.").into()
                 }
                 None => tr("You haven't played this one yet. Press Play to start.").into(),
@@ -710,6 +709,7 @@ impl Launcher {
                     }
                     // No account here owns the game: the button says "Sign in to play", so a
                     // press signs in, as the top bar's Sign in with Microsoft does.
+                    // Horizon-free never gets here: `play_press` prepares instead.
                     (None, PlayPress::Nothing) if owner == Some(false) => {
                         main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.picker.open = false;
