@@ -487,6 +487,7 @@ impl Renderer {
         settings: &crate::graphics::Graphics,
         marker: &std::path::Path,
     ) {
+        self.set_ray_tracing(settings.ray_tracing);
         let now = Instant::now();
         self.watch_hdr(settings.hdr);
         // Auto's grace ends on a fresh read, also where a settings change comes before the

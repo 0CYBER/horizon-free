@@ -367,6 +367,16 @@ fn a_tracing_pack_says_why_it_draws_without_ray_tracing() {
         let tag = matches!(rays, Restart).then(|| "Restart needed".to_owned());
         assert_eq!(noted.4, tag);
     }
+    // Off by the player's Ray Tracing setting: its note where no HORIZON_RAY_TRACING overrides
+    // it (`shader_ui`'s `off_note` covers both cases without the environment).
+    s.horizon.ray_tracing = crate::graphics::RayTracingMode::Off;
+    if std::env::var_os("HORIZON_RAY_TRACING").is_none() {
+        let setting_off = lang::get("Ray tracing is off: the Ray Tracing setting is Off.");
+        let noted = shown(&s, Some(Off), 0);
+        assert_eq!(noted.1.as_deref(), Some(setting_off.as_str()));
+        assert_eq!(noted.3.as_deref(), Some(setting_off.as_str()));
+    }
+    s.horizon.ray_tracing = crate::graphics::RayTracingMode::Auto;
     s.horizon.shader_pack = "horizon:plain".into();
     let plain = shown(&s, Some(Ready), 1);
     assert_eq!(shown(&s, Some(Restart), 1), plain);

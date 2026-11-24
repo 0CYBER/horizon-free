@@ -594,6 +594,42 @@ impl HdrLook {
     }
 }
 
+/// When hardware ray queries (`EXPERIMENTAL_RAY_QUERY`) and the ray-tracing acceleration scene
+/// are requested and built (`horizon-graphics.txt` `rayTracing`; `auto` by default).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RayTracingMode {
+    /// Follows the picked shader pack: enabled when its manifest declares `[ray_tracing]`.
+    #[default]
+    Auto,
+    /// Always requests ray queries at startup and keeps the ray scene ready.
+    On,
+    /// Disables hardware ray queries and the ray scene even if a pack declares `[ray_tracing]`.
+    Off,
+}
+impl RayTracingMode {
+    pub const ALL: [Self; 3] = [Self::Auto, Self::On, Self::Off];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::On => "On",
+            Self::Off => "Off",
+        }
+    }
+    fn parse(value: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.name() == value)
+            .unwrap_or_default()
+    }
+}
+
 static TRANSLUCENT_BATCHING_OFFERED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Whether the device can batch translucent quads (`Graphics::translucent_batching`): set when
@@ -924,6 +960,9 @@ pub struct Graphics {
     /// pack uniforms still match. Off by default: vanilla loaders redraw every frame
     /// (or every `shadowInterval`), and a hit with a stale key shows old shadows.
     pub shadow_cache: bool,
+    /// Whether hardware ray tracing (`EXPERIMENTAL_RAY_QUERY` and `RayScene`) follows the pack
+    /// (`auto`), is always requested (`on`), or stays disabled (`off`).
+    pub ray_tracing: RayTracingMode,
     /// The graphics API (Windows only; see `GraphicsApi`).
     pub api: GraphicsApi,
     /// Backend hold after a GPU search watchdog timeout (`gfx::safe_start`): applied in memory
@@ -1000,6 +1039,7 @@ impl Default for Graphics {
             safe_start: None,
             battery: false,
             shadow_cache: false,
+            ray_tracing: RayTracingMode::Auto,
             api: GraphicsApi::Auto,
             watchdog_api: None,
             watchdog_driver: None,
@@ -1187,6 +1227,7 @@ impl Graphics {
                 "safeStart" => g.safe_start = Some(value.to_owned()),
                 "batteryMode" => g.battery = flag(g.battery),
                 "shadowCache" => g.shadow_cache = flag(g.shadow_cache),
+                "rayTracing" => g.ray_tracing = RayTracingMode::parse(value),
                 "batchTranslucent" => g.translucent_batching = flag(g.translucent_batching),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "watchdogApi" => g.watchdog_api = GraphicsApi::from_name(value),
@@ -1224,7 +1265,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\npbrBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrColorBoost:{}\nhdrLook:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\ngpuCulling:{}\nparallelTick:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\npbrBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrColorBoost:{}\nhdrLook:{}\nbatteryMode:{}\nshadowCache:{}\nrayTracing:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\ngpuCulling:{}\nparallelTick:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -1279,6 +1320,7 @@ impl Graphics {
             self.hdr_look.name(),
             bool_text(self.battery),
             bool_text(self.shadow_cache),
+            self.ray_tracing.name(),
             self.api.name(),
             self.shader_pack,
             bool_text(self.translucent_batching),
@@ -1682,6 +1724,7 @@ mod tests {
             safe_start: Some("Dx12 10de:25a9 NVIDIA GeForce RTX 2050; ; 32.0.16.2124".into()),
             battery: true,
             shadow_cache: true,
+            ray_tracing: RayTracingMode::On,
             api: GraphicsApi::Dx12,
             watchdog_api: Some(GraphicsApi::OpenGl),
             watchdog_driver: Some("Dx12 10de:25a9 NVIDIA GeForce RTX 2050; ; 32.0.16.2124".into()),

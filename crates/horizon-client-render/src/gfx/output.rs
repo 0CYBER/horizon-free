@@ -186,6 +186,10 @@ pub(crate) enum RayStatus {
     /// The GPU and graphics API have ray queries, but the device was opened without them: the
     /// pack picked at the next start gets them.
     Restart,
+    /// The device opened on DirectX 12's FXC, which has no ray queries, because nothing asked
+    /// for them at the start: the next start, asked, compiles with DXC, and the pack gets them
+    /// if the GPU has them.
+    Compiler,
     /// The GPU or graphics API has no ray queries.
     Unsupported,
     /// `HORIZON_RAY_TRACING` is set to something other than `1`.

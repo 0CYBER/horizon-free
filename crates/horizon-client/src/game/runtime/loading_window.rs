@@ -134,6 +134,7 @@ pub(super) fn loading_renderer(
     previous: Option<&Renderer>,
     api: horizon_client::graphics::GraphicsApi,
     rays: bool, // The startup pick declares `[ray_tracing]`: the world renderer keeps this device.
+    ray_tracing: horizon_client::graphics::RayTracingMode,
 ) -> Result<Renderer> {
     static FORCEFIELD: [u8; 4] = [0; 4];
     static EMPTY_HUD: [u8; 4] = [0, 0, 0, 255];
@@ -176,7 +177,10 @@ pub(super) fn loading_renderer(
         false,
         (false, false),
         // An 8-bit frame, which HDR output takes as well: HDR off until the settings apply.
-        &horizon_client::graphics::Graphics::default(),
+        &horizon_client::graphics::Graphics {
+            ray_tracing,
+            ..Default::default()
+        },
         horizon_client::gfx::FrameRequest {
             ray_tracing: rays,
             ..Default::default()

@@ -44,6 +44,8 @@ pub(crate) enum Item {
     Reset,
     /// Horizon's own Shadow Cache (`Graphics::shadow_cache`), for every pack: not the pack's.
     ShadowCache,
+    /// Horizon's own Hardware Ray Tracing switch (`Graphics::ray_tracing`): Auto / On / Off.
+    RayTracing,
 }
 
 const TITLE: &str = "Shaders";
@@ -65,11 +67,13 @@ const APPLYING: &str = "Applying shader pack...";
 const NOTE_LINES: usize = 3;
 /// Why a picked pack that declares `[ray_tracing]` draws without it.
 const RAY_RESTART: &str = "Ray tracing: %s Until then the pack draws without it.";
+const RAY_COMPILER: &str = "Ray tracing: %s This start's DirectX 12 shader compiler has none; the next start picks one that has. Until then the pack draws without it.";
 const RAY_UNSUPPORTED: &str =
     "This GPU or graphics API has no ray tracing: the pack draws without it.";
 const RAY_OFF: &str = "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.";
 /// The row's short tag while the pack waits for a restart to trace rays.
 const RAY_RESTART_TAG: &str = "Restart needed";
+const RAY_SETTING_OFF: &str = "Ray tracing is off: the Ray Tracing setting is Off.";
 /// Screens this many links from the main one, or fewer, are in the page list.
 const LISTED_DEPTH: u8 = 1;
 
@@ -255,6 +259,10 @@ fn parts(item: Item, s: &Settings, screens: &[PackScreen]) -> (String, Option<St
         Item::Link(i) => (format!("{}...", screen_name(i, screens)), None),
         Item::Reset => (lang::get("Reset all options"), None),
         Item::ShadowCache => (lang::get("Shadow Cache"), Some(String::new())),
+        Item::RayTracing => (
+            lang::get("Ray Tracing"),
+            Some(lang::get(s.horizon.ray_tracing.label())),
+        ),
         Item::Profile => match classic(s) {
             Some(o) => shell::name_and_value(&plain(o.profile_label())),
             None => (String::new(), None),
@@ -361,6 +369,9 @@ fn description(item: Item, s: &Settings, screens: &[PackScreen]) -> String {
         Item::ShadowCache => {
             lang::get("Reuses the pack shadow map when sun, view and world match. Off by default.")
         }
+        Item::RayTracing => lang::get(
+            "Ray tracing for packs that use it: Auto as the pack asks, On always, Off never.",
+        ),
         Item::Profile => classic(s)
             .and_then(|o| o.comment("profile"))
             .map(plain)
@@ -395,7 +406,9 @@ fn row(item: Item, s: &Settings, screens: &[PackScreen]) -> Row<Item> {
             steps: slider_steps(item, s),
             text,
         },
-        (Item::Option(_) | Item::Profile, None, None, Some(text)) => Value::Choice(text),
+        (Item::Option(_) | Item::Profile | Item::RayTracing, None, None, Some(text)) => {
+            Value::Choice(text)
+        }
         _ => Value::Press,
     };
     Row::new(item, name, value).about(description(item, s, screens))
@@ -417,7 +430,10 @@ fn pack_sheet(s: &Settings) -> Sheet<Tab, Item> {
         },
         Group {
             name: BUILT_IN,
-            rows: vec![row(Item::ShadowCache, s, &[])],
+            rows: vec![
+                row(Item::ShadowCache, s, &[]),
+                row(Item::RayTracing, s, &[]),
+            ],
         },
     ];
     Sheet::new(Tab::Packs, lang::get(PACKS), about, groups)
@@ -442,10 +458,15 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
     let note = match rays {
         None | Some(RayStatus::Ready) => return,
         Some(RayStatus::Restart) => lang::tr(RAY_RESTART, &[&lang::get("options.needsRestart")]),
+        Some(RayStatus::Compiler) => lang::tr(RAY_COMPILER, &[&lang::get("options.needsRestart")]),
         Some(RayStatus::Unsupported) => lang::get(RAY_UNSUPPORTED),
-        Some(RayStatus::Off) => lang::get(RAY_OFF),
+        Some(RayStatus::Off) => lang::get(off_note(
+            s.horizon.ray_tracing,
+            std::env::var_os("HORIZON_RAY_TRACING").is_some(),
+        )),
     };
-    let tag = matches!(rays, Some(RayStatus::Restart)).then(|| lang::get(RAY_RESTART_TAG));
+    let tag = matches!(rays, Some(RayStatus::Restart | RayStatus::Compiler))
+        .then(|| lang::get(RAY_RESTART_TAG));
     for sheet in sheets.iter_mut() {
         if matches!(sheet.id, Tab::Packs | Tab::Screen(0)) {
             // A line of its own above the description: a long description must not push the
@@ -457,6 +478,16 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
             row.warning = Some(note.clone());
             row.tag = tag.clone();
         }
+    }
+}
+
+/// Why ray tracing is off (`RayStatus::Off`), under the Ray Tracing `setting`: the variable
+/// overrides the setting while it is set (`overridden`), so only Off without it is the setting's.
+fn off_note(setting: crate::graphics::RayTracingMode, overridden: bool) -> &'static str {
+    if !overridden && setting == crate::graphics::RayTracingMode::Off {
+        RAY_SETTING_OFF
+    } else {
+        RAY_OFF
     }
 }
 
@@ -553,6 +584,7 @@ impl shell::Screen for ShaderScreen {
         shell::stamp_of(&(
             &h.shader_pack,
             h.shadow_cache,
+            h.ray_tracing,
             packs,
             options,
             self.rays,
@@ -630,6 +662,20 @@ impl shell::Screen for ShaderScreen {
                 s.horizon.shadow_cache = !s.horizon.shadow_cache;
                 changed
             }
+            Item::RayTracing => {
+                let all = crate::graphics::RayTracingMode::ALL;
+                let at = all
+                    .iter()
+                    .position(|&m| m == s.horizon.ray_tracing)
+                    .unwrap_or(0);
+                let next = if back {
+                    (at + all.len() - 1) % all.len()
+                } else {
+                    (at + 1) % all.len()
+                };
+                s.horizon.ray_tracing = all[next];
+                changed
+            }
             // The shell follows a link (`link`).
             Item::Link(_) => Vec::new(),
             Item::Profile => match s.shader_options.as_mut().filter(|o| o.pack == pack) {
@@ -696,7 +742,7 @@ impl shell::Screen for ShaderScreen {
     /// and the profile (up goes back); the other rows leave it to scroll the list.
     fn wheel_step(&mut self, s: &mut Settings, item: Item, back: bool) -> Option<Vec<Output>> {
         let steps = match item {
-            Item::Profile => true,
+            Item::Profile | Item::RayTracing => true,
             Item::Option(_) => switch(item, s).is_none() && slider(item, s).is_none(),
             _ => false,
         };
@@ -717,6 +763,7 @@ impl shell::Screen for ShaderScreen {
     fn undo(&mut self, s: &mut Settings, before: &Settings) -> Vec<Output> {
         let mut outputs = Vec::new();
         s.horizon.shadow_cache = before.horizon.shadow_cache;
+        s.horizon.ray_tracing = before.horizon.ray_tracing;
         for (i, pack) in s.shader_packs.iter_mut().enumerate() {
             let Some(was) = before.shader_packs.iter().find(|p| p.key == pack.key) else {
                 continue;
@@ -776,7 +823,12 @@ impl shell::Screen for ShaderScreen {
         };
         let h = (&s.horizon, &before.horizon);
         let pick = h.0.shader_pack != h.1.shader_pack;
-        Some(pick || h.0.shadow_cache != h.1.shadow_cache || native || options)
+        Some(
+            pick || h.0.shadow_cache != h.1.shadow_cache
+                || h.0.ray_tracing != h.1.ray_tracing
+                || native
+                || options,
+        )
     }
     /// Changed options of either kind wait for Apply until the pack rebuilds with them.
     fn pending(&self, s: &Settings) -> bool {
@@ -1121,7 +1173,7 @@ mod tests {
         let mut s = settings();
         let mut shell = shell_at(Tab::Packs);
         let mut seen = Vec::new();
-        for _ in 0..12 {
+        for _ in 0..16 {
             shell.key(&mut s, K::Tab, None, false, SIZE);
             if let Some(item) = shell.focused_row()
                 && !seen.contains(&item)
@@ -1134,6 +1186,7 @@ mod tests {
             Item::Pack(1),
             Item::Folder,
             Item::ShadowCache,
+            Item::RayTracing,
         ];
         assert_eq!(seen, all);
     }
@@ -1391,7 +1444,17 @@ mod tests {
             screen.sheets(&s);
             s.shader_packs.clear();
             screen.sheets(&s);
-            for text in [TITLE, PENDING, APPLYING, "Apply", "Undo", "Search options"] {
+            for text in [
+                TITLE,
+                PENDING,
+                APPLYING,
+                "Apply",
+                "Undo",
+                "Search options",
+                RAY_COMPILER,
+                RAY_OFF,
+                RAY_SETTING_OFF,
+            ] {
                 lang::get(text);
             }
         });
@@ -1400,4 +1463,18 @@ mod tests {
         assert_eq!(missed, Vec::<String>::new());
     }
     const VANILLA_KEYS: [&str; 3] = ["pack.openFolder", "options.generic_value", "options.off"];
+
+    /// Off is the setting's only when `HORIZON_RAY_TRACING` isn't set to override it.
+    #[test]
+    fn ray_tracing_is_off_by_the_setting_only_without_the_variable() {
+        use crate::graphics::RayTracingMode::{Auto, Off, On};
+        assert_eq!(off_note(Off, false), RAY_SETTING_OFF);
+        for (setting, overridden) in [(Off, true), (Auto, false), (Auto, true), (On, true)] {
+            assert_eq!(
+                off_note(setting, overridden),
+                RAY_OFF,
+                "{setting:?} {overridden}"
+            );
+        }
+    }
 }

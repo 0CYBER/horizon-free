@@ -596,6 +596,12 @@ async fn open_backend(
         None
     };
     let dxc_found = dxc.is_some();
+    dx12_compiler::note_fxc_until_asked(dx12_compiler::dxc_on_request(
+        &adapter.get_info(),
+        forced,
+        sm_6_5,
+        dx12_compiler::bundled_dll().is_some(),
+    ));
     let (instance, surface, adapter) = dxc.unwrap_or((instance, surface, adapter));
     if adapter.get_info().backend == wgpu::Backend::Dx12 {
         crate::crash::set_detail(

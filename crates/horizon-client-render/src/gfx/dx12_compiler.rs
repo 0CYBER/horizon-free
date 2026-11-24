@@ -41,6 +41,31 @@ pub(super) fn wants_dxc(info: &wgpu::AdapterInfo, forced: bool, sm_6_5: bool) ->
         }
 }
 
+/// Whether this start opened `info` on FXC only because nothing asked for Shader Model 6.5
+/// (`sm_6_5`), with the DLL beside the game (`dll`): a start that asks for it gets DXC.
+pub(super) fn dxc_on_request(
+    info: &wgpu::AdapterInfo,
+    forced: bool,
+    sm_6_5: bool,
+    dll: bool,
+) -> bool {
+    dll && !wants_dxc(info, forced, sm_6_5) && wants_dxc(info, forced, true)
+}
+
+/// `dxc_on_request` for the device opened last: its adapter offers no ray queries on FXC, but
+/// the next start, asked for them, may (`rt::query`'s status tells the two apart).
+static FXC_UNTIL_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Records `dxc_on_request` for the device being opened.
+pub(super) fn note_fxc_until_asked(until_asked: bool) {
+    FXC_UNTIL_ASKED.store(until_asked, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the device opened last kept FXC only because nothing asked for Shader Model 6.5.
+pub(in crate::gfx) fn fxc_until_asked() -> bool {
+    FXC_UNTIL_ASKED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether `WGPU_DX12_COMPILER` names the compiler.
 pub(super) fn forced() -> bool {
     std::env::var_os("WGPU_DX12_COMPILER").is_some()
@@ -139,6 +164,12 @@ mod tests {
         let dgpu = adapter(Backend::Dx12, DeviceType::DiscreteGpu);
         assert!(!wants_dxc(&dgpu, false, false));
         assert!(wants_dxc(&dgpu, false, true));
+        // Such a start kept FXC only because nothing asked: one that asks gets DXC, if it ships.
+        assert!(dxc_on_request(&dgpu, false, false, true));
+        assert!(!dxc_on_request(&dgpu, false, true, true));
+        assert!(!dxc_on_request(&dgpu, false, false, false));
+        let igpu = adapter(Backend::Dx12, DeviceType::IntegratedGpu);
+        assert!(!dxc_on_request(&igpu, false, false, true));
     }
 
     #[test]

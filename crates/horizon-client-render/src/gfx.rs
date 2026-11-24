@@ -2078,6 +2078,8 @@ pub struct Renderer {
     hdr_driver: Option<String>,
     /// Whether the Look setting is Horizon's, kept for the HDR output made when HDR turns on.
     hdr_lighting_setting: bool,
+    /// Player's hardware ray tracing setting (`Graphics::ray_tracing`).
+    ray_tracing_mode: crate::graphics::RayTracingMode,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// A `shaders/` pack whose pipelines build on a thread of their own (`load_shader_pack`).
@@ -2791,7 +2793,13 @@ impl Renderer {
             }
             None => {
                 let _step = crate::spans::startup::step("renderer.open_device");
-                open_device(&window, offscreen, api, request.needs(layers)).await?
+                open_device(
+                    &window,
+                    offscreen,
+                    api,
+                    request.needs(layers, settings.ray_tracing),
+                )
+                .await?
             }
         };
         // A device that is already lost, one `previous` handed over included, makes every
@@ -4984,7 +4992,7 @@ impl Renderer {
             last_wait: std::time::Duration::ZERO,
             last_encode: std::time::Duration::ZERO,
             window,
-            ray_scene: rt::scene::RayScene::forced(&device),
+            ray_scene: rt::scene::RayScene::forced(&device, settings.ray_tracing),
             looks_layout: None,
             device,
             reuse,
@@ -5217,6 +5225,7 @@ impl Renderer {
             entity_atlas: atlas_view.clone(),
             hdr: None,
             hdr_lighting_setting: true,
+            ray_tracing_mode: settings.ray_tracing,
             emission_stats,
             output_caps,
             output_rejected: None,
@@ -7015,6 +7024,29 @@ impl Renderer {
         self.hdr_lighting_setting = on;
         if let Some(hdr) = &mut self.hdr {
             hdr.look = on;
+        }
+    }
+    /// Applies the player's `rayTracing` setting (`Graphics::ray_tracing`), dropping or building
+    /// `RayScene` immediately when the device supports hardware ray queries.
+    pub fn set_ray_tracing(&mut self, mode: crate::graphics::RayTracingMode) {
+        if self.ray_tracing_mode == mode {
+            return;
+        }
+        self.ray_tracing_mode = mode;
+        let traces = self.executor.is_some_and(|c| c.ray_scene);
+        let had = self.ray_scene.is_some();
+        rt::scene::follow(
+            &mut self.ray_scene,
+            &self.device,
+            rt::query::wanted(rt::query::switch_with(mode), traces),
+        );
+        // The pack's trace groups hold the dropped scene's buffers: they go with it, so a later
+        // scene, whose generations start over, never draws with them.
+        if had
+            && self.ray_scene.is_none()
+            && let Some(native) = &mut self.external
+        {
+            native.bind_scene(&self.device, None, glam::DVec3::ZERO);
         }
     }
     /// Measures which pixels of each block sprite may shine (`hdr_stats`), at the current

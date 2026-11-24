@@ -166,6 +166,7 @@ impl Loading {
             None,
             self.settings.horizon.effective_api(),
             shader_packs::picked_pack_shape(&self.settings).ray_tracing,
+            self.settings.horizon.ray_tracing,
         ) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
@@ -237,6 +238,7 @@ impl Loading {
             self.renderer.as_ref(),
             self.settings.horizon.effective_api(),
             shader_packs::picked_pack_shape(&self.settings).ray_tracing,
+            self.settings.horizon.ray_tracing,
         ) {
             Ok(r) => {
                 self.renderer = Some(r);

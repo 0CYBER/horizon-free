@@ -121,7 +121,7 @@ impl Renderer {
         follow(
             &mut self.ray_scene,
             &self.device,
-            super::query::wanted(super::query::switch(), traces),
+            super::query::wanted(super::query::switch_with(self.ray_tracing_mode), traces),
         );
         // TAA's history holds what the pipeline that ran drew (rule 6 of docs/hdr-passes.md).
         if pack.is_some() || self.external.is_some() {
@@ -605,10 +605,13 @@ impl RayScene {
         })
     }
 
-    /// The scene a renderer starts with: one only when `HORIZON_RAY_TRACING=1` asks for it with
-    /// any pack or none; otherwise the pack that loads brings it (`Renderer::replace_executor`).
-    pub(in crate::gfx) fn forced(device: &wgpu::Device) -> Option<Self> {
-        super::query::wanted(super::query::switch(), false)
+    /// The scene a renderer starts with: one when `HORIZON_RAY_TRACING=1` or `RayTracingMode::On`
+    /// asks for it with any pack or none; otherwise the pack that loads brings it (`Renderer::replace_executor`).
+    pub(in crate::gfx) fn forced(
+        device: &wgpu::Device,
+        mode: crate::graphics::RayTracingMode,
+    ) -> Option<Self> {
+        super::query::wanted(super::query::switch_with(mode), false)
             .then(|| Self::new(device))
             .flatten()
     }
@@ -1019,7 +1022,7 @@ impl RayScene {
 }
 
 /// `scene` for a pack that `wants` one: the one there is, or a new one; none otherwise.
-fn follow(scene: &mut Option<RayScene>, device: &wgpu::Device, wants: bool) {
+pub(in crate::gfx) fn follow(scene: &mut Option<RayScene>, device: &wgpu::Device, wants: bool) {
     if !wants {
         *scene = None;
     } else if scene.is_none() {
