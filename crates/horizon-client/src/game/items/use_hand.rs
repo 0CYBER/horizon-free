@@ -651,25 +651,23 @@ impl Game<'_> {
         {
             self.world.block_entities.insert(key, entity);
         }
-        if self.world.block_entities.get(&key).is_some() {
-            self.apply_placed_item(target, &stack, game_master);
-            // Block.setPlacedBy.
-            match self.world.block_entities.get(&key) {
-                Some(BlockEntity::CommandBlock(_)) => {
-                    let data = stack.data().is_some_and(|d| {
-                        d.other(horizon_client::block_entity_item::BLOCK_ENTITY_DATA)
-                            .is_some()
-                    });
-                    self.command_block_placed(key, !data);
-                }
-                Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
-                Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
-                Some(BlockEntity::Jukebox(_)) => self.jukebox_placed(target, &stack),
-                Some(BlockEntity::Sign(sign)) if !sign.waxed && sign.front.has_editable_text() => {
-                    self.open_text_edit(key, true)
-                }
-                _ => {}
+        self.apply_placed_item(target, &stack, game_master);
+        // Block.setPlacedBy.
+        match self.world.block_entities.get(&key) {
+            Some(BlockEntity::CommandBlock(_)) => {
+                let data = stack.data().is_some_and(|d| {
+                    d.other(horizon_client::block_entity_item::BLOCK_ENTITY_DATA)
+                        .is_some()
+                });
+                self.command_block_placed(key, !data);
             }
+            Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
+            Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
+            Some(BlockEntity::Jukebox(_)) => self.jukebox_placed(target, &stack),
+            Some(BlockEntity::Sign(sign)) if !sign.waxed && sign.front.has_editable_text() => {
+                self.open_text_edit(key, true)
+            }
+            _ => {}
         }
         let placer = self.native_acting_player();
         self.block_item_placed(&stack, placer, pos, &ctx);

@@ -478,3 +478,213 @@ fn a_loot_table_that_is_not_an_identifier_is_dropped_with_its_seed() {
         (None, None)
     );
 }
+
+#[test]
+fn block_entity_components_stay_with_the_model_through_chunk_nbt() {
+    let (registry, biomes) = fixture();
+    let pos = (1, 64, 2);
+    let chest = registry.default_state("minecraft:chest").unwrap();
+    let mut chunk = Chunk::empty(0, 0);
+    chunk.set(pos.0, pos.1, pos.2, chest.0);
+    let mut world = crate::world::World::new(registry.default_state("minecraft:air").unwrap(), 0);
+    world.chunks.insert((0, 0), Arc::new(chunk));
+    let read = |input: &str| horizon_core::nbt::parse_snbt(input).unwrap().0;
+    let mut raw = read(
+        r#"{id:"minecraft:chest",x:1,y:64,z:2,CustomName:"Implicit",components:{custom_name:"Explicit",custom_data:{a:1b},rarity:"made_up",unregistered:{}}}"#,
+    );
+    let expected = read(r#"{"minecraft:custom_name":"Explicit","minecraft:custom_data":{a:1b}}"#);
+    let registry_for_components = horizon_client_core::registries::Registries {
+        persistent_components: [
+            "minecraft:custom_name",
+            "minecraft:custom_data",
+            "minecraft:rarity",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        ..Default::default()
+    };
+    normalize_block_entity_components(&mut raw, &registry_for_components);
+    let (_, entity) = decode_block_entity(&raw).unwrap();
+    world.block_entities.insert(pos, entity);
+    world
+        .block_names
+        .insert(pos, Tag::String("Implicit".into()));
+    assert!(world.set_block_entity_metadata(pos, &raw));
+
+    let entity = world.block_entities.get(&pos).unwrap();
+    let mut queried = block_entity_data(pos, entity, "minecraft:chest", None);
+    write_stored_block_entity_components(&mut queried, entity, world.block_entity_source(pos));
+    assert_eq!(queried.get("components"), Some(&expected));
+    let chunk = chunks_with_block_entities(
+        [world.chunks.get(&(0, 0)).unwrap()],
+        &world.block_entities,
+        &world.block_names,
+    )
+    .remove(0);
+    let saved = encode(&chunk, &registry, &biomes);
+    let loaded = decode(&saved, &registry, &biomes).unwrap();
+    assert_eq!(loaded.block_names, [(pos, Tag::String("Implicit".into()))]);
+    let source = &loaded.saved.as_ref().unwrap().block_entity_sources[0].1;
+    assert_eq!(source.get("components"), Some(&expected));
+}
+
+#[test]
+fn stored_container_slots_resolve_item_ids_on_chunk_load() {
+    let (registry, biomes) = fixture();
+    let pos = (1, 64, 2);
+    let chest = registry.default_state("minecraft:chest").unwrap();
+    let mut chunk = Chunk::empty(0, 0);
+    chunk.set(pos.0, pos.1, pos.2, chest.0);
+    let mut saved = encode(&chunk, &registry, &biomes);
+    let read = |input: &str| horizon_core::nbt::parse_snbt(input).unwrap().0;
+    let Tag::Compound(fields) = &mut saved.tag else {
+        panic!("saved chunk must be a compound");
+    };
+    fields.insert(
+        "block_entities".into(),
+        Tag::List(vec![read(
+            r#"{id:"minecraft:chest",x:1,y:64,z:2,components:{container:[
+                {slot:0,item:{id:stone}},
+                {slot:0,item:{id:"minecraft:noitem"}},
+                {slot:1,item:{id:"minecraft:noitem"}},
+                {slot:2,item:{id:"pack:gem"}}
+            ]}}"#,
+        )]),
+    );
+    let item_registry =
+        horizon_client_core::registries::Registries::from_export(&serde_json::json!({
+            "persistent_components": ["minecraft:container"],
+            "by_registry": {"minecraft:item": {"ids": ["minecraft:stone"]}}
+        }));
+    let tables = SaveTables::for_heightmaps(crate::assets::Properties::for_tests(&[]))
+        .with_component_registry(Arc::new(item_registry), ["pack:gem".to_owned()]);
+    let loaded = decode_with(
+        &saved,
+        &registry,
+        &biomes,
+        Some(&tables),
+        ColumnLayout::VANILLA,
+    )
+    .expect("load chunk");
+    let [(loaded_pos, entity)] = loaded.block_entities.as_slice() else {
+        panic!("expected one loaded chest");
+    };
+    assert_eq!(*loaded_pos, pos);
+    let source = &loaded.saved.as_ref().unwrap().block_entity_sources[0].1;
+    let mut queried = block_entity_data(pos, entity, "minecraft:chest", None);
+    write_stored_block_entity_components(&mut queried, entity, Some(source));
+
+    let expected = read(
+        r#"{"minecraft:container":[{slot:0,item:{id:"minecraft:stone"}},{slot:2,item:{id:"pack:gem"}}]}"#,
+    );
+    assert_eq!(queried.get("components"), Some(&expected));
+}
+
+#[test]
+fn stored_lock_resolves_item_tags_and_decodes_subpredicates_on_command_and_reload() {
+    let (registry, biomes) = fixture();
+    let pos = (1, 64, 2);
+    let chest = registry.default_state("minecraft:chest").unwrap();
+    let mut chunk = Chunk::empty(0, 0);
+    chunk.set(pos.0, pos.1, pos.2, chest.0);
+    let mut saved = encode(&chunk, &registry, &biomes);
+    let read = |input: &str| horizon_core::nbt::parse_snbt(input).unwrap().0;
+    let item_registry = Arc::new(horizon_client_core::registries::Registries::from_export(
+        &serde_json::json!({
+            "persistent_components": ["minecraft:lock"],
+            "by_registry": {
+                "minecraft:item": {"ids": ["minecraft:stone"], "tags": ["minecraft:logs"]},
+                "minecraft:data_component_type": {"ids": ["minecraft:lock", "minecraft:rarity"]}
+            }
+        }),
+    ));
+    let tables = SaveTables::for_heightmaps(crate::assets::Properties::for_tests(&[]))
+        .with_component_registry(Arc::clone(&item_registry), []);
+    tables.install_component_item_tags(item_registry.tags("minecraft:item"));
+
+    // Expected values from ItemPredicate and DataComponentPredicate in vanilla 26.3.
+    for (lock, expected) in [
+        (
+            r#"{predicates:{written_book_content:{pages:{contains:[{nbt:"a",source:"block",block:"foo"},{nbt:"a",block:"0 64 -2"},{nbt:"a",block:"~ ~1.5 ~"},{nbt:"a",block:"^ ^.5 ^-2"},{nbt:"a",block:"^ ~ ^"},{nbt:"a",block:"0 64 2 extra"}]}}}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:written_book_content":{pages:{contains:[{block:"0 64 -2",nbt:"a"},{block:"~ ~1.5 ~",nbt:"a"},{block:"^ ^.5 ^-2",nbt:"a"}]}}}}}"#,
+        ),
+        (
+            r#"{predicates:{written_book_content:{pages:{contains:[{nbt:"a",source:"entity",entity:"@q"},{nbt:"a",entity:"@e[limit=]"},{nbt:"a",entity:"@s"},{nbt:"a",entity:"@e[type=pig,limit=1]"},{nbt:"a",entity:"Steve"},{nbt:"a",storage:"example:test"},{nbt:"a",storage:"unqualified"},{nbt:"a",storage:"invalid storage"}]}}}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:written_book_content":{pages:{contains:[{entity:"@s",nbt:"a"},{entity:"@e[type=pig,limit=1]",nbt:"a"},{entity:"Steve",nbt:"a"},{nbt:"a",storage:"example:test"},{nbt:"a",storage:"minecraft:unqualified"}]}}}}}"#,
+        ),
+        (
+            r#"{predicates:{written_book_content:{pages:{contains:[{nbt:"a",source:"block",block:"foo",storage:"valid"},{nbt:"a",source:"storage",block:"0 0 0",storage:"valid"},{nbt:"a",source:"bad",storage:"valid"},{nbt:"a",source:7,storage:"valid"},{nbt:"a",block:"0 0 0",entity:"@s",storage:"valid"},{nbt:"a",block:"foo",entity:"@q",storage:"valid"},{nbt:"a",block:"0 0 0",storage:"valid"},{nbt:"a",entity:"@s",storage:"valid"}]}}}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:written_book_content":{pages:{contains:[{nbt:"a",storage:"minecraft:valid"},{entity:"@s",nbt:"a"},{nbt:"a",storage:"minecraft:valid"},{block:"0 0 0",nbt:"a"},{entity:"@s",nbt:"a"}]}}}}}"#,
+        ),
+        (
+            r#"{predicates:{written_book_content:{pages:{contains:[{text:7},{text:"hi",bold:"bad"}]}}}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:written_book_content":{pages:{contains:["hi"]}}}}}"#,
+        ),
+        (
+            r#"{predicates:{written_book_content:{pages:{contains:[{}, {text:7},{text:"hi",bold:"bad"},{translate:7},{translate:"key",fallback:7},{keybind:"abc"},[],["one",7,"three"],{type:"text",text:"typed"},{type:"bad",text:"a"},{text:"yes",extra:[7,"no"]}]}}}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:written_book_content":{pages:{contains:["hi",{translate:"key"},{keybind:"abc"},{extra:["three"],text:"one"},"typed",{extra:["no"],text:"yes"}]}}}}}"#,
+        ),
+        (
+            r##"{predicates:{written_book_content:{pages:{contains:[{text:"style",shadow_color:[1.0,0.0,0.0,1.0]},{text:"style",click_event:{action:"bad"}},{text:"style",click_event:{action:"run_command",command:7}},{text:"style",hover_event:{action:"show_text",value:{text:"tip",bold:"bad"}}},{text:"style",shadow_color:12.3f},{text:"style",color:"#abc",font:"uniform"}]}}}}"##,
+            r##"{"minecraft:lock":{predicates:{"minecraft:written_book_content":{pages:{contains:[{shadow_color:-65536,text:"style"},"style","style",{hover_event:{action:"show_text",value:"tip"},text:"style"},{shadow_color:12,text:"style"},{color:"#000ABC",font:"minecraft:uniform",text:"style"}]}}}}}"##,
+        ),
+        (
+            r#"{predicates:{enchantments:[{levels:"bad"}],stored_enchantments:[{enchantments:"sharpness",levels:2}]}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:enchantments":[{}],"minecraft:stored_enchantments":[{enchantments:"minecraft:sharpness",levels:2}]}}}"#,
+        ),
+        (
+            r##"{predicates:{enchantments:[{levels:"bad"},{enchantments:["sharpness"],levels:{min:2,max:2}},{enchantments:"#minecraft:exclusive_set/damage",levels:{min:1,max:"bad"}},{enchantments:2,levels:2}],stored_enchantments:[{levels:"bad"}],damage:{damage:3}}}"##,
+            r##"{"minecraft:lock":{predicates:{"minecraft:damage":{damage:3},"minecraft:enchantments":[{},{enchantments:"minecraft:sharpness",levels:2},{enchantments:"#minecraft:exclusive_set/damage",levels:{min:1}},{levels:2}],"minecraft:stored_enchantments":[{}]}}}"##,
+        ),
+        (
+            r##"{predicates:{container:{items:{contains:[{items:2,count:2},7,{items:"#logs",predicates:{enchantments:[{levels:"bad"}]}}],count:[{test:{items:"stone"},count:2},{test:{items:"stone"},count:"bad"},{count:2},7],size:{min:1,max:"bad"},other:3}},bundle_contents:{items:7}}}"##,
+            r##"{"minecraft:lock":{predicates:{"minecraft:bundle_contents":{},"minecraft:container":{items:{contains:[{count:2},{items:"#minecraft:logs",predicates:{"minecraft:enchantments":[{}]}}],count:[{count:2,test:{items:"minecraft:stone"}}],size:{min:1}}}}}}"##,
+        ),
+        (
+            r#"{predicates:{writable_book_content:{pages:{contains:["abc",7],count:[{test:"one",count:{min:1}}]}},written_book_content:{pages:{contains:[{text:"paragraph"},7]},author:7,title:"Good",generation:{min:1,max:1},resolved:-1}}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:writable_book_content":{pages:{contains:["abc"],count:[{count:{min:1},test:"one"}]}},"minecraft:written_book_content":{generation:1,pages:{contains:["paragraph"]},resolved:1b,title:"Good"}}}}"#,
+        ),
+        (
+            r##"{items:"#minecraft:no_such_item_tag",count:1.9f,predicates:{custom_data:7,damage:{durability:1,unrecognized:3},unknown:{x:1}}}"##,
+            r#"{"minecraft:lock":{count:1,predicates:{"minecraft:damage":{durability:1}}}}"#,
+        ),
+        (
+            r##"{items:"#logs",predicates:{custom_data:{key:1b},rarity:{}}}"##,
+            r##"{"minecraft:lock":{items:"#minecraft:logs",predicates:{"minecraft:custom_data":"{key:1b}","minecraft:rarity":{}}}}"##,
+        ),
+        (
+            r#"{predicates:{enchantments:[7,{}],stored_enchantments:[I;2],container:{bad:1},potion_contents:7,"villager/variant":"plains"}}"#,
+            r#"{"minecraft:lock":{predicates:{"minecraft:container":{},"minecraft:enchantments":[{}],"minecraft:stored_enchantments":[],"minecraft:villager/variant":"minecraft:plains"}}}"#,
+        ),
+    ] {
+        let raw = read(&format!(
+            r#"{{id:"minecraft:chest",x:1,y:64,z:2,components:{{lock:{lock}}}}}"#
+        ));
+        let expected = read(expected);
+
+        let mut command = raw.clone();
+        normalize_block_entity_components(&mut command, &item_registry);
+        assert_eq!(command.get("components"), Some(&expected));
+
+        let Tag::Compound(fields) = &mut saved.tag else {
+            panic!("saved chunk must be a compound");
+        };
+        fields.insert("block_entities".into(), Tag::List(vec![raw]));
+        let loaded = decode_with(
+            &saved,
+            &registry,
+            &biomes,
+            Some(&tables),
+            ColumnLayout::VANILLA,
+        )
+        .expect("load chunk");
+        let [(loaded_pos, entity)] = loaded.block_entities.as_slice() else {
+            panic!("expected one loaded chest");
+        };
+        assert_eq!(*loaded_pos, pos);
+        let source = &loaded.saved.as_ref().unwrap().block_entity_sources[0].1;
+        let queried =
+            full_block_entity_data(pos, entity, "minecraft:chest", Some(source), None, None);
+        assert_eq!(queried.get("components"), Some(&expected));
+    }
+}

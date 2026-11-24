@@ -866,45 +866,84 @@ impl World {
             .find(|(p, _)| *p == key)
             .map(|(_, tag)| tag)
     }
-    /// `LockCode.addToTag` for a tag a command gives a container (`setblock`,
-    /// `data merge`): the tag it was set with keeps the lock, so `data get`
-    /// shows it, a player's open checks it and the save writes it.
+    /// Updates a container's lock without changing its stored components.
     pub fn set_block_lock(&mut self, key: (i32, i32, i32), tag: &horizon_core::nbt::Tag) {
+        self.update_block_entity_metadata(key, tag, false);
+    }
+
+    /// `BlockEntity.loadWithComponents`: keep the explicit map beside the model.
+    /// An absent or empty map clears the previous one.
+    pub fn set_block_entity_metadata(
+        &mut self,
+        key: (i32, i32, i32),
+        tag: &horizon_core::nbt::Tag,
+    ) -> bool {
+        self.update_block_entity_metadata(key, tag, true)
+    }
+
+    fn update_block_entity_metadata(
+        &mut self,
+        key: (i32, i32, i32),
+        tag: &horizon_core::nbt::Tag,
+        load_components: bool,
+    ) -> bool {
         use horizon_core::nbt::Tag;
-        let lock = tag.get("lock").and_then(|lock| match lock {
-            Tag::Compound(_) => Some(lock.clone()),
-            _ => None,
-        });
-        let mut tag = tag.clone();
-        if let Tag::Compound(map) = &mut tag {
-            map.remove(&"LootTable".into());
-            map.remove(&"LootTableSeed".into());
+        let lock = tag
+            .get("lock")
+            .filter(|lock| matches!(lock, Tag::Compound(_)));
+        let components = tag
+            .get("components")
+            .filter(|map| matches!(map, Tag::Compound(map) if !map.is_empty()));
+        let source = self.block_entity_source(key);
+        let lock_changed = source.and_then(|tag| tag.get("lock")) != lock;
+        let components_changed = load_components
+            && source
+                .and_then(|tag| tag.get("components"))
+                .filter(|map| matches!(map, Tag::Compound(map) if !map.is_empty()))
+                != components;
+        if !lock_changed && !components_changed {
+            return false;
         }
         self.with_chunk_extras(key, |extras| {
             let at = extras
                 .block_entity_sources
                 .iter()
                 .position(|(p, _)| *p == key);
-            match at {
-                Some(i) => {
-                    if let Tag::Compound(source) = &mut extras.block_entity_sources[i].1 {
-                        match lock {
-                            Some(lock) => {
-                                source.insert("lock".into(), lock);
-                            }
-                            None => {
-                                source.remove(&"lock".into());
+            if let Some(i) = at {
+                if let Tag::Compound(source) = &mut extras.block_entity_sources[i].1 {
+                    for (field, value, changed) in [
+                        ("lock", lock, lock_changed),
+                        ("components", components, components_changed),
+                    ] {
+                        if changed {
+                            match value {
+                                Some(value) => {
+                                    source.insert(field.into(), value.clone());
+                                }
+                                None => {
+                                    source.remove(&field.into());
+                                }
                             }
                         }
                     }
+                    // A runtime stack-limit override may have created a source
+                    // record with no type or position yet.
+                    for field in ["id", "x", "y", "z"] {
+                        if let Some(value) = tag.get(field) {
+                            source.entry(field.into()).or_insert_with(|| value.clone());
+                        }
+                    }
                 }
-                // A container set at runtime has no source yet: the tag the
-                // command gave is the one it was set with, `id` and position
-                // included (the save checks the id before merging).
-                None if lock.is_some() => extras.block_entity_sources.push((key, tag.clone())),
-                None => {}
+            } else {
+                let mut source = tag.clone();
+                if let Tag::Compound(map) = &mut source {
+                    map.remove(&"LootTable".into());
+                    map.remove(&"LootTableSeed".into());
+                }
+                extras.block_entity_sources.push((key, source));
             }
         });
+        true
     }
     /// The fields Horizon keeps beside a block entity's model, for a journal: the tag it was
     /// loaded or set with (its `lock`) and its pending loot metadata.

@@ -92,15 +92,28 @@ impl Game<'_> {
         })
     }
 
-    /// The block entity at `key` as vanilla saves it, with its custom name.
+    /// The block entity at `key` as vanilla saves it.
     fn saved_block_entity(&self, key: (i32, i32, i32)) -> Option<Tag> {
-        let entity = self.world.block_entities.get(&key)?;
         let block = &self
             .res
             .facts()
             .get(self.world.block(key.0, key.1, key.2))
             .name;
-        let mut tag = save::block_entity_encode::encode(key, entity, block);
+        let Some(entity) = self.world.block_entities.get(&key) else {
+            let pos = [key.0, key.1, key.2];
+            let tag = match block.as_ref() {
+                "minecraft:comparator" => self.comparator_data(pos),
+                "minecraft:decorated_pot" => self.pot_data(pos),
+                _ => None,
+            }?;
+            return block_entity_nbt::canonical(&tag);
+        };
+        let mut tag = save::block_entity_data(key, entity, block, self.world.block_lock(key));
+        save::write_stored_block_entity_components(
+            &mut tag,
+            entity,
+            self.world.block_entity_source(key),
+        );
         if let (Some(name), Tag::Compound(map)) = (self.world.block_names.get(&key), &mut tag) {
             map.insert("CustomName".into(), name.clone());
         }
@@ -337,12 +350,20 @@ impl Game<'_> {
         game_master: bool,
     ) {
         let key = (pos[0], pos[1], pos[2]);
-        self.pending.banner.remove(&pos);
         let Some(saved) = self.saved_block_entity(key) else {
             return;
         };
+        self.pending.banner.remove(&pos);
         let placed = block_entity_item::place(&saved, &components(stack), game_master);
         if placed == saved {
+            return;
+        }
+        if !self.world.block_entities.contains_key(&key) {
+            if self.set_pot_data(pos, &placed).is_none()
+                && self.load_comparator_output(pos, &placed).flatten() == Some(true)
+            {
+                self.mark_block_entity_updated(key);
+            }
             return;
         }
         let block = self.world.block(pos[0], pos[1], pos[2]);
@@ -358,6 +379,7 @@ impl Game<'_> {
             new.state_triggered = old.state_triggered;
         }
         self.load_block_name(key, &entity, &placed);
+        self.world.set_block_entity_metadata(key, &placed);
         self.world.block_entities.insert(key, entity);
         self.update_spawner_display(key);
     }

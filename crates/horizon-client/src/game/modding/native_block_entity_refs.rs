@@ -650,6 +650,7 @@ fn save_with_metadata(
     block: &str,
 ) -> Option<Compound> {
     let mut tag = save::block_entity_data(pos, entity, block, world.block_lock(pos));
+    save::write_stored_block_entity_components(&mut tag, entity, world.block_entity_source(pos));
     Game::write_pending_loot(world, pos, &mut tag);
     let Tag::Compound(mut data) = tag else {
         return None;

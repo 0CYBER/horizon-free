@@ -6533,6 +6533,9 @@ impl Game<'_> {
         self.world = world;
         self.inventory = inventory;
         self.save = self.with_profession_save_snapshot(save);
+        if let Some(tables) = self.save.tables.get() {
+            tables.install_component_item_tags(&self.ui.registries.item_tags);
+        }
         // MinecraftServer.prepareLevels: the saved tickets come back.
         self.tickets = if self.options.execution_role.is_client() {
             Default::default()

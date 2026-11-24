@@ -1048,6 +1048,16 @@ pub(super) fn make_streaming(
         shape,
     );
     save.enable_trusted_fluid_load();
+    if let Some(tables) = same_world.and_then(|open| open.tables.get()) {
+        let _ = save.tables.set(Arc::clone(tables));
+    } else if let Some(registry) =
+        super::chat::command_export(&options.resources, options.dedicated.is_none())
+    {
+        let pack_items = res.core.item_data.defaults().entries().keys().cloned();
+        let tables = horizon_client::save::SaveTables::new(&pack.assets)
+            .with_component_registry(registry, pack_items);
+        let _ = save.tables.set(Arc::new(tables));
+    }
     // One section palette budget per world, not one per level.
     if let Some(open) = same_world {
         save.share_section_palettes(open);

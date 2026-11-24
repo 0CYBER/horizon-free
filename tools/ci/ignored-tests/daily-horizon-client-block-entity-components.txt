@@ -1,0 +1,1 @@
+horizon-client game::commands::data::saved_tag_tests::block_entity_components_survive_commands_and_chunk_reload lib daily resources

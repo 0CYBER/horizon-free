@@ -563,6 +563,12 @@ impl Game<'_> {
         };
         let item_tags = tags(&self.items().item_tags);
         let block_tags = tags(&self.items().block_tags);
+        if self.world_adopted
+            && self.remote.is_none()
+            && let Some(tables) = self.save.tables.get()
+        {
+            tables.install_component_item_tags(&item_tags);
+        }
         let reg = &mut self.ui.registries;
         reg.item_tags.clone_from(&item_tags);
         reg.block_tags.clone_from(&block_tags);

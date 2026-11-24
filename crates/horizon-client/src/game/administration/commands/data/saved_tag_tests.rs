@@ -250,3 +250,99 @@ fn the_last_tag_leaves_no_key_and_a_spawner_keeps_its_tags() {
         assert_eq!(game.tags_of(Target::Spawner(reloaded)), ["audit"]);
     });
 }
+
+/// 26.3's BlockInput and BlockDataAccessor load the same explicit map.
+#[test]
+#[ignore = "daily"]
+fn block_entity_components_survive_commands_and_chunk_reload() {
+    with_command_game("block-entity-components", |game| {
+        use horizon_client::chunk::Chunk;
+        use horizon_core::position::ChunkPos;
+        use std::sync::Arc;
+
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+        assert!(game.run_command("tick freeze"));
+        let initial = r#"{"minecraft:custom_data":{a:1b},"minecraft:rarity":"rare","minecraft:lock":{items:"minecraft:stick"},"minecraft:custom_name":"Nest","minecraft:container":[{slot:0,item:{id:"minecraft:stone"}}]}"#;
+        let expected = r#"{"minecraft:custom_data":{a:1b,b:2s},"minecraft:rarity":"rare","minecraft:lock":{items:"minecraft:stick"},"minecraft:custom_name":"Nest","minecraft:container":[{slot:0,item:{id:"minecraft:stone"}}]}"#;
+        let read = |game: &mut Game<'_>, pos: [i32; 3], expected: &str| {
+            let [x, y, z] = pos;
+            assert!(game.run_command(&format!("data get block {x} {y} {z} components")));
+            let saved = game.block_entity_nbt(pos).unwrap();
+            let expected = parse_snbt(expected).unwrap().0;
+            assert_eq!(saved.get("components"), Some(&expected));
+            saved
+        };
+        let hive = [4, 200, 4];
+        assert!(game.run_command(&format!(
+            "setblock 4 200 4 bee_nest{{components:{initial}}} strict"
+        )));
+        let saved = read(game, hive, initial);
+        assert!(saved.get("CustomName").is_none());
+        assert!(saved.get("lock").is_none());
+        assert!(saved.get("Items").is_none());
+
+        assert!(game.run_command(
+            r#"data merge block 4 200 4 {components:{"minecraft:custom_data":{b:2s}}}"#
+        ));
+        read(game, hive, expected);
+
+        let chest = [6, 200, 4];
+        assert!(game.run_command(r#"setblock 6 200 4 chest{CustomName:"Implicit",components:{"minecraft:custom_name":"Explicit"}} strict"#));
+        let explicit = r#"{"minecraft:custom_name":"Explicit"}"#;
+        let saved = read(game, chest, explicit);
+        assert_eq!(
+            saved.get("CustomName"),
+            Some(&Tag::String("Implicit".into()))
+        );
+        let comparator = [8, 200, 4];
+        assert!(game.run_command(
+            r#"setblock 8 200 4 comparator{components:{rarity:"rare",custom_data:7}} strict"#
+        ));
+        let rare = r#"{"minecraft:rarity":"rare"}"#;
+        read(game, comparator, rare);
+
+        let pot = [10, 200, 4];
+        assert!(game.run_command("setblock 10 200 4 decorated_pot strict"));
+        let explicit_item_data = r#"{"minecraft:custom_data":{a:1b}}"#;
+        for (pos, id) in [(comparator, "comparator"), (pot, "decorated_pot")] {
+            let stack = save::item_from_nbt(
+                &parse_snbt(&format!(
+                    r#"{{id:"minecraft:{id}",count:1,components:{explicit_item_data}}}"#
+                ))
+                .unwrap()
+                .0,
+            )
+            .unwrap();
+            game.apply_placed_item(pos, &stack, false);
+            read(game, pos, explicit_item_data);
+        }
+
+        let live = game.world.chunks.get(&(0, 0)).unwrap().clone();
+        let chunk = game.with_entities([&live]).remove(0);
+        let registry = game.pack.assets.registry;
+        let encoded = save::encode(&chunk, registry, game.res.biomes());
+        let mut reloaded = save::decode(&encoded, registry, game.res.biomes()).unwrap();
+        game.world.install_chunk_block_entities(&mut reloaded);
+        game.world.chunks.insert((0, 0), Arc::new(reloaded));
+        for (pos, components) in [
+            (hive, expected),
+            (chest, explicit),
+            (comparator, explicit_item_data),
+            (pot, explicit_item_data),
+        ] {
+            read(game, pos, components);
+        }
+
+        assert!(game.run_command("data remove block 4 200 4 components"));
+        read(game, hive, "{}");
+        assert!(game.run_command("setblock 6 200 4 air strict"));
+        assert!(game.run_command("setblock 6 200 4 chest strict"));
+        read(game, chest, "{}");
+    });
+}

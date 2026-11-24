@@ -514,6 +514,10 @@ pub struct SaveTables {
     air: u32,
     /// The POI type and its max tickets of each state (`PoiTypes`).
     poi: Vec<Option<(&'static str, i32)>>,
+    component_registry: Option<Arc<horizon_client_core::registries::Registries>>,
+    component_items: HashSet<String>,
+    // The world publishes its bound tags once its active packs are loaded.
+    component_item_tags: std::sync::RwLock<Option<Arc<HashSet<String>>>>,
 }
 impl SaveTables {
     pub fn new(assets: &crate::assets::Assets) -> Self {
@@ -540,6 +544,9 @@ impl SaveTables {
             block_ids,
             default_state,
             block_entity: Vec::new(),
+            component_registry: None,
+            component_items: HashSet::new(),
+            component_item_tags: Default::default(),
             heightmaps: assets.properties.clone(),
             air: registry.default_state("minecraft:air").map_or(0, |s| s.0),
             poi: (0..registry.len())
@@ -559,10 +566,35 @@ impl SaveTables {
             block_ids: HashMap::new(),
             default_state: Vec::new(),
             block_entity: Vec::new(),
+            component_registry: None,
+            component_items: HashSet::new(),
+            component_item_tags: Default::default(),
             heightmaps,
             air: 0,
             poi: Vec::new(),
         }
+    }
+    pub fn with_component_registry(
+        mut self,
+        registry: Arc<horizon_client_core::registries::Registries>,
+        pack_items: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.component_items = registry
+            .ids("minecraft:item")
+            .iter()
+            .cloned()
+            .chain(pack_items)
+            .collect();
+        self.component_registry = Some(registry);
+        self
+    }
+    /// Publish the live tag table for chunk reads in this world.
+    pub fn install_component_item_tags(&self, tags: &[String]) {
+        *self
+            .component_item_tags
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(Arc::new(tags.iter().cloned().collect()));
     }
     /// Which states carry a block entity (`BlockFacts`), to drop entries for
     /// unknown block entities whose block is gone.
@@ -704,6 +736,153 @@ pub fn block_entity_data(
         }
     }
     tag
+}
+/// Decode command NBT with the live item and data-component registries.
+pub fn normalize_block_entity_components(
+    tag: &mut Tag,
+    registry: &horizon_client_core::registries::Registries,
+) {
+    let items = if registry.items.is_empty() {
+        registry.ids("minecraft:item")
+    } else {
+        &registry.items
+    };
+    let tags = registry.tags("minecraft:item");
+    normalize_block_entity_component_map(
+        tag,
+        Some(registry),
+        &|registry_id, id| {
+            if registry_id == "minecraft:item" {
+                return match id.strip_prefix('#') {
+                    Some(tag) => tags.iter().any(|id| id == tag),
+                    None => items.is_empty() || items.iter().any(|item| item == id),
+                };
+            }
+            // Command registries carry the world's active enchantment IDs.
+            if registry_id == "minecraft:enchantment"
+                && !id.starts_with('#')
+                && !registry.enchantments.is_empty()
+            {
+                return registry
+                    .enchantments
+                    .iter()
+                    .any(|enchantment| enchantment == id);
+            }
+            known_block_entity_holder(Some(registry), registry_id, id)
+        },
+        |id, value| {
+            if !id.starts_with("minecraft:") {
+                return true;
+            }
+            match horizon_command::item::decoded_component_value(id, value, registry) {
+                Ok(decoded) => {
+                    *value = decoded;
+                    true
+                }
+                Err(_) => false,
+            }
+        },
+    );
+}
+
+fn normalize_block_entity_component_map(
+    tag: &mut Tag,
+    registry: Option<&horizon_client_core::registries::Registries>,
+    known_holder: &dyn Fn(&str, &str) -> bool,
+    mut decode_value: impl FnMut(&str, &mut Tag) -> bool,
+) {
+    let Tag::Compound(tag) = tag else { return };
+    let Some(input) = tag.get_mut(&"components".into()) else {
+        return;
+    };
+    let component_types = registry.map_or(&[][..], |registry| {
+        registry.ids("minecraft:data_component_type")
+    });
+    let mut components = crate::block_entity_nbt::stored_components(
+        Some(input),
+        known_holder,
+        component_types,
+        &|source, input| valid_block_entity_nbt_source(source, input, registry),
+    );
+    components.retain(|key, value| {
+        let id = key.to_string_lossy();
+        known_block_entity_holder(registry, "minecraft:data_component_type", &id)
+            && decode_value(&id, value)
+    });
+    *input = Tag::Compound(components);
+}
+
+fn valid_block_entity_nbt_source(
+    source: &str,
+    input: &str,
+    registry: Option<&horizon_client_core::registries::Registries>,
+) -> bool {
+    use horizon_command::{ArgType, Reader};
+    let empty_registry;
+    let registry = match registry {
+        Some(registry) => registry,
+        None => {
+            empty_registry = horizon_client_core::registries::Registries::default();
+            &empty_registry
+        }
+    };
+    let mut reader = Reader::new(input);
+    let valid = match source {
+        "block" => ArgType::BlockPos.parse(&mut reader, registry).is_ok(),
+        "entity" => horizon_command::selector::parse(&mut reader, registry, true).is_ok(),
+        _ => false,
+    };
+    valid && !reader.can_read()
+}
+
+fn known_block_entity_holder(
+    registry: Option<&horizon_client_core::registries::Registries>,
+    registry_id: &str,
+    id: &str,
+) -> bool {
+    let Some(registry) = registry else {
+        return true;
+    };
+    match registry_id {
+        "minecraft:data_component_type" => {
+            registry.persistent_components.is_empty()
+                || registry
+                    .persistent_components
+                    .iter()
+                    .any(|component| component == id)
+                || horizon_protocol::item::custom::id(id).is_some()
+        }
+        "minecraft:attribute" | "minecraft:mob_effect" | "minecraft:potion"
+            if id.starts_with("minecraft:") =>
+        {
+            let ids = registry.ids(registry_id);
+            ids.is_empty() || ids.iter().any(|known| known == id)
+        }
+        // Dynamic registries and tags can include world-pack entries beyond the export.
+        _ => true,
+    }
+}
+
+/// Add the explicit component map to a tag encoded from the live model.
+pub fn write_stored_block_entity_components(
+    tag: &mut Tag,
+    e: &crate::containers::BlockEntity,
+    source: Option<&Tag>,
+) {
+    use crate::containers::BlockEntity;
+    if matches!(
+        e,
+        BlockEntity::Banner(_) | BlockEntity::CopperGolemStatue(_) | BlockEntity::Mod(_)
+    ) {
+        return;
+    }
+    if let Some(source) = source
+        && source.get("id") == tag.get("id")
+        && let Some(components @ Tag::Compound(_)) = source.get("components")
+        && let Tag::Compound(map) = tag
+    {
+        map.insert("components".into(), components.clone());
+    }
 }
 /// `BlockEntity.saveWithFullMetadata` for a modelled entity: the model's
 /// fields plus what Horizon keeps only in the tag it was loaded with (the
@@ -1676,7 +1855,37 @@ fn decode_column(
         ..ChunkExtras::default()
     };
     if let Some(Tag::List(entities)) = tag.get("block_entities") {
-        for e in entities {
+        let components = tables.and_then(|tables| tables.component_registry.as_deref());
+        let item_tags = tables.and_then(|tables| {
+            tables
+                .component_item_tags
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
+        let known_holder = |registry_id: &str, id: &str| {
+            if registry_id != "minecraft:item" {
+                return known_block_entity_holder(components, registry_id, id);
+            }
+            match id.strip_prefix('#') {
+                Some(tag) => item_tags.as_ref().is_none_or(|tags| tags.contains(tag)),
+                None => tables.is_none_or(|tables| {
+                    tables.component_items.is_empty() || tables.component_items.contains(id)
+                }),
+            }
+        };
+        for mut entry in entities.iter().cloned() {
+            if crate::block_entity_nbt::id(&entry).is_some_and(|id| id.starts_with("minecraft:")) {
+                // Check registry ids here. Other codecs can require
+                // dynamic world data beyond the chunk reader's tables.
+                normalize_block_entity_component_map(
+                    &mut entry,
+                    components,
+                    &known_holder,
+                    |_, _| true,
+                );
+            }
+            let e = &entry;
             if let Some(at) = block_entity_order::saved_at(e, [*x, *z]) {
                 extras.block_entity_order.push(at);
             }
@@ -1714,7 +1923,7 @@ fn decode_column(
                     if randomizable && let Some(pending) = PendingContainerLoot::from_tag(e) {
                         extras.pending_loot.insert(be.0, pending);
                     }
-                    let mut source = e.clone();
+                    let mut source = entry;
                     if randomizable && let Tag::Compound(map) = &mut source {
                         map.remove(&"LootTable".into());
                         map.remove(&"LootTableSeed".into());
@@ -1722,7 +1931,7 @@ fn decode_column(
                     extras.block_entity_sources.push((be.0, source));
                     chunk.block_entities.push(be);
                 }
-                None => extras.block_entities.push(e.clone()),
+                None => extras.block_entities.push(entry),
             }
         }
     }

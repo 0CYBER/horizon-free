@@ -1887,9 +1887,7 @@ impl Game<'_> {
         {
             self.world.block_entities.insert(target, entity);
         }
-        if self.world.block_entities.get(&target).is_some() {
-            self.apply_placed_item([target.0, target.1, target.2], &stack, false);
-        }
+        self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         self.block_item_placed(&stack, None, placed, &ctx);
         self.process_level_events()?;
         Ok((shrink(stack), CLICK))

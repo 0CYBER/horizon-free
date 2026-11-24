@@ -934,6 +934,7 @@ impl Game<'_> {
         mut tag: horizon_core::nbt::Tag,
     ) -> bool {
         use horizon_core::nbt::Tag;
+        self.normalize_command_block_components(pos, &mut tag);
         if self.pot_data(pos).is_some() {
             return self.set_pot_data(pos, &tag).unwrap_or(false);
         }
@@ -963,10 +964,7 @@ impl Game<'_> {
         };
         let rolled = self.take_loot_table(key, &tag, &mut new);
         let after = horizon_client::save::block_entity_encode::encode(key, &new, &name);
-        // The lock is outside the model: a tag that only changes it still
-        // changes the block entity.
-        let lock_changed = self.world.block_lock(key) != tag.get("lock");
-        // So is the custom name.
+        let metadata_changed = self.world.set_block_entity_metadata(key, &tag);
         let name_changed = self.load_block_name(key, &new, &tag);
         let cooldown_changed = if name == "minecraft:hopper" {
             let state = super::super::machines::HopperState::load(&tag);
@@ -986,15 +984,22 @@ impl Game<'_> {
             // State-only sync does not flip `/setblock` into reporting a change.
             self.set_mode_property(key, "minecraft:structure_block", mode);
         }
-        if after == before && !rolled && !lock_changed && !name_changed && !cooldown_changed {
+        if after == before && !rolled && !metadata_changed && !name_changed && !cooldown_changed {
             return false;
         }
         self.world.block_entities.insert(key, new);
-        self.world.set_block_lock(key, &tag);
         self.update_spawner_display(key);
         self.command_block_loaded(key, was_auto);
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         true
+    }
+    fn normalize_command_block_components(&self, pos: [i32; 3], tag: &mut Tag) {
+        let key = (pos[0], pos[1], pos[2]);
+        if tag.get("components").is_some()
+            && !matches!(self.world.block_entities.get(&key), Some(BlockEntity::Mod(_)))
+        {
+            save::normalize_block_entity_components(tag, &self.ui.registries);
+        }
     }
     pub(in crate::game) fn data_block_name(&self, p: [i32; 3]) -> String {
         let state = self.world.block(p[0], p[1], p[2]);
@@ -1106,67 +1111,81 @@ impl Game<'_> {
         true
     }
 
-    /// `ComparatorBlockEntity.loadAdditional` (`getIntOr("OutputSignal", 0)`)
-    /// for a comparator at `p`: None for any other block; else whether the
-    /// loaded output differs from the one it had (None inside when the tag
-    /// does not decode). The block's own metadata comes from `comparator_data`.
-    fn load_comparator_output(&mut self, p: [i32; 3], tag: &Tag) -> Option<Option<bool>> {
+    /// Load the comparator's live output and stored component map. The outer
+    /// option identifies comparators and the inner one reports whether loading
+    /// succeeded and changed the saved data.
+    pub(in crate::game) fn load_comparator_output(
+        &mut self,
+        p: [i32; 3],
+        tag: &Tag,
+    ) -> Option<Option<bool>> {
         let mut input = self.comparator_data(p)?;
-        let before = input.get("OutputSignal").cloned();
-        if let Some(value) = tag.get("OutputSignal") {
-            set_key(&mut input, "OutputSignal", value.clone());
-        } else if let Tag::Compound(map) = &mut input {
-            map.remove(&"OutputSignal".into());
+        let before = input.clone();
+        for field in ["OutputSignal", "components"] {
+            if let Some(value) = tag.get(field) {
+                set_key(&mut input, field, value.clone());
+            } else if let Tag::Compound(map) = &mut input {
+                map.remove(&field.into());
+            }
         }
-        let Some(normalized) = horizon_client::block_entity_nbt::canonical(&input) else {
+        let Some(mut normalized) = horizon_client::block_entity_nbt::canonical(&input) else {
             return Some(None);
         };
-        let output = normalized.get("OutputSignal").cloned();
-        if let Some(Tag::Int(value)) = output {
+        if let Some(Tag::Int(value)) = normalized.get("OutputSignal") {
             let pos = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
-            self.block_ticks.comparator_outputs.insert(pos, value);
+            self.block_ticks.comparator_outputs.insert(pos, *value);
         }
-        Some(Some(output != before))
+        if let Tag::Compound(map) = &mut normalized {
+            map.remove(&"keepPacked".into());
+        }
+        let changed = normalized != before;
+        if normalized.get("components") != before.get("components") {
+            super::super::spill::put_saved_entity(&mut self.world, p, normalized);
+        }
+        Some(Some(changed))
     }
 
-    /// `ComparatorBlockEntity.saveAdditional`: expose the circuit's live output,
-    /// rather than keeping a second copy in the ordinary block entity map.
-    fn comparator_data(&self, p: [i32; 3]) -> Option<Tag> {
+    /// `ComparatorBlockEntity.saveAdditional`: the circuit holds the live
+    /// output, and the chunk's saved block entity holds its explicit components.
+    pub(in crate::game) fn comparator_data(&self, p: [i32; 3]) -> Option<Tag> {
         if self.data_block_name(p) != "minecraft:comparator" {
             return None;
         }
         let pos = horizon_core::position::BlockPos::new(p[0], p[1], p[2]);
+        let saved = self
+            .world
+            .chunks
+            .get(&(p[0] >> 4, p[2] >> 4))
+            .and_then(|chunk| chunk.saved.as_deref())
+            .and_then(|saved| {
+                saved.block_entities.iter().find(|t| {
+                    [t.get("x"), t.get("y"), t.get("z")]
+                        .map(|v| save::number(v).unwrap_or(0) as i32)
+                        == p
+                        && save::text(t.get("id")).as_deref() == Some("minecraft:comparator")
+                })
+            });
         let output = self
             .block_ticks
             .comparator_outputs
             .get(&pos)
             .copied()
             .or_else(|| {
-                let saved = self
-                    .world
-                    .chunks
-                    .get(&(p[0] >> 4, p[2] >> 4))?
-                    .saved
-                    .as_deref()?;
-                let tag = saved.block_entities.iter().find(|t| {
-                    [t.get("x"), t.get("y"), t.get("z")]
-                        .map(|v| save::number(v).unwrap_or(0) as i32)
-                        == p
-                        && save::text(t.get("id")).as_deref() == Some("minecraft:comparator")
-                })?;
-                let tag = horizon_client::block_entity_nbt::canonical(tag)?;
-                match tag.get("OutputSignal") {
-                    Some(Tag::Int(v)) => Some(*v),
-                    _ => None,
-                }
+                let tag = horizon_client::block_entity_nbt::canonical(saved?)?;
+                horizon_client::nbt_path::int_value(tag.get("OutputSignal")?)
             })
             .unwrap_or(0);
+        let components = saved
+            .and_then(|tag| tag.get("components"))
+            .filter(|tag| matches!(tag, Tag::Compound(_)))
+            .cloned()
+            .unwrap_or_else(empty);
         Some(Tag::compound([
             ("id", Tag::String("minecraft:comparator".into())),
             ("x", Tag::Int(p[0])),
             ("y", Tag::Int(p[1])),
             ("z", Tag::Int(p[2])),
-            ("components", empty()),
+            ("components", components),
             ("OutputSignal", Tag::Int(output)),
         ]))
     }
@@ -1265,6 +1284,11 @@ impl Game<'_> {
         let name = self.data_block_name(p);
         let e = self.world.block_entities.get(&key)?;
         let mut tag = save::block_entity_data(key, e, &name, self.world.block_lock(key));
+        save::write_stored_block_entity_components(
+            &mut tag,
+            e,
+            self.world.block_entity_source(key),
+        );
         if name == "minecraft:hopper" {
             set_key(
                 &mut tag,
@@ -1279,10 +1303,11 @@ impl Game<'_> {
         Self::write_pending_loot(&self.world, key, &mut tag);
         Some(tag)
     }
-    pub(in crate::game) fn set_data_of(&mut self, r: &DataRef, tag: Tag) -> R<()> {
+    pub(in crate::game) fn set_data_of(&mut self, r: &DataRef, mut tag: Tag) -> R<()> {
         match r {
             DataRef::Entity(t) => self.apply_entity_nbt(*t, tag),
             DataRef::Block(p) => {
+                self.normalize_command_block_components(*p, &mut tag);
                 // This view is read-only: never decode a live piston into a
                 // second, detached entry in world.block_entities.
                 if self.moving_piston_data(*p).is_some() {
@@ -1325,7 +1350,7 @@ impl Game<'_> {
                         // `StructureBlockEntity.loadAdditional` calls `updateBlockState()`.
                         self.set_mode_property(key, "minecraft:structure_block", mode);
                     }
-                    self.world.set_block_lock(key, &tag);
+                    self.world.set_block_entity_metadata(key, &tag);
                     self.update_spawner_display(key);
                     self.command_block_loaded(key, was_auto);
                     // BlockDataAccessor.setData: setChanged and sendBlockUpdated(3),
@@ -1350,6 +1375,14 @@ impl Game<'_> {
         key: (i32, i32, i32),
         tag: &Tag,
     ) -> bool {
+        let mut normalized;
+        let tag = if tag.get("components").is_some() {
+            normalized = tag.clone();
+            self.normalize_command_block_components([key.0, key.1, key.2], &mut normalized);
+            &normalized
+        } else {
+            tag
+        };
         let state = self.world.block(key.0, key.1, key.2);
         let name = &self.res.facts().get(state).name;
         let Some((_, mut new)) = save::decode_block_entity_for_block(tag, name) else {
@@ -1358,7 +1391,7 @@ impl Game<'_> {
         self.take_loot_table(key, tag, &mut new);
         self.load_block_name(key, &new, tag);
         self.world.block_entities.insert(key, new);
-        self.world.set_block_lock(key, tag);
+        self.world.set_block_entity_metadata(key, tag);
         self.update_spawner_display(key);
         true
     }
