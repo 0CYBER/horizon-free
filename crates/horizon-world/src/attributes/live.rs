@@ -301,10 +301,10 @@ impl<G: FnMut() -> i32> AttributeAccess<Key, Handle> for Data<G> {
     }
 }
 /// An identity allocator that can be copied with its state, so the attributes holding it can be.
-pub trait Identities: FnMut() -> i32 {
+pub trait Identities: FnMut() -> i32 + Send + Sync {
     fn clone_box(&self) -> Box<dyn Identities>;
 }
-impl<F: FnMut() -> i32 + Clone + 'static> Identities for F {
+impl<F: FnMut() -> i32 + Clone + Send + Sync + 'static> Identities for F {
     fn clone_box(&self) -> Box<dyn Identities> {
         Box::new(self.clone())
     }

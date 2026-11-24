@@ -77,22 +77,30 @@ pub(crate) fn hookless<'w>(base: &MobWorld<'w>) -> impl Fn() -> MobWorld<'w> + S
     // Every field but the two hooks, named, so that a field added to `MobWorld` is decided here.
     let MobWorld {
         mob_maps,
+        section_writer: _,
+        professions,
+        loop_context,
         world,
         registry,
         facts,
         fluid_tables,
+        attributes,
         movement,
         collision,
         suffocation,
         data,
         player,
+        player_identity,
+        player_selection: _,
         controlling_player_movement,
         nearest_player,
         others,
+        live_mobs: _,
         dragon,
         leash_boats,
         others_grid,
         others_index,
+        passenger_objects,
         others_villagers,
         village: _,
         species_slots: _,
@@ -119,28 +127,41 @@ pub(crate) fn hookless<'w>(base: &MobWorld<'w>) -> impl Fn() -> MobWorld<'w> + S
         items,
         lid_openers,
         mod_effects: _,
+        mob_hooks: _,
+        goal_host: _,
+        asks_animal_tame: _,
+        asks_living_destroy_block: _,
+        asks_baby_spawn: _,
         who_lookup: _,
         foreign: _,
         border,
     } = base.clone();
     move || MobWorld {
         mob_maps,
+        section_writer: None,
+        professions,
+        loop_context,
         world,
         registry,
         facts,
         fluid_tables,
+        attributes,
         movement,
         collision,
         suffocation,
         data,
         player: player.clone(),
+        player_identity,
+        player_selection: None,
         controlling_player_movement,
         nearest_player,
         others,
+        live_mobs: None,
         dragon,
         leash_boats,
         others_grid,
         others_index,
+        passenger_objects,
         others_villagers,
         village: None,
         species_slots: None,
@@ -167,6 +188,11 @@ pub(crate) fn hookless<'w>(base: &MobWorld<'w>) -> impl Fn() -> MobWorld<'w> + S
         items,
         lid_openers,
         mod_effects: None,
+        mob_hooks: None,
+        goal_host: None,
+        asks_animal_tame: false,
+        asks_living_destroy_block: false,
+        asks_baby_spawn: false,
         who_lookup: None,
         foreign: None,
         border,
@@ -195,15 +221,13 @@ mod tests {
         }
         assert_eq!(game.mobs.len(), 2);
         let examples = game.mobs.clone();
-        game.mobs = (0..MIN_MOBS + 37)
-            .map(|i| {
-                let mut mob = examples[i % 2].clone();
-                mob.id = 10_000 + i as u32;
-                mob.on_climbable = i % 2 != 0; // deliberately stale in both cases
-                mob
-            })
-            .collect::<Vec<_>>()
-            .into();
+        game.mobs.clear();
+        for i in 0..MIN_MOBS + 37 {
+            let mut mob = examples[i % 2].clone();
+            mob.id = 10_000 + i as u32;
+            mob.on_climbable = i % 2 != 0; // deliberately stale in both cases
+            game.mobs.push(mob);
+        }
         let mut snapshot = Vec::new();
         game.prepare_mobs(None, &mut snapshot);
         assert_eq!(snapshot.len(), game.mobs.len());

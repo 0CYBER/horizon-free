@@ -794,17 +794,31 @@ fn can_be_followed(s: Species, followers: i32) -> bool {
 /// `startFollowing` on a recruit, applied after the recruiter's tick. A fish
 /// another leader took this tick (its snapshot was older) stays with it.
 pub fn start_following(mobs: &mut JoinList<Mob>, fish: u32, leader: u32) {
-    let alive = |mobs: &[Mob], id: u32| mobs.iter().any(|m| m.id == id && m.alive() && !m.removed);
-    let Some(current) = mobs.iter().find(|m| m.id == fish).map(|m| m.extra.leader) else {
+    start_following_slots(mobs, fish, leader);
+}
+pub fn start_following_slots<L: super::mob_slot::MobSlots + ?Sized>(
+    mobs: &mut L,
+    fish: u32,
+    leader: u32,
+) {
+    let alive = |mobs: &L, id: u32| {
+        mobs.iter_mobs()
+            .any(|m| m.id == id && m.alive() && !m.removed)
+    };
+    let Some(current) = mobs
+        .iter_mobs()
+        .find(|m| m.id == fish)
+        .map(|m| m.extra.leader)
+    else {
         return;
     };
     if current.is_some_and(|l| alive(mobs, l)) {
         return;
     }
-    if let Some(m) = mobs.iter_mut().find(|m| m.id == fish) {
+    if let Some(m) = mobs.mob_by_id_mut(fish) {
         m.extra.leader = Some(leader);
     }
-    if let Some(m) = mobs.iter_mut().find(|m| m.id == leader) {
+    if let Some(m) = mobs.mob_by_id_mut(leader) {
         m.extra.followers += 1;
     }
 }

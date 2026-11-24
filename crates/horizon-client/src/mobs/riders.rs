@@ -268,15 +268,18 @@ pub fn player_rides(m: &Mob, w: &MobWorld) -> bool {
 /// `Entity.startRiding`: the link it makes, `rider` on `vehicle` as its first
 /// passenger (`addPassenger`).
 pub fn link(mobs: &mut JoinList<Mob>, rider: u32, vehicle: u32) {
+    link_slots(mobs, rider, vehicle);
+}
+pub fn link_slots<L: super::mob_slot::MobSlots + ?Sized>(mobs: &mut L, rider: u32, vehicle: u32) {
     if rider == vehicle {
         return;
     }
-    if let Some(m) = mobs.iter_mut().find(|m| m.id == rider) {
+    if let Some(m) = mobs.mob_by_id_mut(rider) {
         super::shulker::on_start_riding(m);
         m.extra.mount = Some(vehicle);
         m.extra.passenger = true;
     }
-    if let Some(m) = mobs.iter_mut().find(|m| m.id == vehicle)
+    if let Some(m) = mobs.mob_by_id_mut(vehicle)
         && m.extra.rider.is_none()
     {
         m.extra.rider = Some(rider);
@@ -294,9 +297,13 @@ pub fn can_add_passenger(v: &Mob, aboard: usize) -> bool {
 }
 /// `Piglin.getTopPassenger`: down the chain of first passengers from
 /// `vehicle`, stopping at the `counter`th seat.
-fn top_passenger(mobs: &[Mob], vehicle: u32, counter: i32) -> u32 {
+fn top_passenger<L: super::mob_slot::MobSlots + ?Sized>(
+    mobs: &L,
+    vehicle: u32,
+    counter: i32,
+) -> u32 {
     let first = mobs
-        .iter()
+        .iter_mobs()
         .find(|m| m.id == vehicle)
         .and_then(|m| m.extra.rider);
     match first {
@@ -310,16 +317,23 @@ fn top_passenger(mobs: &[Mob], vehicle: u32, counter: i32) -> u32 {
 /// after its boarding cooldown, onto a vehicle with no passenger
 /// (`canRide`, `canAddPassenger`). Returns whether it boarded.
 pub fn start_riding(mobs: &mut JoinList<Mob>, rider: u32, vehicle: u32) -> bool {
+    start_riding_slots(mobs, rider, vehicle)
+}
+pub fn start_riding_slots<L: super::mob_slot::MobSlots + ?Sized>(
+    mobs: &mut L,
+    rider: u32,
+    vehicle: u32,
+) -> bool {
     // `Shulker.startRiding` puts its attach face back before the ride is
     // decided, so a shulker that is refused still ends up lid up.
-    if let Some(m) = mobs.iter_mut().find(|m| m.id == rider) {
+    if let Some(m) = mobs.mob_by_id_mut(rider) {
         super::shulker::on_start_riding(m);
     }
-    let Some(r) = mobs.iter().find(|m| m.id == rider) else {
+    let Some(r) = mobs.iter_mobs().find(|m| m.id == rider) else {
         return false;
     };
     let on_hoglin = mobs
-        .iter()
+        .iter_mobs()
         .any(|m| m.id == vehicle && m.species() == Species::Hoglin);
     let vehicle = if r.species() == Species::Piglin && r.is_baby() && on_hoglin {
         top_passenger(mobs, vehicle, MAX_PASSENGERS_ON_ONE_HOGLIN)
@@ -333,24 +347,27 @@ pub fn start_riding(mobs: &mut JoinList<Mob>, rider: u32, vehicle: u32) -> bool 
     // its vehicle.
     let mut up = Some(vehicle);
     while let Some(v) = up {
-        up = mobs.iter().find(|m| m.id == v).and_then(|m| m.extra.mount);
+        up = mobs
+            .iter_mobs()
+            .find(|m| m.id == v)
+            .and_then(|m| m.extra.mount);
         if up == Some(rider) {
             return false;
         }
     }
-    let Some(v) = mobs.iter().find(|m| m.id == vehicle) else {
+    let Some(v) = mobs.iter_mobs().find(|m| m.id == vehicle) else {
         return false;
     };
     let count = usize::from(v.rider.is_some())
         + mobs
-            .iter()
+            .iter_mobs()
             .filter(|m| m.extra.mount == Some(vehicle))
             .count()
             .max(usize::from(v.extra.rider.is_some()));
     if r.extra.boarding_cooldown > 0 || !can_add_passenger(v, count) {
         return false;
     }
-    link(mobs, rider, vehicle);
+    link_slots(mobs, rider, vehicle);
     true
 }
 /// `Mob.startRiding` for a brain's `StartRiding` event: link the rider, and
@@ -366,11 +383,20 @@ pub fn start_riding_event(
     rider: u32,
     vehicle: u32,
 ) -> usize {
+    start_riding_event_slots(mobs, events, i, rider, vehicle)
+}
+pub fn start_riding_event_slots<L: super::mob_slot::MobSlots + ?Sized>(
+    mobs: &mut L,
+    events: &mut Vec<super::MobEvent>,
+    i: usize,
+    rider: u32,
+    vehicle: u32,
+) -> usize {
     let leashed_at = mobs
-        .iter()
+        .iter_mobs()
         .find(|m| m.id == rider && m.extra.leash.is_some())
         .map(|m| [m.position.x, m.position.y, m.position.z]);
-    let boarded = start_riding(mobs, rider, vehicle);
+    let boarded = start_riding_slots(mobs, rider, vehicle);
     if let Some(at) = leashed_at.filter(|_| boarded) {
         events[i] = super::MobEvent::LeashBreak {
             mob: rider,
@@ -654,6 +680,46 @@ pub fn tick(
     events: &mut Vec<super::MobEvent>,
 ) -> bool {
     tick_with(mobs, index, w, level, events, Mob::tick)
+}
+
+/// Slot-slice variant of [`tick`] for grouped mob lanes (`Group<M: MobSlot>`), which only run
+/// when no native mods are loaded.
+pub fn tick_slots<M: super::MobSlot>(
+    mobs: &mut [M],
+    index: usize,
+    w: &MobWorld,
+    level: &mut super::DamageLevel<'_>,
+    events: &mut Vec<super::MobEvent>,
+) -> bool {
+    let mut owner = index;
+    if !mobs[index].mob().no_ai {
+        for _ in 0..mobs.len() {
+            let Some(vehicle) = mobs[owner]
+                .mob()
+                .extra
+                .mount
+                .and_then(|id| mobs.iter().position(|m| m.mob().id == id))
+            else {
+                break;
+            };
+            if vehicle == index
+                || controller(mobs[vehicle].mob(), w).is_none_or(|r| r.id != mobs[owner].mob().id)
+            {
+                break;
+            }
+            owner = vehicle;
+        }
+    }
+    if owner == index {
+        return Mob::tick(mobs[index].mob_mut(), w, level, events);
+    }
+    let [rider, vehicle] = mobs.get_disjoint_mut([index, owner]).unwrap();
+    Mob::tick(
+        NavigationLoan::new(rider.mob_mut(), vehicle.mob_mut()).rider,
+        w,
+        level,
+        events,
+    )
 }
 
 /// Return an inline consumption pause only after restoring a rider's navigation loan.

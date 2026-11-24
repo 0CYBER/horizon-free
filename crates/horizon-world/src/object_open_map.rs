@@ -1,8 +1,9 @@
 //! Default fastutil object map with live indexed entries and native traversal.
 use crate::object_open_set::{CursorError, ObjectKey};
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     rc::Rc,
+    sync::{Arc, RwLock},
 };
 #[derive(Clone)]
 struct Table<K, V> {
@@ -40,7 +41,7 @@ pub enum TraversalError<E> {
     Callback(E),
 }
 pub struct ObjectOpenMap<K, V> {
-    table: Rc<RefCell<Table<K, V>>>,
+    table: Arc<RwLock<Table<K, V>>>,
     size: i32,
     null: bool,
 }
@@ -48,7 +49,7 @@ pub struct ObjectOpenMap<K, V> {
 impl<K: Clone, V: Clone> Clone for ObjectOpenMap<K, V> {
     fn clone(&self) -> Self {
         Self {
-            table: Rc::new(RefCell::new(self.table.borrow().clone())),
+            table: Arc::new(RwLock::new(self.table.read().unwrap().clone())),
             size: self.size,
             null: self.null,
         }
@@ -57,7 +58,7 @@ impl<K: Clone, V: Clone> Clone for ObjectOpenMap<K, V> {
 impl<K, V> Default for ObjectOpenMap<K, V> {
     fn default() -> Self {
         Self {
-            table: Rc::new(RefCell::new(Table::new(32))),
+            table: Arc::new(RwLock::new(Table::new(32))),
             size: 0,
             null: false,
         }
@@ -75,13 +76,13 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         self.size == 0
     }
     fn n(&self) -> usize {
-        self.table.borrow().keys.len() - 1
+        self.table.read().unwrap().keys.len() - 1
     }
     fn max_fill(&self) -> i32 {
         (self.n() * 3 / 4) as i32
     }
     fn find(&self, key: &K) -> usize {
-        let table = self.table.borrow();
+        let table = self.table.read().unwrap();
         let mask = table.keys.len() - 2;
         let mut p = mixed(key.object_hash()) & mask;
         while table.keys[p].as_ref().is_some_and(|k| k != key) {
@@ -91,12 +92,12 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
     }
     pub fn contains_key(&self, key: Option<&K>) -> bool {
         key.map_or(self.null, |k| {
-            self.table.borrow().keys[self.find(k)].is_some()
+            self.table.read().unwrap().keys[self.find(k)].is_some()
         })
     }
     pub fn get(&self, key: Option<&K>) -> Option<V> {
         let p = key.map_or(self.n(), |k| self.find(k));
-        let table = self.table.borrow();
+        let table = self.table.read().unwrap();
         if key.map_or(self.null, |_| table.keys[p].is_some()) {
             table.values[p].clone()
         } else {
@@ -104,7 +105,7 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         }
     }
     pub fn entries(&self) -> Vec<(Option<K>, Option<V>)> {
-        let table = self.table.borrow();
+        let table = self.table.read().unwrap();
         let n = table.keys.len() - 1;
         let mut entries = Vec::new();
         if self.null {
@@ -120,18 +121,18 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
     pub fn put(&mut self, key: Option<K>, value: Option<V>) -> Option<V> {
         let p = key.as_ref().map_or(self.n(), |k| self.find(k));
         let existing = if key.is_some() {
-            self.table.borrow().keys[p].is_some()
+            self.table.read().unwrap().keys[p].is_some()
         } else {
             self.null
         };
-        let previous = std::mem::replace(&mut self.table.borrow_mut().values[p], value);
+        let previous = std::mem::replace(&mut self.table.write().unwrap().values[p], value);
         if existing {
             return previous;
         }
         if key.is_none() {
             self.null = true;
         }
-        self.table.borrow_mut().keys[p] = key;
+        self.table.write().unwrap().keys[p] = key;
         let old = self.size;
         self.size = self.size.wrapping_add(1);
         if old >= self.max_fill() {
@@ -144,7 +145,7 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         None
     }
     fn rehash(&mut self, n: usize) {
-        let old = self.table.borrow();
+        let old = self.table.read().unwrap();
         let old_n = old.keys.len() - 1;
         let mut table = Table::new(n);
         for p in (0..old_n).rev() {
@@ -159,14 +160,14 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         }
         table.values[n] = old.values[old_n].clone();
         drop(old);
-        self.table = Rc::new(RefCell::new(table));
+        self.table = Arc::new(RwLock::new(table));
     }
     fn shift(
         &mut self,
         mut hole: usize,
         mut cursor: Option<&mut Cursor<K>>,
     ) -> Result<(), CursorError> {
-        let mut table = self.table.borrow_mut();
+        let mut table = self.table.write().unwrap();
         let mask = table.keys.len() - 2;
         loop {
             let mut p = (hole + 1) & mask;
@@ -211,11 +212,11 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
             return None;
         }
         let p = key.map_or(self.n(), |k| self.find(k));
-        let old = self.table.borrow().values[p].clone();
+        let old = self.table.read().unwrap().values[p].clone();
         self.size = self.size.wrapping_sub(1);
         if key.is_none() {
             self.null = false;
-            let mut table = self.table.borrow_mut();
+            let mut table = self.table.write().unwrap();
             table.keys[p] = None;
             table.values[p] = None;
         } else {
@@ -232,7 +233,7 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         }
         self.size = 0;
         self.null = false;
-        let mut table = self.table.borrow_mut();
+        let mut table = self.table.write().unwrap();
         table.keys.fill(None);
         table.values.fill(None);
     }
@@ -271,14 +272,15 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
                     let p = self.find(key);
                     // Deleting a wrapped member externally can make native iteration
                     // nonterminating. Such invalidated wrapped iterators are excluded.
-                    if self.table.borrow().keys[p].is_none() {
+                    if self.table.read().unwrap().keys[p].is_none() {
                         return Err(CursorError::MissingWrapped);
                     }
                     break p as i32;
                 }
                 if self
                     .table
-                    .borrow()
+                    .read()
+                    .unwrap()
                     .keys
                     .get(c.position as usize)
                     .ok_or(CursorError::IndexOutOfBounds)?
@@ -295,7 +297,8 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
     }
     pub fn entry_key(&self, e: &Entry) -> Result<Option<K>, CursorError> {
         self.table
-            .borrow()
+            .read()
+            .unwrap()
             .keys
             .get(e.0.get() as usize)
             .cloned()
@@ -303,7 +306,8 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
     }
     pub fn entry_value(&self, e: &Entry) -> Result<Option<V>, CursorError> {
         self.table
-            .borrow()
+            .read()
+            .unwrap()
             .values
             .get(e.0.get() as usize)
             .cloned()
@@ -316,7 +320,8 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
     ) -> Result<Option<V>, CursorError> {
         Ok(std::mem::replace(
             self.table
-                .borrow_mut()
+                .write()
+                .unwrap()
                 .values
                 .get_mut(e.0.get() as usize)
                 .ok_or(CursorError::IndexOutOfBounds)?,
@@ -329,7 +334,7 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         }
         if c.last == self.n() as i32 {
             self.null = false;
-            let mut t = self.table.borrow_mut();
+            let mut t = self.table.write().unwrap();
             let n = t.keys.len() - 1;
             t.keys[n] = None;
             t.values[n] = None;
@@ -362,7 +367,7 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         mut action: impl FnMut(&mut Self, Option<K>, Option<V>) -> Result<(), E>,
     ) -> Result<(), TraversalError<E>> {
         if self.null {
-            let value = self.table.borrow().values[self.n()].clone();
+            let value = self.table.read().unwrap().values[self.n()].clone();
             action(self, None, value).map_err(TraversalError::Callback)?;
         }
         // Keys are captured after the null callback. Values remain live even if
@@ -370,11 +375,12 @@ impl<K: ObjectKey + Clone, V: Clone> ObjectOpenMap<K, V> {
         let keys = self.table.clone();
         let n = self.n();
         for p in (0..n).rev() {
-            let key = keys.borrow().keys[p].clone();
+            let key = keys.read().unwrap().keys[p].clone();
             if key.is_some() {
                 let value = self
                     .table
-                    .borrow()
+                    .read()
+                    .unwrap()
                     .values
                     .get(p)
                     .cloned()

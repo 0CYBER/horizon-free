@@ -181,23 +181,37 @@ pub struct Packed {
     pub base: f64,
     pub modifiers: Vec<Modifier>,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Instance {
     definition: Definition,
     base: f64,
-    dirty: std::cell::Cell<bool>,
-    cached: std::cell::Cell<f64>,
+    dirty: std::sync::atomic::AtomicBool,
+    cached: std::sync::atomic::AtomicU64,
     by_id: Vec<Modifier>,
     permanent: Vec<Modifier>,
     operations: [Option<OperationMap>; 3],
+}
+impl Clone for Instance {
+    fn clone(&self) -> Self {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        Self {
+            definition: self.definition,
+            base: self.base,
+            dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
+            cached: AtomicU64::new(self.cached.load(Ordering::Relaxed)),
+            by_id: self.by_id.clone(),
+            permanent: self.permanent.clone(),
+            operations: self.operations.clone(),
+        }
+    }
 }
 impl Instance {
     pub fn new(definition: Definition) -> Self {
         Self {
             definition,
             base: definition.default,
-            dirty: std::cell::Cell::new(true),
-            cached: std::cell::Cell::new(0.0),
+            dirty: std::sync::atomic::AtomicBool::new(true),
+            cached: std::sync::atomic::AtomicU64::new(0.0f64.to_bits()),
             by_id: Vec::new(),
             permanent: Vec::new(),
             operations: [None, None, None],
@@ -207,10 +221,10 @@ impl Instance {
         self.base
     }
     pub fn is_dirty(&self) -> bool {
-        self.dirty.get()
+        self.dirty.load(std::sync::atomic::Ordering::Acquire)
     }
     pub fn cached_value(&self) -> f64 {
-        self.cached.get()
+        f64::from_bits(self.cached.load(std::sync::atomic::Ordering::Relaxed))
     }
     pub fn modifiers(&self) -> &[Modifier] {
         &self.by_id
@@ -228,7 +242,7 @@ impl Instance {
         &mut self,
         observer: &mut O,
     ) -> Result<(), AttributeError<O::Error>> {
-        self.dirty.set(true);
+        self.dirty.store(true, std::sync::atomic::Ordering::Release);
         observer.dirty(self).map_err(AttributeError::Observer)
     }
     pub fn set_base_value<O: Observer>(
@@ -328,8 +342,8 @@ impl Instance {
         Ok(())
     }
     pub fn compute_value(&self) -> f64 {
-        if !self.dirty.get() {
-            return self.cached.get();
+        if !self.is_dirty() {
+            return self.cached_value();
         }
         let mut base = self.base;
         for m in self.operation_modifiers(Operation::AddValue) {
@@ -345,11 +359,13 @@ impl Instance {
         self.definition.sanitize(value)
     }
     pub fn value(&self) -> f64 {
-        if self.dirty.get() {
-            self.cached.set(self.compute_value());
-            self.dirty.set(false);
+        use std::sync::atomic::Ordering;
+        if self.dirty.load(Ordering::Acquire) {
+            self.cached
+                .store(self.compute_value().to_bits(), Ordering::Relaxed);
+            self.dirty.store(false, Ordering::Release);
         }
-        self.cached.get()
+        f64::from_bits(self.cached.load(Ordering::Relaxed))
     }
     pub fn replace_from<O: Observer>(
         &mut self,

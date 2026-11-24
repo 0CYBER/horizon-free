@@ -66,9 +66,6 @@ pub(super) struct Group<M: MobSlot> {
     pub corpses: Vec<Mob>,
     pub gone: Vec<Gone>,
     pub guest_events: Vec<(u32, u32, MobEvent)>,
-    /// The mod hooks its turns kept for the join, with each turn's place in the whole list (a
-    /// group of the parallel tick with mods loaded: `native_client_hooks::Deferred`).
-    pub deferred: Vec<(usize, horizon_client::native_client_hooks::Deferred)>,
     /// Whether each turn draws its level-random rolls from a stream of its own, so that it waits
     /// for no other lane (`parallel::mobs_own_random`, read once where the group is made).
     own_random: bool,
@@ -160,7 +157,6 @@ impl<M: MobSlot> Group<M> {
             corpses: Vec::new(),
             gone: Vec::new(),
             guest_events: Vec::new(),
-            deferred: Vec::new(),
             own_random: own_random(),
         }
     }
@@ -199,15 +195,7 @@ impl<M: MobSlot> Group<M> {
             }
             if let Some(foreign) = foreign {
                 foreign.in_seed_order(at, || {
-                    if foreign.defers {
-                        let ((), kept) =
-                            horizon_client::native_client_hooks::deferring_turn(|| {
-                                self.turn(i, turns, shared);
-                            });
-                        self.deferred.extend(kept.into_iter().map(|d| (at, d)));
-                    } else {
-                        self.turn(i, turns, shared);
-                    }
+                    self.turn(i, turns, shared);
                 });
             } else {
                 self.turn(i, turns, shared);
@@ -352,6 +340,7 @@ impl<M: MobSlot> Group<M> {
             nearest_player,
             player: active_player,
             teams: std::sync::Arc::clone(&base.teams),
+            section_writer: None,
             ..*base
         };
         w.controlling_player_movement = controlling_player_movement;
@@ -365,11 +354,21 @@ impl<M: MobSlot> Group<M> {
                 w.game_time,
             ))
         });
-        let kept = horizon_client::mobs::riders::tick(
+        let mut attachments = horizon_mod_runtime::attachments::Attachments::default();
+        let mut attachment_syncs = Default::default();
+        let mut level = horizon_client::health::DamageLevel::hookless(
+            base.world,
+            base.registry,
+            base.items,
+            own.as_mut().unwrap_or(&mut self.random),
+            &mut attachments,
+            &mut attachment_syncs,
+        );
+        let kept = horizon_client::mobs::riders::tick_slots(
             &mut self.mobs,
             i,
             &w,
-            own.as_mut().unwrap_or(&mut self.random),
+            &mut level,
             &mut self.events,
         );
         super::super::tick_profile::end_mob(shared.level_id, sampled);
@@ -381,47 +380,9 @@ impl<M: MobSlot> Group<M> {
                 .player
                 .map(|v| std::mem::replace(&mut self.guests[k].1, v));
         }
-        // Its tick changed its target: the mods may keep the one it had
-        // (`native_living_change_target`), and then what the tick did to
-        // the new one is not dealt.
         if let Some(&before) = self.targets.get(i)
             && m.ai.target != before
         {
-            let named = target_named(
-                m.ai.target,
-                seen_guest,
-                &self.guests,
-                shared.guest_ids,
-                self.player.as_ref(),
-            );
-            // A grouped turn runs while no mod hooks the change (`horizon_mod_api_gen::mob_turn`).
-            if let Some((player, mob)) = named
-                && !horizon_client::native_client_hooks::deferring()
-            {
-                let kind = super::super::native_hooks::mob_kind(m);
-                let mut cancel = false;
-                Game::native_living_change_target(
-                    shared.level_id,
-                    m.id,
-                    &kind,
-                    player,
-                    mob,
-                    &mut cancel,
-                );
-                if cancel {
-                    if let Some(new) = m.ai.target {
-                        let mut k = from;
-                        while k < self.events.len() {
-                            if hits_target(&self.events[k], new) {
-                                self.events.remove(k);
-                            } else {
-                                k += 1;
-                            }
-                        }
-                    }
-                    m.ai.target = before;
-                }
-            }
             self.targets[i] = m.ai.target;
         }
         // A killed mob's body is removed: its effects that act on
@@ -482,7 +443,7 @@ impl<M: MobSlot> Group<M> {
         // ServerLevel ticks entities one after another: the ones
         // after this mob see it as it is now.
         let collisions = self.snapshot[i].collisions;
-        let fresh = seen(m, shared.uuid);
+        let fresh = seen(m, shared.uuid, base.items.expect("mob world has items"));
         self.village.mark(i, &self.snapshot[i], &fresh);
         let reclassified = self.snapshot[i].species != fresh.species;
         self.snapshot[i] = fresh;
@@ -502,6 +463,11 @@ impl<M: MobSlot> Group<M> {
             }
         }
         self.grid.update(i, self.snapshot[i].bounds);
-        horizon_client::mobs::apply_brain_events(&mut self.mobs, &mut self.events, from);
+        horizon_client::mobs::apply_brain_events_slots(
+            &mut self.mobs,
+            &mut level,
+            &mut self.events,
+            from,
+        );
     }
 }

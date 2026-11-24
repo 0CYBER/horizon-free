@@ -52,3 +52,6 @@ horizon_client::game::banners::layer_textures  #20193
 horizon_client::game::item_draw::Game<'_>::item_level  kind=method  #20192
 horizon_client::game::native_shaders::manifest_refused  #20601
 horizon_client::game::shader_packs::block_id_table  #20601
+horizon_client::game::creatures::mob_group::Group<M>::deferred  kind=field  #18420
+horizon_client::game::creatures::mob_islands::Foreign<'_>::defers  kind=field  #18420
+horizon_client::game::creatures::mob_islands::defers  kind=fn  #18420

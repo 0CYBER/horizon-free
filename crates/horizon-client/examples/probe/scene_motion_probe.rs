@@ -286,14 +286,14 @@ pub fn main() -> Result<()> {
             .collect::<Vec<_>>()
             .into_iter();
         let count = instances.len();
-        let used = std::rc::Rc::new(std::cell::Cell::new(0));
+        let used = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = used.clone();
         let mut player = PlayerMotion::with_attribute_identities(
             &resources,
             vector(&f["position"]),
             &hashes,
             Box::new(move || {
-                counter.set(counter.get() + 1);
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 instances.next().expect("unexpected instance allocation")
             }),
         )?;
@@ -744,7 +744,7 @@ pub fn main() -> Result<()> {
             )?;
         }
         writeln!(out, "end")?;
-        if used.get() != count {
+        if used.load(std::sync::atomic::Ordering::Relaxed) != count {
             return Err("reference instance allocation count differs".into());
         }
     }

@@ -3068,37 +3068,45 @@ pub fn apply_brain_events(
     events: &mut Vec<MobEvent>,
     from: usize,
 ) {
+    apply_brain_events_slots(mobs, level, events, from);
+}
+pub fn apply_brain_events_slots<L: mob_slot::MobSlots + ?Sized>(
+    mobs: &mut L,
+    level: &mut DamageLevel<'_>,
+    events: &mut Vec<MobEvent>,
+    from: usize,
+) {
     let mut i = from;
     while i < events.len() {
         match events[i] {
             MobEvent::BreedTarget { mob, partner } => {
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                if let Some(m) = mobs.mob_by_id_mut(mob) {
                     animal_brain::set_breed_partner(m, partner);
                 }
                 events.remove(i);
             }
             MobEvent::LockGaze { mob, partner } => {
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                if let Some(m) = mobs.mob_by_id_mut(mob) {
                     animal_brain::lock_gaze(m, partner);
                     villager_brain::lock_gaze_half(m, Who::Mob(partner));
                 }
                 events.remove(i);
             }
             MobEvent::Retreat { mob, from, at } => {
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == mob) {
+                if let Some(m) = mobs.mob_by_id_mut(mob) {
                     piglin::receive_retreat(m, from, at);
                 }
                 events.remove(i);
             }
             MobEvent::StartRiding { rider, vehicle } => {
-                i = riders::start_riding_event(mobs, events, i, rider, vehicle);
+                i = riders::start_riding_event_slots(mobs, events, i, rider, vehicle);
             }
             MobEvent::StartFollowing { fish, leader } => {
-                aquatic::start_following(mobs, fish, leader);
+                aquatic::start_following_slots(mobs, fish, leader);
                 events.remove(i);
             }
             MobEvent::SchoolSize { leader, by } => {
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == leader) {
+                if let Some(m) = mobs.mob_by_id_mut(leader) {
                     m.extra.followers += by;
                 }
                 events.remove(i);
@@ -3108,7 +3116,7 @@ pub fn apply_brain_events(
             MobEvent::Breed {
                 parent, partner, ..
             } => {
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == partner) {
+                if let Some(m) = mobs.mob_by_id_mut(partner) {
                     m.extra.age = 6000;
                     m.extra.in_love = 0;
                     animal_brain::forget_breed_target(m, parent);
@@ -3128,7 +3136,7 @@ pub fn apply_brain_events(
             } => {
                 let mut sound = None;
                 let mut raised = Vec::new();
-                let fish = mobs.iter().find(|m| m.id == mob);
+                let fish = mobs.iter_mobs().find(|m| m.id == mob);
                 if source.attacker_species.is_none() {
                     source.attacker_species = fish.map(Mob::species);
                 }
@@ -3161,7 +3169,7 @@ pub fn apply_brain_events(
                     .map(|(aim, pos, silent)| (Some(aim), Some(pos), silent))
                     .unwrap_or((None, None, true));
                 let mut hit_level = level.reborrow().attacked_by(&attack);
-                if let Some(t) = mobs.iter_mut().find(|m| m.id == target)
+                if let Some(t) = mobs.mob_by_id_mut(target)
                     && t.damage_aimed(&mut hit_level, amount, source, aim)
                 {
                     t.add_effect("minecraft:poison", poison_ticks, 0);
