@@ -320,7 +320,8 @@ class CompareTests(unittest.TestCase):
         before, effect, nested, outer = records
         names = ('crate::HookId::DimensionTransitionScreenDraw => "dimension_transition_screen_draw",'
                  + ('crate::HookId::DragonFightWon => "dragon_fight_won",' if added_name else "")
-                 + 'crate::HookId::EffectParticleModification => "effect_particle_modification",')
+                 + 'crate::HookId::EffectParticleModification => "effect_particle_modification",'
+                 'crate::HookId::EnchantmentLevelSet => "enchantment_level_set",')
         arms = [
             ('1914093287 => { let receiver = super::hooks(); let p1_0: f32 = input.take()?;\n'
              f'let mut p1 = crate::__wire_record_{before}(p1_0);\n'
@@ -354,7 +355,7 @@ class CompareTests(unittest.TestCase):
                     'let mut p1 = crate::__wire_record_858(p1_0);\n let answer = receiver.dragon_fight_won(&host, '
                     '&mut p1); out.put_owned(answer); out.put(&p1.level); }\n')
 
-    def compare_hook_addition(self, head_records, added_arm, edit=lambda text: text):
+    def compare_hook_addition(self, head_records, added_arm, edit=lambda text: text, native_records=None):
         """The gate's status for the base's dispatch against one with `added_arm` and `head_records`."""
         old_hook = {"name": "dimension_transition_screen_draw", "neoforge": "none"}
         new_hook = {"name": "dragon_fight_won", "neoforge": "none"}
@@ -362,6 +363,8 @@ class CompareTests(unittest.TestCase):
                 "wire_guest_generated.rs": self.guest_dispatch((857, 858, 862, 861))}
         head = {"catalog.json": json.dumps({"hooks": [old_hook, new_hook]}),
                 "wire_guest_generated.rs": edit(self.guest_dispatch(head_records, added_arm, added_name=True))}
+        if native_records is not None:
+            head["native-hook-records.json"] = json.dumps(native_records)
         return self.run_compare(base, head, allow_added=True)[0]
 
     def test_an_added_hook_with_a_borrowed_event_passes(self):
@@ -373,6 +376,53 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(self.compare_hook_addition((857, 859, 863, 862), self.OWNED_ARM), 0)
         with self.subTest("the event and a new owned type only it uses: two numbers"):
             self.assertEqual(self.compare_hook_addition((857, 860, 864, 863), self.OWNED_ARM), 0)
+
+    def test_an_added_native_only_hook_can_shift_later_records(self):
+        # #20252: new native-only types consume three numbers without a guest dispatch arm.
+        self.assertEqual(self.compare_hook_addition((857, 861, 865, 864), None), 0)
+
+    def test_an_added_native_only_hook_only_explains_its_catalog_window(self):
+        cases = {
+            "an existing arm's text": ((857, 861, 865, 864), lambda text: text.replace("out.put(&p1.visible);", "")),
+            "an existing HookId mapping": ((857, 861, 865, 864), lambda text: text.replace(
+                "HookId::EffectParticleModification", "HookId::Different")),
+            "a shift before the native-only hook": ((860, 861, 865, 864), lambda text: text),
+            "a shift after the next arm": ((857, 858, 865, 864), lambda text: text),
+        }
+        for name, (records, edit) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.compare_hook_addition(records, None, edit), 1)
+
+    def test_a_native_only_hook_first_in_the_catalog_does_not_explain_a_shifted_host_call_record(self):
+        # The window ahead of the first retained arm starts above the host calls' records, not at -1.
+        def guest(prefix, records, added_name=False):
+            text = self.guest_dispatch(records, added_name=added_name)
+            if added_name:
+                text = text.replace('crate::HookId::DragonFightWon => "dragon_fight_won",', "").replace(
+                    "match id { ", 'match id { crate::HookId::DragonFightWon => "dragon_fight_won",', 1)
+            return f"fn raw(&self) -> u32 {{ crate::__wire_record_{prefix}(0) }}\n" + text
+
+        old_hook = {"name": "dimension_transition_screen_draw", "neoforge": "none"}
+        new_hook = {"name": "dragon_fight_won", "neoforge": "none"}
+        base = {"catalog.json": json.dumps({"hooks": [old_hook]}),
+                "wire_guest_generated.rs": guest(850, (857, 858, 862, 861))}
+        for prefix, records, status in ((850, (858, 859, 863, 862), 0), (851, (858, 859, 863, 862), 1)):
+            with self.subTest(prefix=prefix, records=records):
+                head = {"catalog.json": json.dumps({"hooks": [new_hook, old_hook]}),
+                        "wire_guest_generated.rs": guest(prefix, records, added_name=True)}
+                self.assertEqual(self.run_compare(base, head, allow_added=True)[0], status)
+
+    def test_native_part_hook_records_use_generator_provenance_not_global_order(self):
+        provenance = {"dragon_fight_won": [[859, 861]]}
+        self.assertEqual(self.compare_hook_addition((857, 858, 864, 863), None, native_records=provenance), 0)
+        for records, data in (
+                ((857, 859, 864, 863), provenance),
+                ((857, 858, 865, 864), provenance),
+                ((857, 858, 864, 863), {"existing_hook": [[859, 861]]}),
+                ((857, 858, 864, 863), {"dragon_fight_won": [[-1, 861]]}),
+        ):
+            with self.subTest(records=records, provenance=data):
+                self.assertEqual(self.compare_hook_addition(records, None, native_records=data), 1)
 
     def test_an_owned_type_an_existing_hook_gains_beside_an_added_hook_is_not_seen_here(self):
         # Not coverage: dimension_transition_screen_draw's answer going from () to a new owned type takes 858 and

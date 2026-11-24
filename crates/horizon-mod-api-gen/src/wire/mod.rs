@@ -346,13 +346,25 @@ pub(super) fn surface<'a>(
     surface_reading(root, included, None)
 }
 
+/// Half-open private record ranges first allocated while resolving native-only hooks.
+pub(super) type NativeHookRecords = std::collections::BTreeMap<String, Vec<(usize, usize)>>;
+
 /// [`surface`]; with `missing`, a listed boundary trait the tree does not have is pushed there
 /// instead of refusing the tree (the surface export reads older trees whose API predates a
 /// listed trait; the build never does).
 pub(super) fn surface_reading<'a>(
     root: &'a Path,
     included: &'a [(&'a str, &'a str)],
+    missing: Option<&mut Vec<String>>,
+) -> Result<Surface<'a>, String> {
+    surface_with_records(root, included, missing, None)
+}
+
+fn surface_with_records<'a>(
+    root: &'a Path,
+    included: &'a [(&'a str, &'a str)],
     mut missing: Option<&mut Vec<String>>,
+    mut native_records: Option<&mut NativeHookRecords>,
 ) -> Result<Surface<'a>, String> {
     let mut types = Types::new(Index::new(root, included))?;
     let api = types.index.module("mod_api", &[])?;
@@ -432,15 +444,29 @@ pub(super) fn surface_reading<'a>(
             if hidden(&function.attrs) && !subscription {
                 continue;
             }
-            if not_on_wasm(&function.attrs) {
+            let native_only = not_on_wasm(&function.attrs);
+            if native_only {
                 excused.push((*owner, name.clone()));
             }
+            let record_hook = native_only
+                && native_records.is_some()
+                && exports().contains(owner)
+                && hooks.iter().any(|(_, hook_name)| hook_name == &name);
+            let first_record = types.defs.len();
             match method(&mut types, *module, owner, function, &subst) {
                 Ok(mut method) => {
                     method.via = via.clone();
                     methods.push(method);
                 }
                 Err(why) => unbound.push(Unbound { owner, name, why }),
+            }
+            if let Some(records) = native_records.as_deref_mut()
+                && record_hook
+            {
+                records
+                    .entry(function.sig.ident.to_string())
+                    .or_default()
+                    .push((first_record, types.defs.len()));
             }
         }
     }
@@ -638,10 +664,18 @@ pub struct Generated {
 }
 
 pub fn generate(root: &Path, included: &[(&str, &str)]) -> Result<Generated, String> {
+    generate_with_records(root, included, None)
+}
+
+pub(super) fn generate_with_records(
+    root: &Path,
+    included: &[(&str, &str)],
+    native_records: Option<&mut NativeHookRecords>,
+) -> Result<Generated, String> {
     let providers = crate::capability_providers::generate(root, included)?.0;
     let mut with_providers = included.to_vec();
     with_providers.push(("capability_providers_generated.rs", providers.as_str()));
-    let surface = surface(root, &with_providers)?;
+    let surface = surface_with_records(root, &with_providers, None, native_records)?;
     coverage(&surface)?;
     names::check_names(&surface.methods)?;
     let mut wire = borrowed::calls(&surface.types);

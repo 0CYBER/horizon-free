@@ -667,7 +667,7 @@ pub mod replace;
 pub(crate) mod source;
 pub mod staging;
 pub mod surface;
-pub use build::{generate, generate_render, write_if_changed};
+pub use build::{generate, generate_api_snapshot, generate_render, write_if_changed};
 pub use notes::generate as generate_hook_notes;
 mod staged;
 pub use staged::{MODS_STAGE, mob_turn, staged_mods};

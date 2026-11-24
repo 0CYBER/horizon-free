@@ -31,6 +31,20 @@ pub fn write_if_changed(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std:
 /// Generate only this crate's files, tracking every source read by the generator.
 /// `root` is supplied at run time by the consuming crate's build script.
 pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), String> {
+    generate_output(root, out_dir, target, false)
+}
+
+/// Generate the API guest and its snapshot-only native hook record provenance.
+pub fn generate_api_snapshot(root: &Path, out_dir: &Path) -> Result<(), String> {
+    generate_output(root, out_dir, Target::Api, true)
+}
+
+fn generate_output(
+    root: &Path,
+    out_dir: &Path,
+    target: Target,
+    snapshot_records: bool,
+) -> Result<(), String> {
     track(root, !matches!(&target, Target::Vocab))?;
     let inventory = if matches!(target, Target::Vocab) {
         let path = root.join("tools/layering/mod_vocab_state.json");
@@ -95,14 +109,25 @@ pub fn generate(root: &Path, out_dir: &Path, target: Target) -> Result<(), Strin
             ];
             let (providers, sources) = super::capability_providers::generate(root, &included)?;
             // The resolver recurses through the API's types: give it a deep stack.
+            let mut native_records = super::wire::NativeHookRecords::new();
+            let records = snapshot_records.then_some(&mut native_records);
             let generated_wire = std::thread::scope(|scope| {
                 std::thread::Builder::new()
                     .stack_size(64 << 20)
-                    .spawn_scoped(scope, || super::wire::generate(root, &included))
+                    .spawn_scoped(scope, || {
+                        super::wire::generate_with_records(root, &included, records)
+                    })
                     .map_err(|e| e.to_string())?
                     .join()
                     .map_err(|_| "generating the wire impls panicked".to_string())?
             })?;
+            if snapshot_records {
+                write_if_changed(
+                    out_dir.join("native-hook-records.json"),
+                    serde_json::to_vec(&native_records).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+            }
             for path in sources.iter().chain(&generated_wire.sources) {
                 crate::rerun_if_changed(&path.display());
             }

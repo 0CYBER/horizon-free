@@ -39,7 +39,7 @@ fn main() -> Result<(), String> {
         ));
     }
     step("generated API", || {
-        horizon_mod_api_gen::generate(&root, &out, horizon_mod_api_gen::Target::Api)
+        horizon_mod_api_gen::generate_api_snapshot(&root, &out)
     })?;
     // The published loops and the exposed internals, as `loops.json` and `internals.json` have them.
     step("loops.json", || {
