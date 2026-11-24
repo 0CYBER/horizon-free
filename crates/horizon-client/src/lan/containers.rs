@@ -77,6 +77,14 @@ pub struct PreparedClick {
     sounds: Vec<&'static str>,
 }
 
+impl PreparedClick {
+    /// The container's own slots, in the menu's order: as `prepare_click` read them, then as
+    /// `run_click` left them. `None` for a click in the player's own inventory.
+    pub fn container(&self) -> Option<&[Option<ItemStack>]> {
+        self.items.as_deref()
+    }
+}
+
 impl Hub {
     pub fn send_to(&self, conn: u32, packet: &C) {
         if let Some(g) = self.guest(conn) {

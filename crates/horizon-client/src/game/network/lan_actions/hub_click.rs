@@ -4,6 +4,7 @@
 //! click, so the click code and the game are separate values and the game is whole while the
 //! hub runs.
 use super::*;
+use crate::game::native_menus::open_menu_of;
 
 impl Game<'_> {
     /// Run `f` with the LAN host taken out of `self.lan`, then put it back. `f` is given the whole
@@ -117,12 +118,89 @@ impl Game<'_> {
                 Some(&*game),
             );
             let Some(mut prepared) = host.hub.prepare_click(conn, p, &game.world) else {
-                return Vec::new();
+                return (Vec::new(), None);
             };
+            let before = prepared.container().map(<[_]>::to_vec);
             // The game is whole here: `game` can be read or written while the hub clicks.
             let outcome = host.hub.run_click(&mut prepared, p, &rules);
-            host.hub.finish_click(prepared, p, &mut game.world, outcome)
+            let takes = match (&before, prepared.container()) {
+                (Some(before), Some(after)) => slot_takes(before, after),
+                _ => Vec::new(),
+            };
+            let heard = if takes.is_empty() {
+                None
+            } else {
+                let uuid = host.hub.guest(conn).map(|g| g.uuid);
+                let menu = open_menu_of(host, conn).map(|(_, menu, pos)| (menu.to_owned(), pos));
+                uuid.zip(menu)
+            };
+            let thrown = host.hub.finish_click(prepared, p, &mut game.world, outcome);
+            (thrown, heard.map(|heard| (heard, takes)))
+        })
+        .map(|(thrown, heard)| {
+            if let Some(((player, (menu, pos)), takes)) = heard {
+                for (slot, taken, left) in takes {
+                    self.native_menu_slot_take(player, &menu, pos, slot, &taken, left.as_ref());
+                }
+            }
+            thrown
         })
         .unwrap_or_default()
+    }
+}
+
+/// The stacks a click took out of a menu's own slots (`Slot.onTake`): each slot that emptied,
+/// became another item, or shrank with its components unchanged, with what left it and what
+/// stayed. A stack that keeps its item and changes its components in place (a bundle filled or
+/// emptied in its slot) is not a take, nor is a slot that only grew or kept its stack.
+fn slot_takes(
+    before: &[Option<ItemStack>],
+    after: &[Option<ItemStack>],
+) -> Vec<(i32, ItemStack, Option<ItemStack>)> {
+    let mut takes = Vec::new();
+    for (slot, (was, now)) in before.iter().zip(after).enumerate() {
+        let Some(was) = was else { continue };
+        let taken = match now {
+            Some(now) if now.item == was.item => {
+                if now.count >= was.count || !now.same_item_same_components(was) {
+                    continue;
+                }
+                let mut taken = was.clone();
+                taken.count = was.count - now.count;
+                taken
+            }
+            _ => was.clone(),
+        };
+        takes.push((slot as i32, taken, now.clone()));
+    }
+    takes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_take_is_what_left_a_slot() {
+        let stone = |n| Some(ItemStack::new("minecraft:stone", n));
+        let dirt = Some(ItemStack::new("minecraft:dirt", 1));
+        let before = [stone(10), stone(10), stone(10), None, stone(5)];
+        let after = [stone(4), None, dirt.clone(), stone(3), stone(8)];
+        let takes = slot_takes(&before, &after);
+        let told: Vec<_> = takes
+            .iter()
+            .map(|(slot, taken, left)| (*slot, taken.count, left.as_ref().map(|l| l.count)))
+            .collect();
+        assert_eq!(told, [(0, 6, Some(4)), (1, 10, None), (2, 10, Some(1))]);
+    }
+
+    #[test]
+    fn a_bundle_filled_in_its_slot_is_not_a_take() {
+        let empty = ItemStack::new("minecraft:bundle", 1);
+        let mut filled = empty.clone();
+        filled.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 3)];
+        let (before, after) = ([Some(empty.clone())], [Some(filled.clone())]);
+        assert!(slot_takes(&before, &after).is_empty());
+        assert!(slot_takes(&after, &before).is_empty());
     }
 }
