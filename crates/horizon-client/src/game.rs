@@ -4820,12 +4820,15 @@ impl Game<'_> {
             + self.clock.fraction() as f32)
             / 24000.0;
         let (w, h) = (batch.width, batch.height);
+        // DialogScreen keeps its previous screen for closing, but only the
+        // active screen is rendered by Gui.extractRenderState.
+        let dialog = self.dialog_open();
         // HDR calibration ends when its page does, whatever moved the screen
         // off Options (a death screen opened by a server, say).
         if self.screen != Screen::Options && self.ui.options.calibration_window.is_some() {
             self.show_calibration((w, h));
         }
-        if self.screen == Screen::Win {
+        if !dialog && self.screen == Screen::Win {
             let drawn = self.draw_screen_with_pre_hook(batch);
             if drawn {
                 self.draw_win_screen(batch);
@@ -4835,7 +4838,7 @@ impl Game<'_> {
             self.draw_screen_with_post_hook(batch);
             return;
         }
-        if self.screen == Screen::Options {
+        if !dialog && self.screen == Screen::Options {
             if self.title.is_none() {
                 self.flush_skin_slots();
                 self.update_remote_skins();
@@ -4944,7 +4947,7 @@ impl Game<'_> {
         // rest of the HUD.
         let subtitles = subtitles(
             show_hud,
-            in_game_ui(self.screen, self.book.is_some() || self.sign_edit.is_some()),
+            !dialog && in_game_ui(self.screen, self.book.is_some() || self.sign_edit.is_some()),
         );
         // The mods' layers (`register_gui_layers`) draw among vanilla's while the HUD shows.
         self.hud_layer_next = show_hud.then_some(0);
@@ -5268,7 +5271,7 @@ impl Game<'_> {
         } else {
             self.screen
         };
-        let drawn = self.draw_screen_with_pre_hook(batch);
+        let drawn = !dialog && self.draw_screen_with_pre_hook(batch);
         match screen {
             _ if !drawn => {}
             Screen::Paused if self.pause_menu => self.draw_pause_menu(batch),
@@ -5333,10 +5336,12 @@ impl Game<'_> {
         // tooltips, so a native mod draws over it here. Never `Playing`: the
         // prompts, books and sign editors drawn over gameplay keep it, draw
         // after this point and so over what a mod drew.
-        self.draw_screen_with_post_hook(batch);
+        if !dialog {
+            self.draw_screen_with_post_hook(batch);
+        }
         self.draw_saving_indicator(batch);
         self.draw_every_toast(batch, !show_hud);
-        if self.server_packs.prompt.is_none() {
+        if !dialog && self.server_packs.prompt.is_none() {
             self.remote_hud(batch);
             self.draw_sign_editor(batch);
             self.draw_book(batch);

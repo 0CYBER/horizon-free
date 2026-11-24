@@ -1347,3 +1347,41 @@ mod pause_tests {
         assert!(!waiting.pauses_world());
     }
 }
+#[cfg(test)]
+mod covered_screen_tests {
+    use crate::game::{Game, Screen, native_entity_refs::tests::with_client_game};
+    use horizon_client::motion::PlayerMotion;
+    use horizon_core::{geometry::Vec3, nbt::Tag};
+
+    /// `DialogScreen` keeps the screen it replaced for closing, but
+    /// `Gui.extractRenderState` draws only the active screen: an inventory
+    /// under a dialog draws nothing until the dialog closes.
+    #[test]
+    #[ignore = "daily"]
+    fn a_dialog_hides_the_inventory_it_covers_until_it_closes() {
+        with_client_game(|game| {
+            game.title = None;
+            // In a world: a dialog without a player replaces the whole HUD.
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            game.ui.hide_gui = true;
+            game.craft_size = 2;
+            game.level.recipe_book.open = [false; 4];
+            let frame = |game: &mut Game<'_>, screen| {
+                game.screen = screen;
+                game.hud([320, 240]).vertices.len()
+            };
+            let inventory = frame(game, Screen::Inventory);
+            let s = |value: &str| Tag::String(value.into());
+            game.show_dialog(&Tag::compound([("type", s("notice")), ("title", s("Hi"))]));
+            assert!(game.dialog_open());
+            let dialog_alone = frame(game, Screen::Playing);
+            assert_eq!(
+                frame(game, Screen::Inventory),
+                dialog_alone,
+                "the covered inventory draws nothing"
+            );
+            game.close_dialogs();
+            assert_eq!(frame(game, Screen::Inventory), inventory);
+        });
+    }
+}

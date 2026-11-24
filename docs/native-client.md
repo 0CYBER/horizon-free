@@ -159,6 +159,9 @@ Worlds autosave every 6000 ticks (5 minutes), when chunks unload and on quit.
 On headless Linux use `vscreen start ./target/release/horizon-client` and
 `vscreen shot`.
 
+Server dialogs replace the visible menu without closing it. Dismissing the
+dialog returns to the open inventory, container, or other screen.
+
 Sound: the game prints the output it opened (`Horizon: audio output ...`) or
 why it has none (`Horizon: no sound: ...`). It opens none with
 `HORIZON_NO_AUDIO` set, nor on a `vscreen`, where tests run beside someone

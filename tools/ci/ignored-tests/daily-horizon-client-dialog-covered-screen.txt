@@ -1,0 +1,2 @@
+# A server dialog hides the screen it covers, using prepared vanilla resources.
+horizon-client game::dialogs::covered_screen_tests::a_dialog_hides_the_inventory_it_covers_until_it_closes lib daily resources
