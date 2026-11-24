@@ -217,21 +217,42 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return glam::Mat4::IDENTITY;
         };
-        let hurt = &p.health.hurt;
+        let mut hurt = HurtBob {
+            hurt_time: p.health.hurt_animation_time as f32 - partial,
+            hurt_duration: p.health.hurt.hurt_duration,
+            hurt_dir: p.health.hurt_dir,
+            death_time: self.death_time().map(|t| t as f32 + partial),
+        };
+        let vanilla_strength = self.settings.file.double("damageTiltStrength");
+        let mut strength = vanilla_strength;
+        let mut canceled = false;
+        if (hurt.hurt_time > 0.0 || hurt.death_time.is_some())
+            && mod_api::__private::enabled_listened(mod_api::HookId::HurtCamera)
+        {
+            let mut hurt_dir = hurt.hurt_dir;
+            self.native_hurt_camera(mod_api::__private::HurtCameraCall {
+                partial_tick: partial,
+                strength: &mut strength,
+                hurt_dir: &mut hurt_dir,
+                canceled: &mut canceled,
+            });
+            // Vanilla's damage waveform can scale strength by up to 14 before narrowing to f32.
+            if !strength.is_finite() || strength.abs() > f64::from(f32::MAX) / 14.0 {
+                strength = vanilla_strength;
+            }
+            if hurt_dir.is_finite() && hurt_dir != hurt.hurt_dir {
+                hurt.hurt_dir = hurt_dir % 360.0;
+            }
+        }
         let state = BobState {
-            living: Some(HurtBob {
-                hurt_time: p.health.hurt_animation_time as f32 - partial,
-                hurt_duration: hurt.hurt_duration,
-                hurt_dir: p.health.hurt_dir,
-                death_time: self.death_time().map(|t| t as f32 + partial),
-            }),
+            // Omitting the living state skips all of bobHurt, including the death twist.
+            living: (!canceled).then_some(hurt),
             player: Some((
                 self.avatar.backwards_interpolated_walk_distance(partial),
                 self.avatar.interpolated_bob(partial),
             )),
         };
-        let tilt = self.settings.file.double("damageTiltStrength");
-        glam::Mat4::from_cols_array(&bob_matrix(&state, tilt, self.settings.view_bobbing).m)
+        glam::Mat4::from_cols_array(&bob_matrix(&state, strength, self.settings.view_bobbing).m)
             * self.native_shake_matrix(partial)
     }
     /// `AbstractClientPlayer.tick` and `aiStep` (`ClientAvatarState.tick`,

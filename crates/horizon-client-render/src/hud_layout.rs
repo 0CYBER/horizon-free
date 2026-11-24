@@ -649,18 +649,46 @@ fn heart(
 }
 
 impl HealthHud {
+    /// The blink `Hud.extractPlayerHealth` computes before updating health history for this frame.
+    pub fn heart_blink(&self, tick: i32) -> bool {
+        let tick = i64::from(tick);
+        self.health_blink_time > tick && (self.health_blink_time - tick) / 3 % 2 == 1
+    }
+
     /// `Hud.extractPlayerHealth` for a screen of `w` x `h` GUI pixels.
     pub fn layout(&mut self, i: &HealthInputs, w: i32, h: i32) -> Vec<GuiDraw> {
+        self.layout_with_heart_blink(i, w, h, self.heart_blink(i.tick))
+    }
+
+    /// The vanilla layout with an explicit blink argument for `Hud.extractHearts`.
+    pub fn layout_with_heart_blink(
+        &mut self,
+        i: &HealthInputs,
+        w: i32,
+        h: i32,
+        blink: bool,
+    ) -> Vec<GuiDraw> {
         let mut out = Vec::new();
-        self.layout_into(i, w, h, &mut out);
+        self.layout_into_with_heart_blink(i, w, h, blink, &mut out);
         out
     }
 
     /// Appends [`HealthHud::layout`] draws to `out` without allocating a new buffer.
     pub fn layout_into(&mut self, i: &HealthInputs, w: i32, h: i32, out: &mut Vec<GuiDraw>) {
+        self.layout_into_with_heart_blink(i, w, h, self.heart_blink(i.tick), out);
+    }
+
+    /// [`HealthHud::layout_into`] with an explicit blink argument for `Hud.extractHearts`.
+    pub fn layout_into_with_heart_blink(
+        &mut self,
+        i: &HealthInputs,
+        w: i32,
+        h: i32,
+        blink: bool,
+        out: &mut Vec<GuiDraw>,
+    ) {
         let tick = i64::from(i.tick);
         let current = ceil(i.health);
-        let blink = self.health_blink_time > tick && (self.health_blink_time - tick) / 3 % 2 == 1;
         if current < self.last_health && i.damage_cooldown {
             self.last_health_time = i.millis;
             self.health_blink_time = tick + 20;
@@ -1046,6 +1074,62 @@ fn opaque(color: u32) -> u32 {
 #[cfg(test)]
 #[path = "hud_layout_gradient_tests.rs"]
 mod gradient_tests;
+
+#[cfg(test)]
+mod heart_blink_tests {
+    use super::*;
+
+    #[test]
+    fn overriding_blink_changes_only_heart_sprites_and_keeps_damage_history() {
+        let mut vanilla = HealthHud {
+            last_health: 20,
+            display_health: 20,
+            last_health_time: 1_950,
+            health_blink_time: 19,
+            ..HealthHud::default()
+        };
+        let mut suppressed = vanilla.clone();
+        let inputs = HealthInputs {
+            tick: 10,
+            millis: 2_000,
+            health: 15.0,
+            max_health: 20.0,
+            absorption: 0.0,
+            armor: 6,
+            food: 18,
+            saturation: 5.0,
+            kind: HeartKind::Normal,
+            regeneration: false,
+            hunger: false,
+            hardcore: false,
+            damage_cooldown: true,
+            air: 300,
+            max_air: 300,
+            under_water: false,
+            vehicle_hearts: 0,
+        };
+        // A new hit updates the timer, but the frame uses the blink from before the update.
+        assert!(vanilla.heart_blink(inputs.tick));
+        let expected = vanilla.layout(&inputs, 320, 240);
+        let actual = suppressed.layout_with_heart_blink(&inputs, 320, 240, false);
+
+        let is_heart = |draw: &&GuiDraw| matches!(draw, GuiDraw::Sprite { sprite, .. } if sprite.starts_with("hud/heart/"));
+        let is_blink = |draw: &GuiDraw| matches!(draw, GuiDraw::Sprite { sprite, .. } if sprite.starts_with("hud/heart/") && sprite.ends_with("_blinking"));
+        assert!(expected.iter().any(is_blink));
+        assert!(!actual.iter().any(is_blink));
+        assert!(
+            expected
+                .iter()
+                .filter(|draw| !is_heart(draw))
+                .eq(actual.iter().filter(|draw| !is_heart(draw)))
+        );
+        assert_eq!(suppressed.last_health, 15);
+        assert_eq!(suppressed.display_health, 20);
+        assert_eq!(suppressed.last_health_time, 2_000);
+        assert_eq!(suppressed.health_blink_time, 30);
+        assert!(suppressed.heart_blink(15));
+    }
+}
 
 #[cfg(test)]
 mod tests {

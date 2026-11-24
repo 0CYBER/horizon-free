@@ -5113,8 +5113,11 @@ impl Game<'_> {
                 let health_draws: &[hud_layout::GuiDraw] = match &native_health_hud {
                     Some(native) => native.as_slice(),
                     None => {
+                        let mut blink = self.health_hud.heart_blink(inputs.tick);
+                        self.native_heart_blink(&mut blink);
                         draws.clear();
-                        self.health_hud.layout_into(&inputs, wi, hi, &mut draws);
+                        self.health_hud
+                            .layout_into_with_heart_blink(&inputs, wi, hi, blink, &mut draws);
                         draws.as_slice()
                     }
                 };

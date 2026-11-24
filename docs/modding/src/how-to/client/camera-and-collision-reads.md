@@ -75,6 +75,18 @@ world, its culling, the billboards facing the camera and `Camera.view` follow it
 first-person hand and the HUD stay level. It is a hook of its own rather than a field of
 `CameraPoseEvent` so that wasm mods built before it keep loading.
 
+## Hurt feedback
+
+Use `hurt_camera` to change vanilla's camera reaction itself. Multiply the event's `strength` to scale
+the Damage Tilt setting, or set `hurt_dir` to `0.0` for a straight roll. Cancel the event to skip the
+damage tilt and death twist for both the world and the first-person hand. The callback does not
+change damage, walking bob, or additive `camera_shake`.
+
+`heart_blink` changes the blink argument of the vanilla heart draw without replacing the health
+layout or changing its history. From a writable client callback, `host.show_action_bar(text)` shows
+a styled `Text` above this client's hotbar. It works on servers without operator access and does
+not send a packet.
+
 ## Viewed levels
 
 A server can open other levels for a client to view besides the one the player is in (`horizon:levels`,

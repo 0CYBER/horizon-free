@@ -29,6 +29,13 @@ pub trait ClientViewClientHost {
     #[access(ClientSetup)]
     fn set_hud_mode(&mut self, mode: HudMode);
     /// Side: client.
+    /// Show styled `line` in this client's action bar, replacing the previous overlay
+    /// message and restarting its normal 60-tick lifetime. Available while playing,
+    /// including from local key callbacks on a remote server; sends nothing to the server.
+    /// An invalid component returns [`TextFormError`] without changing the overlay.
+    #[access(WorldOnly)]
+    fn show_action_bar(&mut self, line: Text) -> Result<(), TextFormError>;
+    /// Side: client.
     /// The window's camera type (`Options.getCameraType`), including its latest pending request.
     #[access(ClientSetup)]
     fn camera_type(&self) -> CameraType;

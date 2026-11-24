@@ -97,6 +97,13 @@ impl Game<'_> {
         }
     }
 
+    /// A local `Hud.setOverlayMessage`, not a server action or packet.
+    pub(in crate::game) fn show_action_bar(&mut self, line: horizon_client::text::Text) {
+        if self.native_window() && self.lan_acting.is_none() {
+            self.titles.set_overlay(line, false);
+        }
+    }
+
     pub(super) fn native_authoritative(&self) -> bool {
         self.is_logical_server()
     }
