@@ -509,10 +509,11 @@ impl Game<'_> {
                 // Stopped because it isn't wanted any more: not the pack's failure.
                 Err(refused) if refused.is_cancelled() => {}
                 Err(refused) => {
+                    let no_room = refused.is_no_room();
                     for note in refused.notes {
                         log::warn!("shader pack {name}: {note}");
                     }
-                    self.shader_pack_failed(&name, dimension, &refused.reason);
+                    self.shader_pack_failed(&name, dimension, &refused.reason, no_room);
                 }
             }
         }
@@ -559,6 +560,7 @@ impl Game<'_> {
             let started = std::time::Instant::now();
             // A pack is not the game's own code: one that makes the shader compiler (or our
             // translation of it) panic is turned off instead of crashing every world load (#3525).
+            let mut no_room = false;
             let loaded = horizon_client::crash::contain(|| {
                 match Pack::open(&path).map(|p| p.with_chosen(chosen_shader_options(name))) {
                     Ok(pack) => {
@@ -592,7 +594,11 @@ impl Game<'_> {
                                 .collect(),
                         );
                         let folder = dimension_folder_named(&pack, self.dim.id(), dimension);
-                        let inputs = renderer.pack_inputs();
+                        // Without room in video memory for its block atlas it is not loaded.
+                        let inputs = renderer.pack_inputs().map_err(|refused| {
+                            no_room = refused.is_no_room();
+                            refused.reason
+                        })?;
                         let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
                         // Textures that name one of the game's: from the resource packs over
                         // the game's own resources.
@@ -703,7 +709,7 @@ impl Game<'_> {
             });
             // A pack that can't run is turned off like one that panics.
             if let Err(error) = loaded.flatten() {
-                self.shader_pack_failed(name, dimension, &error);
+                self.shader_pack_failed(name, dimension, &error, no_room);
             }
         }
         self.sync_block_layers();
@@ -859,7 +865,7 @@ impl Game<'_> {
         {
             self.pack_ids = None;
             if let Some(renderer) = &mut self.renderer {
-                renderer.drop_shader_packs();
+                renderer.unload_shader_pack();
             }
         }
     }
@@ -882,16 +888,20 @@ impl Game<'_> {
         write_shader_options(&options);
         self.pack_ids = None;
         if let Some(renderer) = &mut self.renderer {
-            renderer.drop_shader_packs();
+            // The block atlases stay: no option of the pack changes them.
+            renderer.unload_shader_pack();
         }
     }
 
     /// Turns off the pack `name` after loading it panicked or failed: nothing runs in its place,
     /// it is no longer the picked pack (so the next start does not load it again), and the chat
-    /// says so.
-    fn shader_pack_failed(&mut self, name: &str, dimension: i32, error: &str) {
+    /// says so. Its files are remembered as refused, so they are not tried again as they are,
+    /// unless only video memory was full (`no_room`): picked again, the same files may load.
+    fn shader_pack_failed(&mut self, name: &str, dimension: i32, error: &str, no_room: bool) {
         let path = Self::shader_packs_dir().join(name);
-        remember(&path, fingerprint(&path), false);
+        if !no_room {
+            remember(&path, fingerprint(&path), false);
+        }
         let said = format!("Shader pack {name} could not be loaded and was turned off");
         self.shader_pack_off(name, dimension, error, said);
     }

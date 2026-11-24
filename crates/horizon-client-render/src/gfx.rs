@@ -2108,8 +2108,7 @@ pub struct Renderer {
     /// Rain and snow handed to a shader pack's `gbuffers_weather`, once a pack draws them.
     pack_weather: Option<pack_weather::PackWeather>,
     /// The block sprites as one atlas, while a shader pack is loaded.
-    pack_atlas: Option<pack_atlas::PackAtlas>,
-    pack_material_atlases: Option<[pack_atlas::PackAtlas; 2]>,
+    pack_atlases: pack_atlas::Atlases,
     /// The shared atlas's LabPBR normal and specular paged maps (`set_shared_material_maps`),
     /// which shader packs read for entities, items and the hand.
     shared_material_maps: [Option<wgpu::Texture>; 2],
@@ -5249,8 +5248,7 @@ impl Renderer {
             pack_entity_rest: Vec::new(),
             cloud_bindings,
             pack_weather: None,
-            pack_atlas: None,
-            pack_material_atlases: None,
+            pack_atlases: Default::default(),
             shared_material_maps: [None, None],
             pack_terrain_flat: false,
             separate_ao: false,
@@ -7145,8 +7143,7 @@ impl Renderer {
         block_ids: &[i32],
     ) -> std::result::Result<Option<(Vec<String>, Vec<String>)>, pack_post::Refused> {
         if pack.is_none() {
-            self.pack_atlas = None;
-            self.pack_material_atlases = None;
+            self.pack_atlases.release();
         }
         let instance = wgpu::vertex_attr_array![5=>Float32x4];
         let vertex = wgpu::VertexBufferLayout {
@@ -7162,15 +7159,21 @@ impl Renderer {
         let buffers = [Some(vertex), Some(instances)];
         let flat = self.pack_terrain_flat;
         let sprite_rects = self
-            .pack_atlas
+            .pack_atlases
+            .colour
             .as_ref()
             .map_or_else(Vec::new, |a| a.rects_table());
         let post = pack.map(|post| {
             let world = pack_post::World {
-                atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
+                atlas: self
+                    .pack_atlases
+                    .colour
+                    .as_ref()
+                    .map(|a| (a.view.clone(), a.size())),
                 sprite_rects: &sprite_rects,
                 material_maps: self
-                    .pack_material_atlases
+                    .pack_atlases
+                    .materials
                     .as_ref()
                     .map(|a| [a[0].view.clone(), a[1].view.clone()]),
                 lightmap: self.lightmap_view.clone(),
@@ -7179,16 +7182,20 @@ impl Renderer {
                     .atlas_texture
                     .as_ref()
                     .map_or([1, 1], |t| [t.width(), t.height()]),
-                terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
-                    // Flat terrain programs pull their vertices (`pack_atlas::PULL_FLAT`).
-                    buffers: if flat { &[] } else { &buffers },
-                    table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
-                    depth_write: true,
-                    atlas: None,
-                    material_maps: true,
-                    ids: None,
-                    cull: true,
-                }),
+                terrain: self
+                    .pack_atlases
+                    .colour
+                    .as_ref()
+                    .map(|_| pack_post::Geometry {
+                        // Flat terrain programs pull their vertices (`pack_atlas::PULL_FLAT`).
+                        buffers: if flat { &[] } else { &buffers },
+                        table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
+                        depth_write: true,
+                        atlas: None,
+                        material_maps: true,
+                        ids: None,
+                        cull: true,
+                    }),
                 block_ids,
                 celestial: self
                     .hud
@@ -7223,8 +7230,7 @@ impl Renderer {
             Ok(post) => post,
             Err(e) => {
                 self.pack_post = Some((dimension, None));
-                self.pack_atlas = None;
-                self.pack_material_atlases = None;
+                self.pack_atlases.release();
                 return Err(e);
             }
         };
@@ -7397,13 +7403,19 @@ impl Renderer {
         let queue = self.queue.clone();
         let adapter = self.adapter.clone();
         let format = self.output.frame.format;
-        let atlas = self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size()));
+        let atlas = self
+            .pack_atlases
+            .colour
+            .as_ref()
+            .map(|a| (a.view.clone(), a.size()));
         let sprite_rects = self
-            .pack_atlas
+            .pack_atlases
+            .colour
             .as_ref()
             .map_or_else(Vec::new, |a| a.rects_table());
         let material_maps = self
-            .pack_material_atlases
+            .pack_atlases
+            .materials
             .as_ref()
             .map(|a| [a[0].view.clone(), a[1].view.clone()]);
         let lightmap = self.lightmap_view.clone();
@@ -7421,7 +7433,7 @@ impl Renderer {
         let table = (self.flat.as_ref())
             .filter(|_| flat)
             .map(|f| f.draw_layout.clone());
-        let terrain = self.pack_atlas.is_some();
+        let terrain = self.pack_atlases.colour.is_some();
         let clouds = self.cloud_bindings.clone();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancelled = cancel.clone();
@@ -7463,9 +7475,20 @@ impl Renderer {
             pack_post::PackPost::new(&device, &queue, &adapter, pack, format, world, &cancelled)
         };
         // A pack is not the game's code: a panic building it turns the pack off (#3525).
+        // Video memory running out under it is neither's fault, whatever else failed after it:
+        // nothing it built is kept (error scopes are each thread's own).
+        let scoped = self.device.clone();
+        let build = move || {
+            let memory = scoped.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let built = crate::crash::contain(build);
+            match pollster::block_on(memory.pop()) {
+                Some(_) => Ok(Err(pack_post::Refused::no_room())),
+                None => built,
+            }
+        };
         let thread = std::thread::Builder::new()
             .name("Shader pack".into())
-            .spawn(move || crate::crash::contain(build));
+            .spawn(build);
         match thread {
             Ok(thread) => {
                 // The last pack doesn't draw this dimension meanwhile.
@@ -7546,20 +7569,25 @@ impl Renderer {
     }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
+        self.unload_shader_pack();
+        self.pack_atlases.release();
+    }
+    /// Drops the running shader pack for its `shaders/` pack to be loaded again (its options or
+    /// the tags its ids read changed). The block atlases stay: they are made from the game's
+    /// sprites, not from the pack, and `pack_inputs` makes them again only where those changed.
+    pub fn unload_shader_pack(&mut self) {
         self.world_held = false;
         self.pack_loading = None;
         self.native_pack_loader.cancel();
         self.pack_post = None;
         self.replace_executor(None);
-        self.pack_atlas = None;
-        self.pack_material_atlases = None;
         self.separate_ao = false;
     }
     /// Sets whether shader pack terrain inputs pass vertex alpha to `hz_Color.a` (`separateAo=true`).
     pub fn set_separate_ao(&mut self, separate_ao: bool) {
         if self.separate_ao != separate_ao {
             self.separate_ao = separate_ao;
-            if let Some(atlas) = &mut self.pack_atlas {
+            if let Some(atlas) = &mut self.pack_atlases.colour {
                 atlas.separate_ao = separate_ao;
             }
         }
@@ -7740,8 +7768,7 @@ impl Renderer {
                 }
                 self.pack_metadata = Some(built.metadata);
                 self.pack_post = None;
-                self.pack_atlas = None;
-                self.pack_material_atlases = None;
+                self.pack_atlases.release();
                 NativePackOutcome::Installed {
                     context,
                     labels: built.labels,
@@ -7807,14 +7834,16 @@ impl Renderer {
         }
         self.pack_metadata = Some(metadata);
         self.pack_post = None;
-        self.pack_atlas = None;
-        self.pack_material_atlases = None;
+        self.pack_atlases.release();
         Ok(labels)
     }
     /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
     /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
-    pub fn pack_inputs(&mut self) -> horizon_shaders::GameInputs {
-        let terrain = self.pack_terrain_inputs();
+    /// Refused where video memory has no room for the atlas: none is kept then.
+    pub fn pack_inputs(
+        &mut self,
+    ) -> std::result::Result<horizon_shaders::GameInputs, pack_post::Refused> {
+        let terrain = self.pack_terrain_inputs()?;
         // A geometry stage reads flat draws' vertices itself, through their index buffer.
         let terrain_geometry = terrain
             .clone()
@@ -7830,7 +7859,7 @@ impl Renderer {
                     index: "hz_indices[@]".to_owned(),
                 }
             });
-        horizon_shaders::GameInputs {
+        Ok(horizon_shaders::GameInputs {
             terrain_geometry,
             entity_geometry: Some(pack_entities::geometry_inputs()),
             sky: Some(pack_sky::inputs()),
@@ -7841,80 +7870,41 @@ impl Renderer {
             lines: Some(pack_lines::inputs()),
             hand: Some(pack_hand::inputs()),
             ..pack_atlas::game_terrain(terrain, &self.pack_lava_layers, true)
-        }
+        })
     }
 
-    fn pack_terrain_inputs(&mut self) -> Option<horizon_shaders::GbuffersInputs> {
+    fn pack_terrain_inputs(
+        &mut self,
+    ) -> std::result::Result<Option<horizon_shaders::GbuffersInputs>, pack_post::Refused> {
         // Flat draws whenever the device has them (`render` keeps them on with a pack).
         let flat = self.flat.is_some() && self.flat_on;
-        // Flat draws read each sprite's place from a table: the atlas is stitched as the game's.
-        // Other draws need the grid.
-        if !flat && self.pack_atlas.as_ref().is_some_and(|a| a.is_stitched()) {
-            self.pack_atlas = None;
-        }
-        if self.pack_atlas.is_none() {
-            let mut encoder = self.device.create_command_encoder(&Default::default());
-            let layers = self
-                .sprite_textures
-                .iter()
-                .map(|t| t.depth_or_array_layers())
-                .sum();
-            let sprite = self.sprite_textures[0].width();
-            // Vanilla's padding counts the anisotropy bit only with anisotropic filtering.
-            let anisotropy_bit = if self.texture_filtering == 2 {
-                u32::from(self.max_anisotropy).trailing_zeros()
-            } else {
-                0
-            };
-            let stitched = flat
-                .then(|| {
-                    pack_atlas::PackAtlas::stitched(
-                        &self.device,
-                        &mut encoder,
-                        &self.sprite_textures,
-                        self.sprite_split,
-                        sprite,
-                        &self.sprite_native,
-                        self.mipmap_option,
-                        anisotropy_bit,
-                    )
-                })
-                .flatten();
-            if flat && stitched.is_none() {
-                log::warn!(
-                    "shader pack block atlas: the sprites don't stitch on this device, a grid instead"
-                );
-            }
-            let mut atlas = stitched.or_else(|| {
-                pack_atlas::PackAtlas::new(
-                    &self.device,
-                    &mut encoder,
-                    &self.sprite_textures,
-                    self.sprite_split,
-                    layers,
-                    sprite,
-                )
-            });
-            if let Some(atlas) = &mut atlas {
-                atlas.separate_ao = self.separate_ao;
-            }
-            self.pack_material_atlases = atlas.as_ref().and_then(|colour| {
-                let maps = self.pbr_maps.as_ref()?;
-                let make = |kind: usize, encoder: &mut wgpu::CommandEncoder| {
-                    let arrays: Vec<_> = maps.iter().map(|pair| pair[kind].clone()).collect();
-                    colour.material_for(&self.device, encoder, &arrays, layers)
-                };
-                Some([make(0, &mut encoder)?, make(1, &mut encoder)?])
-            });
-            self.pack_atlas = atlas;
-            self.queue.submit([encoder.finish()]);
+        // Vanilla's padding counts the anisotropy bit only with anisotropic filtering.
+        let anisotropy_bit = if self.texture_filtering == 2 {
+            u32::from(self.max_anisotropy).trailing_zeros()
+        } else {
+            0
+        };
+        let sprites = pack_atlas::Sprites {
+            arrays: &self.sprite_textures,
+            split: self.sprite_split,
+            native: &self.sprite_native,
+            maps: self.pbr_maps.as_deref(),
+            flat,
+            mip_option: self.mipmap_option,
+            anisotropy_bit,
+        };
+        // The queue first waits for the frame on the submit thread, so the device can be
+        // waited for.
+        let queue: &wgpu::Queue = &self.queue;
+        if !self.pack_atlases.ready(&self.device, queue, &sprites) {
+            return Err(pack_post::Refused::no_room());
         }
         self.pack_terrain_flat = flat;
-        Some(
-            self.pack_atlas
-                .as_ref()?
-                .terrain_inputs(self.pack_terrain_flat),
-        )
+        let separate_ao = self.separate_ao;
+        Ok(self.pack_atlases.colour.as_mut().map(|atlas| {
+            atlas.separate_ao = separate_ao;
+            atlas.terrain_inputs(flat)
+        }))
     }
     /// The macros this renderer gives shader packs: the GL extensions this device has
     /// (subgroups, when it has them), and the vendor, renderer and mipmap levels
@@ -8290,7 +8280,7 @@ impl Renderer {
                     );
                 },
             );
-            if let Some(atlases) = &self.pack_material_atlases {
+            if let Some(atlases) = &self.pack_atlases.materials {
                 for (kind, layers) in changed.into_iter().enumerate() {
                     if layers.is_empty() {
                         continue;
@@ -8300,7 +8290,7 @@ impl Renderer {
                 }
             }
         }
-        if let Some(atlas) = &self.pack_atlas {
+        if let Some(atlas) = &self.pack_atlases.colour {
             atlas.copy(
                 &self.device,
                 encoder,

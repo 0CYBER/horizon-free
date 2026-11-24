@@ -7,8 +7,12 @@
 //! padding; this gives the `atlasSize` and spans our probes read in Iris 1.11.7. Other draws get
 //! a grid of array-sized cells ([`PackAtlas::new`]).
 
+#[path = "pack_atlas/atlases.rs"]
+mod atlases;
 #[path = "pack_atlas/stitch.rs"]
 mod stitch;
+
+pub(super) use atlases::{Atlases, Sprites};
 
 pub(super) struct PackAtlas {
     texture: wgpu::Texture,

@@ -90,7 +90,8 @@ fn pack(renderer: &mut Renderer, folder: &Path, valid: bool) {
     let mut macros = horizon_shaders::Macros::standard();
     renderer.define_pack_macros(&mut macros);
     let (properties, _) = horizon_shaders::read_properties(&pack, &mut macros);
-    let post = horizon_shaders::load_post(&pack, "", &properties, &macros, &renderer.pack_inputs());
+    let inputs = renderer.pack_inputs().unwrap();
+    let post = horizon_shaders::load_post(&pack, "", &properties, &macros, &inputs);
     assert_eq!(post.notes.is_empty(), valid, "{:?}", post.notes);
     let (_, notes) = renderer
         .set_shader_pack(0, Some(post), &[])

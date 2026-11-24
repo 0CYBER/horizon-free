@@ -2475,6 +2475,18 @@ impl Refused {
     pub fn is_cancelled(&self) -> bool {
         self.reason == Self::CANCELLED
     }
+    /// The reason of a pack that found no room in video memory for what it makes as it loads:
+    /// not the pack's fault either, and the same files may load the next time.
+    const NO_ROOM: &str = "video memory is full";
+    pub(super) fn no_room() -> Self {
+        Self {
+            reason: Self::NO_ROOM.into(),
+            notes: Vec::new(),
+        }
+    }
+    pub fn is_no_room(&self) -> bool {
+        self.reason == Self::NO_ROOM
+    }
 }
 
 impl PackPost {
