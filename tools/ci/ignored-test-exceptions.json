@@ -880,6 +880,14 @@
     "rationale": "Existing explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-core.txt: benchmark. Not selected by daily shards."
   },
   {
+    "package": "horizon-core",
+    "target": "lib",
+    "test": "storage::tests::benchmark_unpack",
+    "path": "crates/horizon-core/src/storage.rs",
+    "reason": "microbenchmark; run with --ignored --nocapture",
+    "rationale": "Explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-core.txt: microbenchmark of PackedStorage::unpack_into; run with --release --ignored --nocapture. Not selected by daily shards; its correctness is covered by the other storage tests."
+  },
+  {
     "package": "horizon-items",
     "target": "lib",
     "test": "item_data::tests::benchmark_decode_components",

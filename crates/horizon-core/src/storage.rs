@@ -281,23 +281,69 @@ impl PackedStorage {
         Ok(())
     }
 
+    #[inline(always)]
+    fn unpack_fixed<const BITS: u32, const PER_WORD: usize>(words: &[u64], out: &mut [u32]) {
+        let mask = (1u64 << BITS) - 1;
+        let (chunks, tail) = out.as_chunks_mut::<PER_WORD>();
+        for (&word, chunk) in words.iter().zip(chunks.iter_mut()) {
+            let mut w = word;
+            for dst in chunk {
+                *dst = (w & mask) as u32;
+                w >>= BITS;
+            }
+        }
+        if !tail.is_empty() {
+            let mut w = words[chunks.len()];
+            for dst in tail {
+                *dst = (w & mask) as u32;
+                w >>= BITS;
+            }
+        }
+    }
+
     /// [`unpack`](Self::unpack) into `out` (the first `len` slots), without allocating.
     pub fn unpack_into(&self, out: &mut [u32]) {
-        let mut i = 0;
-        for &word in &self.words {
-            for slot in 0..self.per_word.min(self.len - i) {
-                out[i] = ((word >> (slot * usize::from(self.bits))) & self.mask) as u32;
-                i += 1;
+        let out = &mut out[..self.len];
+        if out.is_empty() {
+            return;
+        }
+        match self.bits {
+            4 => Self::unpack_fixed::<4, 16>(&self.words, out),
+            5 => Self::unpack_fixed::<5, 12>(&self.words, out),
+            6 => Self::unpack_fixed::<6, 10>(&self.words, out),
+            7 => Self::unpack_fixed::<7, 9>(&self.words, out),
+            8 => Self::unpack_fixed::<8, 8>(&self.words, out),
+            9 => Self::unpack_fixed::<9, 7>(&self.words, out),
+            15 => Self::unpack_fixed::<15, 4>(&self.words, out),
+            bits => {
+                let per_word = self.per_word;
+                let mask = self.mask;
+                let shift = u32::from(bits);
+                let full_words = out.len() / per_word;
+                let (full, tail) = out.split_at_mut(full_words * per_word);
+                for (&word, chunk) in self.words[..full_words]
+                    .iter()
+                    .zip(full.chunks_exact_mut(per_word))
+                {
+                    let mut w = word;
+                    for dst in chunk {
+                        *dst = (w & mask) as u32;
+                        w >>= shift;
+                    }
+                }
+                if !tail.is_empty() {
+                    let mut w = self.words[full_words];
+                    for dst in tail {
+                        *dst = (w & mask) as u32;
+                        w >>= shift;
+                    }
+                }
             }
         }
     }
     pub fn unpack(&self) -> Vec<u32> {
-        let mut values = Vec::with_capacity(self.len);
-        for &word in &self.words {
-            for slot in 0..self.per_word.min(self.len - values.len()) {
-                values.push(((word >> (slot * usize::from(self.bits))) & self.mask) as u32);
-            }
-        }
+        let mut values = vec![0u32; self.len];
+        self.unpack_into(&mut values);
         values
     }
 }
@@ -412,5 +458,84 @@ mod tests {
         assert!(PackedStorage::new(33, 1).is_err());
         assert!(PackedStorage::from_words(5, 13, vec![0]).is_err());
         assert!(PackedStorage::new(1, 0).unwrap().unpack().is_empty());
+    }
+
+    fn baseline_unpack_into(storage: &PackedStorage, out: &mut [u32]) {
+        let mut i = 0;
+        for &word in &storage.words {
+            for slot in 0..storage.per_word.min(storage.len - i) {
+                out[i] = ((word >> (slot * usize::from(storage.bits))) & storage.mask) as u32;
+                i += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn unpack_into_matches_baseline_across_all_widths_and_tail_lengths() {
+        for bits in 1..=32u8 {
+            for len in [0usize, 1, 7, 13, 64, 256, 4095, 4096] {
+                let mut storage = PackedStorage::new(bits, len).unwrap();
+                for i in 0..len {
+                    let value = ((i as u64 * 17 + u64::from(bits)) & storage.mask) as u32;
+                    storage.write(i, value);
+                }
+                let mut expected = vec![u32::MAX; len + 3];
+                let mut actual = vec![u32::MAX; len + 3];
+                baseline_unpack_into(&storage, &mut expected);
+                storage.unpack_into(&mut actual);
+                assert_eq!(actual, expected, "bits={bits} len={len}");
+                assert_eq!(storage.unpack(), expected[..len]);
+            }
+        }
+    }
+
+    #[test]
+    // cargo test --release -p horizon-core --lib storage::tests::benchmark_unpack -- --ignored --nocapture
+    #[ignore = "microbenchmark; run with --ignored --nocapture"]
+    fn benchmark_unpack() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const ROUNDS: u32 = 31;
+        const ITERS: usize = 2000;
+        for bits in [4u8, 5, 6, 8, 9, 15] {
+            let mut storage = PackedStorage::new(bits, 4096).unwrap();
+            let mut rng = 0x517c_c1b7_2722_0a95u64 ^ u64::from(bits);
+            for i in 0..4096 {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                storage.write(i, (rng & storage.mask) as u32);
+            }
+            let mut out = [0u32; 4096];
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..ROUNDS {
+                for optimized in [round % 2 == 0, round % 2 != 0] {
+                    let started = Instant::now();
+                    for _ in 0..ITERS {
+                        if optimized {
+                            black_box(&storage).unpack_into(black_box(&mut out));
+                        } else {
+                            baseline_unpack_into(black_box(&storage), black_box(&mut out));
+                        }
+                        black_box(out[4095]);
+                    }
+                    if round > 0 {
+                        times[usize::from(optimized)]
+                            .push(started.elapsed().as_secs_f64() * 1e9 / ITERS as f64);
+                    }
+                }
+            }
+            for v in &mut times {
+                v.sort_by(f64::total_cmp);
+            }
+            let median = |v: &[f64]| v[v.len() / 2];
+            println!(
+                "unpack_into {bits:2}-bit (4096): baseline {:8.1} ns/op  optimized {:8.1} ns/op  speedup {:5.2}x",
+                median(&times[0]),
+                median(&times[1]),
+                median(&times[0]) / median(&times[1])
+            );
+        }
     }
 }

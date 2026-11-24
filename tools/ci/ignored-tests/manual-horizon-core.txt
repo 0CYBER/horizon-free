@@ -3,3 +3,4 @@ horizon-core paletted::tests::benchmark_pack by-hand manual # microbenchmark; ru
 horizon-core paletted::tests::benchmark_palette_ids by-hand manual # microbenchmark; run with --ignored --nocapture
 horizon-core paletted::tests::benchmark_unpack by-hand manual # microbenchmark; run with --ignored --nocapture
 horizon-core random::positional::tests::benchmark_legacy_positional_at by-hand manual # benchmark
+horizon-core storage::tests::benchmark_unpack by-hand manual # microbenchmark; run with --ignored --nocapture
