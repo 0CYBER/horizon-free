@@ -163,6 +163,8 @@ mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", featu
 mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab", features = ["testing"] }
 # ui_theme's unit tests draw text in the design system's fonts.
 horizon-theme = { path = "../horizon-theme" }
+# dialog_screen's unit tests switch the text direction in a language only their thread sees.
+horizon-client-core = { path = "../horizon-client-core", features = ["test-language-publication"] }
 horizon-client-render = { path = "../horizon-client-render", features = ["test-support"] }
 horizon-items = { path = "../horizon-items", features = ["test-support"] }
 # Reads back the captures the server_perf tests write.

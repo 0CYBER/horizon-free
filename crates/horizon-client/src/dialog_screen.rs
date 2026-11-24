@@ -7,6 +7,7 @@ use crate::{
     font::Font,
     text::{Style, Text},
 };
+use std::{cell::RefCell, sync::Arc};
 
 /// `ActiveTextCollector.ClickableStyleFinder.accept`: the last style `wanted`
 /// under the cursor, in the same visual order and advances as rendering.
@@ -21,7 +22,7 @@ pub fn line_style_at(
     cursor: (f32, f32),
     wanted: impl Fn(&Style) -> bool,
 ) -> Option<Style> {
-    let text = text.resolve_legacy();
+    let text = text.resolved();
     let visual = crate::bidi::visual(&text);
     let mut pen = x;
     let mut found = None;
@@ -70,8 +71,9 @@ pub const WARNING_SPRITES: [&str; 3] = [
 /// the body's parts, from the top of the screen for the footer's.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Part {
-    /// A line of text and where it starts.
-    Line(Text, f32, f32),
+    /// A line of text and where it starts; shared, so copying the layout or
+    /// placing the body each frame doesn't copy every span of it.
+    Line(Arc<Text>, f32, f32),
     /// A text input's box.
     Field { input: usize, rect: [f32; 4] },
     /// A boolean input: the box, its label right of it.
@@ -161,7 +163,7 @@ fn message(font: &Font, contents: &Text, width: f32) -> Element {
         .enumerate()
         .map(|(i, (line, _))| {
             let x = mid - (font.width_text(&line) / 2.0).trunc();
-            Part::Line(line, x, 4.0 + 9.0 * i as f32)
+            Part::Line(Arc::new(line), x, 4.0 + 9.0 * i as f32)
         })
         .collect::<Vec<_>>();
     Element {
@@ -247,7 +249,7 @@ fn input(font: &Font, i: usize, control: &Control) -> Element {
                 w: w.max(font.width_text(label)),
                 h: 9.0 + 4.0 + h,
                 parts: vec![
-                    Part::Line(shown, 0.0, 0.0),
+                    Part::Line(Arc::new(shown), 0.0, 0.0),
                     Part::Field {
                         input: i,
                         rect: [0.0, 13.0, w, h],
@@ -458,6 +460,32 @@ impl Layout {
     }
 }
 
+/// An open dialog's layout, kept until the screen's size, the font's glyphs
+/// or the text direction change: `DialogScreen` builds its widgets once and
+/// only repositions them on a resize (`MultiLineTextWidget` keeps its split
+/// lines), so a body of many lines isn't wrapped again every frame (#19102).
+/// One per open dialog.
+#[derive(Debug, Default)]
+pub struct LayoutCache(RefCell<Option<(LayoutKey, Arc<Layout>)>>);
+/// What a layout depends on beside its dialog: the screen's size, the font's
+/// epoch and whether the language reads right to left.
+type LayoutKey = ((f32, f32), u64, bool);
+impl LayoutCache {
+    /// `dialog`'s layout on a `size` screen.
+    pub fn get(&self, dialog: &Dialog, font: &Font, size: (f32, f32)) -> Arc<Layout> {
+        let key = (size, font.epoch(), crate::lang::bidirectional());
+        let mut cache = self.0.borrow_mut();
+        if let Some((kept, layout)) = &*cache
+            && *kept == key
+        {
+            return layout.clone();
+        }
+        let layout = Arc::new(Layout::new(dialog, font, size));
+        *cache = Some((key, layout.clone()));
+        layout
+    }
+}
+
 /// `WaitingForResponseScreen`: its Back button's label after `ticks`, and
 /// whether it shows and works (it shows after a second, works after five).
 pub fn waiting_button(ticks: u32) -> (Text, bool, bool) {
@@ -592,6 +620,206 @@ mod tests {
         assert_eq!(click(22.0, 54.9), None, "above the glyph");
         assert_eq!(click(22.0, 65.0), None, "below the glyph and its shadow");
         assert_eq!(click(15.0, 60.0), None, "the plain glyph left of it");
+    }
+
+    /// #19102: a dialog of many lines whose every character has its own click
+    /// event is laid out once, not again every frame, and laid out again when
+    /// the screen changes size; each character still answers with its own click.
+    #[test]
+    fn a_dialog_is_laid_out_once_until_the_screen_changes() {
+        use crate::{component, hud::Rect, text::ClickEvent};
+        use horizon_core::nbt::Tag;
+        let font = Font::load(
+            &horizon_assets::resource_source::ResourceSource::default(),
+            &std::collections::HashMap::new(),
+            &[],
+            (1, 1),
+            (0, 0),
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 1,
+                h: 1,
+            },
+        );
+        let mut dialog = Dialog::parse(&Tag::compound([
+            ("type", Tag::String("minecraft:notice".into())),
+            ("title", Tag::String("Many lines".into())),
+        ]))
+        .unwrap();
+        let id = |line: usize, letter: usize| format!("test:{line}/{letter}");
+        dialog.body = (0..50)
+            .map(|line| {
+                let letters = format!("Line {line}: click me!")
+                    .chars()
+                    .enumerate()
+                    .map(|(letter, c)| {
+                        serde_json::json!({"text": c.to_string(), "click_event": {
+                            "action": "custom", "id": id(line, letter)
+                        }})
+                    })
+                    .collect();
+                Body::Message {
+                    contents: component::to_text(&serde_json::Value::Array(letters), &mut |_| {
+                        Text::empty()
+                    }),
+                    width: 300,
+                }
+            })
+            .collect();
+        let cache = LayoutCache::default();
+        let layout = cache.get(&dialog, &font, (640.0, 480.0));
+        assert!(
+            Arc::ptr_eq(&layout, &cache.get(&dialog, &font, (640.0, 480.0))),
+            "the next frame keeps the layout"
+        );
+        let lines: Vec<_> = layout
+            .body
+            .iter()
+            .filter_map(|p| match p {
+                Part::Line(text, x, y) => Some((text, *x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 50);
+        for (line, (text, x, y)) in lines.into_iter().enumerate() {
+            // Every glyph is the 6 wide missing one.
+            for letter in 0..text.chars().count() {
+                let at = (x + 6.0 * letter as f32 + 3.0, y + 4.0);
+                let click = line_style_at(&font, text, x, y, at, |s| s.click.is_some())
+                    .and_then(|s| s.click);
+                let own = ClickEvent::Custom {
+                    id: id(line, letter),
+                    payload: None,
+                };
+                assert_eq!(click, Some(own), "line {line}, letter {letter}");
+            }
+        }
+        let resized = cache.get(&dialog, &font, (320.0, 240.0));
+        assert!(
+            !Arc::ptr_eq(&layout, &resized),
+            "a resize lays it out again"
+        );
+        assert_eq!(
+            resized.area,
+            Layout::new(&dialog, &font, (320.0, 240.0)).area
+        );
+    }
+
+    /// A font with no glyphs: every character is the missing one.
+    fn glyphless_font() -> Font {
+        Font::load(
+            &horizon_assets::resource_source::ResourceSource::default(),
+            &std::collections::HashMap::new(),
+            &[],
+            (1, 1),
+            (0, 0),
+            crate::hud::Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 1,
+                h: 1,
+            },
+        )
+    }
+
+    /// A notice whose body is one message.
+    fn notice() -> Dialog {
+        use horizon_core::nbt::Tag;
+        let mut dialog = Dialog::parse(&Tag::compound([
+            ("type", Tag::String("minecraft:notice".into())),
+            ("title", Tag::String("Notice".into())),
+        ]))
+        .unwrap();
+        dialog.body = vec![Body::Message {
+            contents: Text::literal("A line of text"),
+            width: 200,
+        }];
+        dialog
+    }
+
+    /// Whether two layouts put everything in the same place.
+    fn same(a: &Layout, b: &Layout) -> bool {
+        (a.title, a.warning, a.area, a.content, &a.body, &a.footer)
+            == (b.title, b.warning, b.area, b.content, &b.body, &b.footer)
+    }
+
+    /// #19102: the kept layout goes when the font's glyphs may come out
+    /// different (here a glyph cache reset, as a full glyph region at a frame's
+    /// start or other font options do), and a frame that resets nothing keeps it.
+    #[test]
+    fn a_dialog_is_laid_out_again_when_the_font_changes() {
+        let (font, dialog, cache) = (glyphless_font(), notice(), LayoutCache::default());
+        let before = cache.get(&dialog, &font, (640.0, 480.0));
+        font.begin_frame();
+        assert!(
+            Arc::ptr_eq(&before, &cache.get(&dialog, &font, (640.0, 480.0))),
+            "a frame that resets no glyphs keeps the layout"
+        );
+        font.reset_cache();
+        let after = cache.get(&dialog, &font, (640.0, 480.0));
+        assert!(
+            !Arc::ptr_eq(&before, &after),
+            "a glyph reset lays it out again"
+        );
+        assert!(same(&after, &Layout::new(&dialog, &font, (640.0, 480.0))));
+        assert!(
+            Arc::ptr_eq(&after, &cache.get(&dialog, &font, (640.0, 480.0))),
+            "and keeps the new layout"
+        );
+    }
+
+    /// #19102: the kept layout goes when the language's text direction
+    /// changes, either way.
+    #[test]
+    fn a_dialog_is_laid_out_again_when_the_text_direction_changes() {
+        use crate::lang::{self, Language};
+        /// A pack declaring one right-to-left language.
+        struct RightToLeft;
+        impl lang::ResourceSource for RightToLeft {
+            fn read(&self, path: &str) -> Option<Vec<u8>> {
+                match path {
+                    "pack.mcmeta" => {
+                        Some(br#"{"language":{"ar_sa":{"bidirectional":true}}}"#.to_vec())
+                    }
+                    "assets/minecraft/lang/ar_sa.json" => Some(b"{}".to_vec()),
+                    _ => None,
+                }
+            }
+        }
+        let (font, dialog, cache) = (glyphless_font(), notice(), LayoutCache::default());
+        // Languages only this thread sees, put back when dropped, so the tests
+        // beside it keep the process-wide one.
+        let _left_to_right = lang::isolate_publication(Language::of("en_us", []));
+        assert!(!lang::bidirectional());
+        let left = cache.get(&dialog, &font, (640.0, 480.0));
+        let right = {
+            let _right_to_left =
+                lang::isolate_publication(Language::load(&[&RightToLeft], "ar_sa"));
+            assert!(lang::bidirectional(), "ar_sa reads right to left");
+            let right = cache.get(&dialog, &font, (640.0, 480.0));
+            assert!(
+                !Arc::ptr_eq(&left, &right),
+                "a right-to-left language lays it out again"
+            );
+            assert!(same(&right, &Layout::new(&dialog, &font, (640.0, 480.0))));
+            assert!(
+                Arc::ptr_eq(&right, &cache.get(&dialog, &font, (640.0, 480.0))),
+                "and keeps the new layout"
+            );
+            right
+        };
+        assert!(!lang::bidirectional());
+        let back = cache.get(&dialog, &font, (640.0, 480.0));
+        assert!(
+            !Arc::ptr_eq(&right, &back),
+            "back to left to right lays it out again"
+        );
+        assert!(same(&back, &Layout::new(&dialog, &font, (640.0, 480.0))));
     }
 
     #[test]
