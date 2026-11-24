@@ -176,9 +176,13 @@ impl Game<'_> {
     }
     /// The other players' models and names: the players a server sends.
     fn other_players(&self) -> Vec<(&Mob, String)> {
-        let mut out = Vec::new();
+        let remote_players = self.remote_player_names();
+        if remote_players.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(remote_players.len());
         let indices = first_mob_indices(&self.mobs);
-        for (id, name) in self.remote_player_names() {
+        for (id, name) in remote_players {
             if let Some(&index) = indices.get(&id) {
                 out.push((&self.mobs[index], name));
             }
@@ -230,319 +234,271 @@ impl Game<'_> {
         hooks: bool,
         frustum: Option<&horizon_client::gfx::JoinedFrusta>,
     ) -> Vec<NameTag> {
-        let target = self.mob_hit().map(|(i, _, _)| self.mobs[i].id);
-        // Asked once a frame: a mod loaded without this hook costs the tags nothing.
-        let name_format = hooks && mod_api::__private::listened(mod_api::HookId::PlayerNameFormat);
-        let viewer = self.player_team();
-        let mut tags = Vec::new();
+        if !hooks
+            && self.mobs.is_empty()
+            && self.armor_stands.is_empty()
+            && self.item_frames.is_empty()
+            && self.own_name_tag().is_none()
+        {
+            return Vec::new();
+        }
         let players = self.other_players();
-        let player_ids = named_by_player_list(&players);
-        let named = self.mobs.iter().filter_map(|m| {
-            // Already named by the player list: a second tag would sit on the
-            // first (`named_by_player_list`). A mob a mod's pre hook canceled has none.
-            if player_ids.contains(&m.id) || self.render_canceled(m.id) {
-                return None;
-            }
-            // A mannequin with no name still shows its description.
-            let name = match &m.custom_name {
-                Some(name) => name.clone(),
-                None if hooks || m.species() == horizon_client::mobs::Species::Mannequin => {
-                    String::new()
-                }
-                None => return None,
-            };
-            // The tag's per-entity distance (vanilla's default is 64) is
-            // measured to the entity: copy the name only for a mob the frame
-            // can show it on.
-            let at = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
-            let max = m.name_tag_distance();
-            (at.distance_squared(camera) < max * max).then_some((m, name, false))
-        });
         let own = self.own_name_tag();
-        let own_id = own.as_ref().map(|(m, _)| m.id);
-        let players = players
-            .into_iter()
-            .filter(|(m, _)| !self.render_canceled(m.id))
-            .chain(own)
-            .map(|(m, name)| (m, name, true));
-        // Who is riding whom: asked once per tag below, and rescanning every entity
-        // for each tag made this quadratic in the number of loaded entities.
-        let local_entity_id = self.remote.as_ref().map(|r| r.entity_id as u32);
-        let ridden = collect_vehicle_ids(
-            &self.mobs,
-            self.remote_vehicle_ids(),
-            self.riding,
-            local_entity_id,
-        );
-        for (m, name, player) in named.chain(players) {
-            if !m.alive() {
-                continue;
-            }
-            // EntityAttachment.NAME_TAG: 0.5 above the box of the current pose.
-            let p = name_tag_at(m, alpha);
-            // The name tag distance is measured to the entity.
-            let distance_sqr =
-                glam::DVec3::new(m.position.x, m.position.y, m.position.z).distance_squared(camera);
-            // Match the model's renderer-specific box, not the tag anchor: the
-            // name must survive when only the entity's feet are in view.
-            let (lo, hi) = super::entity_culling::cull_box(m, alpha);
-            let inflate = glam::DVec3::splat(0.5);
-            if !name_tag_in_view(
-                frustum,
-                distance_sqr,
-                (lo - camera - inflate).as_vec3(),
-                (hi - camera + inflate).as_vec3(),
-                m.name_tag_distance(),
-            ) {
-                continue;
-            }
-            let marks = self.hooks_name_marks(m, Some(m.id) == own_id);
-            let at = match marks.top {
-                Some(top) => p + glam::DVec3::Y * cosmetic_lift(top, m.model_scale()),
-                None => p,
-            };
-            // A player's scores and team go by name, a mob's by UUID.
-            let holder = if player {
-                Some(name.clone())
-            } else {
-                self.persist.uuids.get(&m.id).map(|u| uuid_text(*u))
-            };
-            let team = if player {
-                self.score.board.players_team(&name)
-            } else {
-                self.mob_team_of(m)
-            };
-            // LivingEntityRenderer.shouldShowName (team rules included), then
-            // MobRenderer: a visible name, or the mob under the crosshair.
-            let invisible = sb::invisible_to(team, viewer, self.spectator(), m.is_invisible());
-            // Entity.isDiscrete: a crouching player.
-            let discrete = player && m.extra.crouching;
-            let view = sb::NameView {
-                discrete,
-                distance_sqr,
-                invisible_to_viewer: invisible,
-                hud_hidden: self.ui.hide_gui,
-                is_camera: false,
-                is_vehicle: ridden.contains(&m.id),
-            };
-            // MobRenderer.shouldShowName: a visible name, or the mob under the
-            // crosshair; players (LivingEntityRenderer) need neither.
-            // `ClientMannequin.belowNameDisplay`: the description is `scoreText`, drawn
-            // within the below-name distance (10 by default) whether the name
-            // shows or not.
-            let description = (m.species() == horizon_client::mobs::Species::Mannequin
-                && distance_sqr < m.below_name_distance().powi(2))
-            .then(|| m.extra.description.component())
-            .flatten()
-            .map(|tag| horizon_client::entity_nbt::name_text(&tag).resolve_legacy());
-            let is_own = Some(m.id) == own_id;
-            let name_shown = sb::name_shown(team, viewer, view)
-                && (!is_own || !view.is_vehicle)
-                && (player || m.name_visible || Some(m.id) == target)
-                && (player || m.custom_name.is_some());
-            let mut visible = name_shown;
-            let mut text = None;
-            if hooks {
-                self.native_render_name_tag(
-                    m.id,
-                    if player {
-                        "minecraft:player"
-                    } else {
-                        &m.kind.id
-                    },
-                    name_shown,
-                    &mut visible,
-                    &mut text,
-                );
-            }
-            if !visible {
-                if let Some(text) = description {
-                    let l = self.world.light(
-                        m.position.x.floor() as i32,
-                        (m.position.y + f64::from(m.height())).floor() as i32,
-                        m.position.z.floor() as i32,
-                    );
-                    tags.push(NameTag {
-                        at: p,
-                        lines: vec![(text, 0.0)],
-                        light: l,
-                        discrete,
-                        marks: Marks::default(),
-                    });
-                }
-                continue;
-            }
-            // getDisplayName: the name in the team's prefix, suffix and colour.
-            let member = if player {
-                Text::untrusted(&name)
-            } else {
-                m.custom_name_text
-                    .clone()
-                    .unwrap_or_else(|| Text::untrusted(&name))
-            };
-            // StringDecomposer.iterateFormatted: `§` codes a server leaves
-            // inside the team prefix or the name itself apply at draw time.
-            let mut shown = match team {
-                Some(t) => t.formatted_name(member),
-                None => member,
-            };
-            // Every frame: build the username only for a mod that listens.
-            if player
-                && name_format
-                && let Some(uuid) = self.remote_player_uuid(m.id)
-            {
-                shown = self.player_text(&name, uuid);
-            }
-            let shown = shown.resolve_legacy();
-            let shown = text
-                .map(|text| Text::untrusted(text).resolve_legacy())
-                .unwrap_or(shown);
-            let mut lines = Vec::new();
-            // EntityRenderer.extractNameTags: the score shows within the
-            // per-entity below-name distance (10 by default), under the name.
-            let mut lift = 0.0;
-            if m.species() == horizon_client::mobs::Species::Mannequin {
-                if let Some(text) = description {
-                    lines.push((text, 0.0));
-                    lift = f64::from(9.0f32 * 1.15 * 0.025);
-                }
-            } else if distance_sqr < m.below_name_distance().powi(2)
-                && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
-            {
-                lines.push((score.resolve_legacy(), 0.0));
-                lift = f64::from(9.0f32 * 1.15 * 0.025);
-            }
-            lines.push((shown, lift));
-            let l = self.world.light(
-                m.position.x.floor() as i32,
-                (m.position.y + f64::from(m.height())).floor() as i32,
-                m.position.z.floor() as i32,
-            );
-            tags.push(NameTag {
-                at,
-                lines,
-                light: l,
-                discrete,
-                marks,
+        let has_mob_candidates = hooks
+            || !players.is_empty()
+            || own.is_some()
+            || self.mobs.iter().any(|m| {
+                m.custom_name.is_some() || m.species() == horizon_client::mobs::Species::Mannequin
             });
+        let has_stand_candidates = hooks
+            || self
+                .armor_stands
+                .iter()
+                .any(|a| a.custom_name.is_some() && a.name_visible);
+        let has_frame_candidates = hooks || (!self.ui.hide_gui && !self.item_frames.is_empty());
+        if !has_mob_candidates && !has_stand_candidates && !has_frame_candidates {
+            return Vec::new();
         }
-        drop(player_ids);
-        // Armor stands name themselves: an invisible one with a visible name
-        // is a hologram (its model is skipped, its name tag is not).
-        for a in &self.armor_stands {
-            if !hooks {
-                let Some(_) = &a.custom_name else {
-                    continue;
+        let mut tags = Vec::new();
+        if has_mob_candidates {
+            let target = self.mob_hit().map(|(i, _, _)| self.mobs[i].id);
+            // Asked once a frame: a mod loaded without this hook costs the tags nothing.
+            let name_format =
+                hooks && mod_api::__private::listened(mod_api::HookId::PlayerNameFormat);
+            let viewer = self.player_team();
+            let player_ids = named_by_player_list(&players);
+            let named = self.mobs.iter().filter_map(|m| {
+                // Already named by the player list: a second tag would sit on the
+                // first (`named_by_player_list`). A mob a mod's pre hook canceled has none.
+                if player_ids.contains(&m.id) || self.render_canceled(m.id) {
+                    return None;
+                }
+                // A mannequin with no name still shows its description.
+                let name = match &m.custom_name {
+                    Some(name) => name.as_str(),
+                    None if hooks || m.species() == horizon_client::mobs::Species::Mannequin => "",
+                    None => return None,
                 };
-                if !a.name_visible {
+                // The tag's per-entity distance (vanilla's default is 64) is
+                // measured to the entity: copy the name only for a mob the frame
+                // can show it on.
+                let at = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
+                let max = m.name_tag_distance();
+                (at.distance_squared(camera) < max * max).then(|| (m, name.to_owned(), false))
+            });
+            let own_id = own.as_ref().map(|(m, _)| m.id);
+            let players = players
+                .into_iter()
+                .filter(|(m, _)| !self.render_canceled(m.id))
+                .chain(own)
+                .map(|(m, name)| (m, name, true));
+            // Who is riding whom: asked once per tag below, and rescanning every entity
+            // for each tag made this quadratic in the number of loaded entities.
+            let local_entity_id = self.remote.as_ref().map(|r| r.entity_id as u32);
+            let ridden = collect_vehicle_ids(
+                &self.mobs,
+                self.remote_vehicle_ids(),
+                self.riding,
+                local_entity_id,
+            );
+            for (m, name, player) in named.chain(players) {
+                if !m.alive() {
                     continue;
                 }
-            }
-            let height = f64::from(a.box_size().1);
-            let distance_sqr =
-                glam::DVec3::new(a.position.x, a.position.y, a.position.z).distance_squared(camera);
-            let position = a.render_position(alpha);
-            // Same dimensions and dragon-head growth as armor_stand_geometry.
-            let width = f64::from(a.box_size().0);
-            let dragon = a.equipment[5]
-                .as_ref()
-                .is_some_and(|i| &*i.item == "minecraft:dragon_head");
-            let grow = if dragon { 1.0 } else { 0.5 };
-            let half = glam::DVec3::new(width / 2.0 + grow, grow, width / 2.0 + grow);
-            let origin = super::entity_culling::at(position) - camera;
-            if !name_tag_in_view(
-                frustum,
-                distance_sqr,
-                (origin - half).as_vec3(),
-                (origin + glam::DVec3::new(half.x, height + grow, half.z)).as_vec3(),
-                a.name_tag_distance(),
-            ) {
-                continue;
-            }
-            let team = self.mob_team(a.id);
-            // `ArmorStandRenderer.shouldShowName` overrides the living
-            // entity's rule with `isCustomNameVisible` alone: no team
-            // visibility, no F1, no invisibility.
-            let name_shown = a.custom_name.is_some() && a.name_visible;
-            let mut visible = name_shown;
-            let mut text = None;
-            if hooks {
-                self.native_render_name_tag(
-                    a.id,
-                    "minecraft:armor_stand",
-                    name_shown,
-                    &mut visible,
-                    &mut text,
-                );
-            }
-            if !visible {
-                continue;
-            }
-            let name = a.custom_name.clone().unwrap_or_else(Text::empty);
-            let shown = match team {
-                Some(t) => t.formatted_name(name.clone()),
-                None => name.clone(),
-            }
-            .resolve_legacy();
-            let shown = text
-                .map(|text| Text::untrusted(text).resolve_legacy())
-                .unwrap_or(shown);
-            let mut lines = Vec::new();
-            let mut lift = 0.0;
-            let holder = self.persist.uuids.get(&a.id).map(|u| uuid_text(*u));
-            if distance_sqr < a.below_name_distance().powi(2)
-                && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
-            {
-                lines.push((score.resolve_legacy(), 0.0));
-                lift = f64::from(9.0f32 * 1.15 * 0.025);
-            }
-            lines.push((shown, lift));
-            // The tag rides with the body, between last tick's position and this one's.
-            let at = a.render_position(alpha);
-            let l = self.world.light(
-                at.x.floor() as i32,
-                (at.y + height).floor() as i32,
-                at.z.floor() as i32,
-            );
-            tags.push(NameTag {
-                at: glam::DVec3::new(at.x, at.y + height + 0.5, at.z),
-                lines,
-                light: l,
-                discrete: false,
-                marks: Marks::default(),
-            });
-        }
-        // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
-        // frame's custom-named item, with the HUD visible (also glow frames).
-        let targeted_frame = (hooks || !self.ui.hide_gui)
-            .then(|| self.frame_hit())
-            .flatten()
-            .filter(|(_, distance)| {
-                self.before_block(*distance) && self.mob_hit().is_none_or(|(_, d, _)| d > *distance)
-            })
-            .map(|(index, _)| index);
-        let frames = if hooks {
-            0..self.item_frames.len()
-        } else {
-            targeted_frame.map_or(0..0, |index| index..index + 1)
-        };
-        for index in frames {
-            let frame = &self.item_frames[index];
-            let name = frame.item.as_ref().and_then(|item| item.custom_name());
-            if !hooks && name.is_none() {
-                continue;
-            }
-            let (lo, hi) = frame.bounds();
-            let center = glam::DVec3::from_array(std::array::from_fn(|a| (lo[a] + hi[a]) / 2.0));
-            if center.distance_squared(camera) < 64.0 * 64.0 {
-                let name_shown =
-                    !self.ui.hide_gui && targeted_frame == Some(index) && name.is_some();
+                // EntityAttachment.NAME_TAG: 0.5 above the box of the current pose.
+                let p = name_tag_at(m, alpha);
+                // The name tag distance is measured to the entity.
+                let distance_sqr = glam::DVec3::new(m.position.x, m.position.y, m.position.z)
+                    .distance_squared(camera);
+                // Match the model's renderer-specific box, not the tag anchor: the
+                // name must survive when only the entity's feet are in view.
+                let (lo, hi) = super::entity_culling::cull_box(m, alpha);
+                let inflate = glam::DVec3::splat(0.5);
+                if !name_tag_in_view(
+                    frustum,
+                    distance_sqr,
+                    (lo - camera - inflate).as_vec3(),
+                    (hi - camera + inflate).as_vec3(),
+                    m.name_tag_distance(),
+                ) {
+                    continue;
+                }
+                let marks = self.hooks_name_marks(m, Some(m.id) == own_id);
+                let at = match marks.top {
+                    Some(top) => p + glam::DVec3::Y * cosmetic_lift(top, m.model_scale()),
+                    None => p,
+                };
+                // A player's scores and team go by name, a mob's by UUID.
+                let holder = if player {
+                    Some(name.clone())
+                } else {
+                    self.persist.uuids.get(&m.id).map(|u| uuid_text(*u))
+                };
+                let team = if player {
+                    self.score.board.players_team(&name)
+                } else {
+                    self.mob_team_of(m)
+                };
+                // LivingEntityRenderer.shouldShowName (team rules included), then
+                // MobRenderer: a visible name, or the mob under the crosshair.
+                let invisible = sb::invisible_to(team, viewer, self.spectator(), m.is_invisible());
+                // Entity.isDiscrete: a crouching player.
+                let discrete = player && m.extra.crouching;
+                let view = sb::NameView {
+                    discrete,
+                    distance_sqr,
+                    invisible_to_viewer: invisible,
+                    hud_hidden: self.ui.hide_gui,
+                    is_camera: false,
+                    is_vehicle: ridden.contains(&m.id),
+                };
+                // MobRenderer.shouldShowName: a visible name, or the mob under the
+                // crosshair; players (LivingEntityRenderer) need neither.
+                // `ClientMannequin.belowNameDisplay`: the description is `scoreText`, drawn
+                // within the below-name distance (10 by default) whether the name
+                // shows or not.
+                let description = (m.species() == horizon_client::mobs::Species::Mannequin
+                    && distance_sqr < m.below_name_distance().powi(2))
+                .then(|| m.extra.description.component())
+                .flatten()
+                .map(|tag| horizon_client::entity_nbt::name_text(&tag).resolve_legacy());
+                let is_own = Some(m.id) == own_id;
+                let name_shown = sb::name_shown(team, viewer, view)
+                    && (!is_own || !view.is_vehicle)
+                    && (player || m.name_visible || Some(m.id) == target)
+                    && (player || m.custom_name.is_some());
                 let mut visible = name_shown;
                 let mut text = None;
                 if hooks {
                     self.native_render_name_tag(
-                        frame.id,
-                        frame.kind(),
+                        m.id,
+                        if player {
+                            "minecraft:player"
+                        } else {
+                            &m.kind.id
+                        },
+                        name_shown,
+                        &mut visible,
+                        &mut text,
+                    );
+                }
+                if !visible {
+                    if let Some(text) = description {
+                        let l = self.world.light(
+                            m.position.x.floor() as i32,
+                            (m.position.y + f64::from(m.height())).floor() as i32,
+                            m.position.z.floor() as i32,
+                        );
+                        tags.push(NameTag {
+                            at: p,
+                            lines: vec![(text, 0.0)],
+                            light: l,
+                            discrete,
+                            marks: Marks::default(),
+                        });
+                    }
+                    continue;
+                }
+                // getDisplayName: the name in the team's prefix, suffix and colour.
+                let member = if player {
+                    Text::untrusted(&name)
+                } else {
+                    m.custom_name_text
+                        .clone()
+                        .unwrap_or_else(|| Text::untrusted(&name))
+                };
+                // StringDecomposer.iterateFormatted: `§` codes a server leaves
+                // inside the team prefix or the name itself apply at draw time.
+                let mut shown = match team {
+                    Some(t) => t.formatted_name(member),
+                    None => member,
+                };
+                // Every frame: build the username only for a mod that listens.
+                if player
+                    && name_format
+                    && let Some(uuid) = self.remote_player_uuid(m.id)
+                {
+                    shown = self.player_text(&name, uuid);
+                }
+                let shown = shown.resolve_legacy();
+                let shown = text
+                    .map(|text| Text::untrusted(text).resolve_legacy())
+                    .unwrap_or(shown);
+                let mut lines = Vec::new();
+                // EntityRenderer.extractNameTags: the score shows within the
+                // per-entity below-name distance (10 by default), under the name.
+                let mut lift = 0.0;
+                if m.species() == horizon_client::mobs::Species::Mannequin {
+                    if let Some(text) = description {
+                        lines.push((text, 0.0));
+                        lift = f64::from(9.0f32 * 1.15 * 0.025);
+                    }
+                } else if distance_sqr < m.below_name_distance().powi(2)
+                    && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
+                {
+                    lines.push((score.resolve_legacy(), 0.0));
+                    lift = f64::from(9.0f32 * 1.15 * 0.025);
+                }
+                lines.push((shown, lift));
+                let l = self.world.light(
+                    m.position.x.floor() as i32,
+                    (m.position.y + f64::from(m.height())).floor() as i32,
+                    m.position.z.floor() as i32,
+                );
+                tags.push(NameTag {
+                    at,
+                    lines,
+                    light: l,
+                    discrete,
+                    marks,
+                });
+            }
+            drop(player_ids);
+        }
+        // Armor stands name themselves: an invisible one with a visible name
+        // is a hologram (its model is skipped, its name tag is not).
+        if has_stand_candidates {
+            for a in &self.armor_stands {
+                if !hooks {
+                    let Some(_) = &a.custom_name else {
+                        continue;
+                    };
+                    if !a.name_visible {
+                        continue;
+                    }
+                }
+                let height = f64::from(a.box_size().1);
+                let distance_sqr = glam::DVec3::new(a.position.x, a.position.y, a.position.z)
+                    .distance_squared(camera);
+                let position = a.render_position(alpha);
+                // Same dimensions and dragon-head growth as armor_stand_geometry.
+                let width = f64::from(a.box_size().0);
+                let dragon = a.equipment[5]
+                    .as_ref()
+                    .is_some_and(|i| &*i.item == "minecraft:dragon_head");
+                let grow = if dragon { 1.0 } else { 0.5 };
+                let half = glam::DVec3::new(width / 2.0 + grow, grow, width / 2.0 + grow);
+                let origin = super::entity_culling::at(position) - camera;
+                if !name_tag_in_view(
+                    frustum,
+                    distance_sqr,
+                    (origin - half).as_vec3(),
+                    (origin + glam::DVec3::new(half.x, height + grow, half.z)).as_vec3(),
+                    a.name_tag_distance(),
+                ) {
+                    continue;
+                }
+                let team = self.mob_team(a.id);
+                // `ArmorStandRenderer.shouldShowName` overrides the living
+                // entity's rule with `isCustomNameVisible` alone: no team
+                // visibility, no F1, no invisibility.
+                let name_shown = a.custom_name.is_some() && a.name_visible;
+                let mut visible = name_shown;
+                let mut text = None;
+                if hooks {
+                    self.native_render_name_tag(
+                        a.id,
+                        "minecraft:armor_stand",
                         name_shown,
                         &mut visible,
                         &mut text,
@@ -551,29 +507,107 @@ impl Game<'_> {
                 if !visible {
                     continue;
                 }
-                // NAME_TAG is at the entity height (0.5), then the name
-                // submitter lifts it 0.5. ItemFrameRenderer offsets rendering
-                // 0.3 toward its facing and -0.25 vertically.
-                let step = frame.step();
+                let name = a.custom_name.clone().unwrap_or_else(Text::empty);
+                let shown = match team {
+                    Some(t) => t.formatted_name(name),
+                    None => name,
+                }
+                .resolve_legacy();
+                let shown = text
+                    .map(|text| Text::untrusted(text).resolve_legacy())
+                    .unwrap_or(shown);
+                let mut lines = Vec::new();
+                let mut lift = 0.0;
+                let holder = self.persist.uuids.get(&a.id).map(|u| uuid_text(*u));
+                if distance_sqr < a.below_name_distance().powi(2)
+                    && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
+                {
+                    lines.push((score.resolve_legacy(), 0.0));
+                    lift = f64::from(9.0f32 * 1.15 * 0.025);
+                }
+                lines.push((shown, lift));
+                // The tag rides with the body, between last tick's position and this one's.
+                let at = a.render_position(alpha);
+                let l = self.world.light(
+                    at.x.floor() as i32,
+                    (at.y + height).floor() as i32,
+                    at.z.floor() as i32,
+                );
                 tags.push(NameTag {
-                    at: center
-                        + glam::DVec3::new(
-                            f64::from(step[0] as f32 * 0.3),
-                            0.75,
-                            f64::from(step[2] as f32 * 0.3),
-                        ),
-                    lines: vec![(
-                        Text::untrusted(text.or(name).unwrap_or_default()).resolve_legacy(),
-                        0.0,
-                    )],
-                    light: self.world.light(
-                        center.x.floor() as i32,
-                        center.y.floor() as i32,
-                        center.z.floor() as i32,
-                    ),
+                    at: glam::DVec3::new(at.x, at.y + height + 0.5, at.z),
+                    lines,
+                    light: l,
                     discrete: false,
                     marks: Marks::default(),
                 });
+            }
+        }
+        // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
+        // frame's custom-named item, with the HUD visible (also glow frames).
+        if has_frame_candidates {
+            let targeted_frame = (hooks || !self.ui.hide_gui)
+                .then(|| self.frame_hit())
+                .flatten()
+                .filter(|(_, distance)| {
+                    self.before_block(*distance)
+                        && self.mob_hit().is_none_or(|(_, d, _)| d > *distance)
+                })
+                .map(|(index, _)| index);
+            let frames = if hooks {
+                0..self.item_frames.len()
+            } else {
+                targeted_frame.map_or(0..0, |index| index..index + 1)
+            };
+            for index in frames {
+                let frame = &self.item_frames[index];
+                let name = frame.item.as_ref().and_then(|item| item.custom_name());
+                if !hooks && name.is_none() {
+                    continue;
+                }
+                let (lo, hi) = frame.bounds();
+                let center =
+                    glam::DVec3::from_array(std::array::from_fn(|a| (lo[a] + hi[a]) / 2.0));
+                if center.distance_squared(camera) < 64.0 * 64.0 {
+                    let name_shown =
+                        !self.ui.hide_gui && targeted_frame == Some(index) && name.is_some();
+                    let mut visible = name_shown;
+                    let mut text = None;
+                    if hooks {
+                        self.native_render_name_tag(
+                            frame.id,
+                            frame.kind(),
+                            name_shown,
+                            &mut visible,
+                            &mut text,
+                        );
+                    }
+                    if !visible {
+                        continue;
+                    }
+                    // NAME_TAG is at the entity height (0.5), then the name
+                    // submitter lifts it 0.5. ItemFrameRenderer offsets rendering
+                    // 0.3 toward its facing and -0.25 vertically.
+                    let step = frame.step();
+                    tags.push(NameTag {
+                        at: center
+                            + glam::DVec3::new(
+                                f64::from(step[0] as f32 * 0.3),
+                                0.75,
+                                f64::from(step[2] as f32 * 0.3),
+                            ),
+                        lines: vec![(
+                            Text::untrusted(text.or(name).unwrap_or_default()).resolve_legacy(),
+                            0.0,
+                        )],
+                        light: self.world.light(
+                            center.x.floor() as i32,
+                            center.y.floor() as i32,
+                            center.z.floor() as i32,
+                        ),
+                        discrete: false,
+                        marks: Marks::default(),
+                    });
+                }
             }
         }
         tags
@@ -591,15 +625,23 @@ impl Game<'_> {
         // The text alpha that goes with getBackgroundOpacity(0.25):
         // max((0.25 + 0.75) / 2, 0.5), as ARGB.color (the floor of 255 times it).
         const FADED: u32 = 0x7F;
-        let mut patches = Vec::new();
-        let mut layouts = std::mem::take(&mut self.name_tag_layouts);
-        layouts.begin_frame(&self.gui.atlas);
-        for tag in self.collect_name_tags(
+        let tags = self.collect_name_tags(
             camera,
             alpha,
             !mod_api::__private::mods().is_empty(),
             self.view_frustum.as_ref(),
-        ) {
+        );
+        if tags.is_empty() {
+            if !self.name_tag_layouts.lines.is_empty() {
+                self.name_tag_layouts.begin_frame(&self.gui.atlas);
+                self.name_tag_layouts.end_frame();
+            }
+            return;
+        }
+        let mut patches = Vec::new();
+        let mut layouts = std::mem::take(&mut self.name_tag_layouts);
+        layouts.begin_frame(&self.gui.atlas);
+        for tag in tags {
             let o = tag.at - camera;
             // `gbuffers_entities` draws name tag text (2.3); a sneaking player's faded tag, on its
             // background, blends.

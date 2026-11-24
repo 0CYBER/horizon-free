@@ -2104,6 +2104,9 @@ impl Game<'_> {
         alpha: f64,
         out: &mut Vec<Vertex>,
     ) {
+        if self.carts.is_empty() {
+            return;
+        }
         let a = alpha as f32;
         let Some(uv) = self
             .gui
@@ -2114,6 +2117,7 @@ impl Game<'_> {
         else {
             return;
         };
+        let mut poses = Poses::pooled();
         // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's mean
         // edge, scaled by the view scale.
         let range = (WIDTH + HEIGHT + WIDTH) / 3.0 * 64.0 * self.view_scale();
@@ -2270,7 +2274,7 @@ impl Game<'_> {
                 }
             }
             let m = base * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
-            let poses = Poses::new(model);
+            poses.reset(model);
             horizon_client::mobs::render::draw(model, m, &poses, uv, 0xFFFF_FFFF, packed, 0, out);
             self.finish_lit_entity(culling, c, out, entity_start);
         }

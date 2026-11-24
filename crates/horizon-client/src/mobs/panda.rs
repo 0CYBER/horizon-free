@@ -524,15 +524,27 @@ pub fn client_tick(m: &mut Mob, thundering: bool) {
 // ---- drawing ---------------------------------------------------------------
 
 /// `PandaRenderer.getTextureLocation`.
-pub fn texture(m: &Mob) -> String {
+pub fn texture(m: &Mob) -> &'static str {
+    const ADULT: [&str; 7] = [
+        "entity/panda/panda",
+        "entity/panda/panda_lazy",
+        "entity/panda/panda_worried",
+        "entity/panda/panda_playful",
+        "entity/panda/panda_brown",
+        "entity/panda/panda_weak",
+        "entity/panda/panda_aggressive",
+    ];
+    const BABY: [&str; 7] = [
+        "entity/panda/panda_baby",
+        "entity/panda/lazy_panda_baby",
+        "entity/panda/worried_panda_baby",
+        "entity/panda/playful_panda_baby",
+        "entity/panda/brown_panda_baby",
+        "entity/panda/weak_panda_baby",
+        "entity/panda/aggressive_panda_baby",
+    ];
     let v = usize::from(variant(m)).min(GENES.len() - 1);
-    let gene = GENES[v];
-    match (m.is_baby(), gene) {
-        (false, "normal") => "entity/panda/panda".into(),
-        (false, g) => format!("entity/panda/panda_{g}"),
-        (true, "normal") => "entity/panda/panda_baby".into(),
-        (true, g) => format!("entity/panda/{g}_panda_baby"),
-    }
+    if m.is_baby() { BABY[v] } else { ADULT[v] }
 }
 /// What `PandaRenderState` gives `PandaModel.setupAnim`.
 pub fn pose(m: &Mob, partial: f32) -> Pose {

@@ -7975,25 +7975,33 @@ impl Game<'_> {
         let viewer = self.player_team();
         self.rendered_mobs.set(0);
         let (skinning, listened) = (self.skinning(), self.mob_render_listened());
-        // What custom entity model animations read of the frame.
-        horizon_client::mobs::cem_anim::set_frame(horizon_client::mobs::cem_anim::Frame {
-            time: self.world.game_time as f64 + alpha,
-            day_time: self.world.day_time as f64 + alpha,
-            dimension: match self.dim {
-                Dim::Overworld | Dim::Extra(_) => 0.0,
-                Dim::Nether => -1.0,
-                Dim::End => 1.0,
-            },
-            player: self.player.as_ref().map_or(camera.to_array(), |p| {
-                [p.position.x, p.position.y, p.position.z]
-            }),
-            player_rot: [self.pitch, self.yaw],
-            paused: self.pause,
-            first_person: self.camera_type.is_first_person(),
-            third_person_reversed: self.camera_type
-                == horizon_client::camera::CameraType::ThirdPersonFront,
-            ..Default::default()
-        });
+        let mob_data = self.res.mob_data();
+        // What custom entity model animations read of the frame (only when CEM packs are loaded).
+        if !mob_data
+            .cem
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+        {
+            horizon_client::mobs::cem_anim::set_frame(horizon_client::mobs::cem_anim::Frame {
+                time: self.world.game_time as f64 + alpha,
+                day_time: self.world.day_time as f64 + alpha,
+                dimension: match self.dim {
+                    Dim::Overworld | Dim::Extra(_) => 0.0,
+                    Dim::Nether => -1.0,
+                    Dim::End => 1.0,
+                },
+                player: self.player.as_ref().map_or(camera.to_array(), |p| {
+                    [p.position.x, p.position.y, p.position.z]
+                }),
+                player_rot: [self.pitch, self.yaw],
+                paused: self.pause,
+                first_person: self.camera_type.is_first_person(),
+                third_person_reversed: self.camera_type
+                    == horizon_client::camera::CameraType::ThirdPersonFront,
+                ..Default::default()
+            });
+        }
         for mob in &self.mobs {
             // LevelRenderer: the entity the view looks out of is not drawn
             // in first person.
@@ -9023,6 +9031,31 @@ mod tests {
     use super::thrown_item_quad;
     use super::{ProjectileKind, is_item_billboard};
     use horizon_client::camera::CameraType;
+
+    #[test]
+    #[ignore = "daily"]
+    fn mob_geometry_renders_live_projectiles_when_mobs_is_empty() {
+        use horizon_client::projectiles::Projectile;
+        use horizon_core::geometry::Vec3;
+
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            assert!(game.mobs.is_empty());
+            game.rendered_mobs.set(7);
+            let mut projectile =
+                Projectile::new(ProjectileKind::Snowball, Vec3::new(0.5, 64.5, 0.5), None);
+            projectile.id = 1;
+            game.creatures.projectiles.push(projectile);
+
+            let mut out = Vec::new();
+            game.mob_geometry(glam::DVec3::new(0.5, 64.5, -4.5), 0.0, &mut out);
+
+            assert_eq!(game.rendered_mobs.get(), 0);
+            assert!(
+                !out.is_empty(),
+                "live projectiles must still produce vertices when self.mobs is empty"
+            );
+        });
+    }
 
     #[test]
     #[ignore = "daily"]

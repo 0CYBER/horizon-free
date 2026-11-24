@@ -666,10 +666,62 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     super::nether::ghast_anim(s, p);
 }
 /// Texture of the harness layer for the worn item.
-pub fn harness_texture(item: &str) -> Option<String> {
+pub fn harness_texture(item: &str) -> Option<std::borrow::Cow<'static, str>> {
     let name = item.strip_prefix("minecraft:")?;
-    name.ends_with("_harness")
-        .then(|| format!("entity/equipment/happy_ghast_body/{name}"))
+    if !name.ends_with("_harness") {
+        return None;
+    }
+    Some(match name {
+        "white_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/white_harness")
+        }
+        "orange_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/orange_harness")
+        }
+        "magenta_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/magenta_harness")
+        }
+        "light_blue_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/light_blue_harness")
+        }
+        "yellow_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/yellow_harness")
+        }
+        "lime_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/lime_harness")
+        }
+        "pink_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/pink_harness")
+        }
+        "gray_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/gray_harness")
+        }
+        "light_gray_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/light_gray_harness")
+        }
+        "cyan_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/cyan_harness")
+        }
+        "purple_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/purple_harness")
+        }
+        "blue_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/blue_harness")
+        }
+        "brown_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/brown_harness")
+        }
+        "green_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/green_harness")
+        }
+        "red_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/red_harness")
+        }
+        "black_harness" => {
+            std::borrow::Cow::Borrowed("entity/equipment/happy_ghast_body/black_harness")
+        }
+        other => std::borrow::Cow::Owned(format!("entity/equipment/happy_ghast_body/{other}")),
+    })
 }
 /// Events for the player getting on or off.
 pub fn goggles(down: bool, m: &Mob) -> MobEvent {

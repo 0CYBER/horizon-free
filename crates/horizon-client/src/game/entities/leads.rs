@@ -814,6 +814,11 @@ impl Game<'_> {
     }
     /// `LeashFeatureRenderer` for every lead and `LeashKnotRenderer` for the knots.
     pub(super) fn leash_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+        if !self.mobs.iter().any(|m| m.extra.leash.is_some())
+            && !self.boats.iter().any(|b| b.leash.is_some())
+        {
+            return;
+        }
         let atlas = &self.gui.atlas;
         let white = atlas.font.white();
         let uv = [

@@ -915,30 +915,30 @@ impl Goal for Peek {
     }
 }
 /// The shell's texture: plain or dyed.
-pub fn texture(m: &Mob) -> String {
+pub fn texture(m: &Mob) -> &'static str {
     const COLORS: [&str; 16] = [
-        "white",
-        "orange",
-        "magenta",
-        "light_blue",
-        "yellow",
-        "lime",
-        "pink",
-        "gray",
-        "light_gray",
-        "cyan",
-        "purple",
-        "blue",
-        "brown",
-        "green",
-        "red",
-        "black",
+        "entity/shulker/shulker_white",
+        "entity/shulker/shulker_orange",
+        "entity/shulker/shulker_magenta",
+        "entity/shulker/shulker_light_blue",
+        "entity/shulker/shulker_yellow",
+        "entity/shulker/shulker_lime",
+        "entity/shulker/shulker_pink",
+        "entity/shulker/shulker_gray",
+        "entity/shulker/shulker_light_gray",
+        "entity/shulker/shulker_cyan",
+        "entity/shulker/shulker_purple",
+        "entity/shulker/shulker_blue",
+        "entity/shulker/shulker_brown",
+        "entity/shulker/shulker_green",
+        "entity/shulker/shulker_red",
+        "entity/shulker/shulker_black",
     ];
     // Shulker.getColor: the saved byte is signed; 16 and above are undyed, and
     // DyeColor.byId sends a negative id to white (OutOfBoundsStrategy.ZERO).
     match m.extra.color as i8 {
-        16.. => "entity/shulker/shulker".into(),
-        c => format!("entity/shulker/shulker_{}", COLORS[c.max(0) as usize]),
+        16.. => "entity/shulker/shulker",
+        c => COLORS[c.max(0) as usize],
     }
 }
 /// `attachFace.getOpposite().getRotation()` by attach face: the open

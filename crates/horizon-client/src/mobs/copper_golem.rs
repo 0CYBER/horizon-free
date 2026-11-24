@@ -33,23 +33,23 @@ pub fn register(m: &mut Mob) {
     m.extra.vector[0] = -1.0;
 }
 /// `CopperGolemOxidationLevels`: the body and eye textures.
-pub fn texture(m: &Mob) -> String {
-    match m.extra.variant {
-        0 => "entity/copper_golem/copper_golem".into(),
-        n => format!(
-            "entity/copper_golem/copper_golem_{}",
-            WEATHER[n.min(3) as usize]
-        ),
-    }
+pub fn texture(m: &Mob) -> &'static str {
+    const TEXTURES: [&str; 4] = [
+        "entity/copper_golem/copper_golem",
+        "entity/copper_golem/copper_golem_exposed",
+        "entity/copper_golem/copper_golem_weathered",
+        "entity/copper_golem/copper_golem_oxidized",
+    ];
+    TEXTURES[m.extra.variant.min(3) as usize]
 }
-pub fn eye_texture(m: &Mob) -> String {
-    match m.extra.variant {
-        0 => "entity/copper_golem/copper_golem_eyes".into(),
-        n => format!(
-            "entity/copper_golem/copper_golem_eyes_{}",
-            WEATHER[n.min(3) as usize]
-        ),
-    }
+pub fn eye_texture(m: &Mob) -> &'static str {
+    const TEXTURES: [&str; 4] = [
+        "entity/copper_golem/copper_golem_eyes",
+        "entity/copper_golem/copper_golem_eyes_exposed",
+        "entity/copper_golem/copper_golem_eyes_weathered",
+        "entity/copper_golem/copper_golem_eyes_oxidized",
+    ];
+    TEXTURES[m.extra.variant.min(3) as usize]
 }
 /// The sound of the oxidation level: `spin`, `hurt`, `death` or `step`.
 pub fn sound(m: &Mob, what: &str) -> &'static str {

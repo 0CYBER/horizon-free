@@ -180,7 +180,14 @@ impl CemModels {
         (Self { layers }, standing_species)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+
     pub fn layer(&self, key: &str) -> Option<&CemLayer> {
+        if self.layers.is_empty() {
+            return None;
+        }
         self.layers.get(key)
     }
 }

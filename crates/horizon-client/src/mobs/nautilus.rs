@@ -610,12 +610,12 @@ impl Goal for Charge {
     }
 }
 /// The body texture: the baby's, the adult's, or the zombie's variant.
-pub fn texture(m: &Mob) -> String {
+pub fn texture(m: &Mob) -> &'static str {
     match (zombie(m), m.is_baby(), m.extra.variant) {
-        (true, _, 1) => "entity/nautilus/zombie_nautilus_coral".into(),
-        (true, _, _) => "entity/nautilus/zombie_nautilus".into(),
-        (false, true, _) => "entity/nautilus/nautilus_baby".into(),
-        (false, false, _) => "entity/nautilus/nautilus".into(),
+        (true, _, 1) => "entity/nautilus/zombie_nautilus_coral",
+        (true, _, _) => "entity/nautilus/zombie_nautilus",
+        (false, true, _) => "entity/nautilus/nautilus_baby",
+        (false, false, _) => "entity/nautilus/nautilus",
     }
 }
 /// The body model: `ZombieNautilusRenderer` picks the coral model for the
@@ -629,16 +629,18 @@ pub fn model(m: &Mob) -> &'static str {
     }
 }
 /// The `NAUTILUS_BODY` equipment texture of a nautilus armour item.
-pub fn armor_texture(item: &str) -> Option<String> {
+pub fn armor_texture(item: &str) -> Option<std::borrow::Cow<'static, str>> {
     let material = item
         .strip_prefix("minecraft:")?
         .strip_suffix("_nautilus_armor")?;
-    let material = if material == "golden" {
-        "gold"
-    } else {
-        material
-    };
-    Some(format!("entity/equipment/nautilus_body/{material}"))
+    Some(match material {
+        "copper" => std::borrow::Cow::Borrowed("entity/equipment/nautilus_body/copper"),
+        "iron" => std::borrow::Cow::Borrowed("entity/equipment/nautilus_body/iron"),
+        "golden" => std::borrow::Cow::Borrowed("entity/equipment/nautilus_body/gold"),
+        "diamond" => std::borrow::Cow::Borrowed("entity/equipment/nautilus_body/diamond"),
+        "netherite" => std::borrow::Cow::Borrowed("entity/equipment/nautilus_body/netherite"),
+        other => std::borrow::Cow::Owned(format!("entity/equipment/nautilus_body/{other}")),
+    })
 }
 /// `NautilusModel.setupAnim` (and `ZombieNautilusCoralModel`'s corals,
 /// hidden under armour).

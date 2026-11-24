@@ -107,6 +107,10 @@ impl Game<'_> {
     }
     /// The nearest MAX sources, without building an intermediate list or owning item names.
     pub(super) fn gather_dynamic_lights(&mut self, camera: DVec3, alpha: f64) {
+        if !self.settings.extras.dynamic_lights {
+            self.dynamic_lights.clear();
+            return;
+        }
         let _span = horizon_client::spans::guard("pr_light_gather");
         let mut out = std::mem::take(&mut self.dynamic_lights);
         dynamic_light::select_iter(

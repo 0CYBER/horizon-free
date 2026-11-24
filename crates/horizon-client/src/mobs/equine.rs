@@ -1072,31 +1072,89 @@ pub fn grazes(s: Species) -> bool {
     is_equine(s) && !super::camel::is_camel(s) && !super::llama::is_llama(s)
 }
 /// Body texture and the markings overlay.
-pub fn texture(m: &Mob) -> String {
-    let baby = if m.is_baby() { "_baby" } else { "" };
+pub fn texture(m: &Mob) -> &'static str {
+    let baby = m.is_baby();
     match m.species() {
         Species::Horse => {
-            let c = COLORS[(m.extra.variant as usize).min(6)];
-            format!("entity/horse/horse_{c}{baby}")
+            const ADULT: [&str; 7] = [
+                "entity/horse/horse_white",
+                "entity/horse/horse_creamy",
+                "entity/horse/horse_chestnut",
+                "entity/horse/horse_brown",
+                "entity/horse/horse_black",
+                "entity/horse/horse_gray",
+                "entity/horse/horse_darkbrown",
+            ];
+            const BABY: [&str; 7] = [
+                "entity/horse/horse_white_baby",
+                "entity/horse/horse_creamy_baby",
+                "entity/horse/horse_chestnut_baby",
+                "entity/horse/horse_brown_baby",
+                "entity/horse/horse_black_baby",
+                "entity/horse/horse_gray_baby",
+                "entity/horse/horse_darkbrown_baby",
+            ];
+            let i = (m.extra.variant as usize).min(6);
+            if baby { BABY[i] } else { ADULT[i] }
         }
-        Species::Donkey => format!("entity/horse/donkey{baby}"),
-        Species::Mule => format!("entity/horse/mule{baby}"),
-        Species::SkeletonHorse => format!("entity/horse/horse_skeleton{baby}"),
-        Species::Camel => format!("entity/camel/camel{baby}"),
-        Species::CamelHusk => "entity/camel/camel_husk".into(),
-        _ => format!("entity/horse/horse_zombie{baby}"),
+        Species::Donkey => {
+            if baby {
+                "entity/horse/donkey_baby"
+            } else {
+                "entity/horse/donkey"
+            }
+        }
+        Species::Mule => {
+            if baby {
+                "entity/horse/mule_baby"
+            } else {
+                "entity/horse/mule"
+            }
+        }
+        Species::SkeletonHorse => {
+            if baby {
+                "entity/horse/horse_skeleton_baby"
+            } else {
+                "entity/horse/horse_skeleton"
+            }
+        }
+        Species::Camel => {
+            if baby {
+                "entity/camel/camel_baby"
+            } else {
+                "entity/camel/camel"
+            }
+        }
+        Species::CamelHusk => "entity/camel/camel_husk",
+        _ => {
+            if baby {
+                "entity/horse/horse_zombie_baby"
+            } else {
+                "entity/horse/horse_zombie"
+            }
+        }
     }
 }
-pub fn markings(m: &Mob) -> Option<String> {
+pub fn markings(m: &Mob) -> Option<&'static str> {
     if m.species() != Species::Horse {
         return None;
     }
-    let mk = MARKINGS[(m.extra.variant2 as usize).min(4)];
-    if mk.is_empty() {
-        return None;
-    }
-    let baby = if m.is_baby() { "_baby" } else { "" };
-    Some(format!("entity/horse/horse_markings_{mk}{baby}"))
+    const ADULT: [Option<&str>; 5] = [
+        None,
+        Some("entity/horse/horse_markings_white"),
+        Some("entity/horse/horse_markings_whitefield"),
+        Some("entity/horse/horse_markings_whitedots"),
+        Some("entity/horse/horse_markings_blackdots"),
+    ];
+    const BABY: [Option<&str>; 5] = [
+        None,
+        Some("entity/horse/horse_markings_white_baby"),
+        Some("entity/horse/horse_markings_whitefield_baby"),
+        Some("entity/horse/horse_markings_whitedots_baby"),
+        Some("entity/horse/horse_markings_blackdots_baby"),
+    ];
+    let i = (m.extra.variant2 as usize).min(4);
+    if m.is_baby() { BABY[i] } else { ADULT[i] }
 }
 /// The model key prefix for the species.
 pub fn model_name(s: Species) -> &'static str {

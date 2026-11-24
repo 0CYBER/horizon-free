@@ -216,10 +216,21 @@ pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
     }
 }
 /// The coat texture (`LlamaRenderer`).
-pub fn texture(m: &Mob) -> String {
-    let baby = if m.is_baby() { "_baby" } else { "" };
-    let coat = VARIANTS[(m.extra.variant as usize).min(3)];
-    format!("entity/llama/llama_{coat}{baby}")
+pub fn texture(m: &Mob) -> &'static str {
+    const ADULT: [&str; 4] = [
+        "entity/llama/llama_creamy",
+        "entity/llama/llama_white",
+        "entity/llama/llama_brown",
+        "entity/llama/llama_gray",
+    ];
+    const BABY: [&str; 4] = [
+        "entity/llama/llama_creamy_baby",
+        "entity/llama/llama_white_baby",
+        "entity/llama/llama_brown_baby",
+        "entity/llama/llama_gray_baby",
+    ];
+    let i = (m.extra.variant as usize).min(3);
+    if m.is_baby() { BABY[i] } else { ADULT[i] }
 }
 /// The carpet colour on the llama, if it wears one.
 pub(super) fn carpet(m: &Mob) -> Option<&str> {
@@ -229,7 +240,7 @@ pub(super) fn carpet(m: &Mob) -> Option<&str> {
         .and_then(|i| i.strip_suffix("_carpet"))
 }
 /// `LlamaDecorLayer`: the carpet of an adult, else the trader's blanket.
-pub fn decor(m: &Mob) -> Option<(String, String)> {
+pub fn decor(m: &Mob) -> Option<(&'static str, std::borrow::Cow<'static, str>)> {
     let baby = m.is_baby();
     let model = if baby {
         "llama_baby#decor"
@@ -239,15 +250,34 @@ pub fn decor(m: &Mob) -> Option<(String, String)> {
     if let Some(color) = carpet(m)
         && !baby
     {
-        return Some((model.into(), format!("entity/equipment/llama_body/{color}")));
+        let texture = match color {
+            "white" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/white"),
+            "orange" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/orange"),
+            "magenta" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/magenta"),
+            "light_blue" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/light_blue"),
+            "yellow" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/yellow"),
+            "lime" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/lime"),
+            "pink" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/pink"),
+            "gray" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/gray"),
+            "light_gray" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/light_gray"),
+            "cyan" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/cyan"),
+            "purple" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/purple"),
+            "blue" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/blue"),
+            "brown" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/brown"),
+            "green" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/green"),
+            "red" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/red"),
+            "black" => std::borrow::Cow::Borrowed("entity/equipment/llama_body/black"),
+            other => std::borrow::Cow::Owned(format!("entity/equipment/llama_body/{other}")),
+        };
+        return Some((model, texture));
     }
     is_trader(m).then(|| {
-        let name = if baby {
-            "trader_llama_baby"
+        let texture = if baby {
+            "entity/equipment/llama_body/trader_llama_baby"
         } else {
-            "trader_llama"
+            "entity/equipment/llama_body/trader_llama"
         };
-        (model.into(), format!("entity/equipment/llama_body/{name}"))
+        (model, std::borrow::Cow::Borrowed(texture))
     })
 }
 #[cfg(test)]

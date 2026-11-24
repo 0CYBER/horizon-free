@@ -43,8 +43,9 @@ pub struct SkinModels {
     stored: FxHashMap<usize, (Arc<Part>, Option<Stored>)>,
     rotations: Rotations,
     rotation_cache_disabled: bool,
-    /// Item models, the same way (`item_render::ItemRenderState::submit_skinned`).
-    items: FxHashMap<usize, (Arc<BakedItemModel>, Option<StoredItem>)>,
+    /// Item models, the same way (`item_render::ItemRenderState::submit_skinned`),
+    /// paired with a cached translucency bit once checked.
+    items: FxHashMap<usize, (Arc<BakedItemModel>, Option<(StoredItem, Option<bool>)>)>,
     vertices: u32,
     /// Whether the layers improved transparency would draw in its stages are
     /// posed here too (`gfx::Renderer::skins_tagged`; set each frame): the eyes
@@ -188,11 +189,38 @@ impl SkinModels {
         let vertices = &mut self.vertices;
         let (_, stored) = self.items.entry(key).or_insert_with(|| {
             let before = frame.new_model.len();
-            let stored = flatten_item(model, *vertices, &mut frame.new_model);
+            let stored = flatten_item(model, *vertices, &mut frame.new_model).map(|s| (s, None));
             *vertices += (frame.new_model.len() - before) as u32;
             (model.clone(), stored)
         });
-        stored.as_ref()
+        stored.as_ref().map(|(s, _)| s)
+    }
+
+    /// [`Self::item`], also rejecting models whose sprites have translucent pixels
+    /// and caching that answer once per stored model so repeated copies skip the
+    /// sprite-table mutex.
+    pub fn item_opaque(
+        &mut self,
+        model: &Arc<BakedItemModel>,
+        frame: &mut SkinFrame,
+        is_translucent: impl Fn(&str) -> bool,
+    ) -> Option<&StoredItem> {
+        let key = Arc::as_ptr(model) as usize;
+        let vertices = &mut self.vertices;
+        let (_, stored) = self.items.entry(key).or_insert_with(|| {
+            let before = frame.new_model.len();
+            let stored = flatten_item(model, *vertices, &mut frame.new_model).map(|s| (s, None));
+            *vertices += (frame.new_model.len() - before) as u32;
+            (model.clone(), stored)
+        });
+        let (stored, translucent) = stored.as_mut()?;
+        let has_translucent = *translucent.get_or_insert_with(|| {
+            stored
+                .runs
+                .iter()
+                .any(|run| is_translucent(&model.quads[run.quad].material.sprite))
+        });
+        (!has_translucent).then_some(&*stored)
     }
 }
 

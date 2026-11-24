@@ -1,0 +1,2 @@
+# Empty-mobs projectile render test boots Game with prepared resources.
+horizon-client game::creatures::tests::mob_geometry_renders_live_projectiles_when_mobs_is_empty lib daily resources

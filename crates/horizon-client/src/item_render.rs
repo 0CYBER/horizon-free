@@ -323,14 +323,13 @@ impl ItemRenderState {
             if layer.foil != FoilType::None {
                 return false;
             }
-            let Some(stored) = skin.models.item(baked, skin.frame) else {
-                return false;
-            };
-            let translucent = |run: &crate::mobs::skin::ItemRun| {
-                let sprite = &baked.quads[run.quad].material.sprite;
-                renderer.sprites.translucent(sprite_name(sprite))
-            };
-            if stored.runs.iter().any(translucent) {
+            if skin
+                .models
+                .item_opaque(baked, skin.frame, |sprite| {
+                    renderer.sprites.translucent(sprite_name(sprite))
+                })
+                .is_none()
+            {
                 return false;
             }
         }
@@ -450,10 +449,6 @@ fn submit_quads(
         FoilType::Standard => Foil::Standard,
         FoilType::Special => Foil::Special,
     };
-    let atlas = renderer
-        .glint_atlas
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut normals = FaceNormals::new(m);
     // Quads of one layer mostly share a sprite: look its rect and its
     // translucency up once.
@@ -461,6 +456,12 @@ fn submit_quads(
     let mut last_rect: Option<(&str, Option<Rect>)> = None;
     // A glint in the GUI follows the quad's sprite in the glint atlas: looked up once a sprite too.
     let gui_glint = display == DisplayContext::Gui && foil == Foil::Standard;
+    let atlas = gui_glint.then(|| {
+        renderer
+            .glint_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
     let mut last_glint: Option<(&str, Option<Rect>)> = None;
     for q in &baked.quads {
         let rect = match last_rect {
@@ -513,8 +514,9 @@ fn submit_quads(
             pos,
             uv,
             foil_uv: q.uv,
-            gui_glint_uv: gui_glint
-                .then(|| match last_glint {
+            gui_glint_uv: atlas
+                .as_ref()
+                .and_then(|atlas| match last_glint {
                     Some((sprite, rect)) if sprite == q.material.sprite => rect,
                     _ => {
                         let rect = atlas.get(sprite_name(&q.material.sprite)).copied();
@@ -522,7 +524,6 @@ fn submit_quads(
                         rect
                     }
                 })
-                .flatten()
                 .map(|r| {
                     q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v])
                 }),
@@ -1356,7 +1357,7 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 /// already computed for this draw (also used to place the stack's bob).
 pub fn cluster_poses_with_depth(pose: Mat4, amount: u32, seed: i64, depth: f32) -> Vec<Mat4> {
     use horizon_core::random::{LegacyRandom, RandomSource};
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(amount as usize);
     if amount == 0 {
         return out;
     }
