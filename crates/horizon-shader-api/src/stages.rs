@@ -1928,6 +1928,10 @@ pub fn post_target_declarations(manifest: &crate::manifest::Manifest) -> String 
 /// The motion guide's binding in group 3, in the 0.2 post passes of a pack with `[motion]`.
 pub const MOTION_BINDING: u32 = 14;
 
+/// The opaque scene's reversed depth and linear color, available to opted-in post passes.
+pub const POST_OPAQUE_DEPTH_BINDING: u32 = 8;
+pub const POST_OPAQUE_COLOR_BINDING: u32 = 15;
+
 /// The motion guide's declarations, at `MOTION_BINDING`. The raw texture holds the engine's
 /// objects (`frame_gen/motion.wgsl`): z 1 a matched one with xy its delta, w 1 one with nothing
 /// to match. At depth 0 the engine writes the sky's camera motion from its unposed view (no bob
@@ -2459,6 +2463,12 @@ pub(crate) fn compose_traced(
     ) + &texture_declarations(&pack.manifest.textures);
     if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);
+        if m.post_opaque {
+            prelude += &format!(
+                "@group({GROUP}) @binding({POST_OPAQUE_DEPTH_BINDING}) var opaque_depth: texture_depth_2d;\n\
+                 @group({GROUP}) @binding({POST_OPAQUE_COLOR_BINDING}) var opaque_color: texture_2d<f32>;\n"
+            );
+        }
     }
     if kind == StageKind::Post && pack.manifest.motion.is_some() {
         prelude += MOTION;

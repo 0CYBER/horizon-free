@@ -133,7 +133,11 @@ pub trait ExternalPipeline: Send + std::any::Any {
     /// Its grid of the solid terrain near the camera, drawn by `layers`' displaced layer, in a
     /// terrain pass with the engine's group 0 bound.
     fn draw_displaced(&self, _pass: &mut wgpu::RenderPass<'_>, _layers: TerrainLayers<'_>) {}
-    /// Where the world pass stops before translucent terrain, for layers that read it.
+    /// Whether the pipeline reads a copy of the world before translucent terrain.
+    fn reads_opaque(&self) -> bool {
+        false
+    }
+    /// Where the world pass stops before translucent terrain, for stages that read it.
     fn copy_opaque(&self, _copy: OpaqueCopy<'_>) {}
     /// Its rain and snow. False when it has none, for the engine's own.
     fn draw_weather(

@@ -362,6 +362,15 @@ world's size (1, 0.5 or 0.25), instead of the next pass's `previous`; the prelud
 `var <name>: texture_2d<f32>` (group 3 from binding 32), which holds last frame's until written again (a
 pass reads a blank one in place of the target it writes).
 
+With `post_opaque = true` at the manifest root, raster and compute `[[post]]` passes may also read:
+
+- `opaque_depth` (binding 8), a `texture_depth_2d`: reversed depth before translucent terrain.
+- `opaque_color` (binding 15), a `texture_2d<f32>`: the sky and opaque scene at the same point, in linear light.
+
+Both are at the world's render size. Use the pass's UV and the texture's dimensions when the pass runs
+at a different size. The engine captures them only when a stage reads them. `scene_color` and
+`scene_depth` still contain the scene after translucency.
+
 ### Ray tracing
 
 With `[ray_tracing]` in the manifest (it needs a `[[post]]` pass, a `[[before_world]]` pass, a `[material]` or an

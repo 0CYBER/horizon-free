@@ -130,8 +130,12 @@ impl ExternalPipeline for NativePack {
         }
     }
 
+    fn reads_opaque(&self) -> bool {
+        self.frame.reads_opaque
+    }
+
     fn copy_opaque(&self, copy: OpaqueCopy<'_>) {
-        NativePack::copy_opaque(self, copy);
+        self.frame.copy_world_opaque(copy);
     }
 
     fn draw_weather(

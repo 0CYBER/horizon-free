@@ -627,6 +627,16 @@ pub fn markdown() -> String {
                     world's size (1, 0.5 or 0.25), instead of the next pass's `previous`; the prelude of every pass declares\n\
                     `var <name>: texture_2d<f32>` (group 3 from binding 32), which holds last frame's until written again (a\n\
                     pass reads a blank one in place of the target it writes).\n\n";
+            out += "With `post_opaque = true` at the manifest root, raster and compute `[[post]]` passes may also read:\n\n";
+            out += &format!(
+                "- `opaque_depth` (binding {}), a `texture_depth_2d`: reversed depth before translucent terrain.\n\
+                 - `opaque_color` (binding {}), a `texture_2d<f32>`: the sky and opaque scene at the same point, in linear light.\n\n",
+                crate::stages::POST_OPAQUE_DEPTH_BINDING,
+                crate::stages::POST_OPAQUE_COLOR_BINDING,
+            );
+            out += "Both are at the world's render size. Use the pass's UV and the texture's dimensions when the pass runs\n\
+                    at a different size. The engine captures them only when a stage reads them. `scene_color` and\n\
+                    `scene_depth` still contain the scene after translucency.\n\n";
             out += &ray_tracing();
             out += &kept();
             out += &MOTION_NOTES.replace("{binding}", &MOTION_BINDING.to_string());

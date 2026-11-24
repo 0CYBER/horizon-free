@@ -159,6 +159,8 @@ pub struct Manifest {
     /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
     /// needs `[[post]]`.
     pub motion: Option<Motion>,
+    /// Whether post passes may read the color and depth before translucent terrain.
+    pub post_opaque: bool,
     /// 0.2: kept resources and compute passes.
     pub kept: crate::kept::Kept,
 }
@@ -599,6 +601,8 @@ struct Raw {
     displacement: Option<RawDisplacement>,
     ray_tracing: Option<RayTracing>,
     motion: Option<Motion>,
+    #[serde(default)]
+    post_opaque: bool,
     kept: Option<crate::kept::RawKept>,
     #[serde(default)]
     resource: Vec<crate::kept::RawResource>,
@@ -954,6 +958,9 @@ impl Manifest {
             ));
         }
         let passes = raw.post.iter().filter(|p| !p.compute).count();
+        if raw.post_opaque && passes == 0 {
+            return Err(err("post_opaque needs a raster [[post]] pass".into()));
+        }
         if passes > MAX_POST_PASSES {
             return Err(err(format!(
                 "{passes} post passes; a pack may chain {MAX_POST_PASSES}"
@@ -1336,6 +1343,7 @@ impl Manifest {
             displacement,
             ray_tracing: raw.ray_tracing,
             motion: raw.motion,
+            post_opaque: raw.post_opaque,
             kept,
         })
     }

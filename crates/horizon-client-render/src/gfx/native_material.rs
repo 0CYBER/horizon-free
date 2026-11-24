@@ -11,7 +11,7 @@
 use horizon_shader_api::{check::CheckedStage, stages::GROUP};
 
 use super::displace::{Displacement, MAX_SECTIONS};
-use super::external::{DisplacementPrepare, Near, OpaqueCopy, TerrainLayers};
+use super::external::{DisplacementPrepare, Near, TerrainLayers};
 use super::native_post::kept::StageReads;
 use super::native_post::trace::{TerrainTrace, TraceShape, Traced};
 use super::native_post::{NativeFrame, NativePost, present_constants};
@@ -1038,25 +1038,6 @@ impl super::native_pack::NativePack {
             reads_opaque: self.frame.reads_opaque,
             frame,
         })
-    }
-
-    /// Copies the world before translucent terrain into what the material reads
-    /// (`opaque_depth`, `opaque_color`).
-    pub fn copy_opaque(&self, copy: OpaqueCopy<'_>) {
-        let OpaqueCopy {
-            device,
-            encoder,
-            depth,
-            color,
-        } = copy;
-        encoder.copy_texture_to_texture(
-            depth.as_image_copy(),
-            self.frame.opaque_depth.as_image_copy(),
-            depth.size(),
-        );
-        if let Some(color) = color {
-            self.frame.copy_opaque(device, encoder, color);
-        }
     }
 
     /// Writes out the solid quads of the sections `[displacement]` reaches and picks this

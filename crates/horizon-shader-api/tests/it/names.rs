@@ -353,6 +353,28 @@ reads = [\"r\"]
     }
 }
 
+#[test]
+fn opaque_post_inputs_require_the_manifest_opt_in() {
+    let shader = "fn post(input: PostInput) -> vec4<f32> {
+        let texel = vec2<i32>(input.uv * vec2<f32>(textureDimensions(opaque_color)));
+        return vec4<f32>(textureLoad(opaque_color, texel, 0).rgb, textureLoad(opaque_depth, texel, 0));
+    }";
+    let ordinary = pack(Some(("post.wgsl", shader)));
+    assert!(check(&ordinary).is_err());
+
+    let mut files = ordinary.files;
+    files
+        .get_mut(MANIFEST)
+        .unwrap()
+        .splice(..0, *b"post_opaque = true\n");
+    assert!(check(&Pack::from_files(files).unwrap()).is_ok());
+
+    // The old name remains available to a pack that didn't declare the opt-in.
+    let own = "const opaque_color = vec4<f32>(0.5);
+        fn post(input: PostInput) -> vec4<f32> { return input.color * opaque_color; }";
+    assert!(check(&pack(Some(("post.wgsl", own)))).is_ok());
+}
+
 /// `[motion]` brings the post stage the motion guide's names, `post_motion.txt`, and no others.
 #[test]
 fn motion_brings_the_post_stage_only_the_motion_names() {
