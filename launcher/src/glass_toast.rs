@@ -72,28 +72,37 @@ impl Launcher {
         })
     }
 
-    /// The toast along the bottom, on a narrower window (`xl:hidden`).
+    /// The toast along the bottom, on a narrower window (`xl:hidden`), and on any window while
+    /// the consent or owner screen covers the top bar: the root draws it above them. The Blocks
+    /// look has no top bar line, so it always floats there, on its own plate.
     pub(super) fn toast_float(&self) -> Option<Div> {
-        if self.window_width >= 1280. {
+        let t = self.theme;
+        let covered = self.asking_consent() || self.asking_owner();
+        if t.glass && self.window_width >= 1280. && !covered {
             return None;
         }
-        let (text, n) = current()?;
+        let (said, n) = current()?;
+        let (toast, line) = if t.glass {
+            let line = ui::text(13., FontWeight::NORMAL, ink::FULL).text_color(white(ink::FULL));
+            (crate::glass::float(20.), line)
+        } else {
+            let toast = plate(&t).border_1().border_color(t.rule).bg(t.page);
+            (toast, text(theme::LABEL).text_color(t.ink))
+        };
         Some(
             div()
                 .absolute()
                 .left(px(16.))
                 .right(px(16.))
                 .bottom(px(16.))
+                // As wide as what it says, in the middle.
+                .flex()
+                .justify_center()
                 .child(
-                    crate::glass::float(20.)
+                    toast
                         .px(px(16.))
                         .py(px(12.))
-                        .child(
-                            ui::text(13., FontWeight::NORMAL, ink::FULL)
-                                .relative()
-                                .text_color(white(ink::FULL))
-                                .child(text),
-                        )
+                        .child(line.relative().child(said))
                         .with_animation(
                             ElementId::named_usize("toast", n as usize),
                             crate::motion::eased(crate::motion::POP),
