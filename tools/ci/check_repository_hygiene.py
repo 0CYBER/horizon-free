@@ -3,6 +3,7 @@
 
 Run from the repository root. Untracked and ignored files are deliberately outside
 this check. No paths are exempt; literal examples in tests are assembled in pieces.
+Workflow diagnostics use Git's repository-relative names on every host.
 Uses the pinned, checksummed offline parser under tools/ci/vendor/.
 """
 
@@ -61,12 +62,13 @@ def check(revision=None):
     for raw in paths:
         if not raw:
             continue
-        path = Path(raw.decode("utf-8"))
+        git_path = raw.decode("utf-8")
+        path = Path(git_path)
         if path.parent != Path(".github/workflows") or path.suffix not in {".yml", ".yaml"}:
             continue
         try:
             if revision:
-                content = subprocess.run(["git", "show", f"{revision}:{path.as_posix()}"],
+                content = subprocess.run(["git", "show", f"{revision}:{git_path}"],
                                          stdout=subprocess.PIPE, check=True).stdout.decode("utf-8")
                 source = io.StringIO(content)
             else:
@@ -76,12 +78,12 @@ def check(revision=None):
         except (yaml.YAMLError, UnicodeError, OSError) as error:
             mark = getattr(error, "problem_mark", None)
             line = mark.line + 1 if mark is not None else 1
-            print(f"repository hygiene: {path}:{line}: invalid workflow YAML: {error}",
+            print(f"repository hygiene: {git_path}:{line}: invalid workflow YAML: {error}",
                   file=sys.stderr)
             failed = True
             continue
         if not isinstance(document, dict):
-            print(f"repository hygiene: {path}:1: workflow must be a YAML mapping", file=sys.stderr)
+            print(f"repository hygiene: {git_path}:1: workflow must be a YAML mapping", file=sys.stderr)
             failed = True
     return int(failed)
 

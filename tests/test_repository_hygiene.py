@@ -83,7 +83,9 @@ class RepositoryHygieneTests(unittest.TestCase):
                 self.assertIn("invalid workflow YAML", result.stderr)
                 self.write(path, "on: push\njobs: {}\n")
         self.write(".github/workflows/scalar.yml", "not-a-workflow\n")
-        self.assertNotEqual(self.run_check().returncode, 0)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(".github/workflows/scalar.yml:1: workflow must be a YAML mapping", result.stderr)
 
     def test_pre_push_checks_each_committed_tip_not_clean_worktree(self):
         self.git("commit", "-qm", "clean")
