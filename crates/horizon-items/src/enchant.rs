@@ -7,6 +7,7 @@ mod holder_sets;
 use crate::item_data::Levels;
 use crate::items::{ItemStack, Items};
 pub use holder_sets::HolderSetBinding;
+use horizon_client_core::{lang, text::Text};
 use horizon_core::nbt::Tag;
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_world::tag_layers::TagLayers;
@@ -659,42 +660,90 @@ impl Enchantments {
         level: u32,
         numeric: bool,
     ) -> (String, bool) {
-        let tr = |key: &str| language.and_then(|l| l.get(key).map(str::to_owned));
         let Some(e) = self.get(id) else {
             return (format!("{id} {}", level_name(level)), false);
         };
-        let mut name = tr(&e.description_key).unwrap_or_else(|| e.description.clone());
-        if (level != 1 || e.max_level != 1) && numeric {
+        let mut name = language
+            .and_then(|language| language.get(&e.description_key))
+            .unwrap_or(&e.description)
+            .to_owned();
+        if let Some(suffix) = self.level_suffix(e, language, level, numeric) {
             name.push(' ');
-            name.push_str(&level.to_string());
-        } else if level != 1 || e.max_level != 1 {
-            name.push(' ');
-            let key = format!("enchantment.level.{level}");
-            let suffix = tr(&key)
-                .or_else(|| self.lang.get(&key).cloned())
-                .unwrap_or_else(|| {
-                    if (1..=10).contains(&level) {
-                        level_name(level)
-                    } else {
-                        key
-                    }
-                });
             name.push_str(&suffix);
         }
         (name, self.is_curse(id))
     }
+
+    fn level_suffix(
+        &self,
+        enchantment: &Enchantment,
+        language: Option<&lang::Language>,
+        level: u32,
+        numeric: bool,
+    ) -> Option<String> {
+        if level == 1 && enchantment.max_level == 1 {
+            return None;
+        }
+        if numeric {
+            return Some(level.to_string());
+        }
+        let key = format!("enchantment.level.{level}");
+        if let Some(name) = language
+            .and_then(|language| language.get(&key))
+            .or_else(|| self.translate(&key))
+        {
+            Some(name.to_owned())
+        } else if (1..=10).contains(&level) {
+            Some(level_name(level))
+        } else {
+            Some(key)
+        }
+    }
     /// Tooltip lines for a level list, in `#tooltip_order` then remaining order.
     pub fn tooltip(&self, levels: &[(Arc<str>, u32)]) -> Vec<(String, bool)> {
+        let language = lang::current();
+        let numeric = NUMERIC_LEVELS.load(Ordering::Relaxed);
+        self.ordered_tooltip(levels, |id, level| {
+            self.full_name_with(language.as_deref(), id, level, numeric)
+        })
+    }
+
+    /// The visible enchantment tooltip, with the description's translation key
+    /// still on the root component so a mod can identify the line after localization.
+    pub fn tooltip_text(&self, levels: &[(Arc<str>, u32)]) -> Vec<(Text, bool)> {
+        let language = lang::current();
+        let numeric = NUMERIC_LEVELS.load(Ordering::Relaxed);
+        self.ordered_tooltip(levels, |id, level| {
+            let Some(e) = self.get(id) else {
+                return (Text::literal(format!("{id} {}", level_name(level))), false);
+            };
+            let mut name = if e.description_key.is_empty() {
+                Text::literal(&e.description)
+            } else {
+                Text::translate_with_fallback(&e.description_key, &e.description, &[])
+            };
+            if let Some(suffix) = self.level_suffix(e, language.as_deref(), level, numeric) {
+                name.push(format!(" {suffix}"));
+            }
+            (name, self.is_curse(id))
+        })
+    }
+
+    fn ordered_tooltip<T>(
+        &self,
+        levels: &[(Arc<str>, u32)],
+        mut line: impl FnMut(&str, u32) -> T,
+    ) -> Vec<T> {
         let order = self.tag("minecraft:tooltip_order");
         let mut out = Vec::new();
         for id in order {
             if let Some((_, l)) = levels.iter().find(|(e, _)| e == id) {
-                out.push(self.full_name(id, *l));
+                out.push(line(id, *l));
             }
         }
         for (id, l) in levels {
             if !order.contains(id) {
-                out.push(self.full_name(id, *l));
+                out.push(line(id, *l));
             }
         }
         out

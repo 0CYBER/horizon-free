@@ -1807,30 +1807,28 @@ impl Game<'_> {
         }
         details.start("minecraft:stored_enchantments", lines.len());
         if display.shows("minecraft:stored_enchantments") {
-            for (text, curse) in e.tooltip(stack.stored_enchantments()) {
-                push(
-                    &mut lines,
+            for (text, curse) in e.tooltip_text(stack.stored_enchantments()) {
+                lines.push((
                     text,
                     if curse {
                         rgba(255, 85, 85, 255)
                     } else {
                         rgba(170, 170, 170, 255)
                     },
-                );
+                ));
             }
         }
         details.start("minecraft:enchantments", lines.len());
         if display.shows("minecraft:enchantments") {
-            for (text, curse) in e.tooltip(stack.enchantments()) {
-                push(
-                    &mut lines,
+            for (text, curse) in e.tooltip_text(stack.enchantments()) {
+                lines.push((
                     text,
                     if curse {
                         rgba(255, 85, 85, 255)
                     } else {
                         rgba(170, 170, 170, 255)
                     },
-                );
+                ));
             }
         }
         details.start("minecraft:dyed_color", lines.len());
@@ -2681,6 +2679,43 @@ mod tests {
             });
         });
     }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_can_annotate_enchantments_by_their_description_key() {
+        use mod_api::{ClientHost, Hooks, ItemTooltipEvent, ModEntry, Mods, text::TextContent};
+
+        struct DescriptionMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for DescriptionMod {
+            fn item_tooltip(&self, _: &dyn ClientHost, event: &mut ItemTooltipEvent<'_>) {
+                let line = event.lines.iter().position(|(text, _)| {
+                    matches!(&text.content, TextContent::Translatable { key, .. }
+                        if key == "enchantment.minecraft.sharpness")
+                });
+                if let Some(line) = line {
+                    event.lines.insert(
+                        line + 1,
+                        (mod_api::Text::literal("Test description"), u32::MAX),
+                    );
+                }
+            }
+        }
+        let mods: Mods = vec![ModEntry::new("description", Box::new(DescriptionMod))].into();
+        mod_platform::testing::with_mods(mods, || {
+            super::super::native_entity_refs::tests::with_game(|game| {
+                for item in ["minecraft:diamond_sword", "minecraft:enchanted_book"] {
+                    let mut stack = super::ItemStack::new(item, 1);
+                    stack.enchant("minecraft:sharpness", 3);
+                    let lines = game.stack_tooltip_lines(&stack, false, false);
+                    assert_eq!(lines[1].0.plain(), "Sharpness III", "{item}");
+                    assert_eq!(lines[1].1, super::rgba(170, 170, 170, 255));
+                    assert_eq!(lines[2].0.plain(), "Test description", "{item}");
+                }
+            });
+        });
+    }
+
     /// A helmet's armour lines go where `ItemStack.addAttributeTooltips` puts them; a mod's
     /// `gather_skipped_attribute_tooltips` takes a slot group out, heading and all, and its
     /// `add_attribute_tooltips` line lands right after what is left, with the local player

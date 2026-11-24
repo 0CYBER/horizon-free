@@ -19,6 +19,9 @@ component lines and advanced information. No attached part is needed for a
 global listener, so this is also how a mod edits vanilla or other mods' tooltips.
 The global event supplies the stack, display settings, player IDs, and the
 request's `advanced` and `creative` flags on native and wasm alike.
+Vanilla enchantment descriptions, including those on enchanted books, retain
+their root `TextContent::Translatable { key, .. }`. Match that key (for example,
+`enchantment.minecraft.sharpness`), not the displayed name, level, or color.
 
 ## Drawing a second world camera
 

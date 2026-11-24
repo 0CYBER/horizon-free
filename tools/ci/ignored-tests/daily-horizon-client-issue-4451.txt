@@ -2509,6 +2509,7 @@ horizon-client game::stations::anvil::remote_anvil_tests::a_servers_custom_encha
 horizon-client game::stations::brewing_changed_tests::starting_a_brew_marks_the_chunk lib daily resources
 horizon-client game::stations::cycling_tests::a_tooltip_pre_answer_moves_or_cancels_the_tooltip lib daily resources
 horizon-client game::stations::stonecutter_scroll_tests::the_stonecutter_list_returns_to_the_top_when_its_input_changes lib daily resources
+horizon-client game::stations::tests::a_mod_can_annotate_enchantments_by_their_description_key lib daily resources
 horizon-client game::stations::tests::anvil_subscriber_probe_and_answer_cache lib daily resources
 horizon-client game::stations::tests::attribute_tooltip_hooks_hide_modifiers_and_add_lines_after_them lib daily resources
 horizon-client game::stations::tests::gathered_tooltip_components_wrap_only_when_a_mod_sets_the_width lib daily resources
