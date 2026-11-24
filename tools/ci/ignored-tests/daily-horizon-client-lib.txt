@@ -314,6 +314,7 @@ horizon-client-lib mobs::piglin::brute_home_tests::a_hit_leaves_the_brutes_home_
 horizon-client-lib mobs::piglin::brute_sound_tests::a_brute_names_the_brute_growl lib daily resources
 horizon-client-lib mobs::piglin::conversion_tests::a_converted_piglin_drops_the_item_it_was_admiring lib daily resources
 horizon-client-lib mobs::piglin::conversion_tests::converting_piglin_drops_its_inventory_before_conversion lib daily resources
+horizon-client-lib mobs::piglin::fight_pursuit_tests::melee_piglins_resume_pursuit_when_they_land_against_a_wall lib daily resources
 horizon-client-lib mobs::piglin::hoglin_pacified_feeding_tests::a_pacified_hoglin_refuses_breeding_food_and_a_baby_still_grows lib daily resources
 horizon-client-lib mobs::piglin::hoglin_pacified_feeding_tests::pacification_outlives_the_repellent_by_200_ticks lib daily resources
 horizon-client-lib mobs::piglin::hurt_broadcast_tests::a_brute_hit_by_the_player_calls_the_piglins_around_it lib daily resources

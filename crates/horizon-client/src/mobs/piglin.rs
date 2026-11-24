@@ -4,7 +4,7 @@
 use super::{
     Mob, MobEvent, MobWorld, Seen, Species, Who,
     anim::{Poses, State},
-    brain::{Ttl, living_near, melee_attack, melee_attack_by_age},
+    brain::{Ttl, living_near, melee_attack_by_age},
     goals::{
         Cx, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, Prey, RandomLookAround,
         Stroll, TARGET, TargetState, goal_clone, target_continue,
@@ -1326,6 +1326,130 @@ impl Goal for BackUpIfTooClose {
         m.yaw = super::control::rotate_if_necessary(m.yaw, m.head_yaw, 0.0);
     }
 }
+
+/// The melee fight activity's walk sink. Unlike `MeleeAttackGoal`, it tries
+/// the next walk after the last one ends even if the target has not moved.
+#[derive(Clone, Debug, Default)]
+struct FightMelee {
+    walk: bool,
+    path_target: [i32; 3],
+    path_end: Option<i64>,
+    retry: i32,
+    next_attack: i64,
+}
+
+impl FightMelee {
+    /// `MoveToTargetSink.tryComputePath`: even a partial path is usable. Only
+    /// a missing path calls for a random step towards the target.
+    fn path_to_target(m: &mut Mob, w: &MobWorld, block: [i32; 3]) -> Option<super::path::Path> {
+        m.create_path_to(w, block, 0).or_else(|| {
+            let toward = [
+                f64::from(block[0]) + 0.5,
+                f64::from(block[1]),
+                f64::from(block[2]) + 0.5,
+            ];
+            let step = m.default_random_pos_towards(w, 10, 7, toward, f64::from(PI / 2.0))?;
+            m.create_path_to(w, block_of(Vec3::new(step[0], step[1], step[2])), 0)
+        })
+    }
+
+    /// `MoveToTargetSink.checkExtraStartConditions`: core tries the walk
+    /// queued by fight last tick, before fight updates that memory again.
+    fn try_start_walk(&mut self, m: &mut Mob, cx: &mut Cx, block: [i32; 3], reached: bool) {
+        if self.path_end.is_some() || !self.walk {
+            return;
+        }
+        if self.retry > 0 {
+            self.retry -= 1;
+        } else if !reached && let Some(path) = Self::path_to_target(m, cx.w, block) {
+            let duration = 150 + cx.level.random().next_int_bound(101).unwrap_or(0);
+            self.path_end = Some(cx.w.game_time + i64::from(duration));
+            self.path_target = block;
+            m.nav_move_to_path(cx.w, Some(path), 1.0);
+        }
+    }
+
+    /// `MoveToTargetSink.tick`: an active path is kept until it ends, the
+    /// walk is erased, or the live target has moved more than two blocks.
+    fn tick_walk(&mut self, m: &mut Mob, cx: &mut Cx, block: [i32; 3], reached: bool) {
+        let Some(end) = self.path_end else { return };
+        if cx.w.game_time > end || m.ai.nav.is_done() || !self.walk || reached {
+            if self.walk && !reached && m.ai.nav.stuck {
+                self.retry = cx.level.random().next_int_bound(40).unwrap_or(0);
+            }
+            self.path_end = None;
+            self.walk = false;
+            m.nav_stop();
+        } else if block
+            .into_iter()
+            .zip(self.path_target)
+            .map(|(a, b)| (f64::from(a) - f64::from(b)).powi(2))
+            .sum::<f64>()
+            > 4.0
+            && let Some(path) = Self::path_to_target(m, cx.w, block)
+        {
+            self.path_target = block;
+            m.nav_move_to_path(cx.w, Some(path), 1.0);
+        }
+    }
+}
+
+impl Goal for FightMelee {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE | LOOK
+    }
+    fn name(&self) -> &'static str {
+        "MeleeAttack"
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.target_info(cx.w).is_some_and(|t| {
+            t.alive && t.can_be_seen_as_enemy && !t.creative && m.within_home_at(t.position)
+        })
+    }
+    fn start(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        m.ai.aggressive = true;
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        // `StopAttackingIfTargetInvalid`: a creative player is no target.
+        if m.target_info(cx.w)
+            .is_some_and(|t| t.is_player && t.creative)
+        {
+            m.set_ai_target(cx.w, None);
+        }
+        self.path_end = None;
+        self.walk = false;
+        m.ai.aggressive = false;
+        m.nav_stop();
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    /// `SetWalkTargetFromAttackTargetIfTargetOutOfReach.create`: stop walking
+    /// only when the attack target is both visible and within attack range.
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(who) = m.ai.target else { return };
+        let Some(t) = cx.w.target_info(who) else {
+            return;
+        };
+        let block = block_of(t.position);
+        let reached = block == block_of(m.position);
+        self.try_start_walk(m, cx, block, reached);
+
+        m.look_at_speed([t.position.x, t.eye_y, t.position.z], 30.0, 30.0);
+        let can_hit = m.within_melee_range(cx.w, &t) && m.sees(cx.w, who);
+        self.walk = !can_hit;
+        // `MeleeAttack.create(20)`: the memory expires on the 21st tick.
+        let now = i64::from(m.age);
+        if can_hit && now >= self.next_attack {
+            self.next_attack = now + 21;
+            m.swing();
+            super::ai::do_hurt_target(m, who, cx);
+        }
+        self.tick_walk(m, cx, block, reached);
+    }
+}
+
 pub fn register_piglin(m: &mut Mob) {
     // `AbstractPiglin.<init>`: a piglin's navigation opens doors.
     m.ai.nav.can_open_doors = true;
@@ -1344,7 +1468,7 @@ pub fn register_piglin(m: &mut Mob) {
     // `PiglinAi.initFightActivity`: the spear behaviours come before the melee
     // one, which is `create(20)`.
     g.add(3, super::spear_use::PiglinSpear::new());
-    g.add(3, super::spear_use::NoMeleeWithSpear(melee_attack(20)));
+    g.add(3, super::spear_use::NoMeleeWithSpear(FightMelee::default()));
     g.add(4, NotRiding(PiglinAvoidRepellent));
     g.add(4, GoToWantedItem);
     g.add(4, Celebrate);
@@ -1465,7 +1589,7 @@ pub fn register_brute(m: &mut Mob) {
     let g = &mut m.ai.goals;
     // `PiglinBruteAi` has no `FloatGoal`: a brute sinks in water.
     // `PiglinBruteAi.initFightActivity`: `MeleeAttack.create(20)`.
-    g.add(2, melee_attack(20));
+    g.add(2, FightMelee::default());
     // `PiglinBruteAi.createIdleMovementBehaviors`: `StrollToPoi(HOME, 0.6, 2,
     // 100)` ahead of the plain stroll, so a brute that drifts off walks back to
     // the spot `PiglinBruteAi.initMemories` remembered for it.
@@ -3171,5 +3295,80 @@ mod hoglin_pacified_feeding_tests {
             assert_eq!(m.extra.in_love, 600);
         });
         assert!(ran, "vanilla data is missing");
+    }
+}
+
+#[cfg(test)]
+mod fight_pursuit_tests {
+    use super::*;
+    use crate::mobs::world::{test_player, with_built_test_world};
+    use std::sync::Arc;
+
+    #[test]
+    #[ignore = "daily"]
+    fn melee_piglins_resume_pursuit_when_they_land_against_a_wall() {
+        assert!(
+            with_built_test_world(
+                &[],
+                |world, registry| {
+                    let stone = registry.default_state("minecraft:stone").unwrap();
+                    for x in -1..=0 {
+                        for z in -1..=0 {
+                            world
+                                .chunks
+                                .insert((x, z), Arc::new(crate::chunk::Chunk::empty(x, z)));
+                        }
+                    }
+                    for x in -4..=6 {
+                        for z in -4..=4 {
+                            world.set(x, 63, z, stone).unwrap();
+                        }
+                    }
+                    for y in 64..=66 {
+                        world.set(4, y, 0, stone).unwrap();
+                    }
+                    world.set(1, 64, 0, stone).unwrap();
+                    world.set(0, 64, 0, stone).unwrap();
+                    world.set(0, 65, 0, stone).unwrap();
+                },
+                |w, types| {
+                    let mut w = w.clone();
+                    w.player = Some(test_player(Vec3::new(0.5, 66.0, 0.5)));
+                    for id in ["minecraft:piglin", "minecraft:piglin_brute"] {
+                        let mut m = Mob::new(
+                            1,
+                            Arc::new(types.types[id].clone()),
+                            Vec3::new(3.699_999_9, 64.0, 0.5),
+                            0.0,
+                        );
+                        m.extra.set_main_hand(Some("minecraft:golden_sword".into()));
+                        m.ai.target = Some(Who::Player);
+                        let mut level = crate::health::TestLevel::new(0);
+                        let mut events = Vec::new();
+                        let mut goals = std::mem::take(&mut m.ai.goals);
+                        for on_ground in [false, false, true] {
+                            m.on_ground = on_ground;
+                            w.game_time += 1;
+                            let mut cx = Cx {
+                                w: &w,
+                                level: &mut level.level(),
+                                events: &mut events,
+                            };
+                            goals.tick(&mut m, &mut cx);
+                            if !on_ground {
+                                assert!(m.ai.nav.is_done(), "{id}: no ground path while airborne");
+                            }
+                        }
+                        let path = m.ai.nav.path.as_ref().expect("pursuit resumes on landing");
+                        assert!(
+                            path.reached,
+                            "{id}: the two steps reach the elevated player"
+                        );
+                        assert_eq!(path.target, [0, 66, 0]);
+                    }
+                },
+            ),
+            "vanilla data is missing"
+        );
     }
 }

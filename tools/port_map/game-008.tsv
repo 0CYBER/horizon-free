@@ -61,7 +61,7 @@ SetEntityLookTargetSometimes.create	inline	crates/horizon-client/src/mobs/animal
 SetEntityLookTargetSometimes.Ticker.tickDownAndCheck	inline	crates/horizon-client/src/mobs/animal_brain.rs::B::trigger	the tick counter inside the arm
 SetLookAndInteract.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	SetLookAndInteract arm: nearest visible player within 4 blocks becomes interaction and look target
 SetWalkTargetAwayFrom.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	WalkAwayFrom arm (nearest hostile and last attacker within 6 blocks, away 16 and 7, ten tries); piglins and hoglins use AvoidEntity and repellent goals
-SetWalkTargetFromAttackTargetIfTargetOutOfReach.create	inline	crates/horizon-client/src/mobs/monster_brain.rs::B::try_start	SetWalkTargetFromAttackTarget arm (the warden and axolotl brains have the same); piglins and hoglins chase with the MeleeAttack goal
+SetWalkTargetFromAttackTargetIfTargetOutOfReach.create	inline	crates/horizon-client/src/mobs/monster_brain.rs::B::try_start	SetWalkTargetFromAttackTarget arm (the warden and axolotl brains have the same); piglin and brute melee pursuit is in FightMelee::tick
 SetWalkTargetFromBlockMemory.create	port	crates/horizon-client/src/mobs/villager_brain.rs::walk_to_block_memory
 SetWalkTargetFromLookTarget.create	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::try_start	WalkToLookTarget arm; the sniffer, ghastling and breeze brains have the same
 ShowTradesToPlayer.canStillUse	inline	crates/horizon-client/src/mobs/villager_brain.rs::B::tick_or_stop	ShowTrades arm: still near the player, look time left and an interaction target
