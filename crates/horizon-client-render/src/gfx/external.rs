@@ -4,8 +4,8 @@
 //! (`Renderer::set_external_pipeline`), each point is one `Option` test.
 //!
 //! Workspace-internal: the trait names the engine's frame, its mesh format and its pass order,
-//! has one implementer in this workspace, carries no stability promise and is never exposed to
-//! mods. A mesher or pass change updates its implementer in the same PR. HDR output
+//! carries no stability promise and is never exposed to mods. A mesher or pass change
+//! updates its implementers in the same PR. HDR output
 //! (`output.rs`, `frame_policy`) is not an implementer: it stays the one output stage after the
 //! frame, and a pipeline draws into the frame it gives.
 //!

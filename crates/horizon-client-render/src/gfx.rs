@@ -9128,18 +9128,15 @@ impl Renderer {
         if let Some(pipeline) = self.external.as_mut().filter(|_| !frame.title) {
             pipeline.begin_frame(&state);
         }
-        let shadow_view = self
-            .pack_post
-            .as_ref()
-            .and_then(|p| p.1.as_ref())
-            .filter(|_| !frame.title)
-            .and_then(|p| p.shadow_view(frame))
-            .or_else(|| {
-                self.external
-                    .as_ref()
-                    .filter(|_| !frame.title)?
-                    .shadow_request(&state)
-            });
+        let shadow_view = if frame.title {
+            None
+        } else {
+            self.pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .and_then(|p| external::ExternalPipeline::shadow_request(p, &state))
+                .or_else(|| self.external.as_ref()?.shadow_request(&state))
+        };
         let pack_terrain = !frame.title
             && self
                 .pack_post
