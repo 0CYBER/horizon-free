@@ -1,0 +1,7 @@
+id = "view_center_fixture"
+name = "View Centre Fixture"
+version = "0.1.0"
+description = "Chat `view <chunk x> <chunk z>` streams and draws the world there without moving you; `view off` brings it back."
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

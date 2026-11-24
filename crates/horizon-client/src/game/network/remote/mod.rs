@@ -782,7 +782,7 @@ pub(super) struct Remote {
     overworld_clock: Option<i32>,
     clock_game_time: i64,
     /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
-    chunk_center: (i32, i32),
+    pub(in crate::game) chunk_center: (i32, i32),
     /// Received events a frame left for the next one, in order, with each
     /// item's arrival time so `BACKLOG_LIMIT` tracks the front item's age
     /// instead of staying overdue for an entire continuous chunk stream.

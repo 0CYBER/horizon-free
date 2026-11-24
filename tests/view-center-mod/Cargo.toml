@@ -1,0 +1,13 @@
+[package]
+name = "view-center-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+horizon-mod-api = { path = "../../crates/horizon-mod-api" }
+
+[workspace]

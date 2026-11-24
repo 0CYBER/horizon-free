@@ -25,7 +25,7 @@ let _ = player.set_chunk_areas(host, &[]);
 - **Each call replaces the calling mod's areas** for that player. Other mods' areas stay. An empty slice withdraws them. A chunk no area covers any more stays on the client for 52 ticks, then is forgotten; when none of a level is left, the client drops that world.
 - **Not a player.** An area is a chunk ticket. It counts as no player for natural spawning, mob caps, despawning, spawners, sleeping, raids, the dragon fight or the random-tick rules that look for a player nearby. Terrain generated for an area is saved like any other.
 - **Lifetime.** Areas are never saved. They end when the player leaves.
-- **The player's own level.** An area there holds its ticket, but its chunks are sent only within the player's normal view.
+- **The player's own level.** An area there holds its ticket, but its chunks are sent only within the player's normal view. To stream the player's own level from somewhere else, move the view with [`set_view_center`](#a-view-centre-for-a-camera).
 - **A level opened after the player logged in** (a [runtime level](../world/runtime-levels.md#players-and-clients)) is viewed like any other by a client of this version. An older Horizon client cannot name it: an area there is kept, but nothing of the level is sent to it. When a runtime level closes, the clients that viewed it drop its world.
 - **Refusals.** A call that breaks a limit changes nothing; the areas asked before stay. `ChunkAreaRefusal` names the limit and its value:
   - `NotOnline`: the player is not online on this server.
@@ -44,3 +44,21 @@ let _ = player.set_chunk_areas(host, &[]);
   | `LoadedPerLevel` | `max_viewed_loaded_chunks_per_level`, every player together | 16384 |
   | `TickingPerLevel` | `max_viewed_ticking_chunks_per_level`, every player together | 3528 |
 - **Cost.** With no area on the server, a level pass costs one integer compare.
+
+## A view centre for a camera
+
+A camera mod (a drone, a cinematic camera, a remote view) can move where a player's chunks stream from, in the player's own level, without moving the player, as vanilla's spectator camera (`ServerPlayer.setCamera`) does by moving them:
+
+```rust,ignore
+// Every tick the camera crosses into another chunk:
+let chunk = mod_api::ChunkPos::new((x.floor() as i32) >> 4, (z.floor() as i32) >> 4);
+player.set_view_center(host, Some(chunk));
+// Back on the player:
+player.set_view_center(host, None);
+```
+
+- **What follows the centre.** The player's chunk tracking: the chunks within their view distance of the centre are loaded (and tick) as around a player, sent to their client closest first, and the client is told the new chunk cache centre, so it keeps and draws them. What leaves the view is forgotten as when the player moves.
+- **What stays with the player.** Their position, the chunks under them (kept loaded, but no longer sent while the centre is elsewhere), entity tracking, mob spawning and every rule that looks for a player nearby.
+- **Lifetime.** The centre ends at a respawn, a level change and when the player leaves; it is never saved.
+- **Refused**, returning false and changing nothing: a stale handle, a player not online, a centre more than 1,875,000 chunks from (0, 0) on an axis, and off a server.
+- **The window.** A Horizon client meshes and draws around the server's chunk cache centre once it is more than two chunks from the player, so a mod's camera (`camera_pose`) far from the player sees the world there. A vanilla client keeps the chunks too.

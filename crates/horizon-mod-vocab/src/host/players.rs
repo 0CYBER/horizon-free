@@ -1263,6 +1263,19 @@ pub trait PlayersBackendMut {
         areas: &[ChunkArea],
     ) -> Result<(), ChunkAreaRefusal>;
     /// Side: server.
+    /// Centres the player's chunk tracking on `center`, a chunk of their own level, as
+    /// `ServerPlayer.setCamera` does for a camera entity but without moving the player: the
+    /// chunks around it are loaded (and tick) as around a player, to the server's view distance,
+    /// and sent to their client to the client's view distance, with the chunk cache centre moved
+    /// there so the client keeps and draws them. The chunks around the player themself stay
+    /// loaded but are no longer sent while the centre is elsewhere. `None` puts the tracking
+    /// back on the player. For a camera mod (a drone, a cinematic camera, a remote view). The
+    /// centre ends at a respawn, a level change and when the player leaves. False, changing
+    /// nothing, for a stale handle, a player not online, a centre past the world border's
+    /// farthest chunk (1,875,000 on an axis) and off a server.
+    #[access(WorldOnly)]
+    fn player_set_view_center(&mut self, player: PlayerRef, center: Option<ChunkPos>) -> bool;
+    /// Side: server.
     /// `ServerPlayerGameMode.destroyBlock`: breaks the block at `pos` in the player's level as
     /// this player breaks it, as FTB Ultimine does for each block of a vein. The player's own
     /// checks hold: a spectator, an adventure player whose tool can't break it, a held item that

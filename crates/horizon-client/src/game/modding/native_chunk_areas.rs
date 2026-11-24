@@ -1,6 +1,8 @@
 //! A server mod's chunk areas for one player (arismoko/horizon#3716, step 9b'): `PlayerRef::set_chunk_areas`
 //! on the hub's viewed areas (`lan::viewed_levels`), which own the caps, the tickets and what is
-//! sent. Each mod's areas are kept apart by the id of the mod whose call this is.
+//! sent. Each mod's areas are kept apart by the id of the mod whose call this is. Also a mod's
+//! view centre for a player (`PlayerRef::set_view_center`, horizon-rust/horizon#19219), on
+//! `Hub::set_view_center`.
 use super::Game;
 use horizon_client::lan::viewed_levels::areas as engine;
 use mod_api::{
@@ -101,6 +103,30 @@ impl Game<'_> {
                     LevelRef::new(epoch, mod_api::__private::dimension_key(id))
                 })
             })
+    }
+
+    /// For a server mod: centres `player`'s chunk tracking on `center` in their own level, or on
+    /// the player again with `None`, through `Hub::set_view_center`. False, changing nothing, for
+    /// a player not online, a centre out of range and off a server.
+    pub(super) fn player_set_view_center(
+        &mut self,
+        player: PlayerRef,
+        center: Option<ChunkPos>,
+    ) -> bool {
+        if self.native_lifecycle.epoch().is_none() {
+            return false;
+        }
+        if self.online_player_record(player).is_none()
+            && self.native_acting_player() != Some(player)
+        {
+            return false;
+        }
+        let Some(host) = self.lan.as_mut() else {
+            return false;
+        };
+        host.hub
+            .set_view_center(player.uuid(), center.map(|c| (c.x, c.z)))
+            .is_ok()
     }
 }
 

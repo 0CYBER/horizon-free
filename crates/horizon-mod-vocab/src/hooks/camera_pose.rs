@@ -5,8 +5,9 @@ pub trait Hooks {
     /// placed it (`Camera.update`): its position, and its yaw and pitch in degrees. Set them to
     /// draw the world from anywhere: a cinematic or replay camera. Only the picture, the sound's
     /// listener and the billboards facing the camera follow it; the player, where they aim, the
-    /// first-person hand and which chunks load stay the player's. Values that aren't finite keep
-    /// vanilla's. Not called on the title screen's panorama.
+    /// first-person hand and which chunks load stay the player's (`PlayerRef::set_view_center`
+    /// moves the chunks). Values that aren't finite keep vanilla's. Not called on the title
+    /// screen's panorama.
     /// `camera_roll`, asked right after, rolls it.
     #[hook(
         side = "client",

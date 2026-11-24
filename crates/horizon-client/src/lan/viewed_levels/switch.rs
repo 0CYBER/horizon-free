@@ -82,7 +82,7 @@ impl Hub {
             let mut kept: Vec<_> = g.sent_chunks.iter().copied().collect();
             kept.sort_unstable();
             if watching {
-                let ((cx, cz), r) = (g.chunk(), g.view_distance);
+                let ((cx, cz), r) = (g.view_chunk(), g.view_distance);
                 for &key in kept.iter().filter(|&&(x, z)| tracked(cx, cz, r, x, z)) {
                     if g.watched.insert(key) {
                         self.chunk_watches.push(g, ChunkWatchKind::Watch, key);

@@ -3153,7 +3153,12 @@ impl Game<'_> {
                 .iter()
                 .filter(|g| h.hub.here(g))
                 .filter(|g| !g.is_fake()) // fake players hold small forced tickets below
-                .map(|g| (g.ticket_chunk(), g.spectator()))
+                // A mod's view centre loads around it as around the player, who keeps their own
+                // chunks loaded where they stand (`Hub::set_view_center`).
+                .flat_map(|g| {
+                    std::iter::once((g.ticket_chunk(), g.spectator()))
+                        .chain(g.view_center.map(|c| (c, g.spectator())))
+                })
                 .collect()
         });
         if let Some(p) = &self.player {

@@ -130,7 +130,7 @@ impl Hub {
                 continue;
             }
             for guest in self.guests.iter().filter(|g| g.watches_level(dimension)) {
-                let (cx, cz) = guest.chunk();
+                let (cx, cz) = guest.view_chunk();
                 if !super::tracked(cx, cz, guest.view_distance, x, z)
                     || guest.sent_chunks.contains(&at)
                 {

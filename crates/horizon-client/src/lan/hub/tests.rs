@@ -3380,6 +3380,61 @@ fn departing_guest_releases_multiplayer_wire_cache_when_batches_are_empty() {
     assert_eq!(heights_solo, 0);
     assert!(sections_solo < sections_multiplayer);
 }
+/// A mod's view centre (horizon-rust/horizon#19219): the chunk tracking moves there, the client
+/// is told the new cache centre, the chunks around it load as the player's own do, and the
+/// player stays where they are. `None` puts the tracking back on the player.
+#[test]
+fn a_view_centre_moves_the_chunk_tracking_but_not_the_player() {
+    let (mut hub, rx) = hub_with_a_guest();
+    let uuid = hub.guests[0].uuid;
+    let own = hub.guests[0].chunk();
+    let position = hub.guests[0].position;
+    hub.update_view(0, false);
+    let centres = |rx: &std::sync::mpsc::Receiver<crate::lan::Out>| -> Vec<(i32, i32)> {
+        rx.try_iter()
+            .flat_map(|out| match out {
+                crate::lan::Out::Packet(body) => vec![body],
+                crate::lan::Out::Packets(bodies) => bodies,
+                _ => Vec::new(),
+            })
+            .filter_map(|body| {
+                let mut reader = horizon_protocol::buf::Reader::new(&body);
+                let id = reader.varint().unwrap();
+                match play::Clientbound::decode(id, &body[reader.position()..]) {
+                    Ok(C::SetChunkCacheCenter(p)) => Some((p.x, p.z)),
+                    _ => None,
+                }
+            })
+            .collect()
+    };
+    let _ = centres(&rx);
+
+    assert_eq!(hub.set_view_center(uuid, Some((40, -12))), Ok(()));
+    hub.update_view(0, false);
+    assert_eq!(hub.guests[0].center, Some((40, -12)));
+    assert_eq!(centres(&rx), vec![(40, -12)]);
+    assert_eq!(hub.guests[0].position, position);
+    assert_eq!(hub.guests[0].ticket_chunk(), own);
+    let loading: Vec<_> = hub.loading_chunks(|_| true).collect();
+    assert!(loading.contains(&own) && loading.contains(&(40, -12)));
+    assert_eq!(hub.view_center(uuid), Some((40, -12)));
+
+    // Refused, changing nothing.
+    assert_eq!(
+        hub.set_view_center(uuid, Some((1_875_001, 0))),
+        Err(ViewCenterRefusal::OutOfRange)
+    );
+    assert_eq!(
+        hub.set_view_center(uuid + 1, Some((0, 0))),
+        Err(ViewCenterRefusal::NotOnline)
+    );
+    assert_eq!(hub.view_center(uuid), Some((40, -12)));
+
+    assert_eq!(hub.set_view_center(uuid, None), Ok(()));
+    hub.update_view(0, false);
+    assert_eq!(hub.guests[0].center, Some(own));
+    assert_eq!(centres(&rx), vec![own]);
+}
 
 /// `ServerGamePacketListenerImpl.handleMovePlayer` while a teleport awaits its accept
 /// (`updateAwaitingTeleport`): the move's position is ignored but its turn is not,

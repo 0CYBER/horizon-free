@@ -232,6 +232,10 @@ pub struct Guest {
     /// the player away and they are still at the chunk it left. The hold ends (back to `None`) at
     /// an accepted move or teleport ack, a passenger or vehicle move, a camera change, a placement.
     pub held_ticket_chunk: Option<(i32, i32)>,
+    /// A mod's view centre for this player (`PlayerRef::set_view_center`): the chunk their chunk
+    /// tracking follows in place of their own, in their own level, without moving them. `None`:
+    /// their own chunk, as in vanilla. Ends at a respawn, a level change and when they leave.
+    pub view_center: Option<(i32, i32)>,
     pub previous_position: [f64; 3],
     pub yaw: f32,
     pub pitch: f32,
@@ -768,6 +772,7 @@ impl Guest {
             recipe_sync: Default::default(),
             position,
             held_ticket_chunk: None,
+            view_center: None,
             previous_position: position,
             yaw: 0.0,
             pitch: 0.0,
@@ -1104,6 +1109,11 @@ impl Guest {
             (self.position[0].floor() as i32) >> 4,
             (self.position[2].floor() as i32) >> 4,
         )
+    }
+    /// The chunk this player's chunk tracking is centred on (`ChunkMap.move`'s section): a mod's
+    /// view centre, else their own chunk.
+    pub fn view_chunk(&self) -> (i32, i32) {
+        self.view_center.unwrap_or_else(|| self.chunk())
     }
     pub fn creative(&self) -> bool {
         self.game_mode == CREATIVE

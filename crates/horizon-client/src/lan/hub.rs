@@ -55,12 +55,14 @@ mod raw_inbox;
 mod selector_sync;
 mod spawn_info;
 pub(super) mod terrain;
+mod view_center;
 use advancements::AdvancementOwners;
 use chat::yellow_names;
 pub use pending_move::{
     Accepted, Hearing, MOVE_PACKET_BUDGET, MOVE_PACKET_QUEUE, MovePacket, PendingMove,
 };
 use raw_inbox::{DeferredPayload, PacketDrain, yield_raw};
+pub use view_center::ViewCenterRefusal;
 pub mod game_event {
     pub const NO_RESPAWN_BLOCK_AVAILABLE: u8 = 0;
     pub const START_RAINING: u8 = 1;
@@ -1120,7 +1122,8 @@ impl Hub {
         self.guests
             .simulation_iter()
             .filter(move |g| self.watches(g) && loads(g))
-            .map(Guest::chunk)
+            // A mod's view centre loads as the player's chunk does; the player's own stays loaded.
+            .flat_map(|g| std::iter::once(g.chunk()).chain(g.view_center))
     }
     /// `PlayerList.broadcastAll(packet, dimension)`: the players in the level in place.
     pub fn broadcast_level(&self, packet: &C) {
@@ -1719,9 +1722,10 @@ impl Hub {
             });
         }
         self.send_level_info(i, ctx, true);
-        // ServerLevel.addNewPlayer: the chunk tracking starts at the player.
+        // ServerLevel.addNewPlayer: the chunk tracking starts at the player (or a mod's view
+        // centre, kept through a placement in the same level).
         self.guests.update(i, |g| {
-            let (cx, cz) = g.chunk();
+            let (cx, cz) = g.view_chunk();
             g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
                 x: cx,
                 z: cz,
@@ -1774,7 +1778,7 @@ impl Hub {
         }
         let recentered = self.guests[i]
             .center
-            .is_some_and(|c| c != self.guests[i].chunk());
+            .is_some_and(|c| c != self.guests[i].view_chunk());
         if recentered {
             self.update_view(i, self.chunk_watches.recording());
         }
@@ -2918,8 +2922,8 @@ impl Hub {
         let mut batches = Vec::new();
         for i in 0..self.guests.len() {
             if self.watches(&self.guests[i]) {
-                let moved =
-                    self.terrain.is_some() && self.guests[i].center != Some(self.guests[i].chunk());
+                let moved = self.terrain.is_some()
+                    && self.guests[i].center != Some(self.guests[i].view_chunk());
                 self.update_view(i, watching);
                 if moved || self.terrain.is_some() && self.ticks <= self.guests[i].placed_at + 1 {
                     self.warm_first_terrain(i, world, ctx.streaming);
@@ -3102,7 +3106,7 @@ impl Hub {
     /// the view forgotten and the ones that entered it queued, closest first;
     /// past the view, the far ring's.
     fn update_view(&mut self, i: usize, watching: bool) {
-        let (cx, cz) = self.guests[i].chunk();
+        let (cx, cz) = self.guests[i].view_chunk();
         let r = self.guests[i].view_distance;
         let reach = self.reach(&self.guests[i]);
         if self.guests[i].center != Some((cx, cz))
@@ -5372,8 +5376,10 @@ impl Hub {
         });
         self.send_level_info(i, ctx, true);
         self.send_permission_level(i);
-        // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player.
+        // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player; a mod's
+        // view centre ends with the player it was set for.
         self.guests.update(i, |g| {
+            g.view_center = None;
             let (cx, cz) = g.chunk();
             g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
                 x: cx,
@@ -5458,6 +5464,8 @@ impl Hub {
             // The load timer is not restarted: vanilla resets the client's loaded state on death and
             // respawn only, and covers a level change with its separate `isChangingDimension` term.
             g.center = None;
+            // A mod's view centre named a chunk of the level left.
+            g.view_center = None;
             g.yaw = yaw;
             if let Some(pitch) = pitch {
                 g.pitch = pitch;
