@@ -223,6 +223,9 @@ pub fn auto_name(time: SystemTime) -> String {
 
 /// The backup a name points at: a file in `backups/`, by its full name or the start of it.
 pub fn find(dir: &Path, name: &str) -> Result<String, String> {
+    if name.trim().is_empty() {
+        return Err("a backup name is required".into());
+    }
     let all = list(dir);
     if let Some(b) = all
         .iter()
