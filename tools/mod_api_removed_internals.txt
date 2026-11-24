@@ -52,6 +52,15 @@ horizon_client::game::banners::layer_textures  #20193
 horizon_client::game::item_draw::Game<'_>::item_level  kind=method  #20192
 horizon_client::game::native_shaders::manifest_refused  #20601
 horizon_client::game::shader_packs::block_id_table  #20601
+horizon_client::game::native_replay::FileIdentity  kind=struct  #19246
+horizon_client::game::native_replay::FileIdentity::device  kind=field  #19246
+horizon_client::game::native_replay::FileIdentity::index  kind=field  #19246
+horizon_client::game::native_replay::FileIdentity::of  kind=method  #19246
+horizon_client::game::native_replay::ReplayOrigin::identity  kind=field  #19246
+horizon_client::game::replay::Replay::archive  kind=field  #19246
+horizon_client::game::replay::Replay::identity  kind=field  #19246
+horizon_client::game::studio::archive_unchanged  kind=fn  #19246
+horizon_client::game::studio::note_written  kind=fn  #19246
 horizon_client_render::gfx::Renderer::pack_atlas  #20466
 horizon_client_render::gfx::Renderer::pack_material_atlases  #20466
 horizon_client::game::creatures::mob_group::Group<M>::deferred  kind=field  #18420

@@ -78,3 +78,48 @@ pub enum ReplayError {
     /// being read (`replay_open_failed` only).
     Superseded,
 }
+
+/// A replay bookmark, timed in milliseconds from the start of the recording.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct ReplayMarker {
+    /// Time from the start of the recording, in milliseconds.
+    pub time_ms: u32,
+    /// The bookmark's text.
+    pub label: String,
+}
+
+impl ReplayMarker {
+    /// Creates a bookmark at the given recording time.
+    pub fn new(time_ms: u32, label: impl Into<String>) -> Self {
+        Self {
+            time_ms,
+            label: label.into(),
+        }
+    }
+}
+
+/// The maximum number of uncompressed bytes in a mod's replay data, or in the
+/// complete ReplayMod marker list as encoded on disk.
+pub const REPLAY_EDIT_MAX_BYTES: usize = 1 << 20;
+
+/// Why a read or edit of the currently open replay did not succeed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum ReplayEditError {
+    /// No replay is open.
+    NotOpen,
+    /// This client's replay source has no editable archive.
+    Unavailable,
+    /// No mod is running at this call, so there is no owner for the data.
+    NoCallingMod,
+    /// The entry or the archive exceeds the storage limit.
+    TooLarge,
+    /// Another file has replaced the open replay, or Studio has unsaved edits to the
+    /// same camera data. The edit did not replace the archive.
+    Stale,
+    /// The entry could not be read, or the archive could not be saved.
+    Io,
+}

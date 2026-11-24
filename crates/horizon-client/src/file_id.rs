@@ -38,6 +38,25 @@ pub fn valid_id(id: &str) -> bool {
         )
 }
 
+/// A file's device and inode (volume and file index on Windows), independent of its path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileIdentity {
+    device: u64,
+    index: u64,
+}
+
+impl FileIdentity {
+    /// Read the identity from the already-open file.
+    pub fn of(file: &std::fs::File) -> std::io::Result<Self> {
+        use cap_fs_ext::MetadataExt;
+        let metadata = cap_std::fs::File::from_std(file.try_clone()?).metadata()?;
+        Ok(Self {
+            device: metadata.dev(),
+            index: metadata.ino(),
+        })
+    }
+}
+
 /// Export names must also be creatable as Windows file and directory names.
 pub(crate) fn valid_export_name(name: &str) -> bool {
     valid_id(name) && !name.contains(['<', '>', '"', '|', '?', '*'])

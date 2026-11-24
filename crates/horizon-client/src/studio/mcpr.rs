@@ -6,16 +6,21 @@
 //!   `[timestamp_ms: u32 big-endian][packet_length: u32 big-endian][packet_data: VarInt(packet_id) + payload]`
 //! - Optional `recording.tmcpr.crc32`: CRC32 of the packet stream.
 //! - Optional `markers.json`: the timeline's markers, in ReplayMod's format.
-//! - Optional `camera.json`: the editor's camera path. The archive keeps its
-//!   bytes as the editor wrote them and never reads them.
+//! - Optional `horizon/mod-data/<package id>.bin`: one opaque entry per mod.
+//!   A legacy `camera.json` is an alias for `replay_studio`'s entry.
 
+use crate::file_id::{FileIdentity, reparse_point};
+use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::{Dir, OpenOptions as CapOpenOptions};
 use horizon_protocol::buf::{Reader, write_varint};
+use mod_api::REPLAY_EDIT_MAX_BYTES;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
+    time::SystemTime,
 };
 
 /// The most `metaData.json` may inflate to: real files are a few hundred bytes.
@@ -23,6 +28,14 @@ const MAX_METADATA_BYTES: u64 = 1 << 20;
 /// The most `recording.tmcpr` may inflate to. The reader streams to disk, but
 /// still caps archive expansion to protect disk space from hostile archives.
 const MAX_STREAM_BYTES: u64 = 1 << 30;
+/// A validated stream plus room for compression overhead and other entries.
+/// Editing bigger ZIPs is refused; ordinary playback doesn't need to copy them.
+const MAX_ARCHIVE_EDIT_BYTES: u64 = MAX_STREAM_BYTES + (64 << 20);
+const MAX_EDIT_ENTRY_COMPRESSED_BYTES: u64 = REPLAY_EDIT_MAX_BYTES as u64 + (64 << 10);
+const MARKERS_ENTRY: &str = "markers.json";
+const LEGACY_STUDIO_ENTRY: &str = "camera.json";
+/// The package id of the editor whose data was previously written as `camera.json`.
+pub const REPLAY_STUDIO_OWNER: &str = "replay_studio";
 /// Keep one seek anchor for every group of this many packets.
 const STREAM_INDEX_STRIDE: usize = 1024;
 /// How much recording time a stream and its metadata may hold in memory before
@@ -105,7 +118,7 @@ impl TimestampedPacket {
     }
 }
 
-/// An editor bookmark stored with a replay, without player identity data.
+/// A bookmark stored with a replay, without player identity data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Marker {
@@ -376,25 +389,6 @@ impl McprWriter {
         }
     }
 
-    /// Atomically replace the editor's camera path (`camera.json`) without
-    /// touching the packet stream, metadata or other entries. `None` removes it.
-    /// Returns the archive written, still open, so a caller can tell it from
-    /// one put in its place later.
-    pub fn replace_camera_path(path: &Path, json: Option<&[u8]>) -> io::Result<File> {
-        replace_entry(path, CAMERA_PATH_ENTRY, "camera.part", json)
-    }
-
-    /// Atomically replace the optional editor markers without touching packet data.
-    /// Returns the archive written, still open, as `replace_camera_path` does.
-    pub fn replace_markers(path: &Path, markers: &[Marker]) -> io::Result<File> {
-        let json = if markers.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_vec_pretty(markers).map_err(io::Error::other)?)
-        };
-        replace_entry(path, "markers.json", "markers.part", json.as_deref())
-    }
-
     fn package(&self, part: &Path) -> io::Result<()> {
         package_stream(
             &self.metadata,
@@ -451,7 +445,7 @@ fn package_stream(
     write!(zip, "{:08x}", checksum.finalize())?;
 
     if !markers.is_empty() {
-        zip.start_file("markers.json", options)?;
+        zip.start_file(MARKERS_ENTRY, options)?;
         serde_json::to_writer_pretty(&mut zip, markers).map_err(io::Error::other)?;
     }
 
@@ -624,65 +618,218 @@ pub struct McprReader {
     total_packets: usize,
     /// The last frame's timestamp (normalized): where the packet stream ends.
     last_timestamp_ms: u32,
-    /// The editor's camera path (`camera.json`), as the editor wrote it.
-    pub camera_path: Option<Vec<u8>>,
-    /// User-created editor bookmarks stored in the replay archive.
+    archive: zip::ZipArchive<File>,
+    revision: ArchiveRevision,
+    /// Bookmarks stored in the replay archive, in timeline order.
     pub markers: Vec<Marker>,
 }
 
-/// The archive entry holding the editor's camera path.
-const CAMERA_PATH_ENTRY: &str = "camera.json";
+/// Identity and revision at the time the archive was read or last saved.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ArchiveRevision {
+    identity: FileIdentity,
+    len: u64,
+    modified: SystemTime,
+}
 
-/// Rewrite the archive at `path` with entry `name` replaced by `contents`
-/// (removed when `None`), through a sibling `part` file renamed over it. The
-/// written file comes back open: the file now at `path` unless it was replaced.
-fn replace_entry(path: &Path, name: &str, part: &str, contents: Option<&[u8]>) -> io::Result<File> {
-    let part = sibling(path, part);
+impl ArchiveRevision {
+    fn of(file: &File) -> io::Result<Self> {
+        let metadata = file.metadata()?;
+        Ok(Self {
+            identity: FileIdentity::of(file)?,
+            len: metadata.len(),
+            modified: metadata.modified()?,
+        })
+    }
+
+    fn stale() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "the recording changed since the replay opened it",
+        )
+    }
+
+    fn check(self, parent: &Dir, name: &Path) -> io::Result<()> {
+        if !parent.symlink_metadata(name)?.is_file() {
+            return Err(Self::stale());
+        }
+        let mut options = CapOpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            // Never block if a non-regular file took the name after the stat.
+            options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+        }
+        let file = parent.open_with(name, &options)?.into_std();
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || reparse_point(&metadata) || Self::of(&file)? != self {
+            return Err(Self::stale());
+        }
+        Ok(())
+    }
+}
+
+/// A private sibling that will never grow past the physical archive limit.
+/// The ZIP writer can seek back to patch headers, so the cap is on the offset,
+/// not the total number of bytes written.
+struct CappedWrite<W> {
+    inner: W,
+    offset: u64,
+    max: u64,
+}
+
+impl<W> CappedWrite<W> {
+    fn new(inner: W, max: u64) -> Self {
+        Self {
+            inner,
+            offset: 0,
+            max,
+        }
+    }
+}
+
+impl<W: Write> Write for CappedWrite<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.len() as u64 > self.max.saturating_sub(self.offset) {
+            return Err(edit_too_large());
+        }
+        let written = self.inner.write(buf)?;
+        self.offset += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<W: Seek> Seek for CappedWrite<W> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.offset = self.inner.seek(position)?;
+        Ok(self.offset)
+    }
+}
+
+fn edit_too_large() -> io::Error {
+    io::Error::new(io::ErrorKind::FileTooLarge, "replay storage limit exceeded")
+}
+
+fn mod_data_entry(owner: &str) -> io::Result<String> {
+    // Package ids are already authenticated by the host. Keep the ZIP namespace
+    // unambiguous even for internal callers (no aliases or path separators).
+    if !(1..=64).contains(&owner.len())
+        || !owner
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid mod id",
+        ));
+    }
+    Ok(format!("horizon/mod-data/{owner}.bin"))
+}
+
+/// Rewrite one entry (and remove its legacy alias, if any). Copy unrelated
+/// entries in compressed form: neither the packet stream nor unknown ZIP
+/// entries are inflated or recompressed. Playback keeps its own stream open.
+fn replace_entry(
+    archive: &mut zip::ZipArchive<File>,
+    revision: ArchiveRevision,
+    path: &Path,
+    name: &str,
+    legacy: Option<&str>,
+    contents: Option<&[u8]>,
+) -> io::Result<(zip::ZipArchive<File>, ArchiveRevision)> {
+    if revision.len > MAX_ARCHIVE_EDIT_BYTES {
+        return Err(edit_too_large());
+    }
+    if archive.has_duplicate_names() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "duplicate archive entries",
+        ));
+    }
+    let file_name = Path::new(path.file_name().ok_or(io::ErrorKind::InvalidInput)?);
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let parent = Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
+    revision.check(&parent, file_name)?;
+
+    let part = sibling(Path::new(".horizon-replay"), "part");
+    let mut options = CapOpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = parent.open_with(&part, &options)?.into_std();
     let result = (|| {
-        let file = File::open(path)?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut output = zip::ZipWriter::new(create_private_file(&part)?);
+        let mut output = zip::ZipWriter::new(CappedWrite::new(file, MAX_ARCHIVE_EDIT_BYTES));
+        output.set_raw_comment(archive.comment().into())?;
+        if let Some(data) = archive.raw_zip64_extensible_data_sector() {
+            output.set_raw_zip64_extensible_data_sector(data.into());
+        }
+        let mut remaining = MAX_ARCHIVE_EDIT_BYTES;
         for index in 0..archive.len() {
-            let mut entry = archive.by_index(index).map_err(io::Error::other)?;
-            let entry_name = entry
-                .name()
-                .map(|entry_name| entry_name.into_owned())
-                .map_err(io::Error::other)?;
-            if entry_name == name {
+            let entry = archive.by_index_raw(index)?;
+            let entry_name = entry.name_raw();
+            if entry_name == name.as_bytes() || legacy.is_some_and(|l| entry_name == l.as_bytes()) {
                 continue;
             }
-            let options = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .large_file(entry.size() >= u32::MAX as u64);
-            if entry.is_dir() {
-                output
-                    .add_directory(entry_name, options)
-                    .map_err(io::Error::other)?;
-            } else {
-                output
-                    .start_file(entry_name, options)
-                    .map_err(io::Error::other)?;
-                io::copy(&mut entry, &mut output)?;
+            // The raw copier does not preserve encryption flags in this ZIP build.
+            if entry.encrypted() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "cannot preserve an encrypted replay entry",
+                ));
             }
+            remaining = remaining
+                .checked_sub(entry.compressed_size())
+                .ok_or_else(edit_too_large)?;
+            output.raw_copy_file(entry)?;
         }
         if let Some(contents) = contents {
-            output
-                .start_file(
-                    name,
-                    zip::write::SimpleFileOptions::default()
-                        .compression_method(zip::CompressionMethod::Deflated),
-                )
-                .map_err(io::Error::other)?;
+            output.start_file(
+                name,
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )?;
             output.write_all(contents)?;
         }
-        let file = output.finish().map_err(io::Error::other)?;
+        let file = output.finish()?.inner;
         file.sync_all()?;
-        fs::rename(&part, path)?;
-        Ok(file)
+        #[cfg(windows)]
+        let file = {
+            // Windows can defer the final modification time until the write handle closes.
+            let identity = FileIdentity::of(&file)?;
+            drop(file);
+            let mut options = CapOpenOptions::new();
+            options.read(true).follow(FollowSymlinks::No);
+            let file = parent.open_with(&part, &options)?.into_std();
+            if FileIdentity::of(&file)? != identity {
+                return Err(ArchiveRevision::stale());
+            }
+            file
+        };
+        let saved_revision = ArchiveRevision::of(&file)?;
+        let saved = zip::ZipArchive::new(file)?;
+        // Check again after the copy: don't publish over a replacement that
+        // arrived while the sibling was being written.
+        revision.check(&parent, file_name)?;
+        parent.rename(&part, &parent, file_name)?;
+        Ok((saved, saved_revision))
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&part);
+        let _ = parent.remove_file(&part);
     }
     result
 }
@@ -709,13 +856,13 @@ fn read_optional_entry(
 ) -> io::Result<Option<Vec<u8>>> {
     match archive.by_name(name) {
         Ok(entry) => {
-            let mut bytes = Vec::new();
+            if entry.size() > max || entry.compressed_size() > MAX_EDIT_ENTRY_COMPRESSED_BYTES {
+                return Err(edit_too_large());
+            }
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
             entry.take(max + 1).read_to_end(&mut bytes)?;
             if bytes.len() as u64 > max {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("{name} is larger than {max} bytes"),
-                ));
+                return Err(edit_too_large());
             }
             Ok(Some(bytes))
         }
@@ -737,6 +884,15 @@ fn read_optional_json<T: for<'de> Deserialize<'de>>(
         .transpose()
 }
 
+fn marker_entry(markers: &[Marker]) -> io::Result<Option<Vec<u8>>> {
+    if markers.is_empty() {
+        return Ok(None);
+    }
+    let mut json = CappedWrite::new(Vec::new(), REPLAY_EDIT_MAX_BYTES as u64);
+    serde_json::to_writer_pretty(&mut json, markers).map_err(io::Error::from)?;
+    Ok(Some(json.inner))
+}
+
 impl McprReader {
     /// Open an `.mcpr` replay archive from disk.
     pub fn open(path: &Path) -> io::Result<Self> {
@@ -756,6 +912,7 @@ impl McprReader {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
+        let revision = ArchiveRevision::of(&file)?;
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
@@ -819,10 +976,13 @@ impl McprReader {
                 ));
             }
         }
-        let camera_path = read_optional_entry(&mut archive, CAMERA_PATH_ENTRY, MAX_METADATA_BYTES)?;
-        let markers =
-            read_optional_json::<Vec<Marker>>(&mut archive, "markers.json", MAX_METADATA_BYTES)?
-                .unwrap_or_default();
+        let mut markers = read_optional_json::<Vec<Marker>>(
+            &mut archive,
+            MARKERS_ENTRY,
+            REPLAY_EDIT_MAX_BYTES as u64,
+        )?
+        .unwrap_or_default();
+        markers.sort_by_key(|marker| marker.time_ms);
         // A recording that stopped mid-write ends in a frame that isn't whole:
         // indexing and playback both stop before it.
         let mut packet_index = Vec::new();
@@ -858,9 +1018,71 @@ impl McprReader {
             packet_index,
             total_packets,
             last_timestamp_ms: latest,
-            camera_path,
+            archive,
+            revision,
             markers,
         })
+    }
+
+    pub(super) fn archive_identity(&self) -> FileIdentity {
+        self.revision.identity
+    }
+
+    /// Read a single owner on demand; arbitrary mod entries never affect playback.
+    pub(super) fn read_mod_data(&mut self, owner: &str) -> io::Result<Option<Vec<u8>>> {
+        let name = mod_data_entry(owner)?;
+        let max = REPLAY_EDIT_MAX_BYTES as u64;
+        match read_optional_entry(&mut self.archive, &name, max)? {
+            None if owner == REPLAY_STUDIO_OWNER => {
+                read_optional_entry(&mut self.archive, LEGACY_STUDIO_ENTRY, max)
+            }
+            data => Ok(data),
+        }
+    }
+
+    pub(super) fn write_mod_data(
+        &mut self,
+        path: &Path,
+        owner: &str,
+        data: Option<&[u8]>,
+    ) -> io::Result<()> {
+        if data.is_some_and(|data| data.len() > REPLAY_EDIT_MAX_BYTES) {
+            return Err(edit_too_large());
+        }
+        let legacy = (owner == REPLAY_STUDIO_OWNER).then_some(LEGACY_STUDIO_ENTRY);
+        self.edit(path, &mod_data_entry(owner)?, legacy, data)
+    }
+
+    pub(super) fn replace_markers(&mut self, path: &Path, markers: Vec<Marker>) -> io::Result<()> {
+        let json = marker_entry(&markers)?;
+        self.edit(path, MARKERS_ENTRY, None, json.as_deref())?;
+        self.markers = markers;
+        Ok(())
+    }
+
+    pub(super) fn insert_marker(&mut self, path: &Path, marker: Marker) -> io::Result<()> {
+        let at = self
+            .markers
+            .partition_point(|entry| entry.time_ms <= marker.time_ms);
+        self.markers.insert(at, marker);
+        let result = marker_entry(&self.markers)
+            .and_then(|json| self.edit(path, MARKERS_ENTRY, None, json.as_deref()));
+        if result.is_err() {
+            self.markers.remove(at);
+        }
+        result
+    }
+
+    fn edit(
+        &mut self,
+        path: &Path,
+        name: &str,
+        legacy: Option<&str>,
+        data: Option<&[u8]>,
+    ) -> io::Result<()> {
+        (self.archive, self.revision) =
+            replace_entry(&mut self.archive, self.revision, path, name, legacy, data)?;
+        Ok(())
     }
 
     /// The last packet's timestamp, 0 for a recording without packets.
@@ -1316,27 +1538,49 @@ mod tests {
     }
 
     #[test]
-    fn camera_path_bytes_are_kept_as_written_without_changing_recorded_packets() {
-        let scratch = Scratch::new("camera_path");
-        let path = scratch.0.join("camera.mcpr");
+    fn oversized_mod_data_is_refused_without_touching_the_archive() {
+        let scratch = Scratch::new("owned_data_cap");
+        let path = scratch.0.join("replay.mcpr");
         let mut writer = McprWriter::new(path.clone(), Metadata::default()).unwrap();
         writer.write_packet(0, 1, &[10, 20, 30]).unwrap();
         writer.finish(0).unwrap();
 
-        // Not JSON: the archive stores the editor's bytes without reading them.
-        let saved = b"\x00 editor data {".to_vec();
-        McprWriter::replace_camera_path(&path, Some(&saved)).unwrap();
+        let oversize = vec![0; REPLAY_EDIT_MAX_BYTES + 1];
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let mut zip = zip::ZipWriter::new_append(file).unwrap();
+        zip.start_file(
+            "horizon/mod-data/editor.bin",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(&oversize).unwrap();
+        zip.finish().unwrap();
+
+        // An oversized optional entry doesn't keep the replay from opening.
+        let original = fs::read(&path).unwrap();
         let mut reader = McprReader::open(&path).unwrap();
-        assert_eq!(reader.camera_path, Some(saved));
+        assert_eq!(
+            reader.read_mod_data("editor").unwrap_err().kind(),
+            io::ErrorKind::FileTooLarge
+        );
+        assert_eq!(
+            reader
+                .write_mod_data(&path, "editor", Some(&oversize))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::FileTooLarge
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
 
         let packet = reader.next_packet().unwrap().unwrap();
         assert_eq!(
             (packet.timestamp_ms, packet.id, packet.payload),
             (0, 1, vec![10, 20, 30])
         );
-
-        McprWriter::replace_camera_path(&path, None).unwrap();
-        assert!(McprReader::open(&path).unwrap().camera_path.is_none());
     }
 
     #[test]
@@ -1348,7 +1592,7 @@ mod tests {
         writer.add_marker(250, "Bookmark".into());
         writer.finish(250).unwrap();
 
-        let first = McprReader::open(&path).unwrap();
+        let mut first = McprReader::open(&path).unwrap();
         assert_eq!(
             first.markers,
             vec![Marker {
@@ -1360,7 +1604,7 @@ mod tests {
             time_ms: 400,
             label: "Cut".into(),
         }];
-        McprWriter::replace_markers(&path, &replacement).unwrap();
+        first.replace_markers(&path, replacement.clone()).unwrap();
         let mut reopened = McprReader::open(&path).unwrap();
         assert_eq!(reopened.markers, replacement);
         assert_eq!(

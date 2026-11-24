@@ -21,3 +21,4 @@ horizon-client game::native_replay_tests::a_forward_seek_across_a_relative_telep
 horizon-client game::native_replay_tests::a_failed_read_ends_the_replay_as_a_close_does lib daily resources
 horizon-client game::native_replay_tests::a_close_that_cannot_save_the_camera_path_keeps_it_in_a_draft lib daily resources
 horizon-client game::native_replay_tests::a_rebuilt_replay_player_model_ages_once_per_tick lib daily resources
+horizon-client game::native_replay_tests::an_open_replay_persists_markers_and_owned_data lib daily resources

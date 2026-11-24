@@ -27,8 +27,8 @@ pub trait ReplayClientHost {
     /// with `Superseded`; once a read request waits for a world to be left, a later one is
     /// `WorldBusy` instead. An open asked while a replay plays fails with
     /// `Unavailable` when the camera path edited in that replay can't be saved first, or when
-    /// it reads the very archive the editor saved into since the request (its camera path or a
-    /// marker); the replay playing stays.
+    /// it reads the very archive that was edited since the request (markers or mod data);
+    /// the replay playing stays.
     ///
     /// A replay is never played over a live session it would end: from a plain single-player
     /// world, the world is saved and left as Save and Quit does once the recording is ready,
@@ -84,4 +84,33 @@ pub trait ReplayClientHost {
     /// dropped. `NotOpen` while no replay is open.
     #[access(WorldOnly)]
     fn replay_seek(&mut self, ms: u32) -> Result<(), ReplayError>;
+    /// Side: client.
+    /// Lists the open replay's ReplayMod bookmarks in timeline order. `NotOpen` without a replay.
+    #[access(ClientSetup)]
+    fn replay_markers(&self) -> Result<Vec<ReplayMarker>, ReplayEditError>;
+    /// Side: client.
+    /// Atomically adds a bookmark at the open replay's current position and returns it.
+    /// The full on-disk marker list must fit in [`REPLAY_EDIT_MAX_BYTES`].
+    #[access(WorldOnly)]
+    fn replay_add_marker(&mut self, label: &str) -> Result<ReplayMarker, ReplayEditError>;
+    /// Side: client.
+    /// Atomically replaces the open replay's bookmarks, ordered by time (ties keep their
+    /// input order). An empty list removes them. Times are not clipped to the replay duration.
+    /// The full on-disk marker list must fit in [`REPLAY_EDIT_MAX_BYTES`].
+    #[access(WorldOnly)]
+    fn replay_replace_markers(&mut self, markers: Vec<ReplayMarker>)
+    -> Result<(), ReplayEditError>;
+    /// Side: client.
+    /// Reads this mod's one opaque entry in the open replay, bound to its package id by
+    /// the host. `Ok(None)` means absent. For `replay_studio` only, a legacy `camera.json`
+    /// supplies the data if the new entry is absent. No path or owner is selected by the mod.
+    #[access(WorldOnly)]
+    fn replay_read_mod_data(&mut self) -> Result<Option<Vec<u8>>, ReplayEditError>;
+    /// Side: client.
+    /// Atomically replaces this mod's opaque entry in the open replay. `None` removes it;
+    /// an empty byte vector is a present, zero-length entry. Data over
+    /// [`REPLAY_EDIT_MAX_BYTES`] is refused. Updating or removing `replay_studio`'s entry
+    /// also removes any legacy `camera.json`. The archive rewrite runs before this call returns.
+    #[access(WorldOnly)]
+    fn replay_write_mod_data(&mut self, data: Option<Vec<u8>>) -> Result<(), ReplayEditError>;
 }

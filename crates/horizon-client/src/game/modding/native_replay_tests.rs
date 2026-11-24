@@ -1,10 +1,11 @@
 //! A client mod reads and drives replay playback, and the person's gameplay input stays off the
 //! recording while it plays (#19247).
 use super::native_replay::{
-    FileIdentity, open_in_folder, open_recording, recording_path, recordings_folder, take_request,
+    open_in_folder, open_recording, recording_path, recordings_folder, take_request,
 };
+use horizon_client::file_id::FileIdentity;
 use horizon_client::packet_source::PacketSource;
-use horizon_client::studio::mcpr::TimestampedPacket;
+use horizon_client::studio::mcpr::{REPLAY_STUDIO_OWNER, TimestampedPacket};
 use horizon_client::studio::{CameraKeyframe, CameraTrack, ReplayDriver};
 use mod_api::{ClientHost, Hooks, ModEntry, ReplayError};
 use mod_platform::testing::with_mods;
@@ -867,7 +868,6 @@ fn a_replay_open_never_displaces_a_joining_or_multiplayer_session() {
                 recording: "trip".into(),
                 request: 7,
                 archive: None,
-                identity: None,
                 replacing: None,
             },
         });
@@ -1206,6 +1206,220 @@ fn a_replay_with_a_late_login_is_set_up_before_it_is_heard_open() {
     );
 }
 
+#[test]
+#[ignore = "daily"]
+fn an_open_replay_persists_markers_and_owned_data() {
+    use mod_api::{REPLAY_EDIT_MAX_BYTES, ReplayEditError, ReplayMarker};
+    use std::io::Write;
+
+    fn as_mod<T>(id: &'static str, f: impl FnOnce() -> T) -> T {
+        use horizon_client::crash::{ModCall, enter_native_mod};
+        let _scope = enter_native_mod(ModCall {
+            id,
+            hook: "replay fixture",
+            part: None,
+        });
+        f()
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("trip.mcpr");
+    write_packets(
+        &path,
+        1_000,
+        vec![
+            (0, login_packet()),
+            (400, chat_packet("from the recording")),
+        ],
+    );
+    let old_keyframe = CameraKeyframe::new(100, [1.0, 2.0, 3.0], 0.0, 0.0, 70.0);
+    let mut track = CameraTrack::default();
+    track.insert(old_keyframe.clone());
+    let legacy = serde_json::to_vec(&track).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let mut zip = zip::ZipWriter::new_append(file).unwrap();
+    for (name, data) in [
+        ("camera.json", legacy.as_slice()),
+        ("other.dat", &[2, 1, 0]),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+
+    let preserved = || {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        [
+            "metaData.json",
+            "recording.tmcpr",
+            "recording.tmcpr.crc32",
+            "other.dat",
+        ]
+        .map(|name| {
+            let index = zip.index_for_name(name).unwrap();
+            let mut raw = Vec::new();
+            zip.by_index_raw(index)
+                .unwrap()
+                .read_to_end(&mut raw)
+                .unwrap();
+            raw
+        })
+    };
+    let original_entries = preserved();
+    let mut stale_request = 0;
+    let marks = [
+        ReplayMarker::new(100, "first"),
+        ReplayMarker::new(100, "tie"),
+        ReplayMarker::new(550, "later"),
+    ];
+    let heard = with_heard(|game| {
+        let host: &mut dyn ClientHost = game;
+        assert_eq!(host.replay_markers(), Err(ReplayEditError::NotOpen));
+        assert_eq!(host.replay_read_mod_data(), Err(ReplayEditError::NotOpen));
+        game.replay.recordings_dir = Some(root.path().to_path_buf());
+        game.replay_open("trip").unwrap();
+        finish_opening(game);
+        assert_eq!(game.studio.freecam.track.keyframes(), [old_keyframe]);
+
+        let host: &mut dyn ClientHost = game;
+        assert_eq!(
+            host.replay_read_mod_data(),
+            Err(ReplayEditError::NoCallingMod)
+        );
+        assert_eq!(
+            as_mod(REPLAY_STUDIO_OWNER, || host.replay_read_mod_data()),
+            Ok(Some(legacy.clone()))
+        );
+        as_mod("editor_a", || {
+            assert_eq!(host.replay_read_mod_data(), Ok(None));
+            host.replay_write_mod_data(Some(vec![0xff, 0x00])).unwrap();
+        });
+        as_mod("editor_b", || {
+            assert_eq!(host.replay_read_mod_data(), Ok(None));
+            host.replay_write_mod_data(Some(Vec::new())).unwrap();
+        });
+        assert_eq!(
+            as_mod("editor_a", || host.replay_read_mod_data()),
+            Ok(Some(vec![0xff, 0x00]))
+        );
+        assert!(host.replay_markers().unwrap().is_empty());
+        let playhead = host.replay_state().unwrap().position_ms;
+        assert_eq!(
+            host.replay_add_marker("bookmark"),
+            Ok(ReplayMarker::new(playhead, "bookmark"))
+        );
+        assert_eq!(
+            host.replay_markers().unwrap(),
+            [ReplayMarker::new(playhead, "bookmark")]
+        );
+        host.replay_replace_markers(vec![marks[2].clone(), marks[0].clone(), marks[1].clone()])
+            .unwrap();
+        assert_eq!(host.replay_markers().unwrap(), marks);
+        assert_eq!(game.studio.timeline.markers[0].label, "first");
+
+        let original = std::fs::read(&path).unwrap();
+        let host: &mut dyn ClientHost = game;
+        assert_eq!(
+            as_mod("editor_a", || host.replay_write_mod_data(Some(vec![
+                0;
+                REPLAY_EDIT_MAX_BYTES
+                    + 1
+            ]))),
+            Err(ReplayEditError::TooLarge)
+        );
+        assert_eq!(
+            host.replay_add_marker(&"x".repeat(REPLAY_EDIT_MAX_BYTES)),
+            Err(ReplayEditError::TooLarge)
+        );
+        assert_eq!(host.replay_markers().unwrap(), marks);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            as_mod(REPLAY_STUDIO_OWNER, || host.replay_read_mod_data()),
+            Ok(Some(legacy.clone()))
+        );
+
+        stale_request = host.replay_open("trip").unwrap();
+        as_mod(REPLAY_STUDIO_OWNER, || {
+            host.replay_write_mod_data(Some(b"{\"keyframes\":[]}".to_vec()))
+        })
+        .unwrap();
+        assert!(
+            game.studio.freecam.track.is_empty(),
+            "the editor sees its updated data"
+        );
+        finish_opening(game);
+        game.replay_open("trip").unwrap();
+        finish_opening(game);
+
+        let host: &mut dyn ClientHost = game;
+        assert_eq!(host.replay_markers().unwrap(), marks);
+        assert_eq!(
+            as_mod("editor_a", || host.replay_read_mod_data()),
+            Ok(Some(vec![0xff, 0x00]))
+        );
+        assert_eq!(
+            as_mod("editor_b", || host.replay_read_mod_data()),
+            Ok(Some(Vec::new()))
+        );
+        assert_eq!(
+            as_mod(REPLAY_STUDIO_OWNER, || host.replay_read_mod_data()),
+            Ok(Some(b"{\"keyframes\":[]}".to_vec()))
+        );
+        as_mod(REPLAY_STUDIO_OWNER, || host.replay_write_mod_data(None)).unwrap();
+        assert_eq!(
+            as_mod(REPLAY_STUDIO_OWNER, || host.replay_read_mod_data()),
+            Ok(None)
+        );
+        assert_eq!(preserved(), original_entries);
+
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        assert!(
+            zip.by_name("camera.json").is_err(),
+            "the legacy value can't reappear"
+        );
+        let markers: serde_json::Value =
+            serde_json::from_reader(zip.by_name("markers.json").unwrap()).unwrap();
+        assert_eq!(
+            markers,
+            serde_json::json!([
+                {"timeMs": 100, "label": "first"}, {"timeMs": 100, "label": "tie"}, {"timeMs": 550, "label": "later"}
+            ])
+        );
+        drop(zip);
+        game.seek_studio_replay(500).unwrap();
+        assert!(
+            game.ui
+                .chat
+                .recent_lines(10)
+                .iter()
+                .any(|line| line == "from the recording")
+        );
+
+        // A new file at this name must not receive either mod data or markers from the replay.
+        write_recording(&path, 2_000, &[]);
+        let replacement = std::fs::read(&path).unwrap();
+        let host: &mut dyn ClientHost = game;
+        assert_eq!(
+            as_mod("editor_b", || host.replay_write_mod_data(None)),
+            Err(ReplayEditError::Stale)
+        );
+        assert_eq!(
+            host.replay_replace_markers(Vec::new()),
+            Err(ReplayEditError::Stale)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
+    });
+    assert!(
+        heard.contains(&format!("failed trip Unavailable #{stale_request}")),
+        "{heard:?}"
+    );
+}
+
 /// A replacement never costs the camera path edited in the replay playing: when it can't be
 /// saved, or the replacement was read from the archive it was just saved into, the replay
 /// playing stays and the request fails with `Unavailable`.
@@ -1231,9 +1445,12 @@ fn a_replacement_keeps_the_replay_whose_camera_edits_it_would_lose() {
         finish_opening(game);
         assert!(!game.studio.camera_track_dirty, "the edits were saved");
         assert_eq!(game.replay_state().unwrap().recording, "trip");
-        let saved = ReplayDriver::open(&path).unwrap();
-        let saved: CameraTrack =
-            serde_json::from_slice(saved.camera_path().expect("a camera path")).unwrap();
+        let saved = ReplayDriver::open(&path)
+            .unwrap()
+            .read_mod_data(REPLAY_STUDIO_OWNER)
+            .unwrap()
+            .expect("a camera path");
+        let saved: CameraTrack = serde_json::from_slice(&saved).unwrap();
         assert_eq!(
             saved.keyframes(),
             std::slice::from_ref(&first),
@@ -1990,7 +2207,11 @@ fn a_close_that_cannot_save_the_camera_path_keeps_it_in_a_draft() {
         assert_eq!(draft("trip.camera-draft-2.json").keyframes(), [second]);
         assert!(said(game, "trip.camera-draft-2.json"));
         assert!(
-            ReplayDriver::open(&path).unwrap().camera_path().is_none(),
+            ReplayDriver::open(&path)
+                .unwrap()
+                .read_mod_data(REPLAY_STUDIO_OWNER)
+                .unwrap()
+                .is_none(),
             "the file put in its place is untouched"
         );
     });

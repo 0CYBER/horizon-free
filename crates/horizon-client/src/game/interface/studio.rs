@@ -6,7 +6,7 @@ use super::{Game, Screen, packs};
 use horizon_client::{
     Result,
     packet_source::PacketSource,
-    studio::{ReplayDriver, TimelineAction},
+    studio::{ReplayDriver, TimelineAction, mcpr::REPLAY_STUDIO_OWNER},
     text::Text,
 };
 use serde_json::{Value, json};
@@ -33,6 +33,19 @@ impl Studio {
     /// The free camera flies, apart from the player.
     pub(super) fn flying(&self) -> bool {
         self.freecam.active
+    }
+
+    pub(super) fn set_camera_data(&mut self, data: Option<&[u8]>) {
+        self.freecam.track = match data.map(serde_json::from_slice) {
+            Some(Ok(track)) => track,
+            Some(Err(error)) => {
+                log::warn!("Studio: could not read the replay's camera path: {error}");
+                Default::default()
+            }
+            None => Default::default(),
+        };
+        self.timeline.selected_keyframe = None;
+        self.timeline.dragging_keyframe = None;
     }
 }
 
@@ -427,28 +440,15 @@ impl Game<'_> {
 
     /// Add a bookmark at the replay playhead and save it in the `.mcpr` archive.
     pub(super) fn add_studio_marker(&mut self) {
-        let archive = &mut self.replay.archive;
-        let identity = &mut self.replay.identity;
-        let Some(replay) = self
-            .replay
-            .driver
-            .as_mut()
-            .and_then(|driver| driver.as_any_mut().downcast_mut::<ReplayDriver>())
-        else {
+        let Some(replay) = self.replay.edit_driver() else {
             return;
         };
-        if let Err(error) = archive_unchanged(*archive, replay) {
-            log::warn!("Studio: could not save replay marker: {error}");
-            return;
-        }
         let label = Text::translate(
             "horizon.studio.timeline.marker",
             &[Text::literal((replay.markers().len() + 1).to_string())],
         )
         .plain();
-        let added = replay.add_marker(label);
-        note_written(archive, identity, replay);
-        match added {
+        match replay.add_marker(label) {
             Ok(_) => self.studio.timeline.markers = replay.markers().to_vec(),
             Err(error) => log::warn!("Studio: could not save replay marker: {error}"),
         }
@@ -479,14 +479,8 @@ impl Game<'_> {
 
     /// Saves the free camera's path into the replay playing, when it changed.
     pub(super) fn save_studio_camera_track(&mut self) -> std::io::Result<()> {
-        let archive = &mut self.replay.archive;
-        let identity = &mut self.replay.identity;
         if self.studio.camera_track_dirty
-            && let Some(driver) = self
-                .replay
-                .driver
-                .as_mut()
-                .and_then(|driver| driver.as_any_mut().downcast_mut::<ReplayDriver>())
+            && let Some(driver) = self.replay.edit_driver()
         {
             let track = &self.studio.freecam.track;
             let json = if track.is_empty() {
@@ -494,29 +488,25 @@ impl Game<'_> {
             } else {
                 Some(serde_json::to_vec_pretty(track).map_err(std::io::Error::other)?)
             };
-            archive_unchanged(*archive, driver)?;
-            let saved = driver.save_camera_path(json);
-            note_written(archive, identity, driver);
-            saved?;
+            driver.write_mod_data(REPLAY_STUDIO_OWNER, json.as_deref())?;
             self.studio.camera_track_dirty = false;
         }
         Ok(())
     }
 
     /// A replay opened: the timeline shows it and the free camera takes its saved path.
-    pub(super) fn studio_replay_opened(&mut self, driver: &ReplayDriver) {
+    pub(super) fn studio_replay_opened(&mut self, driver: &mut ReplayDriver) {
         self.studio.timeline.duration_ms = u64::from(driver.duration_ms());
         self.studio.timeline.current_time_ms = 0;
         self.studio.timeline.playing = !driver.is_paused();
         self.studio.timeline.markers = driver.markers().to_vec();
-        self.studio.freecam.track = match driver.camera_path().map(serde_json::from_slice) {
-            Some(Ok(track)) => track,
-            Some(Err(error)) => {
+        match driver.read_mod_data(REPLAY_STUDIO_OWNER) {
+            Ok(data) => self.studio.set_camera_data(data.as_deref()),
+            Err(error) => {
                 log::warn!("Studio: could not read the replay's camera path: {error}");
-                Default::default()
+                self.studio.set_camera_data(None);
             }
-            None => Default::default(),
-        };
+        }
         self.studio.camera_track_dirty = false;
     }
 
@@ -532,24 +522,10 @@ impl Game<'_> {
         {
             self.studio.freecam.update_spline_playback(position);
         }
-        if let Some((position, duration, paused, markers)) =
-            self.replay.driver.as_ref().map(|replay| {
-                let markers = replay
-                    .as_any()
-                    .downcast_ref::<ReplayDriver>()
-                    .map_or_else(Vec::new, |driver| driver.markers().to_vec());
-                (
-                    replay.position_ms(),
-                    replay.duration_ms(),
-                    replay.is_paused(),
-                    markers,
-                )
-            })
-        {
-            self.studio.timeline.current_time_ms = u64::from(position);
-            self.studio.timeline.duration_ms = u64::from(duration);
-            self.studio.timeline.playing = !paused;
-            self.studio.timeline.markers = markers;
+        if let Some(replay) = self.replay.driver.as_ref() {
+            self.studio.timeline.current_time_ms = u64::from(replay.position_ms());
+            self.studio.timeline.duration_ms = u64::from(replay.duration_ms());
+            self.studio.timeline.playing = !replay.is_paused();
         }
     }
 
@@ -562,8 +538,8 @@ impl Game<'_> {
         self.studio.camera_track_dirty = false;
     }
 
-    /// The camera path a failed save on close would lose, written as the archive's
-    /// `camera.json` would hold it to a new `<recording>.camera-draft*.json` beside the
+    /// The camera path a failed save on close would lose, written as JSON to a
+    /// new `<recording>.camera-draft*.json` beside the
     /// recording, else in the game folder's `recordings/`; the player is told where.
     fn save_studio_camera_draft(&mut self) {
         let Some(recording) = self
@@ -854,47 +830,6 @@ fn write_camera_draft(dir: &std::path::Path, stem: &str, json: &[u8]) -> std::io
         }
     }
     Err(std::io::Error::other("too many camera path drafts"))
-}
-
-/// A replay a mod opened (`replay_open`) saves into the archive it was opened from only: the file
-/// at its path now must be that same file, not one put in its place since. Other replays (the
-/// replays list, `/studio replay open`) save to their path as before.
-fn archive_unchanged(
-    archive: Option<super::native_replay::FileIdentity>,
-    driver: &ReplayDriver,
-) -> std::io::Result<()> {
-    let Some(archive) = archive else {
-        return Ok(());
-    };
-    let now = std::fs::File::open(driver.path())
-        .and_then(|file| super::native_replay::FileIdentity::of(&file))?;
-    if now != archive {
-        return Err(std::io::Error::other(
-            "the recording was replaced since the replay opened it",
-        ));
-    }
-    Ok(())
-}
-
-/// After an editor save, the archive it wrote (from the handle the writer returns) is the one the
-/// replay reads (`identity`) and a mod's replay saves into next (`archive`).
-fn note_written(
-    archive: &mut Option<super::native_replay::FileIdentity>,
-    identity: &mut Option<super::native_replay::FileIdentity>,
-    driver: &mut ReplayDriver,
-) {
-    let Some(written) = driver.take_written() else {
-        return;
-    };
-    let written = super::native_replay::FileIdentity::of(&written).ok();
-    // Unknown, it matches nothing: a reopen recorded before this save counts as stale.
-    *identity = written;
-    // An identity that can't be read keeps the old one: the next save is refused, not unguarded.
-    if archive.is_some()
-        && let Some(written) = written
-    {
-        *archive = Some(written);
-    }
 }
 
 #[cfg(test)]

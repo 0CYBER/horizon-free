@@ -22,9 +22,10 @@ opened from a file elsewhere (`/studio replay open <path>`) has the empty id.
 the game runs (once every id has been given, `replay_open` is `Unavailable`). Exactly one of `replay_opened` or `replay_open_failed` follows with that id, whatever happens; only
 the game closing first promises neither. One thread reads recordings at a time: a later `replay_open` replaces a
 request still waiting or being read, which fails with `Superseded`, and the replaced reading is cancelled. A read
-request waiting for a world to be left is past that: a later `replay_open` is `WorldBusy` and the first goes on. While a replay plays, its edited camera path is saved before another replaces it; if that save fails, or
-the replacement was read from the same archive and the editor saved into it after the request (the camera path or a
-marker), the replay playing stays and the request fails with `Unavailable`.
+request waiting for a world to be left is past that: a later `replay_open` is `WorldBusy` and the first goes on.
+While a replay plays, its edited Studio camera path is saved before another replaces it. If that save fails, or
+if the requested copy was read from the same archive and its markers or mod data were saved after the request,
+the replay playing stays and the request fails with `Unavailable`.
 
 A replay never displaces a session it would end: `replay_open` is `WorldBusy` while a world is being joined, a
 multiplayer server is connected, or the single-player world is open to LAN or has splitscreen players (leave it with
@@ -74,10 +75,35 @@ key mappings), mouse button (`mouse_button_pre`/`_post`), the wheel and the bump
 not while a screen or prompt, chat included, takes the wheel), and its screens and prompts take input as usual, so a replay editor can run on a mod's own camera (`camera_pose`). Escape
 closes the replay and P opens the pause menu.
 
-Studio's editor saves its markers and camera path into the recording. For a replay a mod opened, the file at the
-recording's path is checked before each save to be the archive that was opened (or last saved); if another file has
-been put there, the save is refused.
+## Markers and mod data
 
-`ReplayState`, `ReplayError` and the hooks' events are `#[non_exhaustive]` for Rust callers only. On the wire every
+These calls act on the replay playing in this window. They take neither a path nor a recording id.
+Use `replay_opened` to know when your requested recording is ready.
+
+| Call | Access | What it does |
+|---|---|---|
+| `replay_markers()` | client setup | Returns the replay's bookmarks in timeline order. |
+| `replay_add_marker(label)` | world | Saves a bookmark at the current playhead and returns it. |
+| `replay_replace_markers(markers)` | world | Replaces the whole list. Create entries with `ReplayMarker::new(time_ms, label)`. Ties keep their input order; an empty list clears it. |
+| `replay_read_mod_data()` | world | Reads this mod's bytes. `Ok(None)` means there is no entry. |
+| `replay_write_mod_data(data)` | world | Replaces this mod's bytes with `Some(bytes)`, or removes them with `None`. `Some(vec![])` is a present but empty entry. |
+
+Markers are shared platform data and still use ReplayMod's `markers.json`. Mod data is separate: the host
+uses the calling package's id, so two mods can save data in the same replay without replacing one another's
+entries. Data travels with the `.mcpr`; it isn't private to the player who saved it. The ZIP entry is
+`horizon/mod-data/<package id>.bin`. Only `replay_studio` falls back to the old `camera.json`, and only
+when its new entry is absent. Updating or removing that entry also removes `camera.json` so outdated
+data cannot reappear. The built-in editor reads and saves to the same entry; an update from `replay_studio`
+is refused while the editor has unsaved camera changes.
+
+Each mod's entry and the whole serialized marker list have a 1 MiB limit (`REPLAY_EDIT_MAX_BYTES`).
+Saves are synchronous and atomic. They copy the rest of the archive without changing the recording's packets
+or metadata, so save at editing milestones rather than every frame. ZIPs over 1 GiB plus 64 MiB cannot be
+edited. `ReplayEditError::TooLarge` and `Stale` leave the recording unchanged; `Stale` also covers the
+recording being replaced externally while it is open. `NotOpen` means there is no replay, `Unavailable`
+means there is no editable archive for this replay, `NoCallingMod` means there is no package to bind the data to,
+and `Io` means the archive could not be read or written.
+
+`ReplayState`, `ReplayError`, `ReplayMarker`, `ReplayEditError` and the hooks' events are `#[non_exhaustive]` for Rust callers only. On the wire every
 field and variant is encoded and its layout hashed ([wire types](../../concepts/wire-types.md)), so they stay as they
 are: adding one would break wasm mods built against this version.

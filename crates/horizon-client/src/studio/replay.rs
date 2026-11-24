@@ -3,7 +3,8 @@
 //! Feeds recorded `.mcpr` packet streams into the client's packet processing
 //! loop at user-controlled playback speeds (slow-motion, 1x, fast-forward, pause).
 
-use super::mcpr::{Marker, McprReader, McprWriter, Metadata, TimestampedPacket};
+use super::mcpr::{Marker, McprReader, Metadata, TimestampedPacket};
+use crate::file_id::FileIdentity;
 use crate::packet_source::PacketSource;
 use std::{
     fs::File,
@@ -37,8 +38,6 @@ pub struct ReplayDriver {
     /// The next packet read fails, as a failing archive's would.
     #[cfg(test)]
     fail_next_read: bool,
-    /// The archive the editor's last save wrote, still open (`take_written`).
-    written: Option<File>,
 }
 
 impl ReplayDriver {
@@ -47,8 +46,8 @@ impl ReplayDriver {
         Self::from_file(std::fs::File::open(path)?, path)
     }
 
-    /// As [`ReplayDriver::open`], from the archive already open as `file`; `path` is only where
-    /// the editor later saves its markers and camera path.
+    /// As [`ReplayDriver::open`], from the archive already open as `file`; `path` is where
+    /// edits are saved only while it still names that archive.
     pub fn from_file(file: File, path: &Path) -> io::Result<Self> {
         Self::from_file_cancellable(file, path, &AtomicBool::new(false))
     }
@@ -82,14 +81,12 @@ impl ReplayDriver {
             broken: false,
             #[cfg(test)]
             fail_next_read: false,
-            written: None,
         })
     }
 
-    /// The archive the editor's last save (`add_marker`, `save_camera_path`) wrote, still open,
-    /// once: what is at [`ReplayDriver::path`] now unless something replaced it since.
-    pub fn take_written(&mut self) -> Option<File> {
-        self.written.take()
+    /// The archive this replay read, as of its most recent successful edit.
+    pub fn archive_identity(&self) -> FileIdentity {
+        self.reader.archive_identity()
     }
 
     /// The next packet into the cache; a failure marks the stream broken.
@@ -127,15 +124,19 @@ impl ReplayDriver {
         Ok(packets)
     }
 
-    /// The archive this replay reads, where the editor saves its markers and camera path.
+    /// The archive this replay reads and saves edits to.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// The editor's camera path saved alongside the packet stream, as the
-    /// editor wrote it, if present.
-    pub fn camera_path(&self) -> Option<&[u8]> {
-        self.reader.camera_path.as_deref()
+    /// The owner's data in this replay's archive. The host supplies the authenticated id.
+    pub fn read_mod_data(&mut self, owner: &str) -> io::Result<Option<Vec<u8>>> {
+        self.reader.read_mod_data(owner)
+    }
+
+    /// Atomically replace or remove one owner's data. The playback stream is untouched.
+    pub fn write_mod_data(&mut self, owner: &str, data: Option<&[u8]>) -> io::Result<()> {
+        self.reader.write_mod_data(&self.path, owner, data)
     }
 
     /// Markers saved alongside the packet stream, in timeline order.
@@ -149,23 +150,14 @@ impl ReplayDriver {
             time_ms: self.position_ms(),
             label,
         };
-        let mut markers = self.reader.markers.clone();
-        markers.push(marker.clone());
-        markers.sort_by_key(|entry| entry.time_ms);
-        self.written = Some(McprWriter::replace_markers(&self.path, &markers)?);
-        self.reader.markers = markers;
+        self.reader.insert_marker(&self.path, marker.clone())?;
         Ok(marker)
     }
 
-    /// Save the editor's camera path in the recording archive; `None`
-    /// removes it.
-    pub fn save_camera_path(&mut self, json: Option<Vec<u8>>) -> io::Result<()> {
-        self.written = Some(McprWriter::replace_camera_path(
-            &self.path,
-            json.as_deref(),
-        )?);
-        self.reader.camera_path = json;
-        Ok(())
+    /// Persist a complete replacement of the replay's bookmarks.
+    pub fn replace_markers(&mut self, mut markers: Vec<Marker>) -> io::Result<()> {
+        markers.sort_by_key(|entry| entry.time_ms);
+        self.reader.replace_markers(&self.path, markers)
     }
 
     /// Exact playhead for fixed-clock playback.
