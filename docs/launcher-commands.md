@@ -105,7 +105,7 @@ Start the client (needs a signed-in Microsoft account that owns Minecraft: Java 
 - `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 - `--account`: Play this launch as this signed-in account (its name or UUID), without changing the one `account select` picked: several games can play as several accounts at once
 
-MCP: `play`, then the `game_*` tools.
+MCP: `play` (its `arg` needs `confirm: true`), then the `game_*` tools.
 
 ## `horizon-launcher server`
 

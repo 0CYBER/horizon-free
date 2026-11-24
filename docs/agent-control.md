@@ -267,7 +267,9 @@ turn the switch off.
   `confirm` and carries the MCP `destructiveHint`. In the game these are `world-delete`, `fill`
   and `setblock` (the table's `DESTRUCTIVE`); in the launcher, `remove`, `modpack remove`,
   `mods remove`, `servers forget` and `account sign-out` (`cli_tools::DESTRUCTIVE`), and what
-  decides what the next Play runs or joins: `instance launch`, `instance java` and `game-args`.
+  decides what the next Play runs or joins: `instance launch`, `instance java` and `game-args`,
+  and the `play` tool's `arg` (game arguments passed as they are: `--server`, `--session-file`,
+  `--smoke-report`; no hint, so a plain `play` asks nothing).
   Without `confirm: true` the call is refused and the message says to ask the player. In the game
   CLI the flag is `--confirm`. The launcher CLI asks nothing: a person typing `remove` meant it.
 - **Other people's text is data.** Chat, signs, books, MOTDs, names, mod descriptions and log lines
@@ -278,8 +280,8 @@ turn the switch off.
 - **Ask before reaching out.** A command that sends data or reaches other people carries
   `openWorldHint`, and its description says "only when the player asks". In the game these are
   `connect`, `lan`, `friends`, `chat` and `command`; in the launcher, `servers create` and
-  `share-log`. `play`'s `join` argument says the same. Bug and benchmark reports stay local;
-  there is no telemetry or data collection switch ([Horizon sends nothing](telemetry.md)).
+  `share-log`. `play`'s `join` and `server` arguments say the same. Bug and benchmark reports
+  stay local; there is no telemetry or data collection switch ([Horizon sends nothing](telemetry.md)).
 - **No secrets.** No surface returns tokens, session files, keychain entries or invite secrets
   the player didn't ask to share:
   - accounts are names and UUIDs;

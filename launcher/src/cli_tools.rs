@@ -260,7 +260,7 @@ impl Tool {
 #[cfg(test)]
 fn session_tool(words: &str) -> &'static str {
     match words {
-        "play" => "`play`, then the `game_*` tools",
+        "play" => "`play` (its `arg` needs `confirm: true`), then the `game_*` tools",
         "server" => "`server`, `server_command`, `server_log`, `server_stop`",
         "account sign-in" => "`account_sign_in`",
         "account list" => "`account_list`",

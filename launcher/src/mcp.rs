@@ -45,7 +45,8 @@ fn session_tools() -> Value {
             "join": { "type": "string", "description": "Join a friend's world with its invite code. Only when the player asks." },
             "server": { "type": "string", "description": "Join this server at once: an address, or a server of the instance's list (multiplayer_list) by name or position. Only when the player asks." },
             "offscreen": { "type": "boolean", "description": "Render without showing a window (game_screenshot still works)." },
-            "arg": { "type": "array", "items": { "type": "string" }, "description": "Extra game arguments, passed through as-is (for example \"--server-thread\")." } } } },
+            "arg": { "type": "array", "items": { "type": "string" }, "description": "Extra game arguments, passed through as-is (for example \"--server-thread\"). They decide what the game joins, reads, writes and deletes (--server, --session-file, --smoke-report): needs confirm, only when the player asks." },
+            "confirm": { "type": "boolean", "description": "true once the player agreed to the extra game arguments in arg." } } } },
         { "name": "server", "description": "Start a Horizon dedicated server. It runs until server_stop or the end of this MCP session. Requires agreeing to the Minecraft EULA. CLI: horizon-launcher server",
           "inputSchema": { "type": "object", "properties": { "version": version, "allow_jar_downloads": jar_downloads, "dir": { "type": "string", "description": "The server's folder. Default: the launcher's server folder." }, "accept_eula": { "type": "boolean", "description": "Agree to the Minecraft EULA (https://aka.ms/MinecraftEULA) on the player's behalf. Only with their consent." } } } },
         { "name": "server_command", "description": "Send a console command to the server started with server (for example \"list\" or \"say hello\"), and return the lines it printed in reply.",
@@ -71,6 +72,23 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
+/// `play`'s extra game arguments go to the game as they are: `--server HOST`, `--session-file
+/// PATH` (read, then deleted), `--smoke-report PATH` (written on exit), `--control-socket PATH`.
+/// Like `game-args`, they need the player's yes; `play` without them stays free.
+fn play_needs_confirm(args: &Value) -> Result<(), String> {
+    let extra = args
+        .get("arg")
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty());
+    if extra && args.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(
+            "play passes arg to the game as it is: ask the player, then call it with confirm: true"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 impl Session {
     fn call(&mut self, name: &str, args: &Value) -> Result<String, String> {
         let allow_jar_downloads = args
@@ -79,6 +97,7 @@ impl Session {
             .unwrap_or(false);
         match name {
             "play" => {
+                play_needs_confirm(args)?;
                 if self.client.as_ref().is_some_and(|c| c.finished().is_none()) {
                     return Err("The client is already running.".into());
                 }
@@ -371,6 +390,31 @@ pub fn serve() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn play_with_extra_game_arguments_needs_confirm() {
+        let evil = json!({ "arg": ["--server", "evil.example:25565"] });
+        assert!(play_needs_confirm(&evil).unwrap_err().contains("confirm"));
+        let deletes = json!({ "arg": ["--session-file=/home/me/notes.txt"], "confirm": false });
+        assert!(play_needs_confirm(&deletes).is_err());
+        let agreed = json!({ "arg": ["--server", "evil.example:25565"], "confirm": true });
+        assert!(play_needs_confirm(&agreed).is_ok());
+        // Starting the game, and joining what the player asked for, stay one call.
+        for free in [
+            json!({}),
+            json!({ "arg": [] }),
+            json!({ "world": "Agent", "creative": true }),
+            json!({ "server": "play.example.org" }),
+        ] {
+            assert!(play_needs_confirm(&free).is_ok(), "{free}");
+        }
+        let play = &session_tools()[0];
+        assert_eq!(play["name"], "play");
+        assert_eq!(
+            play["inputSchema"]["properties"]["confirm"]["type"],
+            "boolean"
+        );
+    }
 
     #[test]
     fn a_launcher_error_carries_no_untrusted_notice() {
