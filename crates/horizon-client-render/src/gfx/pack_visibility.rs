@@ -30,13 +30,19 @@ impl Renderer {
             }
         }
         if frame.sky.sunrise_color[3] > 0.001 {
-            draw_sky_part(
-                pass,
-                visibility,
-                &self.sunrise_pipeline,
-                Some(&self.sunrise_buffer),
-                super::sunrise_fan::VERTICES as u32,
-            );
+            match self.core_sky.as_ref().filter(|c| c.draws_sunrise()) {
+                Some(core) => {
+                    core.draw_sunrise(pass);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
+                None => draw_sky_part(
+                    pass,
+                    visibility,
+                    &self.sunrise_pipeline,
+                    Some(&self.sunrise_buffer),
+                    super::sunrise_fan::VERTICES as u32,
+                ),
+            }
         }
     }
 

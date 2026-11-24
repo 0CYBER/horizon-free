@@ -117,11 +117,14 @@ pub struct HudAtlas {
     /// The packs' `core/sky` and `core/stars`, when a pack replaces them.
     pub sky_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     pub stars_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
+    /// The packs' `core/position_color` (`RenderPipelines.SUNRISE_SUNSET`).
+    pub sunrise_shader: Option<Arc<crate::core_shader::CoreProgram>>,
+    /// The packs' `core/gui` (`RenderPipelines.GUI` and its blend variants).
+    pub gui_shader: Option<Arc<crate::core_shader::CoreProgram>>,
     /// The packs' `core/lightmap`, which draws the lightmap texture in place of the CPU
     /// formula (`RenderPipelines.LIGHTMAP`).
     pub lightmap_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
-    /// The packs' `core/position_tex_color` (`RenderPipelines.GUI_TEXTURED`), when a pack
-    /// replaces it: [`HudBatch::pack_blit`] draws the menu textures with it.
+    /// The packs' `core/position_tex_color` (`RenderPipelines.GUI_TEXTURED`).
     pub blit_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
     /// The packs' Polytone screen sprite modifiers.
     pub sprite_modifiers: std::sync::Arc<sprite_modifiers::SpriteModifiers>,
@@ -1108,8 +1111,10 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            sunrise_shader: None,
             lightmap_shader: None,
             blit_shader: None,
+            gui_shader: None,
             sprite_modifiers: Default::default(),
             random_textures: Default::default(),
             emissive: Arc::default(),
@@ -1179,8 +1184,10 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            sunrise_shader: None,
             lightmap_shader: None,
             blit_shader: None,
+            gui_shader: None,
             sprite_modifiers: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
@@ -1802,8 +1809,10 @@ impl HudAtlas {
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
+            sunrise_shader: None,
             lightmap_shader: None,
             blit_shader: None,
+            gui_shader: None,
             sprite_modifiers: Default::default(),
             random_textures,
             emissive,
@@ -1986,13 +1995,53 @@ pub enum Blend {
     /// An OptiFine CIT glint layer (`cit_glint`), blended as entry `n` of
     /// `GlintTextures::blends` says.
     CitGlint(u8),
+    /// `RenderPipelines.GUI` (or its blend variants), with an optional GUI-space scissor.
+    GuiFill(GuiFill, Option<[u32; 4]>),
     /// `GuiGraphicsExtractor.blit(GUI_TEXTURED, texture, ...)` as vanilla draws it: one quad
     /// with the blit's own UVs, which the pack's `position_tex_color` draws with picture `id`
     /// as `Sampler0` ([`HudBatch::pack_blit`]).
     PackBlit(u64),
+    PackBlitClipped(u64, [u32; 4]),
     /// The same blit as the atlas tiles it draws natively, translucent: drawn unless the pack's
     /// shader draws the `PackBlit` of picture `id` after it.
     PackBlitNative(u64),
+}
+
+/// The blend selected by `GuiGraphicsExtractor.fill` and `textHighlight`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GuiFill {
+    Alpha,
+    Invert,
+    Additive,
+}
+
+impl Blend {
+    fn core_scissor(self) -> Option<[u32; 4]> {
+        match self {
+            Self::GuiFill(_, clip) => clip,
+            Self::PackBlitClipped(_, clip) => Some(clip),
+            _ => None,
+        }
+    }
+
+    /// Keep vanilla's input vertices intact; its scissor runs after the pack's vertex shader.
+    fn scissor_core(&mut self, mut clip: [f32; 4]) {
+        if let Some(old) = self.core_scissor() {
+            let [x0, y0, x1, y1] = old.map(f32::from_bits);
+            clip = [
+                x0.max(clip[0]),
+                y0.max(clip[1]),
+                x1.min(clip[2]),
+                y1.min(clip[3]),
+            ];
+        }
+        let clip = clip.map(f32::to_bits);
+        *self = match *self {
+            Self::GuiFill(mode, _) => Self::GuiFill(mode, Some(clip)),
+            Self::PackBlit(id) | Self::PackBlitClipped(id, _) => Self::PackBlitClipped(id, clip),
+            _ => return,
+        };
+    }
 }
 /// What a `Blend::EndPortal` fill samples: the atlas rects (u0, v0, width,
 /// height) of `end_sky.png` and `end_portal.png`, and the `GameTime` uniform.
@@ -2000,6 +2049,19 @@ pub enum Blend {
 pub struct EndPortalFill {
     pub sprites: [[f32; 4]; 2],
     pub game_time: f32,
+}
+
+/// `GuiRenderState.findAppropriateNode`: a wholly scissored rectangle is not extracted.
+fn intersects_scissor(q: &[HudVertex; 6], [x0, y0, x1, y1]: [f32; 4]) -> bool {
+    let mut lo = q[0].pos;
+    let mut hi = lo;
+    for v in [&q[1], &q[2], &q[5]] {
+        for axis in 0..2 {
+            lo[axis] = lo[axis].min(v.pos[axis]);
+            hi[axis] = hi[axis].max(v.pos[axis]);
+        }
+    }
+    lo[0].max(x0) < hi[0].min(x1) && lo[1].max(y0) < hi[1].min(y1)
 }
 pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     (a as u32) << 24 | (b as u32) << 16 | (g as u32) << 8 | r as u32
@@ -2159,13 +2221,14 @@ impl HudBatch {
         invert_text: bool,
     ) {
         if invert_text {
-            let start = self.vertices.len();
-            self.fill(atlas, x, y, w, h, rgba(255, 255, 255, 255));
-            self.invert_since(start);
+            self.fill_with(
+                atlas,
+                [x, y, w, h],
+                rgba(255, 255, 255, 255),
+                GuiFill::Invert,
+            );
         }
-        let start = self.vertices.len();
-        self.fill(atlas, x, y, w, h, rgba(0, 0, 255, 255));
-        self.blend_since(start, Blend::Additive);
+        self.fill_with(atlas, [x, y, w, h], rgba(0, 0, 255, 255), GuiFill::Additive);
     }
     /// The vertex ranges in order, each with its blend.
     pub fn runs(&self) -> Vec<(std::ops::Range<u32>, Blend)> {
@@ -2210,6 +2273,20 @@ impl HudBatch {
             runs.push((at.max(vertices.start)..end, Blend::Alpha));
         }
         runs
+    }
+
+    /// Emit an expanded Java quad in its original corner order.
+    fn core_quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: [u32; 4]) {
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: p[i],
+                uv: uv[i],
+                color: color[i],
+                depth: 0.0,
+                glint_uv: [0.0, 0.0],
+                text: 0,
+            });
+        }
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
@@ -2369,6 +2446,34 @@ impl HudBatch {
         }
     }
     pub fn clip_since(&mut self, start: usize, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let start_vertex = start as u32;
+        let first = self
+            .blends
+            .partition_point(|(range, _)| range.end <= start_vertex);
+        // A scissor can start in a run coalesced with the fill immediately before it.
+        if let Some((range, blend)) = self.blends.get_mut(first)
+            && range.start < start_vertex
+        {
+            let tail = (start_vertex..range.end, *blend);
+            range.end = start_vertex;
+            self.blends.insert(first + 1, tail);
+        }
+        let bounds = [x0, y0, x1, y1];
+        for (range, blend) in &mut self.blends[first..] {
+            if range.start >= start_vertex {
+                blend.scissor_core(bounds);
+            }
+        }
+        let mut blends = self.blends[first..].iter().peekable();
+        let mut scissored = |read: usize| {
+            let read = read as u32;
+            while blends.peek().is_some_and(|(range, _)| range.end <= read) {
+                blends.next();
+            }
+            blends.peek().is_some_and(|(range, blend)| {
+                range.contains(&read) && blend.core_scissor().is_some()
+            })
+        };
         // Cut where the quads are. The kept ones move down over what is gone, rather than taking
         // all of them out and putting them back. Only when a cut quad grows past what is still
         // to be read is the rest taken out and put back after it.
@@ -2383,9 +2488,15 @@ impl HudBatch {
             let q: [HudVertex; 6] = self.vertices[read..read + 6].try_into().expect("six");
             moved.push(write as u32);
             index += 1;
-            let inside = q
-                .iter()
-                .all(|v| v.pos[0] >= x0 && v.pos[0] <= x1 && v.pos[1] >= y0 && v.pos[1] <= y1);
+            let inside = if scissored(read) {
+                if !intersects_scissor(&q, bounds) {
+                    continue;
+                }
+                true
+            } else {
+                q.iter()
+                    .all(|v| v.pos[0] >= x0 && v.pos[0] <= x1 && v.pos[1] >= y0 && v.pos[1] <= y1)
+            };
             if inside {
                 if write != read {
                     self.vertices.copy_within(read..read + 6, write);
@@ -2394,7 +2505,7 @@ impl HudBatch {
                 continue;
             }
             cut.clear();
-            clip_quad(q, [x0, y0, x1, y1], &mut cut);
+            clip_quad(q, bounds, &mut cut);
             if write + cut.len() <= read + 6 {
                 self.vertices[write..write + cut.len()].copy_from_slice(&cut);
                 write += cut.len();
@@ -2406,9 +2517,15 @@ impl HudBatch {
                 .to_vec();
             self.vertices.truncate(write);
             self.vertices.extend_from_slice(&cut);
-            for q in rest {
+            for (offset, q) in rest.into_iter().enumerate() {
                 moved.push(self.vertices.len() as u32);
-                clip_quad(q, [x0, y0, x1, y1], &mut self.vertices);
+                if scissored(read + (offset + 1) * 6) {
+                    if intersects_scissor(&q, bounds) {
+                        self.vertices.extend_from_slice(&q);
+                    }
+                } else {
+                    clip_quad(q, bounds, &mut self.vertices);
+                }
             }
             appending = true;
             break;
@@ -2418,7 +2535,7 @@ impl HudBatch {
         }
         moved.push(self.vertices.len() as u32);
         let at = |v: u32| moved[((v as usize).saturating_sub(start) / 6).min(moved.len() - 1)];
-        for (range, _) in &mut self.blends {
+        for (range, _) in &mut self.blends[first..] {
             if range.start as usize >= start {
                 *range = at(range.start)..at(range.end);
             }
@@ -2440,14 +2557,65 @@ impl HudBatch {
             self.rect_uv(x, y, w, h, r, u32::MAX);
         }
     }
+    /// `GuiGraphicsExtractor.fill`: a solid rectangle on `RenderPipelines.GUI`.
     pub fn fill(&mut self, atlas: &HudAtlas, x: f32, y: f32, w: f32, h: f32, color: u32) {
-        let mut r = atlas.white;
-        let (cu, cv) = ((r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0);
-        r.u0 = cu;
-        r.u1 = cu;
-        r.v0 = cv;
-        r.v1 = cv;
-        self.rect_uv(x, y, w, h, r, color);
+        self.fill_with(atlas, [x, y, w, h], color, GuiFill::Alpha);
+    }
+
+    fn fill_with(&mut self, atlas: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32, mode: GuiFill) {
+        let start = self.vertices.len();
+        let r = atlas.white;
+        if atlas.gui_shader.is_some() {
+            // Java's solid fills put the larger coordinate first on both axes.
+            let x1 = x.min(x + w);
+            let y1 = y.min(y + h);
+            let x0 = x.max(x + w);
+            let y0 = y.max(y + h);
+            let uv = [(r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0];
+            self.core_quad(
+                [[x0, y0], [x0, y1], [x1, y1], [x1, y0]],
+                [uv; 4],
+                [color; 4],
+            );
+            self.blend_since(start, Blend::GuiFill(mode, None));
+        } else {
+            let blend = match mode {
+                GuiFill::Alpha => Blend::Alpha,
+                GuiFill::Invert => Blend::Invert,
+                GuiFill::Additive => Blend::Additive,
+            };
+            self.fill_native(atlas, [x, y, w, h], color, blend);
+        }
+    }
+    /// A solid rectangle drawn natively with `blend`, never with the pack's `core/gui`: for
+    /// fills whose own pipeline replaces `RenderPipelines.GUI` (the End portal, an inverting
+    /// crosshair), so their vertices are recorded under that one blend only.
+    pub fn fill_native(
+        &mut self,
+        atlas: &HudAtlas,
+        [x, y, w, h]: [f32; 4],
+        color: u32,
+        blend: Blend,
+    ) {
+        let start = self.vertices.len();
+        let r = atlas.white;
+        let u = (r.u0 + r.u1) / 2.0;
+        let v = (r.v0 + r.v1) / 2.0;
+        self.rect_uv(
+            x,
+            y,
+            w,
+            h,
+            Rect {
+                u0: u,
+                v0: v,
+                u1: u,
+                v1: v,
+                ..r
+            },
+            color,
+        );
+        self.blend_since(start, blend);
     }
     /// Any four-cornered shape in one colour, corners in order round it.
     pub fn fill_quad(&mut self, atlas: &HudAtlas, corners: [[f32; 2]; 4], color: u32) {
@@ -2455,7 +2623,7 @@ impl HudBatch {
         let uv = [(w.u0 + w.u1) / 2.0, (w.v0 + w.v1) / 2.0];
         self.quad(corners, [uv; 4], color);
     }
-    /// GuiGraphics.fillGradient: `top` to `bottom`, down the rectangle.
+    /// `GuiGraphicsExtractor.fillGradient`: `top` to `bottom`, down the rectangle.
     pub fn fill_gradient(
         &mut self,
         atlas: &HudAtlas,
@@ -2465,6 +2633,16 @@ impl HudBatch {
     ) {
         let r = atlas.white;
         let uv = [(r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0];
+        if atlas.gui_shader.is_some() {
+            let start = self.vertices.len();
+            self.core_quad(
+                [[x, y], [x, y + h], [x + w, y + h], [x + w, y]],
+                [uv; 4],
+                [top, bottom, bottom, top],
+            );
+            self.blend_since(start, Blend::GuiFill(GuiFill::Alpha, None));
+            return;
+        }
         let p = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
         let c = [top, top, bottom, bottom];
         for i in [0, 1, 2, 0, 2, 3] {
@@ -3080,6 +3258,26 @@ impl HudUniform {
 }
 use crate::gfx::hud_coverage::{self, Pipeline};
 
+/// `BlendFunction.INVERT`: ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR, ONE, ZERO.
+const GUI_INVERT: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::OneMinusDst,
+        dst_factor: wgpu::BlendFactor::OneMinusSrc,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent::REPLACE,
+};
+const GUI_ADD: wgpu::BlendComponent = wgpu::BlendComponent {
+    src_factor: wgpu::BlendFactor::One,
+    dst_factor: wgpu::BlendFactor::One,
+    operation: wgpu::BlendOperation::Add,
+};
+/// `BlendFunction.ADDITIVE`: ONE, ONE.
+const GUI_ADDITIVE: wgpu::BlendState = wgpu::BlendState {
+    color: GUI_ADD,
+    alpha: GUI_ADD,
+};
+
 pub struct HudRenderer {
     pictures: HashMap<u64, (Arc<pictures::Picture>, wgpu::BindGroup)>,
     pub sprite_animations: Vec<(Rect, crate::sprites::SpriteAnimation, (usize, usize, u32))>,
@@ -3107,6 +3305,7 @@ pub struct HudRenderer {
     atlas_view: wgpu::TextureView,
     /// The resource pack's text shader, when it has one that works.
     pack_text: Option<pack_text::PackText>,
+    pack_gui: Option<pack_text::PackText>,
     /// The resource pack's `position_tex_color`, when it has one that works, and its bind
     /// group for each picture a `Blend::PackBlit` reads.
     pack_blit: Option<pack_text::PackText>,
@@ -3296,40 +3495,9 @@ impl HudRenderer {
             "fs_main",
             Some(true),
         );
-        // BlendFunction.INVERT: ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR,
-        // ONE, ZERO.
-        let invert_pipeline = create(
-            "HUD crosshair",
-            wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::OneMinusDst,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::Zero,
-                    operation: wgpu::BlendOperation::Add,
-                },
-            },
-            "fs_crosshair",
-            None,
-        );
-        // BlendFunction.ADDITIVE: ONE, ONE.
-        let add = wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::One,
-            operation: wgpu::BlendOperation::Add,
-        };
-        let additive_pipeline = create(
-            "HUD text highlight",
-            wgpu::BlendState {
-                color: add,
-                alpha: add,
-            },
-            "fs_main",
-            None,
-        );
+        let invert_pipeline = create("HUD crosshair", GUI_INVERT, "fs_crosshair", None);
+        let additive_pipeline = create("HUD text highlight", GUI_ADDITIVE, "fs_main", None);
+        let add = GUI_ADD;
         // RenderPipelines.GLINT tests depth EQUAL and writes none; the faces are
         // the model's own, so LEQUAL passes the same pixels.
         let depth_glint_pipeline = create(
@@ -3394,6 +3562,7 @@ impl HudRenderer {
             coverage,
             atlas_view: view.clone(),
             pack_text: None,
+            pack_gui: None,
             pack_blit: None,
             pack_blit_groups: HashMap::new(),
             zoom: 1.0,
@@ -3424,12 +3593,29 @@ impl HudRenderer {
                 &self.atlas_view,
                 shader,
                 self.coverage,
-                "text",
+                pack_text::Kind::Text,
             )
         });
     }
-    /// Draw the menu textures `HudBatch::pack_blit` records with `shader`
-    /// (`HudAtlas::blit_shader`), or natively.
+    /// Draw `GuiGraphicsExtractor.fill` and its blend variants with the pack's `core/gui`.
+    pub fn set_gui_shader(
+        &mut self,
+        device: &wgpu::Device,
+        shader: Option<&crate::core_shader::CoreProgram>,
+    ) {
+        self.pack_gui = shader.and_then(|shader| {
+            pack_text::PackText::new(
+                device,
+                self.format,
+                &self.atlas_view,
+                shader,
+                self.coverage,
+                pack_text::Kind::Fill,
+            )
+        });
+    }
+
+    /// Draw original GUI textures `HudBatch::pack_blit` records with `shader`, or natively.
     pub fn set_blit_shader(
         &mut self,
         device: &wgpu::Device,
@@ -3445,7 +3631,7 @@ impl HudRenderer {
                 &self.atlas_view,
                 shader,
                 self.coverage,
-                "position_tex_color",
+                pack_text::Kind::Blit,
             )
         });
     }
@@ -3532,7 +3718,10 @@ impl HudRenderer {
                 batch.glint_colour,
             )),
         );
-        for pack in [&self.pack_text, &self.pack_blit].into_iter().flatten() {
+        for pack in [&self.pack_text, &self.pack_gui, &self.pack_blit]
+            .into_iter()
+            .flatten()
+        {
             pack.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
         }
     }
@@ -3625,6 +3814,7 @@ impl HudRenderer {
             });
             pass.set_bind_group(0, &self.group, &[]);
             pass.set_vertex_buffer(0, self.buffer.slice(..));
+            let mut scissor = None;
             if let Some(clip) = clip {
                 let [x, y, w, h] = clip.map(|v| (v as f32 * self.zoom) as u32);
                 let (x, y) = (x.min(size[0]), y.min(size[1]));
@@ -3636,6 +3826,22 @@ impl HudRenderer {
                 pass.set_scissor_rect(x, y, w, h);
             }
             for (range, blend) in &runs[at..end] {
+                if let Some(bounds) = blend.core_scissor() {
+                    let scale = batch.scale * self.zoom;
+                    let [x0, y0, x1, y1] = bounds.map(|b| (f32::from_bits(b) * scale) as u32);
+                    let (x, y) = (x0.min(size[0]), y0.min(size[1]));
+                    let w = x1.min(size[0]).saturating_sub(x);
+                    let h = y1.min(size[1]).saturating_sub(y);
+                    if w == 0 || h == 0 {
+                        continue;
+                    }
+                    if scissor != Some([x, y, w, h]) {
+                        pass.set_scissor_rect(x, y, w, h);
+                        scissor = Some([x, y, w, h]);
+                    }
+                } else if scissor.take().is_some() {
+                    pass.set_scissor_rect(0, 0, size[0], size[1]);
+                }
                 let pipeline = match blend {
                     Blend::Picture(id) => {
                         self.draw_picture(&mut pass, *id, range.clone(), coverage.is_some());
@@ -3654,7 +3860,19 @@ impl HudRenderer {
                         }
                         continue;
                     }
-                    Blend::PackBlit(id) => {
+                    Blend::GuiFill(mode, _) => {
+                        if let Some(pack) = &self.pack_gui {
+                            pack.draw_fill(&mut pass, *mode, range.clone(), coverage.is_some());
+                            pass.set_bind_group(0, &self.group, &[]);
+                            continue;
+                        }
+                        match mode {
+                            GuiFill::Alpha => &self.pipeline,
+                            GuiFill::Invert => &self.invert_pipeline,
+                            GuiFill::Additive => &self.additive_pipeline,
+                        }
+                    }
+                    Blend::PackBlit(id) | Blend::PackBlitClipped(id, _) => {
                         if let (Some(pack), Some(group)) =
                             (&self.pack_blit, self.pack_blit_groups.get(id))
                         {

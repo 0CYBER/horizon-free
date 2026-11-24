@@ -1072,37 +1072,48 @@ pub fn paint(batch: &mut HudBatch, atlas: &HudAtlas, draws: &[Draw]) -> Option<u
                 tex,
                 color,
             } => {
-                let key = texture
+                let texture = texture.strip_prefix("minecraft:").unwrap_or(texture);
+                let texture = texture
                     .trim_start_matches("textures/")
                     .trim_end_matches(".png");
-                let key = if atlas.sprites.contains_key(key) {
-                    key
+                let key = if atlas.sprites.contains_key(texture) {
+                    texture
                 } else {
                     "misc/unknown_pack"
                 };
                 let color = crate::hud_layout::abgr(*color as u32);
-                if src[0] == tex[0] && src[1] == tex[1]
-                    || (*u == 0.0 && *v == 0.0 && src[0] <= tex[0] && src[1] <= tex[1])
-                {
-                    if let Some(mut r) = atlas.sprites.get(key).copied() {
-                        let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
-                        r.u1 = r.u0 + du * src[0] as f32 / tex[0] as f32;
-                        r.v1 = r.v0 + dv * src[1] as f32 / tex[1] as f32;
-                        batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, color);
-                    }
-                } else {
-                    crate::ui::tiled(
-                        batch,
-                        atlas,
-                        key,
-                        *x as f32,
-                        *y as f32,
-                        *w as f32,
-                        *h as f32,
-                        tex[0] as f32,
-                        color,
-                    );
-                }
+                batch.pack_blit(
+                    atlas,
+                    texture,
+                    [*x as f32, *y as f32, *w as f32, *h as f32],
+                    [*u, *v, src[0] as f32, src[1] as f32],
+                    [tex[0] as f32, tex[1] as f32],
+                    color,
+                    |batch| {
+                        if src[0] == tex[0] && src[1] == tex[1]
+                            || (*u == 0.0 && *v == 0.0 && src[0] <= tex[0] && src[1] <= tex[1])
+                        {
+                            if let Some(mut r) = atlas.sprites.get(key).copied() {
+                                let (du, dv) = (r.u1 - r.u0, r.v1 - r.v0);
+                                r.u1 = r.u0 + du * src[0] as f32 / tex[0] as f32;
+                                r.v1 = r.v0 + dv * src[1] as f32 / tex[1] as f32;
+                                batch.rect_uv(*x as f32, *y as f32, *w as f32, *h as f32, r, color);
+                            }
+                        } else {
+                            crate::ui::tiled(
+                                batch,
+                                atlas,
+                                key,
+                                *x as f32,
+                                *y as f32,
+                                *w as f32,
+                                *h as f32,
+                                tex[0] as f32,
+                                color,
+                            );
+                        }
+                    },
+                );
             }
             Draw::Fill {
                 x0,

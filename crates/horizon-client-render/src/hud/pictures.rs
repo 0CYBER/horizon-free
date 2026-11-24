@@ -104,17 +104,16 @@ impl HudBatch {
         }
     }
 
-    /// `GuiGraphicsExtractor.blit(GUI_TEXTURED, texture, x, y, u, v, w, h, tw, th)`. `native`
-    /// draws it from the atlas. When the packs replace `core/position_tex_color`, vanilla's one
-    /// quad follows (UVs `u / tw` to `(u + w) / tw`, the texture repeating), which the renderer
-    /// draws with that shader and `texture` alone instead of `native`'s.
+    /// `GuiGraphicsExtractor.blit`: the source rectangle and target size are independent.
+    /// The native path uses atlas UVs. A pack's `GUI_TEXTURED` program instead receives
+    /// `BlitRenderState`'s one quad with the original texture alone bound as `Sampler0`.
     #[allow(clippy::too_many_arguments)]
     pub fn pack_blit(
         &mut self,
         atlas: &HudAtlas,
         texture: &str,
         [x, y, w, h]: [f32; 4],
-        [u, v]: [f32; 2],
+        [u, v, sw, sh]: [f32; 4],
         [tw, th]: [f32; 2],
         color: u32,
         native: impl FnOnce(&mut Self),
@@ -129,20 +128,82 @@ impl HudBatch {
         };
         self.blend_since(start, Blend::PackBlitNative(picture.id));
         let start = self.vertices.len();
-        self.quad(
-            [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+        self.core_quad(
+            [[x, y], [x, y + h], [x + w, y + h], [x + w, y]],
             [
                 [u / tw, v / th],
-                [(u + w) / tw, v / th],
-                [(u + w) / tw, (v + h) / th],
-                [u / tw, (v + h) / th],
+                [u / tw, (v + sh) / th],
+                [(u + sw) / tw, (v + sh) / th],
+                [(u + sw) / tw, v / th],
             ],
-            color,
+            [color; 4],
         );
         self.blend_since(start, Blend::PackBlit(picture.id));
         if !self.pictures.iter().any(|p| p.id == picture.id) {
             self.pictures.push(picture);
         }
+    }
+
+    /// `GuiGraphicsExtractor.innerBlit` for a standalone texture's region, not a GUI atlas sprite.
+    /// The fallback keeps the baked atlas sample, cut as `dims` says; it never loads the
+    /// standalone image.
+    pub fn texture_blit(
+        &mut self,
+        atlas: &HudAtlas,
+        texture: &str,
+        dest: [f32; 4],
+        source: [f32; 2],
+        dims: [f32; 2],
+    ) {
+        self.texture_blit_cut(atlas, texture, dest, source, dims, false);
+    }
+
+    /// [`Self::texture_blit`] whose fallback cuts the baked sprite by its own pixel size
+    /// (`Rect.w`, `Rect.h`), as these screens always did; only the pack's shader gets `dims`.
+    pub fn texture_blit_baked(
+        &mut self,
+        atlas: &HudAtlas,
+        texture: &str,
+        dest: [f32; 4],
+        source: [f32; 2],
+        dims: [f32; 2],
+    ) {
+        self.texture_blit_cut(atlas, texture, dest, source, dims, true);
+    }
+
+    fn texture_blit_cut(
+        &mut self,
+        atlas: &HudAtlas,
+        texture: &str,
+        dest: [f32; 4],
+        [u, v]: [f32; 2],
+        dims: [f32; 2],
+        baked: bool,
+    ) {
+        let [x, y, w, h] = dest;
+        self.pack_blit(
+            atlas,
+            texture,
+            dest,
+            [u, v, w, h],
+            dims,
+            u32::MAX,
+            |batch| {
+                if let Some(mut r) = atlas.sprites.get(texture).copied() {
+                    let [tw, th] = if baked {
+                        [r.w as f32, r.h as f32]
+                    } else {
+                        dims
+                    };
+                    let (du, dv) = ((r.u1 - r.u0) / tw, (r.v1 - r.v0) / th);
+                    r.u0 += u * du;
+                    r.v0 += v * dv;
+                    r.u1 = r.u0 + w * du;
+                    r.v1 = r.v0 + h * dv;
+                    batch.rect_uv(x, y, w, h, r, u32::MAX);
+                }
+            },
+        );
     }
 }
 

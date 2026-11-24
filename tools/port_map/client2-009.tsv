@@ -42,7 +42,7 @@ GuiGraphicsExtractor.textWithWordWrap	port	crates/horizon-client-render/src/scre
 GuiGraphicsExtractor.blitSprite	port	crates/horizon-client-render/src/hud.rs::HudBatch::sprite_scaled	gap: minor: tile and nine-slice scaling is in ui.rs (tiled, draw_nine_slice)
 GuiGraphicsExtractor.blitNineSliceInnerSegment	port	crates/horizon-client-render/src/ui.rs::draw_nine_slice	inner segments of a nine-slice sprite
 GuiGraphicsExtractor.blitTiledSprite	port	crates/horizon-client-render/src/ui.rs::tiled
-GuiGraphicsExtractor.innerBlit	port	crates/horizon-client-render/src/screen_draw.rs::blit	texture rectangle by UV; the atlas lookup is in HudBatch::rect_uv
+GuiGraphicsExtractor.innerBlit	port	crates/horizon-client-render/src/hud/pictures.rs::HudBatch::texture_blit	standalone GUI texture by its UV rectangle; GUI atlas sprites use the atlas draw path
 GuiGraphicsExtractor.innerTiledBlit	port	crates/horizon-client-render/src/ui.rs::tile	one tiled quad
 GuiGraphicsExtractor.item	port	crates/horizon-client/src/game/interface/inventory_slots.rs::Game::draw_item	gap: minor: no seed or owner is passed to the item model
 GuiGraphicsExtractor.fakeItem	inline	crates/horizon-client/src/game/interface/inventory_slots.rs::Game::draw_item	same as item with no owner

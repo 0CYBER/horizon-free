@@ -468,7 +468,7 @@ impl Game<'_> {
             *self.slot_mut(slot) = Some(stack);
         }
     }
-    /// `HorseInventoryScreen`'s background, slot frames and the mount.
+    /// `AbstractMountInventoryScreen.extractBackground`: original texture, then GUI atlas slots.
     pub(super) fn draw_mount_background(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
         let Some(open) = self.mount_menu.open.as_ref() else {
             return;
@@ -480,7 +480,13 @@ impl Game<'_> {
         } else {
             "gui/container/horse"
         };
-        batch.sprite_region(atlas, background, [ox, oy, 176.0, 166.0], 256.0, 256.0);
+        batch.texture_blit(
+            atlas,
+            background,
+            [ox, oy, 176.0, 166.0],
+            [0.0; 2],
+            [256.0; 2],
+        );
         if open.columns > 0 {
             batch.sprite_region(
                 atlas,

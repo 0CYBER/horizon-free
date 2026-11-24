@@ -55,13 +55,13 @@ impl Game<'_> {
             let (fuel, total_fuel, brew, total_brew) =
                 (b.fuel, b.total_fuel, b.brew_time, b.total_brew_time);
             let atlas = &self.gui.atlas;
-            Self::part(
-                batch,
+            // `BrewingStandScreen.extractBackground`: the panel is not a GUI atlas sprite.
+            batch.texture_blit_baked(
                 atlas,
                 "gui/container/brewing_stand",
-                (0.0, 0.0),
-                (176.0, 166.0),
-                (ox, oy),
+                [ox, oy, 176.0, 166.0],
+                [0.0; 2],
+                [256.0; 2],
             );
             self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
             let fuel_len = if total_fuel > 0 {
@@ -147,13 +147,12 @@ impl Game<'_> {
             crate::game::screen_info::name_container(|| title.plain());
             {
                 let atlas = &self.gui.atlas;
-                Self::part(
-                    batch,
+                batch.texture_blit_baked(
                     atlas,
                     kind.texture(),
-                    (0.0, 0.0),
-                    (176.0, 166.0),
-                    (ox, oy),
+                    [ox, oy, 176.0, 166.0],
+                    [0.0; 2],
+                    [256.0; 2],
                 );
                 self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
                 let (tx, ty) = kind.title_pos();

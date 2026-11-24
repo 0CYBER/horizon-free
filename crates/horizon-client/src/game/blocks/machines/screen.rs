@@ -1,7 +1,7 @@
 use super::*;
 
 impl Game<'_> {
-    /// HopperScreen / DispenserScreen background and labels; false for other containers.
+    /// `HopperScreen.extractBackground` / `DispenserScreen.extractBackground` and their labels.
     pub(in crate::game) fn draw_machine_screen(
         &self,
         batch: &mut horizon_client::hud::HudBatch,
@@ -41,13 +41,13 @@ impl Game<'_> {
                 "Dropper",
             ),
         };
-        if let Some(mut r) = atlas.sprites.get(texture).copied() {
-            let dv = (r.v1 - r.v0) / r.h as f32;
-            let du = (r.u1 - r.u0) / r.w as f32;
-            r.u1 = r.u0 + 176.0 * du;
-            r.v1 = r.v0 + height * dv;
-            batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
-        }
+        batch.texture_blit_baked(
+            atlas,
+            texture,
+            [ox, oy, 176.0, height],
+            [0.0; 2],
+            [256.0; 2],
+        );
         self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
         let grey = horizon_client::hud::rgba(64, 64, 64, 255);
         let title = &self.remote_menu_title().unwrap_or_else(|| {

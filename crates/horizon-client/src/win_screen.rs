@@ -242,9 +242,7 @@ impl WinScreen {
     ) {
         let (w, h) = (batch.width, batch.height);
         if self.poem {
-            let start = batch.vertices.len();
-            batch.fill(atlas, 0.0, 0.0, w, h, u32::MAX);
-            batch.blend_since(start, Blend::EndPortal);
+            batch.fill_native(atlas, [0.0, 0.0, w, h], u32::MAX, Blend::EndPortal);
             batch.end_portal = end_portal;
         } else {
             self.menu_background(batch, atlas, w, h);

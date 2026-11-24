@@ -1,10 +1,9 @@
-//! A resource pack's `core/sky` and `core/stars` shaders: the overworld's sky disc and stars drawn
-//! with the pack's GLSL (`SkyRenderer.renderSkyDisc`, `renderStars`), as a pack that adds a haze
-//! to the horizon or tints the night sky expects. Without one the sky draws natively (`fs_sky` in
-//! terrain.wgsl, stars.rs).
+//! Resource-pack programs for the overworld's sky disc, stars and sunrise/sunset fan.
+//! Without a replacement, the respective part draws natively.
 
 use crate::core_shader::{CoreProgram, Glue};
 use glam::Mat4;
+use horizon_core::geometry::trig::Mth;
 use wgpu::util::DeviceExt;
 
 /// `DefaultVertexFormat.POSITION`: the disc's and the stars' vertices.
@@ -16,6 +15,58 @@ pub(crate) const GLUE: Glue = Glue {
     finish: "",
     vertex_id: "int(gl_VertexIndex)",
 };
+
+/// `RenderPipelines.SUNRISE_SUNSET`: `POSITION_COLOR` in an indexed triangle fan.
+pub(crate) const SUNRISE_GLUE: Glue = Glue {
+    inputs: &[("Position", "vec3"), ("Color", "vec4")],
+    prelude: "layout(location = 0) in vec3 hz_position;\n\
+              layout(location = 1) in vec4 hz_color;",
+    setup: "Position = hz_position; Color = hz_color;",
+    ..GLUE
+};
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct SunriseVertex {
+    position: [f32; 3],
+    color: [u8; 4],
+}
+
+/// `SkyRenderer.buildSunriseFan`: one opaque white centre and a transparent white rim.
+fn sunrise_fan() -> ([SunriseVertex; 18], [u16; 48]) {
+    let vertices = std::array::from_fn(|i| {
+        if i == 0 {
+            SunriseVertex {
+                position: [0.0, 100.0, 0.0],
+                color: [255; 4],
+            }
+        } else {
+            let angle = (i - 1) as f32 * std::f32::consts::TAU / 16.0;
+            let cos = angle.mcos();
+            SunriseVertex {
+                position: [angle.msin() * 120.0, cos * 120.0, -cos * 40.0],
+                color: [255, 255, 255, 0],
+            }
+        }
+    });
+    let indices = std::array::from_fn(|i| match i % 3 {
+        0 => 0,
+        rim => (i / 3 + rim) as u16,
+    });
+    (vertices, indices)
+}
+
+/// `SkyRenderer.renderSunriseAndSunset`: rotate towards the sun and scale the local Z by alpha.
+pub(super) fn sunrise_model_view(view: Mat4, sun_angle: f32, alpha: f32) -> Mat4 {
+    let flip = if sun_angle.to_radians().msin() < 0.0 {
+        180.0_f32
+    } else {
+        0.0
+    };
+    view * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2)
+        * Mat4::from_rotation_z((flip + 90.0).to_radians())
+        * Mat4::from_scale(glam::Vec3::new(1.0, 1.0, alpha))
+}
 
 /// Each uniform block's offset in the one buffer (`core_shader::BLOCKS` order).
 const BLOCK_OFFSETS: [u64; 4] = [0, 256, 512, 768];
@@ -42,17 +93,21 @@ struct Part {
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     vertices: wgpu::Buffer,
+    indices: Option<wgpu::Buffer>,
     count: u32,
 }
 
 impl Part {
-    fn new(
+    #[allow(clippy::too_many_arguments)]
+    fn new<V: bytemuck::Pod>(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         program: &CoreProgram,
         name: &str,
         blend: Option<wgpu::BlendState>,
-        triangles: &[[f32; 3]],
+        vertices: &[V],
+        indices: &[u16],
+        attributes: &[wgpu::VertexAttribute],
     ) -> Option<Self> {
         // A pack's shader is untrusted: the backend failing to compile it is an internal error.
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -65,7 +120,7 @@ impl Part {
         };
         let vertex = module("vertex", &program.vertex);
         let fragment = module("fragment", &program.fragment);
-        // Vanilla's SKY and STARS pipelines have no samplers: a pack that reads one is not used.
+        // These vanilla pipelines have no samplers; a replacement cannot sample a texture.
         let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..4)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -116,12 +171,15 @@ impl Part {
                 entry_point: Some("main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 12,
+                    array_stride: std::mem::size_of::<V>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    attributes,
                 })],
             },
-            primitive: wgpu::PrimitiveState::default(),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: (!indices.is_empty()).then_some(wgpu::Face::Back),
+                ..Default::default()
+            },
             // The sky is drawn first, behind everything: no depth test, no depth write.
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
@@ -149,17 +207,30 @@ impl Part {
             log::warn!("the resource pack's {name} shader is not used: {e}");
             return None;
         }
+        let count = (if indices.is_empty() {
+            vertices.len()
+        } else {
+            indices.len()
+        }) as u32;
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(name),
-            contents: bytemuck::cast_slice(triangles),
+            contents: bytemuck::cast_slice(vertices),
             usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = (!indices.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(name),
+                contents: bytemuck::cast_slice(indices),
+                usage: wgpu::BufferUsages::INDEX,
+            })
         });
         Some(Self {
             pipeline,
             group,
             uniform,
             vertices,
-            count: triangles.len() as u32,
+            indices: index_buffer,
+            count,
         })
     }
 
@@ -167,27 +238,43 @@ impl Part {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        pass.draw(0..self.count, 0..1);
+        if let Some(indices) = &self.indices {
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..self.count, 0, 0..1);
+        } else {
+            pass.draw(0..self.count, 0..1);
+        }
     }
 }
 
-/// The packs' sky disc and stars pipelines, each present when a pack replaces that shader.
+/// The core pipelines each present only when a pack replaces that shader.
 pub(super) struct CoreSky {
     disc: Option<Part>,
     stars: Option<Part>,
+    sunrise: Option<Part>,
 }
 
 impl CoreSky {
-    /// `None` when neither shader is replaced or neither builds.
+    /// `None` when no replacement builds.
     pub(super) fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         disc: Option<&CoreProgram>,
         stars: Option<&CoreProgram>,
+        sunrise: Option<&CoreProgram>,
     ) -> Option<Self> {
         let disc = disc.and_then(|program| {
             // RenderPipelines.SKY: ColorTargetState.DEFAULT, no blending.
-            Part::new(device, format, program, "sky", None, &disc_triangles())
+            Part::new(
+                device,
+                format,
+                program,
+                "sky",
+                None,
+                &disc_triangles(),
+                &[],
+                &wgpu::vertex_attr_array![0 => Float32x3],
+            )
         });
         let stars = stars.and_then(|program| {
             // RenderPipelines.STARS: BlendFunction.OVERLAY (src alpha and one; alpha one, zero).
@@ -204,9 +291,35 @@ impl CoreSky {
                 },
             };
             let triangles = super::stars::star_triangles();
-            Part::new(device, format, program, "stars", Some(overlay), &triangles)
+            Part::new(
+                device,
+                format,
+                program,
+                "stars",
+                Some(overlay),
+                &triangles,
+                &[],
+                &wgpu::vertex_attr_array![0 => Float32x3],
+            )
         });
-        (disc.is_some() || stars.is_some()).then_some(Self { disc, stars })
+        let sunrise = sunrise.and_then(|program| {
+            let (vertices, indices) = sunrise_fan();
+            Part::new(
+                device,
+                format,
+                program,
+                "position_color",
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+                &vertices,
+                &indices,
+                &wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4],
+            )
+        });
+        (disc.is_some() || stars.is_some() || sunrise.is_some()).then_some(Self {
+            disc,
+            stars,
+            sunrise,
+        })
     }
 
     pub(super) fn draws_disc(&self) -> bool {
@@ -217,18 +330,26 @@ impl CoreSky {
         self.stars.is_some()
     }
 
-    /// Uploads the disc's and the stars' blocks: `sky` and `stars` from [`uniforms`].
+    pub(super) fn draws_sunrise(&self) -> bool {
+        self.sunrise.is_some()
+    }
+
+    /// Upload the active parts' separate `DynamicTransforms` blocks.
     pub(super) fn prepare(
         &self,
         uploads: &mut super::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         sky: &[u8],
         stars: Option<&[u8]>,
+        sunrise: Option<&[u8]>,
     ) {
         if let Some(disc) = &self.disc {
             uploads.buffer(encoder, &disc.uniform, 0, sky);
         }
         if let (Some(part), Some(data)) = (&self.stars, stars) {
+            uploads.buffer(encoder, &part.uniform, 0, data);
+        }
+        if let (Some(part), Some(data)) = (&self.sunrise, sunrise) {
             uploads.buffer(encoder, &part.uniform, 0, data);
         }
     }
@@ -237,6 +358,13 @@ impl CoreSky {
     pub(super) fn draw_disc(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(disc) = &self.disc {
             disc.draw(pass);
+        }
+    }
+
+    /// The sunrise/sunset fan, in place of the native one.
+    pub(super) fn draw_sunrise(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(sunrise) = &self.sunrise {
+            sunrise.draw(pass);
         }
     }
 
@@ -294,6 +422,22 @@ mod tests {
         assert!(near(triangles[23], [-512.0, 16.0, 0.0]));
     }
 
+    #[test]
+    fn position_color_sunrise_uses_the_vanilla_fan_colors_and_pose() {
+        let (vertices, indices) = sunrise_fan();
+        assert_eq!(vertices[0].position, [0.0, 100.0, 0.0]);
+        assert_eq!(vertices[0].color, [255; 4]);
+        assert!(vertices[1..].iter().all(|v| v.color == [255, 255, 255, 0]));
+        assert_eq!(vertices[1].position, [0.0, 120.0, -40.0]);
+        assert_eq!(&indices[..3], &[0, 1, 2]);
+        assert_eq!(&indices[45..], &[0, 16, 17]);
+        let v = glam::Vec3::new(0.0, 120.0, -40.0);
+        let morning = sunrise_model_view(Mat4::IDENTITY, 90.0, 0.25).transform_point3(v);
+        let evening = sunrise_model_view(Mat4::IDENTITY, 270.0, 0.25).transform_point3(v);
+        assert!(morning.abs_diff_eq(glam::Vec3::new(-120.0, 10.0, 0.0), 1e-4));
+        assert!(evening.abs_diff_eq(glam::Vec3::new(120.0, 10.0, 0.0), 1e-4));
+    }
+
     /// The prepared resources (`HORIZON_RESOURCES`, or `.local/horizon-client/<version>`), where
     /// vanilla's sky shader and its includes are.
     fn resources() -> std::path::PathBuf {
@@ -341,7 +485,8 @@ mod tests {
         };
         const SIZE: u32 = 64;
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let sky = CoreSky::new(&device, format, Some(&program), None).expect("the sky pipeline");
+        let sky =
+            CoreSky::new(&device, format, Some(&program), None, None).expect("the sky pipeline");
         let projection = crate::gfx::world_projection(90.0, 1.0, 2048.0);
         let data = uniforms(
             [0; 48],

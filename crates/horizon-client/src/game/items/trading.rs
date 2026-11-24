@@ -794,12 +794,14 @@ impl Game<'_> {
         let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.items())).collect();
         self.render_transparent_background("merchant", batch);
         let atlas = &self.gui.atlas;
-        if let Some(mut r) = atlas.sprites.get("gui/container/villager").copied() {
-            let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
-            r.u1 = r.u0 + 276.0 * du;
-            r.v1 = r.v0 + 166.0 * dv;
-            batch.rect_uv(ox + SHIFT, oy, 276.0, 166.0, r, u32::MAX);
-        }
+        // `MerchantScreen.extractBackground` uses a 512x256 source texture.
+        batch.texture_blit_baked(
+            atlas,
+            "gui/container/villager",
+            [ox + SHIFT, oy, 276.0, 166.0],
+            [0.0; 2],
+            [512.0, 256.0],
+        );
         self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
         let tr = |k: &str, f: &str| horizon_client::lang::get_or(k, f);
         let name = merchant_display_name(progress, &profession, custom);

@@ -95,20 +95,22 @@ impl Game<'_> {
         let (cx, cy) = ((w - 15) / 2 + 7, (h - 15) / 2 + 7);
         let atlas = &self.gui.atlas;
         let (shape, rim) = self.pvp.crosshair.runs(&c);
-        let fill = |batch: &mut HudBatch, &(x0, y, x1): &(i32, i32, i32), colour: u32| {
-            let (x, y) = ((cx + x0) as f32, (cy + y) as f32);
-            batch.fill(atlas, x, y, (x1 - x0) as f32, 1.0, colour);
+        let fill = |batch: &mut HudBatch, &(x0, y, x1): &(i32, i32, i32), colour: u32, invert| {
+            let at = [(cx + x0) as f32, (cy + y) as f32, (x1 - x0) as f32, 1.0];
+            if invert {
+                // One native inverting fill, not a `core/gui` fill inverted a second time.
+                batch.fill_native(atlas, at, colour, horizon_client::hud::Blend::Invert);
+            } else {
+                batch.fill(atlas, at[0], at[1], at[2], at[3], colour);
+            }
         };
         for run in rim {
-            fill(batch, run, rgba(0, 0, 0, 255));
+            fill(batch, run, rgba(0, 0, 0, 255), false);
         }
-        let start = batch.vertices.len();
         let [a, r, g, b] = c.colour.argb().to_be_bytes();
+        let invert = c.colour == Colour::Inverted;
         for run in shape {
-            fill(batch, run, rgba(r, g, b, a));
-        }
-        if c.colour == Colour::Inverted {
-            batch.invert_since(start);
+            fill(batch, run, rgba(r, g, b, a), invert);
         }
     }
     /// The block outline's fill: each box of the targeted block's shape (`getShape`, the boxes

@@ -113,13 +113,14 @@ fn recover_issues(dir: &Path) -> [Option<crate::save::DatIssue>; 2] {
 /// `LogoRenderer.extractRenderState`: the logo's top 44 of 64 rows, then the
 /// edition banner's top 14 of 16 rows overlapping its bottom by 7.
 fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
-    batch.sprite_region(
+    batch.texture_blit(
         atlas,
         "gui/title/minecraft",
         [(w / 2.0).floor() - 128.0, 30.0, 256.0, 44.0],
-        256.0,
-        64.0,
+        [0.0; 2],
+        [256.0, 64.0],
     );
+    // The edition banner is generated in the atlas for Horizon's branding.
     batch.sprite_region(
         atlas,
         crate::title_edition::SPRITE,

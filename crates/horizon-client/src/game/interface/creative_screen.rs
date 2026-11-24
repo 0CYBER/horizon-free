@@ -152,11 +152,14 @@ impl Game<'_> {
         } else {
             "gui/container/creative_inventory/tab_items"
         };
-        if let Some(mut r) = self.gui.atlas.sprites.get(background).copied() {
-            r.u1 = r.u0 + (r.u1 - r.u0) * Creative::WIDTH / r.w as f32;
-            r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
-            batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
-        }
+        // `CreativeModeInventoryScreen.extractBackground`: the selected tab's original image.
+        batch.texture_blit_baked(
+            &self.gui.atlas,
+            background,
+            [ox, oy, Creative::WIDTH, Creative::HEIGHT],
+            [0.0; 2],
+            [256.0; 2],
+        );
         let (tx, ty) = Creative::tab_position(tab);
         batch.sprite(&self.gui.atlas, &tab_sprite(tab, true), ox + tx, oy + ty);
         self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);

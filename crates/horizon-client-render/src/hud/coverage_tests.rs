@@ -75,6 +75,10 @@ struct Gpu {
 
 impl Gpu {
     fn new() -> Option<Self> {
+        Self::with_pixels(2, 1, &[255, 255, 255, 255, 255, 255, 255, 0])
+    }
+
+    fn with_pixels(width: u32, height: u32, pixels: &[u8]) -> Option<Self> {
         let instance = crate::gfx::test_gpu::instance();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
         if !hud_coverage::supported(
@@ -92,8 +96,8 @@ impl Gpu {
             &wgpu::TextureDescriptor {
                 label: None,
                 size: wgpu::Extent3d {
-                    width: 2,
-                    height: 1,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -104,7 +108,7 @@ impl Gpu {
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
-            &[255, 255, 255, 255, 255, 255, 255, 0],
+            pixels,
         );
         let view = atlas.create_view(&Default::default());
         let hud = HudRenderer::new(
@@ -135,6 +139,16 @@ impl Gpu {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         })
+    }
+
+    /// Exercise the production HUD upload path, including standalone pictures and core uniforms.
+    fn prepare(&mut self, batch: &HudBatch) {
+        let mut uploads = crate::gfx::upload::Uploads::new(&self.device);
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.hud
+            .prepare(&self.device, &mut uploads, &mut encoder, batch, [4, 2]);
+        uploads.finish(&encoder);
+        self.queue.submit([encoder.finish()]);
     }
 
     /// `batch` drawn on the HUD's target cleared to `backdrop`, with coverage cleared to
@@ -481,7 +495,11 @@ fn a_pack_blit_replaces_its_native_tiles_only_with_the_packs_shader() {
     batch.rect_uv(0.0, 0.0, 4.0, 2.0, rect, rgba(0, 255, 0, 255));
     batch.blend_since(0, Blend::PackBlitNative(image.id));
     let start = batch.vertices.len();
-    batch.rect_uv(0.0, 0.0, 4.0, 2.0, rect, u32::MAX);
+    batch.core_quad(
+        [[0.0, 0.0], [0.0, 2.0], [4.0, 2.0], [4.0, 0.0]],
+        [[0.0, 0.0], [0.0, 1.0], [0.5, 1.0], [0.5, 0.0]],
+        [u32::MAX; 4],
+    );
     batch.blend_since(start, Blend::PackBlit(image.id));
     let draw = |gpu: &mut Gpu| {
         let mut uploads = crate::gfx::upload::Uploads::new(&gpu.device);
@@ -509,4 +527,246 @@ fn a_pack_blit_replaces_its_native_tiles_only_with_the_packs_shader() {
         assert_eq!(&row[..8], &[255, 0, 0, 255, 255, 0, 0, 255]);
         assert_eq!(&row[8..], &[0; 8]);
     }
+}
+
+fn write_gui_fixture_shader(root: &Path, name: &str, vertex: &str, fragment: &str) {
+    let dir = root.join("assets/minecraft/shaders/core");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(format!("{name}.vsh")), vertex).unwrap();
+    fs::write(dir.join(format!("{name}.fsh")), fragment).unwrap();
+}
+
+#[test]
+fn loaded_core_gui_preserves_gradient_scissor_and_hdr_coverage() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let stock = tempfile::tempdir().unwrap();
+    let pack = tempfile::tempdir().unwrap();
+    let stock_src = crate::resource_source::ResourceSource::directory(stock.path().to_owned());
+    let pack_src = crate::resource_source::ResourceSource::directory(pack.path().to_owned());
+    write_gui_fixture_shader(
+        pack.path(),
+        "gui",
+        "#version 330\n\
+         layout(std140) uniform Projection { mat4 ProjMat; };\n\
+         layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; };\n\
+         in vec3 Position; in vec4 Color; out vec4 shade;\n\
+         void main() { shade = Color; gl_Position = ProjMat * ModelViewMat * vec4(Position.xy + vec2(1.0, 0.0), 1.0, 1.0); }\n",
+        "#version 330\n\
+         in vec4 shade; out vec4 frag;\n\
+         void main() { frag = vec4(shade.bgr, 0.5); }\n",
+    );
+    let stock = HudAtlas::build(&stock_src).unwrap();
+    let atlas = HudAtlas::build_over(&pack_src, &stock_src).unwrap();
+    assert!(stock.gui_shader.is_none());
+    let shader = atlas
+        .gui_shader
+        .as_deref()
+        .expect("core/gui in the pack is loaded");
+    let Some(mut gpu) = Gpu::with_pixels(atlas.width, atlas.height, &atlas.pixels()) else {
+        return;
+    };
+    let draw = |atlas: &HudAtlas, gpu: &mut Gpu| {
+        let mut batch = HudBatch::scratch([4, 2]);
+        batch.fill_gradient(
+            atlas,
+            (0.0, 0.0, 3.0, 2.0),
+            rgba(255, 0, 0, 255),
+            rgba(0, 0, 255, 255),
+        );
+        batch.clip_since(0, 1.0, 0.0, 3.0, 2.0);
+        // An ordinary atlas quad immediately after the clipped draw must not inherit its scissor
+        // or be sent to the fill program merely because its UVs sample white.
+        batch.rect_uv(3.0, 0.0, 1.0, 2.0, atlas.white, rgba(0, 255, 0, 255));
+        gpu.prepare(&batch);
+        let (plain, _) = gpu.draw(&batch, 0.0, 0.0, false);
+        let (color, mask) = gpu.draw(&batch, 0.0, 0.0, true);
+        assert_eq!(color, plain);
+        (color, mask)
+    };
+    let check = |(pixels, mask): (Vec<u8>, Vec<u8>), top: [u8; 4], bottom: [u8; 4]| {
+        let px = |c: [u8; 4]| [[0; 4], c, c, [0, 255, 0, 255]];
+        let expected = [px(top), px(bottom)].into_iter().flatten().flatten();
+        assert_eq!(pixels.len(), 32);
+        assert!(
+            pixels
+                .iter()
+                .copied()
+                .zip(expected)
+                .all(|(p, w)| p.abs_diff(w) <= 1),
+            "{pixels:?}"
+        );
+        let expected = [0, top[3], top[3], 255, 0, bottom[3], bottom[3], 255];
+        assert_eq!(mask.len(), 8);
+        assert!(
+            mask.iter()
+                .copied()
+                .zip(expected)
+                .all(|(p, w)| p.abs_diff(w) <= 1),
+            "{mask:?}"
+        );
+    };
+    check(draw(&stock, &mut gpu), [191, 0, 64, 255], [64, 0, 191, 255]);
+    gpu.hud.set_gui_shader(&gpu.device, Some(shader));
+    assert!(gpu.hud.pack_gui.is_some());
+    // At the row centres the original gradient is 3/4 red or 3/4 blue. The shader reverses
+    // RGB and halves alpha; alpha blending over clear then halves each channel.
+    check(draw(&atlas, &mut gpu), [32, 0, 96, 128], [96, 0, 32, 128]);
+}
+
+#[test]
+fn special_blend_fills_record_one_run_with_core_gui() {
+    let stock = tempfile::tempdir().unwrap();
+    let pack = tempfile::tempdir().unwrap();
+    write_gui_fixture_shader(
+        pack.path(),
+        "gui",
+        "#version 330\n\
+         layout(std140) uniform Projection { mat4 ProjMat; };\n\
+         layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; };\n\
+         in vec3 Position; in vec4 Color; out vec4 shade;\n\
+         void main() { shade = Color; gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0); }\n",
+        "#version 330\n\
+         in vec4 shade; out vec4 frag;\n\
+         void main() { frag = shade; }\n",
+    );
+    let atlas = HudAtlas::build_over(
+        &crate::resource_source::ResourceSource::directory(pack.path().to_owned()),
+        &crate::resource_source::ResourceSource::directory(stock.path().to_owned()),
+    )
+    .unwrap();
+    assert!(atlas.gui_shader.is_some());
+    let mut batch = HudBatch::scratch([4, 2]);
+    batch.fill(&atlas, 0.0, 0.0, 4.0, 2.0, u32::MAX);
+    // The End poem's portal background, then an inverting crosshair run.
+    batch.fill_native(&atlas, [0.0, 0.0, 4.0, 2.0], u32::MAX, Blend::EndPortal);
+    batch.fill_native(&atlas, [1.0, 0.0, 2.0, 1.0], u32::MAX, Blend::Invert);
+    assert_eq!(
+        batch.runs(),
+        vec![
+            (0..6, Blend::GuiFill(GuiFill::Alpha, None)),
+            (6..12, Blend::EndPortal),
+            (12..18, Blend::Invert),
+        ]
+    );
+    assert_eq!(batch.blends.len(), 3, "no vertex is under two blends");
+}
+
+#[test]
+fn loaded_gui_textured_blit_samples_and_rescales_the_original_inventory_texture() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let root = tempfile::tempdir().unwrap();
+    let source = crate::resource_source::ResourceSource::directory(root.path().to_owned());
+    let texture = "gui/container/inventory";
+    let image = root
+        .path()
+        .join(format!("assets/minecraft/textures/{texture}.png"));
+    fs::create_dir_all(image.parent().unwrap()).unwrap();
+    let mut png = png::Encoder::new(fs::File::create(image).unwrap(), 8, 2);
+    png.set_color(png::ColorType::Rgba);
+    png.set_depth(png::BitDepth::Eight);
+    let colors = [
+        [255, 0, 255, 255],
+        [0, 255, 255, 255],
+        [0, 0, 255, 255],
+        [255, 255, 0, 255],
+    ];
+    let row = [
+        colors[0], colors[0], colors[1], colors[1], colors[2], colors[2], colors[3], colors[3],
+    ];
+    png.write_header()
+        .unwrap()
+        .write_image_data([row, row].as_flattened().as_flattened())
+        .unwrap();
+    let stock = HudAtlas::build(&source).unwrap();
+    let pack = tempfile::tempdir().unwrap();
+    write_gui_fixture_shader(
+        pack.path(),
+        "position_tex_color",
+        "#version 330\n\
+         layout(std140) uniform Projection { mat4 ProjMat; };\n\
+         layout(std140) uniform DynamicTransforms { mat4 ModelViewMat; };\n\
+         uniform sampler2D Sampler0;\n\
+         in vec3 Position; in vec4 Color; in vec2 UV0; out vec2 uv;\n\
+         void main() {\n\
+             uv = UV0 * 2.0; vec2 p = Position.xy * 2.0;\n\
+             if (textureSize(Sampler0, 0) != ivec2(8, 2) || texelFetch(Sampler0, ivec2(0, 1), 0).rb != vec2(1.0)) { p.x += 16.0; }\n\
+             gl_Position = ProjMat * ModelViewMat * vec4(p, 1.0, 1.0);\n\
+         }\n",
+        "#version 330\n\
+         uniform sampler2D Sampler0; in vec2 uv; out vec4 frag;\n\
+         void main() { frag = texture(Sampler0, uv); }\n",
+    );
+    let atlas = HudAtlas::build_over(
+        &crate::resource_source::ResourceSource::directory(pack.path().to_owned()),
+        &source,
+    )
+    .unwrap();
+    let shader = atlas
+        .blit_shader
+        .as_deref()
+        .expect("core/position_tex_color in the pack is loaded");
+    let Some(mut gpu) = Gpu::with_pixels(stock.width, stock.height, &stock.pixels()) else {
+        return;
+    };
+    let batch = |atlas: &HudAtlas| {
+        let mut batch = HudBatch::scratch([4, 2]);
+        // Same extraction as InventoryScreen and AbstractMountInventoryScreen: the source
+        // uses nominal GUI units (here 4x2), not the PNG's physical dimensions (8x2).
+        batch.texture_blit(atlas, texture, [0.0, 0.0, 2.0, 1.0], [0.0; 2], [4.0, 2.0]);
+        batch
+    };
+    let native = batch(&stock);
+    assert!(native.blends.is_empty() && native.pictures.is_empty());
+    gpu.prepare(&native);
+    assert_eq!(
+        gpu.draw(&native, 0.0, 0.0, true),
+        (
+            [
+                colors[0], colors[1], [0; 4], [0; 4], [0; 4], [0; 4], [0; 4], [0; 4]
+            ]
+            .concat(),
+            vec![255, 255, 0, 0, 0, 0, 0, 0]
+        ),
+    );
+    gpu.hud.set_blit_shader(&gpu.device, Some(shader));
+    assert!(gpu.hud.pack_blit.is_some());
+    let replaced = batch(&atlas);
+    assert_eq!(replaced.pictures.len(), 1);
+    gpu.prepare(&replaced);
+    // The two-pixel native crop is replaced, not painted over another time: the vertex stage
+    // expands it to four pixels; the source's UVs now read all four colors on both rows.
+    assert_eq!(
+        gpu.draw(&replaced, 0.0, 0.0, true),
+        ([colors, colors].as_flattened().concat(), vec![255; 8]),
+    );
+
+    // The draw-list path also supports a source extent independent of the output rectangle.
+    // Source x = 1..2 in a nominal width of 4; the shader doubles those UVs to 0.5..1.
+    let mut stretched = HudBatch::scratch([4, 2]);
+    crate::screen_draw::paint(
+        &mut stretched,
+        &atlas,
+        &[crate::screen_draw::Draw::Blit {
+            texture: format!("textures/{texture}.png"),
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 1,
+            u: 1.0,
+            v: 0.0,
+            src: [1, 1],
+            tex: [4, 2],
+            color: -1,
+        }],
+    );
+    gpu.prepare(&stretched);
+    assert_eq!(
+        gpu.draw(&stretched, 0.0, 0.0, true),
+        (
+            [colors[2], colors[2], colors[3], colors[3]]
+                .repeat(2)
+                .concat(),
+            vec![255; 8]
+        ),
+    );
 }
