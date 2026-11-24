@@ -1,18 +1,27 @@
 use super::*;
 
 impl ItemEntity {
-    /// `Entity.applyEffectsFromBlocks` after the move: water puts the item
-    /// out, then lava, fire and cactus hurt it. Each hit posts `entity_damage`
-    /// at the item's position, and the hit that destroys it ends the pass.
-    /// The burning of `Entity.baseTick` is [`ItemEntity::burning_tick`]'s.
+    /// `Entity.applyEffectsFromBlocks` after the move: lava, fire and cactus
+    /// hurt the item, then water or rain (`in_rain`, `Entity.isInRain`) puts it
+    /// out. Each hit posts `entity_damage` at the item's position, and the hit
+    /// that destroys it ends the pass. The burning of `Entity.baseTick` is
+    /// [`ItemEntity::burning_tick`]'s.
     pub fn environment_tick(
         &mut self,
         mut world: &World,
         facts: &BlockFacts,
         registry: &horizon_world::registry::BlockRegistry,
         can_be_hurt_by: &dyn Fn(&ItemStack, &str) -> bool,
+        in_rain: bool,
     ) -> ItemEnvironmentTick {
-        self.environment_tick_inner(&mut world, facts, registry, can_be_hurt_by, |_, _| false)
+        self.environment_tick_inner(
+            &mut world,
+            facts,
+            registry,
+            can_be_hurt_by,
+            in_rain,
+            |_, _| false,
+        )
     }
     /// As `environment_tick`, allowing the caller to decide each actual damage attempt.
     pub fn environment_tick_with_hook(
@@ -21,6 +30,7 @@ impl ItemEntity {
         facts: &BlockFacts,
         registry: &horizon_world::registry::BlockRegistry,
         can_be_hurt_by: &dyn Fn(&ItemStack, &str) -> bool,
+        in_rain: bool,
         mut invulnerable: impl FnMut(&mut World, &str) -> bool,
     ) -> ItemEnvironmentTick {
         self.environment_tick_inner(
@@ -28,6 +38,7 @@ impl ItemEntity {
             facts,
             registry,
             can_be_hurt_by,
+            in_rain,
             |world, damage| invulnerable(world, damage),
         )
     }
@@ -37,14 +48,20 @@ impl ItemEntity {
         facts: &BlockFacts,
         registry: &horizon_world::registry::BlockRegistry,
         can_be_hurt_by: &dyn Fn(&ItemStack, &str) -> bool,
+        in_rain: bool,
         mut invulnerable: impl FnMut(&mut W, &str) -> bool,
     ) -> ItemEnvironmentTick {
         let fluid = self.fluid_at_feet(world, facts);
         let fire_immune = !can_be_hurt_by(&self.stack, "minecraft:in_fire");
         let mut hits = ItemHits::default();
-        if fluid == Fluid::Water || fire_immune {
+        if fire_immune {
             self.fire_ticks = 0;
         }
+        // `Entity.applyEffectsFromBlocks` snapshots `isOnFire` before the block
+        // contacts, which may ignite the item this tick, then puts it out in
+        // water or rain; the hiss compares the two.
+        let was_on_fire = self.fire_ticks > 0;
+        let blocks_apply = self.health > 0;
         let mut lava_hurt = false;
         // LavaCauldronBlock.entityInside applies LAVA_IGNITE and then lavaHurt.
         // A cauldron is not a lava fluid, and removed items get no block effects.
@@ -84,9 +101,12 @@ impl ItemEntity {
         {
             hits.hit(self, 1);
         }
+        let extinguished =
+            blocks_apply && self.extinguish_if_wet(fluid == Fluid::Water, in_rain, was_on_fire);
         ItemEnvironmentTick {
             alive: self.health > 0,
             lava_hurt,
+            extinguished,
             spilled: hits.spilled,
             damage_events: hits.events,
         }

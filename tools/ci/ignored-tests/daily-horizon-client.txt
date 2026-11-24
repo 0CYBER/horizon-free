@@ -61,6 +61,10 @@ horizon-client game::ghasts::ghastling_hatch_tests::hatched_ghastling_spawns_non
 horizon-client game::gui_clips::dispatch_tests::a_hook_call_clips_what_its_mod_draws_and_closes_what_it_leaves_open lib daily resources
 horizon-client game::gui_entity::tests::a_screen_draws_a_mob_by_type_once_and_refuses_what_it_cant_draw lib daily game-boot
 horizon-client game::initial_spawn_tests::a_spawn_search_follows_the_level_seed lib daily resources
+horizon-client game::item_entities::give_fake_item_tests::give_that_fits_draws_from_the_players_random lib daily resources
+horizon-client game::item_entities::give_fake_item_tests::give_that_fits_spawns_a_fake_item_that_is_never_picked_up lib daily resources
+horizon-client game::item_entities::item_rain_fire_tests::rain_puts_a_burning_item_out_with_the_hiss lib daily resources
+horizon-client game::item_entities::item_rain_fire_tests::rain_puts_out_what_a_fire_block_ignites_in_the_same_tick lib daily resources
 horizon-client game::item_entities::orb_pickup_tests::a_player_picks_a_random_orb_not_the_first lib daily resources
 horizon-client game::lan_actions::admin_feedback::tests::a_level_zero_operator_hears_another_operators_command lib daily resources
 horizon-client game::lan_actions::admin_feedback::tests::a_level_zero_splitscreen_seat_hears_no_admin_line lib daily resources

@@ -146,7 +146,11 @@ fn a_given_stack_fills_the_inventory_then_drops_for_its_player() {
         assert_eq!(b.give_stack(game, named), Ok(()));
         let g = game.lan.as_ref().unwrap().hub.guest(13).unwrap();
         assert_eq!(g.inventory[7], Some(engine));
-        assert_eq!(game.dropped.len(), before + 1);
+        // The whole stack fitted, so `GiveCommand.giveItem` flashes its fake item too.
+        assert_eq!(game.dropped.len(), before + 2);
+        let flash = game.dropped.last().unwrap();
+        assert_eq!(flash.pickup_delay, 32767, "ItemEntity.setNeverPickUp");
+        assert_eq!(flash.age, 5999, "ItemEntity.makeFakeItem");
     });
 }
 

@@ -278,7 +278,7 @@ pub(super) enum After {
     Drop([i32; 3], ItemStack),
     /// `Player.drop(stack, false)` by the player with this UUID: what no longer fits.
     PlayerDrop(u128, ItemStack),
-    GivePickup(u128),
+    GivePickup(u128, ItemStack),
     InventoryTrigger(u128),
     GiveRest(u128, ItemStack, Option<[i32; 4]>),
     PlayerEquip(u128, String, Option<ItemStack>),
@@ -996,8 +996,8 @@ impl Game<'_> {
             After::Drop(pos, stack) => {
                 self.spawn_item(stack, pos.map(|p| f64::from(p) + 0.5), [0.0; 3], 10);
             }
-            After::GivePickup(uuid) => {
-                self.native_as_player(uuid, |g| g.give_pickup());
+            After::GivePickup(uuid, stack) => {
+                self.native_as_player(uuid, |g| g.give_pickup(stack));
             }
             After::InventoryTrigger(uuid) => {
                 self.native_as_player(uuid, |g| {

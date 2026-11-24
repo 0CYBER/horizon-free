@@ -94,7 +94,7 @@ pub fn main() -> horizon_client::Result<()> {
                 item.burning_tick(in_lava, &can_hurt);
             }
             if item.health > 0 {
-                item.environment_tick(&world, &facts, assets.registry, &can_hurt);
+                item.environment_tick(&world, &facts, assets.registry, &can_hurt, false);
             }
             output.push_str(&format!(
                 "\t{},{},{}",
