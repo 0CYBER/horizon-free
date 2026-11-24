@@ -87,6 +87,15 @@ pub(super) struct Stage<'p> {
     pub(super) replaced: HashMap<usize, String>,
     /// Globals whose initializer runs in our `main` (`g = hz_init_g();`), in order.
     pub(super) inits: Vec<String>,
+    /// Globals that keep their literal initializer (`initializer`): no constants, so a `const`
+    /// that names one runs in our `main` too.
+    pub(super) literal_globals: Vec<String>,
+    /// A function was declared before its body (`float f();`): its body may read or write
+    /// globals declared after an initializer that calls it.
+    prototype: bool,
+    /// An initializer run in our `main` called the pack's functions after a prototype: the
+    /// globals of literals after it run in our `main` too, in file order (`initializer`).
+    in_order: bool,
     /// Authored global names; automatic core matrix inputs must not hide them.
     pub(super) globals: BTreeSet<String>,
     /// Their captured array size constants and declarator ends: `.length()` stays type-only.
@@ -278,6 +287,47 @@ pub(super) fn is_ident(t: &str) -> bool {
     t.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
 }
 
+/// Whether a global of type `ty`, not an array, takes its initializer through a constructor of
+/// the type, which converts it (`vec2 v = ivec2(1)`): scalars, vectors and matrices. An array or
+/// a struct must match.
+fn converts(ty: &str) -> bool {
+    matches!(ty, "float" | "int" | "uint" | "bool") || ty.contains("vec") || ty.starts_with("mat")
+}
+
+/// The scalar and vector types a literal initializer may construct (`literal_value`).
+const LITERAL_TYPES: [&str; 16] = [
+    "float", "int", "uint", "bool", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "uvec2",
+    "uvec3", "uvec4", "bvec2", "bvec3", "bvec4",
+];
+
+/// Whether `value`, the significant tokens of a global's initializer, is numbers (a sign before
+/// one), `true` and `false` in constructors of scalars, vectors and arrays of one dimension
+/// (`vec2[2](vec2(-0.5, 1.0), vec2(2.0))`): an expression naga's frontend folds into literals
+/// and keeps as the global's own initializer.
+fn literal_value(value: &[&str]) -> bool {
+    let number = |t: &str| {
+        let mut chars = t.chars();
+        match chars.next() {
+            Some('.') => chars.next().is_some_and(|c| c.is_ascii_digit()),
+            first => first.is_some_and(|c| c.is_ascii_digit()),
+        }
+    };
+    let mut arrays = 0;
+    !value.is_empty()
+        && value.iter().enumerate().all(|(k, &t)| match t {
+            "(" | ")" | "," | "]" | "true" | "false" => true,
+            "[" => {
+                arrays += 1;
+                arrays == 1
+            }
+            "-" | "+" => {
+                (k == 0 || matches!(value[k - 1], "(" | ","))
+                    && value.get(k + 1).is_some_and(|&n| number(n))
+            }
+            _ => number(t) || LITERAL_TYPES.contains(&t),
+        })
+}
+
 fn outer_array_length(ty: &str) -> Option<&str> {
     let open = ty.find('[')?;
     let mut depth = 0;
@@ -351,6 +401,9 @@ impl<'p> Stage<'p> {
             paged_maps: false,
             replaced: HashMap::new(),
             inits: Vec::new(),
+            literal_globals: Vec::new(),
+            prototype: false,
+            in_order: false,
             globals: BTreeSet::new(),
             runtime_array_lengths: HashMap::new(),
             errors: Vec::new(),
@@ -624,6 +677,7 @@ impl<'p> Stage<'p> {
             return self.buffer_block(&words);
         }
         if body || prototype {
+            self.prototype |= prototype && !body;
             return self.function(&words);
         }
         let mut k = 0;
@@ -878,12 +932,13 @@ impl<'p> Stage<'p> {
             .push(format!("hz_out{n}.{swizzle} = {name};"));
     }
 
-    /// A global `T name = a ? b : c;` or, without `const`, any initialized global: naga only
-    /// evaluates constant initializers at global scope (a conditional is not one; GL drivers
-    /// also take uniforms and other globals there), so each initializer becomes a function of
-    /// ours on the same line (`T a; T hz_init_a() { return T(...); } T b; ...`), called by our
-    /// `main` before the pack's, in file order. The return converts as GLSL's initialization
-    /// does (`vec2 v = ivec2(...)`).
+    /// A global `T name = a ? b : c;` or, without `const`, any initialized global but one of
+    /// literals (`literal_value`): naga only evaluates constant initializers at global scope (a
+    /// conditional is not one; GL drivers also take uniforms and other globals there), so each
+    /// initializer becomes a function of ours on the same line (`T a; T hz_init_a() { return
+    /// T(...); } T b; ...`), called by our `main` before the pack's, in file order. The return
+    /// converts as GLSL's initialization does (`vec2 v = ivec2(...)`); a global of literals keeps
+    /// them in the same constructor (`int n = int(8.0);`), which naga folds into a constant.
     pub(super) fn initializer(&mut self, words: &[usize], to: usize) {
         let text = |i: usize| self.tokens[i];
         let Some(eq) = words.iter().position(|&i| text(i) == "=") else {
@@ -922,43 +977,6 @@ impl<'p> Stage<'p> {
         }) else {
             return;
         };
-        // The zero-division rewrite reads hz_zero, so even a literal-only expression must run
-        // at invocation time. Its value is unspecified in GLSL; keep the existing arithmetic
-        // policy rather than inventing a finite replacement. Later dependent constants must
-        // run after it, while unrelated constants (including comma declarators) stay constant.
-        let mut runtime_names: BTreeSet<&str> = self.inits.iter().map(String::as_str).collect();
-        let runtime: Vec<bool> = declarators
-            .iter()
-            .enumerate()
-            .map(|(n, &(begin, assign, end))| {
-                let run = assign.is_some_and(|a| {
-                    !constant
-                        || (a + 1..end).any(|n| {
-                            let t = text(words[n]);
-                            let next = words.get(n + 1).map(|&i| text(i));
-                            t == "?"
-                                || (NOT_CONSTANT.contains(&t) && next == Some("("))
-                                || (t == "/" && next.is_some_and(is_zero_literal))
-                                || (runtime_names.contains(t)
-                                    && text(words[n - 1]) != "."
-                                    && next != Some("(")
-                                    // A sized array's length depends on its type, not its values.
-                                    && ![".", "length", "(", ")"].iter().enumerate().all(
-                                        |(offset, &t)| {
-                                            words.get(n + offset + 1).is_some_and(|&i| text(i) == t)
-                                        },
-                                    ))
-                        })
-                });
-                if run {
-                    runtime_names.insert(text(words[if n == 0 { name_at } else { begin }]));
-                }
-                run
-            })
-            .collect();
-        if !runtime.iter().any(|&run| run) {
-            return;
-        }
         // The type, with a `vec3[]`'s count written in.
         let mut ty = String::new();
         for &i in &words[..name_at] {
@@ -977,6 +995,83 @@ impl<'p> Stage<'p> {
             }
         }
         if ty.is_empty() {
+            return;
+        }
+        // The zero-division rewrite reads hz_zero, so even a literal-only expression must run
+        // at invocation time. Its value is unspecified in GLSL; keep the existing arithmetic
+        // policy rather than inventing a finite replacement. Later dependent constants must
+        // run after it, while unrelated constants (including comma declarators) stay constant.
+        let mut runtime_names: BTreeSet<&str> = (self.inits.iter())
+            .chain(&self.literal_globals)
+            .map(String::as_str)
+            .collect();
+        // A global of literals (`vec2 o[2] = vec2[2](vec2(-0.5, 1.0), vec2(2.0))`) keeps them as
+        // its initializer, as a GL driver takes it: nothing of ours stores it again in every
+        // invocation, so a table read at a dynamic index (TAA jitter, AO offsets) is the module's
+        // constant data. A scalar, vector or matrix, or an array of one dimension (more are
+        // written reversed for naga); a global of another type (a struct, a `double`) runs in
+        // our `main`, as does a `shared` one, which takes no initializer.
+        // After a prototype, an initializer that calls the pack's functions may reach globals
+        // declared after it (`float f(); float a = f(); float k = 2.0; float f() { return k; }`):
+        // those run in our `main` too, so that `a` still reads `k` before `k` is set.
+        let type_brackets = words[..name_at].iter().filter(|&&i| text(i) == "[").count();
+        let shared = words[..name_at].iter().any(|&i| text(i) == "shared");
+        let mut in_order = self.in_order;
+        let mut literal = Vec::new();
+        let runtime: Vec<bool> = declarators
+            .iter()
+            .enumerate()
+            .map(|(n, &(begin, assign, end))| {
+                let at = if n == 0 { name_at } else { begin };
+                let run = assign.is_some_and(|a| {
+                    if !constant {
+                        let brackets = (words[at..a].iter()).filter(|&&i| text(i) == "[").count();
+                        let value: Vec<&str> = words[a + 1..end].iter().map(|&i| text(i)).collect();
+                        let shape = match type_brackets + brackets {
+                            0 => converts(&ty),
+                            1 => true,
+                            _ => false,
+                        };
+                        return in_order || shared || !shape || !literal_value(&value);
+                    }
+                    (a + 1..end).any(|n| {
+                        let t = text(words[n]);
+                        let next = words.get(n + 1).map(|&i| text(i));
+                        t == "?"
+                            || (NOT_CONSTANT.contains(&t) && next == Some("("))
+                            || (t == "/" && next.is_some_and(is_zero_literal))
+                            || (runtime_names.contains(t)
+                                && text(words[n - 1]) != "."
+                                && next != Some("(")
+                                // A sized array's length depends on its type, not its values.
+                                && ![".", "length", "(", ")"].iter().enumerate().all(
+                                    |(offset, &t)| {
+                                        words.get(n + offset + 1).is_some_and(|&i| text(i) == t)
+                                    },
+                                ))
+                    })
+                });
+                in_order |= run
+                    && self.prototype
+                    && assign.is_some_and(|a| {
+                        (a + 1..end).any(|k| {
+                            self.globals.contains(text(words[k]))
+                                && words.get(k + 1).is_some_and(|&i| text(i) == "(")
+                        })
+                    });
+                if run || (!constant && assign.is_some()) {
+                    runtime_names.insert(text(words[at]));
+                }
+                if !run && !constant && assign.is_some() {
+                    literal.push(text(words[at]).to_owned());
+                }
+                run
+            })
+            .collect();
+        self.in_order = in_order;
+        // A declarator run in our `main` splits the declaration around its function.
+        let split = runtime.contains(&true);
+        if !split && literal.is_empty() {
             return;
         }
         let mut replaced = Vec::new();
@@ -1007,6 +1102,8 @@ impl<'p> Stage<'p> {
                 String::new()
             };
             let end_token = words.get(end).copied().unwrap_or(to);
+            // Scalars, vectors and matrices convert; arrays and structs must match.
+            let scalar = array.is_empty() && !ty.contains('[') && converts(&ty);
             match assign {
                 Some(a) if runtime[n] => {
                     let dimensions = if array.is_empty() { &ty } else { &array };
@@ -1028,12 +1125,6 @@ impl<'p> Stage<'p> {
                     } else {
                         String::new()
                     };
-                    // Scalars, vectors and matrices convert; arrays and structs must match.
-                    let scalar = array.is_empty()
-                        && !ty.contains('[')
-                        && (matches!(ty.as_str(), "float" | "int" | "uint" | "bool")
-                            || ty.contains("vec")
-                            || ty.starts_with("mat"));
                     let (open, close) = if scalar {
                         (format!("{ty}("), ")")
                     } else {
@@ -1051,7 +1142,20 @@ impl<'p> Stage<'p> {
                     replaced.push((end_token, format!("{close}; }}{next}")));
                     names.push(name);
                 }
-                _ if n + 1 < declarators.len() => replaced.push((end_token, format!(";{next}"))),
+                // Kept in the constructor the return above would convert them with: naga folds
+                // `int(8.0)` into the global's constant initializer, where `8.0` alone mismatches.
+                Some(a) if scalar && !constant => {
+                    replaced.push((words[a], format!("= {ty}(")));
+                    let rest = if split && n + 1 < declarators.len() {
+                        format!(";{next}")
+                    } else {
+                        text(end_token).to_owned()
+                    };
+                    replaced.push((end_token, format!("){rest}")));
+                }
+                _ if split && n + 1 < declarators.len() => {
+                    replaced.push((end_token, format!(";{next}")))
+                }
                 _ => {}
             }
         }
@@ -1062,6 +1166,7 @@ impl<'p> Stage<'p> {
         }
         self.replaced.extend(replaced);
         self.inits.extend(names);
+        self.literal_globals.extend(literal);
     }
 
     /// `layout(std430, binding = n) buffer Name {`: an SSBO, in set 4 at its binding. Its
@@ -1162,8 +1267,10 @@ impl<'p> Stage<'p> {
 
 #[cfg(test)]
 mod tests {
-    use crate::translate::Target;
+    use crate::pack::tests::zip;
     use crate::translate::tests::program;
+    use crate::translate::{Target, translate_compute};
+    use crate::{Macros, Pack, preprocess};
 
     #[test]
     fn a_struct_defined_in_a_varyings_declaration_is_a_varying() {
@@ -1180,5 +1287,168 @@ mod tests {
         // `p` and `q`, each packed into one slot.
         let inputs = p.fragment.entry_points[0].function.arguments.len();
         assert_eq!(inputs, 2, "{inputs} inputs");
+    }
+
+    /// A global of literals is the module's initializer, as a GL driver takes it, with nothing of
+    /// ours storing it again in every invocation: a table read at a dynamic index (TAA jitter,
+    /// AO offsets) is constant data, not an array copied for each pixel. One that reads a uniform
+    /// still runs in our `main`, and so does a `const` that names a global of literals.
+    #[test]
+    fn a_global_of_literals_is_initialized_by_the_module() {
+        let m = fragment(
+            "#version 120\nuniform float viewWidth;\nuniform int frameCounter;\n\
+             vec2 offsets[3] = vec2[3](vec2(-0.5, 1.0), vec2(0.25, -2.0), vec2(1.5));\n\
+             float bias = -1.0, scaled = viewWidth * 2.0;\nconst float twice = bias * 2.0;\n\
+             void main() { gl_FragData[0] = vec4(offsets[frameCounter], bias + twice, scaled); }\n",
+        );
+        assert_eq!(
+            init(&m, "offsets"),
+            floats(&[-0.5, 1.0, 0.25, -2.0, 1.5, 1.5])
+        );
+        assert_eq!(init(&m, "bias"), floats(&[-1.0]));
+        assert_eq!(init(&m, "scaled"), None);
+        assert_eq!(init(&m, "twice"), None);
+        assert_eq!(initializers(&m), ["hz_init_scaled", "hz_init_twice"]);
+    }
+
+    /// GL drivers take literals of another type than the global's (`int steps = 8.0;`) and
+    /// convert them as the type's constructor does: each global's constant is a value of its own
+    /// type, as it is for literals of the global's type.
+    #[test]
+    fn a_global_of_literals_converts_to_its_type() {
+        use naga::Literal::{Bool, I32, U32};
+        let m = fragment(
+            "#version 330\nout vec4 c;\n\
+             int steps = 8.0;\nbool on = 1;\nint i = 1u;\nmat3 m = 1.0;\nvec3 tint = 1.0;\n\
+             vec3 fog = vec4(0.5, 0.6, 0.7, 1.0);\nfloat f = vec2(1.0, 2.0);\n\
+             int taps[2] = int[2](1u, -2);\nuint mask = 3u;\nbool off = false;\n\
+             bvec2 flags = bvec2(true, false);\n\
+             void main() { c = vec4(tint * m * fog * f, float(steps + i + taps[1]) * float(on)\n\
+             + float(mask) + float(off) + float(flags.x)); }\n",
+        );
+        assert_eq!(init(&m, "steps"), Some(vec![I32(8)]));
+        assert_eq!(init(&m, "on"), Some(vec![Bool(true)]));
+        assert_eq!(init(&m, "i"), Some(vec![I32(1)]));
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        assert_eq!(init(&m, "m"), floats(&identity));
+        assert_eq!(init(&m, "tint"), floats(&[1.0, 1.0, 1.0]));
+        assert_eq!(init(&m, "fog"), floats(&[0.5, 0.6, 0.7]));
+        assert_eq!(init(&m, "f"), floats(&[1.0]));
+        assert_eq!(init(&m, "taps"), Some(vec![I32(1), I32(-2)]));
+        assert_eq!(init(&m, "mask"), Some(vec![U32(3)]));
+        assert_eq!(init(&m, "off"), Some(vec![Bool(false)]));
+        assert_eq!(init(&m, "flags"), Some(vec![Bool(true), Bool(false)]));
+        assert!(initializers(&m).is_empty(), "{:?}", initializers(&m));
+    }
+
+    /// A function declared before its body may read a global declared after an initializer
+    /// that calls it (GLSL 4.60, 4.1.11 lets one call the pack's functions). Such globals run in
+    /// our `main` after that initializer, in file order, so `a` reads `k` before `k` is set. A
+    /// global of literals before the call keeps its constant.
+    #[test]
+    fn globals_after_a_call_before_a_body_run_in_file_order() {
+        let m = fragment(
+            "#version 120\nfloat f();\nfloat base = 1.0;\nfloat a = f();\nfloat k = 2.0;\n\
+             float f() { return base + k; }\n\
+             void main() { gl_FragData[0] = vec4(a, k, 0.0, 1.0); }\n",
+        );
+        assert_eq!(init(&m, "base"), floats(&[1.0]));
+        assert_eq!(init(&m, "k"), None);
+        let entry = &m.entry_points[0].function;
+        let mut stored = Vec::new();
+        stores(&m, entry, &entry.body, &mut stored);
+        stored.retain(|&name| matches!(name, "a" | "k"));
+        assert_eq!(stored, ["a", "k"]);
+    }
+
+    /// Workgroup memory takes no initializer in naga: a `shared` global of literals, which GLSL
+    /// forbids and a driver may still take, runs in our `main`.
+    #[test]
+    fn a_shared_global_of_literals_runs_in_main() {
+        let csh = "#version 430\nlayout(local_size_x = 1) in;\nshared float k = 2.0;\n\
+                   layout(std430, binding = 0) buffer B { float v; } b;\nvoid main() { b.v = k; }\n";
+        let pack = Pack::from_zip_bytes("P.zip", zip(&[("shaders/composite.csh", csh)])).unwrap();
+        let p = translate_compute(&preprocess(&pack, "composite.csh", &Macros::standard()))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(initializers(&p.module), ["hz_init_k"]);
+    }
+
+    /// The fragment stage of a composite program whose fragment source is `fsh`.
+    fn fragment(fsh: &str) -> naga::Module {
+        let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+        program(
+            &[("composite.vsh", vsh), ("composite.fsh", fsh)],
+            Target::Buffers,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .fragment
+    }
+
+    /// The literals of global `name`'s initializer, component by component; `None` without one.
+    fn init(m: &naga::Module, name: &str) -> Option<Vec<naga::Literal>> {
+        let (_, global) = (m.global_variables.iter())
+            .find(|(_, g)| g.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no global {name}"));
+        global.init.map(|e| {
+            let mut values = Vec::new();
+            literals(m, e, &mut values);
+            values
+        })
+    }
+
+    fn floats(values: &[f32]) -> Option<Vec<naga::Literal>> {
+        Some(values.iter().map(|&v| naga::Literal::F32(v)).collect())
+    }
+
+    /// Our functions that run a global's initializer in `main`, in the module's order.
+    fn initializers(m: &naga::Module) -> Vec<&str> {
+        (m.functions.iter())
+            .filter_map(|(_, f)| f.name.as_deref())
+            .filter(|name| name.starts_with("hz_init_"))
+            .collect()
+    }
+
+    /// The globals `body` of `f` stores to, in order, through the functions it calls.
+    fn stores<'m>(
+        m: &'m naga::Module,
+        f: &naga::Function,
+        body: &naga::Block,
+        out: &mut Vec<&'m str>,
+    ) {
+        for statement in body {
+            match *statement {
+                naga::Statement::Store { pointer, .. } => {
+                    if let naga::Expression::GlobalVariable(g) = f.expressions[pointer]
+                        && let Some(name) = m.global_variables[g].name.as_deref()
+                    {
+                        out.push(name);
+                    }
+                }
+                naga::Statement::Call { function, .. } => {
+                    let callee = &m.functions[function];
+                    stores(m, callee, &callee.body, out);
+                }
+                naga::Statement::Block(ref block) => stores(m, f, block, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// The literals of a constant expression of `m`, component by component.
+    fn literals(m: &naga::Module, e: naga::Handle<naga::Expression>, out: &mut Vec<naga::Literal>) {
+        match m.global_expressions[e] {
+            naga::Expression::Literal(v) => out.push(v),
+            naga::Expression::Compose { ref components, .. } => {
+                for &c in components {
+                    literals(m, c, out);
+                }
+            }
+            naga::Expression::Splat { size, value } => {
+                for _ in 0..size as u8 {
+                    literals(m, value, out);
+                }
+            }
+            ref other => panic!("not a literal: {other:?}"),
+        }
     }
 }
