@@ -270,3 +270,48 @@ fn a_project_inside_a_game_checkout_builds_against_it_and_a_pinned_one_does_not(
     );
     assert_eq!(game_tree(&outside).unwrap(), None);
 }
+
+/// URL downloads in `sdk_fetch` go through `horizon_port_pack::net::agent`, so a configured proxy
+/// receives requests for non-local hosts (`.invalid` never resolves without the proxy).
+#[test]
+fn url_fetch_routes_through_configured_proxy() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    struct ResetProxy;
+    impl Drop for ResetProxy {
+        fn drop(&mut self) {
+            horizon_port_pack::net::set_proxy(None);
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        let mut header = String::new();
+        while reader.read_line(&mut header).unwrap() > 2 {
+            header.clear();
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nproxied-sdk",
+            )
+            .unwrap();
+        request_line
+    });
+
+    let _reset = ResetProxy;
+    horizon_port_pack::net::set_proxy(Some(format!("http://127.0.0.1:{port}")));
+    let base = Base::Url("http://horizon.invalid/releases".to_owned());
+    let body = base.read("sdk-test", "sdk.json", 64).unwrap();
+    assert_eq!(body, b"proxied-sdk");
+    let request_line = server.join().unwrap();
+    assert!(
+        request_line.starts_with("GET http://horizon.invalid/releases/sdk-test/sdk.json "),
+        "unexpected proxy request line: {request_line:?}"
+    );
+}

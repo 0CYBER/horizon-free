@@ -262,7 +262,10 @@ impl Base {
         match self {
             Self::Url(base) => {
                 let url = format!("{base}/{release}/{file}");
-                let response = ureq::get(&url).call().map_err(|e| format!("{url}: {e}"))?;
+                let response = horizon_port_pack::net::agent(&url)
+                    .get(&url)
+                    .call()
+                    .map_err(|e| format!("{url}: {e}"))?;
                 Ok(Box::new(response.into_reader()))
             }
             Self::Folder(base) => {
@@ -295,7 +298,8 @@ impl Base {
                 .collect()),
             Self::Url(base) if base == BASE => {
                 let api = horizon_addresses::SDK_RELEASE_LIST;
-                let text = ureq::get(api)
+                let text = horizon_port_pack::net::agent(api)
+                    .get(api)
                     .call()
                     .map_err(|e| format!("{api}: {e}"))?
                     .into_string()

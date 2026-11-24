@@ -526,7 +526,6 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
- "ureq",
  "wasm-encoder 0.261.0",
  "wasmparser 0.261.0",
  "wat",
