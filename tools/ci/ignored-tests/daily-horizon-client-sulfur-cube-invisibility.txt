@@ -1,0 +1,2 @@
+horizon-client game::creatures::spectator_view_tests::an_invisible_sulfur_cube_keeps_its_contained_block lib daily resources
+horizon-client game::native_living_renderers_tests::an_invisible_sulfur_cube_carrying_a_block_runs_a_registered_renderer lib daily child-process

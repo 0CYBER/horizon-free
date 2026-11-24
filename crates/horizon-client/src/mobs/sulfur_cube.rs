@@ -1407,9 +1407,9 @@ pub fn body(m: &Mob) -> (String, String) {
         )
     }
 }
-/// `SulfurCubeInnerLayer`: the inner cube when no block is held.
+/// `SulfurCubeInnerLayer.submit`: the inner cube when no block is held and the cube is visible.
 pub fn inner(m: &Mob) -> Option<(&'static str, &'static str)> {
-    if has_body(m) {
+    if has_body(m) || m.is_invisible() {
         return None;
     }
     Some(if m.is_baby() {
@@ -1954,5 +1954,49 @@ mod mob_contact_tests {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod inner_tests {
+    use super::*;
+
+    #[test]
+    fn inner_core_skips_when_invisible_or_carrying_block() {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let data = std::sync::Arc::make_mut(&mut kind);
+        data.id = "minecraft:sulfur_cube".into();
+        data.species = crate::mobs::Species::SulfurCube;
+
+        for baby in [false, true] {
+            for body in [None, Some("minecraft:tnt")] {
+                for invisible in [false, true] {
+                    let mut m = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
+                    if baby {
+                        m.extra.age = -24000;
+                    }
+                    m.extra.set_body(body.map(Into::into));
+                    m.invisible = invisible;
+
+                    let expected = if body.is_none() && !invisible {
+                        Some(if baby {
+                            (
+                                "sulfur_cube_small#inner",
+                                "entity/sulfur_cube/sulfur_cube_inner_small",
+                            )
+                        } else {
+                            ("sulfur_cube#inner", "entity/sulfur_cube/sulfur_cube_inner")
+                        })
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        inner(&m),
+                        expected,
+                        "baby={baby}, body={body:?}, invisible={invisible}"
+                    );
+                }
+            }
+        }
     }
 }

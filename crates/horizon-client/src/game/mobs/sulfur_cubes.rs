@@ -11,6 +11,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::position::BlockPos;
+use horizon_world::registry::BlockStateId;
 
 fn block_transform(base: glam::Mat4, baby: bool) -> glam::Mat4 {
     base * glam::Mat4::from_scale(glam::Vec3::new(1.0, -1.0, -1.0))
@@ -37,7 +38,18 @@ fn block_light(light: u32, emission: u8) -> u32 {
 }
 
 impl Game<'_> {
-    /// The swallowed block replaces the opaque core and precedes the shell.
+    /// `SulfurCubeInnerLayer.submit`: the renderable block state inside a sulfur cube, if any.
+    pub(super) fn sulfur_cube_contained_block(&self, mob: &Mob) -> Option<BlockStateId> {
+        let item = mob.extra.body_id()?;
+        if super::armor_stands::skull_kind(item).is_some() {
+            return None;
+        }
+        // shortcut: the body slot retains only an item id; preserve the stack
+        // before supporting its block-state components here.
+        self.items().get(item).and_then(|item| item.block)
+    }
+
+    /// `SulfurCubeInnerLayer.submit`: the swallowed block replaces the opaque core and precedes the shell.
     pub(super) fn sulfur_cube_body_geometry(
         &self,
         mob: &Mob,
@@ -45,17 +57,9 @@ impl Game<'_> {
         base: glam::Mat4,
         light: u32,
         out: &mut Vec<Vertex>,
-    ) {
-        let Some(item) = mob.extra.body_id() else {
-            return;
-        };
-        if super::armor_stands::skull_kind(item).is_some() {
-            return;
-        }
-        // shortcut: the body slot retains only an item id; preserve the stack
-        // before supporting its block-state components here.
-        let Some(state) = self.items().get(item).and_then(|item| item.block) else {
-            return;
+    ) -> bool {
+        let Some(state) = self.sulfur_cube_contained_block(mob) else {
+            return false;
         };
         let start = out.len();
         self.block_model_vertices(
@@ -76,6 +80,7 @@ impl Game<'_> {
                 vertex.layer = overlay;
             }
         }
+        out.len() > start
     }
 
     fn sulfur_sound(&mut self, index: usize, sound: &str) {

@@ -107,6 +107,10 @@ impl Hooks for Scene {
     ) {
         let zombie = Arc::new(Zombie(self.heard.clone()));
         event.renderers.register("minecraft:zombie".into(), zombie);
+        let cube = Arc::new(Zombie(self.heard.clone()));
+        event
+            .renderers
+            .register("minecraft:sulfur_cube".into(), cube);
         let skeleton = self.skeleton.clone();
         event
             .renderers
@@ -235,6 +239,45 @@ fn a_registered_living_type_draws_its_renderer_in_place_of_its_model() {
             assert!(!cow.is_empty(), "an unregistered type draws its model");
             assert!(cow.iter().all(|v| above(v) < 3.0), "{cow:?}");
             assert_eq!(events(heard), ["living_pre 92", "living_post 92"]);
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_invisible_sulfur_cube_carrying_a_block_runs_a_registered_renderer() {
+    in_scene(
+        "an_invisible_sulfur_cube_carrying_a_block_runs_a_registered_renderer",
+        |game, heard, _| {
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:sulfur_cube")
+                .unwrap()
+                .clone();
+            let at = horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5);
+            let mut cube = Mob::new(97, kind, at, 30.0);
+            (cube.body_yaw, cube.previous_body_yaw) = (30.0, 30.0);
+            cube.invisible = true;
+            cube.extra.set_body(Some("minecraft:tnt".into()));
+            game.mobs.clear();
+            game.mobs.push(cube);
+            game.prepare_entity_culling(glam::DVec3::ZERO);
+            let mut out = Vec::new();
+            game.mob_geometry(CAMERA, 1.0, &mut out);
+            assert_eq!(
+                quads(&out),
+                [100.0],
+                "the registered renderer takes ownership and suppresses the vanilla contained block"
+            );
+            assert_eq!(
+                events(heard),
+                [
+                    "living_pre 97",
+                    "renderer 97 body 30 baby false Standing",
+                    "living_post 97"
+                ]
+            );
         },
     );
 }
