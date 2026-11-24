@@ -84,11 +84,11 @@ impl Game<'_> {
             return false;
         }
         // A spear jabs (`MultiPlayerGameMode.piercingAttack`): this client
-        // syncs its look so the server's stab raycasts along it, reports the
-        // reach and combo of a mob in range, then the server stabs while this
-        // client swings, plays the sound and starts its charge again.
+        // reports the reach and combo of a mob in range, then the server stabs
+        // while this client swings, plays the sound and starts its charge
+        // again. No movement packet goes out here: the server uses the
+        // rotation the tick's own position packet carried, as for vanilla.
         if let Some(kinetic) = spear {
-            self.remote_sync_look();
             if let Some((i, distance, _)) = self.mob_hit()
                 && self.before_block(distance)
                 && self.held_range_allows(distance)
