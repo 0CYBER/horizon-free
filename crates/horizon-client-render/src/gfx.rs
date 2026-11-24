@@ -787,7 +787,8 @@ struct Globals {
     /// The sunrise fan's triangles as the sky shader tests them (`sunrise_fan::normals`).
     sunrise_fan: [[f32; 4]; 2 * sunrise_fan::TRIANGLES],
     /// x: `Options.textureFiltering` (0 none, 1 RGSS, 2 anisotropic); y: the sprite arrays' width;
-    /// z: the mip level at which a sprite is one texel, when the views reach it, else 0.
+    /// z: the mip level at which a sprite is one texel, when the views reach it, else 0;
+    /// w: `log2(y)` for `terrain.wgsl`'s `rotated_grid` and `sample_nearest`.
     filtering: [f32; 4],
     /// x and y unused; z 1 with HDR output on; w the world's writers write light (terrain.wgsl).
     hdr_light: [f32; 4],
@@ -2378,6 +2379,19 @@ fn sprite_sampler_descriptor(anisotropy: u16) -> wgpu::SamplerDescriptor<'static
 /// `Options.maxAnisotropyValue` for a `maxAnisotropyBit`: `1 << bit`, at most wgpu's 16.
 fn sampler_anisotropy(bit: i32) -> u16 {
     1u16 << bit.clamp(0, 4)
+}
+/// Uniform `Globals::filtering` for `terrain.wgsl`: mode, sprite width, single-texel mip level
+/// (or 0 when the views stop before one), and `log2(sprite_width)`.
+fn filtering_uniform(texture_filtering: u32, sprite_width: u32, mipmaps: u32) -> [f32; 4] {
+    let size = sprite_width as f32;
+    // The views' last level (`rebuild_terrain_group`), when a sprite is one texel
+    // there: RGSS takes one tap from it on (terrain.wgsl's `rotated_grid`).
+    let single = if sprite_width.checked_shr(mipmaps) == Some(1) {
+        mipmaps as f32
+    } else {
+        0.0
+    };
+    [texture_filtering as f32, size, single, size.max(1.0).log2()]
 }
 /// terrain.wgsl's group 0.
 #[allow(clippy::too_many_arguments)]
@@ -8736,18 +8750,11 @@ impl Renderer {
             } else {
                 [[0.0; 4]; 2 * sunrise_fan::TRIANGLES]
             },
-            filtering: [
-                self.texture_filtering as f32,
-                self.sprite_textures[0].width() as f32,
-                // The views' last level (`rebuild_terrain_group`), when a sprite is one texel
-                // there: RGSS takes one tap from it on (terrain.wgsl's `rotated_grid`).
-                if self.sprite_textures[0].width() >> self.mipmaps == 1 {
-                    self.mipmaps as f32
-                } else {
-                    0.0
-                },
-                0.0,
-            ],
+            filtering: filtering_uniform(
+                self.texture_filtering,
+                self.sprite_textures[0].width(),
+                self.mipmaps,
+            ),
             hdr_light: [
                 0.0,
                 0.0,
@@ -15261,6 +15268,218 @@ mod tests {
             [2, 4, 8],
             "Options.maxAnisotropyValue is 1 << bit"
         );
+    }
+    #[test]
+    fn filtering_uniform_precomputes_log2_sprite_size() {
+        assert_eq!(super::filtering_uniform(1, 16, 4), [1.0, 16.0, 4.0, 4.0]);
+        assert_eq!(super::filtering_uniform(1, 16, 3), [1.0, 16.0, 0.0, 4.0]);
+        assert_eq!(super::filtering_uniform(2, 32, 5), [2.0, 32.0, 5.0, 5.0]);
+        assert_eq!(super::filtering_uniform(0, 64, 4), [0.0, 64.0, 0.0, 6.0]);
+        assert_eq!(super::filtering_uniform(0, 1, 0), [0.0, 1.0, 0.0, 0.0]);
+        // Zero width or oversized mip count must never panic or produce NaN/infinity.
+        assert_eq!(super::filtering_uniform(1, 0, 4), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(super::filtering_uniform(1, 16, 32), [1.0, 16.0, 0.0, 4.0]);
+        // Non-power-of-two resource pack sprites still store exact f32 log2(width).
+        for width in [24u32, 48, 96] {
+            let f = super::filtering_uniform(1, width, 2);
+            assert_eq!(f[1], width as f32);
+            assert_eq!(f[2], 0.0);
+            assert_eq!(f[3].to_bits(), (width as f32).log2().to_bits());
+        }
+    }
+    #[test]
+    fn packed_corner_shift_div_255_and_axis_unpack_are_bit_exact() {
+        // Exhaustive proof over all 65,536 byte pairs for terrain.wgsl's `mul_div_255`.
+        for g in 0u32..=255 {
+            for ch in 0u32..=255 {
+                let x = g * ch;
+                let fast = (x + 1 + (x >> 8)) >> 8;
+                assert_eq!(fast, x / 255, "g={g} ch={ch}");
+            }
+        }
+        // Exhaustive proof over all 192 (axis, side, start, dir, corner) combinations against
+        // `mesher::packed::packed_vertex` (modulo-free branchless axis & step unpacking).
+        let block = [3u32, 7, 11];
+        for axis in 0u32..3 {
+            for side in 0u32..2 {
+                for start in 0u32..4 {
+                    for dir in 0u32..2 {
+                        let orient = block[0]
+                            | (block[1] << 4)
+                            | (block[2] << 8)
+                            | (axis << 12)
+                            | (side << 14)
+                            | (start << 15)
+                            | (dir << 17);
+                        let words = [0xff80_4020, 0xffff_ffff, 0, 0, 0, orient << 12];
+                        for corner in 0u32..4 {
+                            let step = (start + if dir == 1 { 4 - corner } else { corner }) & 3;
+                            let dw = step >> 1;
+                            let du = (step ^ dw) & 1;
+                            let a0 = axis == 0;
+                            let a1 = axis == 1;
+                            let offset = [
+                                if a0 {
+                                    side
+                                } else if a1 {
+                                    dw
+                                } else {
+                                    du
+                                },
+                                if a0 {
+                                    du
+                                } else if a1 {
+                                    side
+                                } else {
+                                    dw
+                                },
+                                if a0 {
+                                    dw
+                                } else if a1 {
+                                    du
+                                } else {
+                                    side
+                                },
+                            ];
+                            let pos = [
+                                (block[0] + offset[0]) as f32,
+                                (block[1] + offset[1]) as f32,
+                                (block[2] + offset[2]) as f32,
+                            ];
+                            let expected =
+                                crate::mesher::packed::packed_vertex(&words, corner as usize);
+                            assert_eq!(
+                                pos, expected.pos,
+                                "axis={axis} side={side} start={start} dir={dir} corner={corner}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn rgss_zero_sqrt_lod_and_squared_thresholds_match_vanilla() {
+        let dot2 = |a: [f32; 2]| a[0] * a[0] + a[1] * a[1];
+        let smoothstep = |e0: f32, e1: f32, x: f32| {
+            let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        // Floor clamp must remain a normal f32 so FTZ GPUs never flush it to 0 before `log2`.
+        let floor = 1e-36_f32;
+        assert!(floor.is_normal() && floor > f32::MIN_POSITIVE);
+        let derivs = [
+            0.0_f32, 1e-12, 1e-6, 1e-4, 0.01, 0.0625, 0.125, 0.5, 1.0, 10.0, 1000.0, -0.37,
+        ];
+        for width in [1u32, 16, 24, 32, 64, 256, 1024] {
+            let f = super::filtering_uniform(1, width, 4);
+            let min_pixel = 1.0 / f[1];
+            let min_sq = min_pixel * min_pixel;
+            let log2_size = f[3];
+            for &dux in &derivs {
+                for &duy in &[0.0_f32, 0.03, -0.5] {
+                    for &dvx in &[0.0_f32, -0.02, 0.4] {
+                        for &dvy in &derivs {
+                            let du = [dux, duy];
+                            let dv = [dvx, dvy];
+                            let du_len = dot2(du).sqrt();
+                            let dv_len = dot2(dv).sqrt();
+                            // Original `rotated_grid` LOD.
+                            let eff = (du_len.min(dv_len) * du_len.max(dv_len)).sqrt();
+                            let ratio = eff / min_pixel;
+                            let orig_rgss = if ratio <= 0.0 {
+                                0.0
+                            } else {
+                                ratio.log2().max(0.0)
+                            };
+                            // Optimized zero-sqrt `rotated_grid` LOD.
+                            let area_sq = dot2(du) * dot2(dv);
+                            let fast_rgss = (0.25 * area_sq.max(1e-36).log2() + log2_size).max(0.0);
+                            assert!(fast_rgss.is_finite(), "NaN/inf for {width} {du:?} {dv:?}");
+                            assert!(
+                                (orig_rgss - fast_rgss).abs() < 1e-5,
+                                "rgss lod mismatch ({width}, {du:?}, {dv:?}): orig={orig_rgss} fast={fast_rgss}"
+                            );
+                            // Original vs zero-sqrt `sample_nearest` tiled LOD.
+                            let tiled_ratio = du_len.max(dv_len) / min_pixel;
+                            let orig_tiled = if tiled_ratio <= 0.0 {
+                                0.0
+                            } else {
+                                tiled_ratio.log2().max(0.0)
+                            };
+                            let max_grad_sq = dot2(du).max(dot2(dv));
+                            let fast_tiled =
+                                (0.5 * max_grad_sq.max(1e-36).log2() + log2_size).max(0.0);
+                            assert!(fast_tiled.is_finite());
+                            assert!(
+                                (orig_tiled - fast_tiled).abs() < 1e-5,
+                                "tiled lod mismatch ({width}, {du:?}, {dv:?}): orig={orig_tiled} fast={fast_tiled}"
+                            );
+                        }
+                    }
+                }
+            }
+            // Squared early-exit thresholds around `min_pixel` and `2 * min_pixel` (±20 ULPs).
+            for target in [min_pixel, 2.0 * min_pixel] {
+                let base_bits = target.to_bits();
+                for delta in -20i32..=20 {
+                    let Some(bits) = base_bits.checked_add_signed(delta) else {
+                        continue;
+                    };
+                    let m = f32::from_bits(bits);
+                    if m < 0.0 {
+                        continue;
+                    }
+                    let sq = m * m;
+                    let orig_blend = smoothstep(min_pixel, 2.0 * min_pixel, sq.sqrt());
+                    let fast_blend = if sq <= min_sq {
+                        0.0
+                    } else if sq >= 4.0 * min_sq {
+                        1.0
+                    } else {
+                        smoothstep(min_pixel, 2.0 * min_pixel, sq.sqrt())
+                    };
+                    assert_eq!(
+                        orig_blend.to_bits(),
+                        fast_blend.to_bits(),
+                        "blend boundary mismatch at width={width}, m={m}: orig={orig_blend} fast={fast_blend}"
+                    );
+                }
+            }
+        }
+        // `terrain_vertex` visibility guard: `vis < 1.0` iff 23-bit mantissa is non-zero.
+        for mantissa in [0u32, 1, 2, 0x003f_ffff, 0x007f_fffe, 0x007f_ffff] {
+            let vis = 1.0 - (mantissa as f32) / 8_388_608.0;
+            assert_eq!(vis < 1.0, mantissa != 0);
+        }
+    }
+    #[test]
+    fn terrain_wgsl_composed_modules_validate() {
+        let terrain = super::terrain_shader();
+        for (name, source) in [
+            ("terrain.wgsl", terrain.clone()),
+            (
+                "terrain.wgsl + visbuffer.wgsl",
+                terrain.clone() + include_str!("visbuffer.wgsl"),
+            ),
+            (
+                "terrain.wgsl + oit.wgsl + oit_world.wgsl",
+                terrain.clone() + include_str!("oit.wgsl") + include_str!("oit_world.wgsl"),
+            ),
+            (
+                "terrain.wgsl + rt_unpack.wgsl",
+                terrain + include_str!("rt_unpack.wgsl"),
+            ),
+        ] {
+            let module =
+                naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{name}: {e}"));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
     }
     #[test]
     fn distant_tiles_repeat_their_sprite_under_the_clamped_sampler() {

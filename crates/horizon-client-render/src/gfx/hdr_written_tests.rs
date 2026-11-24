@@ -25,7 +25,6 @@ override TEST_OVERLAY: u32 = 0u;
     let own = globals.colored_lights[0];
     o.color = vec4(select(vec3(0.8, 1.0, 0.7), own.rgb, own.a > 0.0) * shade,
         select(1.0, 0.5, globals.misc.z > 0.5));
-    o.scene = vec2(15.0);
     o.spherical = globals.misc.x;
     o.cylindrical = globals.misc.x;
     o.visibility = globals.misc.y;

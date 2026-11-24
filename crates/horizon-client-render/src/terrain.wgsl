@@ -33,7 +33,7 @@ struct Globals {
     sunrise_fan: array<vec4<f32>, 32>,
     // x: Options.textureFiltering (0 none, 1 RGSS, 2 anisotropic), y: the sprite arrays' width
     // in texels (vanilla's TextureSize), z: the mip level at which a sprite is one texel when
-    // the views reach it, else 0 (`rotated_grid`).
+    // the views reach it, else 0 (`rotated_grid`), w: log2(y) for `rotated_grid` and `sample_nearest`.
     filtering: vec4<f32>,
     // HDR output: z 1 with it on, which nothing here reads; w: apply the no-pack HDR gain;
     // HDR_WRITE_LIGHT independently keeps float alpha as coverage. x and y are unused.
@@ -113,7 +113,7 @@ fn sprite_level(uv: vec2<f32>, layer: u32, lod: f32) -> vec4<f32> {
 // sprites while `uv` stays inside one (see `tile_uv` below).
 fn sample_nearest(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv: vec2<f32>,
                   texel_screen: vec2<f32>, tiled: bool) -> vec4<f32> {
-    let texel_coords = uv / pixel;
+    let texel_coords = uv * globals.filtering.y;
     let center = round(texel_coords) - 0.5;
     var offset = texel_coords - center;
     offset = (offset - 0.5) * pixel / max(texel_screen, vec2(1e-12)) + 0.5;
@@ -123,36 +123,40 @@ fn sample_nearest(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv
         // An anisotropic sampler lays its taps along those gradients, past the sprite's edge,
         // where the clamped sampler reads that edge texel again: long streaks on the far tiles.
         // Asking for the level the gradients give takes the one tap an anisotropy of 1 would.
-        let level = max(length(du), length(dv)) / min(pixel.x, pixel.y);
-        return sprite_level(at, layer, max(0.0, log2(level)));
+        let max_grad_sq = max(dot(du, du), dot(dv, dv));
+        return sprite_level(at, layer,
+            max(0.0, 0.5 * log2(max(max_grad_sq, 1e-36)) + globals.filtering.w));
     }
     return sprite_grad(at, layer, du, dv);
 }
 // sampleRGSS: four rotated-grid samples of the two nearest mip levels, faded in as the texels
 // shrink below two screen pixels, over sample_nearest.
 fn sample_rgss(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv: vec2<f32>,
-               texel_screen: vec2<f32>, tiled: bool) -> vec4<f32> {
-    let max_texel = max(texel_screen.x, texel_screen.y);
-    let min_pixel = min(pixel.x, pixel.y);
-    let blend = smoothstep(min_pixel, min_pixel * 2.0, max_texel);
+               sq: vec2<f32>, tiled: bool) -> vec4<f32> {
+    let max_sq = max(sq.x, sq.y);
+    let min_pixel = pixel.x;
+    let min_sq = min_pixel * min_pixel;
     // Only the side of the mix that has weight is sampled: near texels (blend 0) take
-    // sample_nearest's one tap alone, far ones (blend 1) the rotated grid alone.
-    if blend <= 0.0 {
-        return sample_nearest(uv, layer, pixel, du, dv, texel_screen, tiled);
+    // sample_nearest's one tap alone, far ones (blend 1) the rotated grid alone, skipping
+    // both `sqrt(sq)` ops and `smoothstep` outside the narrow (min_pixel, 2*min_pixel) band.
+    if max_sq <= min_sq {
+        return sample_nearest(uv, layer, pixel, du, dv, sqrt(sq), tiled);
     }
     let rgss = rotated_grid(uv, layer, pixel, du, dv);
-    if blend >= 1.0 {
+    if max_sq >= 4.0 * min_sq {
         return rgss;
     }
+    let texel_screen = sqrt(sq);
+    let blend = smoothstep(min_pixel, min_pixel * 2.0, max(texel_screen.x, texel_screen.y));
     return mix(sample_nearest(uv, layer, pixel, du, dv, texel_screen, tiled), rgss, blend);
 }
 fn rotated_grid(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>,
                 dv: vec2<f32>) -> vec4<f32> {
-    let min_pixel = min(pixel.x, pixel.y);
-    let du_len = length(du);
-    let dv_len = length(dv);
-    let effective = sqrt(min(du_len, dv_len) * max(du_len, dv_len));
-    let exact = max(0.0, log2(effective / min_pixel));
+    // log2(sqrt(length(du) * length(dv)) / (1 / sprite_size))
+    // = 0.25 * log2(dot(du, du) * dot(dv, dv)) + log2(sprite_size).
+    // 1e-36 is a normal f32 (> FLT_MIN) so FTZ GPUs never flush it to 0 before `log2`.
+    let area_sq = dot(du, du) * dot(dv, dv);
+    let exact = max(0.0, 0.25 * log2(max(area_sq, 1e-36)) + globals.filtering.w);
     // From this level on the sprite is a single texel (0: the views stop before one is), and
     // the sampler clamps any level past it to it: there every tap reads the same value, so
     // one tap gives the four's mean. Distant tiles sit there.
@@ -163,12 +167,12 @@ fn rotated_grid(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>,
     // sampleRGSS takes each of the four taps at the two mip levels around `exact` and mixes them
     // by fract(exact). The sprite sampler's mip filter is linear, so a tap at the fractional
     // level is that mix: four texture instructions where the shader mix took eight.
-    var offsets = array<vec2<f32>, 4>(
-        vec2(0.125, 0.375), vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(-0.375, 0.125));
-    var sum = vec4(0.0);
-    for (var i = 0; i < 4; i++) {
-        sum += sprite_level(uv + offsets[i] * pixel, layer, exact);
-    }
+    let d0 = vec2(0.125, 0.375) * pixel;
+    let d1 = vec2(0.375, -0.125) * pixel;
+    let sum = sprite_level(uv + d0, layer, exact)
+        + sprite_level(uv - d0, layer, exact)
+        + sprite_level(uv + d1, layer, exact)
+        + sprite_level(uv - d1, layer, exact);
     return sum * 0.25;
 }
 // Distant terrain tiles (lod/mesh.rs) count their UVs in blocks past 1: each block takes the
@@ -189,11 +193,11 @@ fn sprite_at(tiled: vec2<f32>, layer: u32, du: vec2<f32>, dv: vec2<f32>) -> vec4
     // block's (whose UVs stay inside its sprite).
     let tiled_face = any(tiled - uv >= vec2(0.5));
     let pixel = vec2(1.0 / globals.filtering.y);
-    let texel_screen = sqrt(du * du + dv * dv);
+    let sq = du * du + dv * dv;
     if u32(globals.filtering.x) == 1u {
-        return sample_rgss(uv, layer, pixel, du, dv, texel_screen, tiled_face);
+        return sample_rgss(uv, layer, pixel, du, dv, sq, tiled_face);
     }
-    return sample_nearest(uv, layer, pixel, du, dv, texel_screen, tiled_face);
+    return sample_nearest(uv, layer, pixel, du, dv, sqrt(sq), tiled_face);
 }
 
 // The terrain stages' values, as the code reads them. What crosses from the vertex stage to the
@@ -208,8 +212,6 @@ struct TerrainOut {
     // How the face shines in HDR output (mesher.rs's `TIER_BITS`): 0 not
     // at all, 1 to 4 the tier with its bright parts, 5 to 8 the tier all over.
     emission: u32,
-    // Block and sky light over 16.
-    scene: vec2<f32>,
     fade: u32,
     // A distant tile's tile-relative position, for its fade (`faded`).
     local: vec3<f32>,
@@ -219,7 +221,7 @@ struct TerrainOut {
     height: f32,
     emissive_layer: u32,
 }
-// `TerrainOut` in 5 interpolant locations instead of 12. A GPU's vertex stage pays for each
+// `TerrainOut` in 5 interpolant locations instead of 11. A GPU's vertex stage pays for each
 // location it exports (AMD's parameter cache gives one a whole slot, however few of its four
 // components are used): on an RX 580 the 12 cost 3.2 ns per quad and these 5 cost 1.6. Every
 // component is still interpolated on its own (and the integers stay flat), so each pixel gets
@@ -230,10 +232,10 @@ struct TerrainWire {
     @location(0) a: vec4<f32>,
     // `local` and `visibility`.
     @location(1) b: vec4<f32>,
-    // `uv` and `scene`.
+    // `uv`, `spherical` and `cylindrical`.
     @location(2) c: vec4<f32>,
-    // `spherical`, `cylindrical` and `height`.
-    @location(3) d: vec4<f32>,
+    // `height` (read only by `fs_solid_mirror`, so other fragment shaders can drop this location).
+    @location(3) d: f32,
     // `layer`, `emission`, `fade` and `emissive_layer`.
     @location(4) @interpolate(flat) e: vec4<u32>,
 }
@@ -242,8 +244,8 @@ fn to_wire(o: TerrainOut) -> TerrainWire {
     w.clip = o.clip;
     w.a = o.color;
     w.b = vec4(o.local, o.visibility);
-    w.c = vec4(o.uv, o.scene);
-    w.d = vec4(o.spherical, o.cylindrical, o.height, 0.0);
+    w.c = vec4(o.uv, o.spherical, o.cylindrical);
+    w.d = o.height;
     w.e = vec4(o.layer, o.emission, o.fade, o.emissive_layer);
     return w;
 }
@@ -254,10 +256,9 @@ fn from_wire(w: TerrainWire) -> TerrainOut {
     o.local = w.b.xyz;
     o.visibility = w.b.w;
     o.uv = w.c.xy;
-    o.scene = w.c.zw;
-    o.spherical = w.d.x;
-    o.cylindrical = w.d.y;
-    o.height = w.d.z;
+    o.spherical = w.c.z;
+    o.cylindrical = w.c.w;
+    o.height = w.d;
     o.layer = w.e.x;
     o.emission = w.e.y;
     o.fade = w.e.z;
@@ -483,10 +484,10 @@ fn arena_vertex(v: u32) -> ArenaCorner {
     let c = arena_page[v * 3u + 2u];
     return ArenaCorner(vec3(a.x, a.y, b.x), vec3(b.y, c.x, c.y));
 }
-// The offset a block corner adds on one component: `side` on the face's axis (rel 0), `du`
-// on the next axis (rel 1), `dw` on the one after (rel 2).
-fn corner_offset(rel: u32, side: u32, du: u32, dw: u32) -> u32 {
-    return select(select(dw, du, rel == 1u), side, rel == 0u);
+// Exact integer `(g * ch) / 255u` for bytes `g` and `ch` in 0..=255 without integer division.
+fn mul_div_255(g: u32, ch: u32) -> u32 {
+    let x = g * ch;
+    return (x + 1u + (x >> 8u)) >> 8u;
 }
 // `packed::packed_vertex`: corner `corner` of the record whose words are lo (0 to 2) and
 // hi (3 to 5).
@@ -498,16 +499,18 @@ fn packed_corner(lo: vec3<u32>, hi: vec3<u32>, corner: u32) -> ArenaCorner {
     let start = (orient >> 15u) & 3u;
     let dir = (orient >> 17u) & 1u;
     let step = (start + select(corner, 4u - corner, dir == 1u)) & 3u;
-    let du = select(0u, 1u, step == 1u || step == 2u);
-    let dw = select(0u, 1u, step >= 2u);
-    // No dynamic component stores: FXC (DirectX 12) rejects them (X3500). A component's offset
-    // from the axis (0: the axis, 1: the next, 2: the one after) picks what it gets. Scalar
-    // selects only: a vector select becomes GLSL's mix(uvec3, uvec3, bvec3), which old AMD
-    // OpenGL drivers (Radeon HD 7400M, driver 15.301) resolve to the float overload and reject.
+    let dw = step >> 1u;
+    let du = (step ^ dw) & 1u;
+    // No dynamic component stores: FXC (DirectX 12) rejects them (X3500). Scalar selects only:
+    // a vector select becomes GLSL's mix(uvec3, uvec3, bvec3), which old AMD OpenGL drivers
+    // (Radeon HD 7400M, driver 15.301) resolve to the float overload and reject.
+    // axis 0 -> (side, du, dw), axis 1 -> (dw, side, du), axis 2 -> (du, dw, side).
+    let a0 = axis == 0u;
+    let a1 = axis == 1u;
     let offset = vec3(
-        corner_offset((3u - axis) % 3u, side, du, dw),
-        corner_offset((4u - axis) % 3u, side, du, dw),
-        corner_offset((5u - axis) % 3u, side, du, dw),
+        select(select(du, dw, a1), side, a0),
+        select(select(dw, side, a1), du, a0),
+        select(select(side, du, a1), dw, a0),
     );
     let pos = block + offset;
     let sel = lo.z >> 24u;
@@ -537,8 +540,10 @@ fn packed_corner(lo: vec3<u32>, hi: vec3<u32>, corner: u32) -> ArenaCorner {
         code = (hi.y >> 27u) & 7u;
     }
     let alpha = select((code * 51u) << 24u, t & 0xff000000u, code == 0u);
-    let color = (g * ((t >> 16u) & 255u) / 255u) | ((g * ((t >> 8u) & 255u) / 255u) << 8u)
-        | ((g * (t & 255u) / 255u) << 16u) | alpha;
+    let color = mul_div_255(g, (t >> 16u) & 255u)
+        | (mul_div_255(g, (t >> 8u) & 255u) << 8u)
+        | (mul_div_255(g, t & 255u) << 16u)
+        | alpha;
     return ArenaCorner(bitcast<vec3<u32>>(vec3<f32>(pos)),
         vec3((u << 10u) | (v << 26u), (hi.x & 0xffffu) | (packed_light << 16u), color));
 }
@@ -694,7 +699,6 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     }
     let block = max(f32(light.y), dynamic_block_light(pos));
     out.color = vec4(color.rgb, 1.0) * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
-    out.scene = vec2(block / 16.0, f32(light.x) / 16.0);
     if globals.colored_count.x > 0u {
         out.color = vec4(min(out.color.rgb + color.rgb * native_colored_light(pos), vec3(1.0)), out.color.a);
     }
@@ -705,8 +709,13 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.cylindrical = max(length(eye.xz), abs(eye.y));
     out.fade = fade_code(w);
     const CHUNK_FULLY_VISIBLE_RANGE: f32 = 16.0;
-    out.visibility = mix(1.0, instance_visibility(w),
-        clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
+    let vis = instance_visibility(w);
+    if vis < 1.0 {
+        out.visibility = mix(1.0, vis,
+            clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
+    } else {
+        out.visibility = 1.0;
+    }
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -742,15 +751,17 @@ struct TerrainMsaa {
     let in = from_wire(wire);
     let s = solid_uncut(in);
     let mask = cutout_coverage(s.color.a, (in.layer & 0x8000u) != 0u);
-    return TerrainMsaa(solid_finish(in, s.texel, s.color), mask);
+    return TerrainMsaa(solid_finish(in, s.texel, s.color, s.du, s.dv), mask);
 }
 // `fs_solid` for the opaque pass (`opaque_quad`): no fade, no cutout, no discard.
 @fragment fn fs_opaque(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
-    let texel = sprite(in.uv, in.layer & 0x7fffu);
+    let du = dpdx(in.uv);
+    let dv = dpdy(in.uv);
+    let texel = sprite_at(in.uv, in.layer & 0x7fffu, du, dv);
     var color = texel * in.color;
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
-    return solid_finish(in, texel, color);
+    return solid_finish(in, texel, color, du, dv);
 }
 // The water mirror (gfx.rs's reflection pass): what lies below the water plane
 // (`fog_ends.w`, camera-relative) would show above it in the mirror, so it is cut away.
@@ -763,27 +774,32 @@ fn solid_color(in: TerrainOut) -> vec4<f32> {
     let s = solid_uncut(in);
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     if s.color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
-    return solid_finish(in, s.texel, s.color);
+    return solid_finish(in, s.texel, s.color, s.du, s.dv);
 }
-// A solid pixel's sprite texel and colour before its cutout, which `solid_color` discards
-// below half alpha and `fs_solid_msaa` turns into coverage.
+// A solid pixel's sprite texel, colour and UV screen gradients before its cutout, which
+// `solid_color` discards below half alpha and `fs_solid_msaa` turns into coverage.
 struct SolidUncut {
     texel: vec4<f32>,
     color: vec4<f32>,
+    du: vec2<f32>,
+    dv: vec2<f32>,
 }
 fn solid_uncut(in: TerrainOut) -> SolidUncut {
     let dx = dpdx(in.local);
     let dy = dpdy(in.local);
     if faded(in.fade, in.local, dx, dy) { discard; }
-    let texel = sprite(in.uv, in.layer & 0x7fffu);
+    let du = dpdx(in.uv);
+    let dv = dpdy(in.uv);
+    let texel = sprite_at(in.uv, in.layer & 0x7fffu, du, dv);
     var color = texel * in.color;
     // terrain.fsh: the fade-in mixes toward the fog colour.
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
-    return SolidUncut(texel, color);
+    return SolidUncut(texel, color, du, dv);
 }
 // The rest of a solid pixel's colour once it is kept: emission and fog.
-fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
-    return solid_light(solid_finish_at(in, texel, color, dpdx(in.uv), dpdy(in.uv)));
+fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<f32>,
+                dv: vec2<f32>) -> vec4<f32> {
+    return solid_light(solid_finish_at(in, texel, color, du, dv));
 }
 // A finished solid pixel (its colour, and its mark in `finished.a`) as the frame keeps it:
 // opaque, and on the float frame lit by HDR's gain where it applies (`hdr_light.w`).
