@@ -399,6 +399,54 @@ fn function_index(game: &Path, commit: &str) -> Result<api_gen::functions::Funct
     index.checked().map_err(|e| format!("E_MIXIN_INDEX: {e}"))
 }
 
+/// Refuses any `OVERWRITE` mixin row whose target function fingerprint is missing or does not
+/// match the current function span's SHA-256 in `index`, printing the current fingerprint so the
+/// mod author can re-verify the overwritten body after a game update.
+fn check_overwrite_fingerprints(
+    bundles: &[&Bundle],
+    index: &api_gen::functions::FunctionIndex,
+) -> Result<(), String> {
+    use horizon_platform::mod_package::manifest::mixin::Kind;
+    let mut refusals = Vec::new();
+    for bundle in bundles {
+        for mixin in &bundle.native().mixin {
+            if mixin.kind != Kind::Overwrite {
+                continue;
+            }
+            let key = api_gen::functions::key(&mixin.target);
+            let Some(function) = index.functions.get(&key) else {
+                continue;
+            };
+            let owner = format!("{}:{}", bundle.manifest.id, mixin.id);
+            match mixin.fingerprint.as_deref() {
+                Some(pinned) if pinned == function.sha256 => {}
+                Some(pinned) => refusals.push(trf(
+                    "E_MIXIN_OVERWRITE_FINGERPRINT: {owner}: {target}: pinned fingerprint `{pinned}` does not match current `{current}`",
+                    &[
+                        ("owner", &owner),
+                        ("target", &mixin.target),
+                        ("pinned", pinned),
+                        ("current", &function.sha256),
+                    ],
+                )),
+                None => refusals.push(trf(
+                    "E_MIXIN_OVERWRITE_FINGERPRINT: {owner}: {target}: OVERWRITE mixin must pin fingerprint = \"{current}\"",
+                    &[
+                        ("owner", &owner),
+                        ("target", &mixin.target),
+                        ("current", &function.sha256),
+                    ],
+                )),
+            }
+        }
+    }
+    if refusals.is_empty() {
+        Ok(())
+    } else {
+        Err(refusals.join("\n"))
+    }
+}
+
 /// Copies, generates and transforms the patch crates for `projects` into `out`, without
 /// compiling them; `None` when no mod has a mixin, module, bridge or loop.
 pub(super) fn prepare<'a>(
@@ -450,6 +498,7 @@ pub(super) fn prepare<'a>(
     let source = super::source_until(sdk.commit(), &super::check_cancelled)?;
     let started = std::time::Instant::now();
     let index = function_index(game, sdk.commit())?;
+    check_overwrite_fingerprints(&bundles, &index)?;
     // A filled loop's entry, or one whose loop function has rows, is copied like a mixin's target,
     // with the loop's body.
     let targets: Vec<String> = rows
@@ -534,6 +583,8 @@ pub(super) fn prepare<'a>(
         let mut rows = bundle.native().mixin.clone();
         for row in &mut rows {
             row.target = ids[row.target.as_str()].to_owned();
+            // Launcher-checked pin; horizon-mixins does not accept a `fingerprint` key.
+            row.fingerprint = None;
         }
         let mut manifest = toml::Table::new();
         manifest.insert(
@@ -722,6 +773,64 @@ mod refusal_tests {
         assert_eq!(
             super::target_refusal(&refused, &requests),
             "E_MIXIN_NOT_REPLACEABLE: first:before, second:after: game::tick: no slot"
+        );
+    }
+
+    #[test]
+    fn overwrite_fingerprint_pin_matches_or_prints_current_fingerprint() {
+        use horizon_platform::mod_package::manifest::{mixin, Manifest};
+        let current = "b".repeat(64);
+        let stale = "a".repeat(64);
+        let mut index = super::api_gen::functions::FunctionIndex::default();
+        index.functions.insert(
+            "horizon_client::game::Game::tick".into(),
+            super::api_gen::functions::Function {
+                module: "horizon_client::game".into(),
+                file: "crates/horizon-client/src/game.rs".into(),
+                span: [0, 10],
+                signature_hash: "sig".into(),
+                sha256: current.clone(),
+            },
+        );
+        let bundle_with = |fingerprint: Option<String>| {
+            let text = format!(
+                "id='sample'\nname='Sample'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n[native]\ngame='26.3'\nhorizon='{0}'\nmixins='{0}'\n",
+                "c".repeat(40)
+            );
+            let mut manifest = Manifest::parse(&text).unwrap();
+            manifest.native.as_mut().unwrap().mixin.push(mixin::Mixin {
+                id: "replace_tick".into(),
+                target: "horizon_client::game::Game::tick".into(),
+                kind: mixin::Kind::Overwrite,
+                helper: "src/tick.rs".into(),
+                fingerprint,
+                options: toml::Table::new(),
+            });
+            super::Bundle {
+                dir: std::path::PathBuf::new(),
+                manifest,
+            }
+        };
+
+        let matched = bundle_with(Some(current.clone()));
+        super::check_overwrite_fingerprints(&[&matched], &index).unwrap();
+
+        let unpinned = bundle_with(None);
+        let err = super::check_overwrite_fingerprints(&[&unpinned], &index).unwrap_err();
+        assert!(
+            err.contains("E_MIXIN_OVERWRITE_FINGERPRINT")
+                && err.contains("sample:replace_tick")
+                && err.contains(&current),
+            "{err}"
+        );
+
+        let mismatched = bundle_with(Some(stale.clone()));
+        let err = super::check_overwrite_fingerprints(&[&mismatched], &index).unwrap_err();
+        assert!(
+            err.contains("E_MIXIN_OVERWRITE_FINGERPRINT")
+                && err.contains(&stale)
+                && err.contains(&current),
+            "{err}"
         );
     }
 }

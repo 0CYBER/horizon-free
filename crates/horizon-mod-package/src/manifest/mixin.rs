@@ -15,6 +15,11 @@ pub struct Mixin {
     pub kind: Kind,
     /// The helper's source file in this package, compiled inside the target function.
     pub helper: String,
+    /// Required on `OVERWRITE` rows: the 64-character lowercase hex SHA-256 fingerprint of the
+    /// target function's source span, so a game update that changes the replaced function is
+    /// refused rather than silently dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
     #[serde(flatten)]
     pub options: toml::Table,
 }
@@ -148,6 +153,24 @@ impl Mixin {
                     "hook",
                     "a named hook is a mod_api::Hooks method; a mixin names its target",
                 ));
+            }
+            match (entry.kind, entry.fingerprint.as_deref()) {
+                (Kind::Overwrite, Some(fp))
+                    if fp.len() == 64
+                        && fp.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) => {}
+                (Kind::Overwrite, _) => {
+                    return Err(invalid(
+                        "fingerprint",
+                        "an OVERWRITE mixin must pin the target function's 64-character lowercase hex sha256 fingerprint",
+                    ));
+                }
+                (_, Some(_)) => {
+                    return Err(invalid(
+                        "fingerprint",
+                        "only OVERWRITE mixins pin a target function fingerprint",
+                    ));
+                }
+                (_, None) => {}
             }
         }
         Ok(())
@@ -370,6 +393,41 @@ mod tests {
         .unwrap_err();
         assert!(
             error.contains("E_MIXIN_INVALID: sample:Ticks_A: invalid id; it gives the same accessor name as bridge `ticks-a`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn overwrite_mixins_require_a_valid_sha256_fingerprint_pin() {
+        let overwrite = ROW.replace("kind='MODIFY_EXPRESSION_VALUE'", "kind='OVERWRITE'");
+        let valid_fp = "a".repeat(64);
+        let pinned = format!("{overwrite}fingerprint='{valid_fp}'\n");
+        let manifest = parse(&native(), &pinned).unwrap();
+        assert_eq!(
+            manifest.native.unwrap().mixin[0].fingerprint.as_deref(),
+            Some(valid_fp.as_str())
+        );
+
+        // Missing or malformed fingerprints on OVERWRITE are refused.
+        for bad in [
+            overwrite.clone(),
+            format!("{overwrite}fingerprint=''\n"),
+            format!("{overwrite}fingerprint='{}'\n", "a".repeat(63)),
+            format!("{overwrite}fingerprint='{}'\n", "A".repeat(64)),
+            format!("{overwrite}fingerprint='{}g'\n", "a".repeat(63)),
+        ] {
+            let error = parse(&native(), &bad).unwrap_err();
+            assert!(
+                error.contains("E_MIXIN_INVALID: sample:autosave: invalid fingerprint;"),
+                "{bad}: {error}"
+            );
+        }
+
+        // Non-OVERWRITE rows must not carry a fingerprint pin.
+        let non_overwrite = format!("{ROW}fingerprint='{valid_fp}'\n");
+        let error = parse(&native(), &non_overwrite).unwrap_err();
+        assert!(
+            error.contains("E_MIXIN_INVALID: sample:autosave: invalid fingerprint;"),
             "{error}"
         );
     }

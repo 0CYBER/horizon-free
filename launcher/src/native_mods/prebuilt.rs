@@ -1326,6 +1326,7 @@ mod tests {
                     target: "Game::tick".into(),
                     kind: mixin::Kind::Head,
                     helper: "m.rs".into(),
+                    fingerprint: None,
                     options: toml::Table::new(),
                 })
             }),
