@@ -9,7 +9,7 @@ pub(super) enum MenuOpen {
 
 /// Per-guest state of the gameplay code that lives outside `Guest`.
 #[derive(Default)]
-pub(super) struct GuestPlay {
+pub(in crate::game) struct GuestPlay {
     mining: Option<Mining>,
     destroy_delay: u32,
     using: Option<(usize, u32)>,
@@ -239,6 +239,15 @@ impl GuestPlay {
     /// The guest's `Player.attackStrengthTicker` outside its turn.
     pub(in crate::game) fn attack_ticks(&self) -> u32 {
         self.attack_ticks
+    }
+    /// Fresh play state for a scoped fake-player action: starts with a full attack charge
+    /// (100 ticks, matching a local player's initial `attack_ticks`) so weapon attacks deal
+    /// full damage.
+    pub(in crate::game) fn scoped() -> Self {
+        Self {
+            attack_ticks: 100,
+            ..Self::default()
+        }
     }
     /// The main-hand item of the guest's last tick (`Game.attack_item`).
     pub(in crate::game) fn attack_item(&self) -> Option<&str> {

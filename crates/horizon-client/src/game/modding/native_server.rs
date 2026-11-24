@@ -563,7 +563,9 @@ impl Game<'_> {
         let mut state = ScopedPlayerState::new(self.motion, self.items(), setup)?;
         let host = self.lan.as_mut().expect("validated fake's host");
         host.hub.guests.update(gi, |guest| state.swap(guest));
-        let play = host.play.insert(conn, Default::default());
+        let play = host
+            .play
+            .insert(conn, crate::game::lan_actions::GuestPlay::scoped());
         let menus = host.menus.insert(conn, Default::default());
         // A hook that panics during the action must not leave the fake on the scoped body: its
         // own body, inventory, menus and play state are put back before the panic goes on.
@@ -5165,6 +5167,45 @@ pub(super) mod fake_action_tests {
                 .unwrap();
             assert_eq!(rod.outcome, ActionOutcome::Consumed, "the rod casts");
             assert!(game.hook.is_none(), "no hook is left for nobody to reel in");
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn scoped_fake_player_attack_starts_fully_charged() {
+        use super::super::native_entity_refs::tests::with_game;
+        with_game(|game| {
+            let (player, ..) = fake(game, None, 0);
+            let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
+            game.mobs.push(horizon_client::mobs::Mob::new(
+                5001,
+                kind,
+                horizon_core::geometry::Vec3::new(2.0, 64.0, 0.5),
+                0.0,
+            ));
+            let target = game.entity(5001).unwrap();
+            let setup = mod_api::PlayerActionSetup::new(
+                Some(crate::game::api_values::test_snapshot(&ItemStack::new(
+                    "minecraft:diamond_sword",
+                    1,
+                ))),
+                [0.5, 64.0 + f64::from(1.62_f32), 0.5],
+                -90.0,
+                0.0,
+                false,
+            );
+            let result = player
+                .perform_action_scoped(game, PlayerAction::Attack { target }, setup)
+                .unwrap();
+            assert_eq!(result.outcome, ActionOutcome::Consumed);
+            let cow = game.mobs.iter().find(|m| m.id == 5001).unwrap();
+            // A fully charged diamond sword deals 7.0 damage to a 10.0-HP cow (leaving 3.0);
+            // an uncharged attack at attack_ticks == 0 would deal only a small fraction.
+            assert!(
+                (cow.health - 3.0).abs() < 0.01,
+                "expected full-charge diamond sword hit leaving 3.0 HP, got {}",
+                cow.health
+            );
         });
     }
 

@@ -171,6 +171,7 @@ horizon-client game::native_player_respawn_tests::each_respawn_refusal_has_its_o
 horizon-client game::native_recipes::tests::a_sync_of_other_types_keeps_the_content_mods_recipes lib daily resources
 horizon-client game::native_recipes::tests::a_synced_vanilla_recipe_has_one_book_id_the_servers lib daily resources
 horizon-client game::native_recipes::tests::synced_vanilla_recipes_keep_their_book_ids lib daily resources
+horizon-client game::native_server::fake_action_tests::scoped_fake_player_attack_starts_fully_charged lib daily resources
 horizon-client game::native_server::network_settings_tests::server_settings_follow_the_network_config lib daily slow
 horizon-client game::native_world_columns::tests::terrain_columns_are_the_generators_own_surface_and_load_no_chunk lib daily resources
 horizon-client game::native_world_read::tests::recipe_types_list_each_type_with_recipes_or_a_serializer lib daily resources
