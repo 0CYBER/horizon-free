@@ -193,23 +193,78 @@ fn new(args: &[String]) -> Result<Option<PathBuf>, String> {
         })
         .collect();
     let name = flag(args, "--name")?.map_or_else(|| base.replace(['-', '_'], " "), str::to_string);
+    // The name lands inside a TOML basic string, so it is escaped there; the id is [a-z0-9_] already.
+    let name = toml_escape(&name);
     let fill = |t: &str| t.replace("{id}", &id).replace("{name}", &name);
-    match flag(args, "--template")? {
-        None | Some("content") => {}
-        Some(template @ ("native" | "wasm")) => {
-            new_code(
-                dir,
-                &id,
-                template == "native",
-                flag(args, "--horizon")?,
-                fill,
-            )?;
-            return Ok(Some(dir.to_owned()));
-        }
+    let (files, folders) = match flag(args, "--template")? {
+        None | Some("content") => (content_files(&fill), Vec::new()),
+        Some(template @ ("native" | "wasm")) => (
+            new_code(&id, template == "native", flag(args, "--horizon")?, &fill)?,
+            vec!["assets", "data"],
+        ),
         Some(_) => return Err("--template is content, native or wasm".into()),
+    };
+    let code = !folders.is_empty();
+    let manifest = files
+        .iter()
+        .find(|(file, _)| file == MANIFEST)
+        .map(|(_, text)| text.as_str())
+        .expect("every template has a manifest");
+    // Checked before anything is written, so a bad id or name leaves nothing behind.
+    let manifest = Manifest::parse(manifest)?;
+    stage(dir, &files, &folders, |staged| {
+        if code {
+            return Ok(());
+        }
+        Content::read(staged, &manifest).map(|_| ())
+    })?;
+    if code {
+        let native = manifest.native.is_some();
+        let next = if native {
+            format!(
+                "horizon-launcher native-build {} --instance <instance> --trust-native-code",
+                dir.display()
+            )
+        } else {
+            format!("cd {} && cargo horizon-mod build --wasm", dir.display())
+        };
+        println!(
+            "Created {} ({} mod id {id}). Your editor resolves horizon-mod-api once the SDK is in .horizon/sdk/: \
+             any cargo horizon-mod command fetches it in a fresh clone. Next: {next}",
+            dir.display(),
+            if native { "native" } else { "wasm" },
+        );
+        return Ok(Some(dir.to_owned()));
     }
-    // A block copying a vanilla one, with its model, name, loot, recipe and tag.
-    let files = [
+    println!(
+        "Created {} (mod id {id}). Next: cd {path} && cargo horizon-mod build, then copy \
+         target/horizon-mod/{id}.hmod into your game folder's horizon-mods/ \
+         (docs/modding/src/start/first-content-mod.md)",
+        dir.display()
+    );
+    Ok(None)
+}
+
+/// `text` as the inside of a TOML basic string.
+fn toml_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A block copying a vanilla one, with its model, name, loot, recipe and tag.
+fn content_files(fill: &dyn Fn(&str) -> String) -> Vec<(String, String)> {
+    [
         (
             MANIFEST,
             include_str!("../template/content/horizon-mod.toml"),
@@ -247,25 +302,165 @@ fn new(args: &[String]) -> Result<Option<PathBuf>, String> {
             include_str!("../template/content/pickaxe.json"),
         ),
         (".gitignore", include_str!("../template/gitignore")),
-    ];
-    for (file, text) in files {
-        let file = fill(file);
-        let file = file.as_str();
-        let to = dir.join(file);
-        std::fs::create_dir_all(to.parent().expect("a file in the mod"))
-            .map_err(|e| e.to_string())?;
-        std::fs::write(&to, fill(text)).map_err(|e| format!("{}: {e}", to.display()))?;
+    ]
+    .map(|(file, text)| (fill(file), fill(text)))
+    .into()
+}
+
+/// Writes `files` and empty `folders` into a staging folder beside `dir`, runs `check` on it, and
+/// only then moves it to `dir`: a failure removes what this call made (the staging folder and the
+/// parents it created, while empty) and nothing else, and an existing `dir` is never replaced.
+fn stage(
+    dir: &Path,
+    files: &[(String, String)],
+    folders: &[&str],
+    check: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let parent = dir
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("the path needs a folder name")?;
+    // The parents this call made itself, shallowest first: `create_dir` says which ones were
+    // already there (or appeared meanwhile), so a failure takes back only the former.
+    let mut created: Vec<PathBuf> = Vec::new();
+    let undo = |created: &[PathBuf]| {
+        for made in created.iter().rev() {
+            // Only while empty: a folder that gained content meanwhile stays.
+            let _ = std::fs::remove_dir(made);
+        }
+    };
+    for next in missing_parents(parent) {
+        match std::fs::create_dir(next) {
+            Ok(()) => created.push(next.to_path_buf()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && next.is_dir() => {}
+            Err(e) => {
+                undo(&created);
+                return Err(format!("{}: {e}", next.display()));
+            }
+        }
     }
-    let manifest =
-        Manifest::parse(&std::fs::read_to_string(dir.join(MANIFEST)).map_err(|e| e.to_string())?)?;
-    Content::read(dir, &manifest)?;
-    println!(
-        "Created {} (mod id {id}). Next: cd {path} && cargo horizon-mod build, then copy \
-         target/horizon-mod/{id}.hmod into your game folder's horizon-mods/ \
-         (docs/modding/src/start/first-content-mod.md)",
-        dir.display()
-    );
-    Ok(None)
+    // A short name that does not depend on the destination's, so a long folder name still stages.
+    // `create_dir` fails when the name is taken, so this never removes a folder that was there.
+    let mut staging = None;
+    for n in 0..100 {
+        let path = parent.join(format!(".hmod-new-{}-{n}", std::process::id()));
+        match std::fs::create_dir(&path) {
+            Ok(()) => {
+                staging = Some(path);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                undo(&created);
+                return Err(format!("{}: {e}", path.display()));
+            }
+        }
+    }
+    let Some(staging) = staging else {
+        undo(&created);
+        return Err(format!("{}: no free staging name", parent.display()));
+    };
+    let built = (|| {
+        for (file, text) in files {
+            let to = staging.join(file);
+            std::fs::create_dir_all(to.parent().expect("a file in the mod"))
+                .map_err(|e| e.to_string())?;
+            std::fs::write(&to, text).map_err(|e| format!("{}: {e}", to.display()))?;
+        }
+        for folder in folders {
+            std::fs::create_dir_all(staging.join(folder)).map_err(|e| e.to_string())?;
+        }
+        check(&staging)?;
+        publish(&staging, dir)
+    })();
+    if built.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+        undo(&created);
+    }
+    built
+}
+
+/// The folders on the way to `parent` that do not exist yet, shallowest first. A relative path's
+/// walk ends at its first component, never at the empty path.
+fn missing_parents(parent: &Path) -> Vec<&Path> {
+    let mut missing: Vec<&Path> = parent
+        .ancestors()
+        .take_while(|p| !p.as_os_str().is_empty() && !p.exists())
+        .collect();
+    missing.reverse();
+    missing
+}
+
+/// Moves the staged folder to `dir` without replacing anything that is there. Where the system has
+/// a rename that refuses an existing name (Linux `renameat2`, macOS `renamex_np`) that is the
+/// publication. Elsewhere on Unix a rename replaces an empty folder, so `dir` is claimed first with
+/// `create_dir` (which fails when the name is taken) and the rename only replaces that claim, failing
+/// if anything was put in it meanwhile. On Windows `dir` is looked for first: std's rename there
+/// replaces an existing empty folder too (Windows 10 1607+ on a file system with POSIX rename
+/// semantics), so an empty folder made between the look and the rename would be replaced; one with
+/// anything in it never is.
+fn publish(staging: &Path, dir: &Path) -> Result<(), String> {
+    let fail = |e: std::io::Error| format!("{}: {e}", dir.display());
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    match rename_no_replace(staging, dir) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(fail(e)),
+        // The file system or kernel has no such rename: the claim below does the job.
+        Err(e)
+            if matches!(
+                e.raw_os_error(),
+                Some(libc::EINVAL | libc::ENOSYS | libc::ENOTSUP)
+            ) => {}
+        Err(e) => return Err(fail(e)),
+    }
+    if cfg!(unix) {
+        std::fs::create_dir(dir).map_err(fail)?;
+        if let Err(e) = std::fs::rename(staging, dir) {
+            let _ = std::fs::remove_dir(dir);
+            return Err(fail(e));
+        }
+        Ok(())
+    } else {
+        if dir.exists() {
+            return Err(format!("{}: already exists", dir.display()));
+        }
+        std::fs::rename(staging, dir).map_err(fail)
+    }
+}
+
+/// `rename` that fails with `AlreadyExists` instead of replacing `to`, in one step.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &Path| {
+        CString::new(p.as_os_str().as_bytes())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+    };
+    let (from, to) = (c(from)?, c(to)?);
+    #[cfg(target_os = "linux")]
+    // SAFETY: both are valid NUL-terminated paths for the whole call.
+    let done = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    // SAFETY: both are valid NUL-terminated paths for the whole call.
+    let done = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    if done == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// The build a code mod pins: `--horizon`'s (a sha or a Nightly name), or the current Nightly's,
@@ -312,16 +507,15 @@ fn update(dir: &Path, horizon: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// A flat code mod project, native or wasm, pinned to the build it is made for. Its `Cargo.toml`
-/// names the SDK by path (`.horizon/sdk/api/crates/horizon-mod-api`); a native mod pins its
-/// build in `[native] horizon`, a wasm mod in `[package.metadata.horizon] sdk`.
+/// The files of a flat code mod project, native or wasm, pinned to the build it is made for. Its
+/// `Cargo.toml` names the SDK by path (`.horizon/sdk/api/crates/horizon-mod-api`); a native mod pins
+/// its build in `[native] horizon`, a wasm mod in `[package.metadata.horizon] sdk`.
 fn new_code(
-    dir: &Path,
     id: &str,
     native: bool,
     horizon: Option<&str>,
-    fill: impl Fn(&str) -> String,
-) -> Result<(), String> {
+    fill: &dyn Fn(&str) -> String,
+) -> Result<Vec<(String, String)>, String> {
     if id.len() > 64 {
         return Err(format!("mod id {id}: 64 characters at most"));
     }
@@ -345,36 +539,14 @@ fn new_code(
         )
     };
     let cargo = include_str!("../template/native/api.toml").replace("{metadata}", &metadata);
-    let files = [
+    Ok([
         ("Cargo.toml", cargo.as_str()),
         ("src/lib.rs", include_str!("../template/native/lib.rs")),
         (MANIFEST, manifest.as_str()),
         (".gitignore", include_str!("../template/gitignore")),
-    ];
-    for (file, text) in files {
-        let to = dir.join(file);
-        std::fs::create_dir_all(to.parent().expect("a file in the mod"))
-            .map_err(|e| e.to_string())?;
-        std::fs::write(&to, fill(text)).map_err(|e| format!("{}: {e}", to.display()))?;
-    }
-    for folder in ["assets", "data"] {
-        std::fs::create_dir_all(dir.join(folder)).map_err(|e| e.to_string())?;
-    }
-    let next = if native {
-        format!(
-            "horizon-launcher native-build {} --instance <instance> --trust-native-code",
-            dir.display()
-        )
-    } else {
-        format!("cd {} && cargo horizon-mod build --wasm", dir.display())
-    };
-    println!(
-        "Created {} ({} mod id {id}). Your editor resolves horizon-mod-api once the SDK is in .horizon/sdk/: \
-         any cargo horizon-mod command fetches it in a fresh clone. Next: {next}",
-        dir.display(),
-        if native { "native" } else { "wasm" },
-    );
-    Ok(())
+    ]
+    .map(|(file, text)| (file.to_owned(), fill(text)))
+    .into())
 }
 
 /// Packs the mod in the current folder into `target/horizon-mod/<id>.hmod`: the manifest and
@@ -619,6 +791,152 @@ mod tests {
             .is_err()
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_quoted_name_reaches_the_manifest_unchanged_in_every_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let name = "My \"Mod\" \\ back";
+        for template in ["content", "native", "wasm"] {
+            let path = dir.path().join(format!("quoted-{template}"));
+            new(&[
+                path.display().to_string(),
+                "--name".into(),
+                name.into(),
+                "--template".into(),
+                template.into(),
+                "--horizon".into(),
+                commit.into(),
+            ])
+            .unwrap();
+            let manifest =
+                Manifest::parse(&std::fs::read_to_string(path.join(MANIFEST)).unwrap()).unwrap();
+            assert_eq!(manifest.name, name, "{template}");
+        }
+    }
+
+    #[test]
+    fn a_name_with_a_newline_cannot_add_manifest_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sneaky");
+        let name = "x\"\nversion = \"9.9.9";
+        match new(&[path.display().to_string(), "--name".into(), name.into()]) {
+            Ok(_) => {
+                let manifest =
+                    Manifest::parse(&std::fs::read_to_string(path.join(MANIFEST)).unwrap())
+                        .unwrap();
+                assert_eq!(manifest.version, "0.1.0");
+                assert_eq!(manifest.name, name);
+            }
+            Err(_) => assert!(!path.exists()),
+        }
+    }
+
+    #[test]
+    fn an_over_long_id_fails_before_anything_is_left_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let long = "a".repeat(65);
+        for template in ["content", "native", "wasm"] {
+            let path = dir.path().join(format!("{long}{template}"));
+            let error = new(&[
+                path.display().to_string(),
+                "--template".into(),
+                template.into(),
+                "--horizon".into(),
+                commit.into(),
+            ])
+            .unwrap_err();
+            assert!(error.contains("id"), "{template}: {error}");
+            assert!(!path.exists(), "{template}");
+        }
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    #[test]
+    fn a_failed_new_takes_back_the_parents_it_created_and_keeps_those_that_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("old")).unwrap();
+        // A parent name no filesystem accepts: `fresh` is made, then the next component fails.
+        let long = "x".repeat(300);
+        let path = dir.path().join("old/fresh").join(&long).join("mod");
+        assert!(new(&[path.display().to_string()]).is_err());
+        assert!(dir.path().join("old").is_dir());
+        assert!(!dir.path().join("old/fresh").exists());
+        let path = dir.path().join("new/parents").join(&long).join("mod");
+        assert!(new(&[path.display().to_string()]).is_err());
+        assert!(!dir.path().join("new").exists());
+    }
+
+    #[test]
+    fn publishing_never_replaces_a_destination_that_appeared_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("mine");
+        // The folder shows up after `new` looked, while the staged one is being checked.
+        let error = stage(&dest, &[("a.txt".into(), "x".into())], &[], |_| {
+            std::fs::create_dir(&dest).unwrap();
+            std::fs::write(dest.join("keep.txt"), "keep").unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.contains("mine"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("keep.txt")).unwrap(),
+            "keep"
+        );
+        assert!(!dest.join("a.txt").exists());
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(left.len(), 1, "{left:?}");
+    }
+
+    #[test]
+    fn an_existing_empty_destination_is_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("mine");
+        let error = stage(&dest, &[("a.txt".into(), "x".into())], &[], |_| {
+            std::fs::create_dir(&dest).unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.contains("mine"), "{error}");
+        assert!(dest.is_dir());
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_relative_parents_walk_stops_before_the_empty_path() {
+        let missing = missing_parents(Path::new("zz-no-such-folder/inner"));
+        assert_eq!(
+            missing,
+            [
+                Path::new("zz-no-such-folder"),
+                Path::new("zz-no-such-folder/inner")
+            ]
+        );
+        assert!(missing_parents(Path::new("")).is_empty());
+    }
+
+    #[test]
+    fn a_long_folder_name_still_stages() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("a".repeat(250));
+        stage(&dest, &[("a.txt".into(), "x".into())], &[], |_| Ok(())).unwrap();
+        assert!(dest.join("a.txt").is_file());
+    }
+
+    #[test]
+    fn a_failed_new_never_removes_a_folder_that_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("taken");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("mine.txt"), "keep").unwrap();
+        assert!(new(&[path.display().to_string()]).is_err());
+        assert_eq!(
+            std::fs::read_to_string(path.join("mine.txt")).unwrap(),
+            "keep"
+        );
     }
 
     #[test]
