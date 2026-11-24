@@ -974,38 +974,59 @@ impl Environment {
         let mut biomes = HashMap::new();
         let mut post = HashMap::new();
         let tags = std::cell::RefCell::new(HashMap::new());
-        for file in root.list("data/minecraft/worldgen/biome/") {
-            let Some(name) = file
-                .strip_prefix("data/minecraft/worldgen/biome/")
-                .and_then(|s| s.strip_suffix(".json"))
-            else {
-                continue;
-            };
-            if name.contains('/') {
+        for namespace in root.namespaces("data") {
+            if !horizon_core::level_id::valid_level_namespace(&namespace) {
+                log::debug!("skipping biome namespace with invalid id: {namespace}");
                 continue;
             }
-            let biome: Json = serde_json::from_slice(&root.read(&file)?)?;
-            let name = format!("minecraft:{name}");
-            let mut map = match AttributeMap::parse(&biome["attributes"]) {
-                Ok(map) => map,
-                Err(e) => {
-                    log::warn!("biome {}: {e}", file);
+            let prefix = format!("data/{namespace}/worldgen/biome/");
+            for file in root.list(&prefix) {
+                let Some(path) = file
+                    .strip_prefix(&prefix)
+                    .and_then(|s| s.strip_suffix(".json"))
+                else {
+                    continue;
+                };
+                if !horizon_core::level_id::valid_level_path(path) {
+                    log::debug!("skipping biome with invalid path: {file}");
                     continue;
                 }
-            };
-            let mut post_map = AttributeMap::default();
-            for m in &packs.biomes {
-                let in_tag =
-                    |tag: &str| biome_tag(root, tag, &mut tags.borrow_mut()).contains(&name);
-                if m.targets.matches(&name, in_tag) {
-                    resolver.apply(&mut map, &m.base);
-                    resolver.apply(&mut post_map, &m.post_process);
+                let bytes = match root.read(&file) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        log::warn!("biome {file}: {e}");
+                        continue;
+                    }
+                };
+                let biome: Json = match serde_json::from_slice(&bytes) {
+                    Ok(biome) => biome,
+                    Err(e) => {
+                        log::warn!("biome {file}: {e}");
+                        continue;
+                    }
+                };
+                let name = format!("{namespace}:{path}");
+                let mut map = match AttributeMap::parse(&biome["attributes"]) {
+                    Ok(map) => map,
+                    Err(e) => {
+                        log::warn!("biome {}: {e}", file);
+                        continue;
+                    }
+                };
+                let mut post_map = AttributeMap::default();
+                for m in &packs.biomes {
+                    let in_tag =
+                        |tag: &str| biome_tag(root, tag, &mut tags.borrow_mut()).contains(&name);
+                    if m.targets.matches(&name, in_tag) {
+                        resolver.apply(&mut map, &m.base);
+                        resolver.apply(&mut post_map, &m.post_process);
+                    }
                 }
+                if !post_map.is_empty() {
+                    post.insert(name.clone(), post_map);
+                }
+                biomes.insert(name, map);
             }
-            if !post_map.is_empty() {
-                post.insert(name.clone(), post_map);
-            }
-            biomes.insert(name, map);
         }
         builder.biome_layer(biomes.values());
         let mut ids = Vec::new();
@@ -1676,5 +1697,105 @@ mod tests {
         assert_eq!(sky("minecraft:forest"), [1.0, 0.0, 0.0]);
         // Plains land on the transparent pixel: the colour before stays.
         assert_eq!(sky("minecraft:plains"), [128.0 / 255.0; 3]);
+    }
+
+    #[test]
+    fn biomes_load_across_all_namespaces_and_nested_paths() {
+        use horizon_assets::resource_source::Resource;
+        let file = |json: &str| Resource::bytes(json.as_bytes().to_vec());
+        let world = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "data/minecraft/dimension_type/overworld.json".into(),
+                file(
+                    r##"{"has_skylight": true, "has_ceiling": false,
+                    "attributes": {"minecraft:visual/sky_color": "#808080", "minecraft:visual/fog_color": "#000000"}}"##,
+                ),
+            ),
+            (
+                "data/minecraft/worldgen/biome/plains.json".into(),
+                file(r##"{"attributes": {"minecraft:visual/sky_color": "#404040"}}"##),
+            ),
+            (
+                "data/minecraft/worldgen/biome/sub/x.json".into(),
+                file(r##"{"attributes": {"minecraft:visual/sky_color": "#202020"}}"##),
+            ),
+            (
+                "data/custom/worldgen/biome/sub/grove.json".into(),
+                file(
+                    r##"{"attributes": {"minecraft:visual/sky_color": "#00ff00", "minecraft:visual/fog_color": "#0000ff"}}"##,
+                ),
+            ),
+            (
+                "data/custom/worldgen/biome/broken.json".into(),
+                file("{not valid json"),
+            ),
+            (
+                "data/BadNS/worldgen/biome/ignored.json".into(),
+                file(r#"{"attributes": {}}"#),
+            ),
+            (
+                "data/custom/worldgen/biome/BadPath.json".into(),
+                file(r#"{"attributes": {}}"#),
+            ),
+        ]));
+        let pack = ResourceSource::indexed(std::collections::BTreeMap::from([(
+            "assets/mypack/polytone/biome_modifiers/grove_fog.json".into(),
+            file(
+                r##"{"targets": "custom:sub/grove", "attributes_modifiers": {"visual/fog_color": "#ff0000"}}"##,
+            ),
+        )]));
+        let modifiers = PackModifiers::read(&pack);
+        let env = Environment::load_dimension_with(&world, "overworld", &modifiers).unwrap();
+
+        assert!(env.biome("minecraft:plains").is_some());
+        assert!(env.biome("minecraft:sub/x").is_some());
+        assert!(env.biome("custom:sub/grove").is_some());
+        assert!(env.biome("custom:broken").is_none());
+        assert!(env.biome("BadNS:ignored").is_none());
+        assert!(env.biome("custom:BadPath").is_none());
+
+        let grove = sky_at(&env, "custom:sub/grove", 0.0);
+        assert_eq!(grove.sky_color, [0.0, 1.0, 0.0]);
+        assert_eq!(grove.fog_color, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn directory_backed_biomes_enumerate_namespaces_and_skip_malformed() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-env-biome-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, body: &str| {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        write(
+            "data/minecraft/dimension_type/overworld.json",
+            r##"{"has_skylight": true, "has_ceiling": false,
+                "attributes": {"minecraft:visual/sky_color": "#808080"}}"##,
+        );
+        write(
+            "data/minecraft/worldgen/biome/plains.json",
+            r##"{"attributes": {"minecraft:visual/sky_color": "#404040"}}"##,
+        );
+        write(
+            "data/minecraft/worldgen/biome/sub/x.json",
+            r##"{"attributes": {"minecraft:visual/sky_color": "#202020"}}"##,
+        );
+        write(
+            "data/custom/worldgen/biome/sub/grove.json",
+            r##"{"attributes": {"minecraft:visual/sky_color": "#00ff00"}}"##,
+        );
+        write("data/custom/worldgen/biome/broken.json", "{not valid json");
+
+        let root = ResourceSource::directory(dir.clone());
+        let env = Environment::load_dimension_with(&root, "overworld", &PackModifiers::default())
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(env.biome("minecraft:plains").is_some());
+        assert!(env.biome("minecraft:sub/x").is_some());
+        assert!(env.biome("custom:sub/grove").is_some());
+        assert!(env.biome("custom:broken").is_none());
     }
 }
