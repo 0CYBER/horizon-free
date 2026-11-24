@@ -269,6 +269,7 @@ impl Integrated {
         self.call(move |g| {
             if let Some(host) = g.lan.as_mut() {
                 host.hub.ops.remove(&uuid);
+                host.hub.split_players.remove(&uuid);
             }
         });
     }
@@ -284,6 +285,7 @@ impl Integrated {
                 let owner = host.owner.as_ref()?.uuid;
                 let level = host.hub.ops.get(&owner).copied().unwrap_or(0);
                 host.hub.ops.insert(uuid, level);
+                host.hub.split_players.insert(uuid);
                 host.hub.lan.connect_local().ok()
             })
             .flatten();
