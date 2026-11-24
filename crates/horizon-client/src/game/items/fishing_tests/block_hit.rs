@@ -112,3 +112,71 @@ fn a_bobber_rings_a_floor_bell_on_its_side() {
     cast_east(&mut game, Vec3::new(2.5, 64.6, 5.5), "minecraft:bell_ring");
     assert_eq!(game.stats.get("custom", "minecraft:bell_ring"), 1);
 }
+
+/// `AmethystBlock.onProjectileHit`, which `AmethystClusterBlock` and
+/// `BuddingAmethystBlock` inherit without overriding: a projectile that strikes
+/// a cluster, a bud, budding amethyst or the plain block rings
+/// `block.amethyst_block.chime` at the struck block, at 1.0 and pitched by the
+/// level random; a block outside the class rings nothing and draws nothing.
+#[test]
+#[ignore = "daily"]
+fn a_bobber_chimes_on_every_amethyst_block() {
+    use crate::game::creatures::ProjectileHitter;
+    use horizon_client::mobs::Who;
+    use horizon_core::random::RandomSource;
+    let mut resources = None;
+    let mut game = game(&mut resources);
+    game.audio.capture = Some(Vec::new());
+    // The projectile a bobber's `onHitBlock` names (`FishingHook.onHitBlock`).
+    let projectile = ProjectileHitter {
+        owner: Some(Who::Player),
+        guest: None,
+        arrow: false,
+        kind: "minecraft:fishing_bobber",
+        position: Vec3::new(4.5, 64.6, 2.5),
+    };
+    let strike = |game: &mut Game<'_>| {
+        game.audio.capture.as_mut().unwrap().clear();
+        let mut random = game.world.random.clone();
+        let pitch = 0.5 + random.next_float() * 1.2;
+        game.projectile_block_impact(
+            &projectile,
+            [4, 64, 2],
+            Vec3::new(4.5, 64.0, 2.5),
+            [0, 1, 0],
+        )
+        .unwrap();
+        let played = game.audio.capture.as_ref().unwrap().clone();
+        // What the level random draws next: the chime's one draw, and no other.
+        (played, pitch, random.next_float())
+    };
+    for name in [
+        "minecraft:amethyst_block",
+        "minecraft:budding_amethyst",
+        "minecraft:amethyst_cluster",
+        "minecraft:large_amethyst_bud",
+        "minecraft:medium_amethyst_bud",
+        "minecraft:small_amethyst_bud",
+    ] {
+        assert!(
+            game.run_command(&format!("setblock 4 64 2 {name}")),
+            "{name}"
+        );
+        let (played, pitch, after) = strike(&mut game);
+        assert_eq!(played.len(), 1, "{name}: one chime");
+        assert_eq!(played[0].event, "minecraft:block.amethyst_block.chime");
+        assert_eq!(played[0].position, [4.5, 64.5, 2.5], "{name}: the block");
+        assert_eq!(played[0].volume, 1.0);
+        assert_eq!(played[0].pitch, pitch, "{name}: one level draw");
+        assert_eq!(game.world.random.next_float(), after);
+    }
+    assert!(game.run_command("setblock 4 64 2 minecraft:stone"));
+    let mut before = game.world.random.clone();
+    let (played, _, _) = strike(&mut game);
+    assert!(played.is_empty(), "stone is no amethyst");
+    assert_eq!(
+        game.world.random.next_float(),
+        before.next_float(),
+        "stone draws nothing"
+    );
+}

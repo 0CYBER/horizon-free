@@ -1770,6 +1770,9 @@ pub enum MobEvent {
         count: u32,
     },
     Sound(&'static str, [f64; 3], f32, f32),
+    /// `Entity.playSound`: a sound at `at` in the entity's own sound source,
+    /// which the event's category alone would not give.
+    SourcedSound(&'static str, mod_api::SoundSource, [f64; 3], f32, f32),
     ProfessionWorkSound(Arc<str>, [f64; 3], f32, f32),
     /// `level.playSound(null, mob, sound, source, volume, pitch)`: a sound
     /// bound to mob `mob` (`ServerLevel.playSeededSound`'s entity overload),
@@ -3859,6 +3862,17 @@ impl Mob {
             Species::Axolotl => axolotl::MAX_AIR,
             Species::Dolphin => 4800,
             _ => 300,
+        }
+    }
+    /// `Entity.getSoundSource`: the mixer group this mob's sounds play in,
+    /// hostile for a killer bunny whatever its species' default.
+    pub fn sound_source(&self) -> mod_api::SoundSource {
+        if (self.species() == Species::Rabbit && self.extra.variant == rabbit::EVIL)
+            || ai::hostile_species(self.species())
+        {
+            mod_api::SoundSource::Hostile
+        } else {
+            mod_api::SoundSource::Neutral
         }
     }
     /// `Mob.getMainArm`: the left arm when the mob is left-handed, a player's

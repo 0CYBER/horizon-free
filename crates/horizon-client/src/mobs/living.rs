@@ -72,7 +72,8 @@ fn landing_dust_at(position: Vec3, landing: [i32; 3]) -> Vec3 {
     )
 }
 
-/// `Entity.moveDist`, `flyDist`, `nextStep` and `Parrot.nextFlap`.
+/// `Entity.moveDist`, `flyDist`, `nextStep`, `Parrot.nextFlap` and the
+/// amethyst step chime's swell.
 #[derive(Clone, Copy, Debug)]
 pub struct Steps {
     pub move_dist: f32,
@@ -81,6 +82,10 @@ pub struct Steps {
     pub next_flap: f32,
     /// `AbstractHorse.gallopSoundCounter`.
     pub gallop: i32,
+    /// `Entity.crystalSoundIntensity`: the chime swells by 0.07 a step, up to 1.
+    pub crystal_sound_intensity: f32,
+    /// `Entity.lastCrystalSoundPlayTick`: the tick the last chime rang on.
+    pub last_crystal_sound_play_tick: i32,
 }
 impl Default for Steps {
     fn default() -> Self {
@@ -90,6 +95,8 @@ impl Default for Steps {
             next_step: 1.0,
             next_flap: 1.0,
             gallop: 0,
+            crystal_sound_intensity: 0.0,
+            last_crystal_sound_play_tick: 0,
         }
     }
 }
@@ -1100,6 +1107,11 @@ impl Mob {
                         std::borrow::Cow::Owned(name) => MobEvent::SoundId(name, at, volume, pitch),
                     });
                 }
+                // Entity.walkingStepSound: the amethyst chime after the
+                // footfall, by the effect block's state.
+                if heard {
+                    self.amethyst_step_chime(w, legacy_state, events);
+                }
                 // Entity.vibrationAndSoundEffectsFromBlock: the step's game
                 // event, with the supporting block's state when the effect
                 // block is another.
@@ -1161,6 +1173,41 @@ impl Mob {
                 });
             }
         }
+    }
+    /// `Entity.playAmethystStepSound`: a step on
+    /// `#minecraft:crystal_sound_blocks` rings the chime at most once every 20
+    /// ticks, swelling by 0.07 a step and pitched by the mob's own random. A
+    /// silent mob rings nothing but still swells and draws.
+    fn amethyst_step_chime(
+        &mut self,
+        w: &MobWorld,
+        state: BlockStateId,
+        events: &mut Vec<MobEvent>,
+    ) {
+        let tick = self.age as i32;
+        let last = self.ai.steps.last_crystal_sound_play_tick;
+        if !w.has_tag("minecraft:crystal_sound_blocks", &w.facts.get(state).name)
+            || tick < last + 20
+        {
+            return;
+        }
+        let decayed = self.ai.steps.crystal_sound_intensity
+            * horizon_core::jmath::pow(0.997, f64::from(tick - last)) as f32;
+        let intensity = 1.0_f32.min(decayed + 0.07);
+        self.ai.steps.crystal_sound_intensity = intensity;
+        let pitch = 0.5 + intensity * self.random.next_float() * 1.2;
+        let volume = 0.1 + intensity * 1.2;
+        if !self.silent {
+            let at = [self.position.x, self.position.y, self.position.z];
+            events.push(MobEvent::SourcedSound(
+                "block.amethyst_block.chime",
+                self.sound_source(),
+                at,
+                volume,
+                pitch,
+            ));
+        }
+        self.ai.steps.last_crystal_sound_play_tick = tick;
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
     /// every 0.55, a strider's every 0.6, a turtle's every 0.15.
@@ -3860,6 +3907,9 @@ pub mod teleports;
 #[cfg(test)]
 mod farmland_event_tests;
 
+#[cfg(test)]
+#[path = "living_amethyst_tests.rs"]
+mod amethyst_tests;
 #[cfg(test)]
 #[path = "climbable_player_push_tests.rs"]
 mod climbable_player_push_tests;

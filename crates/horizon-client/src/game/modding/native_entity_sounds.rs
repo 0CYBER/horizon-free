@@ -12,16 +12,7 @@ use mod_api::{EntityRef, SoundSource};
 /// `Monster`s: `Hoglin`, `Ghast`, `Phantom`, `Shulker` and the slimes
 /// (`AbstractCubeMob`).
 pub(super) fn hostile_species(species: Species) -> bool {
-    horizon_client::mobs::ai::is_monster(species)
-        || matches!(
-            species,
-            Species::Hoglin
-                | Species::Ghast
-                | Species::Phantom
-                | Species::Shulker
-                | Species::Slime
-                | Species::MagmaCube
-        )
+    horizon_client::mobs::ai::hostile_species(species)
 }
 
 impl Game<'_> {

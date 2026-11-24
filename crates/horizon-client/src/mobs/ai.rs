@@ -1006,6 +1006,22 @@ pub fn is_monster(s: Species) -> bool {
             | S::Wither
     )
 }
+/// `Entity.getSoundSource` for mobs: `Monster`'s own override is hostile, and
+/// so are a few mobs that are not `Monster`s (`Hoglin`, `Ghast`, `Phantom`,
+/// `Shulker` and the slimes). A killer bunny is hostile too; `Mob::sound_source`
+/// adds it from the variant.
+pub fn hostile_species(s: Species) -> bool {
+    is_monster(s)
+        || matches!(
+            s,
+            Species::Hoglin
+                | Species::Ghast
+                | Species::Phantom
+                | Species::Shulker
+                | Species::Slime
+                | Species::MagmaCube
+        )
+}
 /// One full entity tick. Returns false when the mob is gone.
 /// `Mob.getTarget` / `Mob.setTarget` (`asValidTarget`): a player in creative
 /// or spectator mode or in Peaceful is never a mob's target, however the target was set (an
