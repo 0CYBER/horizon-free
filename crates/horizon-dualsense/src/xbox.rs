@@ -127,9 +127,16 @@ const EFFECT: [u8; 3] = [0xff, 0x00, 0xeb];
 /// `0x0F`: the report sets both handle motors and both trigger motors.
 const MOTORS_ON: u8 = 0x0f;
 
+/// A motor's magnitude in a GIP report: 0..100, not the byte [`Motors`] holds. SDL's
+/// `SDL_hidapi_xboxone.c` divides its 16-bit input by 655 for the same range; WGI and the
+/// DualSense take the byte (`Motors::levels`).
+fn magnitude(level: u8) -> u8 {
+    (u16::from(level) * 100 / 255) as u8
+}
+
 /// The USB report: GIP's rumble command, 0x09, then 0x00, 0x00 (its client and sequence), the
 /// payload's length 0x09, 0x00, 0x0F, the triggers' levels, the handles' levels, and the effect's
-/// last three bytes.
+/// last three bytes. Each level is 0..100.
 pub fn usb(motors: Motors) -> [u8; USB_REPORT_LEN] {
     [
         USB_REPORT_ID,
@@ -138,25 +145,26 @@ pub fn usb(motors: Motors) -> [u8; USB_REPORT_LEN] {
         0x09,
         0x00,
         MOTORS_ON,
-        motors.left_trigger,
-        motors.right_trigger,
-        motors.strong,
-        motors.weak,
+        magnitude(motors.left_trigger),
+        magnitude(motors.right_trigger),
+        magnitude(motors.strong),
+        magnitude(motors.weak),
         EFFECT[0],
         EFFECT[1],
         EFFECT[2],
     ]
 }
 
-/// The Bluetooth report: 0x03, 0x0F, the four levels, then the effect's last three bytes.
+/// The Bluetooth report: 0x03, 0x0F, the four levels (0..100), then the effect's last three
+/// bytes.
 pub fn bluetooth(motors: Motors) -> [u8; BT_REPORT_LEN] {
     [
         BT_REPORT_ID,
         MOTORS_ON,
-        motors.left_trigger,
-        motors.right_trigger,
-        motors.strong,
-        motors.weak,
+        magnitude(motors.left_trigger),
+        magnitude(motors.right_trigger),
+        magnitude(motors.strong),
+        magnitude(motors.weak),
         EFFECT[0],
         EFFECT[1],
         EFFECT[2],
@@ -178,7 +186,7 @@ mod tests {
         assert_eq!(
             usb(motors),
             [
-                0x09, 0x00, 0x00, 0x09, 0x00, 0x0f, 90, 10, 200, 40, 0xff, 0x00, 0xeb
+                0x09, 0x00, 0x00, 0x09, 0x00, 0x0f, 35, 3, 78, 15, 0xff, 0x00, 0xeb
             ]
         );
         assert_eq!(
@@ -197,7 +205,7 @@ mod tests {
         };
         assert_eq!(
             bluetooth(motors),
-            [0x03, 0x0f, 90, 10, 200, 40, 0xff, 0x00, 0xeb]
+            [0x03, 0x0f, 35, 3, 78, 15, 0xff, 0x00, 0xeb]
         );
         assert_eq!(
             bluetooth(Motors::STOP),

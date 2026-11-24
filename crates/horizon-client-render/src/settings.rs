@@ -922,6 +922,11 @@ pub enum Opt {
     /// Horizon's controller settings (`horizon-controller.txt`).
     PadEnabled,
     PadVibration,
+    /// How hard the handles (and the pad's own rumble actuators) buzz
+    /// (`PadSettings::vibration_strength`).
+    PadVibrationStrength,
+    /// How hard an Xbox pad's impulse triggers buzz (`PadSettings::impulse_strength`).
+    PadImpulseStrength,
     PadPlayInBackground,
     PadAdaptiveTriggers,
     PadLightbar,

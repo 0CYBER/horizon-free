@@ -473,9 +473,11 @@
   "horizon.splitscreen.setup.window_place": "Prozor %s (%s od %s)",
   "horizon.title.not_affiliated": "Nije povezano sa Mojang-om ili Microsoft-om",
   "horizon.options.block_vibration": "Хаптичка повратна информација из Bedrock-а",
-  "horizon.options.split_vibration": "Вибрација при дељењу гомиле",
   "horizon.options.impulse_triggers": "Импулсни окидачи",
-  "A tick when you break a block, as in Bedrock.": "Када разбијете блок, он вибрира, као у Bedrock-у.",
-  "A short buzz when you split a stack, as in Bedrock.": "Кратка вибрација када поделите гомилу, као у Bedrock-у.",
+  "The light on a DualSense or a DualShock 4 shows your health, from green through amber to red.": "Светло на DualSense или DualShock 4 приказује ваше здравље, од зелене преко јантарне до црвене.",
+  "The light on a DualSense or a DualShock 4 changes with the dimension you're in.": "Светло на DualSense или DualShock 4 се мења са димензијом у којој се налазите.",
+  "A DualSense or a DualShock 4 keeps its own light.": "DualSense или DualShock 4 задржава своје сопствено светло.",
+  "What the light on a DualSense or a DualShock 4 shows, over USB or Bluetooth.": "Шта приказује светло на DualSense или DualShock 4, преко USB-а или Bluetooth-а.",
+  "A tick when you break a block and a short buzz when you split a stack, as in Bedrock.": "Када разбијете блок, он вибрира, и кратка вибрација када поделите гомилу, као у Bedrock-у.",
   "An Xbox One controller's triggers buzz with its handles.": "Окидачи Xbox One контролера вибрирају заједно са његовим ручкама."
 }

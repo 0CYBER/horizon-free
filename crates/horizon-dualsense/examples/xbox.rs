@@ -65,11 +65,11 @@ fn main() {
                     ..Motors::STOP
                 }
             };
-            pad.write(motors).expect("write");
+            pad.write(motors, None).expect("write");
             std::thread::sleep(Duration::from_millis(700));
         }
     }
-    pad.write(Motors::STOP).expect("stop");
+    pad.write(Motors::STOP, None).expect("stop");
     println!("  stopped");
 }
 

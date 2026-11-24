@@ -68,10 +68,8 @@ pub enum Item {
 /// (docs/layers.md#file-size).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
-    /// A broken block ticks the pad, as in Bedrock.
+    /// A broken block ticks the pad and a split buzzes, as in Bedrock.
     BlockVibration,
-    /// Splitting a stack buzzes briefly, as in Bedrock.
-    SplitVibration,
     /// An Xbox One pad's impulse triggers buzz with its handles.
     ImpulseTriggers,
 }
@@ -80,21 +78,18 @@ impl Switch {
     fn caption(self) -> &'static str {
         match self {
             Switch::BlockVibration => "horizon.options.block_vibration",
-            Switch::SplitVibration => "horizon.options.split_vibration",
             Switch::ImpulseTriggers => "horizon.options.impulse_triggers",
         }
     }
     fn on(self, s: &Settings) -> bool {
         match self {
             Switch::BlockVibration => s.controller.block_vibration,
-            Switch::SplitVibration => s.controller.split_vibration,
             Switch::ImpulseTriggers => s.controller.impulse_triggers,
         }
     }
     fn toggle(self, s: &mut Settings) {
         match self {
             Switch::BlockVibration => s.controller.block_vibration = !s.controller.block_vibration,
-            Switch::SplitVibration => s.controller.split_vibration = !s.controller.split_vibration,
             Switch::ImpulseTriggers => {
                 s.controller.impulse_triggers = !s.controller.impulse_triggers
             }
@@ -141,12 +136,12 @@ fn choice_description(opt: Opt, pad: &PadSettings) -> Option<&'static str> {
         },
         Opt::PadLightbar => match pad.lightbar {
             gamepad::Lightbar::Health => {
-                "A DualSense's light shows your health, from green through amber to red."
+                "The light on a DualSense or a DualShock 4 shows your health, from green through amber to red."
             }
             gamepad::Lightbar::Dimension => {
-                "A DualSense's light changes with the dimension you're in."
+                "The light on a DualSense or a DualShock 4 changes with the dimension you're in."
             }
-            gamepad::Lightbar::Off => "A DualSense keeps its own light.",
+            gamepad::Lightbar::Off => "A DualSense or a DualShock 4 keeps its own light.",
         },
         Opt::PadRadialMode => match pad.radial_mode {
             gamepad::RadialMode::Hold => "horizon.options.radial_mode.hold.about",
@@ -359,17 +354,21 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                     "Feedback",
                     vec![
                         option(Opt::PadVibration, "Rumble when something happens to you."),
-                        switch(
-                            Switch::BlockVibration,
-                            "A tick when you break a block, as in Bedrock.",
-                        ),
-                        switch(
-                            Switch::SplitVibration,
-                            "A short buzz when you split a stack, as in Bedrock.",
+                        option(
+                            Opt::PadVibrationStrength,
+                            "How hard the handles buzz. Lower it if the pad rattles on a desk.",
                         ),
                         switch(
                             Switch::ImpulseTriggers,
                             "An Xbox One controller's triggers buzz with its handles.",
+                        ),
+                        option(
+                            Opt::PadImpulseStrength,
+                            "How hard an Xbox pad's triggers buzz. Lower it if its triggers rattle.",
+                        ),
+                        switch(
+                            Switch::BlockVibration,
+                            "A tick when you break a block and a short buzz when you split a stack, as in Bedrock.",
                         ),
                         option(
                             Opt::PadAdaptiveTriggers,
@@ -377,7 +376,7 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                         option(
                             Opt::PadLightbar,
-                            "What a DualSense's light shows, over USB or Bluetooth.",
+                            "What the light on a DualSense or a DualShock 4 shows, over USB or Bluetooth.",
                         ),
                     ],
                 ),
@@ -422,7 +421,6 @@ impl Item {
             Item::Option(Opt::PadEnabled) => Some(c.enabled),
             Item::Option(Opt::PadVibration) => Some(c.vibration),
             Item::Switch(Switch::BlockVibration) => Some(c.block_vibration),
-            Item::Switch(Switch::SplitVibration) => Some(c.split_vibration),
             Item::Switch(Switch::ImpulseTriggers) => Some(c.impulse_triggers),
             Item::Option(Opt::PadPlayInBackground) => Some(c.play_in_background),
             Item::Option(Opt::PadAdaptiveTriggers) => Some(c.adaptive_triggers),
@@ -767,6 +765,8 @@ mod tests {
             Opt::PadGameplayGuide,
             Opt::PadCraftOnServers,
             Opt::PadVibration,
+            Opt::PadVibrationStrength,
+            Opt::PadImpulseStrength,
             Opt::PadPlayInBackground,
             Opt::PadAdaptiveTriggers,
             Opt::PadLightbar,
@@ -787,11 +787,7 @@ mod tests {
         ] {
             assert!(items.contains(&Item::Option(opt)), "{opt:?}");
         }
-        for setting in [
-            Switch::BlockVibration,
-            Switch::SplitVibration,
-            Switch::ImpulseTriggers,
-        ] {
+        for setting in [Switch::BlockVibration, Switch::ImpulseTriggers] {
             assert!(items.contains(&Item::Switch(setting)), "{setting:?}");
         }
     }
@@ -807,8 +803,8 @@ mod tests {
                 Item::Switch(Switch::BlockVibration),
                 (|s: &Settings| s.controller.block_vibration) as fn(&Settings) -> bool,
             ),
-            (Item::Switch(Switch::SplitVibration), |s: &Settings| {
-                s.controller.split_vibration
+            (Item::Switch(Switch::ImpulseTriggers), |s: &Settings| {
+                s.controller.impulse_triggers
             }),
         ] {
             let at = ui.point_at(&s, SIZE, item);

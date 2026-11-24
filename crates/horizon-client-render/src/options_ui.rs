@@ -336,6 +336,8 @@ impl Opt {
             // the namespace the client bundles (assets/horizon/lang).
             Opt::PadEnabled => "horizon.options.controller",
             Opt::PadVibration => "horizon.options.vibration",
+            Opt::PadVibrationStrength => "horizon.options.vibration_strength",
+            Opt::PadImpulseStrength => "horizon.options.impulse_strength",
             Opt::PadPlayInBackground => "horizon.options.play_in_background",
             Opt::PadAdaptiveTriggers => "horizon.options.adaptive_triggers",
             Opt::PadLightbar => "horizon.options.lightbar",
@@ -434,6 +436,9 @@ impl Opt {
             Opt::ChatHeightUnfocused => Kind::Slider(s.chat_height_unfocused),
             Opt::ChatLineSpacing => Kind::Slider(s.chat_line_spacing),
             Opt::PadLookSensitivity => Kind::Slider(s.controller.look_sensitivity),
+            // A strength is already 0..1: the slider's position is the value.
+            Opt::PadVibrationStrength => Kind::Slider(s.controller.vibration_strength),
+            Opt::PadImpulseStrength => Kind::Slider(s.controller.impulse_strength),
             Opt::PadPointerSpeed => unit(s.controller.pointer_speed, 0.25, 3.0),
             Opt::PadScrollSpeed => unit(s.controller.scroll_speed, 1.0, 36.0),
             Opt::PadRepeatDelay => unit(s.controller.repeat_delay, 0.1, 1.0),
@@ -513,6 +518,8 @@ impl Opt {
             Opt::NotificationDisplayTime => Some(95),
             Opt::PadMoveDeadzone | Opt::PadLookDeadzone => Some(50),
             Opt::PadTriggerThreshold => Some(80),
+            // 5% a step, so "100%" is one of them.
+            Opt::PadVibrationStrength | Opt::PadImpulseStrength => Some(20),
             Opt::SprintWindow => Some(10),
             _ => None,
         }
@@ -735,10 +742,16 @@ impl Opt {
                     )],
                 ),
             ),
-            Opt::PadMoveDeadzone | Opt::PadLookDeadzone | Opt::PadTriggerThreshold => {
+            Opt::PadMoveDeadzone
+            | Opt::PadLookDeadzone
+            | Opt::PadTriggerThreshold
+            | Opt::PadVibrationStrength
+            | Opt::PadImpulseStrength => {
                 let v = match self {
                     Opt::PadMoveDeadzone => s.controller.move_deadzone,
                     Opt::PadLookDeadzone => s.controller.look_deadzone,
+                    Opt::PadVibrationStrength => s.controller.vibration_strength,
+                    Opt::PadImpulseStrength => s.controller.impulse_strength,
                     _ => s.controller.trigger_threshold,
                 };
                 Text::translate(
@@ -1026,6 +1039,8 @@ impl Opt {
             Opt::PadMoveDeadzone => s.controller.move_deadzone = step(0.0, 50.0) / 100.0,
             Opt::PadLookDeadzone => s.controller.look_deadzone = step(0.0, 50.0) / 100.0,
             Opt::PadTriggerThreshold => s.controller.trigger_threshold = step(10.0, 90.0) / 100.0,
+            Opt::PadVibrationStrength => s.controller.vibration_strength = step(0.0, 20.0) / 20.0,
+            Opt::PadImpulseStrength => s.controller.impulse_strength = step(0.0, 20.0) / 20.0,
             Opt::SprintWindow => s.sprint_window = step(0.0, 10.0) as i32,
             Opt::Page(page, row) => pages::slide(page, row, v),
             _ => {}
@@ -8257,6 +8272,8 @@ mod tests {
             Opt::PadMoveDeadzone,
             Opt::PadLookDeadzone,
             Opt::PadTriggerThreshold,
+            Opt::PadVibrationStrength,
+            Opt::PadImpulseStrength,
             Opt::SprintWindow,
         ];
         for opt in stepped_opts {

@@ -848,11 +848,10 @@ impl Game<'_> {
         if !settings.enabled || !settings.vibration || !self.pad.in_use {
             return;
         }
-        // Bedrock's own switch, off for a player who doesn't want every block to tick; the
-        // split's tick has its own, so either can be off without the other.
+        // Bedrock's own switch, off for a player who doesn't want every block to tick. It
+        // covers the split's buzz too: both are the same Bedrock-like feedback.
         match rumble {
-            Rumble::BlockBroken if !settings.block_vibration => return,
-            Rumble::ItemStackSplit if !settings.split_vibration => return,
+            Rumble::BlockBroken | Rumble::ItemStackSplit if !settings.block_vibration => return,
             _ => {}
         }
         let Some(pulse) = rumble.pulse() else {
