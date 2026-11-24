@@ -199,8 +199,8 @@ impl Session {
     }
 
     /// `hunt ID`: walk up to a mob and hit it until it is gone, at most `timeout` seconds.
-    fn hunt(&mut self, id: i64, timeout: f64) -> Result<Value, Failure> {
-        let deadline = Instant::now() + Duration::from_secs_f64(timeout.max(0.0));
+    fn hunt(&mut self, id: i64, timeout: Duration) -> Result<Value, Failure> {
+        let deadline = Instant::now() + timeout;
         let before = self.game("inventory")?;
         let (mut hits, mut seen) = (0, Value::Null);
         loop {
@@ -216,7 +216,7 @@ impl Session {
             if Instant::now() > deadline {
                 return Err(Failure {
                     reply: json!({
-                        "error": format!("entity {id} still alive after {timeout} s"),
+                        "error": format!("entity {id} still alive after {} s", timeout.as_secs_f64()),
                         "kind": "timeout",
                         "hits": hits,
                         "entity": mob,
@@ -327,18 +327,20 @@ impl Session {
                 "use horizon-ctl COMMAND --help outside scripts",
             ));
         }
-        let number = |i: usize, what: &str| -> Result<f64, Failure> {
-            words
+        let number = |i: usize, what: &str| -> Result<Duration, Failure> {
+            let text = words
                 .get(i)
-                .ok_or_else(|| Failure::usage(format!("missing {what}; usage: {}", usage(name))))?
-                .parse::<f64>()
-                .map_err(|_| {
-                    Failure::usage(format!("{what} must be a number; usage: {}", usage(name)))
-                })
+                .ok_or_else(|| Failure::usage(format!("missing {what}; usage: {}", usage(name))))?;
+            parse_seconds(text).ok_or_else(|| {
+                Failure::usage(format!(
+                    "{what} must be a number of seconds, at most {MAX_SECONDS}; usage: {}",
+                    usage(name)
+                ))
+            })
         };
         match name {
             "sleep" => {
-                thread::sleep(Duration::from_secs_f64(number(1, "SECONDS")?.max(0.0)));
+                thread::sleep(number(1, "SECONDS")?);
                 Ok(json!({ "ok": true }))
             }
             "launch" => {
@@ -355,7 +357,7 @@ impl Session {
                 if !wait {
                     return Ok(reply);
                 }
-                let mut ready = self.wait_ready(300.0)?;
+                let mut ready = self.wait_ready(Duration::from_secs(300))?;
                 ready["launch"] = reply;
                 Ok(ready)
             }
@@ -383,9 +385,9 @@ impl Session {
             }
             "hunt" => {
                 let (id, timeout) = match words {
-                    [_, id] => (id.parse::<i64>().ok(), Some(30.0)),
+                    [_, id] => (id.parse::<i64>().ok(), Some(Duration::from_secs(30))),
                     [_, id, flag, s] if flag == "--timeout" => {
-                        (id.parse::<i64>().ok(), s.parse::<f64>().ok())
+                        (id.parse::<i64>().ok(), parse_seconds(s))
                     }
                     _ => (None, None),
                 };
@@ -406,8 +408,10 @@ impl Session {
                     [_, key, _] => (key.clone(), number(2, "SECONDS")?),
                     _ => return Err(Failure::usage(format!("usage: {}", usage(name)))),
                 };
+                // The duration is checked before the key goes down: a refusal
+                // later would leave it pressed.
                 self.game(&format!("key {key} down"))?;
-                thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
+                thread::sleep(seconds);
                 self.game(&format!("key {key} up"))
             }
             "logs" => logs(&self.home, &words[1..]),
@@ -415,7 +419,7 @@ impl Session {
                 let limit = if words.len() > 1 {
                     number(1, "SECONDS")?
                 } else {
-                    120.0
+                    Duration::from_secs(120)
                 };
                 self.wait_ready(limit)
             }
@@ -438,8 +442,8 @@ impl Session {
         }
     }
 
-    fn wait_ready(&mut self, limit: f64) -> Result<Value, Failure> {
-        let deadline = Instant::now() + Duration::from_secs_f64(limit.max(0.0));
+    fn wait_ready(&mut self, limit: Duration) -> Result<Value, Failure> {
+        let deadline = Instant::now() + limit;
         loop {
             let status = self.game("status")?;
             if world_ready(&status) {
@@ -447,13 +451,27 @@ impl Session {
             }
             if Instant::now() > deadline {
                 return Err(Failure {
-                    reply: json!({ "error": format!("not ready after {limit} seconds"), "status": status }),
+                    reply: json!({ "error": format!("not ready after {} seconds", limit.as_secs_f64()), "status": status }),
                     status: GAME_ERROR,
                 });
             }
             thread::sleep(Duration::from_millis(250));
         }
     }
+}
+
+/// The longest wait a command takes, in seconds (a year): `Duration` can't hold
+/// every `f64` a number parses to (`inf`, `1e30`), and a longer wait is a typo.
+const MAX_SECONDS: u64 = 365 * 24 * 3600;
+
+/// `text` as a wait: a number of seconds (below 0 counts as 0), or None when it
+/// isn't a finite number of at most `MAX_SECONDS`.
+fn parse_seconds(text: &str) -> Option<Duration> {
+    // NaN and -inf would pass `max(0.0)` as 0, so they are refused first.
+    let seconds = text.parse::<f64>().ok().filter(|s| s.is_finite())?;
+    Duration::try_from_secs_f64(seconds.max(0.0))
+        .ok()
+        .filter(|d| d.as_secs() <= MAX_SECONDS)
 }
 
 /// Whether `status` says a world has arrived: the player is in it, no chunk
@@ -724,14 +742,14 @@ fn main() -> ExitCode {
                 args.remove(0);
             }
             Some("--timeout") if args.len() >= 2 => {
-                let Ok(s) = args[1].parse::<f64>() else {
+                let Some(s) = parse_seconds(&args[1]) else {
                     print(
-                        &json!({ "error": "--timeout takes seconds", "kind": "usage" }),
+                        &json!({ "error": format!("--timeout takes seconds, at most {MAX_SECONDS}"), "kind": "usage" }),
                         false,
                     );
                     return ExitCode::from(USAGE);
                 };
-                timeout = Some(Duration::from_secs_f64(s.max(0.001)));
+                timeout = Some(s.max(Duration::from_millis(1)));
                 args.drain(0..2);
             }
             Some("--api") if args.len() >= 2 => {
@@ -1015,6 +1033,36 @@ mod tests {
         let reply = logs(&home, &words("--crash")).unwrap();
         assert_eq!(reply["text"], "new");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn seconds_are_finite_and_bounded() {
+        assert_eq!(parse_seconds("1.5"), Some(Duration::from_millis(1500)));
+        assert_eq!(parse_seconds("-3"), Some(Duration::ZERO));
+        for bad in ["inf", "-inf", "NaN", "1e30", "31536001", "x", ""] {
+            assert_eq!(parse_seconds(bad), None, "{bad}");
+        }
+    }
+
+    /// A bad duration is a usage error before any key goes down: the key would stay pressed.
+    #[cfg(unix)]
+    #[test]
+    fn hold_with_a_bad_duration_presses_no_key() {
+        let (path, game) = fake_game("hold-bad", r#"{"ok":true}"#);
+        let home = std::env::temp_dir().join(format!("horizon-ctl-hold-{}", std::process::id()));
+        let mut s = Session::new(path.clone(), Some(Duration::from_secs(5)));
+        s.home = home;
+        for bad in ["inf", "1e30"] {
+            let f = s
+                .run(&["hold".to_owned(), "w".to_owned(), bad.to_owned()])
+                .unwrap_err();
+            assert_eq!(f.status, USAGE, "{bad}");
+        }
+        drop(s);
+        // The fake game waits for a connection; give it one so it can report what it got.
+        drop(std::os::unix::net::UnixStream::connect(&path).unwrap());
+        assert!(game.join().unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
