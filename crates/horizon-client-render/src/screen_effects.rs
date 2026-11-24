@@ -166,10 +166,14 @@ fn hand_scale(aspect: f32) -> [f32; 2] {
     [1.0 / (half * aspect), 1.0 / half]
 }
 impl ScreenEffects {
-    /// `Hud.updateVignetteBrightness` and `LocalPlayer.handlePortalTransitionEffect`.
-    pub fn tick(&mut self, eye_brightness: f32, inside_portal: bool) {
+    /// `Gui.tick` -> `Hud.updateVignetteBrightness`: eases every client tick, even while
+    /// `/tick freeze` pauses the level.
+    pub fn tick_vignette(&mut self, eye_brightness: f32) {
         let target = (1.0 - eye_brightness).clamp(0.0, 1.0);
         self.vignette_brightness += (target - self.vignette_brightness) * 0.01;
+    }
+    /// `LocalPlayer.handlePortalTransitionEffect`: runs only while the level ticks.
+    pub fn tick_portal(&mut self, inside_portal: bool) {
         self.o_portal = self.portal;
         let step = if inside_portal {
             0.0125
@@ -179,6 +183,11 @@ impl ScreenEffects {
             0.0
         };
         self.portal = (self.portal + step).clamp(0.0, 1.0);
+    }
+    /// `Hud.updateVignetteBrightness` and `LocalPlayer.handlePortalTransitionEffect`.
+    pub fn tick(&mut self, eye_brightness: f32, inside_portal: bool) {
+        self.tick_vignette(eye_brightness);
+        self.tick_portal(inside_portal);
     }
     /// `LocalPlayer.tickSpinningEffect` and Nausea's blend. `nausea` is `None`
     /// without the effect, else whether it is past its blend-out point
@@ -557,5 +566,18 @@ mod tests {
         assert_eq!(parse(r#"{"texture":{"blur":false}}"#), None);
         assert_eq!(parse(r#"{"animation":{}}"#), None);
         assert_eq!(parse("not json"), None);
+    }
+    #[test]
+    fn tick_vignette_eases_independently_of_portal_tick() {
+        let mut fx = ScreenEffects {
+            vignette_brightness: 1.0,
+            portal: 0.25,
+            o_portal: 0.2,
+            ..ScreenEffects::default()
+        };
+        fx.tick_vignette(1.0);
+        assert!((fx.vignette_brightness - 0.99).abs() < 1e-6);
+        assert_eq!(fx.portal, 0.25);
+        assert_eq!(fx.o_portal, 0.2);
     }
 }

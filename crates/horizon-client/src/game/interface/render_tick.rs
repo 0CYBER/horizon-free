@@ -600,6 +600,12 @@ impl Game<'_> {
         self.hold_fullbright();
         if running || !self.clock.still() {
             self.fog.tick_flicker();
+            if let Some(e) = self.eye_position() {
+                // Gui.tick eases the HUD vignette every client tick, including under /tick freeze.
+                // HORIZON_STILL holds it with the frozen world, like the fog flicker.
+                let brightness = self.eye_brightness(e);
+                self.screen_fx.tick_vignette(brightness);
+            }
         }
         if running {
             self.texture_ticks += 1;
@@ -665,9 +671,8 @@ impl Game<'_> {
         let mut laps = horizon_client::spans::laps();
         let eye = self.eye_position();
         if let Some(e) = eye {
-            let brightness = self.eye_brightness(e);
             let inside_portal = self.client_portal_effect();
-            self.screen_fx.tick(brightness, inside_portal);
+            self.screen_fx.tick_portal(inside_portal);
             // LocalPlayer.aiStep: processPortalCooldown after the transition
             // effect (a local world's player counts down in handlePortal).
             if self.remote.is_some() && self.portals.player.cooldown > 0 {
