@@ -2,9 +2,58 @@
 use super::{Aabb, TraversalError, Vec3, clamp, floor_i32};
 use crate::{fast_hash::FxHashSet, position::BlockPos};
 
+const INLINE_VISITED_CAP: usize = 24;
+
+/// Inline stack set for the common short-movement case (typically 2-12 blocks per
+/// entity tick), spilling to a heap `FxHashSet` only on long sweeps.
+enum VisitedSet {
+    Inline {
+        items: [i64; INLINE_VISITED_CAP],
+        len: usize,
+    },
+    Hashed(FxHashSet<i64>),
+}
+
+impl VisitedSet {
+    #[inline]
+    fn new() -> Self {
+        Self::Inline {
+            items: [0; INLINE_VISITED_CAP],
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn insert(&mut self, value: i64) -> bool {
+        match self {
+            Self::Inline { items, len } => {
+                for &existing in &items[..*len] {
+                    if existing == value {
+                        return false;
+                    }
+                }
+                if *len < INLINE_VISITED_CAP {
+                    items[*len] = value;
+                    *len += 1;
+                    return true;
+                }
+                let mut set =
+                    FxHashSet::with_capacity_and_hasher(INLINE_VISITED_CAP * 2, Default::default());
+                for &existing in &items[..*len] {
+                    set.insert(existing);
+                }
+                set.insert(value);
+                *self = Self::Hashed(set);
+                true
+            }
+            Self::Hashed(set) => set.insert(value),
+        }
+    }
+}
+
 struct Sweep<'v, V> {
     visitor: &'v mut V,
-    visited: FxHashSet<i64>,
+    visited: VisitedSet,
     work: usize,
     limit: usize,
 }
@@ -80,9 +129,7 @@ pub fn sweep_intersected_blocks(
     }
     let mut sweep = Sweep {
         visitor: &mut visitor,
-        // Only asked whether it holds a position: the fast hash, sized for a
-        // short move's boxes.
-        visited: FxHashSet::with_capacity_and_hasher(32, Default::default()),
+        visited: VisitedSet::new(),
         work: 0,
         limit: max_work,
     };
@@ -221,5 +268,51 @@ mod tests {
             sweep_intersected_blocks(Vec3::ZERO, Vec3::ZERO, box_, 1, |_, _| true),
             Err(TraversalError::VisitLimit)
         );
+    }
+
+    #[test]
+    fn inline_visited_set_matches_hash_set_across_spill_boundary() {
+        let box_short = Aabb::new(Vec3::new(0.2, 0.0, 0.2), Vec3::new(0.8, 1.8, 0.8));
+        let mut short_visits = Vec::new();
+        assert_eq!(
+            sweep_intersected_blocks(
+                Vec3::new(0.5, 0.0, 0.5),
+                Vec3::new(0.65, 0.0, 0.55),
+                box_short.move_by(Vec3::new(0.15, 0.0, 0.05)),
+                256,
+                |p, step| {
+                    short_visits.push((p, step));
+                    true
+                }
+            ),
+            Ok(true)
+        );
+        // Ensure no duplicate positions were visited
+        let mut seen = FxHashSet::default();
+        for &(p, _) in &short_visits {
+            assert!(seen.insert(p), "duplicate visit {p:?}");
+        }
+        assert!(!short_visits.is_empty());
+
+        // Long diagonal move that spills well past INLINE_VISITED_CAP (24)
+        let mut long_visits = Vec::new();
+        assert_eq!(
+            sweep_intersected_blocks(
+                Vec3::new(0.5, 0.0, 0.5),
+                Vec3::new(12.5, 4.0, 9.5),
+                box_short.move_by(Vec3::new(12.0, 4.0, 9.0)),
+                4096,
+                |p, step| {
+                    long_visits.push((p, step));
+                    true
+                }
+            ),
+            Ok(true)
+        );
+        assert!(long_visits.len() > INLINE_VISITED_CAP * 2);
+        let mut seen_long = FxHashSet::default();
+        for &(p, _) in &long_visits {
+            assert!(seen_long.insert(p), "duplicate long visit {p:?}");
+        }
     }
 }
