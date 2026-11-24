@@ -335,6 +335,19 @@ pub mod game {
         fn fields(&self) -> Self::Fields<'_>;
     }
 
+    /// A control prompt resolved by the client, with its layout size and any physical pad source.
+    pub fn input_glyph(
+        label: String,
+        size: [f32; 2],
+        controller: Option<(ControllerGlyphFamily, ControllerButton)>,
+    ) -> InputGlyph {
+        InputGlyph {
+            label,
+            size,
+            controller,
+        }
+    }
+
     /// A block entity handle the game names.
     pub fn block_entity_ref(
         level: LevelRef,

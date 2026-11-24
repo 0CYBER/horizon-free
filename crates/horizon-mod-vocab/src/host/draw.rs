@@ -273,6 +273,12 @@ pub trait DrawContext {
     fn widget_text_field(&mut self, field: &TextFieldView) -> TextFieldLayout {
         unimplemented!("DrawContext::widget_text_field")
     }
+    /// Draw a [`InputGlyph`] at the top-left of its layout box, using its stock artwork or key
+    /// label. `argb` multiplies its colours (`0xFFFFFFFF` leaves them unchanged). Returns `false`
+    /// when the surface cannot draw the glyph or the position is not finite.
+    fn input_glyph(&mut self, glyph: &InputGlyph, at: [f32; 2], argb: u32) -> bool {
+        false
+    }
 
     /// Save the current GUI translation. Returns false without changing it when eight
     /// translations are already saved. Every listener of a hook call shares the translation,

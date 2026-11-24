@@ -1,9 +1,8 @@
 //! A controller button as the player sees it: Horizon's own art where the pad's family has one
 //! (`assets/horizon/textures/gui/controller/`, which a resource pack can replace), else the label
-//! printed on the pad, in its colour, on a dark key. Whatever shows a button draws and measures it
-//! here, from a [`Glyph`]: what the button does (`GlyphOf`), in the player's [`Glyphs`]. A Nintendo
-//! pad going by its letters is part of `Glyphs`, which only the settings make, so no caller handles
-//! the letters, and nothing outside this module can turn a bare button into art or a label.
+//! printed on the pad, in its colour, on a dark key. Gameplay and menu prompts ask for what the
+//! button does (`GlyphOf`) in the player's [`Glyphs`]. [`Glyph::physical`] instead documents a
+//! physical button, independent of the roles assigned to it.
 use crate::gamepad::{Button, GlyphOf, GlyphStyle, MenuJob, PadSettings};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use crate::pad_cursor;
@@ -203,9 +202,8 @@ impl Glyphs {
     }
 }
 
-/// A glyph ready to draw: the part a button plays, in a player's [`Glyphs`]. It is only built from
-/// what the button does (`GlyphOf`), so a rebinding or a pad's letters reach every glyph; there is
-/// no way to draw or name a bare button.
+/// A glyph ready to draw: a bound action or a menu job in a player's [`Glyphs`], or the physical
+/// button itself when a prompt explicitly documents its position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glyph {
     part: Button,
@@ -224,6 +222,21 @@ impl Glyph {
             part: job.button(),
             glyphs,
         }
+    }
+    /// The artwork of an actual button by position, not the action it plays. An already resolved
+    /// physical button must not be turned back into a Nintendo letter role.
+    pub fn physical(button: Button, family: GlyphStyle) -> Self {
+        Self {
+            part: button,
+            glyphs: Glyphs {
+                family,
+                letters: false,
+            },
+        }
+    }
+    /// The artwork family and button position the glyph depicts, after any letter remap.
+    pub fn art_input(self) -> (GlyphStyle, Button) {
+        self.glyphs.on_pad(self.part)
     }
     /// The part this glyph is for (what the pad reads, after any letters), for `pad status`.
     pub fn part(self) -> Button {
@@ -321,7 +334,7 @@ pub fn width(atlas: &HudAtlas, glyph: Glyph) -> f32 {
     let (family, button) = glyph.glyphs.on_pad(glyph.part);
     match art(atlas, glyph).and_then(|_| source()?.width(family, button)) {
         Some(width) => width,
-        None => HudBatch::text_width(atlas, glyph.label()).ceil() + 4.0,
+        None => key_label_width(atlas, glyph.label()),
     }
 }
 
@@ -334,6 +347,18 @@ pub fn rect(atlas: &HudAtlas, glyph: Glyph, x: f32, y: f32) -> [f32; 4] {
 /// only: the art brings its own.
 pub fn draw(batch: &mut HudBatch, atlas: &HudAtlas, glyph: Glyph, x: f32, y: f32) {
     let [left, top, wide, tall] = rect(atlas, glyph, x, y);
+    draw_tinted(batch, atlas, glyph, [left, top, wide, tall], u32::MAX);
+}
+
+/// Draw a control glyph with a colour multiplier (packed as [`rgba`]), in its layout box.
+pub fn draw_tinted(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    glyph: Glyph,
+    rect: [f32; 4],
+    tint: u32,
+) {
+    let [left, top, wide, tall] = rect;
     if let Some(name) = art(atlas, glyph) {
         batch.sprite_scaled(
             atlas,
@@ -342,13 +367,45 @@ pub fn draw(batch: &mut HudBatch, atlas: &HudAtlas, glyph: Glyph, x: f32, y: f32
             top - MARGIN,
             wide + 2.0 * MARGIN,
             tall + 2.0 * MARGIN,
-            u32::MAX,
+            tint,
         );
     } else {
-        let [r, g, b] = glyph.color();
-        batch.fill(atlas, left, top, wide, tall, rgba(40, 40, 40, 255));
-        batch.text(atlas, glyph.label(), x + 1.0, y, rgba(r, g, b, 255), false);
+        draw_key_label(batch, atlas, glyph.label(), rect, glyph.color(), tint);
     }
+}
+
+/// The width of a stock text key, including its padding.
+pub fn key_label_width(atlas: &HudAtlas, label: &str) -> f32 {
+    HudBatch::text_width(atlas, label).ceil() + 4.0
+}
+
+/// Draw a stock text key: the same dark cap and baseline used for controller text glyphs.
+pub fn draw_key_label(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    label: &str,
+    [left, top, wide, tall]: [f32; 4],
+    rgb: [u8; 3],
+    tint: u32,
+) {
+    let [r, g, b, a] = tint.to_le_bytes();
+    let mul = |base: u8, channel: u8| ((u16::from(base) * u16::from(channel) + 127) / 255) as u8;
+    batch.fill(
+        atlas,
+        left,
+        top,
+        wide,
+        tall,
+        rgba(mul(40, r), mul(40, g), mul(40, b), a),
+    );
+    batch.text(
+        atlas,
+        label,
+        left + 2.0,
+        top + 2.0,
+        rgba(mul(rgb[0], r), mul(rgb[1], g), mul(rgb[2], b), a),
+        false,
+    );
 }
 
 /// Horizon's art for the atlas: each `(sprite, width, height, RGBA texels)`.

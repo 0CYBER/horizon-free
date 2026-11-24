@@ -33,6 +33,7 @@ pub mod hud_layout;
 // hidden: module of API-owned HUD values; mods use the re-export
 #[doc(hidden)]
 pub mod hud_mode;
+pub(crate) mod input_glyph;
 pub(crate) mod key_mapping;
 pub(crate) mod keyframe_animation;
 // hidden: a module of game-side types; mods use their re-exports

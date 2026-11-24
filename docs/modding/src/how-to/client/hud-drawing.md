@@ -5,6 +5,40 @@ is one of vanilla's `GuiGraphics` calls: `fill`, `text`, `sprite`, `item_stack` 
 takes a buffer of `GuiDraw` ops for the same calls, with `Push` / `Pop` for the pose. Native and wasm mods use
 the same methods and the same ops.
 
+## Active control prompts
+
+Resolve a glyph in the draw hook rather than caching it. `ClientHost::input_glyph` reads the
+current vanilla mapping for the device the player used last; changing Jump in Controls affects the
+next draw. On a controller it uses that player's binding, artwork family and Nintendo letter
+setting. An unknown or unbound mapping returns `None`; a stick tilt is not a button binding.
+
+```rust,ignore
+use mod_api::{ClientHost, ControllerButton, GuiRenderPostEvent, prelude::*};
+
+fn gui_render_post(&self, host: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>) {
+    let mut x = 20.0;
+    for glyph in [
+        host.input_glyph("key.jump"),
+        host.mod_input_glyph("mymod", "zoom"),
+        host.key_input_glyph("key.mouse.left"),
+        host.controller_input_glyph(ControllerButton::South),
+    ].into_iter().flatten() {
+        event.batch.input_glyph(&glyph, [x, 20.0], 0xFFFF_FFFF);
+        x += glyph.size()[0] + 4.0;
+    }
+}
+```
+
+`mod_input_glyph` uses the registered mapping's actual assigned key or mouse button, including
+modifiers. It has no controller binding. Explicit physical queries don't follow the last input
+method: a physical key names itself, and `South` denotes the bottom face button even when Nintendo
+letter mode binds Jump to the right face button instead. A controller must be available for the
+controller query. `glyph.label()` gives the displayed label for text alternatives.
+
+`DrawContext::input_glyph` takes the top-left of the glyph's layout box in GUI pixels and an ARGB
+colour multiplier. Opaque white preserves the artwork or key label's original colours. The game
+draws through its own atlas and the current clip; the mod never needs a sprite name or UV.
+
 ## Inventory and hotbar animation
 
 Use `screen_render_background` to draw between the container panel and its slots, or

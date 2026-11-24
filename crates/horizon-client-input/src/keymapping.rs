@@ -1,6 +1,6 @@
 //! The down/click state of `KeyMapping` and `ToggleKeyMapping` (sneak,
 //! sprint, attack and use can be toggled instead of held).
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 /// The bound of a mapping's pending clicks: its count's largest value. Nothing in the engine
 /// drains them in a loop; a mod's `consumeClick` takes one a call.
@@ -255,6 +255,7 @@ pub struct ModBinding<'a> {
 #[derive(Clone, Debug)]
 struct ModKey {
     state: KeyState,
+    input: Option<Arc<str>>,
     modifiers: u32,
     context: MappingContext,
 }
@@ -280,7 +281,7 @@ impl ModKey {
 pub struct ModKeys {
     keys: Vec<ModKey>,
     /// Each bound key's mappings, by its name.
-    by_input: HashMap<Box<str>, Vec<usize>>,
+    by_input: HashMap<Arc<str>, Vec<usize>>,
     by_mouse: HashMap<winit::event::MouseButton, Vec<usize>>,
     /// Each mod's mappings, by id.
     by_id: HashMap<Box<str>, HashMap<Box<str>, usize>>,
@@ -297,26 +298,38 @@ impl ModKeys {
         let mut count = 0;
         for (index, binding) in bindings.into_iter().enumerate() {
             count = index + 1;
+            if let Some(button) = crate::keybinds::mouse_button(&binding.input) {
+                self.by_mouse.entry(button).or_default().push(index);
+            }
+            let input = if binding.input.is_empty() || binding.input == "key.keyboard.unknown" {
+                None
+            } else {
+                let input = self
+                    .by_input
+                    .get_key_value(binding.input.as_str())
+                    .map_or_else(
+                        || Arc::<str>::from(binding.input),
+                        |(input, _)| Arc::clone(input),
+                    );
+                self.by_input
+                    .entry(Arc::clone(&input))
+                    .or_default()
+                    .push(index);
+                Some(input)
+            };
             let key = ModKey {
                 state: KeyState::plain(),
+                input,
                 modifiers: binding.modifiers,
                 context: binding.context,
             };
             match self.keys.get_mut(index) {
                 Some(old) => {
+                    old.input = key.input;
                     old.modifiers = key.modifiers;
                     old.context = key.context;
                 }
                 None => self.keys.push(key),
-            }
-            if let Some(button) = crate::keybinds::mouse_button(&binding.input) {
-                self.by_mouse.entry(button).or_default().push(index);
-            }
-            if !binding.input.is_empty() && binding.input != "key.keyboard.unknown" {
-                self.by_input
-                    .entry(binding.input.into_boxed_str())
-                    .or_default()
-                    .push(index);
             }
             self.by_id
                 .entry(binding.owner.into())
@@ -396,6 +409,11 @@ impl ModKeys {
     }
     fn index(&self, owner: &str, id: &str) -> Option<usize> {
         self.by_id.get(owner)?.get(id).copied()
+    }
+    /// The physical input and modifiers installed for this mapping, if bound.
+    pub fn binding(&self, owner: &str, id: &str) -> Option<(&str, u32)> {
+        let key = &self.keys[self.index(owner, id)?];
+        Some((key.input.as_deref()?, key.modifiers))
     }
     /// `isDown` of mod `owner`'s mapping `id`: held, while its conflict context
     /// and modifiers are active.

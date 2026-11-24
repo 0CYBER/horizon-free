@@ -309,6 +309,10 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_gui_draw_item_decorations_with(&mut *self.surface, &stack, at, text)
     }
+    fn input_glyph(&mut self, glyph: &InputGlyph, at: [f32; 2], argb: u32) -> bool {
+        self.game
+            .native_input_glyph_draw(&mut *self.surface, glyph, at, argb)
+    }
 }
 /// [`BlockEntityDrawContext`] on the game's `crate::game::native_block_entity_draw::BlockEntityDraw`.
 pub(crate) struct GameBlockEntityDrawContext<'a, 'g> {

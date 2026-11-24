@@ -617,9 +617,9 @@ book's page text), the pad drives the pointer instead.
 
 A button is drawn as Horizon's own art where its family has a picture, and otherwise as the label
 printed on the pad, in its colour, on a dark key (`pad_glyph.rs`; no Mojang assets, nothing from the
-player's jar). Whatever draws or measures a glyph goes through that module, asking for it by what the button
-does (a bound action or a menu job), never by a button: a rebinding or a pad's letters reach every glyph
-([ui-kit.md](ui-kit.md)).
+player's jar). Gameplay and menu prompts go through that module by what the button does, so a
+rebinding or a pad's letters reach every prompt. A mod can also use it to show a specific physical
+button, without changing its position in Nintendo letter mode ([ui-kit.md](ui-kit.md)).
 
 | Family | Art | Text |
 |---|---|---|

@@ -1,0 +1,11 @@
+ids = [
+    "method:prelude::ClientOptionsClientHost::input_glyph",
+    "method:prelude::ClientOptionsClientHost::mod_input_glyph",
+    "method:prelude::ClientOptionsClientHost::key_input_glyph",
+    "method:prelude::ClientOptionsClientHost::controller_input_glyph",
+    "method:DrawContext::input_glyph",
+    "type:InputGlyph",
+    "type:ControllerButton",
+    "type:ControllerGlyphFamily",
+]
+why = "Mods can resolve the active client's bindings or request a physical input by name or button position, then draw it using the game's key labels and controller artwork without needing atlas identifiers."

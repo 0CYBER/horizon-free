@@ -36,3 +36,60 @@ fn a_wasm_mod_reads_the_gui_scale_the_window_applies() {
     }
     guest::set_transport(None);
 }
+
+#[test]
+fn a_wasm_mod_can_round_trip_a_resolved_input_glyph() {
+    use mod_api::{ControllerButton, ControllerGlyphFamily, DrawContext, InputGlyph};
+
+    struct GlyphHost(InputGlyph);
+    impl mod_api::Host for GlyphHost {}
+    mod_api::impl_host_areas!(GlyphHost);
+    impl mod_api::ClientHost for GlyphHost {}
+    mod_api::impl_client_host_areas!(GlyphHost, except(client_options));
+    impl ClientOptionsClientHost for GlyphHost {
+        fn input_glyph(&self, action: &str) -> Option<InputGlyph> {
+            (action == "key.jump").then(|| self.0.clone())
+        }
+    }
+
+    #[derive(Default)]
+    struct Draw(Option<(InputGlyph, [f32; 2], u32)>);
+    impl DrawContext for Draw {
+        fn input_glyph(&mut self, glyph: &InputGlyph, at: [f32; 2], argb: u32) -> bool {
+            self.0 = Some((glyph.clone(), at, argb));
+            true
+        }
+    }
+
+    mod_api::__private::initialize().unwrap();
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    let client = GlyphHost(mod_api::__private::game::input_glyph(
+        "A".into(),
+        [12.0, 12.0],
+        Some((ControllerGlyphFamily::Nintendo, ControllerButton::East)),
+    ));
+    let mut draw = Draw::default();
+    let mut frame = boundary::Frame::default();
+    frame.set_client_host(&client);
+    frame.set_draw_context_mut(&mut draw);
+    let mut cx = boundary::Cx::default();
+    cx.frames.push(frame);
+    let cx = std::cell::RefCell::new(cx);
+    guest::set_transport(Some(Rc::new(move |id, bytes| {
+        let mut out = Writer::new();
+        // SAFETY: the host and draw context remain live until this synchronous transport ends.
+        unsafe { boundary::serve(id, &mut *cx.borrow_mut(), bytes, &mut out) }.unwrap();
+        out.into_bytes()
+    })));
+    assert_eq!(
+        ClientOptionsClientHost::input_glyph(&guest::Guest, "unknown"),
+        None
+    );
+    let glyph = ClientOptionsClientHost::input_glyph(&guest::Guest, "key.jump").unwrap();
+    assert_eq!(glyph, client.0);
+    let at = [21.0, 7.0];
+    let argb = 0xFFFF_7788;
+    assert!(DrawContext::input_glyph(&mut guest::Guest, &glyph, at, argb));
+    guest::set_transport(None);
+    assert_eq!(draw.0, Some((client.0, at, argb)));
+}
