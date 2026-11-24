@@ -1,6 +1,6 @@
 use super::*;
 use crate::game::{Audio, Options, Progress, Settings, load_resources};
-use mod_api::{self, ChatSuggestionAppliedEvent, ClientHost, Hooks};
+use mod_api::{self, ChatSuggestionAppliedEvent, ChatSuggestionsEvent, ClientHost, Hooks};
 use std::sync::{Arc, Mutex};
 
 /// Exercise the actual Game keyboard/mouse handlers and generated mod dispatch.
@@ -131,5 +131,108 @@ fn chat_completion_reaches_mods_from_keyboard_and_mouse_isolated() {
         );
         game.chat_key_code(KeyCode::ArrowDown, None);
         assert_eq!(calls.lock().unwrap().len(), 3, "navigation does not apply");
+    });
+}
+
+/// The chat box open on an empty line, as T opens it.
+fn open_chat(game: &mut Game<'_>) {
+    game.screen = Screen::Chat;
+    game.ui.chat_screen = Some(ChatScreen::new(
+        &Measure(&game.gui.atlas.font),
+        &Commands {
+            dispatcher: chat_tree(&game.remote),
+            registries: &game.ui.registries,
+        },
+        "",
+        false,
+        0,
+        640,
+        360,
+        ChatAbilities::new(ChatVisibility::Full),
+    ));
+}
+
+/// `chat_suggestions` through the Game's keys and generated dispatch: asked
+/// about plain chat text before the next key, its entries shown by Tab among
+/// the players' names and reported by `chat_suggestion_applied` when picked;
+/// never asked about a command. With no mod listening nothing is taken.
+#[test]
+#[ignore = "daily"]
+fn plain_chat_suggestions_reach_mods_and_join_the_list() {
+    struct Applied(Arc<Mutex<Vec<String>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Applied {
+        fn chat_suggestion_applied(
+            &self,
+            _host: &dyn ClientHost,
+            e: &mut ChatSuggestionAppliedEvent<'_>,
+        ) {
+            self.0.lock().unwrap().push(e.suggestion.to_owned());
+        }
+    }
+    struct Suggester(Arc<Mutex<Vec<(String, usize)>>>, Arc<Mutex<Vec<String>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Suggester {
+        fn chat_suggestions(&self, _host: &dyn ClientHost, e: &mut ChatSuggestionsEvent<'_>) {
+            self.0.lock().unwrap().push((e.input.to_owned(), e.cursor));
+            e.suggestions.push("stack".into());
+        }
+        fn chat_suggestion_applied(
+            &self,
+            _host: &dyn ClientHost,
+            e: &mut ChatSuggestionAppliedEvent<'_>,
+        ) {
+            self.1.lock().unwrap().push(e.suggestion.to_owned());
+        }
+    }
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+    game.ui.registries.players = vec!["Steve".into()];
+
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "applied",
+        Box::new(Applied(applied.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        open_chat(&mut game);
+        game.chat_type("hi st");
+        game.chat_key_code(KeyCode::Tab, None);
+        let screen = game.ui.chat_screen.as_mut().unwrap();
+        assert_eq!(
+            screen.take_chat_query(),
+            Some(("hi st".into(), 5)),
+            "no listener: the box's text is not taken"
+        );
+        game.chat_key_code(KeyCode::Tab, None);
+        assert_eq!(*applied.lock().unwrap(), ["Steve"]);
+    });
+
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "suggester",
+        Box::new(Suggester(asked.clone(), applied.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        open_chat(&mut game);
+        game.chat_type("hi st");
+        // Tab shows the list, then picks its entries in turn: "stack" starts
+        // with the word as typed, so it comes first.
+        for _ in 0..3 {
+            game.chat_key_code(KeyCode::Tab, None);
+        }
+        assert_eq!(*applied.lock().unwrap(), ["stack", "Steve"]);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [("hi st".to_owned(), 5), ("hi stack".to_owned(), 8)]
+        );
+
+        open_chat(&mut game);
+        game.chat_type("/gamem");
+        game.chat_key_code(KeyCode::Tab, None);
+        assert_eq!(asked.lock().unwrap().len(), 2, "a command asks nothing");
     });
 }

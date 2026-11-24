@@ -1078,6 +1078,7 @@ one of these moments has to move that logic into a client native mod.
 | `camera_roll.rs` | `camera_roll` |
 | `camera_type.rs` | `camera_type_cycle` |
 | `chat_suggestion_applied.rs` | `chat_suggestion_applied` |
+| `chat_suggestions.rs` | `chat_suggestions` |
 | `client_chat.rs` | `client_chat` |
 | `client_chat_received.rs` | `client_chat_received` |
 | `client_mining_predict.rs` | `client_mining_predict` |

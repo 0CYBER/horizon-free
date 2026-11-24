@@ -1410,6 +1410,8 @@ pub struct ChatScreen {
     /// The request to send (`ServerboundCommandSuggestionPacket`): id and
     /// the command up to the cursor.
     request: Option<(i32, String)>,
+    /// Whether mods may add to the list (`take_chat_query`).
+    chat_query: ChatQuery,
     suggestions: Option<SuggestionList>,
     completion: Option<SuggestionCompletion>,
     usage: Vec<Text>,
@@ -1424,6 +1426,19 @@ pub struct ChatScreen {
     /// `MouseHandler.lastClick`: a click within 250 ms of the last one on
     /// this screen is a double click.
     last_click: Option<std::time::Instant>,
+}
+/// Where the chat box's list stands with mods' completions
+/// (`ChatScreen::take_chat_query`, `ChatScreen::add_chat_suggestions`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatQuery {
+    /// The list is a command's, blank text's, or already has mods' entries.
+    Closed,
+    /// The list is plain chat text's, worked out with the cursor at this
+    /// character, and mods are still to be asked.
+    Unasked(usize),
+    /// Mods were asked about this list, at its cursor; their entries may join
+    /// it.
+    Asked(usize),
 }
 /// Local completions waiting for the server's reply to request `id`.
 struct Awaiting {
@@ -1536,6 +1551,7 @@ impl ChatScreen {
             pending: None,
             awaiting: None,
             request: None,
+            chat_query: ChatQuery::Closed,
             suggestions: None,
             completion: None,
             usage: Vec::new(),
@@ -1575,6 +1591,7 @@ impl ChatScreen {
             pending: None,
             awaiting: None,
             request: None,
+            chat_query: ChatQuery::Closed,
             suggestions: None,
             completion: None,
             usage: Vec::new(),
@@ -1676,6 +1693,7 @@ impl ChatScreen {
             self.suggestions = None;
         }
         self.usage.clear();
+        self.chat_query = ChatQuery::Closed;
         let cursor = self.input.cursor;
         let cursor_b = byte_at(&command, cursor);
         let slash = command.starts_with('/');
@@ -1721,6 +1739,7 @@ impl ChatScreen {
             let (range, list) = merge_suggestions(partial, builder.out);
             self.awaiting = None;
             self.pending = Some((range.0, list));
+            self.chat_query = ChatQuery::Unasked(cursor);
             self.usage_width = 0;
             self.usage_position = 0;
             // CommandSuggestions.updateCommandInfo: the Chat option may take
@@ -1739,6 +1758,49 @@ impl ChatScreen {
     /// The completion request to send to the server, if one is waiting.
     pub fn take_request(&mut self) -> Option<(i32, String)> {
         self.request.take()
+    }
+    /// The plain chat text (no `/`) the list was just worked out for, and the
+    /// cursor it was worked out with, in characters: once each time that
+    /// happens (the text changed, or the screen opened or resized holding it),
+    /// for mods to add theirs with `add_chat_suggestions`. None for a command
+    /// or blank text. After a completion that cursor is the end of the text:
+    /// `EditBox.setValue` works the list out there, then `useSuggestion` moves
+    /// the cursor back.
+    pub fn take_chat_query(&mut self) -> Option<(String, usize)> {
+        let ChatQuery::Unasked(cursor) = self.chat_query else {
+            return None;
+        };
+        self.chat_query = ChatQuery::Asked(cursor);
+        Some((self.input.value.clone(), cursor))
+    }
+    /// Mods' completions for the plain chat text `input` with the cursor at
+    /// `cursor` (from `take_chat_query`). Each replaces the word before the
+    /// cursor (`getLastWordIndex`), as the players' names do, and joins
+    /// vanilla's list as `Suggestions.merge` joins two: one of each, sorted
+    /// ignoring case. One that only repeats that word is left out, as
+    /// Brigadier's `suggest` leaves it. Nothing changes unless the list is
+    /// still the one asked about, for that text and cursor.
+    pub fn add_chat_suggestions(&mut self, input: &str, cursor: usize, entries: Vec<String>) {
+        if self.chat_query != ChatQuery::Asked(cursor) || self.input.value != input {
+            return;
+        }
+        self.chat_query = ChatQuery::Closed;
+        if entries.is_empty() {
+            return;
+        }
+        let partial = &input[..byte_at(input, cursor)];
+        let mut builder = SuggestionsBuilder::new(partial, last_word_index(partial));
+        for text in entries {
+            builder.suggest(text);
+        }
+        let mut list = self
+            .pending
+            .take()
+            .map(|(_, list)| list)
+            .unwrap_or_default();
+        list.extend(builder.out);
+        let (range, list) = merge_suggestions(partial, list);
+        self.pending = Some((range.0, list));
     }
     /// `ClientSuggestionProvider.completeCustomSuggestions`: the server's
     /// completions for request `id`, with `range` in UTF-16 units of the

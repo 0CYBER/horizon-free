@@ -1370,6 +1370,172 @@ fn the_suggestion_list_asks_for_the_pointing_hand() {
     assert_eq!(crate::widgets::take_cursor(), crate::widgets::Cursor::Arrow);
 }
 
+/// The shown suggestion list, top to bottom.
+fn shown(screen: &ChatScreen) -> Vec<&str> {
+    screen.suggestions.as_ref().map_or_else(Vec::new, |l| {
+        l.list.iter().map(|s| s.text.as_str()).collect()
+    })
+}
+
+/// Mods' completions for plain chat (`take_chat_query`, `add_chat_suggestions`)
+/// join the players' names as `Suggestions.merge` joins two lists: one of each,
+/// sorted ignoring case; `CommandSuggestions.sortSuggestions` then puts first
+/// those starting with the typed word, compared as typed.
+#[test]
+fn mods_chat_suggestions_join_the_players_in_vanillas_order() {
+    use winit::keyboard::KeyCode as K;
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries {
+        players: vec!["Steve".into(), "Alex".into()],
+        ..Registries::default()
+    };
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", false, 0, 640, 360, full());
+    screen.type_text(&m, &c, "hi st");
+    let (input, cursor) = screen.take_chat_query().expect("plain chat asks mods");
+    assert_eq!((input.as_str(), cursor), ("hi st", 5));
+    assert_eq!(screen.take_chat_query(), None, "asked once per change");
+    let entries = ["stack", "Strider", "st", "Steve", ":star:"].map(String::from);
+    screen.add_chat_suggestions(&input, cursor, entries.to_vec());
+    screen.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    // "st" only repeats the word and "Steve" is listed once.
+    assert_eq!(shown(&screen), ["stack", ":star:", "Steve", "Strider"]);
+    screen.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    assert_eq!(screen.value(), "hi stack");
+    assert_eq!(
+        screen.take_suggestion_completion(),
+        Some(SuggestionCompletion {
+            original: "hi st".into(),
+            range: (3, 5),
+            text: "stack".into(),
+            input: "hi stack".into(),
+        })
+    );
+}
+
+/// A mod's completion replaces the word before the cursor and keeps the text
+/// after it, as a player's name does (`getLastWordIndex` of the text up to the
+/// cursor). It is shown whether or not it starts with that word.
+#[test]
+fn a_mods_chat_suggestion_replaces_the_word_before_the_cursor() {
+    use winit::keyboard::KeyCode as K;
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", false, 0, 640, 360, full());
+    screen.type_text(&m, &c, "hi :sm there");
+    screen.edit_input(&m, &c, |field| field.set_cursor_and_highlight(&m, 6));
+    let (input, cursor) = screen.take_chat_query().expect("plain chat asks mods");
+    assert_eq!((input.as_str(), cursor), ("hi :sm there", 6));
+    screen.add_chat_suggestions(&input, cursor, vec!["😄".into()]);
+    for _ in 0..2 {
+        screen.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    }
+    assert_eq!(screen.value(), "hi 😄 there");
+    assert_eq!(
+        screen.take_suggestion_completion(),
+        Some(SuggestionCompletion {
+            original: "hi :sm there".into(),
+            range: (3, 6),
+            text: "😄".into(),
+            input: "hi 😄 there".into(),
+        })
+    );
+}
+
+/// Commands keep vanilla's completions: mods are not asked about one and what
+/// they offer never joins its list. Blank text asks nothing; a draft the chat
+/// opens on does; an answer for text that has since changed joins nothing.
+#[test]
+fn chat_suggestions_leave_commands_blank_text_and_stale_answers_alone() {
+    use winit::keyboard::KeyCode as K;
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries {
+        permission: 4,
+        ..Registries::default()
+    };
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let new =
+        |initial: &str, draft: bool| ChatScreen::new(&m, &c, initial, draft, 0, 640, 360, full());
+
+    let mut command = new("", false);
+    command.type_text(&m, &c, "/gamem");
+    assert_eq!(command.take_chat_query(), None, "a command");
+    command.add_chat_suggestions("/gamem", 6, vec!["gamemodes".into()]);
+    // Escape hides the list; Tab shows it again from what is pending.
+    command.key(&m, &c, &VecDeque::new(), K::Escape, false, false);
+    command.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    assert_eq!(shown(&command), ["gamemode"]);
+
+    let mut blank = new("", false);
+    assert_eq!(blank.take_chat_query(), None, "an empty box");
+    blank.type_text(&m, &c, "   ");
+    assert_eq!(blank.take_chat_query(), None, "spaces");
+
+    let mut draft = new("hello", true);
+    assert_eq!(draft.take_chat_query(), Some(("hello".into(), 5)));
+
+    let mut stale = new("", false);
+    stale.type_text(&m, &c, "hi st");
+    let (input, cursor) = stale.take_chat_query().expect("plain chat asks mods");
+    stale.type_text(&m, &c, "a");
+    stale.add_chat_suggestions(&input, cursor, vec!["stack".into()]);
+    assert_eq!(stale.take_chat_query(), Some(("hi sta".into(), 6)));
+    stale.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    assert!(shown(&stale).is_empty());
+    assert_eq!(stale.value(), "hi sta");
+}
+
+/// A completion in the middle of the text works vanilla's list out again with
+/// the cursor at the end (`EditBox.setValue`), then moves the cursor back to
+/// the completion's end (`SuggestionsList.useSuggestion`). Mods are asked at
+/// the cursor the list was worked out with, so their entries join the players'
+/// names for the same word.
+#[test]
+fn after_a_completion_mods_are_asked_at_the_lists_cursor() {
+    use winit::keyboard::KeyCode as K;
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries {
+        players: vec!["Alex".into(), "Theresa".into()],
+        ..Registries::default()
+    };
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", false, 0, 640, 360, full());
+    screen.type_text(&m, &c, "hi al ther");
+    screen.edit_input(&m, &c, |field| field.set_cursor_and_highlight(&m, 5));
+    for _ in 0..2 {
+        screen.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    }
+    assert_eq!(screen.value(), "hi Alex ther");
+    assert_eq!(
+        screen.input.cursor, 7,
+        "the cursor stays after the completion"
+    );
+    let (input, cursor) = screen.take_chat_query().expect("the completion asks mods");
+    assert_eq!((input.as_str(), cursor), ("hi Alex ther", 12));
+    screen.add_chat_suggestions(&input, cursor, vec!["Theo".into()]);
+    // Escape hides the list; Tab shows it again from what is pending.
+    screen.key(&m, &c, &VecDeque::new(), K::Escape, false, false);
+    screen.key(&m, &c, &VecDeque::new(), K::Tab, false, false);
+    assert_eq!(shown(&screen), ["Theo", "Theresa"]);
+}
+
 /// The lines a message adds, as the loop did before only the survivors were kept:
 /// every wrapped line inserted at the front, the trim to 100 after the last.
 fn reference_lines(chat: &Chat, font: &Font, content: &Text, previous: &[String]) -> Vec<String> {

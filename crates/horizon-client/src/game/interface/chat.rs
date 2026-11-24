@@ -1249,6 +1249,8 @@ impl Game<'_> {
     }
     /// A key (and the text it typed) while the chat screen is open.
     pub(super) fn chat_key_code(&mut self, key: KeyCode, typed_text: Option<&str>) {
+        // Tab shows the list with what mods add to the text so far.
+        self.ask_chat_suggestions();
         // The live modifiers, not `self.keys`: every ModifiersChanged runs
         // sync_toggle, which drops ShiftLeft and ControlLeft from `self.keys`
         // while a screen is open.
@@ -1339,6 +1341,27 @@ impl Game<'_> {
                 &completion.text,
                 &completion.input,
             );
+        }
+    }
+    /// `chat_suggestions`: mods' completions for the plain chat text the box
+    /// just worked out its list for (`ChatScreen::take_chat_query`), joined to
+    /// that list. With no mod listening nothing is asked or copied.
+    fn ask_chat_suggestions(&mut self) {
+        if !mod_api::__private::listened(mod_api::HookId::ChatSuggestions) {
+            return;
+        }
+        let Some((input, cursor)) = self
+            .ui
+            .chat_screen
+            .as_mut()
+            .and_then(ChatScreen::take_chat_query)
+        else {
+            return;
+        };
+        let mut suggestions = Vec::new();
+        self.native_chat_suggestions(&input, cursor, &mut suggestions);
+        if let Some(screen) = self.ui.chat_screen.as_mut() {
+            screen.add_chat_suggestions(&input, cursor, suggestions);
         }
     }
     /// The server's completions for an `ask_server` request
@@ -1758,6 +1781,9 @@ impl Game<'_> {
         Some(horizon_protocol::crypto::uuid_string(bits))
     }
     pub(super) fn draw_chat_screen(&mut self, batch: &mut HudBatch) {
+        // A change no key was pressed after (a click, a paste, the chat opening
+        // on a draft) reaches mods by the next frame.
+        self.ask_chat_suggestions();
         self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
         self.gui_layer("minecraft:chat", batch, |g, batch| g.draw_chat(batch));
         let Some(mut screen) = self.ui.chat_screen.take() else {
