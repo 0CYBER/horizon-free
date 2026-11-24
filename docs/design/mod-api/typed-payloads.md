@@ -1,7 +1,7 @@
 # Registered payloads and the typed-payload design
 
 The registered **raw** transport implements [arismoko/horizon#2882](https://github.com/arismoko/horizon/issues/2882).
-Typed registration and token binding over it are [below](#typed-registration-and-tokens-813-step-4b-1);
+Typed registration and token binding over it are [below](#typed-registration-and-tokens-arismokohorizon813-step-4b-1);
 configuration snapshots remain work for [arismoko/horizon#813](https://github.com/arismoko/horizon/issues/813).
 The transport contract is detailed in [Registered raw custom payload transport](../raw-custom-payload-transport.md).
 

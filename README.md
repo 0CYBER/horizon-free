@@ -72,6 +72,7 @@
 
 <p align="center">
   <a href="docs/native-client.md#run-from-a-checkout"><b>Build guide</b></a> ·
+  <a href="docs/README.md"><b>Developer docs</b></a> ·
   <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
   <a href="GOVERNANCE.md"><b>Governance</b></a> ·
   <a href="https://opencollective.com/horizonrust"><b>Sponsor</b></a>

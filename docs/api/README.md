@@ -13,6 +13,7 @@ section has one page per surface, plus the rules every surface follows:
 | [Servers](server.md) | hosts, panels, bots | `horizon-server` commands, `server.toml`, control API `/api/v1` | stable | [server-reference.md](server-reference.md) (generated) |
 | [Launcher](launcher.md) | players' agents, pack makers | `horizon-launcher` commands and its MCP server | preview | [launcher-commands.md](../launcher-commands.md) (generated) |
 | [Launch](launch.md) | other launchers | `horizon-client`'s launch options, the session JSON, exit codes; `horizon-prepare`'s output, `--check` and `--progress json` | experimental | [launch-reference.md](launch-reference.md) (generated) |
+| [Content](content.md) | other launchers, pack tools | content folders under `--game-dir`, on/off files, pre-install verification and `content` in `--launch-api` | experimental | on that page |
 | [Data formats](data-formats.md) | tools that read Horizon's files | benchmark reports, settings files, signed checksums | stable or preview, per format | on that page |
 
 ## How these APIs are designed
@@ -30,7 +31,7 @@ section has one page per surface, plus the rules every surface follows:
   sockets listen on this computer only, behind a token; nothing here is on by default where it would change vanilla's
   look or behaviour.
 - **Free when unused.** An API nobody uses costs nothing per tick or per frame: no engine, no thread, no allocation.
-- **One contract for every mode.** In-frame single player, the server thread, LAN and the dedicated server run the
+- **One contract for every mode.** Single player (on its server thread), LAN and the dedicated server run the
   same gameplay code ([AGENTS.md](../../AGENTS.md)), so a server-side API serves all of them.
 
 ## References are generated

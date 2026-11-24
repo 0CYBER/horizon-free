@@ -202,7 +202,7 @@ crate or code outside the game's binary (C, E) makes a change fast.
 Nothing in this note widens what a mod can do.
 
 - Content mods have no code. The game checks every downloaded file against the index exactly as the launcher does,
-  and keeps the content fence ([mods.md](../mods.md#namespaces-and-limits)).
+  and keeps the content fence ([content-mods.md](../modding/src/how-to/content-mods.md#namespaces-and-limits)).
 - Native mods stay full-trust native code. The in-game browser shows the launcher's trust notice and red warning
   before installing one, and installing never builds or runs it: the launcher does, behind its own warning.
 - The registry review stays the gate for listing a project, `revoked.toml` turns off taken-down files in the game

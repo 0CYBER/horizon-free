@@ -102,7 +102,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-prepare` | Builds `.local/horizon-client/26.3` from the player's own Minecraft install (runs the Java exporters) |
 | `horizon-server` | `horizon-server`: `server.toml`, CLI, supervisor of the headless game ([docs/hosting.md](docs/hosting.md)) |
 | `horizon-server-files` | `server.properties`, eula, ops/whitelist/bans, usercache |
-| `horizon-anticheat` | The dedicated server's anticheat, off by default: `[anticheat]` settings, violation levels, the checks' rules; the hub runs them (`lan/anticheat.rs`) ([docs/anticheat.md](docs/anticheat.md)) |
+| `horizon-anticheat` | The dedicated server's anticheat, on by default (`combat` and `ground` act; `timer` and `prediction` log only): `[anticheat]` settings, violation levels, the checks' rules; the hub runs them (`lan/anticheat.rs`) ([docs/anticheat.md](docs/anticheat.md)) |
 | `horizon-cosmetics` | Cosmetic items Horizon clients draw on players (off by default): the item format, bones and animations ([docs/cosmetics.md](docs/cosmetics.md)) |
 | `horizon-addresses` | Every built-in address of an outside service vanilla doesn't contact (Horizon layer; [docs/layers.md](docs/layers.md#built-in-addresses)) |
 | `horizon-friends`, `horizon-relay` | Play with Friends: invite codes, encrypted tunnel, the relay ([docs/play-with-friends.md](docs/play-with-friends.md)) |

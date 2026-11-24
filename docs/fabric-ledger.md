@@ -1,6 +1,6 @@
 # Fabric API mapping ledger
 
-NeoForge 26.3's transfer API is the specification for parts: Fabric transfer maps almost entirely onto its transactions, component-carrying resources and index-based contents. This ledger maps transfer, registries and data if Fabric mods become port targets; event counterparts belong on individual native hooks, except the review notes under [Event counterparts: client lifecycle and ticks](#event-counterparts-client-lifecycle-and-ticks-1014), which record why a reviewed hook has no `fabric` key. It also records the amount conversion: 81,000 droplets per bucket versus 1,000 mB; conversions refuse fractional mB, never round.
+NeoForge 26.3's transfer API is the specification for parts: Fabric transfer maps almost entirely onto its transactions, component-carrying resources and index-based contents. This ledger maps transfer, registries and data if Fabric mods become port targets; event counterparts belong on individual native hooks, except the review notes under [Event counterparts: client lifecycle and ticks](#event-counterparts-client-lifecycle-and-ticks-arismokohorizon1014), which record why a reviewed hook has no `fabric` key. It also records the amount conversion: 81,000 droplets per bucket versus 1,000 mB; conversions refuse fractional mB, never round.
 
 This is a porting ledger, not a promise of binary or source compatibility. **Covered** means the named use has a usable counterpart, not that a whole Fabric module is identical. **Planned** means an explicitly identified design or tracker item, not shipped code. **Gap** means the particular semantics have no established equivalent. Multiple statuses on a row distinguish the individual claims.
 
@@ -34,7 +34,7 @@ The counterpart for most transfer operations is NeoForge-shaped `ResourceHandler
 
 ## Registries and data
 
-Event counterparts belong on individual hooks; the exceptions are the review notes under [Event counterparts: client lifecycle and ticks](#event-counterparts-client-lifecycle-and-ticks-1014). These rows concern registry and data contracts; a partial counterpart does not imply whole-module compatibility.
+Event counterparts belong on individual hooks; the exceptions are the review notes under [Event counterparts: client lifecycle and ticks](#event-counterparts-client-lifecycle-and-ticks-arismokohorizon1014). These rows concern registry and data contracts; a partial counterpart does not imply whole-module compatibility.
 
 | Fabric module and key API | Fork mapping and status | Porting boundary |
 |---|---|---|

@@ -7,7 +7,7 @@ Rules for a coding agent making a Horizon mod. They are short on purpose; each l
 2. **Use a hook or a Part method** when one exists (search the rustdoc of `horizon-mod-api`). A per-block,
    per-item or per-entity moment is a Part method ([Parts](../modding/src/concepts/parts.md)).
 3. **Otherwise take [the native route](../modding/src/concepts/native-route.md):** a native `[[native.mixin]]` and declared
-   internals, only when the API cannot express it, and file a hook request for what it needed. `[[inject]]` was removed
+   internals, only when the API cannot express it, and file a [hook request](https://github.com/horizon-rust/horizon/issues) for what it needed. `[[inject]]` was removed
    (#19576) and is refused by name.
 4. **Names:** NeoForge 26.3 names for hooks that have a counterpart; no `on_` prefix; the event is `&mut`;
    handles come from the event; writes take `host`.
@@ -19,4 +19,4 @@ Rules for a coding agent making a Horizon mod. They are short on purpose; each l
    ([manifest](../modding/src/reference/manifest.md)).
 7. **Freshness errors:** a changed internal's hash refuses the mod; run `cargo horizon-mod update` or `internals add` again. Never substitute a different function.
 8. **Data and assets** are read through a reload hook, once per reload, never on the tick.
-9. **Missing hook?** File a hook request on horizon-rust/horizon.
+9. **Missing hook?** File a [hook request](https://github.com/horizon-rust/horizon/issues) on horizon-rust/horizon.

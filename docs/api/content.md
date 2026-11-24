@@ -50,12 +50,12 @@ starts and writes them when the player changes a setting.
   that doesn't build Horizon doesn't offer them.
 - **A modpack** isn't copied into the game folder. A launcher reads its `horizon-modpack.toml`, installs each mod
   it lists from the index with the checks below, writes `mod.<id>:true` for those with `on` (the default), and
-  copies `overrides/` into the game folder. `overrides/` may hold only what [mod-index.md](mod-index.md#hpack)
+  copies `overrides/` into the game folder. `overrides/` may hold only what [registry-index.md](../modding/src/reference/registry-index.md#hpack)
   lists, within its size limits.
 
 ## Before installing a file
 
-The checks `horizon_mod_package::index::check_file` makes, which [mod-index.md](mod-index.md#before-a-file-is-installed)
+The checks `horizon_mod_package::index::check_file` makes, which [registry-index.md](../modding/src/reference/registry-index.md#before-a-file-is-installed)
 specifies. A launcher that installs from the index makes the same ones:
 
 1. **Where it comes from.** An `https://` address of the index's shape: a registry release

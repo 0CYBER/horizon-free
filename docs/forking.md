@@ -59,7 +59,7 @@ only. They do not pass to forks, ports or derived launchers, whatever their lice
 - Its builds must not ship, embed, download or otherwise fetch Horizon's client ID, and must not tell
   players to set `HORIZON_MSA_CLIENT_ID` to it. Sign-ins made with it would appear to Microsoft and
   Mojang as Horizon's, which the project does not accept.
-- The MIT licence covers the code, not the app registration: copying the code gives no right to use
+- Horizon's licence ([GNU LGPL-3.0-or-later](../LICENSE), and [MIT](../LICENSES/MIT.txt) for earlier code) covers the code, not the app registration: copying the code gives no right to use
   Horizon's client ID.
 - Horizon may restrict, rotate or revoke its client ID at any time, which breaks every build that
   uses it, and reports misuse to Microsoft, Mojang and the hosting platform.

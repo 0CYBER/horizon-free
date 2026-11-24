@@ -14,19 +14,19 @@ Agents say what they are. An agent's issues, comments and reviews start with "ðŸ
 
 Not every line is read by a person. Instead, every change is checked against the real game, automatically:
 
-- **Harnesses.** A harness is a test that gives the same inputs to Horizon and to the real Minecraft 26.3, then compares the results. There are 326 of them (25 October 2026), from world generation to mobs, redstone and commands. The [status table](https://playhorizon.dev/#parity) shows what they cover. Passing them all does not prove that nothing else differs.
+- **Harnesses.** A harness is a test that gives the same inputs to Horizon and to the real Minecraft 26.3, then compares the results. There are 691 of them (November 2026), from world generation to mobs, redstone and commands. The [status table](https://playhorizon.dev/#parity) shows what they cover. Passing them all does not prove that nothing else differs.
 - **Checks on every pull request.** `verify` runs on GitHub's machines for every pull request and every change to main: formatting, lints with warnings treated as errors, the tests, and the check that no Minecraft files are committed. Main takes no change without it. `parity` runs the harnesses a change can affect, on a machine that holds a copy of Minecraft. For a pull request from a fork, it runs once a maintainer has read the change.
 - **Outside contributions are checked again.** Before a contributor's pull request merges, Ludovic's agents compare what it claims with vanilla's own code, review it line by line, rewrite the weak parts, and test it in single player, on a LAN and on a dedicated server where those apply.
 - **Releases are tested first.** A release is published only after its smoke test passes (the game starts and draws a world) and while no issue is labelled `release-blocker`.
 
 ## Why it's safe to run
 
-- **Open source.** All of the code is public on [GitHub](https://github.com/horizon-rust/horizon), under the MIT licence.
+- **Open source.** All of the code is public on [GitHub](https://github.com/horizon-rust/horizon), under the [GNU LGPL, version 3 or later](../LICENSE) (code merged before the move from MIT stays available under the [MIT licence](../LICENSES/MIT.txt)).
 - **Built from the public code.** Releases are built by GitHub Actions, the build service of GitHub, from the public source. Linux and Windows are built on GitHub's machines, and macOS on Ludovic's Mac mini, which runs GitHub Actions jobs. Every build log is [public](https://github.com/horizon-rust/horizon/actions/workflows/release.yml).
 - **Signed checksums.** Every release has a `SHA256SUMS` file, a fingerprint of each download, and `SHA256SUMS.sig`, a signature of that list made with Horizon's release key, which only release builds from main can use. The launcher and `horizon-server update` check both before they install anything, and refuse a file that does not match. The very first server install with `install.sh` checks the fingerprint but not the signature.
 - **Not yet signed by Apple or Microsoft.** The macOS app is not notarized by Apple, because it is not signed with a paid Apple developer account, so macOS asks you to confirm the first time ([Install](https://playhorizon.dev/docs/install#download-the-launcher) shows how). The Windows programs are not code-signed either, so Windows may warn you too.
 - **Mods are off by default, and reviewed.** A content mod is data and runs no code. A native mod is Rust code with your rights, not sandboxed: the launcher compiles it against a pinned prebuilt game only after a warning and your OK, and the registry lists one only after a maintainer has read its source. See [Making a content mod](modding/src/how-to/content-mods.md) and [Native mods](modding/src/how-to/native-mods.md).
-- **Nothing collected.** The launcher and the game send nothing about you or your machine to any server. See [Horizon sends nothing](telemetry.md).
+- **Opt-in data collection.** Performance statistics, crash reports, bug reports and benchmark uploads are all off until you turn them on in the launcher, with two exceptions documented upfront: the anonymous "I'm playing" ping and the optional *Show me as Horizon* badge. See [Opt-in data collection](telemetry.md).
 
 ## What it doesn't contain
 
