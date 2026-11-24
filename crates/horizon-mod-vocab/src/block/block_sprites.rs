@@ -206,3 +206,28 @@ impl AtlasRegion {
         Self { uv, size }
     }
 }
+
+/// A player's skin as the client draws it, as `player_skin` answers it: where its textures lie in
+/// the GUI atlas (the atlas entity quads sample, `WorldDrawn::atlas` for a native render mod).
+/// Plain data for this frame: a skin downloaded later, or a slot reused for another player's,
+/// moves it, so read it again each frame you draw with it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct PlayerSkin {
+    /// The 64x64 skin (`PlayerSkin.body`): the downloaded one once it is in the atlas, the
+    /// profile's default (Steve, Alex...) until then, as `PlayerInfo.getSkin` gives it.
+    pub skin: AtlasRegion,
+    /// `PlayerSkin.model` is `SLIM`: the arms are 3 pixels wide.
+    pub slim: bool,
+    /// `PlayerSkin.cape`: the cape's 64x32 texture, none without one or with the cape hidden by
+    /// the local player's Skin Customization. The elytra draws it too when the player has one.
+    pub cape: Option<AtlasRegion>,
+}
+
+impl PlayerSkin {
+    /// A skin, from the game's atlas.
+    pub fn new(skin: AtlasRegion, slim: bool, cape: Option<AtlasRegion>) -> Self {
+        Self { skin, slim, cape }
+    }
+}

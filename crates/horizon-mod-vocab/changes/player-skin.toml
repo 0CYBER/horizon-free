@@ -1,0 +1,2 @@
+ids = ["method:prelude::ClientRenderClientHost::player_skin", "type:PlayerSkin"]
+why = "A client mod drawing a player's model itself (a 3D map, a portrait) can find the player's skin and cape in the GUI atlas and whether the model is slim, as the client draws that player."

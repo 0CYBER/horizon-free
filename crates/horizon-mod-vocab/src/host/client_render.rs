@@ -103,6 +103,15 @@ pub trait ClientRenderClientHost {
     #[access(PublishedResources)]
     fn gui_sprite(&self, sprite: &Identifier) -> Option<AtlasRegion>;
     /// Side: client.
+    /// For a client mod drawing a player's model itself (a 3D map, a portrait): where the player's
+    /// skin and cape lie in the GUI atlas, and whether the model is slim, as this client draws that
+    /// player: the downloaded skin once it is in the atlas, the profile's default until then. The
+    /// regions hold for this frame (a later download or another player's skin can take a slot),
+    /// so ask each frame you draw. None for an entity that is not a player or a mannequin this
+    /// client shows, and for a stale handle.
+    #[access(WorldOnly)]
+    fn player_skin(&self, entity: EntityRef) -> Option<PlayerSkin>;
+    /// Side: client.
     /// Published asset/data read: available in Setup, Reloading and World.
     /// For a client mod: changes each time the resources load (a resource pack turned on or off can move every
     /// sprite): ask `native_block_sprites` again then. API 380.

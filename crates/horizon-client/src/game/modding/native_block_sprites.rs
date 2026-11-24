@@ -3,7 +3,7 @@
 use super::Game;
 use horizon_client::block_sprites::{BlockSprites, Lookup, SpriteRef};
 use horizon_world::registry::BlockStateId;
-use mod_api::{AtlasRegion, Identifier};
+use mod_api::{AtlasRegion, EntityRef, Identifier, PlayerSkin};
 
 /// The most pixel bytes one `sprite_pixels` call returns: the default texture budget
 /// (`sprites::DEFAULT_TEXTURE_BUDGET`), so with it every layer of the arrays fits in one call.
@@ -122,6 +122,22 @@ impl Game<'_> {
             self.gui.atlas.sprites.get(&sprite.to_string())
         }?;
         Some(AtlasRegion::new([r.u0, r.v0, r.u1, r.v1], [r.w, r.h]))
+    }
+    /// For a client mod: the player's or mannequin's skin and cape in the GUI atlas and its model,
+    /// as this client draws it (`Mob::skin`, `slim`, `cape`, set each frame by `update_remote_skins`).
+    pub(super) fn player_skin(&self, entity: EntityRef) -> Option<PlayerSkin> {
+        use super::commands::Target;
+        let mob = match self.native_client_entity_target(entity)? {
+            Target::Player => self.player_model.as_ref()?,
+            Target::Mob(id) => self.mobs.iter().find(|m| m.id == id && !m.removed)?,
+            _ => return None,
+        };
+        skin_regions(
+            &self.gui.atlas.sprites,
+            mob.skin.as_deref()?,
+            mob.slim,
+            mob.cape.as_deref(),
+        )
     }
     fn native_sprite_lookup(&self) -> Lookup<'_> {
         // (no renderer, no arrays: every layer counts as array 0's)
@@ -539,5 +555,63 @@ mod block_tint_color_tests {
             }
             std::fs::remove_dir_all(root).unwrap();
         });
+    }
+}
+
+/// A skin and cape by their atlas names, as [`PlayerSkin`]: none when the skin is not in the atlas
+/// (its slot taken since it was set), and no cape when the cape's is not.
+fn skin_regions(
+    sprites: &std::collections::HashMap<String, horizon_client::hud::Rect>,
+    skin: &str,
+    slim: bool,
+    cape: Option<&str>,
+) -> Option<PlayerSkin> {
+    let region = |name: &str| {
+        let r = sprites.get(name)?;
+        Some(AtlasRegion::new([r.u0, r.v0, r.u1, r.v1], [r.w, r.h]))
+    };
+    Some(PlayerSkin::new(region(skin)?, slim, cape.and_then(region)))
+}
+
+#[cfg(test)]
+mod player_skin_tests {
+    use super::*;
+    use horizon_client::hud::Rect;
+
+    fn rect(u0: f32, v0: f32) -> Rect {
+        Rect {
+            u0,
+            v0,
+            u1: u0 + 0.25,
+            v1: v0 + 0.25,
+            w: 64,
+            h: 64,
+        }
+    }
+
+    #[test]
+    fn a_skin_reads_its_and_its_capes_atlas_regions() {
+        let sprites = std::collections::HashMap::from([
+            ("skins/abc".to_owned(), rect(0.5, 0.0)),
+            ("capes/def".to_owned(), rect(0.0, 0.5)),
+        ]);
+        let skin = skin_regions(&sprites, "skins/abc", true, Some("capes/def")).unwrap();
+        assert_eq!(
+            skin.skin,
+            AtlasRegion::new([0.5, 0.0, 0.75, 0.25], [64, 64])
+        );
+        assert!(skin.slim);
+        assert_eq!(
+            skin.cape,
+            Some(AtlasRegion::new([0.0, 0.5, 0.25, 0.75], [64, 64]))
+        );
+        // A cape whose slot was taken is left out; a skin whose slot was taken answers none.
+        assert_eq!(
+            skin_regions(&sprites, "skins/abc", false, Some("capes/x"))
+                .unwrap()
+                .cape,
+            None
+        );
+        assert_eq!(skin_regions(&sprites, "skins/gone", false, None), None);
     }
 }
