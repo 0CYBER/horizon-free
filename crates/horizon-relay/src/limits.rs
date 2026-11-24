@@ -89,6 +89,12 @@ pub struct Rates {
     /// client could fill the relay's global cap with silent connections, each held for the
     /// first-line wait. A host keeps one connection per guest it plays with, hence the margin.
     pub open_per_address: usize,
+    /// Bridges one address may be an end of at once (`RELAY_MAX_BRIDGES_PER_ADDRESS`), an IPv6 /48
+    /// [`SITE_HOSTS`] times as many; a bridge counts for its guest's address and its host's. Without
+    /// it a few addresses holding bridges to themselves (they last as long as a byte each way every
+    /// two minutes) leave every other guest `Full`. The default is the hosts an address may hold
+    /// ([`Rates::hosts_per_address`]) times the guests that join one host at a time (8).
+    pub bridges_per_address: usize,
     /// Unknown codes a minute (and the burst) from one site, an IPv4 /24 or an IPv6 /48, checked
     /// before the global budget, so emptying that takes many sites rather than one home's /64s.
     pub site_unknown_per_min: f64,
@@ -116,6 +122,7 @@ impl Default for Rates {
             block: Duration::from_secs(600),
             hosts_per_address: 4,
             open_per_address: 64,
+            bridges_per_address: 32,
             site_unknown_per_min: 24.0,
             site_unknown_burst: 6.0,
             nameplate_unknown_per_min: 5.0,
@@ -182,6 +189,8 @@ pub struct Limiter {
     hosts: HashMap<(IpAddr, u8), usize>,
     /// Open connections, counted the same way and given back by [`Limiter::close_connection`].
     open: HashMap<(IpAddr, u8), usize>,
+    /// Bridges, counted the same way and given back by [`Limiter::close_bridge`].
+    bridges: HashMap<(IpAddr, u8), usize>,
     /// Unknown-code budgets by [`site_key`], swept with the addresses.
     sites: HashMap<IpAddr, Site>,
     /// Unknown-code budgets by nameplate, swept with the sites.
@@ -198,6 +207,7 @@ impl Limiter {
             last_sweep: Instant::now(),
             hosts: HashMap::new(),
             open: HashMap::new(),
+            bridges: HashMap::new(),
             sites: HashMap::new(),
             nameplates: HashMap::new(),
             site_registers: HashMap::new(),
@@ -231,6 +241,38 @@ impl Limiter {
                 *n -= 1;
                 if *n == 0 {
                     self.open.remove(&k);
+                }
+            }
+        }
+    }
+    /// Count one more bridge ended at `ip` (as guest or as host), unless its address (or IPv6 site)
+    /// is an end of as many as it may be already.
+    pub fn open_bridge(&mut self, ip: IpAddr) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        let keys = host_keys(ip, self.rates.bridges_per_address);
+        if keys
+            .iter()
+            .any(|(k, cap)| self.bridges.get(k).copied().unwrap_or(0) >= *cap)
+        {
+            return false;
+        }
+        for (k, _) in keys {
+            *self.bridges.entry(k).or_insert(0) += 1;
+        }
+        true
+    }
+    /// A bridge [`Limiter::open_bridge`] let in has ended.
+    pub fn close_bridge(&mut self, ip: IpAddr) {
+        if !self.enabled {
+            return;
+        }
+        for (k, _) in host_keys(ip, self.rates.bridges_per_address) {
+            if let Some(n) = self.bridges.get_mut(&k) {
+                *n -= 1;
+                if *n == 0 {
+                    self.bridges.remove(&k);
                 }
             }
         }
@@ -451,6 +493,43 @@ mod tests {
         // Off when the relay can't see client addresses.
         let mut off = Limiter::new(Rates::default(), false);
         assert!((0..1000).all(|_| off.open_connection(home)));
+    }
+
+    #[test]
+    fn an_address_is_an_end_of_only_so_many_bridges() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let mut l = Limiter::new(
+            Rates {
+                bridges_per_address: 2,
+                ..Rates::default()
+            },
+            true,
+        );
+        let home = ip("203.0.113.7");
+        // A bridge from an address to itself is an end at each side.
+        assert!(l.open_bridge(home) && l.open_bridge(home));
+        assert!(!l.open_bridge(home), "the third is refused");
+        assert!(l.open_bridge(ip("203.0.113.8")), "another address isn't");
+        l.close_bridge(home);
+        assert!(
+            l.open_bridge(home),
+            "a bridge that ended gives its place back"
+        );
+        l.close_bridge(home);
+        l.close_bridge(home);
+        assert!(
+            !l.bridges.contains_key(&(home, 64)),
+            "nothing is left behind"
+        );
+        // IPv6: 2 per /64, 8 per /48 however many /64s it spreads over.
+        let opened: usize = (0..10)
+            .flat_map(|home| [home; 2])
+            .map(|home| usize::from(l.open_bridge(ip(&format!("2001:db8:7:{home}::1")))))
+            .sum();
+        assert_eq!(opened, 2 * SITE_HOSTS);
+        // Off when the relay can't see client addresses.
+        let mut off = Limiter::new(Rates::default(), false);
+        assert!((0..1000).all(|_| off.open_bridge(home)));
     }
 
     #[test]

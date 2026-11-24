@@ -2,6 +2,7 @@
 //! dependencies again for every file. A new test file goes in this folder with a `mod` line here.
 
 mod bridge_slots;
+mod bridges_per_address;
 mod global_unknown;
 mod hosts_per_address;
 mod open_per_address;

@@ -120,6 +120,9 @@ impl Config {
         if let Some(v) = var(&get, "RELAY_MAX_OPEN_PER_ADDRESS", COUNT)? {
             c.rates.open_per_address = v;
         }
+        if let Some(v) = var(&get, "RELAY_MAX_BRIDGES_PER_ADDRESS", COUNT)? {
+            c.rates.bridges_per_address = v;
+        }
         if let Some(v) = var(&get, "RELAY_MAX_BRIDGES", COUNT)? {
             c.max_bridges = v;
         }
@@ -279,9 +282,12 @@ struct HostEntry {
     to_host: Sender<Out>,
     pending: usize,
 }
+/// A host's attach connection, with its place in the address's open cap: the stream goes on
+/// living in the guest's join thread, so the slot must live as long.
+type Attached = (TcpStream, SocketAddr, Option<OpenSlot>);
 struct Pending {
     nameplate: String,
-    attach: SyncSender<(TcpStream, SocketAddr)>,
+    attach: SyncSender<Attached>,
 }
 #[derive(Default)]
 struct Inner {
@@ -448,18 +454,35 @@ fn unmap(peer: SocketAddr) -> SocketAddr {
 
 /// A connection counted against its address's cap ([`limits::Limiter::open_connection`]), given
 /// back however the connection ends.
-struct OpenSlot<'a>(&'a State, std::net::IpAddr);
-impl<'a> OpenSlot<'a> {
-    fn take(state: &'a State, ip: std::net::IpAddr) -> Option<Self> {
+struct OpenSlot(Arc<State>, std::net::IpAddr);
+impl OpenSlot {
+    fn take(state: &Arc<State>, ip: std::net::IpAddr) -> Option<Self> {
         // Decided with the lock released before a slot exists: a refused one must never be built,
         // its Drop would give back a place it never took (and lock the limiter again).
         let open = locked(&state.limiter).open_connection(ip);
-        open.then(|| Self(state, ip))
+        open.then(|| Self(state.clone(), ip))
     }
 }
-impl Drop for OpenSlot<'_> {
+impl Drop for OpenSlot {
     fn drop(&mut self) {
         locked(&self.0.limiter).close_connection(self.1);
+    }
+}
+
+/// One of an address's bridges ([`limits::Limiter::open_bridge`]), taken for each end of a bridge
+/// and given back when it drops.
+struct AddressBridge(Arc<State>, std::net::IpAddr);
+impl AddressBridge {
+    fn take(state: &Arc<State>, ip: std::net::IpAddr) -> Option<Self> {
+        // As for `OpenSlot`: a refused one is never built, its Drop would give back a place it
+        // never took.
+        let open = locked(&state.limiter).open_bridge(ip);
+        open.then(|| Self(state.clone(), ip))
+    }
+}
+impl Drop for AddressBridge {
+    fn drop(&mut self) {
+        locked(&self.0.limiter).close_bridge(self.1);
     }
 }
 
@@ -488,7 +511,7 @@ fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Re
     // Counted per address before anything is read: past its cap a connection is closed at once,
     // not held for `first_line` with one of the relay's global slots. Behind the PROXY protocol the
     // client's address is the line the load balancer sends on connect, so it's counted after it.
-    let mut _open = None;
+    let mut open = None;
     // Behind the PROXY protocol only the load balancers may connect: anyone else is closed at
     // once, before the relay holds a slot for `first_line` waiting for a line it would refuse.
     let from_balancer =
@@ -500,7 +523,7 @@ fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Re
         let Some(slot) = OpenSlot::take(state, peer.ip()) else {
             return Ok(());
         };
-        _open = Some(slot);
+        open = Some(slot);
     }
     // The first line (and an HTTP request) within `first_line` in all.
     let first_line = horizon_friends::deadline(&stream, state.config.first_line)?;
@@ -515,7 +538,7 @@ fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Re
         let Some(slot) = OpenSlot::take(state, peer.ip()) else {
             return Ok(());
         };
-        _open = Some(slot);
+        open = Some(slot);
         line = wire::read_line(&mut stream)?.ok_or(io::ErrorKind::UnexpectedEof)?;
     }
     if line.starts_with(b"GET ") {
@@ -536,7 +559,7 @@ fn handle(state: &Arc<State>, mut stream: TcpStream, peer: SocketAddr) -> io::Re
             ..
         } if v == wire::VERSION => join(state, stream, peer, &nameplate, protocol),
         ToRelay::Attach { v, session, token } if v == wire::VERSION => {
-            attach(state, stream, peer, session, &token)
+            attach(state, stream, peer, session, &token, open)
         }
         _ => refuse(&mut stream, ErrorCode::BadRequest),
     }
@@ -764,6 +787,9 @@ fn join(
         state.rate_limited.fetch_add(1, Ordering::Relaxed);
         return refuse(&mut stream, ErrorCode::RateLimited);
     }
+    // The guest's end of the bridge, counted for its address before the lookup and given back
+    // however this join ends; a refusal is told after the lookup, so an unknown code still is one.
+    let guest_bridge = AddressBridge::take(state, peer.ip());
     let session = random_u64();
     let (atx, arx) = sync_channel(1);
     let lookup = {
@@ -777,6 +803,7 @@ fn join(
             None => Lookup::Unknown,
             Some(h) if h.protocol != protocol => Lookup::Version(h.game.clone()),
             Some(h) if h.pending >= state.config.max_pending_per_host => Lookup::Full,
+            Some(_) if guest_bridge.is_none() => Lookup::Full,
             Some(h) => match BridgeSlot::take(&state.bridges, state.config.max_bridges) {
                 Some(slot) => {
                     h.pending += 1;
@@ -835,7 +862,13 @@ fn join(
         }
     }
     match attached {
-        Ok((host, host_peer)) => bridge(state, stream, peer, host, host_peer, session, slot),
+        Ok((host, host_peer, _host_open)) => {
+            // The host's end counts for its address too, for as long as the bridge lives.
+            let Some(_host_bridge) = AddressBridge::take(state, host_peer.ip()) else {
+                return refuse(&mut stream, ErrorCode::Full);
+            };
+            bridge(state, stream, peer, host, host_peer, session, slot)
+        }
         Err(_) => {
             drop(slot);
             refuse(&mut stream, ErrorCode::HostUnreachable)
@@ -849,6 +882,7 @@ fn attach(
     peer: SocketAddr,
     session: u64,
     token: &str,
+    open: Option<OpenSlot>,
 ) -> io::Result<()> {
     let target = {
         let inner = locked(&state.inner);
@@ -864,11 +898,11 @@ fn attach(
             .map(|p| p.attach.clone())
     };
     match target {
-        Some(tx) => match tx.try_send((stream, peer)) {
+        Some(tx) => match tx.try_send((stream, peer, open)) {
             Ok(()) => Ok(()),
             Err(
-                std::sync::mpsc::TrySendError::Full((mut stream, _))
-                | std::sync::mpsc::TrySendError::Disconnected((mut stream, _)),
+                std::sync::mpsc::TrySendError::Full((mut stream, ..))
+                | std::sync::mpsc::TrySendError::Disconnected((mut stream, ..)),
             ) => refuse(&mut stream, ErrorCode::BadRequest),
         },
         None => refuse(&mut stream, ErrorCode::BadRequest),
