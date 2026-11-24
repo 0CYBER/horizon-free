@@ -511,6 +511,8 @@ impl Launcher {
     pub(crate) fn proxy_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let focused = self.proxy_focused;
+        let glass = glass_ui::flat();
+        let placeholder = tr("For example http://127.0.0.1:7890");
         let field = div()
             .id("proxy")
             .track_focus(&self.proxy_focus)
@@ -526,14 +528,18 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(line_edit::content(
-                &self.proxy_input,
-                &t,
-                focused,
-                false,
-                false,
-                tr("For example http://127.0.0.1:7890"),
-            ))
+            .child(if glass {
+                line_edit::content_in_width(&self.proxy_input, &t, focused, placeholder)
+            } else {
+                line_edit::content_with(
+                    &self.proxy_input,
+                    &t,
+                    focused,
+                    false,
+                    false,
+                    placeholder.into(),
+                )
+            })
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.proxy_focus, cx);
                 cx.notify();
@@ -563,7 +569,7 @@ impl Launcher {
                 ))
                 .into_any_element(),
         };
-        if glass_ui::flat() {
+        if glass {
             return glass_ui::setting_row_stacked(
                 tr("Proxy"),
                 Some(detail),

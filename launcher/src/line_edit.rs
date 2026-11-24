@@ -4,8 +4,8 @@
 
 use super::*;
 use gpui::{
-    black, canvas, Bounds, Font, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point,
-    TextRun,
+    black, canvas, fill, point, size, Bounds, ContentMask, Font, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Pixels, Point, ShapedLine, TextAlign, TextRun,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -38,11 +38,18 @@ enum Run {
 }
 
 /// Where the text was drawn last frame, and how: what turns a mouse position into a character.
-struct Area {
-    bounds: Bounds<Pixels>,
-    font: Font,
-    size: Pixels,
-    mask: bool,
+enum Area {
+    Fixed {
+        bounds: Bounds<Pixels>,
+        font: Font,
+        size: Pixels,
+        mask: bool,
+    },
+    Pixels {
+        bounds: Bounds<Pixels>,
+        line: Box<ShapedLine>,
+        offset: Pixels,
+    },
 }
 
 struct Snap {
@@ -125,21 +132,37 @@ impl LineEdit {
     /// The character under `pos`, from where the text was drawn last frame.
     fn index_at(&self, window: &Window, pos: Point<Pixels>) -> Option<usize> {
         let area = self.area.borrow();
-        let a = area.as_ref()?;
+        let (bounds, font, size, mask) = match area.as_ref()? {
+            Area::Fixed {
+                bounds,
+                font,
+                size,
+                mask,
+            } => (bounds, font, *size, *mask),
+            Area::Pixels {
+                bounds,
+                line,
+                offset,
+            } => {
+                let x = (pos.x - bounds.origin.x).clamp(px(0.), bounds.size.width);
+                let at = line.closest_index_for_x(x + *offset);
+                return Some(line.text[..at].chars().count().min(self.len()));
+            }
+        };
         let shown: String = self
             .text
             .chars()
             .skip(self.scroll)
             .take(self.visible)
             .collect();
-        let shown = if a.mask {
+        let shown = if mask {
             "•".repeat(shown.chars().count())
         } else {
             shown
         };
         let run = TextRun {
             len: shown.len(),
-            font: a.font.clone(),
+            font: font.clone(),
             color: black(),
             background_color: None,
             underline: None,
@@ -147,9 +170,9 @@ impl LineEdit {
         };
         let line = window
             .text_system()
-            .shape_line(shown.clone().into(), a.size, &[run], None);
+            .shape_line(shown.clone().into(), size, &[run], None);
         let at = line
-            .closest_index_for_x(pos.x - a.bounds.origin.x)
+            .closest_index_for_x(pos.x - bounds.origin.x)
             .min(shown.len());
         Some(self.scroll + shown[..at].chars().count())
     }
@@ -592,7 +615,7 @@ pub(super) fn content_with(
             canvas(
                 move |bounds, window, _| {
                     let style = window.text_style();
-                    *area.borrow_mut() = Some(Area {
+                    *area.borrow_mut() = Some(Area::Fixed {
                         bounds,
                         font: style.font(),
                         size: style.font_size.to_pixels(window.rem_size()),
@@ -606,12 +629,135 @@ pub(super) fn content_with(
         )
 }
 
+/// Draw a one-line field in its actual laid-out width, including proportional fonts.
+pub(super) fn content_in_width(
+    edit: &LineEdit,
+    t: &theme::Theme,
+    focused: bool,
+    placeholder: &'static str,
+) -> Div {
+    if edit.text.is_empty() {
+        *edit.area.borrow_mut() = None;
+        return content_with(edit, t, focused, false, false, placeholder.into());
+    }
+
+    // A value from settings.json can contain a newline even though typing and paste cannot.
+    // Substitute a space for display only, preserving the byte and character positions.
+    let text = gpui::SharedString::from(edit.text.replace('\n', " "));
+    let (start, end) = edit.range();
+    let lo = edit.byte(start);
+    let hi = edit.byte(end);
+    let caret = if edit.caret == start { lo } else { hi };
+    let ink = t.ink;
+    let selection = t.accent.opacity(theme::SELECTION);
+    let area = edit.area.clone();
+    let hit_area = area.clone();
+    div().w_full().min_w_0().h_full().child(
+        canvas(
+            move |bounds, window, _| {
+                let style = window.text_style();
+                let run = TextRun {
+                    len: text.len(),
+                    font: style.font(),
+                    color: ink,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let font_size = style.font_size.to_pixels(window.rem_size());
+                let line = window
+                    .text_system()
+                    .shape_line(text, font_size, &[run], None);
+                let caret_x = line.x_for_index(caret);
+                let mut area = area.borrow_mut();
+                let previous = match area.as_ref() {
+                    Some(Area::Pixels { offset, .. }) => *offset,
+                    _ => px(0.),
+                };
+                let offset = pixel_scroll(previous, caret_x, line.width(), bounds.size.width);
+                if let Some(Area::Pixels {
+                    bounds: old_bounds,
+                    line: old_line,
+                    offset: old_offset,
+                }) = area.as_mut()
+                {
+                    *old_bounds = bounds;
+                    **old_line = line;
+                    *old_offset = offset;
+                } else {
+                    *area = Some(Area::Pixels {
+                        bounds,
+                        line: Box::new(line),
+                        offset,
+                    });
+                }
+                (caret_x, window.line_height())
+            },
+            move |bounds, (caret_x, line_height), window, cx| {
+                let area = hit_area.borrow();
+                let Some(Area::Pixels { line, offset, .. }) = area.as_ref() else {
+                    return;
+                };
+                let center_y = bounds.origin.y + bounds.size.height / 2.;
+                let origin = point(bounds.origin.x - *offset, center_y - line_height / 2.);
+                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    if lo != hi {
+                        let a = line.x_for_index(lo);
+                        let b = line.x_for_index(hi);
+                        let highlight = Bounds {
+                            origin: point(origin.x + a.min(b), origin.y),
+                            size: size((b - a).abs(), line_height),
+                        };
+                        window.paint_quad(fill(highlight, selection).corner_radii(px(2.)));
+                    }
+                    let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+                    if focused {
+                        window.paint_quad(fill(
+                            Bounds {
+                                origin: point(origin.x + caret_x, center_y - px(7.)),
+                                size: size(px(1.), px(14.)),
+                            },
+                            ink,
+                        ));
+                    }
+                });
+            },
+        )
+        .size_full(),
+    )
+}
+
+/// Keep a full pixel for the caret and fill the viewport when scrolling near the end.
+fn pixel_scroll(previous: Pixels, caret: Pixels, text: Pixels, width: Pixels) -> Pixels {
+    let room = (width - px(1.)).max(px(0.));
+    previous
+        .min((text - room).max(px(0.)))
+        .min(caret)
+        .max(caret - room)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn edit(text: &str) -> LineEdit {
         LineEdit::new(text.into(), 1024, 38)
+    }
+
+    #[test]
+    fn pixel_viewport_fills_available_width_and_keeps_the_caret_visible() {
+        let text = px(620.);
+        // 560px glass field, minus the two 16px insets.
+        let wide = px(528.);
+        let end = pixel_scroll(px(0.), text, text, wide);
+        assert_eq!(end, px(93.));
+        assert_eq!(pixel_scroll(end, px(400.), text, wide), end);
+        assert_eq!(pixel_scroll(end, px(0.), text, wide), px(0.));
+
+        let narrow = pixel_scroll(end, text, text, px(268.));
+        assert_eq!(narrow, px(353.));
+        assert_eq!(pixel_scroll(narrow, text, text, wide), end);
+        assert_eq!(pixel_scroll(end, px(500.), px(500.), wide), px(0.));
     }
 
     fn typed(e: &mut LineEdit, s: &str) {

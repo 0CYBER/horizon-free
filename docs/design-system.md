@@ -343,6 +343,8 @@ as `--glass-*`.
 - **Type**: Geist for everything; Bricolage Grotesque SemiBold for page, instance and dialog names,
   at the optical size a browser picks for them: `Bricolage Grotesque Display` (56) and
   `Bricolage Grotesque Heading` (28), cut by `tools/bake_bricolage.py`.
+- **Proxy field** (Settings → Network): the address uses the full padded width of the
+  field and scrolls horizontally to keep the caret visible.
 - **Icons**: Hugeicons' free set (MIT), the ones the mockup uses, stroked 1.6 in the text colour
   (`crates/horizon-theme/icons/glass/`, served as `icons/glass/<name>.svg`).
 
