@@ -1704,6 +1704,7 @@ mod tests {
             "api.allow_public",
             "panel.bind",
             "properties.enable-rcon",
+            "anticheat.strikes=",
         ] {
             let (status, _) = call(
                 "PATCH",
