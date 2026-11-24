@@ -1415,9 +1415,12 @@ impl Mob {
         }
         // AbstractHorse.causeFallDamage (llamas override it): a landing of more
         // than a block thuds, and the horse's fall makes no generic fall sound.
+        // A client's copy of a mount it drives lands too, but `ClientLevel`
+        // plays a mob's `playSound` nowhere (its excluded entity is the local
+        // player, not the mob): the server's broadcast is what the rider hears.
         let thud =
             super::equine::is_equine(self.species()) && !super::llama::is_llama(self.species());
-        if thud && distance > 1.0 && !self.silent {
+        if thud && distance > 1.0 && !self.silent && !self.extra.client_side {
             let at = [self.position.x, self.position.y, self.position.z];
             let sound = if self.is_baby() {
                 "entity.baby_horse.land"
@@ -1484,8 +1487,9 @@ impl Mob {
                 (false, true) => "entity.generic.big_fall",
                 (false, false) => "entity.generic.small_fall",
             };
-            // Horses thud and llamas make no generic fall sound.
-            if !horse {
+            // Horses thud and llamas make no generic fall sound; a client's
+            // copy leaves every fall sound to the server's broadcast.
+            if !horse && !self.extra.client_side {
                 events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
                 self.block_fall_sound(contact, events);
             }
@@ -1500,9 +1504,10 @@ impl Mob {
     }
     /// `LivingEntity.playBlockFallSound`: the block 0.2 below the feet plays
     /// its fall sound at half its volume and three quarters of its pitch,
-    /// unless the mob is silent or the block is air.
+    /// unless the mob is silent or the block is air. A client's copy of a
+    /// mount it drives leaves it to the server, as `ClientLevel` does.
     fn block_fall_sound(&self, contact: Option<(&MobWorld, [i32; 3])>, events: &mut Vec<MobEvent>) {
-        if self.silent {
+        if self.silent || self.extra.client_side {
             return;
         }
         if let Some((w, _)) = contact {
@@ -3916,6 +3921,9 @@ mod climbable_player_push_tests;
 #[cfg(test)]
 #[path = "living_climbable_tests.rs"]
 mod climbable_tests;
+#[cfg(test)]
+#[path = "horse_fall_sound_tests.rs"]
+mod horse_fall_sound_tests;
 #[cfg(test)]
 #[path = "ice_friction_tests.rs"]
 mod ice_friction_tests;
