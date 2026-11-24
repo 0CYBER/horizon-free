@@ -10,6 +10,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
+pub mod power;
 pub mod scrub;
 
 /// What `program args` prints, trimmed, when it succeeds and prints something. On Windows the
@@ -527,37 +528,14 @@ fn field_spaced(text: &str, key: &str) -> Option<String> {
     })
 }
 
-/// `ac` or `battery`; `None` where it can't be read.
+/// `ac` or `battery`; `None` where it can't be read. Read once, here and now: what the crash
+/// report and telemetry keep as the machine's state at the start. [`power::sample`] is the live
+/// channel, sampled off the frame loop.
 pub fn power() -> Option<&'static str> {
-    if cfg!(target_os = "macos") {
-        let batt = command_output("pmset", &["-g", "batt"])?;
-        return Some(if batt.contains("'Battery Power'") {
-            "battery"
-        } else {
-            "ac"
-        });
+    match power::read_source() {
+        power::Source::Unknown => None,
+        source => Some(source.as_str()),
     }
-    if cfg!(windows) {
-        // BatteryStatus 1: discharging.
-        let status =
-            powershell("(Get-CimInstance Win32_Battery | Select-Object -First 1).BatteryStatus")?;
-        return Some(if status.trim() == "1" {
-            "battery"
-        } else {
-            "ac"
-        });
-    }
-    let mut on_battery = None;
-    for entry in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
-        let read =
-            |name: &str| std::fs::read_to_string(entry.path().join(name)).unwrap_or_default();
-        match read("type").trim() {
-            "Mains" if read("online").trim() == "1" => return Some("ac"),
-            "Battery" => on_battery = Some("battery"),
-            _ => {}
-        }
-    }
-    on_battery
 }
 
 /// `laptop` or `desktop`: the firmware's chassis type, else whether there is a battery.

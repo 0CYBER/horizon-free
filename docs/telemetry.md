@@ -54,6 +54,8 @@ Every item has `day` (days since 1970, UTC: no finer time), `source` (`launcher`
 
 The launcher's own items (bug reports sent from it) have no GPU or screen: only the game knows them. The memory given to the game is not a setting in Horizon (no Java heap): `peak_ram_mb` is what it used. Benchmark reports carry the same facts in their `hardware` (`docs/benchmark-report.md`).
 
+`power` is the machine as it was when the game started, and it stays that for the whole session: a laptop that unplugs keeps `ac`, because the field says what the session started on, not what it runs on now. The live state is the game's own channel (`horizon_system::power`), which reads the OS at 1 Hz on a thread of its own and never in the frame loop: the client's log line for each change and the graphics page's warning ([graphics.md](graphics.md)) read it, and nothing is collected or sent from it.
+
 No serial number, host name, user name, MAC address or path is read. Settings → Data collection → "View what would be sent" and `horizon-launcher data show` print every field as it would leave this machine.
 
 A summary (`frames`, `ticks`) is the count, the 50th, 95th and 99th percentile and the maximum in milliseconds (to the tenth), and 14 bucket counts: under 4 ms, 4–6, 6–8, 8–10, 10–12, 12–14, 14–16.7, 16.7–20, 20–25, 25–33.3, 33.3–50, 50–100, 100–250, and 250 ms and more. Raw frame times never leave: `Timings` records them in tenths of a millisecond (20 KB however long the session) and only its summary is kept. A perf item is under 1 KiB.

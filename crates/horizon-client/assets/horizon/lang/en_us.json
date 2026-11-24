@@ -1333,5 +1333,7 @@
   "horizon.options.menu_pointer": "Pointer",
   "horizon.screenshot.canceled": "Screenshot canceled",
   "horizon.screenshot.success_hdr": "Saved screenshot as %s and %s",
+  "horizon.graphics.os_energy_saver": "The OS's energy saver is on: the system's own switch, which these settings don't set.",
+  "horizon.graphics.os_thermal_limit": "The OS is holding the CPU below full speed to stay cool, which slows this game too.",
   "Coarse distant terrain in local worlds.": "Coarse distant terrain in local worlds."
 }

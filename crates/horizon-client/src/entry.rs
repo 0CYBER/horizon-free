@@ -160,6 +160,14 @@ pub fn start<G>(
     );
     // The log's first line names the build, so a bug report that carries the log says which one it was.
     log::info!("Horizon {}", crash::version());
+    // The machine's power state, on its own thread at 1 Hz and never in the frame loop: the
+    // window's tick says in the log what changed, and the graphics page says what the OS is
+    // reporting about the machine (its energy saver, or a CPU held below full speed;
+    // `horizon_system::power`, docs/graphics.md). A dedicated server has no window and no page,
+    // so it doesn't start the thread.
+    if side == "client" {
+        horizon_system::power::start();
+    }
     // Mods' startup bars and lines (`RegistrationContext::progress`), before they register.
     game::startup_progress::install(side == "server");
     // Mod loading emits refusals; both client and dedicated logs must exist first.
