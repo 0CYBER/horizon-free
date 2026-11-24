@@ -69,6 +69,7 @@ horizon-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_ref
 horizon-client game::mods::tests::content_overlay_validates_dependencies_and_orders_layers lib daily child-process
 horizon-client game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection lib daily child-process
 horizon-client game::mounts::tests::a_camel_husk_keeps_itself_once_clicked lib daily game-boot
+horizon-client game::minecarts::default_on_rails_tests::default_behaviour_updates_on_rails_every_tick lib daily resources
 horizon-client game::mounts::tests::a_chest_on_a_donkey_or_mule_plays_its_own_sound_at_full_volume lib daily game-boot
 horizon-client game::mounts::tests::feeding_a_mount_draws_from_its_own_random_and_posts_eat lib daily game-boot
 horizon-client game::mounts::tests::saddling_and_armouring_play_at_pitch_one_from_the_mounts_own_random lib daily game-boot
