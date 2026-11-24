@@ -522,7 +522,7 @@ fn save_during_action_savepoint_refused() {
     let (mut host, menu) = fixture();
     assert_eq!(
         host.place(&menu, |_| {
-            // Production save admission uses this exact process-wide signal.
+            // Production save admission reads this thread's leases.
             assert!(!horizon_client::join_seq::visibility::passes_settled());
             Reply::Allow
         }),

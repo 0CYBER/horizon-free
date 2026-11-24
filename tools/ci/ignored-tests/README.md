@@ -92,9 +92,6 @@ rerun also exceeds 5 s, fails, or has no passing timed record; both times are pr
 are, so a warned test stays until someone moves it. Initial times are wall time with three binaries and their test
 threads running at once, not isolated measurements. Documentation examples and `verify`'s Python steps are not timed.
 
-Tests that assert process-wide save admission isolate themselves, not the whole shard. For example,
-`game::visibility_unwind_tests::visibility_listener_unwind_does_not_block_an_outside_save` uses Game's
-`in_own_process` helper to run its callback, unwind and disk-save assertions in an exact-selected child
-process. It still runs through the normal parallel shard selection, without a failure-policy row or
-special runner selector. Other fixtures' outstanding leases must not be worked around by weakening
-the process-wide `passes_settled` save gate.
+Save admission is checked on the thread that opened the entities' passes. Independent fixtures
+can hold their own passes concurrently. The visibility-unwind fixtures still require prepared
+resources for their on-disk save checks.

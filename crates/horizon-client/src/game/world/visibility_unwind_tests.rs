@@ -64,15 +64,6 @@ impl Hooks for PanicPickup {
 #[test]
 #[ignore = "daily"]
 fn visibility_listener_unwind_does_not_block_an_outside_save() {
-    // Save admission is process-wide, even when this game's visibility is settled.
-    // Other fixtures may legitimately hold leases; isolate the real save proof.
-    crate::game::in_own_process(
-        "game::visibility_unwind_tests::visibility_listener_unwind_does_not_block_an_outside_save",
-        visibility_unwind_save,
-    );
-}
-
-fn visibility_unwind_save() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -120,5 +111,40 @@ fn visibility_unwind_save() {
             root.join("level.dat").exists(),
             "actual outside save must complete"
         );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn integrated_save_completes_while_the_client_has_a_render_pass() {
+    use horizon_client::join_seq::visibility::{PassLease, Visibility};
+    use std::sync::mpsc;
+
+    let root = tempfile::tempdir().unwrap();
+    with_save_game(root.path(), |game| {
+        game.options.execution_role = execution_role::ExecutionRole::IntegratedServer;
+        let level = root.path().join("level.dat");
+        std::thread::scope(|scope| {
+            let (ready, held) = mpsc::sync_channel(0);
+            let (release, wait) = mpsc::channel::<()>();
+            let window = scope.spawn(move || {
+                let _render_pass = Visibility::default().enter();
+                ready.send(()).unwrap();
+                let _ = wait.recv();
+            });
+            held.recv().unwrap();
+            {
+                let _local_pass = PassLease::enter();
+                assert_eq!(
+                    game.save_game().unwrap_err().to_string(),
+                    "entity pass is lifted"
+                );
+                assert!(!level.exists());
+            }
+            game.save_game().unwrap();
+            assert!(level.exists(), "the authoritative world was not saved");
+            drop(release);
+            window.join().unwrap();
+        });
     });
 }

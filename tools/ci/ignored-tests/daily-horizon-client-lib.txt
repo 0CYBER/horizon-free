@@ -62,7 +62,6 @@ horizon-client-lib export::sink::tests::protocol_probe_times_out_when_a_helper_k
 horizon-client-lib export::sink::tests::slow_encoder_applies_backpressure_and_receives_frames_in_order lib daily child-process
 horizon-client-lib export::sink::tests::successful_encoder_exit_kills_helpers_without_inherited_pipes lib daily child-process
 horizon-client-lib item_render::special_parts_tests::a_parts_tint_reaches_the_vertices_as_a_vanilla_tint_does lib daily resources
-horizon-client-lib join_seq::visibility::tests::unbound_passes_block_until_restore_consumption_and_unwind lib daily child-process
 horizon-client-lib lan::conn::tests::profession_mod_missing_refused_before_pairing lib daily child-process
 horizon-client-lib lan::entity::tests::send_on_threads_matches_send_in_order lib daily slow
 horizon-client-lib lan::hub::tests::collision_exclusion_tests::the_server_checks_a_guests_moves_through_the_same_exclusions_as_its_client lib daily resources

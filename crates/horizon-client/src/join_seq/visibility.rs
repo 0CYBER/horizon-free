@@ -5,26 +5,32 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-/// Process-wide outstanding entity passes, including unbound owners and parked levels.
-/// Admission is serialized with lending on the game thread.
-static PASSES: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Unsettled passes opened on this game thread, including parked levels and
+    /// unbound owners. Lending and save admission both start on the owning thread;
+    /// another game's render or simulation cannot block it.
+    static PASSES: Arc<AtomicUsize> = Arc::default();
+}
 
 pub fn passes_settled() -> bool {
-    PASSES.load(Ordering::Relaxed) == 0
+    PASSES.with(|passes| passes.load(Ordering::Acquire) == 0)
 }
 
 /// Lexical obligation for rows held outside their authoritative storage.
 #[derive(Debug)]
-pub struct PassLease(());
+pub struct PassLease(Arc<AtomicUsize>);
 impl PassLease {
     pub fn enter() -> Self {
-        PASSES.fetch_add(1, Ordering::Relaxed);
-        Self(())
+        PASSES.with(|passes| {
+            passes.fetch_add(1, Ordering::Relaxed);
+            Self(Arc::clone(passes))
+        })
     }
 }
 impl Drop for PassLease {
     fn drop(&mut self) {
-        PASSES.fetch_sub(1, Ordering::Relaxed);
+        // A pass moved to a helper still belongs to the thread that lent it.
+        self.0.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -112,24 +118,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "daily"]
     fn unbound_passes_block_until_restore_consumption_and_unwind() {
-        // The admission signal is process-wide. Isolate this test from other
-        // tests legitimately lifting owners concurrently in the same runner.
-        const CHILD: &str = "HORIZON_SAVE_LEASE_TEST_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--include-ignored", "--exact", "join_seq::visibility::tests::unbound_passes_block_until_restore_consumption_and_unwind"])
-                .env(CHILD, "1")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "test=join_seq::visibility::tests::unbound_passes_block_until_restore_consumption_and_unwind exit_code={:?} category=fixture-child-failed",
-                output.status.code()
-            );
-            return;
-        }
         assert!(passes_settled());
         let mut list = JoinList::<Row>::default();
         list.push(row());
@@ -153,6 +142,40 @@ mod tests {
         }));
         assert!(panic.is_err());
         assert!(passes_settled());
+
+        let lease = PassLease::enter();
+        std::thread::scope(|scope| {
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            let worker = scope.spawn(move || {
+                // Keep the originating thread busy until the helper releases its lease.
+                let _lease = lease;
+                let _ = wait.recv();
+                assert!(passes_settled());
+            });
+            assert!(!passes_settled());
+            drop(release);
+            worker.join().unwrap();
+        });
+        assert!(passes_settled());
+    }
+
+    #[test]
+    fn independent_thread_pass_does_not_delay_owner_save() {
+        std::thread::scope(|scope| {
+            let (ready, held) = std::sync::mpsc::sync_channel(0);
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            let window = scope.spawn(move || {
+                let mut entities = JoinList::<Row>::default();
+                entities.push(row());
+                let _render_pass = entities.lift();
+                ready.send(()).unwrap();
+                let _ = wait.recv();
+            });
+            held.recv().unwrap();
+            assert!(passes_settled());
+            drop(release);
+            window.join().unwrap();
+        });
     }
 
     #[test]

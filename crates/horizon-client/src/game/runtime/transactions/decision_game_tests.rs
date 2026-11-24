@@ -335,8 +335,7 @@ fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
 
 // A decision abandoned by a listener unwind: the action savepoint closes, its
 // save-gate lease is released (saving is admitted again), and the deferred
-// drop is never published, even when the root commits. Like the others here,
-// run serially (--test-threads=1): the save gate is process-wide.
+// drop is never published, even when the root commits.
 #[test]
 #[ignore = "daily"]
 fn abandoned_token_releases_real_save_gate_and_publishes_nothing() {

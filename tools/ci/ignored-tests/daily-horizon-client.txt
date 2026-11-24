@@ -260,7 +260,8 @@ horizon-client game::transaction_entities_tests::ids_never_go_back_and_a_stale_h
 horizon-client game::transaction_entities_tests::late_id_kinds_spawned_then_aborted_are_removed lib daily child-process
 horizon-client game::transaction_entities_tests::outside_a_transaction_joins_and_leaves_are_told_at_the_call lib daily child-process
 horizon-client game::viewed_worlds::switch::tests::a_level_opened_after_login_is_forgotten_once_left lib daily resources
-horizon-client game::visibility_unwind_tests::visibility_listener_unwind_does_not_block_an_outside_save lib daily child-process
+horizon-client game::visibility_unwind_tests::integrated_save_completes_while_the_client_has_a_render_pass lib daily resources
+horizon-client game::visibility_unwind_tests::visibility_listener_unwind_does_not_block_an_outside_save lib daily resources
 horizon-client game::wake_time::tests::a_later_listener_reads_and_replaces_the_earlier_adjustment lib daily resources
 horizon-client game::wind::wind_charged_tests::a_mobs_burst_leaves_vehicles_alone_with_mob_griefing_off lib daily game-boot
 horizon-client game::wind::wind_charged_tests::a_silent_wind_charge_bursts_without_a_sound lib daily game-boot

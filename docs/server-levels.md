@@ -86,6 +86,10 @@ its own region folder, as in vanilla (`DIM-1`, `DIM1`). A level closed for being
 Each player's saved data holds its dimension (`Dimension`). A guest who leaves in
 the Nether, or whose host saves and quits, joins again in the Nether where it was.
 
+The server refuses to save while its own entity pass or an unfinished transaction holds state
+outside resident storage. Passes on the independent integrated client's render thread do not
+block the save.
+
 ## What's checked
 
 `python3 tools/lan_e2e.py --check portals --check levels`:
