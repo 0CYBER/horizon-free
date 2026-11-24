@@ -5,7 +5,7 @@
 //! its armour stand.
 use super::Game;
 use super::native_block_entity_draw::{BlockEntityDraw, place_turning};
-use glam::{Mat4, Vec3};
+use glam::{Affine3A, EulerRot, Mat4, Quat, Vec3};
 use horizon_client::{
     block_entity_render::diffuse_lights,
     hud::{HudAtlas, HudBatch},
@@ -14,13 +14,91 @@ use horizon_client::{
 };
 use horizon_world::level::data::state_flags;
 use mod_api::{
-    SCENE_MAX_TEXTURED_QUADS, SceneError, SceneTexturedQuad, SceneView, SceneWithQuadsError,
+    SCENE_MAX_TEXTURED_QUADS, SceneError, SceneSection, SceneSectionError, SceneTexturedQuad,
+    SceneView, SceneWithQuadsError,
 };
 /// Prepared scene data. Entity fields remain borrowed for the duration of the draw.
 pub(super) struct SceneBlock<'a> {
     pub pos: [i32; 3],
     pub state: horizon_world::registry::BlockStateId,
     pub entity: Option<&'a mod_api::SceneBlockEntity>,
+}
+
+struct SectionPose {
+    range: std::ops::Range<usize>,
+    transform: Affine3A,
+}
+
+pub(super) struct SceneBlocks<'a, 'b> {
+    pub(super) cells: &'a [SceneBlock<'b>],
+    poses: Vec<SectionPose>,
+}
+
+impl<'a, 'b> SceneBlocks<'a, 'b> {
+    pub(super) fn stationary(cells: &'a [SceneBlock<'b>]) -> Self {
+        Self {
+            cells,
+            poses: Vec::new(),
+        }
+    }
+
+    pub(super) fn posed(
+        cells: &'a [SceneBlock<'b>],
+        sections: &[SceneSection],
+    ) -> Result<Self, SceneSectionError> {
+        let mut poses = Vec::with_capacity(sections.len().min(cells.len()));
+        let mut previous_end = 0;
+        for (index, section) in (0u32..).zip(sections) {
+            let invalid = SceneSectionError::BadSection { index };
+            let start = section.first as usize;
+            let end = start.checked_add(section.count as usize).ok_or(invalid)?;
+            if start < previous_end || start == end || end > cells.len() {
+                return Err(invalid);
+            }
+            let [x, y, z] = section.rotation.map(f32::to_radians);
+            let pivot = Vec3::from_array(section.pivot);
+            let translation = Vec3::from_array(section.translation);
+            if ![x, y, z].into_iter().all(f32::is_finite)
+                || !pivot.is_finite()
+                || !translation.is_finite()
+            {
+                return Err(invalid);
+            }
+            let rotation = Quat::from_euler(EulerRot::ZYX, z, y, x);
+            let transform = Affine3A::from_rotation_translation(
+                rotation,
+                translation + (pivot - rotation * pivot),
+            );
+            if !transform.is_finite() {
+                return Err(invalid);
+            }
+            poses.push(SectionPose {
+                range: start..end,
+                transform,
+            });
+            previous_end = end;
+        }
+        Ok(Self { cells, poses })
+    }
+
+    /// Blocks and their culling group, in the original order; group 0 is stationary.
+    fn iter(&self) -> impl Iterator<Item = (&SceneBlock<'b>, usize, Option<&Affine3A>)> {
+        let mut sections = self.poses.iter().enumerate().peekable();
+        self.cells.iter().enumerate().map(move |(index, block)| {
+            if sections
+                .peek()
+                .is_some_and(|(_, pose)| pose.range.end <= index)
+            {
+                sections.next();
+            }
+            match sections.peek() {
+                Some((group, pose)) if pose.range.contains(&index) => {
+                    (block, group + 1, Some(&pose.transform))
+                }
+                _ => (block, 0, None),
+            }
+        })
+    }
 }
 
 /// A scene quad projected into GUI coordinates, with atlas UVs and ABGR colour.
@@ -178,7 +256,7 @@ impl Game<'_> {
     pub(super) fn draw_scene_quads(
         &self,
         batch: &mut HudBatch,
-        blocks: &[SceneBlock<'_>],
+        blocks: &SceneBlocks<'_, '_>,
         frame: SceneFrame,
         extra: impl FnOnce(&mut Vec<SceneQuad>),
     ) -> Result<(), mod_api::SceneError> {
@@ -195,17 +273,22 @@ impl Game<'_> {
             return Err(mod_api::SceneError::BadView);
         }
         // The Game boundary prepared every state before any drawing began.
-        let occupied: std::collections::HashMap<[i32; 3], _> =
-            blocks.iter().map(|b| (b.pos, b.state)).collect();
-        let solid = |pos: [i32; 3]| {
-            occupied.get(&pos).is_some_and(|&state| {
+        let occupied: std::collections::HashMap<_, _> = blocks
+            .iter()
+            .map(|(block, group, _)| ((group, block.pos), block.state))
+            .collect();
+        let solid = |group, pos| {
+            occupied.get(&(group, pos)).is_some_and(|&state| {
                 self.res.behaviours().facts(state).flags & state_flags::SOLID_RENDER != 0
             })
         };
         let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
         let tables = &self.pack.context.tables;
         let mut quads = Vec::new();
-        for block in blocks {
+        for (block, group, transform) in blocks.iter() {
+            let point = |pos| transform.map_or(pos, |pose| pose.transform_point3(pos));
+            let direction =
+                |normal| transform.map_or(normal, |pose| pose.transform_vector3(normal));
             let at = Vec3::new(
                 block.pos[0] as f32,
                 block.pos[1] as f32,
@@ -222,7 +305,10 @@ impl Game<'_> {
             for face in models.iter().flat_map(|(_, model)| &model.faces) {
                 if let Some(cull) = face.quad.cull {
                     let [dx, dy, dz] = step(cull);
-                    if solid([block.pos[0] + dx, block.pos[1] + dy, block.pos[2] + dz]) {
+                    if solid(
+                        group,
+                        [block.pos[0] + dx, block.pos[1] + dy, block.pos[2] + dz],
+                    ) {
                         continue;
                     }
                 }
@@ -235,7 +321,7 @@ impl Game<'_> {
                     continue;
                 };
                 let [nx, ny, nz] = step(face.quad.facing);
-                let normal = Vec3::new(nx as f32, ny as f32, nz as f32);
+                let normal = direction(Vec3::new(nx as f32, ny as f32, nz as f32));
                 let mut color = shaded(0xFFFF_FFFF, face_shade(normal));
                 if let Some(t) = tables.default_tint(block.state, face.quad.tint_index, grass) {
                     color = horizon_client::hud_layout::multiply(
@@ -244,7 +330,7 @@ impl Game<'_> {
                     );
                 }
                 quads.push(SceneQuad {
-                    corners: face.quad.positions.map(|p| at + Vec3::from_array(p)),
+                    corners: face.quad.positions.map(|p| point(at + Vec3::from_array(p))),
                     uv: face.quad.uv.map(|uv| {
                         [
                             sprite.u0 + uv[0] * (sprite.u1 - sprite.u0),
@@ -287,11 +373,12 @@ impl Game<'_> {
                         normal = Vec3::new(f32::from(nx), f32::from(ny), f32::from(nz))
                             .normalize_or_zero();
                     }
+                    let normal = direction(normal);
                     // `entity.wgsl`: |w| >= 0.5 is shaded by the normal; smaller
                     // keeps the colour baked in (quads, cubes, items, text).
                     let unbaked = w.unsigned_abs() >= 64;
                     quads.push(SceneQuad {
-                        corners,
+                        corners: corners.map(point),
                         uv: q.each_ref().map(|v| v.uv),
                         color: if unbaked {
                             shaded(q[0].color, face_shade(normal))

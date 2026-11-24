@@ -240,6 +240,62 @@ impl Scene {
     }
 }
 
+/// A rigid pose for a consecutive group in [`Scene::blocks`], without moving
+/// the scene camera or rounding its blocks to different cells.
+#[derive(Clone, Copy, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneSection {
+    /// Index of the first block in the section.
+    pub first: u32,
+    /// Number of blocks in the section, at least one.
+    pub count: u32,
+    /// Translation in scene axes, in blocks, applied after rotation.
+    pub translation: [f32; 3],
+    /// Angles in degrees, applied about the scene's X, Y, then Z axes.
+    pub rotation: [f32; 3],
+    /// Rotation center in the original scene coordinates, in blocks.
+    pub pivot: [f32; 3],
+}
+
+impl SceneSection {
+    /// Pose `count` blocks starting at `first` around `pivot`, then translate them.
+    pub fn new(
+        first: u32,
+        count: u32,
+        translation: [f32; 3],
+        rotation: [f32; 3],
+        pivot: [f32; 3],
+    ) -> Self {
+        Self {
+            first,
+            count,
+            translation,
+            rotation,
+            pivot,
+        }
+    }
+}
+
+/// Why a draw with posed sections was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum SceneSectionError {
+    /// The same refusal as an ordinary `DrawContext::draw_scene`.
+    Scene(SceneError),
+    /// The section had an empty, overlapping, unsorted or out-of-range block
+    /// span, or a pose that could not be represented.
+    BadSection {
+        /// Index in the caller's section list.
+        index: u32,
+    },
+}
+
+impl From<SceneError> for SceneSectionError {
+    fn from(error: SceneError) -> Self {
+        Self::Scene(error)
+    }
+}
+
 /// Why `draw_scene` refused a scene. Nothing of a refused scene is drawn, except for
 /// [`TooManyScenes`](Self::TooManyScenes), which draws the blocks and the scene's last
 /// state.

@@ -31,6 +31,27 @@ if let Err(why) = event.batch.draw_scene([12.0, 20.0, 140.0, 110.0], &scene, vie
 }
 ```
 
+## Moving a section
+
+Keep the blocks in their original cells. To lift or rotate a part of the structure, group those
+blocks consecutively in `scene.blocks` and draw the scene with a `SceneSection` for that range:
+
+```rust
+use mod_api::SceneSection;
+
+// Rotate blocks 2–5 about the hinge, then lift them half a block.
+let door = SceneSection::new(2, 4, [0.0, 0.5, 0.0], [0.0, door_angle, 0.0], [2.0, 0.0, 1.0]);
+event.batch.draw_scene_with_sections(rect, &scene, view, &[door])?;
+```
+
+The angles are degrees around scene X, Y, then Z; the pivot and the translation are in blocks.
+List multiple sections in block-index order with no overlaps. Blocks outside the sections stay put.
+A section's blocks and block-entity drawings move together, testing depth against the rest of the
+scene. Faces at a moving boundary are kept so pulling a section away exposes both sides.
+
+A pose changes drawing only. The scene clock, block animate ticks and particle collisions still use
+the original cells; the scene's separate entity and particle positions do not follow the section.
+
 ## Entities
 
 A `SceneEntity` holds the same `GuiEntity` that `DrawContext::entity` draws: a new entity

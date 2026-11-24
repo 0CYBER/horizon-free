@@ -156,6 +156,26 @@ pub trait DrawContext {
     ) -> Result<(), SceneWithQuadsError> {
         Err(SceneWithQuadsError::Scene(SceneError::Unavailable))
     }
+    /// Draw one scene, with rigid poses on selected ranges of its blocks.
+    /// Pass sections in increasing block-index order, with nonempty,
+    /// nonoverlapping ranges. Blocks outside the ranges stay still. Model and
+    /// block-entity geometry move together. Culling against a solid neighbor
+    /// only applies within the same section (or among the still blocks), so
+    /// pulling a section away exposes both sides. All geometry shares one
+    /// depth pass, including untouched entities and particles.
+    ///
+    /// The poses change drawing only: the clock, block simulation, and
+    /// particles' collision grid still use the original cells. Use an empty
+    /// section slice for the same draw as [`draw_scene`](Self::draw_scene).
+    fn draw_scene_with_sections(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        sections: &[SceneSection],
+    ) -> Result<(), SceneSectionError> {
+        Err(SceneError::Unavailable.into())
+    }
     /// `GuiGraphics.enableScissor`: what this hook call draws from now on, until the matching
     /// [`pop_clip`](Self::pop_clip), is cut to `rect` (`[x, y, w, h]` in GUI pixels, as
     /// [`fill`](Self::fill) takes it), the visible part of a sprite, glyph or item kept.

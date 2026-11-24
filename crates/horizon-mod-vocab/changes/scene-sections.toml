@@ -1,0 +1,3 @@
+ids = ["method:DrawContext::draw_scene_with_sections", "type:SceneSection", "type:SceneSectionError"]
+why = "Translate and rotate ranges of scene blocks about a pivot without rebuilding their grid, losing outside faces, or drawing separate depth passes. Block entity geometry follows the blocks."
+migrate = "Additive. Keep draw_scene for fixed scenes; call draw_scene_with_sections with sorted nonoverlapping sections for animated ranges. Scene and SceneBlock wire data are unchanged."

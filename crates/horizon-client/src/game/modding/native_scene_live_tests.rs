@@ -193,6 +193,70 @@ fn draw(game: &super::Game<'_>, scene: &Scene, view: SceneView) -> (Result<(), S
 
 #[test]
 #[ignore = "daily"]
+fn posed_scene_sections_move_independently_in_one_depth_pass() {
+    use crate::game::api_values::TryIntoApi as _;
+    use mod_api::{SceneSection, SceneSectionError};
+
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let stone = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone")
+            .unwrap()
+            .try_into_api()
+            .unwrap();
+        let scene = Scene::new(vec![
+            mod_api::SceneBlock::new([0, 0, 0], stone, None),
+            mod_api::SceneBlock::new([1, 0, 0], stone, None),
+        ]);
+        let view = SceneView::new([0.0; 3], 0.0, 0.0, 20.0);
+        let pose = SceneSection::new(1, 1, [0.25, 0.75, 0.0], [0.0, 90.0, 0.0], [0.0; 3]);
+        let mut batch = HudBatch::scratch([320, 240]);
+        let mut context = GameDrawContext::new(game, &mut batch);
+        let overlapping = SceneSection::new(0, 2, [0.0; 3], [0.0; 3], [0.0; 3]);
+        assert_eq!(
+            context.draw_scene_with_sections(RECT, &scene, view, &[overlapping, pose]),
+            Err(SceneSectionError::BadSection { index: 1 })
+        );
+        drop(context);
+        assert!(batch.vertices.is_empty());
+
+        GameDrawContext::new(game, &mut batch)
+            .draw_scene_with_sections(RECT, &scene, view, &[pose])
+            .unwrap();
+        let ends = |include: fn(f32) -> bool| {
+            batch
+                .vertices
+                .iter()
+                .filter(|v| include(v.pos[1]))
+                .map(|v| v.pos[0])
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), x| {
+                    (lo.min(x), hi.max(x))
+                })
+        };
+        // With the unturned camera, pixel x is 60 - 20 * scene x.
+        // The raised cube turns [1,2] of X into [0,1] of -Z and [0,1] of Z
+        // into [0,1] of X, then shifts right in scene axes by a quarter block.
+        for (got, want) in [
+            (ends(|y| y < 20.0), (35.0, 55.0)),
+            (ends(|y| y > 48.0), (40.0, 60.0)),
+        ] {
+            assert!(
+                (got.0 - want.0).abs() < 0.001 && (got.1 - want.1).abs() < 0.001,
+                "{got:?}"
+            );
+        }
+        assert_eq!(
+            batch.blends.len(),
+            1,
+            "both cubes test against the same depth buffer"
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
 fn textured_faces_use_the_real_atlas_and_share_the_scene_clip_and_depth() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
         let scene = Scene::new(vec![mod_api::SceneBlock::new(

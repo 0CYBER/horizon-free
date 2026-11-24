@@ -9,7 +9,7 @@
 use super::api_values::TryIntoEngine as _;
 use super::{
     Game,
-    native_scene::{SceneBlock, SceneFrame, SceneQuad, face_shade, shaded},
+    native_scene::{SceneBlock, SceneBlocks, SceneFrame, SceneQuad, face_shade, shaded},
 };
 use glam::{DVec3, Quat, Vec3};
 use horizon_client::{
@@ -209,7 +209,7 @@ impl Game<'_> {
     pub(super) fn native_draw_scene(
         &self,
         batch: &mut HudBatch,
-        blocks: &[SceneBlock<'_>],
+        blocks: &SceneBlocks<'_, '_>,
         scene: &Scene,
         frame: SceneFrame,
     ) -> Result<(), SceneError> {
@@ -247,7 +247,7 @@ impl Game<'_> {
             .live_scenes
             .try_borrow_mut()
             .map_err(|_| SceneError::Unavailable)?;
-        let key = scene_key(blocks);
+        let key = scene_key(blocks.cells);
         let at = scenes
             .live
             .iter()
@@ -276,7 +276,7 @@ impl Game<'_> {
         }
         let fresh = at.is_none_or(|i| !same(&scenes.live[i]) || clock.tick < scenes.live[i].tick);
         let i = if fresh {
-            let made = self.live_scene(blocks, scene, owner, clock, key)?;
+            let made = self.live_scene(blocks.cells, scene, owner, clock, key)?;
             match at {
                 Some(i) => {
                     scenes.live[i] = made;
@@ -311,7 +311,7 @@ impl Game<'_> {
     fn draw_live(
         &self,
         batch: &mut HudBatch,
-        blocks: &[SceneBlock<'_>],
+        blocks: &SceneBlocks<'_, '_>,
         frame: SceneFrame,
         l: &mut Live,
         partial: f32,
