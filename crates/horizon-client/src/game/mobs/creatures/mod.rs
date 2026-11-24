@@ -1645,8 +1645,8 @@ impl Game<'_> {
         // `score_destroyed_entities`): LivingEntity.die does not reset them.
         // Raider.die's hero and Villager.tellWitnessesThatIWasMurdered go to
         // the causing entity, not the credited player: a tame wolf's kill is
-        // neither its owner's heroism nor a murder by them.
-        let slain_by_player = by_player && !killed_by_mob(m);
+        // neither its owner's heroism nor a murder by them, nor is a fall's.
+        let slain_by_player = by_player && super::combat::killed_by_player(m);
         self.raider_died(m, slain_by_player, killer.flatten());
         self.villager_murdered(m, slain_by_player, killer.flatten());
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];

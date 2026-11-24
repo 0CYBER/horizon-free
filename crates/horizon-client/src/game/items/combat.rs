@@ -933,6 +933,21 @@ fn fall_location_of(name: &str, trapdoor: bool) -> &'static str {
     }
 }
 
+/// `DamageSource.getEntity()` of a mob's killing blow: the entity that caused
+/// it, which is no player for a fall, lava, fire or the void.
+fn causing_entity(m: &Mob) -> Option<Who> {
+    m.last_damage.and_then(|(d, _)| d.attacker)
+}
+
+/// Whether the killing blow's causing entity was a player: `Raider.die` grants
+/// hero of the village to that entity, not to the player `getKillCredit` names.
+/// `Villager.die` gossips about any causing entity, a mob's included, under its
+/// UUID; no player reputation reads a mob's, so only a player's blow is a murder
+/// here.
+pub(super) fn killed_by_player(m: &Mob) -> bool {
+    matches!(causing_entity(m), Some(Who::Player))
+}
+
 /// Whether the causing entity deals `kind` itself (`DamageSources.mobAttack`,
 /// `playerAttack`, a mace's or a spear's, a ram's no-aggro blow, a sting, a
 /// sonic boom, thorns): the fork's one answer lives with the damage sources.
