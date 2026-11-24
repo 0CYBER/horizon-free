@@ -268,6 +268,8 @@ impl Game<'_> {
         self.map_patches.clear();
         self.text_patches.get_mut().clear();
         self.kept_block_entities.get_mut().clear();
+        // Mods' dynamic textures keep their names: only their pixels go up again.
+        self.dynamic_textures.forget_uploads();
         horizon_client::ui_theme::reset_atlas();
     }
 

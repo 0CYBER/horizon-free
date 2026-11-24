@@ -9,6 +9,7 @@ pub(crate) mod client_reload;
 pub(crate) mod client_session;
 pub(crate) mod closing_save;
 pub(crate) mod debug_entries;
+pub(crate) mod dynamic_texture;
 pub(crate) mod entity_layers;
 pub(crate) mod entity_renderers;
 pub(crate) mod equipment_render;

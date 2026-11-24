@@ -558,6 +558,9 @@ impl Game<'_> {
             .extras
             .skip_modded_splashes_if_vanilla_modified;
         self.gui = gui.with_splashes(&self.pack.source, &self.vanilla_root(), skip);
+        // Client mods' dynamic textures keep their names and places in the new atlas's page,
+        // and their kept pixels upload with the next frame: no mod uploads them again.
+        self.dynamic_textures.rebind(&mut self.gui.atlas);
         self.standalone_geometry = standalone_geometry;
         self.instance_groups.borrow_mut().clear();
         // The new atlas's skin and map slots are blank: players and maps

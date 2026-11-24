@@ -2,7 +2,7 @@ use super::{HudAtlas, MISSING_SPRITE, Rect};
 
 /// The packed key of a GUI sprite id: `minecraft:boss_bar/pink_background` is
 /// `gui/sprites/boss_bar/pink_background`, another namespace's `ns:gui/sprites/...`.
-fn atlas_key_of_gui_sprite(id: &str) -> String {
+pub(super) fn atlas_key_of_gui_sprite(id: &str) -> String {
     match id.split_once(':') {
         Some(("minecraft", path)) => format!("gui/sprites/{path}"),
         Some((namespace, path)) => format!("{namespace}:gui/sprites/{path}"),
