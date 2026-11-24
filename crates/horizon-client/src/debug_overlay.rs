@@ -133,18 +133,26 @@ pub fn labelled_pass_lines(label: &str, passes: &[(String, f32)]) -> Vec<String>
         return Vec::new();
     }
     let total: f32 = passes.iter().map(|p| p.1).sum();
-    let mut lines = vec![format!("{label}: {total:.2} ms in {} passes", passes.len())];
+    let mut lines = vec![format!(
+        "{label}: {} ms in {} passes",
+        java_number::format_fixed(f64::from(total), 2),
+        passes.len()
+    )];
     let mut costliest: Vec<&(String, f32)> = passes.iter().collect();
     costliest.sort_by(|a, b| b.1.total_cmp(&a.1));
-    lines.extend(
-        costliest
-            .iter()
-            .take(SHOWN)
-            .map(|(name, ms)| format!("{name}: {ms:.2} ms")),
-    );
+    lines.extend(costliest.iter().take(SHOWN).map(|(name, ms)| {
+        format!(
+            "{name}: {} ms",
+            java_number::format_fixed(f64::from(*ms), 2)
+        )
+    }));
     if costliest.len() > SHOWN {
         let rest: f32 = costliest[SHOWN..].iter().map(|p| p.1).sum();
-        lines.push(format!("{} more: {rest:.2} ms", costliest.len() - SHOWN));
+        lines.push(format!(
+            "{} more: {} ms",
+            costliest.len() - SHOWN,
+            java_number::format_fixed(f64::from(rest), 2)
+        ));
     }
     lines
 }
@@ -159,9 +167,9 @@ pub fn compact_count(n: u64) -> String {
     let suffix = ["", "k", "M", "G", "T"][unit];
     match value {
         _ if unit == 0 => n.to_string(),
-        v if v < 9.995 => format!("{v:.2}{suffix}"),
-        v if v < 99.95 => format!("{v:.1}{suffix}"),
-        v => format!("{v:.0}{suffix}"),
+        v if v < 9.995 => format!("{}{suffix}", java_number::format_fixed(v, 2)),
+        v if v < 99.95 => format!("{}{suffix}", java_number::format_fixed(v, 1)),
+        v => format!("{}{suffix}", java_number::format_fixed(v, 0)),
     }
 }
 
@@ -180,7 +188,7 @@ pub fn pass_detail_lines(
     let mut lines = vec![tr("horizon.debug.pass_detail.title", &[&tr(mode, &[])])];
     for (pass, parts) in parts {
         for (part, ms) in parts {
-            let ms = format!("{ms:.2}");
+            let ms = java_number::format_fixed(f64::from(*ms), 2);
             lines.push(tr("horizon.debug.pass_detail.part", &[pass, part, &ms]));
         }
     }
@@ -190,7 +198,7 @@ pub fn pass_detail_lines(
     }
     let per_pixel = |fragments: u64, pixels: u64| match support.fragment_unit {
         Some(unit) if pixels > 0 => {
-            format!("{:.2}", unit.pixels_of(fragments) as f64 / pixels as f64)
+            java_number::format_fixed(unit.pixels_of(fragments) as f64 / pixels as f64, 2)
         }
         _ => "?".to_owned(),
     };
@@ -284,7 +292,7 @@ pub fn refresh_rate_label(hz: f64) -> String {
     if hz == hz.round() {
         format!("{}", hz as i64)
     } else {
-        format!("{hz:.2}")
+        java_number::format_fixed(hz, 2)
     }
 }
 
@@ -976,5 +984,13 @@ mod tests {
         assert_eq!(lines[1], "p9: 9.00 ms");
         assert_eq!(lines[8], "p2: 2.00 ms");
         assert_eq!(lines[9], "2 more: 1.00 ms");
+    }
+
+    #[test]
+    fn overlay_and_refresh_labels_round_decimal_midpoints_half_up() {
+        assert_eq!(refresh_rate_label(1.005), "1.01");
+        assert_eq!(compact_count(1_005), "1.01k");
+        assert_eq!(compact_count(10_250), "10.3k");
+        assert_eq!(compact_count(102_500), "103k");
     }
 }
