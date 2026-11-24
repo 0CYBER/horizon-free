@@ -1118,6 +1118,7 @@ impl Game<'_> {
                         .then(|| g.entity_pick_result(p.id))
                         .flatten()
                 });
+                self.guest_pick_avatar_profile(conn, p.id, p.include_data);
             }
             _ => {}
         }

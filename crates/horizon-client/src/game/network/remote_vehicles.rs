@@ -464,6 +464,18 @@ impl Game<'_> {
         let Some(id) = self.riding else {
             return Ok(false);
         };
+        // LocalPlayer.aiStep's pending auto-jump: `canAutoJump` needs a walking
+        // player, so one cannot start in a vehicle, but the tick after boarding
+        // still counts the last one down, presses jump (`input.makeJump`) and
+        // keeps that jump from toggling flight (`!wasAutoJump`).
+        let mut keys = keys;
+        if let Some(p) = self.player.as_mut() {
+            p.was_auto_jump = p.auto_jump_time > 0;
+            if p.was_auto_jump {
+                p.auto_jump_time -= 1;
+                keys.jump = true;
+            }
+        }
         // LocalPlayer.aiStep runs its sprint decisions in a vehicle too: `canSprint` and
         // this client's authority stand in for food (`isSprintingPossible`).
         let (can_sprint, local) = self
@@ -484,6 +496,7 @@ impl Game<'_> {
             // Another animal moves on the server with the rider's input
             // (PlayerInput); the rider sits where `positionRider` puts it.
             self.position_rider();
+            self.rider_flight_toggle(keys.jump);
             return Ok(true);
         }
         // Generic entities are valid vehicles too (plugins use displays as seats).
@@ -523,6 +536,7 @@ impl Game<'_> {
                     p.velocity = Vec3::ZERO;
                     p.fall_distance = 0.0;
                 }
+                self.rider_flight_toggle(keys.jump);
                 return Ok(true);
             }
         }
@@ -598,7 +612,20 @@ impl Game<'_> {
             p.velocity = Vec3::ZERO;
             p.fall_distance = 0.0;
         }
+        self.rider_flight_toggle(keys.jump);
         Ok(true)
+    }
+
+    /// `LocalPlayer.aiStep`'s creative-flight toggle for a rider, whose tick
+    /// runs here instead of the walking one. `Player.tick` counts the
+    /// jump-trigger window down and clears a passenger's `onGround` before
+    /// `aiStep`, so the mount must be jumpable (`Player.jumpableVehicle`) and
+    /// the toggle's jump from the ground never runs for a rider.
+    fn rider_flight_toggle(&mut self, jumping: bool) {
+        let vehicle_jumpable = self.jumpable_mount();
+        if let Some(player) = self.player.as_mut() {
+            player.creative_flight_toggle(jumping, vehicle_jumpable);
+        }
     }
 
     /// `LocalPlayer.tick` for a passenger: the boat it controls goes to the
@@ -860,6 +887,10 @@ fn mount_move(m: &Mob) -> S {
         on_ground: m.on_ground,
     })
 }
+
+#[cfg(test)]
+#[path = "remote_vehicles/creative_flight_tests.rs"]
+mod creative_flight_tests;
 
 /// Avatar's VEHICLE attachment scales independently of the vehicle's seat.
 fn generic_player_seat(at: glam::DVec3, before: glam::DVec3, scale: f32) -> (Vec3, Vec3) {

@@ -860,6 +860,28 @@ impl Game<'_> {
             }
         }
     }
+    /// `FetchProfileCommand.printForAvatar`: an avatar's own profile
+    /// (a player's `GameProfile`), reported as `reportResolvedProfile` does.
+    pub(in crate::game) fn report_avatar_profile(
+        &mut self,
+        id: u128,
+        name: &str,
+        properties: &[horizon_protocol::packets::login::Property],
+    ) {
+        let profile = ResolvedProfile {
+            id,
+            name: name.to_owned(),
+            properties: properties
+                .iter()
+                .map(|p| (p.name.clone(), p.value.clone(), p.signature.clone()))
+                .collect(),
+        };
+        self.report_resolved_profile(
+            "commands.fetchprofile.entity.success",
+            Text::literal(name),
+            &profile,
+        );
+    }
     /// `FetchProfileCommand.reportResolvedProfile`: the profile as
     /// `ResolvableProfile.CODEC` encodes it (`id`, `name`, and `properties`
     /// only when there are some), four clickable actions and the head object,

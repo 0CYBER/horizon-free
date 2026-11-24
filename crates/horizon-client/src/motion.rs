@@ -1079,31 +1079,13 @@ impl MotionWorld<'_, '_, '_> {
         self.player.was_in_powder_snow = self.player.in_powder_snow;
         self.player.in_powder_snow = false;
         self.player.old_position = self.player.position;
-        if self.player.jump_trigger_time > 0 {
-            self.player.jump_trigger_time -= 1;
-        }
         self.player
             .peaceful_regeneration(self.loop_context, self.scene.health_rules)?;
         // LocalPlayer.aiStep: double-tap jump toggles creative flight.
-        let was_jumping = std::mem::replace(&mut self.player.was_jumping, jumping);
-        let flying_before = self.player.flying;
-        if self.player.spectator {
-            self.player.flying = true;
-            self.player.ground.on_ground = false;
-        } else if self.player.may_fly && !was_jumping && jumping && !self.player.was_auto_jump {
-            // `LocalPlayer.aiStep`: mayfly gates the flight toggle, not the
-            // flying state independently supplied by the server's abilities.
-            if self.player.jump_trigger_time == 0 {
-                self.player.jump_trigger_time = 7;
-            } else if !self.player.swimming {
-                self.player.flying = !self.player.flying;
-                if self.player.flying && self.player.ground.on_ground {
-                    self.jump_from_ground()?;
-                }
-                self.player.jump_trigger_time = 0;
-            }
+        let (was_jumping, toggled, jumped) = self.player.creative_flight_toggle(jumping, true);
+        if jumped {
+            self.jump_from_ground()?;
         }
-        let toggled = flying_before != self.player.flying;
         // The server clears the glide flag from the position the client sent
         // last tick, and the client applies it a tick later, before aiStep: a
         // landing glide lasts one more tick on the ground, with no ground

@@ -257,6 +257,8 @@ impl Game<'_> {
         // (`yRotO`/`xRotO`), as the local tick does; `tick` returns before it
         // reaches its own write when this window is a server client.
         self.rope_rot_old = (self.yaw, self.pitch);
+        // Before the tick, and a rider's toggle in `remote_ride`.
+        let was_flying = self.player.as_ref().is_some_and(|p| p.flying);
         // A passenger moves with its vehicle (Entity.rideTick), not by itself.
         let riding = self.screen != Screen::Dead && self.remote_ride(keys, sprint_window)?;
         // The server sends no passenger's position: they sit where their
@@ -283,7 +285,6 @@ impl Game<'_> {
             [player.velocity.x, player.velocity.y, player.velocity.z],
             [player.position.x, player.position.y, player.position.z],
         );
-        let was_flying = player.flying;
         self.sync_player_body();
         // LivingEntity.tickDeath: the local player counts its deathTime once
         // per client tick while dead (the camera's death roll and zoom).

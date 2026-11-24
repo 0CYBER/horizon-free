@@ -1065,10 +1065,17 @@ impl Game<'_> {
         equine::is_equine(species) || horizon_client::mobs::nautilus::is_nautilus(species)
     }
     /// `Player.jumpableVehicle`: a saddled mount that jumps (not a pig or a
-    /// strider, which a saddle only steers).
+    /// strider, which a saddle only steers), and a camel only while it moves
+    /// (`Camel.canJump` adds `!refuseToMove`).
     pub(super) fn jumpable_mount(&self) -> bool {
-        self.mount_index()
-            .is_some_and(|i| self.mobs[i].extra.saddled() && Self::jumps(self.mobs[i].species()))
+        self.remote.as_ref().is_none_or(|r| r.first_passenger)
+            && self.mount_index().is_some_and(|i| {
+                let m = &self.mobs[i];
+                m.extra.saddled()
+                    && Self::jumps(m.species())
+                    && !(crate::mobs::camel::is_camel(m.species())
+                        && crate::mobs::camel::refuse_to_move(m))
+            })
     }
     /// `willPrioritizeJumpInfo`: charging a jump or recharging.
     pub(super) fn mount_jumping(&self) -> bool {

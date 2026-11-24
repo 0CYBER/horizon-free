@@ -1,6 +1,42 @@
 use super::*;
 
 impl PlayerMotion {
+    /// `Player.tick`'s jump-trigger countdown and `LocalPlayer.aiStep`'s
+    /// creative-flight toggle. `vehicle_jumpable` is vanilla's
+    /// `getVehicle() == null || jumpableVehicle() != null`: a rider only
+    /// toggles flight on a jumpable mount. Returns the jump key last tick,
+    /// whether flight changed, and whether the toggle jumped from the ground
+    /// (the caller runs `jumpFromGround`).
+    pub fn creative_flight_toggle(
+        &mut self,
+        jumping: bool,
+        vehicle_jumpable: bool,
+    ) -> (bool, bool, bool) {
+        if self.jump_trigger_time > 0 {
+            self.jump_trigger_time -= 1;
+        }
+        let was_jumping = std::mem::replace(&mut self.was_jumping, jumping);
+        let flying_before = self.flying;
+        let mut jumped = false;
+        if self.spectator {
+            self.flying = true;
+            self.ground.on_ground = false;
+        } else if self.may_fly && !was_jumping && jumping && !self.was_auto_jump {
+            // `LocalPlayer.aiStep`: mayfly gates the flight toggle, not the
+            // flying state independently supplied by the server's abilities.
+            if self.jump_trigger_time == 0 {
+                self.jump_trigger_time = 7;
+            } else if vehicle_jumpable && !self.swimming {
+                self.flying = !self.flying;
+                if self.flying && self.ground.on_ground {
+                    jumped = true;
+                }
+                self.jump_trigger_time = 0;
+            }
+        }
+        (was_jumping, flying_before != self.flying, jumped)
+    }
+
     /// Explicit identity allocation for deterministic reference replay.
     pub fn with_attribute_identities(
         resources: &MotionResources,

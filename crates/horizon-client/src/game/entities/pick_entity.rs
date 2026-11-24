@@ -1,7 +1,7 @@
 //! Pick Block on an entity (`Minecraft.pickBlockOrEntity`'s entity case and
 //! `ServerGamePacketListenerImpl.handlePickItemFromEntity`): the client aims,
 //! the server answers with `Entity.getPickResult`.
-use super::Game;
+use super::{Game, lan_actions::guest_within_entity_range};
 use horizon_client::{items::ItemStack, save::uuid_text};
 use mod_api::{BlockPos, CrosshairTarget, EntityRef};
 
@@ -160,6 +160,43 @@ impl Game<'_> {
             return None;
         };
         Some(ItemStack::new(&item, 1))
+    }
+
+    /// `handlePickItemFromEntity`'s `include_data`: a game master who picks
+    /// an avatar prints its profile (`FetchProfileCommand.printForAvatar`).
+    pub(super) fn guest_pick_avatar_profile(
+        &mut self,
+        conn: u32,
+        id: i32,
+        include_data: bool,
+    ) {
+        if !include_data {
+            return;
+        }
+        let Some(host) = self.lan.as_ref() else {
+            return;
+        };
+        let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        let Some((uuid, name, properties, bounds)) = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.entity_id == id && host.hub.here(g))
+            .map(|g| (g.uuid, g.name.clone(), g.properties.clone(), g.bounds()))
+        else {
+            return;
+        };
+        // `Player.isWithinEntityInteractionRange(entity, 3.0)`, from the acting guest.
+        if !guest_within_entity_range(&host.hub.guests[gi], &bounds, 3.0) {
+            return;
+        }
+        self.as_guest_messaged(conn, |g| {
+            if g.can_use_game_master_blocks() {
+                g.report_avatar_profile(uuid, &name, &properties);
+            }
+        });
     }
 
     /// `Player.isWithinEntityInteractionRange(entity, 3.0)`: the entity's box
