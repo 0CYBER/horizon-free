@@ -1,4 +1,7 @@
 pub mod item {
+    pub mod containers {
+        pub struct ModBlockEntityFields;
+    }
     pub mod menu {
         pub struct MenuButtonContext {
             pub player: u128,

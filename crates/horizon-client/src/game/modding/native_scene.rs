@@ -5,6 +5,7 @@
 //! its armour stand.
 use super::Game;
 use super::native_block_entity_draw::{BlockEntityDraw, place_turning};
+use super::native_scene_live::LiveBlockEntity;
 use glam::{Affine3A, EulerRot, Mat4, Quat, Vec3};
 use horizon_client::{
     block_entity_render::diffuse_lights,
@@ -325,8 +326,9 @@ impl Game<'_> {
     /// block is drawn with its model, full bright and shaded by face, a face
     /// against a solid neighbour in the scene left out; a block with an
     /// `entity` (a mod's) is drawn by `native_block_entity_submit` as in the
-    /// world too, its `spin` parts turning with the game time. What lies
-    /// outside the box is cut off, and the scene has a depth of its own, so
+    /// world too. Its animation follows the scene clock for a kept ticking copy,
+    /// and otherwise the client clock. What lies outside the box is cut off, and
+    /// the scene has a depth of its own, so
     /// it never covers the screen's other drawing or is covered by it but in
     /// the order drawn. `extra` adds quads in the scene's coordinates before
     /// the scene is seen and sorted (a living scene's entities and particles,
@@ -337,6 +339,7 @@ impl Game<'_> {
         batch: &mut HudBatch,
         blocks: &SceneBlocks<'_, '_>,
         frame: SceneFrame,
+        animation: Option<(u64, f32, &[LiveBlockEntity])>,
         extra: impl FnOnce(&mut Vec<SceneQuad>),
     ) -> Result<(), mod_api::SceneError> {
         let SceneFrame {
@@ -365,7 +368,14 @@ impl Game<'_> {
         let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
         let tables = &self.pack.context.tables;
         let mut quads = Vec::new();
-        for (block, group, transform) in blocks.iter() {
+        let (tick, partial, kept) = animation.unwrap_or((0, 0.0, &[]));
+        let mut kept = kept.iter().peekable();
+        for (i, (block, group, transform)) in blocks.iter().enumerate() {
+            let ticking = if kept.peek().is_some_and(|entry| entry.index == i) {
+                kept.next().and_then(|entry| entry.ticking.as_ref())
+            } else {
+                None
+            };
             let point = |pos| transform.map_or(pos, |pose| pose.transform_point3(pos));
             let direction =
                 |normal| transform.map_or(normal, |pose| pose.transform_vector3(normal));
@@ -422,21 +432,38 @@ impl Game<'_> {
                     cull: true,
                 });
             }
-            if let Some(entity) = &block.entity {
-                let entity =
-                    mod_api::ModBlockEntity::new(entity.id.to_string(), entity.fields.clone());
+            if let Some(seed) = block.entity {
+                let original;
+                let (entity, partial, game_time, animation_time) =
+                    if let Some((_, entity)) = ticking {
+                        (
+                            entity,
+                            partial,
+                            i64::try_from(tick).unwrap_or(i64::MAX),
+                            tick as f64 + f64::from(partial),
+                        )
+                    } else {
+                        original =
+                            mod_api::ModBlockEntity::new(seed.id.to_string(), seed.fields.clone());
+                        (
+                            &original,
+                            self.clock.fraction() as f32,
+                            self.world.game_time,
+                            self.animation_time(),
+                        )
+                    };
                 let name = &*self.res.facts().get(block.state).name;
                 let mut draw = BlockEntityDraw::posed(
-                    self.clock.fraction() as f32,
-                    self.world.game_time,
+                    partial,
+                    game_time,
                     240 | 240 << 8,
                     block.pos,
                     Mat4::IDENTITY,
                     diffuse_lights(false),
                     Vec::new(),
                 )
-                .animated(self.animation_time());
-                self.native_block_entity_submit(block.pos, name, block.state, &entity, &mut draw);
+                .animated(animation_time);
+                self.native_block_entity_submit(block.pos, name, block.state, entity, &mut draw);
                 // Its text's new glyphs upload with this screen's batch.
                 batch.patches.append(&mut self.text_patches.borrow_mut());
                 let time = draw.animation();

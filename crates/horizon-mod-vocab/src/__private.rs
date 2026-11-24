@@ -98,6 +98,23 @@ pub fn entity_part_hooked(hook: HookId, name: &'static str, kind: &str) -> bool 
         .is_some_and(|table| !table.entity(|| Some(kind)).is_empty())
 }
 
+/// Whether a block entity type has opted into the scene-only ticker.
+pub fn scene_block_entity_ticker(kind: &str) -> Option<BlockEntityTypeKey> {
+    let hook = HookId::BlockEntitySceneTick;
+    if !crate::parts::has_part_hook(hook) {
+        return None;
+    }
+    let parts = crate::parts::parts(hook, "block_entity_scene_tick");
+    if parts
+        .for_hook(hook)?
+        .block_entity_kind(|| Some(kind))
+        .is_empty()
+    {
+        return None;
+    }
+    crate::content::registry_keys::block_entity_type_key(kind)
+}
+
 /// A read backend wrapper for a host the game builds narrowed: the mob tick's
 /// goal view hands itself out as its own backend.
 pub fn backend_ref(inner: &dyn Backend) -> crate::BackendRef<'_> {

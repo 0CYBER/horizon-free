@@ -120,7 +120,8 @@ pub trait DrawContext {
     /// block is drawn with its model, full bright and shaded by face, a face
     /// against a solid neighbour in the scene left out; a block with an
     /// `entity` (a mod's) is drawn by `block_entity_submit` as in the
-    /// world too, its `spin` parts turning with the game time. What lies
+    /// world too. A clocked copy of a type with a native scene ticker animates on
+    /// the scene clock; otherwise it uses the client clock. What lies
     /// outside the box is cut off, and the scene has a depth of its own, so
     /// it never covers the screen's other drawing or is covered by it but in
     /// the order drawn. Draw it from a screen's drawing hook
@@ -361,7 +362,7 @@ pub trait BlockEntityDrawContext {
     fn partial(&self) -> f32 {
         unimplemented!("BlockEntityDrawContext::draw_partial")
     }
-    /// The level's game time, for animations.
+    /// The level's game time, or the scene's tick for a ticking scene block entity.
     fn game_time(&self) -> i64 {
         unimplemented!("BlockEntityDrawContext::draw_game_time")
     }
@@ -370,6 +371,7 @@ pub trait BlockEntityDrawContext {
     /// `TextureManager.tick` count): pausing and `/tick freeze` hold it, and the server's
     /// time updates never set it back, unlike `game_time`. Each client counts from its
     /// own start, so it means nothing on the server or to another client.
+    /// A ticking scene block entity uses its scene's tick and partial tick instead.
     fn animation_time(&self) -> f64 {
         unimplemented!("BlockEntityDrawContext::draw_animation_time")
     }

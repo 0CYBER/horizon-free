@@ -4,6 +4,8 @@ use crate::{BlockState, Identifier, item::containers::ModBlockEntityFields};
 
 /// A mod block entity's type and public fields supplied to a screen's drawing Part.
 /// This is not a live entity: internal cache and revision identities never cross the API.
+/// With a scene clock and a native scene ticker registered for this type, these values
+/// seed the ticking copy. Changes to the inputs or a clock rewind reset that copy.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -135,17 +137,13 @@ impl SceneParticle {
     }
 }
 
-/// A scene's own clock. The scene keeps its live particles from one draw to the next
-/// under `id` and the calling mod (one id per scene a mod's screens show; two mods'
-/// id 1 are two scenes). When `tick` is ahead of the tick the scene last ran, it runs
-/// the ticks in between: the blocks' animate ticks when `animate_blocks` is set
-/// ([`SCENE_ANIMATE_PICKS`] picks a tick among the scene's own blocks), then the
-/// particles'. A jump of more than [`SCENE_CATCH_UP`] ticks (a page resumed) starts the
-/// scene over from no particles and runs only the last [`SCENE_CATCH_UP`] ticks. The
-/// same tick again is a paused scene: nothing is added and nothing moves. A tick behind
-/// the last one, or a scene whose blocks or entities changed, starts the scene over with
-/// no particles. Each tick's randomness is seeded from `id` and the tick, so the same
-/// ticks give the same picture.
+/// A scene's own clock, kept under `id` and the calling mod (give each scene its own id).
+/// When `tick` advances, the scene runs the ticks in between: the blocks' animate ticks
+/// when `animate_blocks` is set, any registered native scene-only block entity tickers,
+/// then the particles' ticks. A jump of more than [`SCENE_CATCH_UP`] ticks resets the
+/// ticking copies, clears particles and runs only the last [`SCENE_CATCH_UP`] ticks. The
+/// same tick again does not run anything. A tick behind the last one, or changed scene
+/// inputs, starts the scene over. Each tick's randomness is seeded from `id` and `tick`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -191,7 +189,7 @@ pub const SCENE_MAX_ENTITIES: usize = 16;
 /// together: past it no new particle is added, and more than this many to add at once
 /// is [`SceneError::TooManyParticles`].
 pub const SCENE_MAX_PARTICLES: usize = 512;
-/// The most scenes with entities or particles that animate in one frame
+/// The most living scenes that animate in one frame
 /// ([`SceneError::TooManyScenes`]).
 pub const SCENE_MAX_ANIMATING: usize = 4;
 /// The most overlays one scene draw takes ([`SceneOverlayError::TooManyOverlays`]).
@@ -259,9 +257,9 @@ impl SceneOverlay {
 }
 
 /// A scene `DrawContext::draw_scene` draws: its blocks, and optionally the entities
-/// standing in it, the particles the mod adds and the clock that ticks them. A scene of
-/// blocks alone (no entities, no particles, and no clock or one with `animate_blocks`
-/// off) keeps no state and reads no clock. Keep one and change its clock each frame.
+/// standing in it, the particles the mod adds and the clock that ticks them and any
+/// registered native scene block entity copies. Blocks without a clock do not tick;
+/// disabling [`SceneClock::animate_blocks`] only stops the blocks' animate ticks.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]

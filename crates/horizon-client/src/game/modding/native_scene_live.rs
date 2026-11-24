@@ -1,11 +1,8 @@
 //! Living screen scenes (`DrawContext::draw_scene` with entities, particles or a clock):
-//! a scene's blocks as `native_scene` draws them, with entities standing in them and
-//! particles that live in them, as GuideME's guide scenes and Ponder show. The game keeps,
-//! per calling mod and clock id, a small level of each scene's blocks (for the blocks'
-//! animate ticks and the particles' collisions), its own particle engine and its entities,
-//! prepared for drawing only as `DrawContext::entity` prepares them. Nothing of it reaches
-//! the client's level, its particle engine or its sounds. A scene of blocks alone never
-//! comes here.
+//! a scene's blocks and mod block entities as `native_scene` draws them, with entities
+//! standing in them and particles that live in them. Per calling mod and clock id, the
+//! game keeps the block entities' own fields, a small level of the scene's blocks, its own
+//! particle engine and its entities. None of that is the client's level or particle engine.
 use super::api_values::TryIntoEngine as _;
 use super::{
     Game,
@@ -23,8 +20,9 @@ use horizon_client::{
 };
 use horizon_core::geometry::Vec3 as Position;
 use mod_api::{
-    GuiEntity, GuiEntityError, SCENE_ANIMATE_PICKS, SCENE_CATCH_UP, SCENE_MAX_ANIMATING,
-    SCENE_MAX_ENTITIES, SCENE_MAX_PARTICLES, Scene, SceneClock, SceneError, SceneView,
+    BlockEntityTypeKey, GuiEntity, GuiEntityError, ModBlockEntity, SCENE_ANIMATE_PICKS,
+    SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES, SCENE_MAX_PARTICLES, Scene,
+    SceneBlockEntity, SceneClock, SceneError, SceneView,
 };
 use std::{
     cell::Cell,
@@ -39,6 +37,26 @@ const KEPT: usize = 16;
 /// a block this far out draws but has no animate tick.
 const FAR: f64 = 30_000_000.0;
 
+/// An input's original fields, and its scene-owned drawing copy when its type opted in.
+pub(super) struct LiveBlockEntity {
+    pub(super) index: usize,
+    seed: SceneBlockEntity,
+    pub(super) ticking: Option<(BlockEntityTypeKey, ModBlockEntity)>,
+}
+
+impl LiveBlockEntity {
+    fn new(index: usize, seed: &SceneBlockEntity) -> Self {
+        let id = seed.id.to_string();
+        let ticking = mod_api::__private::scene_block_entity_ticker(&id)
+            .map(|kind| (kind, ModBlockEntity::new(id, seed.fields.clone())));
+        Self {
+            index,
+            seed: seed.clone(),
+            ticking,
+        }
+    }
+}
+
 /// One scene's kept state.
 struct Live {
     /// The mod that drew it, and its clock's id.
@@ -48,6 +66,8 @@ struct Live {
     key: u64,
     /// The entities it was made for.
     entities: Vec<GuiEntity>,
+    /// The supplied block entities, in input order, separate from their mutable copies.
+    block_entities: Vec<LiveBlockEntity>,
     /// The last tick it ran.
     tick: u64,
     /// The frame it last drew in.
@@ -111,6 +131,15 @@ pub(super) fn scene_key(blocks: &[SceneBlock<'_>]) -> u64 {
     h.finish()
 }
 
+/// The input payloads are compared with the original seeds, never with the animated fields.
+fn same_block_entities(blocks: &[SceneBlock<'_>], kept: &[LiveBlockEntity]) -> bool {
+    blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, block)| block.entity.map(|entity| (i, entity)))
+        .eq(kept.iter().map(|entry| (entry.index, &entry.seed)))
+}
+
 /// The seed of scene `id`'s tick `tick`: the same ticks give the same particles.
 pub(super) fn tick_seed(id: u32, tick: u64) -> i64 {
     let mut h = DefaultHasher::new();
@@ -142,8 +171,7 @@ pub(super) fn facing_viewer(view: SceneView) -> Quat {
         * Quat::from_rotation_y(std::f32::consts::PI)
 }
 
-/// Whether `scene` lives: entities, particles to add, or blocks that animate. A scene
-/// that doesn't takes the block-only path and keeps nothing.
+/// Whether a scene lives without any scene-only block entity tickers.
 pub(super) fn lives(scene: &Scene) -> bool {
     !scene.entities.is_empty()
         || !scene.particles.is_empty()
@@ -158,7 +186,9 @@ pub(super) fn check(
 ) -> Result<SceneClock, SceneError> {
     let finite = rect.iter().chain(&view.center).all(|v| v.is_finite())
         && view.yaw.is_finite()
-        && view.pitch.is_finite();
+        && view.pitch.is_finite()
+        && view.scale.is_finite()
+        && view.scale > 0.0;
     if !finite {
         return Err(SceneError::BadView);
     }
@@ -203,7 +233,8 @@ fn entity_refusal(error: GuiEntityError, index: u32) -> SceneError {
 impl Game<'_> {
     /// Draws the prepared `blocks` into the given `frame`, with its textured quads.
     /// A static scene keeps no state and reads no clock. A living one is drawn with
-    /// its entities and the particles its clock ticks. Invalid input draws nothing.
+    /// its entities and the particles its clock ticks; a clock also drives any
+    /// scene-only block entity tickers. Invalid input draws nothing.
     /// Past the frame's animating budget, the blocks, textured quads and the scene's
     /// last state are drawn, its clock does not advance, and this returns `TooManyScenes`.
     pub(super) fn native_draw_scene(
@@ -216,8 +247,56 @@ impl Game<'_> {
         if !self.native_window() {
             return Err(SceneError::Unavailable);
         }
-        if !lives(scene) {
-            return self.draw_scene_quads(batch, blocks, frame, |_| {});
+        let ordinary = lives(scene);
+        let can_tick = scene.clock.is_some()
+            && mod_api::__private::has_part_hook(mod_api::HookId::BlockEntitySceneTick);
+        if !ordinary && !can_tick {
+            return self.draw_scene_quads(batch, blocks, frame, None, |_| {});
+        }
+        let owner = mod_api::content::crash::current_native_mod().unwrap_or("");
+        let mut scenes = self
+            .live_scenes
+            .try_borrow_mut()
+            .map_err(|_| SceneError::Unavailable)?;
+        let at = scene.clock.and_then(|clock| {
+            scenes
+                .live
+                .iter()
+                .position(|l| l.owner == owner && l.id == clock.id)
+        });
+        let key = scene_key(blocks.cells);
+        let matching = at.filter(|&i| {
+            let l = &scenes.live[i];
+            l.key == key
+                && (!can_tick || same_block_entities(blocks.cells, &l.block_entities))
+                && l.entities
+                    .iter()
+                    .eq(scene.entities.iter().map(|e| &e.entity))
+        });
+        if !ordinary {
+            let ticking = matching.map_or_else(
+                || {
+                    blocks.cells.iter().filter_map(|b| b.entity).any(|entity| {
+                        mod_api::__private::scene_block_entity_ticker(&entity.id.to_string())
+                            .is_some()
+                    })
+                },
+                |i| {
+                    scenes.live[i]
+                        .block_entities
+                        .iter()
+                        .any(|entry| entry.ticking.is_some())
+                },
+            );
+            if !ticking {
+                self.draw_scene_quads(batch, blocks, frame, None, |_| {})?;
+                // Removing a ticking input retires its previous animation, even when the
+                // replacement no longer has anything that animates.
+                if let Some(i) = at {
+                    scenes.live.swap_remove(i);
+                }
+                return Ok(());
+            }
         }
         let clock = check(frame.rect, scene, frame.view)?;
         // Checked whole before anything is kept; an empty list allocates nothing.
@@ -242,41 +321,24 @@ impl Game<'_> {
                 existing.push((index as usize, mob));
             }
         }
-        let owner = mod_api::content::crash::current_native_mod().unwrap_or("");
-        let mut scenes = self
-            .live_scenes
-            .try_borrow_mut()
-            .map_err(|_| SceneError::Unavailable)?;
-        let key = scene_key(blocks.cells);
-        let at = scenes
-            .live
-            .iter()
-            .position(|l| l.owner == owner && l.id == clock.id);
-        let same = |l: &Live| {
-            l.key == key
-                && l.entities.len() == scene.entities.len()
-                && l.entities
-                    .iter()
-                    .zip(&scene.entities)
-                    .all(|(a, b)| *a == b.entity)
-        };
+        let matching = matching.filter(|&i| clock.tick >= scenes.live[i].tick);
         let frame_id = self.frames;
         if !scenes.admit(frame_id, owner, clock.id) {
             // Still draw the fixed geometry, and the last state when it is this scene's.
-            let last = at.filter(|&i| same(&scenes.live[i]));
-            match last {
+            match matching {
                 Some(i) => {
                     let l = &mut scenes.live[i];
                     l.frame = frame_id;
                     self.draw_live(batch, blocks, frame, l, clock.partial)?;
                 }
-                None => self.draw_scene_quads(batch, blocks, frame, |_| {})?,
+                None => self.draw_scene_quads(batch, blocks, frame, None, |_| {})?,
             }
             return Err(SceneError::TooManyScenes);
         }
-        let fresh = at.is_none_or(|i| !same(&scenes.live[i]) || clock.tick < scenes.live[i].tick);
-        let i = if fresh {
-            let made = self.live_scene(blocks.cells, scene, owner, clock, key)?;
+        let i = if let Some(i) = matching {
+            i
+        } else {
+            let made = self.live_scene(blocks.cells, scene, owner, clock, key, can_tick)?;
             match at {
                 Some(i) => {
                     scenes.live[i] = made;
@@ -292,15 +354,13 @@ impl Game<'_> {
                     scenes.live.len() - 1
                 }
             }
-        } else {
-            at.unwrap_or_default()
         };
         let l = &mut scenes.live[i];
         l.frame = frame_id;
         for (index, mob) in existing {
             l.mobs[index] = mob;
         }
-        self.advance_live_scene(l, clock, &added);
+        self.advance_live_scene(l, blocks.cells, clock, &added);
         for (mob, e) in l.mobs.iter_mut().zip(&scene.entities) {
             pose(mob, e, clock);
         }
@@ -317,32 +377,40 @@ impl Game<'_> {
         partial: f32,
     ) -> Result<(), SceneError> {
         let Live {
+            tick,
+            block_entities,
             engine,
             mobs,
             verts,
             ..
         } = l;
         let view = frame.view;
-        self.draw_scene_quads(batch, blocks, frame, |quads| {
-            for mob in mobs.iter() {
+        self.draw_scene_quads(
+            batch,
+            blocks,
+            frame,
+            Some((*tick, partial, block_entities)),
+            |quads| {
+                for mob in mobs.iter() {
+                    verts.clear();
+                    // `DrawContext::entity`'s submission, in the scene's coordinates.
+                    self.gui_entity_geometry_at(mob, partial, DVec3::ZERO, verts);
+                    entity_quads(verts, quads);
+                }
                 verts.clear();
-                // `DrawContext::entity`'s submission, in the scene's coordinates.
-                self.gui_entity_geometry_at(mob, partial, DVec3::ZERO, verts);
-                entity_quads(verts, quads);
-            }
-            verts.clear();
-            let base = facing_viewer(view);
-            engine.render(DVec3::ZERO, base, partial, &|_| 0xFF, verts);
-            for q in verts.as_chunks::<4>().0 {
-                quads.push(SceneQuad {
-                    corners: q.each_ref().map(|v| Vec3::from_array(v.pos)),
-                    uv: q.each_ref().map(|v| v.uv),
-                    color: q[0].color,
-                    normal: Vec3::Z,
-                    cull: false,
-                });
-            }
-        })
+                let base = facing_viewer(view);
+                engine.render(DVec3::ZERO, base, partial, &|_| 0xFF, verts);
+                for q in verts.as_chunks::<4>().0 {
+                    quads.push(SceneQuad {
+                        corners: q.each_ref().map(|v| Vec3::from_array(v.pos)),
+                        uv: q.each_ref().map(|v| v.uv),
+                        color: q[0].color,
+                        normal: Vec3::Z,
+                        cull: false,
+                    });
+                }
+            },
+        )
     }
 
     /// A new kept scene: a level of `blocks`, an empty particle engine on the GUI atlas
@@ -355,6 +423,7 @@ impl Game<'_> {
         owner: &'static str,
         clock: SceneClock,
         key: u64,
+        can_tick: bool,
     ) -> Result<Live, SceneError> {
         let mut mobs = Vec::with_capacity(scene.entities.len());
         for (index, e) in (0u32..).zip(&scene.entities) {
@@ -402,6 +471,15 @@ impl Game<'_> {
             id: clock.id,
             key,
             entities: scene.entities.iter().map(|e| e.entity.clone()).collect(),
+            block_entities: if can_tick {
+                blocks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, b)| b.entity.map(|entity| LiveBlockEntity::new(i, entity)))
+                    .collect()
+            } else {
+                Vec::new()
+            },
             tick: clock.tick,
             frame: self.frames,
             world,
@@ -413,13 +491,14 @@ impl Game<'_> {
     }
 
     /// Runs `l`'s ticks up to `clock.tick` as the client's tick runs them: the blocks'
-    /// animate ticks (`SCENE_ANIMATE_PICKS` picks among the scene's own blocks), then the
-    /// particles (`ParticleEngine.tick`). A jump past `SCENE_CATCH_UP` starts over from no
-    /// particles and runs only the last `SCENE_CATCH_UP` ticks. The first tick run also
-    /// adds `added`. Particles' sounds are dropped.
+    /// animate ticks (`SCENE_ANIMATE_PICKS` picks among the scene's own blocks), scene-only
+    /// block entity ticks, then the particles. A jump past `SCENE_CATCH_UP` resets the
+    /// block entity fields to their seeds and clears particles before running the last
+    /// `SCENE_CATCH_UP` ticks. The first tick also adds `added`. Particles' sounds are dropped.
     fn advance_live_scene(
         &self,
         l: &mut Live,
+        blocks: &[SceneBlock<'_>],
         clock: SceneClock,
         added: &[(ParticleOptions, [f64; 3], [f64; 3])],
     ) {
@@ -427,6 +506,7 @@ impl Game<'_> {
             return;
         };
         let Live {
+            block_entities,
             world,
             engine,
             picks,
@@ -434,6 +514,11 @@ impl Game<'_> {
         } = l;
         if restart {
             engine.clear();
+            for entry in &mut *block_entities {
+                if let Some((_, entity)) = &mut entry.ticking {
+                    **entity = entry.seed.fields.clone();
+                }
+            }
         }
         engine.particle_level = self.settings.particles;
         let facts = self.res.facts();
@@ -468,6 +553,18 @@ impl Game<'_> {
             }
             if clock.animate_blocks {
                 animate_scene(self.res.animate(), engine, &ctx, picks, SCENE_ANIMATE_PICKS);
+            }
+            for entry in &mut *block_entities {
+                if let Some((kind, entity)) = &mut entry.ticking {
+                    let block = &blocks[entry.index];
+                    Self::native_block_entity_scene_tick(
+                        *kind,
+                        block.pos,
+                        block.state,
+                        tick,
+                        entity,
+                    );
+                }
             }
             engine.tick(&ParticleLevel {
                 world,
