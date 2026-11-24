@@ -298,6 +298,15 @@ pub trait BlockEntityDrawContext {
     fn set_light(&mut self, light: u32) {
         unimplemented!("BlockEntityDrawContext::draw_set_light")
     }
+    /// What is drawn next shows the enchanted armour glint, as an enchanted piece of armour
+    /// does (`RenderTypes.armorCutoutNoCullGlint`: `enchanted_glint_armor` scrolling over the
+    /// quads' own texture coordinates on their atlas), until `set_glint(false)`: what a mod's
+    /// worn armour drawn in an entity layer shows when its stack `has_foil`. It covers quads,
+    /// boxes, blocks, models and model parts; items keep their own foil, and text, terrain
+    /// models and fluids show none.
+    fn set_glint(&mut self, glint: bool) {
+        unimplemented!("BlockEntityDrawContext::draw_set_glint")
+    }
     /// Draws a quad with `corners` in blocks under `draw`'s pose, in a model
     /// face's order (top left, bottom left, bottom right, top right as seen
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in

@@ -234,6 +234,8 @@ pub struct BlockEntityDraw {
     /// in the vertex stream those paths and their spans already cover.
     prepared: bool,
     records: Vec<PreparedRecord>,
+    /// What is drawn shows the enchanted armour glint (`native_draw_set_glint`).
+    glint: bool,
 }
 
 struct PreparedRecord {
@@ -374,6 +376,7 @@ impl BlockEntityDraw {
             spins: Vec::new(),
             prepared: false,
             records: Vec::new(),
+            glint: false,
         }
     }
 
@@ -392,9 +395,10 @@ impl BlockEntityDraw {
         self.spins.last().is_some_and(|(_, spin)| spin.is_some())
     }
 
-    /// Record a prepared copy at the current vertex, unless this draw is CPU-only or spinning.
+    /// Record a prepared copy at the current vertex, unless this draw is CPU-only, spinning or
+    /// glinting (the glint is the CPU vertices' own).
     fn defer_model(&mut self, slot: u32, generation: u64, tint: u32) -> bool {
-        if !self.prepared || self.spinning() {
+        if !self.prepared || self.spinning() || self.glint {
             return false;
         }
         self.records.push(PreparedRecord {
@@ -562,6 +566,18 @@ impl BlockEntityDraw {
     /// The light the helpers draw with (`native_draw_light`).
     pub(super) fn light(&self) -> u32 {
         self.light
+    }
+    /// The vertices from `start` on show the enchanted armour glint when it is on
+    /// (`native_draw_set_glint`): `ARMOR_GLINT` at their own texture coordinates, as
+    /// `armorCutoutNoCullGlint` draws over a model on its atlas.
+    fn glint_from(&mut self, start: usize) {
+        if !self.glint {
+            return;
+        }
+        for v in self.vertices.iter_mut().skip(start) {
+            v.layer = (v.layer & !0xFFFF) | horizon_client::mobs::render::ARMOR_GLINT;
+            v.glint_uv = v.uv;
+        }
     }
     /// A quad of `corners` (blocks, under the pose) with unit UVs, shaded as
     /// vanilla's block entity models are (`Lighting`'s two lights).
@@ -789,6 +805,7 @@ impl Game<'_> {
                 self.standalone_geometry.generation(),
             ),
             records: Vec::new(),
+            glint: false,
         };
         let now = self.world.game_time;
         let mut kept = self.kept_block_entities.borrow_mut();
@@ -853,6 +870,7 @@ impl Game<'_> {
             draw.kept = false;
             draw.spins.clear();
             draw.records.clear();
+            draw.glint = false;
             self.api_block_entity_submit(pos, block, id, entity, &mut draw);
             self.finish_prepared_draw(&mut draw, corner, camera);
             // The turning parts, from the start of this block's vertices.
@@ -1006,6 +1024,13 @@ impl Game<'_> {
     pub(super) fn native_draw_set_light(&self, draw: &mut BlockEntityDraw, light: u32) {
         draw.light = light;
     }
+    /// What is drawn next shows the enchanted armour glint, as an enchanted piece of armour does
+    /// (`RenderTypes.armorCutoutNoCullGlint`: `enchanted_glint_armor` scrolling over the quads'
+    /// own texture coordinates), until `native_draw_set_glint(false)`: quads, boxes, blocks,
+    /// models and model parts, not items (an item's own foil), text, terrain models or fluids.
+    pub(super) fn native_draw_set_glint(&self, draw: &mut BlockEntityDraw, glint: bool) {
+        draw.glint = glint;
+    }
     /// Draws a quad with `corners` in blocks under `draw`'s pose, in a model
     /// face's order (top left, bottom left, bottom right, top right as seen
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in
@@ -1024,12 +1049,14 @@ impl Game<'_> {
             return false;
         };
         let [u0, v0, u1, v1] = uv.map(|t| t / 16.0);
+        let start = draw.vertices.len();
         draw.quad(
             corners,
             [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
             rect,
             tint,
         );
+        draw.glint_from(start);
         true
     }
 
@@ -1136,6 +1163,7 @@ impl Game<'_> {
         tint: u32,
     ) -> bool {
         let mut all = true;
+        let start = draw.vertices.len();
         for (direction, face) in Direction::ALL.into_iter().zip(faces) {
             let Some(face) = face else { continue };
             let Some(rect) = self.gui.atlas.sprites.get(face.sprite).copied() else {
@@ -1151,6 +1179,7 @@ impl Game<'_> {
                 draw.quad(quad.positions, quad.uv, rect, tint);
             }
         }
+        draw.glint_from(start);
         all
     }
 
@@ -1184,7 +1213,9 @@ impl Game<'_> {
             return false;
         };
         let pose = draw.pose();
+        let start = draw.vertices.len();
         self.block_model_vertices(id, 42, pose, draw.light, true, &mut draw.vertices);
+        draw.glint_from(start);
         true
     }
 
@@ -1230,6 +1261,7 @@ impl Game<'_> {
             &mut draw.vertices,
         );
         super::minecarts::scale_tint_alpha(&mut draw.vertices[start..], faces, tint);
+        draw.glint_from(start);
         Ok(())
     }
 
@@ -1255,7 +1287,9 @@ impl Game<'_> {
         let Some(rect) = self.gui.atlas.sprites.get(sprite).copied() else {
             return false;
         };
+        let start = draw.vertices.len();
         draw_model_part(draw, part, rect, tint);
+        draw.glint_from(start);
         true
     }
 
@@ -1392,6 +1426,7 @@ mod tests {
             spins: Vec::new(),
             prepared: false,
             records: Vec::new(),
+            glint: false,
         }
     }
 
@@ -1434,6 +1469,57 @@ mod tests {
         place_turning(&draw.vertices, &draw.spins, 1.0, Vec3::ZERO, &mut out);
         assert!(out[..4].iter().all(|v| v.normal == [0; 4]));
         assert!(out[4..].iter().all(|v| v.normal == [0, 0, 127, 127]));
+    }
+
+    /// `set_glint` marks what is drawn while it is on with the armour glint at the vertices' own
+    /// atlas UVs, leaves what came before and after plain, and keeps a glinting model off the
+    /// prepared (GPU instance) path, whose copies carry no glint.
+    #[test]
+    fn a_glinting_quad_shows_the_armour_glint_and_stays_on_the_cpu() {
+        let glint = horizon_client::mobs::render::ARMOR_GLINT;
+        let mut draw = draw();
+        let corners = [
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ];
+        let uv = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
+        draw.quad(corners, uv, sprite(), 0xFFFFFF);
+        draw.glint = true;
+        draw.quad(corners, uv, sprite(), 0xFFFFFF);
+        draw.glint_from(4);
+        draw.glint = false;
+        draw.quad(corners, uv, sprite(), 0xFFFFFF);
+        draw.glint_from(8);
+        let (before, rest) = draw.vertices.split_at(4);
+        let (glinting, after) = rest.split_at(4);
+        assert!(
+            before
+                .iter()
+                .chain(after)
+                .all(|v| v.layer & 0xFFFF != glint)
+        );
+        assert!(
+            glinting
+                .iter()
+                .all(|v| v.layer & 0xFFFF == glint && v.glint_uv == v.uv)
+        );
+        assert!(
+            glinting.iter().any(|v| v.uv != before[0].uv),
+            "the UVs differ by corner"
+        );
+
+        draw.prepared = true;
+        assert!(
+            draw.defer_model(0, 1, u32::MAX),
+            "a plain model is prepared"
+        );
+        draw.glint = true;
+        assert!(
+            !draw.defer_model(0, 1, u32::MAX),
+            "a glinting one is drawn on the CPU"
+        );
     }
 
     #[test]

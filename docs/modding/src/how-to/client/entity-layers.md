@@ -82,6 +82,10 @@ carry over, so add them each time. The event also tells what renderers this load
   and the vanilla layers, and `parts` is none: the renderer's model has no vanilla parts.
 - An entity whose `render_living_pre` or `render_player_pre` a mod canceled draws none of its layers,
   as NeoForge's canceled `RenderLivingEvent.Pre` skips them.
+- A layer drawing worn armour of its own shows its enchantment glint with `draw.set_glint(true)`
+  before the armour's models and `set_glint(false)` after: vanilla's `armorCutoutNoCullGlint`, the
+  armour glint scrolling over the models' texture coordinates, as `EquipmentLayerRenderer` draws an
+  enchanted piece. Items drawn with `item` keep their own foil.
 - `submit` returns `Ok(())` to keep what it drew. A layer that returns an `Err`, panics, or (in a wasm
   mod) has its call refused or trapped is logged once and asked no more until the next resource load
   adds it again; what it drew that frame is dropped.
