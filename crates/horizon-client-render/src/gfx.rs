@@ -543,6 +543,7 @@ mod census;
 pub mod compositor;
 pub(crate) mod core_lightmap;
 pub(crate) mod core_lines;
+pub(crate) mod core_models;
 pub(crate) mod core_sky;
 pub(crate) mod core_text;
 mod cull;
@@ -1756,6 +1757,7 @@ pub struct Renderer {
     /// A resource pack's `core/rendertype_lines`, which draws the block outline in their place.
     core_lines: Option<core_lines::CoreLines>,
     core_text: Option<core_text::CoreText>,
+    core_models: Option<core_models::World>,
     /// The packs' `core/sky` and `core/stars`, drawn in place of the native sky and stars.
     core_sky: Option<core_sky::CoreSky>,
     /// A resource pack's `core/lightmap`, which draws the lightmap texture in place of the
@@ -5054,6 +5056,7 @@ impl Renderer {
             lines_secondary,
             core_lines: None,
             core_text: None,
+            core_models: None,
             core_sky: None,
             pack_lightmap: None,
             lightmap_from_cpu: false,
@@ -5410,6 +5413,43 @@ impl Renderer {
         self.lightmap_uploaded = false;
         self.lightmap_key = None;
         self.lightmap_from_cpu = false;
+    }
+    /// Resource-pack `core/item` and `core/entity`, bound to this generation's material images.
+    pub fn set_core_model_shaders(
+        &mut self,
+        atlas: &crate::hud::HudAtlas,
+        item_sheet: &std::collections::HashMap<String, crate::hud::Rect>,
+        gui_lights: [[glam::Vec3; 2]; 2],
+    ) -> std::collections::HashMap<String, crate::hud::Rect> {
+        self.core_models = self.hud.atlas_texture.as_ref().and_then(|source| {
+            core_models::World::new(
+                &self.device,
+                &self.queue,
+                self.output.frame.format,
+                source,
+                atlas,
+                (&self.lightmap_view, &self.lightmap_sampler),
+            )
+        });
+        let gui = self.hud.atlas_texture.as_ref().and_then(|source| {
+            core_models::Gui::new(
+                &self.device,
+                &self.queue,
+                self.output.frame.overlay_format,
+                self.hud.pack_model_coverage(),
+                source,
+                atlas,
+                item_sheet,
+                gui_lights,
+                (&self.lightmap_view, &self.lightmap_sampler),
+            )
+        });
+        let Some((gui, sprites)) = gui else {
+            self.hud.pack_item = None;
+            return Default::default();
+        };
+        self.hud.pack_item = Some(gui);
+        sprites
     }
     /// LevelRenderer.submitBlockOutline: the buffer holds `edges` per stroke, the black
     /// secondary stroke first when high contrast is on.
@@ -8833,6 +8873,9 @@ impl Renderer {
                     frame.ticks,
                     &self.animations,
                 );
+                if let (Some(item), Some(source)) = (&self.hud.pack_item, &self.hud.atlas_texture) {
+                    item.animate(&mut encoder, source);
+                }
                 self.last_hud_animated_tick = Some(frame.ticks);
             }
         }
@@ -10413,6 +10456,34 @@ impl Renderer {
             // The pack replaced `frame.entities`. A staged cut indexes the original stream,
             // and the game does not stage one while that pack is loaded.
             self.prepared_draws.clear();
+        }
+        if let Some(models) = self.core_models.as_mut()
+            && !pack_entities
+            && !pack_skin
+            && !frame.title
+        {
+            let lights = [
+                glam::Vec3::new(0.2, 1.0, -0.7).normalize(),
+                glam::Vec3::new(-0.2, if frame.nether_lighting { -1.0 } else { 1.0 }, 0.7)
+                    .normalize(),
+            ];
+            let primary = views.primary();
+            let uniforms = core_models::Uniforms::new(
+                pack.globals,
+                jitter * primary.projection * pose,
+                primary.view,
+                fog_color,
+                pack.fog,
+                lights,
+                self.output.frame.linear_light,
+            );
+            models.prepare(
+                &self.queue,
+                &uniforms,
+                skin,
+                posed,
+                &self.entity_batch.combined[..((entity_quads * 4 - posed) as usize)],
+            );
         }
         let prepared_count = self.prepared_draws.len() as u64;
         let stride = std::mem::size_of::<PreparedModelInstance>() as u64;
@@ -12222,12 +12293,27 @@ impl Renderer {
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 if self.prepared_draws.is_empty() {
-                    pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
+                    if let Some(models) = self.core_models.as_ref()
+                        && entity_stage.is_none()
+                        && !pack_entities
+                        && !pack_skin
+                        && !frame.title
+                    {
+                        models.draw(&mut pass, &self.entity_pipeline, &self.entity_group);
+                    } else {
+                        pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
+                    }
                 } else {
+                    let core_models =
+                        (entity_stage.is_none() && !pack_entities && !pack_skin && !frame.title)
+                            .then_some(self.core_models.as_ref())
+                            .flatten();
                     prepared_model::draw_ordered(
                         &mut pass,
                         &prepared_model::EntityRangePass {
                             pipeline: &self.entity_pipeline,
+                            group: &self.entity_group,
+                            core_models,
                             vertices: &self.entity_buffer,
                             indices: &self.indices,
                         },

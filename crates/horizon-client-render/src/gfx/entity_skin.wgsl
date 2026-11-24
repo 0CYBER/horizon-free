@@ -16,7 +16,7 @@ const PART_WORDS: u32 = 25u;
 // A job (16 words): first model vertex, vertex count, first part, first output
 // vertex, the texture rect (4 floats), scroll, colour, light, overlay,
 // whether the overlay is the armour glint (its model UV in `glint_uv`), the mode
-// (`SkinJob::mode`: 0 a model, 1 an item's quads, 2 a model with no normal),
+// (`SkinJob::mode`: 0 a model, 1 an item's quads, 2 flat, 3 flat model outline),
 // whether its quads cull back faces (`SkinJob::cull`), 1 spare (0: `keep`'s).
 const JOB_WORDS: u32 = 16u;
 // `mesher::Vertex` (11 words): pos (3), uv (2), layer, color, light, normal
@@ -90,6 +90,11 @@ fn skin(
     let glint = jobs[j + 12u] != 0u;
     let mode = jobs[j + 13u];
     let cull = jobs[j + 14u] != 0u;
+    // Match the CPU model walk: signed V identifies the source rect for core/entity.
+    let ordinary = overlay == 0u || overlay == 1u || overlay == 5u
+        || (overlay >= 16u && overlay <= 31u);
+    let core = (mode == 0u || mode == 3u) && scroll == 0.0
+        && ordinary && rect.x < rect.z && rect.y < rect.w;
     keep = jobs[j + 15u];
     for (var k = lane; k < count; k += 64u) {
         let v = (first + k) * MODEL_WORDS;
@@ -118,8 +123,8 @@ fn skin(
         if mode == 1u {
             vertex_color = parts[part * PART_WORDS + 16u + axis];
             normal = 1u << 24u;
-        } else if mode == 2u {
-            // The eyes render type's layers: no normal (`SkinJob::FLAT`).
+        } else if mode == 2u || mode == 3u {
+            // Eyes and outlines have no normal.
             normal = 0u;
         }
         let o = (dst + k) * VERTEX_WORDS;
@@ -135,6 +140,9 @@ fn skin(
         if glint {
             out[o + 9u] = bitcast<u32>(uv.x);
             out[o + 10u] = bitcast<u32>(uv.y);
+        } else if core {
+            out[o + 9u] = bitcast<u32>(rect.x);
+            out[o + 10u] = bitcast<u32>(-rect.y);
         } else {
             out[o + 9u] = 0u;
             out[o + 10u] = 0u;

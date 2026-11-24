@@ -110,6 +110,8 @@ pub struct PreparedModelDraw {
 /// The CPU entity pipelines a prepared draw is ordered against.
 pub struct EntityRangePass<'a> {
     pub pipeline: &'a wgpu::RenderPipeline,
+    pub group: &'a wgpu::BindGroup,
+    pub core_models: Option<&'a super::core_models::World>,
     pub vertices: &'a wgpu::Buffer,
     pub indices: &'a wgpu::Buffer,
 }
@@ -201,11 +203,21 @@ pub fn draw_ordered<'a>(
 ) {
     for span in ranges {
         if span.end / 4 > span.start / 4 {
-            let (first, last) = (span.start / 4 * 6, span.end / 4 * 6);
-            pass.set_pipeline(entities.pipeline);
             pass.set_vertex_buffer(0, entities.vertices.slice(..));
             pass.set_index_buffer(entities.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(first..last, 0, 0..1);
+            if let Some(core) = entities.core_models {
+                core.draw_range(
+                    pass,
+                    entities.pipeline,
+                    entities.group,
+                    span.start / 4..span.end / 4,
+                );
+                pass.set_bind_group(0, entities.group, &[]);
+            } else {
+                let (first, last) = (span.start / 4 * 6, span.end / 4 * 6);
+                pass.set_pipeline(entities.pipeline);
+                pass.draw_indexed(first..last, 0, 0..1);
+            }
         }
         let Some(run) = span.run else {
             continue;
@@ -222,6 +234,7 @@ pub fn draw_ordered<'a>(
         models.draw_run(pass, instances, range, run);
     }
     pass.set_pipeline(entities.pipeline);
+    pass.set_bind_group(0, entities.group, &[]);
     pass.set_vertex_buffer(0, entities.vertices.slice(..));
     pass.set_index_buffer(entities.indices.slice(..), wgpu::IndexFormat::Uint32);
 }

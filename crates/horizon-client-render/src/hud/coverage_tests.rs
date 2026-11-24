@@ -529,6 +529,180 @@ fn a_pack_blit_replaces_its_native_tiles_only_with_the_packs_shader() {
     }
 }
 
+#[test]
+fn core_item_draws_the_baked_tint_and_stitched_item_sheet() {
+    use crate::gfx::core_models::{Gui, ModelShaders, texture};
+    use horizon_assets::resource_source::{Resource, ResourceSource};
+
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some(mut gpu) = Gpu::new() else { return };
+    let vertex = r#"
+layout(std140) uniform Projection {
+    mat4 ProjMat;
+};
+in vec3 Position;
+in vec4 Color;
+in vec2 UV0;
+in vec3 Normal;
+out vec2 uv;
+out vec4 tint;
+void main() {
+    gl_Position = ProjMat * vec4(Position + vec3(Normal.z, 0.0, 0.0), 1.0);
+    uv = UV0;
+    tint = Color;
+}
+"#;
+    let fragment = r#"
+uniform sampler2D Sampler0;
+uniform sampler2D Sampler1;
+uniform sampler2D Sampler2;
+in vec2 uv;
+in vec4 tint;
+out vec4 fragColor;
+void main() {
+    if (textureSize(Sampler0, 0) != ivec2(2, 1)) discard;
+    vec4 material = texture(Sampler0, uv);
+    float overlay = texelFetch(Sampler1, ivec2(0, 10), 0).a;
+    float light = texelFetch(Sampler2, ivec2(15), 0).b;
+    fragColor = vec4(tint.r, material.g, overlay * light, material.a);
+}
+"#;
+    let pack = ResourceSource::indexed(
+        [
+            (
+                "assets/minecraft/shaders/core/item.vsh".into(),
+                Resource::bytes(vertex.as_bytes().to_vec()),
+            ),
+            (
+                "assets/minecraft/shaders/core/item.fsh".into(),
+                Resource::bytes(fragment.as_bytes().to_vec()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut atlas = HudAtlas::boot();
+    atlas.model_shaders = ModelShaders::load(&pack, &ResourceSource::indexed(Default::default()));
+    atlas.width = 4;
+    atlas.height = 1;
+    let rect = |u0, u1| Rect {
+        u0,
+        u1,
+        v0: 0.0,
+        v1: 1.0,
+        w: 1,
+        h: 1,
+    };
+    atlas.sprites = [
+        (MISSING_SPRITE.to_string(), rect(0.0, 0.25)),
+        ("item/test".into(), rect(0.75, 1.0)),
+    ]
+    .into_iter()
+    .collect();
+    let layouts = [
+        ("missingno".into(), rect(0.0, 0.5)),
+        ("item/test".into(), rect(0.5, 1.0)),
+    ]
+    .into_iter()
+    .collect();
+    let image = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 4,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let light = texture(&gpu.device, "synthetic lightmap", [16, 16]);
+    let write = |texture: &wgpu::Texture, pixels: &[u8]| {
+        gpu.queue.write_texture(
+            texture.as_image_copy(),
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(texture.width() * 4),
+                rows_per_image: None,
+            },
+            texture.size(),
+        );
+    };
+    write(
+        &image,
+        &[
+            255, 0, 255, 255, 40, 80, 160, 255, 5, 10, 15, 255, 60, 120, 250, 255,
+        ],
+    );
+    write(&light, &[255, 255, 96, 255].repeat(16 * 16));
+    let [view, light_view] = [&image, &light].map(|t| t.create_view(&Default::default()));
+    let sampler = gpu.device.create_sampler(&Default::default());
+    gpu.hud = HudRenderer::new(
+        &gpu.device,
+        hud_coverage::HUD_FORMAT,
+        &view,
+        &view,
+        &view,
+        &sampler,
+        true,
+    )
+    .unwrap();
+    let tint = rgba(32, 200, 20, 255);
+    let points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+    let mut stock = HudBatch::scratch([4, 2]);
+    stock.quad(points, [[0.875, 0.5]; 4], tint);
+    let (control, _) = gpu.draw(&stock, 0.0, 0.0, true);
+    assert_eq!(&control[0..4], &[8, 94, 20, 255]);
+    assert_eq!(&control[8..12], &[0; 4]);
+
+    let (gui, installed) = Gui::new(
+        &gpu.device,
+        &gpu.queue,
+        hud_coverage::HUD_FORMAT,
+        true,
+        &image,
+        &atlas,
+        &layouts,
+        [[glam::Vec3::Z; 2]; 2],
+        (&light_view, &sampler),
+    )
+    .unwrap();
+    gpu.hud.pack_item = Some(gui);
+    let mut packed = HudBatch::scratch([4, 2]);
+    let r = installed["item/test"];
+    packed.item_model_quad(
+        points.map(|[x, y]| [x, y, 0.0]),
+        [[(r.u0 + r.u1) * 0.5, 0.5]; 4],
+        [0.0, 0.0, 1.0],
+        tint,
+        false,
+    );
+    let mut uploads = crate::gfx::upload::Uploads::new(&gpu.device);
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    gpu.hud
+        .prepare(&gpu.device, &mut uploads, &mut encoder, &packed, [4, 2]);
+    uploads.finish(&encoder);
+    gpu.queue.submit([encoder.finish()]);
+    let (colors, mask) = gpu.draw(&packed, 0.0, 0.0, true);
+    assert_eq!(
+        &colors[0..4],
+        &[0; 4],
+        "the real normal shifts the icon one pixel"
+    );
+    assert_eq!(
+        &colors[8..12],
+        &[32, 120, 96, 255],
+        "raw tint, item material, overlay and lightmap"
+    );
+    assert_eq!(mask, [0, 255, 255, 0].repeat(2));
+}
+
 fn write_gui_fixture_shader(root: &Path, name: &str, vertex: &str, fragment: &str) {
     let dir = root.join("assets/minecraft/shaders/core");
     fs::create_dir_all(&dir).unwrap();

@@ -89,6 +89,8 @@ impl SkinJob {
     /// A model's polygons with no normal at all (all four bytes 0): the eyes render
     /// type's layers, which entity.wgsl leaves unshaded.
     pub const FLAT: u32 = 2;
+    // A flattened model outline still copies the model texture identity.
+    const FLAT_MODEL_OUTLINE: u32 = 3;
 }
 
 const _: () = assert!(std::mem::size_of::<Vertex>() == 44);
@@ -139,7 +141,11 @@ impl SkinFrame {
             self.outline_jobs.push(SkinJob {
                 dst: self.outline_vertices,
                 color,
-                mode: SkinJob::FLAT,
+                mode: if job.mode == SkinJob::MODEL {
+                    SkinJob::FLAT_MODEL_OUTLINE
+                } else {
+                    SkinJob::FLAT
+                },
                 ..job
             });
             self.outline_vertices += job.count;
@@ -495,6 +501,12 @@ fn expand_jobs(
 ) -> Vec<Vertex> {
     let mut out = vec![bytemuck::Zeroable::zeroed(); vertices as usize];
     for job in jobs {
+        let r = job.rect;
+        let core = matches!(job.mode, SkinJob::MODEL | SkinJob::FLAT_MODEL_OUTLINE)
+            && job.scroll == 0.0
+            && matches!(job.overlay, 0 | 1 | 5 | 16..=31)
+            && r[0] < r[2]
+            && r[1] < r[3];
         for k in 0..job.count {
             let v = model[(job.first + k) as usize];
             let part = &frame.parts[(job.part + v.part) as usize];
@@ -509,11 +521,10 @@ fn expand_jobs(
             } else {
                 (v.uv[0] + job.scroll) % 1.0
             };
-            let r = job.rect;
             let (color, normal) = if job.mode == SkinJob::ITEM {
                 let color = part.normal[v.axis as usize].to_bits();
                 (color, crate::mesher::CULL_BACK)
-            } else if job.mode == SkinJob::FLAT {
+            } else if matches!(job.mode, SkinJob::FLAT | SkinJob::FLAT_MODEL_OUTLINE) {
                 (job.color, [0; 4])
             } else {
                 let w = if job.cull != 0 {
@@ -530,7 +541,13 @@ fn expand_jobs(
                 color,
                 light: job.light,
                 normal,
-                glint_uv: if job.glint != 0 { v.uv } else { [0.0, 0.0] },
+                glint_uv: if job.glint != 0 {
+                    v.uv
+                } else if core {
+                    [r[0], -r[1]]
+                } else {
+                    [0.0, 0.0]
+                },
             };
         }
     }

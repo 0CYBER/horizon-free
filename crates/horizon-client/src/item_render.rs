@@ -56,6 +56,8 @@ pub struct ItemQuad {
     /// or UV3 for a special model).
     pub foil_uv: [[f32; 2]; 4],
     /// Standard GUI glint uses the vanilla items atlas; CIT keeps sprite-local UVs.
+    /// On an unenchanted GUI model this is instead the optional `core/item` UV
+    /// in the same stitched sheet.
     pub gui_glint_uv: Option<[[f32; 2]; 4]>,
     pub normal: Vec3,
     pub color: u32,
@@ -568,6 +570,14 @@ fn submit_quads(
         FoilType::Standard => Foil::Standard,
         FoilType::Special => Foil::Special,
     };
+    let gui_core =
+        display == DisplayContext::Gui && foil == Foil::None && renderer.core_gui_enabled();
+    let core_atlas = gui_core.then(|| {
+        renderer
+            .core_gui_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
     let mut normals = FaceNormals::new(m);
     // Quads of one layer mostly share a sprite: look its rect and its
     // translucency up once.
@@ -633,16 +643,21 @@ fn submit_quads(
             pos,
             uv,
             foil_uv: q.uv,
-            gui_glint_uv: atlas
-                .as_ref()
-                .and_then(|atlas| match last_glint {
+            gui_glint_uv: (atlas.is_some() || core_atlas.is_some())
+                .then(|| match last_glint {
                     Some((sprite, rect)) if sprite == q.material.sprite => rect,
                     _ => {
-                        let rect = atlas.get(sprite_name(&q.material.sprite)).copied();
+                        let name = sprite_name(&q.material.sprite);
+                        let rect = match (&core_atlas, &atlas) {
+                            (Some(core_atlas), _) => core_atlas.get(name).copied(),
+                            (None, Some(atlas)) => atlas.get(name).copied(),
+                            (None, None) => None,
+                        };
                         last_glint = Some((&q.material.sprite, rect));
                         rect
                     }
                 })
+                .flatten()
                 .map(|r| {
                     q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v])
                 }),
@@ -915,6 +930,8 @@ pub struct ItemRenderer {
     /// without rules.
     pub cit: Option<cit::CitModels>,
     glint_atlas: Mutex<HashMap<String, Rect>>,
+    core_gui_atlas: Mutex<HashMap<String, Rect>>,
+    core_gui: std::sync::atomic::AtomicBool,
 }
 
 /// Every `items/**/*.json` client item definition, by identifier. Through
@@ -964,6 +981,29 @@ impl ItemRenderer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = sprites;
         Ok(())
+    }
+
+    /// Install the GPU-side GUI item material atlas derived from the baked item sprites.
+    pub fn install_core_gui(
+        &self,
+        install: impl FnOnce(&HashMap<String, Rect>) -> HashMap<String, Rect>,
+    ) {
+        let atlas = self
+            .glint_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let installed = install(&atlas);
+        let enabled = !installed.is_empty();
+        *self
+            .core_gui_atlas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = installed;
+        self.core_gui
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn core_gui_enabled(&self) -> bool {
+        self.core_gui.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Load item definitions, item prototypes (`items.json`), every model,
@@ -1076,6 +1116,8 @@ impl ItemRenderer {
         let static_items: FxHashSet<String> = models.static_item_ids().into_iter().collect();
         Ok(Self {
             glint_atlas: Mutex::default(),
+            core_gui_atlas: Mutex::default(),
+            core_gui: Default::default(),
             item_ids,
             models,
             library,

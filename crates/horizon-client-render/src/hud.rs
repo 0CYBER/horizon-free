@@ -114,6 +114,7 @@ pub struct HudAtlas {
     /// `misc/enchanted_glint_armor`, the armour layers' `GlintSampler`.
     pub glint_armor: (Vec<u8>, u32, u32),
     pub text_shaders: crate::gfx::core_text::TextShaders,
+    pub(crate) model_shaders: crate::gfx::core_models::ModelShaders,
     /// A resource pack's own `core/rendertype_lines` shader for the block outline, translated;
     /// none draws the outline natively.
     pub lines_shader: Option<std::sync::Arc<crate::core_shader::CoreProgram>>,
@@ -1037,6 +1038,7 @@ impl HudAtlas {
                 dynamic_textures::Page::take(&mut atlas.sprites, atlas.width, atlas.height);
         }
         pack_text::load_shaders(&mut atlas, root, defaults);
+        atlas.model_shaders = crate::gfx::core_models::ModelShaders::load(root, defaults);
         atlas.sprite_modifiers = std::sync::Arc::new(sprite_modifiers::SpriteModifiers::read(
             root,
             atlas.sprites.keys(),
@@ -1129,6 +1131,7 @@ impl HudAtlas {
             glint: (Vec::new(), 1, 1),
             glint_armor: (Vec::new(), 1, 1),
             text_shaders: Default::default(),
+            model_shaders: Default::default(),
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
@@ -1203,6 +1206,7 @@ impl HudAtlas {
             glint_armor: (vec![0; 4], 1, 1),
             white,
             text_shaders: Default::default(),
+            model_shaders: Default::default(),
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
@@ -1829,6 +1833,7 @@ impl HudAtlas {
             glint,
             glint_armor,
             text_shaders: Default::default(),
+            model_shaders: Default::default(),
             lines_shader: None,
             sky_shader: None,
             stars_shader: None,
@@ -2051,6 +2056,9 @@ pub enum Blend {
     /// The same blit as the atlas tiles it draws natively, translucent: drawn unless the pack's
     /// shader draws the `PackBlit` of picture `id` after it.
     PackBlitNative(u64),
+    /// A baked GUI item material, with `Lighting.Entry.ITEMS_3D` when true
+    /// and `ITEMS_FLAT` when false.
+    ItemModel(bool),
 }
 
 /// The blend selected by `GuiGraphicsExtractor.fill` and `textHighlight`.
@@ -2410,6 +2418,26 @@ impl HudBatch {
                 text: 0,
             });
         }
+    }
+    /// A face of `GuiItemAtlas.drawToSlot`. A non-glint model uses the spare
+    /// glint attribute for its three signed, quantized normal components.
+    pub fn item_model_quad(
+        &mut self,
+        p: [[f32; 3]; 4],
+        uv: [[f32; 2]; 4],
+        normal: [f32; 3],
+        color: u32,
+        block_light: bool,
+    ) {
+        let start = self.vertices.len();
+        self.quad_3d(p, uv, color);
+        let normal = normal.into_iter().enumerate().fold(0u32, |bits, (i, n)| {
+            bits | (((n.clamp(-1.0, 1.0) * 127.0).round() as i32 + 127) as u32) << (i * 8)
+        });
+        for v in &mut self.vertices[start..] {
+            v.glint_uv[0] = normal as f32;
+        }
+        self.blend_since(start, Blend::ItemModel(block_light));
     }
     /// `RenderTypes.armorCutoutNoCullGlint` (and the items' glint types) over a
     /// [`Self::quad_3d`] face: `uv` is the face's atlas UV,
@@ -3471,6 +3499,7 @@ pub struct HudRenderer {
     /// group for each picture a `Blend::PackBlit` reads.
     pack_blit: Option<pack_text::PackText>,
     pack_blit_groups: HashMap<u64, wgpu::BindGroup>,
+    pub(crate) pack_item: Option<crate::gfx::core_models::Gui>,
     /// Target pixels per window pixel: above 1 for a screenshot drawn larger than the
     /// window (`Renderer::screenshot_quality`).
     pub zoom: f32,
@@ -3766,8 +3795,13 @@ impl HudRenderer {
             pack_gui: None,
             pack_blit: None,
             pack_blit_groups: HashMap::new(),
+            pack_item: None,
             zoom: 1.0,
         })
+    }
+
+    pub(crate) fn pack_model_coverage(&self) -> bool {
+        self.coverage
     }
     /// Draw the CIT glint layers of `textures` (the pack's enchantment rules); `None` or no
     /// textures draws none.
@@ -3925,6 +3959,9 @@ impl HudRenderer {
         {
             pack.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
         }
+        if let Some(item) = &self.pack_item {
+            item.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);
+        }
     }
     /// Draw the batch `prepare` staged.
     pub fn draw(
@@ -4052,6 +4089,14 @@ impl HudRenderer {
                     } => &self.through_walls_overlay_pipeline,
                     Blend::Vignette => &self.vignette_pipeline,
                     Blend::EndPortal => &self.end_portal_pipeline,
+                    Blend::ItemModel(block_light) => {
+                        if let Some(item) = &self.pack_item {
+                            item.draw(&mut pass, range.clone(), *block_light, coverage.is_some());
+                            pass.set_bind_group(0, &self.group, &[]);
+                            continue;
+                        }
+                        &self.pipeline
+                    }
                     Blend::CitGlint(blend) => {
                         if let Some(cit) = &self.cit_glint {
                             cit.draw(&mut pass, *blend, range.clone(), coverage.is_some());

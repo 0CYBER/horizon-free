@@ -13,6 +13,8 @@ struct Frame {
     bindings: wgpu::BindGroupLayout,
     atlas: wgpu::TextureView,
     atlas_texture: wgpu::Texture,
+    lightmap: wgpu::TextureView,
+    sampler: wgpu::Sampler,
 }
 
 /// The software Vulkan adapter (lavapipe, llvmpipe) the pixel tests draw on.
@@ -82,7 +84,9 @@ fn software_frame(
         atlas_size[0],
         atlas_size[1],
         format,
-        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
     );
     queue.write_texture(
         atlas_texture.as_image_copy(),
@@ -174,6 +178,8 @@ fn software_frame(
         bindings,
         atlas: atlas_view,
         atlas_texture,
+        lightmap: light_view,
+        sampler,
     })
 }
 
@@ -223,6 +229,17 @@ pub fn render(
     atlas: &[u8],
     view_proj: Mat4,
     hdr: bool,
+) -> std::result::Result<Vec<u8>, String> {
+    render_with_core(vertices, atlas_size, atlas, view_proj, hdr, None)
+}
+
+fn render_with_core(
+    vertices: &[Vertex],
+    atlas_size: [u32; 2],
+    atlas: &[u8],
+    view_proj: Mat4,
+    hdr: bool,
+    core: Option<(&crate::hud::HudAtlas, bool, bool)>,
 ) -> std::result::Result<Vec<u8>, String> {
     // The HDR mark pass is gone (the entity shader has no `fs_hdr_mark`): `hdr` changes nothing.
     let _ = hdr;
@@ -298,6 +315,46 @@ pub fn render(
             contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
+    let mut models = core.and_then(|(atlas, _, _)| {
+        core_models::World::new(
+            &frame.device,
+            &frame.queue,
+            frame.color.format(),
+            &frame.atlas_texture,
+            atlas,
+            (&frame.lightmap, &frame.sampler),
+        )
+    });
+    if let Some(models) = &mut models {
+        let (_, posed, linear) = core.unwrap();
+        let uniforms = core_models::Uniforms::new(
+            [0; 48],
+            view_proj,
+            Mat4::IDENTITY,
+            [0.0; 4],
+            [1000.0; 6],
+            [glam::Vec3::Y, glam::Vec3::Y],
+            linear,
+        );
+        let skin = posed.then(|| entity_skin::SkinFrame {
+            jobs: vec![entity_skin::SkinJob {
+                dst: 0,
+                count: 4,
+                rect: [0.5, 0.0, 1.0, 1.0],
+                ..Default::default()
+            }],
+            vertices: 4,
+            ..Default::default()
+        });
+        let start = if posed { 4 } else { 0 };
+        models.prepare(
+            &frame.queue,
+            &uniforms,
+            skin.as_ref(),
+            start,
+            &vertices[start as usize..],
+        );
+    }
     let mut encoder = frame.device.create_command_encoder(&Default::default());
     {
         let color_view = frame.color.create_view(&Default::default());
@@ -327,9 +384,120 @@ pub fn render(
         pass.set_bind_group(0, &frame.group, &[]);
         pass.set_vertex_buffer(0, vertex.slice(..));
         pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
+        if let Some(models) = models {
+            models.draw(&mut pass, &pipeline, &frame.group);
+        } else {
+            pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
+        }
     }
     readback(&frame, encoder)
+}
+
+/// `ModelFeatureRenderer.prepareModel`: both CPU and posed runs bind the selected
+/// entity image, rather than sampling our 2x1 packing as a sprite-sized texture.
+#[test]
+#[ignore = "daily"]
+fn core_entity_uses_live_material_color_and_preserves_frame_encoding() {
+    use horizon_assets::resource_source::{Resource, ResourceSource};
+    let vertex = r#"
+layout(std140) uniform Projection {
+    mat4 ProjMat;
+};
+in vec3 Position;
+in vec4 Color;
+in vec2 UV0;
+in ivec2 UV1;
+out vec4 tint;
+out vec2 uv;
+flat out ivec2 overlayUV;
+void main() {
+    gl_Position = ProjMat * vec4(Position, 1.0);
+    tint = Color;
+    uv = UV0;
+    overlayUV = UV1;
+}
+"#;
+    let fragment = r#"
+uniform sampler2D Sampler0;
+uniform sampler2D Sampler1;
+uniform sampler2D Sampler2;
+in vec4 tint;
+in vec2 uv;
+flat in ivec2 overlayUV;
+out vec4 fragColor;
+void main() {
+    vec4 sampleColor = texture(Sampler0, uv);
+    float light = 0.0;
+#ifdef PER_FACE_LIGHTING
+    light = texelFetch(Sampler2, ivec2(0), 0).r;
+#endif
+    float overlay = texelFetch(Sampler1, overlayUV, 0).a;
+    fragColor = vec4(sampleColor.g, tint.r, light * overlay, 1.0);
+}
+"#;
+    let base = ResourceSource::indexed(Default::default());
+    let pack = ResourceSource::indexed(
+        [
+            (
+                "assets/minecraft/shaders/core/entity.vsh".into(),
+                Resource::bytes(vertex.as_bytes().to_vec()),
+            ),
+            (
+                "assets/minecraft/shaders/core/entity.fsh".into(),
+                Resource::bytes(fragment.as_bytes().to_vec()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut atlas = crate::hud::HudAtlas::boot();
+    // Two texels wide, so a sprite-local UV and the atlas UV pick different ones.
+    atlas.width = 4;
+    atlas.height = 1;
+    atlas.sprites.insert(
+        "entity/test/body".into(),
+        crate::hud::Rect {
+            u0: 0.5,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 2,
+            h: 1,
+        },
+    );
+    atlas.model_shaders = core_models::ModelShaders::load(&pack, &base);
+    let vertices =
+        [[-0.75, -0.75], [0.75, -0.75], [0.75, 0.75], [-0.75, 0.75]].map(|[x, y]| Vertex {
+            pos: [x, y, 0.5],
+            // The atlas's third texel, the sprite's first; read unmapped, the sprite's second.
+            uv: [0.625, 0.5],
+            layer: 0,
+            color: u32::from_le_bytes([128, 64, 255, 255]),
+            light: 0xf0f0,
+            normal: [0, 127, 0, 127],
+            glint_uv: [0.5, -0.0],
+        });
+    let pixels = [
+        1, 2, 3, 255, 1, 2, 3, 255, 90, 160, 230, 255, 40, 20, 10, 255,
+    ];
+    let check = |core, expected: [u8; 4]| {
+        let out =
+            render_with_core(&vertices, [4, 1], &pixels, Mat4::IDENTITY, false, core).unwrap();
+        let at = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
+        let got = &out[at..at + 4];
+        for (got, want) in got.iter().zip(expected) {
+            assert!(
+                got.abs_diff(want) <= 1,
+                "entity center {:?}, expected {expected:?}",
+                &out[at..at + 4]
+            );
+        }
+    };
+    check(None, [23, 30, 230, 255]);
+    check(Some((&atlas, false, false)), [160, 128, 128, 255]);
+    check(Some((&atlas, true, false)), [160, 128, 128, 255]);
+    // The same colours in a linear frame; alpha remains coverage.
+    check(Some((&atlas, false, true)), [91, 56, 56, 255]);
 }
 
 /// Inputs for one offscreen prepared instance. Fields stay named so the draw is not a long argument list.

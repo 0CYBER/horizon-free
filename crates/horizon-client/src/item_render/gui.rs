@@ -45,6 +45,7 @@ pub fn items_3d_lights() -> (Vec3, Vec3) {
 #[derive(Clone, Copy, Debug)]
 struct Point {
     p: Vec2,
+    z: f32,
     uv: [f32; 2],
     glint_uv: [f32; 2],
     cit_uv: [f32; 2],
@@ -52,6 +53,7 @@ struct Point {
 fn lerp(a: Point, b: Point, t: f32) -> Point {
     Point {
         p: a.p + (b.p - a.p) * t,
+        z: a.z + (b.z - a.z) * t,
         uv: [
             a.uv[0] + (b.uv[0] - a.uv[0]) * t,
             a.uv[1] + (b.uv[1] - a.uv[1]) * t,
@@ -194,7 +196,10 @@ pub fn draw(
     }
     // A static item drawn where it was drawn before gives the same vertices:
     // take them instead of submitting, sorting and clipping its quads again.
-    let key = DrawnKey::of(state, renderer, sprites, x, y);
+    // The GUI model batch also carries material runs; the vertex-only cache is native.
+    let key = (!renderer.core_gui_enabled())
+        .then(|| DrawnKey::of(state, renderer, sprites, x, y))
+        .flatten();
     if let Some(key) = &key
         && let Ok(drawn) = renderer.gui_drawn.lock()
         && let Some(verts) = drawn.get(key)
@@ -393,7 +398,8 @@ fn draw_now(
         * Mat4::from_scale(Vec3::new(16.0, -16.0, 16.0));
     let mut quads: Vec<ItemQuad> = Vec::new();
     state.submit(renderer, sprites, host, pose, &mut quads);
-    let lights = if state.uses_block_light() {
+    let block_light = state.uses_block_light();
+    let lights = if block_light {
         items_3d_lights()
     } else {
         items_flat_lights()
@@ -433,7 +439,15 @@ fn draw_now(
         rules: &models.rules.rules,
         millis: time * 1000.0,
     });
-    draw_quads_with(&quads, lights, batch, rect, glint.as_ref(), cit);
+    draw_quads_with(
+        &quads,
+        lights,
+        batch,
+        rect,
+        glint.as_ref(),
+        cit,
+        renderer.core_gui_enabled().then_some(block_light),
+    );
 }
 
 /// Lights, culls, sorts far to near and clips `quads` (GUI positions) to
@@ -445,7 +459,7 @@ fn draw_quads(
     rect: [f32; 4],
     glint: Option<&Glint>,
 ) {
-    draw_quads_with(quads, lights, batch, rect, glint, None);
+    draw_quads_with(quads, lights, batch, rect, glint, None, None);
 }
 
 /// [`draw_quads`], then a stack's CIT glint layers over every face.
@@ -456,6 +470,7 @@ fn draw_quads_with(
     rect: [f32; 4],
     glint: Option<&Glint>,
     cit: Option<CitDraw>,
+    pack_light: Option<bool>,
 ) {
     // The faces the CIT layers go over once the item is drawn.
     let mut fans = Vec::new();
@@ -466,6 +481,7 @@ fn draw_quads_with(
             .iter()
             .map(|v| Point {
                 p: v.pos.truncate(),
+                z: v.pos.z,
                 uv: v.uv,
                 glint_uv: v.glint_uv,
                 cit_uv: v.cit_uv,
@@ -478,7 +494,26 @@ fn draw_quads_with(
             if fan.len() < 3 {
                 continue;
             }
-            emit(batch, &fan, |_| color, None);
+            if let Some(block_light) = pack_light
+                && cit.is_none()
+                && q.foil == Foil::None
+                && q.gui_glint_uv.is_some()
+            {
+                let [a, red, green, blue] = q.color.to_be_bytes();
+                let tint = crate::hud::rgba(red, green, blue, a);
+                for j in 1..fan.len() - 1 {
+                    let corners = [fan[0], fan[j], fan[j + 1], fan[j + 1]];
+                    batch.item_model_quad(
+                        corners.map(|v| [v.p.x, v.p.y, v.z]),
+                        corners.map(|v| v.glint_uv),
+                        q.normal.to_array(),
+                        tint,
+                        block_light,
+                    );
+                }
+            } else {
+                emit(batch, &fan, |_| color, None);
+            }
             if q.foil != Foil::None {
                 emit(batch, &fan, |_| color, glint);
             }
@@ -799,6 +834,7 @@ mod tests {
             [0.0, 0.0, 16.0, 16.0],
             None,
             Some(cit),
+            None,
         );
         // The square's two triangles, then the one layer over both: six vertices a triangle.
         assert_eq!(batch.vertices.len(), 24);
@@ -828,6 +864,7 @@ mod tests {
     fn triangles_clip_to_the_slot() {
         let p = |x: f32, y: f32| Point {
             p: Vec2::new(x, y),
+            z: 0.0,
             uv: [x, y],
             glint_uv: [0.0, 0.0],
             cit_uv: [0.0, 0.0],
