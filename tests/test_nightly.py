@@ -731,11 +731,12 @@ class SdkPairTests(unittest.TestCase):
         self.assertFalse(nightly.listed("SHA256SUMS", b"index", sums))
 
     def test_an_sdk_asset_is_trusted_only_under_the_forks_signature_for_its_own_tag(self):
-        command = nightly.signature_check("a" * 40, Path("/tmp/x"), ["sdk.json"])
+        folder = Path.cwd() / "SDK assets"
+        command = nightly.signature_check("a" * 40, folder, ["sdk.json"])
         self.assertEqual(command[:6], ["cargo", "run", "--locked", "--quiet", "-p", "horizon-release-sign"])
         arguments = command[command.index("--") + 1:]
         self.assertEqual(arguments, ["verify", "--repository", "horizon-rust/horizon", "--tag", "sdk-" + "a" * 40,
-                                     "--only", "sdk.json", "/tmp/x"])
+                                     "--only", "sdk.json", str(folder)])
         self.assertNotIn("--publishing", command, "an unsigned SDK is refused, as the launcher refuses it")
 
     def test_the_previous_sdk_is_the_nearest_published_one_behind_the_build(self):
