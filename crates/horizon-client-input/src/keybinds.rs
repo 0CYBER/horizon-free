@@ -84,6 +84,9 @@ pub fn crate_mappings() -> &'static [&'static [(&'static str, &'static str, &'st
 pub const HORIZON_MAPPINGS: &[(&str, &str, &str)] = &[
     // The emote wheel (docs/cosmetics.md), on a key vanilla leaves free.
     ("key.emote", "key.keyboard.b", "multiplayer"),
+    // Fullbright (`extras.fullbright`), unbound until a player picks a key: vanilla has only the
+    // gamma slider.
+    ("key.fullbright", "key.keyboard.unknown", "misc"),
 ];
 /// Active non-vanilla mappings: registered crate mappings, falling back to HORIZON_MAPPINGS if empty.
 fn non_vanilla_mappings()
@@ -768,8 +771,12 @@ mod tests {
     fn horizon_saved_falls_back_when_no_crates_registered() {
         let mut keys = KeyBinds::default();
         let saved = keys.horizon_saved();
-        assert_eq!(saved.len(), 1);
+        assert_eq!(saved.len(), 2);
         assert_eq!(saved[0], ("key.emote", "key.keyboard.b".to_string()));
+        assert_eq!(
+            saved[1],
+            ("key.fullbright", "key.keyboard.unknown".to_string())
+        );
         keys.set("key.emote", "key.keyboard.v");
         let saved_rebound = keys.horizon_saved();
         assert_eq!(
@@ -791,9 +798,11 @@ mod tests {
         assert_eq!(active[1].1, "key.keyboard.x");
         // Verify fallback is empty when registered is provided
         let fallback_only: Vec<_> = active_non_vanilla(&[]).collect();
-        assert_eq!(fallback_only.len(), 1);
+        assert_eq!(fallback_only.len(), 2);
         assert_eq!(fallback_only[0].0, "key.emote");
         assert_eq!(fallback_only[0].1, "key.keyboard.b");
+        assert_eq!(fallback_only[1].0, "key.fullbright");
+        assert_eq!(fallback_only[1].1, "key.keyboard.unknown");
     }
     #[test]
     fn only_a_synced_set_changes_keybind_display() {

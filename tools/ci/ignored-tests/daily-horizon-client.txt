@@ -43,6 +43,8 @@ horizon-client game::fishing::impact::tests::bobbers_notify_before_entity_deflec
 horizon-client game::fishing::impact::tests::entity_impact_includes_items_and_cancel_skips_hooking lib daily resources
 horizon-client game::fishing::impact::tests::misses_water_and_the_closed_gate_emit_no_bobber_impact lib daily resources
 horizon-client game::fishing::impact::tests::removing_a_bobber_in_its_impact_clears_the_line_without_rewards lib daily resources
+horizon-client game::fullbright_key_tests::a_mouse_bound_fullbright_press_toggles_the_extra_and_keeps_the_buttons_mappings lib daily game-boot
+horizon-client game::fullbright_key_tests::the_fullbright_key_toggles_the_extra_and_does_nothing_where_the_server_holds_it_off lib daily game-boot
 horizon-client game::game_mode::tests::leaving_creative_keeps_the_carried_stack lib daily resources
 horizon-client game::game_mode::tests::the_tick_swap_out_of_creative_keeps_the_carried_stack lib daily resources
 horizon-client game::ghasts::ghastling_hatch_tests::hatched_ghastling_spawns_non_persistent lib daily resources

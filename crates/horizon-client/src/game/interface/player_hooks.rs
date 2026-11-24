@@ -18,10 +18,16 @@ use horizon_hooks::players::{
 use std::sync::Arc;
 
 /// Registers the hooks of the Horizon parts still in this crate (cosmetics: spec #14091 step 5
-/// moves them out). Before the hooks are sealed.
+/// moves them out), and the key mappings those parts bind. Before the hooks are sealed.
 pub(crate) fn register() {
     if let Err(e) = super::cosmetics::register() {
         log::error!("Cosmetics: their hooks came too late: {e}");
+    }
+    // Fullbright key mapping (#18700): always registered, as the emote key is.
+    static FULLBRIGHT: &horizon_hooks::actions::Mappings =
+        &[("key.fullbright", "key.keyboard.unknown", "misc")];
+    if let Err(e) = horizon_hooks::actions::register(FULLBRIGHT) {
+        log::error!("Fullbright key: its mapping came too late: {e}");
     }
 }
 

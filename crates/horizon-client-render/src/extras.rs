@@ -12,6 +12,8 @@ pub const SORT_KEY: &str = "horizon.sort";
 const SKIN_LAYERS_KEY: &str = "threeDSkinLayers";
 /// The emote wheel's key, here and in the `key_key.emote` line #10092 wrote to `options.txt`.
 const EMOTE_KEY: &str = "emoteKey";
+/// The fullbright toggle's key (`key.fullbright`), which vanilla has no line for at all.
+const FULLBRIGHT_KEY: &str = "fullbrightKey";
 const OLD_EMOTE_LINE: &str = "key_key.emote";
 
 /// The minimap's sizes in GUI pixels, and its zooms in blocks per pixel.
@@ -133,6 +135,9 @@ pub struct Extras {
     /// `Settings::keys`, bound in Controls with the vanilla ones; it is only kept in this file
     /// so that `options.txt` stays vanilla's (`Settings::load` hands it over, `save` takes it back).
     pub emote_key: String,
+    /// Fullbright's key (`key.fullbright`), kept here like `emote_key`: unbound by default, so
+    /// the switch in the Video settings is the only way to it until a player picks a key.
+    pub fullbright_key: String,
     /// A new chat line slides in from the left while it fades in (`Chat::layout`).
     pub chat_animation: bool,
     /// The indicator bar at the left of a chat line (on by default, as vanilla).
@@ -210,6 +215,7 @@ impl Default for Extras {
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
             emote_key: crate::keybinds::KeyBinds::default_of("key.emote").into(),
+            fullbright_key: crate::keybinds::KeyBinds::default_of("key.fullbright").into(),
             chat_animation: false,
             chat_indicator: true,
             no_ai: false,
@@ -367,6 +373,7 @@ impl Extras {
                 "sort" => e.sort = flag(e.sort),
                 "sortKey" if value.starts_with("key.") => e.sort_key = value.to_owned(),
                 EMOTE_KEY if value.starts_with("key.") => e.emote_key = value.to_owned(),
+                FULLBRIGHT_KEY if value.starts_with("key.") => e.fullbright_key = value.to_owned(),
                 "chatAnimation" => e.chat_animation = flag(e.chat_animation),
                 "chatIndicator" => e.chat_indicator = flag(e.chat_indicator),
                 horizon_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
@@ -455,6 +462,7 @@ impl Extras {
             bool_text(self.spyglass_polar_look),
         );
         text.push_str(&format!("{EMOTE_KEY}:{}\n", self.emote_key));
+        text.push_str(&format!("{FULLBRIGHT_KEY}:{}\n", self.fullbright_key));
         self.pvp.serialize(&mut text);
         text
     }

@@ -426,6 +426,8 @@ impl Settings {
         // Horizon's own key bindings live in horizon-extras.txt, not in options.txt.
         let emote = settings.extras.emote_key.clone();
         settings.keys.set("key.emote", &emote);
+        let fullbright = settings.extras.fullbright_key.clone();
+        settings.keys.set("key.fullbright", &fullbright);
         // The loaded set is the active one: `keybind` text components show its keys.
         settings.keys.sync_action_bindings();
         // `Options.load`: `sharePresence` decides what the friends service posts.
@@ -738,6 +740,8 @@ impl Settings {
         };
         // Horizon's own bindings aren't in options.txt.
         next.keys.set("key.emote", self.keys.get("key.emote"));
+        next.keys
+            .set("key.fullbright", self.keys.get("key.fullbright"));
         Ok(next)
     }
     /// The `options.txt` text (Options.save).
@@ -755,6 +759,7 @@ impl Settings {
             crate::gamepad::store::keep(&self.controller);
             let mut extras = self.extras.clone();
             extras.emote_key = self.keys.get("key.emote").to_owned();
+            extras.fullbright_key = self.keys.get("key.fullbright").to_owned();
             extras.save(dir);
             horizon_hooks::settings::engine::save_own(dir, &[crate::extras::FILE]);
             self.mods.save(&crate::logging::shared_dir(dir));

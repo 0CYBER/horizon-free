@@ -66,6 +66,22 @@ impl Game<'_> {
             master_volume: self.settings.master_volume,
         }
     }
+    /// Whether fullbright is on as the player sees it: the extra's own switch
+    /// (`extras.fullbright`), unless this window's server holds it off (`fullbright_held`, a
+    /// connection to another's server; #3823, #14335).
+    pub(in crate::game) fn fullbright(&self) -> bool {
+        self.settings.extras.fullbright && !self.settings.fullbright_held
+    }
+    /// Turns fullbright on or off and saves it, as the Video settings' switch does; `false`,
+    /// changing nothing, where the server holds it off.
+    pub(in crate::game) fn set_fullbright(&mut self, on: bool) -> bool {
+        if self.settings.fullbright_held {
+            return false;
+        }
+        self.settings.extras.fullbright = on;
+        self.settings.save(&Self::options_path());
+        true
+    }
 }
 
 /// Convert live client settings into the API-owned GUI snapshot.

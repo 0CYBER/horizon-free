@@ -9909,6 +9909,12 @@ impl Game<'_> {
                             {
                                 self.smooth_camera_action();
                             }
+                            // `key.fullbright` takes mouse buttons too (`bind_mouse`), and no
+                            // vanilla mapping translates it: its press is taken here as the key's
+                            // is. It is not swallowed: the mappings on this button still run below.
+                            if pressed {
+                                self.fullbright_key_press(&input);
+                            }
                             for mapped in self.settings.keys.translate_mouse_all(button) {
                                 match mapped {
                                     Err(b)
@@ -10336,6 +10342,16 @@ impl Game<'_> {
                             .is_some_and(|n| self.settings.keys.get("key.smoothCamera") == n)
                     {
                         self.smooth_camera_action();
+                    }
+                    // `key.fullbright` is Horizon's, unbound by default: no vanilla mapping
+                    // translates it, so its press is taken here. It is not swallowed: a key it
+                    // shares with a mapping still drives that mapping, as vanilla runs every
+                    // mapping bound to a key.
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && let Some(name) = horizon_client::keybinds::key_name(key)
+                    {
+                        self.fullbright_key_press(name);
                     }
                     // ScreenEvent.KeyPressed.Post / KeyReleased.Post: no screen arm
                     // took the key, so the open screen's `keyPressed` returned

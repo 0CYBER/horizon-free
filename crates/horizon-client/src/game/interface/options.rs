@@ -833,6 +833,20 @@ impl Game<'_> {
             r.fullbright = self.settings.extras.fullbright && !held;
         }
     }
+    /// The fullbright key (`key.fullbright`), from the game: it toggles the extra the Video
+    /// settings' switch does, and the next tick's `hold_fullbright` draws it. Reported handled
+    /// where the server holds fullbright off too, so the key does nothing else there (the
+    /// settings row is hidden in that state, and the key says nothing either).
+    pub(super) fn fullbright_key_press(&mut self, name: &str) -> bool {
+        if self.screen != Screen::Playing
+            || self.settings.keys.get("key.fullbright") != name
+            || name == "key.keyboard.unknown"
+        {
+            return false;
+        }
+        self.set_fullbright(!self.fullbright());
+        true
+    }
 }
 
 /// Fullbright is held off on another's server, where it would light what the server shows

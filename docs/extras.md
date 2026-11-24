@@ -75,6 +75,9 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
   lightmap and the graphics screen hides the row, while the saved choice stays for the next world. Single
   player, a LAN host, a splitscreen seat in P1's world and Replay Studio keep it (`fullbright_held`,
   `game/options.rs`).
+- Its own key, `key.fullbright` (Controls, unbound by default, saved in `horizon-extras.txt` as
+  `fullbrightKey`), toggles it in play; client mods read and set it through the host's `fullbright` and
+  `set_fullbright` (area `client_options`). Both change nothing while it is held off.
 
 ### Dynamic lights (`dynamicLights`, default off)
 - A light source held by a player or mob (main or off hand), dropped as an item, or an entity on

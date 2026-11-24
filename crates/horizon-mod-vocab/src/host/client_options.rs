@@ -38,4 +38,17 @@ pub trait ClientOptionsClientHost {
     /// A snapshot of the current audio preferences.
     #[access(ClientSetup)]
     fn audio_options(&self) -> ClientAudioOptions;
+    /// Side: client.
+    /// Whether fullbright is on as the player sees it: Horizon's extra that draws the
+    /// world at full light, unless the server this window plays on holds it off
+    /// (`settings.fullbright_held`: another's server, #3823/#14335). In single player, as a
+    /// LAN host and in Replay Studio it is the extra's own switch.
+    #[access(ClientSetup)]
+    fn fullbright(&self) -> bool;
+    /// Side: client.
+    /// Turns fullbright on or off, saved with the rest of the settings as the Video
+    /// settings' switch does; the next frame draws it. `false`, changing nothing, where
+    /// [`Self::fullbright`] is held off by the server.
+    #[access(ClientSetup)]
+    fn set_fullbright(&mut self, on: bool) -> bool;
 }

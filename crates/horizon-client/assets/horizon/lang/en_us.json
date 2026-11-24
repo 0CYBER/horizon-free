@@ -842,6 +842,7 @@
   "horizon.extras.cosmetics_mine": "My cosmetics",
   "horizon.extras.cosmetics_mine.tooltip": "Hidden: every Horizon player sees you without your cosmetics, you included. The same switch as the launcher's Wardrobe.",
   "key.emote": "Emote Wheel",
+  "key.fullbright": "Toggle Fullbright",
   "horizon.emote_wheel.title": "Emotes",
   "horizon.emote_wheel.empty": "No emotes yet",
   "horizon.emote_wheel.help": "Release or click to play · 1–8 · Esc closes",
