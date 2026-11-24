@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
+use super::array_constructors::matching;
 use super::scan::{QUALIFIERS, STORAGE, significant};
 use super::{Error, GbuffersInputs, Program, Target};
 use crate::Preprocessed;
@@ -489,9 +490,150 @@ fn combine(
     out.code = code.trim_end_matches('\n').to_owned();
     out.lines.truncate(out.code.split('\n').count());
     // A strip of n vertices is n - 2 triangles: at most `max_vertices - 2`, whichever of the
-    // stage's paths runs.
-    let triangles = max_vertices.saturating_sub(2).max(1);
+    // stage's paths runs, and no more than its loops when each draws one strip of three
+    // (`emission_loops`). An instance past the triangles the stage emits would draw nothing and
+    // skip the image and atomic writes (`hz_primary` is in the first one); its other stores
+    // repeat the first instance's. Yet it runs the whole stage.
+    let strip = max_vertices.saturating_sub(2);
+    let triangles = emission_loops(&gs_tokens)
+        .map_or(strip, |loops| loops.min(strip))
+        .max(1);
     Ok((out, triangles))
+}
+
+/// The most triangles the geometry stage can emit when its strips are three vertices each:
+/// every `EmitVertex()` is in `main`, in a loop `for (int i = 0; i < 3; i++)` (its innermost
+/// loop) that emits once an iteration, never sets `i`, is in no other loop and is followed by
+/// `EndPrimitive();` or the end of `main`. Such a loop runs at most once and draws a strip of at
+/// most three vertices, one triangle, whatever `max_vertices` allows. `None` for a stage of
+/// another shape.
+fn emission_loops(tokens: &[&str]) -> Option<u32> {
+    let t: Vec<&str> = tokens.iter().copied().filter(|t| significant(t)).collect();
+    let at = |i: usize| t.get(i).copied().unwrap_or("");
+    // `void main()` or `void main(void)`: the brace of its body.
+    let open = (1..t.len()).find_map(|i| {
+        let shut = if at(i + 2) == "void" { i + 3 } else { i + 2 };
+        (t[i] == "main"
+            && t[i - 1] == "void"
+            && at(i + 1) == "("
+            && at(shut) == ")"
+            && at(shut + 1) == "{")
+            .then_some(shut + 1)
+    })?;
+    let close = matching(&t, open)?;
+    let emits: Vec<usize> = (0..t.len()).filter(|&i| t[i] == "EmitVertex").collect();
+    if emits
+        .iter()
+        .any(|&e| e <= open || e >= close || at(e + 1) != "(")
+    {
+        return None;
+    }
+    // The loops of `main`: their keyword, their body's first and last tokens, and the variable
+    // of one counting 0, 1, 2.
+    let mut loops: Vec<(usize, usize, usize, Option<&str>)> = Vec::new();
+    let mut tails = Vec::new();
+    for (i, &word) in t.iter().enumerate().take(close).skip(open + 1) {
+        match word {
+            "do" => {
+                if at(i + 1) != "{" {
+                    return None;
+                }
+                let last = matching(&t, i + 1)?;
+                // The `while` after the body starts no loop of its own.
+                tails.push(last + 1);
+                loops.push((i, i + 1, last, None));
+            }
+            "for" | "while" if !tails.contains(&i) => {
+                if at(i + 1) != "(" {
+                    return None;
+                }
+                let shut = matching(&t, i + 1)?;
+                let (first, last) = statement(&t, shut + 1)?;
+                let var = if word == "for" {
+                    counter(&t[i + 2..shut])
+                } else {
+                    None
+                };
+                loops.push((i, first, last, var));
+            }
+            _ => {}
+        }
+    }
+    let mut counted = Vec::new();
+    for &e in &emits {
+        // The innermost loop around the call, which must hold it in its body.
+        let k = (loops.iter()).rposition(|&(start, _, last, _)| start < e && e <= last)?;
+        let (start, first, last, var) = loops[k];
+        let v = var.filter(|_| first <= e)?;
+        let once = emits
+            .iter()
+            .filter(|&&f| (first..=last).contains(&f))
+            .count()
+            == 1;
+        let nested = (loops.iter()).any(|&(s, _, l, _)| s < start && start <= l);
+        let ended = last + 1 == close
+            || t.get(last + 1..last + 5) == Some(&["EndPrimitive", "(", ")", ";"][..]);
+        if !once || nested || !ended || sets(&t[first..=last], v) {
+            return None;
+        }
+        if !counted.contains(&start) {
+            counted.push(start);
+        }
+    }
+    Some(counted.len() as u32)
+}
+
+/// The first and last tokens of the statement at `t[at]`: a block, or a statement up to its `;`
+/// with no block or control flow of its own.
+fn statement(t: &[&str], at: usize) -> Option<(usize, usize)> {
+    if *t.get(at)? == "{" {
+        return Some((at, matching(t, at)?));
+    }
+    let mut depth = 0usize;
+    for (j, &token) in t.iter().enumerate().skip(at) {
+        match token {
+            "(" | "[" => depth += 1,
+            ")" | "]" => depth = depth.checked_sub(1)?,
+            "{" | "}" | "for" | "while" | "do" | "if" | "else" | "switch" => return None,
+            ";" if depth == 0 => return Some((at, j)),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The variable of a loop header `int i = 0; i < 3; i++` (or `i <= 2`, `i != 3`, `++i`,
+/// `i += 1`): three iterations, unless the body sets it.
+fn counter<'a>(header: &[&'a str]) -> Option<&'a str> {
+    let parts: Vec<&[&'a str]> = header.split(|t| *t == ";").collect();
+    let [init, test, step] = parts[..] else {
+        return None;
+    };
+    let ["int", v, "=", "0"] = *init else {
+        return None;
+    };
+    let counts = matches!(*test, [w, "<", "3"] | [w, "<", "=", "2"] | [w, "!", "=", "3"] if w == v);
+    let steps = matches!(*step, [w, "+", "+"] | ["+", "+", w] | [w, "+", "=", "1"] if w == v);
+    (counts && steps && super::scan::is_ident(v)).then_some(v)
+}
+
+/// Whether `body` may set variable `v`: an assignment, `++` or `--`, a swizzle of it (`v.x = 0`
+/// sets `v`), or `v` passed alone to a function, which may take it as an `out` parameter.
+fn sets(body: &[&str], v: &str) -> bool {
+    let at = |i: Option<usize>| i.and_then(|i| body.get(i)).copied().unwrap_or("");
+    (0..body.len()).any(|j| {
+        let [p2, p1] = [j.checked_sub(2), j.checked_sub(1)].map(at);
+        let [n1, n2, n3] = [j + 1, j + 2, j + 3].map(|k| at(Some(k)));
+        body[j] == v
+            && p1 != "."
+            && ((n1 == "=" && n2 != "=")
+                || (matches!(n1, "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^") && n2 == "=")
+                || (matches!(n1, "<" | ">") && n2 == n1 && n3 == "=")
+                || (matches!(n1, "+" | "-") && n2 == n1)
+                || (matches!(p1, "+" | "-") && p2 == p1)
+                || n1 == "."
+                || (matches!(p1, "(" | ",") && matches!(n1, ")" | ",")))
+    })
 }
 
 /// Functions whose calls write memory other invocations see.
@@ -694,6 +836,74 @@ mod tests {
         let fsh = "#version 430\nuniform float far;\nin float gDepth;\n\
                    void main() {\n    gl_FragData[0] = vec4(gDepth / far);\n}\n";
         fold(vsh, gsh, fsh).unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    /// A stage that may emit six vertices, as two strips of three (one of them only sometimes),
+    /// emits two triangles at most, not the four of one strip of six: two instances.
+    #[test]
+    fn strips_of_three_draw_an_instance_each() {
+        let vsh = "#version 430\nout vec2 vUv;\nvoid main() {\n    vUv = gl_Vertex.xy;\n    \
+                   gl_Position = ftransform();\n}\n";
+        let gsh = "#version 430\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 6) out;\n\
+                   uniform float far;\nin vec2 vUv[];\nout vec2 gUv;\nvoid main() {\n    \
+                   if (far > 16.0) {\n        for (int i = 0; i < 3; i++) {\n            \
+                   gUv = vUv[i] * 2.0;\n            gl_Position = vec4(vUv[i], 0.0, 1.0);\n            \
+                   EmitVertex();\n        }\n        EndPrimitive();\n    }\n    \
+                   for (int i = 0; i < 3; ++i) {\n        gUv = vUv[i];\n        \
+                   gl_Position = gl_in[i].gl_Position;\n        EmitVertex();\n    }\n    \
+                   EndPrimitive();\n}\n";
+        let fsh = "#version 430\nin vec2 gUv;\nvoid main() {\n    gl_FragData[0] = vec4(gUv, 0.0, 1.0);\n}\n";
+        let (_, triangles) = fold(vsh, gsh, fsh).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(triangles, 2);
+    }
+
+    /// Strips that can run on past three vertices (n vertices are n - 2 triangles), or loops
+    /// that can run more than once, keep the bound of `max_vertices`.
+    #[test]
+    fn only_strips_of_three_bound_the_triangles() {
+        let bound = |main: &str| emission_loops(&lex(main));
+        let strip = "for (int i = 0; i < 3; i++) { o = v[i]; gl_Position = gl_in[i].gl_Position; \
+                     EmitVertex(); }";
+        assert_eq!(
+            bound(&format!("void main() {{ {strip} EndPrimitive(); }}")),
+            Some(1)
+        );
+        assert_eq!(
+            bound(&format!(
+                "void main() {{ if (c) {{ {strip} EndPrimitive(); }} {strip} }}"
+            )),
+            Some(2)
+        );
+        assert_eq!(
+            bound("void main(void) { for (int k = 0; k <= 2; ++k) EmitVertex(); }"),
+            Some(1)
+        );
+        assert_eq!(bound("void main() { imageStore(a, p, v); }"), Some(0));
+        for main in [
+            // One strip of six vertices, and one of four.
+            format!("void main() {{ {strip} {strip} EndPrimitive(); }}"),
+            format!("void main() {{ {strip} gl_Position = p; EmitVertex(); EndPrimitive(); }}"),
+            // A loop in a loop, a loop of four, two vertices an iteration.
+            format!("void main() {{ for (int j = 0; j < 2; j++) {{ {strip} EndPrimitive(); }} }}"),
+            "void main() { for (int i = 0; i < 4; i++) EmitVertex(); }".into(),
+            "void main() { for (int i = 0; i < 3; i++) { EmitVertex(); EmitVertex(); } }".into(),
+            // The counter set again, or passed to a function that may set it.
+            "void main() { for (int i = 0; i < 3; i++) { EmitVertex(); if (c) i = 0; } }".into(),
+            "void main() { for (int i = 0; i < 3; i++) { step(i); EmitVertex(); } }".into(),
+            "void main() { for (int i = 0; i < 3; i++) { EmitVertex(); if (c) i--; } }".into(),
+            "void main() { for (int i = 0; i < 3; i++) { EmitVertex(); if (c) i.x = -1; } }".into(),
+            "void main() { for (int i = 0; i < 3; i++) { EmitVertex(); if (c && i == 2) i -= 3; } }"
+                .into(),
+            // A strip not ended before the next one, and one in a loop of another kind.
+            format!("void main() {{ if (c) {{ {strip} }} {strip} EndPrimitive(); }}"),
+            format!("void main() {{ do {{ {strip} EndPrimitive(); }} while (++n < 2); }}"),
+            "void main() { int i = 0; while (i < 3) { EmitVertex(); i++; } }".into(),
+            // Emitted by a function of the stage's own.
+            "void emit() { EmitVertex(); }\nvoid main() { for (int i = 0; i < 3; i++) emit(); }"
+                .into(),
+        ] {
+            assert_eq!(bound(&main), None, "{main}");
+        }
     }
 
     #[test]

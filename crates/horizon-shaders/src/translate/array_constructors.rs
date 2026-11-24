@@ -176,7 +176,7 @@ fn constructor_end<'a>(
 }
 
 /// The index of the bracket closing the one at `open`.
-fn matching(tokens: &[&str], open: usize) -> Option<usize> {
+pub(super) fn matching(tokens: &[&str], open: usize) -> Option<usize> {
     let mut depth = 0usize;
     for (j, t) in tokens.iter().enumerate().skip(open) {
         match *t {
