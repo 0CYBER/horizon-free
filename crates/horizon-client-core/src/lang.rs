@@ -796,11 +796,8 @@ mod tests {
         assert_eq!(en.get("horizon.options.controller"), Some("Controller"));
         let ru = Language::load(&[&empty], "ru_ru");
         assert_eq!(ru.get("horizon.options.controller"), Some("Геймпад"));
-        // Every bundled string carries both languages: a key added to one file
-        // and forgotten in the other shows as a key name on screen.
-        for key in en.map().keys() {
-            assert!(ru.get(key).is_some(), "{key} has no ru_ru value");
-        }
+        // A key ru_ru.json lacks is no gap on screen: `load` layers en_us under every
+        // language, so it shows the English (#12714). `tools/lang_coverage.py` lists them.
         assert_eq!(en.get("horizon.pages.mods"), Some("Mods"));
         assert_eq!(ru.get("horizon.pages.mods"), Some("Моды"));
         let zh = Language::load(&[&empty], "zh_cn");
