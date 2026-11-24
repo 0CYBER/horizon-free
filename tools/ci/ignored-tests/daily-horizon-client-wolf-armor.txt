@@ -1,0 +1,2 @@
+horizon-client game::wolf_armor_tests::thorns_wear_a_wolfs_body_piece_and_a_break_sends_its_event lib daily resources
+horizon-client game::wolf_armor_tests::wolf_break_event_reaches_clients_before_the_empty_body_slot lib daily resources

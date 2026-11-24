@@ -71,11 +71,21 @@ impl Game<'_> {
             return;
         };
         let at = [m.position.x, m.position.y, m.position.z];
+        self.mob_break_item(id, &stack, at);
+    }
+    /// `LivingEntity.breakItem` for the mob `id`, with the stack that broke:
+    /// its break sound (unless the mob is silent) where it stands, then five
+    /// crumbs. A window that is its own client has already lost the stack from
+    /// the slot, so it hands it here.
+    pub(super) fn mob_break_item(&mut self, id: i32, stack: &ItemStack, at: [f64; 3]) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id as u32) else {
+            return;
+        };
         let (eye, pitch, yaw, silent) = (m.eye_height(), m.head_pitch, m.yaw, m.silent);
         if !silent {
-            self.break_sound_at(&stack, at);
+            self.break_sound_at(stack, at);
         }
-        let options = self.item_particle(&stack);
+        let options = self.item_particle(stack);
         let mut spawned = Vec::new();
         particles::item_use_particles(
             &mut self.world.random,

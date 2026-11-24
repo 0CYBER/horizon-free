@@ -129,10 +129,11 @@ fn a_hurt_horse_reports_the_body_armour_wear() {
     );
 }
 
-/// `Horse` is the only mob that overrides `LivingEntity.hurtArmor` (the
-/// base one is empty, `LivingEntity.java:1887`), so a donkey wearing a body
-/// item — `/item replace entity @e[type=minecraft:donkey,limit=1]
-/// armor.body with minecraft:wolf_armor` — wears nothing.
+/// `Horse` and `Wolf` are the mobs that override `LivingEntity.hurtArmor`
+/// (the base one is empty, `LivingEntity.java:1887`), so a donkey wearing a
+/// body item — `/item replace entity @e[type=minecraft:donkey,limit=1]
+/// armor.body with minecraft:wolf_armor` — wears nothing, even though
+/// vanilla only gives a horse's and a wolf's body piece the wear.
 #[test]
 fn a_donkey_wearing_a_body_item_wears_nothing() {
     let mut test_level = crate::health::TestLevel::new(0);
@@ -148,7 +149,7 @@ fn a_donkey_wearing_a_body_item_wears_nothing() {
             .outbox
             .iter()
             .any(|e| matches!(e, MobEvent::ArmorHurt { .. })),
-        "only a horse's own override wears its body piece"
+        "only a horse's or a wolf's own override wears its body piece"
     );
 }
 

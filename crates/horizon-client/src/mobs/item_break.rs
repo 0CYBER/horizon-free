@@ -209,7 +209,7 @@ mod tests {
         // Levels change below 95%, 69% and 32% of the 64 points left, that is
         // after 4, 20 and 44 points of wear.
         let hurt = |wolf: &mut Mob, damage: f32| {
-            wolf.hurt_wolf_armor(damage);
+            crate::mobs::wolf::hurt_armor(wolf, damage);
             std::mem::take(&mut wolf.outbox)
         };
         let scutes = |events: &[MobEvent]| {

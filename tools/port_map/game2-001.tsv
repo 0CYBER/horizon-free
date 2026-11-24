@@ -33,9 +33,9 @@ Wolf.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_fr
 Wolf.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	the sound variant is stored and `variant_sound` reads it for the wolf's growl, pant and whine
 Wolf.getAmbientSound	port	crates/horizon-client/src/mobs/ai.rs::ambient_sound	angry reads the persistent anger timer (`tame::angry`) and plays the variant's growl, else a calm wolf plays its variant's pant or whine
 Wolf.die	port	crates/horizon-client/src/mobs/tame.rs::die	`drops::die` asks it first: isWet/isShaking and both shake animations are cleared
-Wolf.getHeadRollAngle	port	crates/horizon-client/src/mobs/tame.rs::anim
-Wolf.applyTamingSideEffects	port	crates/horizon-client/src/mobs/tame.rs::set_tame
-Wolf.hurtArmor	port	crates/horizon-client/src/mobs.rs::Mob::hurt_wolf_armor
+Wolf.getHeadRollAngle	port	crates/horizon-client/src/mobs/tame.rs::anim	
+Wolf.applyTamingSideEffects	port	crates/horizon-client/src/mobs/tame.rs::set_tame	
+Wolf.hurtArmor	port	crates/horizon-client/src/mobs/wolf.rs::wears_body	when: a hit the armour did not take (doHurtEquipment on the body slot); game/mobs/creatures/mod.rs::Game::hurt_mob_armor takes max(1, damage / 4) off it, Unbreaking and the fire-resistant spare applied
 Wolf.tryToTame	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_mob	one in three tames; particles 7 or 6, sit, stop nav, clear target
 Wolf.handleEntityEvent	inline	crates/horizon-client/src/mobs/tame.rs::ai_step	entity events 8 and 56 folded into the shake state in ai_step
 Wolf.getLeashOffset	port	crates/horizon-client/src/mobs/leash.rs::leash_offset	(0, 0.6 times the eye height as a float product, 0.4 times the width)
