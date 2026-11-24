@@ -1305,6 +1305,7 @@ impl ExperienceOrb {
         }
         // ExperienceOrb.tick applies block effects after moving, before drag.
         let discarded = server
+            && !burnt_out
             && self.apply_lava_contact_damage_inner(
                 world,
                 fluids,
@@ -1376,9 +1377,6 @@ impl ExperienceOrb {
         on_sound: &mut dyn FnMut([f64; 3], f32),
         invulnerable: &mut dyn FnMut(&mut W, &str) -> bool,
     ) -> bool {
-        if self.health <= 0 {
-            return true;
-        }
         let contacts = orb_lava_contacts(self.previous, self.position, wanted, |p| {
             let fluid = fluids.fluid(world.block(p.x, p.y, p.z));
             if !fluid
@@ -5301,23 +5299,54 @@ mod orb_lava_tests {
             );
             assert_eq!(client_orb.health, 5);
 
-            // Dead orb (health <= 0) takes no contact damage and emits no sound
-            let mut dead_orb = sample_orb(Vec3::new(20.5, 4.1, 20.5), 0);
+            // A loaded zero-health orb survives in air until lava actually damages it (vanilla
+            // checks health only inside `ExperienceOrb.hurtServer`).
+            let mut zero_health_air = sample_orb(Vec3::new(22.5, 4.1, 22.5), 0);
             sounds.clear();
-            let mut dead_draws = 0;
-            let discarded = dead_orb.apply_lava_contact_damage(
+            let mut air_draws = 0;
+            let discarded_in_air = zero_health_air.apply_lava_contact_damage(
                 world,
                 fluids,
                 Vec3::ZERO,
                 &mut || {
-                    dead_draws += 1;
+                    air_draws += 1;
                     0.5
                 },
                 &mut |pos, pitch| sounds.push((pos, pitch)),
             );
-            assert!(discarded, "dead orb remains discarded");
-            assert!(sounds.is_empty(), "dead orb must not play burn sound");
-            assert_eq!(dead_draws, 0, "dead orb must not consume random float");
+            assert!(
+                !discarded_in_air,
+                "zero-health orb in air survives until damaged"
+            );
+            assert!(
+                sounds.is_empty(),
+                "zero-health orb in air must not play burn sound"
+            );
+            assert_eq!(
+                air_draws, 0,
+                "zero-health orb in air must not consume random float"
+            );
+
+            // Once lava contacts a zero-health orb, hurt() discards it and plays the burn sound.
+            let mut zero_health_lava = sample_orb(Vec3::new(20.5, 4.1, 20.5), 0);
+            sounds.clear();
+            let mut lava_draws = 0;
+            let discarded_in_lava = zero_health_lava.apply_lava_contact_damage(
+                world,
+                fluids,
+                Vec3::ZERO,
+                &mut || {
+                    lava_draws += 1;
+                    0.5
+                },
+                &mut |pos, pitch| sounds.push((pos, pitch)),
+            );
+            assert!(
+                discarded_in_lava,
+                "zero-health orb in lava is discarded on contact damage"
+            );
+            assert_eq!(sounds.len(), 1, "lava contact plays burn sound");
+            assert_eq!(lava_draws, 1, "lava contact consumes one random float");
         });
     }
 
