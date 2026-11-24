@@ -268,7 +268,7 @@ the mod list. The scaffold does not create a default icon.
 | What | Limit |
 | --- | --- |
 | A registry file, as downloaded | 64 MiB |
-| Selected native source files, excluding the manifest, icon and resources | 511 files, 64 MiB unpacked in total |
+| Selected native source files, excluding the manifest, icon and resources | 65,536 files, 64 MiB unpacked in total |
 | Content files | 65,536 files, 16 MiB each, 512 MiB in total |
 | `horizon-mod.toml` | 32 MiB |
 | `icon.png` | 256 KiB encoded, 512 × 512 pixels |

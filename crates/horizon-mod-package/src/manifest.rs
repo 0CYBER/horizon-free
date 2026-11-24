@@ -41,6 +41,12 @@ pub const MAX_WASM_MEMORY_MIB: u32 = 4096;
 /// Maximum manifest bytes accepted by package readers and developer tools.
 pub const MAX_MANIFEST: u64 = 32 << 20;
 
+/// The most source files (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/**`, the root notices) a
+/// package selects: as many as its content files, so a port laid out one file per class fits.
+pub const MAX_SOURCE_FILES: usize = crate::content::MAX_FILES;
+/// The most bytes those source files take, unpacked.
+pub const MAX_SOURCE_BYTES: u64 = 64 << 20;
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -1099,7 +1105,7 @@ impl Package {
                     }
                 }
             }
-            if source_count > 511 || source_bytes > 64 << 20 {
+            if source_count > MAX_SOURCE_FILES || source_bytes > MAX_SOURCE_BYTES {
                 return Err("native package exceeds its entry or size limit".into());
             }
             if resource_count > crate::content::MAX_FILES
@@ -1210,7 +1216,7 @@ impl Package {
                             .checked_add(size)
                             .ok_or("native package too large")?;
                         *source_count += 1;
-                        if *source_bytes > 64 << 20 || *source_count > 511 {
+                        if *source_bytes > MAX_SOURCE_BYTES || *source_count > MAX_SOURCE_FILES {
                             return Err("native package exceeds its entry or size limit".into());
                         }
                         files.insert(name, std::fs::read(path).map_err(|e| e.to_string())?);
@@ -1910,6 +1916,29 @@ capabilities = ["registries"]
                 .contains("unsupported executable")
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A port written one file per class keeps more than 511 source files, far under the byte cap.
+    #[test]
+    fn a_native_project_of_many_source_files_packs_and_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/classes")).unwrap();
+        let manifest = format!(
+            "{EXAMPLE}[native]\ngame = '26.3'\nhorizon = '{}'\nmixins = '{}'\n",
+            "a".repeat(40),
+            "b".repeat(40)
+        );
+        std::fs::write(root.join(MANIFEST), manifest).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = 'ruby'\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "mod classes;\n").unwrap();
+        for i in 0..700 {
+            std::fs::write(root.join(format!("src/classes/c{i}.rs")), "pub struct C;\n").unwrap();
+        }
+        let bytes = Package::pack_directory(root).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(Package::read_zip(&mut zip).unwrap().manifest.id, "ruby");
+        assert!(zip.by_name("src/classes/c699.rs").is_ok());
     }
 
     #[test]
