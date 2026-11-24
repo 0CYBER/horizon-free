@@ -371,6 +371,7 @@ impl Game<'_> {
         let Some((_, mut entity)) = save::decode_block_entity_for_block(&placed, name) else {
             return;
         };
+        entity.clean_stacks(&self.items().component_defaults);
         // The new crafter's state flag (CrafterBlock.newBlockEntity), which
         // its saved data has no part of.
         if let (BlockEntity::Crafter(new), Some(BlockEntity::Crafter(old))) =

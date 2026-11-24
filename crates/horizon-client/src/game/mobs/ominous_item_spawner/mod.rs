@@ -102,6 +102,8 @@ impl Game<'_> {
         else {
             return;
         };
+        let mut item = item;
+        self.clean_stack(&mut item);
         self.next_entity += 1;
         let id = self.next_entity;
         let saved = horizon_client::entity_nbt::uuid(&tag);
@@ -282,3 +284,31 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod warning_tests;
+
+#[cfg(test)]
+mod saved_item_tests {
+    use crate::game::game_tests::tests::server_game;
+    use horizon_client::items::ItemStack;
+
+    /// A saved spawner's item is taken in against the world's item prototypes, so
+    /// the item it spawns stacks with the player's.
+    #[test]
+    #[ignore = "daily"]
+    fn a_saved_spawners_item_is_the_worlds_stack() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        game.build_registries();
+        let tag = horizon_core::nbt::parse_snbt(concat!(
+            r#"{id:"minecraft:ominous_item_spawner",Pos:[0.5d,70d,0.5d],spawn_item_after_ticks:60L,"#,
+            r#"item:{id:"minecraft:iron_ore",count:3,components:{"minecraft:max_stack_size":64}}}"#
+        ))
+        .unwrap()
+        .0;
+        game.load_ominous_item_spawner(tag);
+        let item = (&game.ominous_spawners)
+            .into_iter()
+            .last()
+            .map(|s| s.item.clone());
+        assert_eq!(item, Some(ItemStack::new("minecraft:iron_ore", 3)));
+    }
+}

@@ -53,6 +53,9 @@ impl Equipment {
     pub fn iter(&self) -> std::slice::Iter<'_, Option<ItemStack>> {
         self.0.iter()
     }
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Option<ItemStack>> {
+        self.0.iter_mut()
+    }
     /// `EntityEquipment.CODEC` read: the slots of an `equipment` compound.
     pub fn read(tag: &Tag) -> Self {
         let mut out = Self::default();

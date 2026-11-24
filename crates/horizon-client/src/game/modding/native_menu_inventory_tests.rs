@@ -82,7 +82,12 @@ fn exercise(reopen: bool) {
                             playerdata::save_now(g, root.path()).unwrap();
                             g.inventory.fill(None);
                             let reopened = horizon_client::save::Level::read(root.path()).unwrap();
-                            assert!(playerdata::load_owner(g, root.path(), Some(&reopened)));
+                            assert!(playerdata::load_owner(
+                                g,
+                                root.path(),
+                                Some(&reopened),
+                                &Default::default()
+                            ));
                             assert_eq!(g.uuid, 12);
                         }
                     })

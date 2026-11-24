@@ -4,6 +4,42 @@
 use super::*;
 
 impl Game<'_> {
+    /// A saved stack as this world takes it in (`ItemStack.CODEC`, `applyPatch`):
+    /// a value equal to its item's prototype in this world's item table leaves the
+    /// patch.
+    pub(in crate::game) fn clean_stack(&self, stack: &mut horizon_client::items::ItemStack) {
+        horizon_client::item_data::clean_stack(stack, &self.items().component_defaults);
+    }
+    /// `ItemStack.CODEC` (`applyPatch`) on the stacks of the block entities in the
+    /// chunks loaded this frame: a value equal to its item's prototype in this
+    /// world's item table leaves the patch (`BlockEntity::clean_stacks`).
+    pub(in crate::game) fn clean_loaded_stacks(&mut self) {
+        if self.remote.is_some() {
+            return;
+        }
+        let prototypes = self.items().component_defaults.clone();
+        for &(x, z, _) in &self.world.loaded_chunks {
+            let Some(saved) = self
+                .world
+                .chunks
+                .get(&(x, z))
+                .and_then(|chunk| chunk.saved.as_deref())
+            else {
+                continue;
+            };
+            for (at, _) in &saved.block_entity_sources {
+                // `get_mut` wakes a sleeping entity: only one with a stack to clean.
+                let stale = self
+                    .world
+                    .block_entities
+                    .get(at)
+                    .is_some_and(|entity| entity.clone().clean_stacks(&prototypes));
+                if stale && let Some(entity) = self.world.block_entities.get_mut(at) {
+                    entity.clean_stacks(&prototypes);
+                }
+            }
+        }
+    }
     pub(super) fn clear_lod(&mut self) {
         // The samplers waiting on the server stop first: dropping the far
         // terrain joins them.
@@ -209,6 +245,9 @@ impl Game<'_> {
             self.streaming.complete_commit(&mut self.world, commit)
         });
         self.streaming.extra.truncate(areas);
+        // Its saved stacks are built against this world's item prototypes as the
+        // chunk arrives: the worker that decoded it had no item table.
+        self.clean_loaded_stacks();
         // A lectern read from a save resolves its book pages as its chunk
         // arrives (`LecternBlockEntity.loadAdditional`): the chunk was decoded
         // on a worker, which has no game to read a selector or a score with.

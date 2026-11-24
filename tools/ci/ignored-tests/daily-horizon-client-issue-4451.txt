@@ -259,8 +259,10 @@ horizon-client game::commands::fill_note_instrument_tests::strict_explicit_and_f
 horizon-client game::commands::forced_respawn_tests::overworld_spawnpoint_is_validated_at_both_player_blocks lib daily resources
 horizon-client game::commands::forced_respawn_tests::setworldspawn_reports_normalized_rotation lib daily resources
 horizon-client game::commands::global_selector_order_tests::actual_registered_global_selector_keeps_interleaved_insertion_and_limits lib daily resources
+horizon-client game::commands::item_count_predicate_tests::command_and_entity_stacks_are_built_against_the_world_prototypes lib daily resources
 horizon-client game::commands::item_count_predicate_tests::component_equality_reads_the_effective_value lib daily resources
 horizon-client game::commands::item_count_predicate_tests::count_equality_uses_live_stack_bounds_and_command_flow lib daily resources
+horizon-client game::commands::item_count_predicate_tests::saved_player_stacks_load_against_the_world_prototypes lib daily resources
 horizon-client game::commands::item_damage_range_tests::actual_chest_damage_range_uses_live_damage_and_effective_presence lib daily resources
 horizon-client game::commands::items::builtin_component_delivery_tests::h283_actual_command_inventory_bridge_encodes_four_builtin_components lib daily resources
 horizon-client game::commands::items::item_entity_contents_tests::a_dropped_item_entity_holds_its_stack_in_contents lib daily resources
@@ -358,6 +360,8 @@ horizon-client game::core_tests::wind_charge_burst_tests::a_nether_charge_bursts
 horizon-client game::core_tests::wind_charge_burst_tests::a_wind_charge_kill_of_a_mob_deals_the_wind_charge_damage_type lib daily resources
 horizon-client game::creaking::nested_spawn_tests::lifted_heart_callback_keeps_nested_spawns_until_the_next_pass lib daily resources
 horizon-client game::create_fluid_source_tests::a_mod_keeps_one_source_from_counting lib daily resources
+horizon-client game::creative_hotbar::saved_row_tests::saving_a_toolbar_keeps_the_others_as_saved lib daily resources
+horizon-client game::creative_hotbar::saved_row_tests::saved_toolbar_stacks_are_the_worlds lib daily resources
 horizon-client game::creator_mod_id_tests::a_part_names_the_mod_that_made_the_stack lib daily resources
 horizon-client game::creatures::armor_destroy_tests::a_break_effect_follows_only_an_applied_break lib daily resources
 horizon-client game::creatures::armor_destroy_tests::an_enderman_does_not_take_a_changed_block lib daily resources
@@ -974,6 +978,7 @@ horizon-client game::machines::native_fluids::tests::a_scoped_tank_can_refuse_a_
 horizon-client game::machines::part_front_tests::a_dropper_and_a_crafter_put_into_a_mod_part_in_front_of_them lib daily resources
 horizon-client game::machines::part_front_tests::a_part_handing_a_crafters_output_back_into_its_grid_loses_none lib daily resources
 horizon-client game::machines::part_front_tests::a_part_handing_a_droppers_item_back_into_it_loses_none lib daily resources
+horizon-client game::machines::pot_hopper_insertion_tests::a_pots_redundant_saved_value_stacks_with_the_hoppers lib daily resources
 horizon-client game::machines::pot_hopper_insertion_tests::actual_hopper_pulls_from_the_saved_pot_slot lib daily resources
 horizon-client game::machines::pot_hopper_insertion_tests::actual_hopper_ticks_insert_into_the_saved_pot_slot lib daily resources
 horizon-client game::machines::pot_signal_tests::a_hand_inserted_item_raises_an_already_powered_comparator lib daily resources
@@ -2058,6 +2063,7 @@ horizon-client game::nether_portal::tests::passenger_callbacks_cannot_revisit_an
 horizon-client game::nether_portal::tests::portal_capture_preserves_rejected_objects_and_reverses_admission lib daily resources
 horizon-client game::nether_portal::tests::portal_cooldown_follows_the_class_then_the_first_passenger lib daily resources
 horizon-client game::nether_portal::tests::refused_mob_passenger_stays_behind lib daily resources
+horizon-client game::ominous_item_spawner::saved_item_tests::a_saved_spawners_item_is_the_worlds_stack lib daily resources
 horizon-client game::ominous_item_spawner::warning_tests::lifecycle_spawner_commands_unload_park_and_remote_metadata lib daily resources
 horizon-client game::ominous_item_spawner::warning_tests::residency_command_positions_and_client_spawner_clock lib daily resources
 horizon-client game::ominous_item_spawner::warning_tests::residency_spawner_load_expiry_and_spawn_order lib daily resources
@@ -2186,6 +2192,7 @@ horizon-client game::perspective::preview_tests::player_render_transform_uses_va
 horizon-client game::piglin_admire_tests::piglin_admire_hit_keeps_baby_gold_and_cancels_adult_barter lib daily resources
 horizon-client game::piglin_admire_tests::piglin_admire_preserves_components_on_death_and_finish lib daily resources
 horizon-client game::piglins::tests::a_throw_swings_the_off_hand_once lib daily resources
+horizon-client game::piston_carry::tests::a_restored_carried_chest_lands_with_world_item_stacks lib daily resources
 horizon-client game::piston_carry::tests::a_save_mid_move_keeps_the_carried_block_entity_and_a_bad_key_is_left_out lib daily resources
 horizon-client game::piston_push::h255_mob_piston_ground_tests::a_stuck_arrow_whose_push_a_wall_stops_falls_when_nothing_holds_it lib daily resources
 horizon-client game::piston_push::h255_mob_piston_ground_tests::h255_added_blocked_request_updates_ground_before_tiny_return lib daily resources
@@ -2477,6 +2484,7 @@ horizon-client game::spawner::entity_registry::tests::a_types_enemy_and_animal_f
 horizon-client game::spawner::tests::a_running_delay_counts_down_without_drawing lib daily resources
 horizon-client game::spill::crafter_drop_name_tests::actual_crafter_destruction_keeps_source_name_off_the_dropped_item lib daily resources
 horizon-client game::spill::tests::a_block_entity_part_gives_back_what_it_held_when_removed lib daily resources
+horizon-client game::spill::saved_sherd_tests::a_saved_pots_sherds_drop_as_the_worlds_stacks lib daily resources
 horizon-client game::spill::tests::a_block_entity_removing_itself_in_its_tick_is_not_asked lib daily resources
 horizon-client game::spill::tests::a_kept_block_replaced_in_its_own_tick_drops_nothing lib daily resources
 horizon-client game::spill::tests::a_kept_container_keeps_its_stacks_on_removal_and_an_unmarked_one_scatters lib daily resources

@@ -1140,8 +1140,10 @@ impl LevelAccess for GameLevel<'_> {
         };
         let name = &block.name;
         let tag = Tag::Compound(nbt);
-        if let Some((key, entity)) = horizon_client::save::decode_block_entity_for_block(&tag, name)
+        if let Some((key, mut entity)) =
+            horizon_client::save::decode_block_entity_for_block(&tag, name)
         {
+            entity.clean_stacks(&self.items.component_defaults);
             self.world.block_entities.insert(key, entity);
             if tag.get("LootTable").is_some() {
                 self.emit(LevelEvent::ContainerLootTable { pos, tag });

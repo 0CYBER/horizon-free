@@ -5,6 +5,14 @@ use horizon_client::{hotbar, items::ItemStack, keybinds, text::Text};
 use horizon_core::nbt::Tag;
 
 impl Game<'_> {
+    /// Saved toolbars as this world takes their stacks in (`ItemStack.CODEC`,
+    /// `applyPatch` against its item prototypes), so they stack with its own.
+    fn clean_hotbar_rows(&self, rows: &mut [Vec<Option<ItemStack>>]) {
+        for stack in rows.iter_mut().flatten().flatten() {
+            self.clean_stack(stack);
+        }
+    }
+
     /// Whether the key bound to `mapping` is held, or the controller button bound to it.
     pub(super) fn mapped_key_down(&self, mapping: &str) -> bool {
         keybinds::key_code(self.settings.keys.get(mapping))
@@ -21,7 +29,8 @@ impl Game<'_> {
         }
         let path = Self::options_path().with_file_name("hotbar.nbt");
         let known = |id: &str| self.res.items().get(id).is_some();
-        let rows = hotbar::load(&path, &known);
+        let mut rows = hotbar::load(&path, &known);
+        self.clean_hotbar_rows(&mut rows);
         let key = |mapping: &str| keybinds::display_name(self.settings.keys.get(mapping)).plain();
         let empty = || ItemStack::new("minecraft:air", 0);
         let mut items = Vec::with_capacity(hotbar::GROUPS * hotbar::SIZE);
@@ -70,16 +79,11 @@ impl Game<'_> {
     /// says so on the action bar.
     pub(super) fn hotbar_load_or_save(&mut self, index: usize, load: bool) {
         let path = Self::options_path().with_file_name("hotbar.nbt");
-        let known = |id: &str| self.items().get(id).is_some();
-        let mut rows = hotbar::load(&path, &known);
         if load {
-            for (slot, stack) in rows[index].iter().enumerate() {
-                self.inventory[slot] = stack.clone();
-            }
+            self.load_hotbar_row(&path, index);
             return;
         }
-        rows[index] = self.inventory[..hotbar::SIZE].to_vec();
-        if let Err(e) = hotbar::save(&path, &rows) {
+        if let Err(e) = self.save_hotbar_row(&path, index) {
             // saveHotbar sets the message inside its try, so a failed save says nothing.
             log::warn!("the creative hotbar was not saved: {e}");
             return;
@@ -95,5 +99,83 @@ impl Game<'_> {
         // handleHotbarLoadOrSave: the overlay, said at once.
         self.say_system_now(&message);
         self.titles.set_overlay(message, false);
+    }
+    /// The saved row `index` into the hotbar, its stacks taken in against this
+    /// world's item prototypes.
+    fn load_hotbar_row(&mut self, path: &std::path::Path, index: usize) {
+        let known = |id: &str| self.items().get(id).is_some();
+        let mut rows = hotbar::load(path, &known);
+        let mut row = std::mem::take(&mut rows[index]);
+        for stack in row.iter_mut().flatten() {
+            self.clean_stack(stack);
+        }
+        for (slot, stack) in row.into_iter().enumerate() {
+            self.inventory[slot] = stack;
+        }
+    }
+    /// The hotbar into the saved row `index`. The other rows are written back
+    /// as they were read: a value this world's prototypes leave out may be
+    /// another world's override.
+    fn save_hotbar_row(&self, path: &std::path::Path, index: usize) -> horizon_client::Result<()> {
+        let known = |id: &str| self.items().get(id).is_some();
+        let mut rows = hotbar::load(path, &known);
+        rows[index] = self.inventory[..hotbar::SIZE].to_vec();
+        hotbar::save(path, &rows)
+    }
+}
+
+#[cfg(test)]
+mod saved_row_tests {
+    use crate::game::game_tests::tests::server_game;
+    use horizon_client::{hotbar, items::ItemStack};
+
+    /// A saved toolbar's stacks are taken in against the world's item prototypes,
+    /// so a loaded one stacks with the inventory's.
+    #[test]
+    #[ignore = "daily"]
+    fn saved_toolbar_stacks_are_the_worlds() {
+        let mut resources = None;
+        let game = server_game(&mut resources);
+        let saved = horizon_core::nbt::parse_snbt(
+            r#"{id:"minecraft:iron_ore",count:3,components:{"minecraft:max_stack_size":64}}"#,
+        )
+        .unwrap()
+        .0;
+        let mut rows: Vec<hotbar::Hotbar> = vec![vec![horizon_client::save::item_from_nbt(&saved)]];
+        game.clean_hotbar_rows(&mut rows);
+        assert_eq!(rows[0][0], Some(ItemStack::new("minecraft:iron_ore", 3)));
+    }
+
+    /// Saving one toolbar keeps the others as the file had them, a value this
+    /// world's prototypes leave out included; loading one takes it in.
+    #[test]
+    #[ignore = "daily"]
+    fn saving_a_toolbar_keeps_the_others_as_saved() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("hotbar.nbt");
+        let saved = horizon_core::nbt::parse_snbt(
+            r#"{id:"minecraft:iron_ore",count:3,components:{"minecraft:max_stack_size":64}}"#,
+        )
+        .unwrap()
+        .0;
+        let overridden = horizon_client::save::item_from_nbt(&saved);
+        let mut rows: Vec<hotbar::Hotbar> = (0..hotbar::GROUPS)
+            .map(|_| vec![None; hotbar::SIZE])
+            .collect();
+        rows[1][0] = overridden.clone();
+        hotbar::save(&path, &rows).unwrap();
+        let known = |_: &str| true;
+
+        game.save_hotbar_row(&path, 0).unwrap();
+        assert_eq!(hotbar::load(&path, &known)[1][0], overridden);
+
+        game.load_hotbar_row(&path, 1);
+        assert_eq!(
+            game.inventory[0],
+            Some(ItemStack::new("minecraft:iron_ore", 3))
+        );
+        assert_eq!(hotbar::load(&path, &known)[1][0], overridden);
     }
 }

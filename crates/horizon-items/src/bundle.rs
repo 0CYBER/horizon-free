@@ -181,6 +181,15 @@ impl Contents {
     /// `getTooltipImage`) need the item **and** the component: a bundle with
     /// it removed, or another item carrying it, is a plain item.
     pub fn of(items: &Items, stack: &ItemStack) -> Option<Self> {
+        let mut contents = Self::from_stack(items, stack)?;
+        // `BundleContents.Mutable` materializes each saved `ItemStackTemplate`.
+        if crate::item_data::clean_stacks(&mut contents.items, &items.component_defaults) {
+            contents.weight = contents_weight(items, &contents.items);
+        }
+        Some(contents)
+    }
+
+    fn from_stack(items: &Items, stack: &ItemStack) -> Option<Self> {
         if !is_bundle_item(items, stack) {
             return None;
         }
@@ -396,7 +405,7 @@ pub fn tooltip_layout(
     box_width: f32,
     description_lines: usize,
 ) -> Option<TooltipLayout> {
-    let contents = Contents::of(items, stack)?;
+    let contents = Contents::from_stack(items, stack)?;
     let offset = ((box_width - 96.0) / 2.0).floor();
     if contents.items().is_empty() {
         // The description takes the top; the bar follows it. Its lines are

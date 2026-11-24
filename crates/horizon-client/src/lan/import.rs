@@ -521,10 +521,12 @@ impl Kept {
 /// guest is touched only once everything is known to be well. It refuses everything once
 /// the server has begun to stop.
 /// `attributes`: the game's attribute catalog, whose bounds the record's values are checked
-/// against.
+/// against. `prototypes`: the game's item prototypes, which the record's stacks are
+/// built against (`playerdata::apply`).
 pub fn import_player(
     hub: &mut Hub,
     attributes: &Catalog,
+    prototypes: &crate::item_data::ItemPrototypes,
     uuid: u128,
     request: &Value,
 ) -> Result<Imported, String> {
@@ -593,7 +595,7 @@ pub fn import_player(
         if request.parts.contains(&"ender_chest") {
             g.ender_items.iter_mut().for_each(|slot| *slot = None);
         }
-        playerdata::apply(g, &level);
+        playerdata::apply(g, &level, prototypes);
         kept.restore(g, &request.parts);
         // What the request says of where the player stands wins over the record.
         let a = &request.arrival;

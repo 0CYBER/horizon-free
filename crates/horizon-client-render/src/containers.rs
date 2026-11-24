@@ -446,6 +446,46 @@ impl Crafter {
     }
 }
 impl BlockEntity {
+    /// Its saved stacks as the game that owns `prototypes` takes them in
+    /// (`ItemStack.CODEC`, `applyPatch`): each slot, record, book, brushed item and a
+    /// vault's key, display and ejections, through `item_data::clean_stack`. A mod's
+    /// slots are written only when one changes, so an unchanged entity keeps its
+    /// revision. True when a stack changed.
+    pub fn clean_stacks(&mut self, prototypes: &horizon_items::item_data::ItemPrototypes) -> bool {
+        fn clean<'a>(
+            stacks: impl IntoIterator<Item = &'a mut Option<ItemStack>>,
+            prototypes: &horizon_items::item_data::ItemPrototypes,
+        ) -> bool {
+            horizon_items::item_data::clean_stacks(stacks.into_iter().flatten(), prototypes)
+        }
+        match self {
+            BlockEntity::Chest(items) => clean(items, prototypes),
+            BlockEntity::Furnace(f) => clean(&mut f.items, prototypes),
+            BlockEntity::Brewing(b) => clean(&mut b.items, prototypes),
+            BlockEntity::Jukebox(j) => clean(&mut j.items, prototypes),
+            BlockEntity::Lectern(l) => clean([&mut l.book], prototypes),
+            BlockEntity::Crafter(c) => clean(&mut c.items, prototypes),
+            BlockEntity::Campfire(c) => clean(&mut c.items, prototypes),
+            BlockEntity::Brushable(b) => clean([&mut b.item], prototypes),
+            BlockEntity::Shelf(s) => clean(&mut s.items, prototypes),
+            BlockEntity::ChiseledBookshelf(b) => clean(&mut b.items, prototypes),
+            BlockEntity::Vault(v) => {
+                let ejected =
+                    horizon_items::item_data::clean_stacks(&mut v.items_to_eject, prototypes);
+                clean([&mut v.config.key_item, &mut v.display_item], prototypes) | ejected
+            }
+            BlockEntity::Mod(m) => {
+                let mut items = m.items.clone();
+                let changed = clean(&mut items, prototypes);
+                if changed {
+                    m.items = items;
+                }
+                changed
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the stock factory gives this block item slots. Shares the factory's
     /// classifier without constructing an entity or consulting a world instance.
     pub fn has_builtin_item_container(name: &str) -> bool {

@@ -2183,8 +2183,10 @@ fn mob_from_nbt_at(
             && let Some(Tag::List(items)) = tag.get("Inventory")
         {
             // InventoryCarrier.readInventoryFromTag -> SimpleContainer
-            // .fromItemList (eight slots).
-            m.extra.inventory = crate::mobs::villager::load_container(&m, items, 8);
+            // .fromItemList (eight slots), without the world's prototypes here;
+            // `Mob::clean_saved_stacks` reads it again.
+            m.extra.inventory =
+                crate::mobs::villager::load_container(&m, items, 8, &Default::default());
         }
     }
     if matches!(

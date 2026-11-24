@@ -182,6 +182,8 @@ impl Game<'_> {
             Ok(v) => v,
             Err(e) => return json!({ "error": format!("the request is not JSON: {e}") }),
         };
+        // The record's stacks are built against this world's item prototypes.
+        let prototypes = self.items().component_defaults.clone();
         let Some(host) = self.lan.as_mut() else {
             return json!({ "error": "the server is not open to players" });
         };
@@ -204,6 +206,7 @@ impl Game<'_> {
         let result = horizon_client::lan::import::import_player(
             &mut host.hub,
             &self.motion.attributes,
+            &prototypes,
             uuid,
             &request,
         );

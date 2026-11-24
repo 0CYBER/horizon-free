@@ -253,7 +253,7 @@ pub(in crate::game) mod tests {
             // A fresh record of the same player never died until it loads.
             let mut fresh = new_guest(2, 123);
             assert_eq!(fresh.last_death, None);
-            assert!(playerdata::load(&mut fresh, &world));
+            assert!(playerdata::load(&mut fresh, &world, &Default::default()));
             assert_eq!(
                 fresh.last_death,
                 Some(("minecraft:overworld".into(), [4, 70, -9]))

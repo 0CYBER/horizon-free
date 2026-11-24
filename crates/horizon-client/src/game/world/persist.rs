@@ -1026,6 +1026,10 @@ impl Game<'_> {
     ) {
         self.next_entity += 1;
         if let Some(mut a) = entity_nbt::armor_stand_from_nbt(&tag, self.next_entity) {
+            a.equipment
+                .iter_mut()
+                .flatten()
+                .for_each(|stack| self.clean_stack(stack));
             a.live
                 .retain_supplier(&self.motion.attributes, "minecraft:armor_stand");
             if let Some(state) = transferred {
@@ -1107,7 +1111,10 @@ impl Game<'_> {
     ) {
         self.next_entity += 1;
         if let Some(mut f) = entity_nbt::item_frame_from_nbt(&tag, self.next_entity) {
-            let item = f.item.take();
+            let mut item = f.item.take();
+            if let Some(stack) = item.as_mut() {
+                self.clean_stack(stack);
+            }
             f.set_item(item);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(f.id, state);

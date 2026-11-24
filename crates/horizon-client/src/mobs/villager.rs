@@ -530,6 +530,28 @@ pub fn is_farmer(m: &Mob) -> bool {
 /// `SimpleContainer(8)`: stacks the villager carries.
 const INVENTORY_SLOTS: usize = 8;
 
+/// A villager's or piglin's eight carried slots read again from its saved
+/// `tag`, each stack taken in against the world's item `prototypes` before it
+/// merges; other mobs are left as they are. A villager keeps them in its
+/// [`Ext`], a piglin in the mob's own inventory.
+pub(crate) fn reload_container(
+    m: &mut Mob,
+    tag: &horizon_core::nbt::Tag,
+    prototypes: &crate::item_data::ItemPrototypes,
+) {
+    use crate::mobs::Species;
+    if matches!(m.species(), Species::Villager | Species::Piglin)
+        && let Some(horizon_core::nbt::Tag::List(items)) = tag.get("Inventory")
+    {
+        let inventory = load_container(m, items, INVENTORY_SLOTS, prototypes);
+        if m.species() == Species::Villager {
+            ext_mut(m).inventory = inventory;
+        } else {
+            m.extra.inventory = inventory;
+        }
+    }
+}
+
 /// `SimpleContainer.addItem` on a container of `slots` slots held as its
 /// occupied stacks in slot order: fill the stacks of the same item and
 /// components below `max_stack`, then free slots; the part that did not fit
@@ -559,14 +581,18 @@ pub(crate) fn add_to_container(
 }
 
 /// `SimpleContainer.fromItemList`: clear, then `addItem` each saved stack
-/// at the type's limit for it; what does not fit is dropped.
+/// at the type's limit for it; what does not fit is dropped. Each stack is
+/// taken in against the world's item `prototypes` (`ItemStack.CODEC`,
+/// `applyPatch`) before it merges.
 pub(crate) fn load_container(
     m: &Mob,
     items: &[horizon_core::nbt::Tag],
     slots: usize,
+    prototypes: &crate::item_data::ItemPrototypes,
 ) -> Vec<ItemStack> {
     let mut inventory = Vec::new();
-    for stack in items.iter().filter_map(crate::save::item_from_nbt) {
+    for mut stack in items.iter().filter_map(crate::save::item_from_nbt) {
+        crate::item_data::clean_stack(&mut stack, prototypes);
         let max = m.kind.inventory_stack_limit(&stack);
         let _ = add_to_container(&mut inventory, stack, max, slots);
     }
@@ -1177,7 +1203,8 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
     let asleep = e.sleeping_pos.is_some();
     // InventoryCarrier.readInventoryFromTag -> SimpleContainer.fromItemList.
     if let Some(Tag::List(items)) = tag.get("Inventory") {
-        let inventory = load_container(m, items, INVENTORY_SLOTS);
+        // Without the world's prototypes here; `Mob::clean_saved_stacks` reads it again.
+        let inventory = load_container(m, items, INVENTORY_SLOTS, &Default::default());
         ext_mut(m).inventory = inventory;
     }
     if asleep {

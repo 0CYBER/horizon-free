@@ -496,6 +496,7 @@ impl Game<'_> {
                     Some(self.pack.assets.registry),
                 )
                 .ok_or_else(stale)?;
+                new.clean_saved_stacks(&tag, &self.items().component_defaults);
                 horizon_client::mobs::armor::prepare(&new, &self.motion.attributes);
                 self.resolve_loaded_profession(&mut new);
                 let unresolved = self
@@ -615,6 +616,7 @@ impl Game<'_> {
             }
             Target::Item(id) => {
                 let mut new = entity_nbt::item_entity_from_nbt(&tag, id, 0.0).ok_or_else(stale)?;
+                self.clean_stack(&mut new.stack);
                 if let Some(slot) = self.dropped.iter_mut().find(|e| e.id == id) {
                     new.join = slot.join;
                     new.bob_offset = slot.bob_offset;
@@ -637,6 +639,10 @@ impl Game<'_> {
             }
             Target::Stand(id) => {
                 let mut new = entity_nbt::armor_stand_from_nbt(&tag, id).ok_or_else(stale)?;
+                new.equipment
+                    .iter_mut()
+                    .flatten()
+                    .for_each(|stack| self.clean_stack(stack));
                 if let Some(slot) = self.armor_stands.iter_mut().find(|a| a.id == id) {
                     // Entity.load keeps the existing entity's firstTick state
                     // and its place in the level's join order.
@@ -648,6 +654,9 @@ impl Game<'_> {
             }
             Target::Frame(id) => {
                 let mut new = entity_nbt::item_frame_from_nbt(&tag, id).ok_or_else(stale)?;
+                if let Some(stack) = new.item.as_mut() {
+                    self.clean_stack(stack);
+                }
                 if let Some(i) = self.item_frames.iter().position(|f| f.id == id) {
                     let old = &self.item_frames[i];
                     // Entity.load cannot change the runtime type; saveWithoutId
@@ -658,7 +667,10 @@ impl Game<'_> {
                     // count, item and components, before adopting the new stack.
                     // It compares the stack as read; setItem keeps one of it
                     // only after, as `new.item` already does.
-                    let read = tag.get("Item").and_then(save::item_from_nbt);
+                    let mut read = tag.get("Item").and_then(save::item_from_nbt);
+                    if let Some(stack) = read.as_mut() {
+                        self.clean_stack(stack);
+                    }
                     if old.item.as_ref().is_some_and(|a| {
                         read.as_ref()
                             .is_none_or(|b| a.count != b.count || !a.same_item_same_components(b))
@@ -676,6 +688,7 @@ impl Game<'_> {
                 // position, rotation, motion, ground and gravity flags, Fire and chest items.
                 let (position, velocity, yaw) =
                     entity_nbt::boat_from_nbt(&tag).ok_or_else(stale)?;
+                let prototypes = self.items().component_defaults.clone();
                 let uuid = self.uuid_for(id);
                 let i = self
                     .boats
@@ -696,6 +709,10 @@ impl Game<'_> {
                     if b.chest {
                         b.items =
                             save::decode_items(tag.get("Items"), crate::game::boats::CHEST_SLOTS);
+                        horizon_client::item_data::clean_stacks(
+                            b.items.iter_mut().flatten(),
+                            &prototypes,
+                        );
                     }
                 });
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
@@ -1388,6 +1405,7 @@ impl Game<'_> {
         let Some((_, mut new)) = save::decode_block_entity_for_block(tag, name) else {
             return false;
         };
+        new.clean_stacks(&self.items().component_defaults);
         self.take_loot_table(key, tag, &mut new);
         self.load_block_name(key, &new, tag);
         self.world.block_entities.insert(key, new);

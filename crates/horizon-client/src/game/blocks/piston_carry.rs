@@ -219,7 +219,8 @@ impl Game<'_> {
         };
         let block = &self.res.facts().get(piston.moved_state).name;
         match horizon_client::save::decode_block_entity_for_block(tag, block) {
-            Some((_, entity)) => {
+            Some((_, mut entity)) => {
+                entity.clean_stacks(&self.items().component_defaults);
                 let attachments = match attachment_compound(tag.get(ATTACHMENTS_KEY)) {
                     Ok(Some(data)) => Some(Attachments::from_nbt(data.clone())),
                     Ok(None) => None,
@@ -269,6 +270,53 @@ mod tests {
     use super::*;
     use horizon_client::{chunk::Chunk, containers::BlockEntity, items::ItemStack};
     use std::sync::Arc;
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_restored_carried_chest_lands_with_world_item_stacks() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let registry = game.pack.assets.registry;
+            let piston = MovingPiston {
+                moved_state: registry.default_state("minecraft:chest").unwrap(),
+                direction: Direction::East,
+                extending: true,
+                source: false,
+                progress: 0.5,
+                progress_o: 0.5,
+                last_ticked: 0,
+                death_ticks: 0,
+                id: 0,
+            };
+            let at = BlockPos::new(2, 64, 1);
+            let key = (at.x, at.y, at.z);
+            let mut saved = game.moving_piston_to_nbt(at, &piston);
+            let Tag::Compound(fields) = &mut saved else {
+                panic!("moving piston tag");
+            };
+            let chest = horizon_core::nbt::parse_snbt(
+                r#"{id:"minecraft:chest",x:2,y:64,z:1,Items:[{Slot:0b,id:"minecraft:iron_ore",count:3,components:{"minecraft:max_stack_size":64}}]}"#,
+            )
+            .unwrap()
+            .0;
+            fields.insert(CARRIED_KEY.into(), chest);
+            let extras = ChunkExtras {
+                block_entities: vec![saved],
+                ..Default::default()
+            };
+
+            game.restore_moving_piston(at, piston, Some(&extras));
+            assert!(game.world.block_entities.land(key));
+            let Some(BlockEntity::Chest(items)) = game.world.block_entities.get(&key) else {
+                panic!("carried chest landed");
+            };
+            assert!(
+                items[0]
+                    .as_ref()
+                    .unwrap()
+                    .matches(&ItemStack::new("minecraft:iron_ore", 3))
+            );
+        });
+    }
 
     #[test]
     #[ignore = "daily"]

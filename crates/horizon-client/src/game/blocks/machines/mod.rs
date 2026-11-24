@@ -425,9 +425,7 @@ impl Containers<'_> {
         if view.kind == Kind::Pot {
             let (pos, _) = view.locate(slot)?;
             let tag = spill::saved_entity(self.world, [pos.0, pos.1, pos.2])?;
-            return tag
-                .get("item")
-                .and_then(save::item_from_nbt)
+            return pot_item(&tag, self.items)
                 .filter(|stack| stack.count > 0)
                 .map(Cow::Owned);
         }
@@ -841,6 +839,15 @@ pub(super) fn shelf_signal(
     )
 }
 
+/// A decorated pot's item, which the pot keeps as saved NBT, as the world takes it in
+/// (`ItemStack.CODEC`: `applyPatch` against the world's item prototypes), so it stacks
+/// with the hopper's and the player's stacks as they do.
+pub(super) fn pot_item(tag: &Tag, items: &Items) -> Option<ItemStack> {
+    let mut stack = tag.get("item").and_then(save::item_from_nbt)?;
+    horizon_client::item_data::clean_stack(&mut stack, &items.component_defaults);
+    Some(stack)
+}
+
 impl Game<'_> {
     pub(super) fn containers(&self) -> Containers<'_> {
         Containers {
@@ -978,7 +985,7 @@ impl Game<'_> {
             else {
                 return (Some(stack), false);
             };
-            let item = tag.get("item").and_then(save::item_from_nbt);
+            let item = pot_item(&tag, self.items());
             Some((tag, item))
         } else {
             None
@@ -1092,7 +1099,7 @@ impl Game<'_> {
     /// `ContainerSingleItem.removeItem(0, 1)` on a decorated pot's saved slot.
     fn pot_take_one(&mut self, pos: Pos) -> Option<ItemStack> {
         let mut tag = spill::saved_entity(&self.world, [pos.0, pos.1, pos.2])?;
-        let mut item = tag.get("item").and_then(save::item_from_nbt)?;
+        let mut item = pot_item(&tag, self.items())?;
         if item.count == 0 {
             return None;
         }
@@ -1109,7 +1116,7 @@ impl Game<'_> {
         let Some(mut tag) = spill::saved_entity(&self.world, [pos.0, pos.1, pos.2]) else {
             return;
         };
-        let item = match tag.get("item").and_then(save::item_from_nbt) {
+        let item = match pot_item(&tag, self.items()) {
             Some(mut current) => {
                 current.count += one.count;
                 current
@@ -3463,6 +3470,71 @@ mod pot_hopper_insertion_tests {
         assert_eq!(held, 2, "the hopper took both items");
         let tag = spill::saved_entity(&game.world, [5, 201, 4]).expect("saved pot");
         assert!(tag.get("item").is_none(), "the pot is empty");
+    }
+    /// A pot's saved item is taken in against the world's item prototypes, as the
+    /// hopper's slots are: a hopper full of ore saved with a value equal to the
+    /// prototype (`max_stack_size:64`) still pulls the pot's ore saved the same way,
+    /// and a broken pot spills it as the same stack.
+    #[test]
+    #[ignore = "daily"]
+    fn a_pots_redundant_saved_value_stacks_with_the_hoppers() {
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.block_ticks
+            .add_empty_chunk(BlockPos::new(0, 0, 0).chunk())
+            .unwrap();
+        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+        let ore = r#"id:"minecraft:iron_ore",components:{"minecraft:max_stack_size":64}"#;
+        let plain = |count| ItemStack::new("minecraft:iron_ore", count);
+        assert!(game.run_command(&format!(
+            "setblock 5 201 4 decorated_pot{{item:{{{ore},count:2}}}}"
+        )));
+        let tag = spill::saved_entity(&game.world, [5, 201, 4]).expect("saved pot");
+        assert_eq!(pot_item(&tag, game.items()), Some(plain(2)));
+        let slots = (0..5)
+            .map(|slot| format!("{{Slot:{slot}b,{ore},count:10}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(game.run_command(&format!(
+            "setblock 5 200 4 hopper[facing=down,enabled=true]{{Items:[{slots}],TransferCooldown:0}}"
+        )));
+        let start = game.world.game_time;
+        for elapsed in 1..=9 {
+            game.world.game_time = start + elapsed;
+            game.tick_hopper((5, 200, 4));
+        }
+        let Some(BlockEntity::Chest(slots)) = game.world.block_entities.get(&(5, 200, 4)) else {
+            panic!("hopper inventory missing");
+        };
+        assert!(
+            slots
+                .iter()
+                .flatten()
+                .all(|s| s.same_item_same_components(&plain(1)))
+        );
+        let held: u32 = slots.iter().flatten().map(|s| s.count).sum();
+        assert_eq!(held, 52, "the hopper took both of the pot's ore");
+        // A pot broken with ore saved in it spills the world's stack.
+        assert!(game.run_command(&format!(
+            "setblock 7 200 4 decorated_pot{{item:{{{ore},count:3}}}}"
+        )));
+        assert!(game.run_command("setblock 7 200 4 air destroy"));
+        let spilled: Vec<ItemStack> = game
+            .spill
+            .spawns
+            .iter()
+            .map(|s| s.stack.clone())
+            .chain(game.dropped.iter().map(|e| e.stack.clone()))
+            .filter(|s| &*s.item == "minecraft:iron_ore")
+            .collect();
+        assert!(!spilled.is_empty(), "the pot's ore spilled");
+        assert!(
+            spilled
+                .iter()
+                .all(|s| s.same_item_same_components(&plain(1)))
+        );
     }
 }
 

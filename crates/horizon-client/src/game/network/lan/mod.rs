@@ -3006,6 +3006,8 @@ impl Game<'_> {
         entities: &[EntityState],
         spawn: [f64; 3],
     ) {
+        // The player's stacks are built against this world's item prototypes.
+        let prototypes = self.items().component_defaults.clone();
         let Some(host) = self.lan.as_mut() else {
             return;
         };
@@ -3019,8 +3021,8 @@ impl Game<'_> {
             // PlayerList.loadPlayerData: the owner gets the world's player file,
             // everyone else their own.
             let known = match owner.filter(|o| o.uuid == g.uuid) {
-                Some(o) => playerdata::load_owner(g, &root, o.saved.take().as_deref()),
-                None => playerdata::load(g, &root),
+                Some(o) => playerdata::load_owner(g, &root, o.saved.take().as_deref(), &prototypes),
+                None => playerdata::load(g, &root, &prototypes),
             };
             // `PlayerList.placeNewPlayer`: a saved level the world no longer has is the Overworld.
             if !levels.has(&g.dimension) {

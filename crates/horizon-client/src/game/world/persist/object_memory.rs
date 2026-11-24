@@ -85,6 +85,7 @@ impl Game<'_> {
         let bob = own.next_float() * std::f32::consts::PI * 2.0;
         own.next_float();
         if let Some(mut e) = entity_nbt::item_entity_from_nbt(&tag, self.next_entity, bob) {
+            self.clean_stack(&mut e.stack);
             e.random = own;
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(e.id, state);
@@ -132,6 +133,7 @@ impl Game<'_> {
         {
             if let Some(a) = p.arrow.as_mut() {
                 a.last_state = in_block.and_then(|t| self.state_from_nbt(&t));
+                self.clean_stack(&mut a.pickup_item);
             }
             self.claim_owner(&mut p);
             // An arrow that came through a portal keeps its
@@ -430,6 +432,10 @@ impl Game<'_> {
                     tag.get("Items"),
                     crate::game::boats::CHEST_SLOTS,
                 );
+                b.items
+                    .iter_mut()
+                    .flatten()
+                    .for_each(|stack| self.clean_stack(stack));
             }
             b.velocity = velocity;
             // AbstractBoat.readAdditionalSaveData: the lead's holder.
@@ -469,6 +475,10 @@ impl Game<'_> {
         let riders = passenger_graph::take_passengers(&mut tag);
         let id = self.next_entity + 1;
         if let Some(mut c) = crate::game::minecarts::Minecart::from_nbt(&tag, id, kind) {
+            c.items
+                .iter_mut()
+                .flatten()
+                .for_each(|stack| self.clean_stack(stack));
             crate::game::minecarts::forget_unreadable_display(&mut c, |t| {
                 self.state_from_nbt(t).is_some()
             });
@@ -534,6 +544,7 @@ impl Game<'_> {
             Some(self.pack.assets.registry),
             own,
         )?;
+        m.clean_saved_stacks(&tag, &self.items().component_defaults);
         self.resolve_loaded_profession(&mut m);
         if horizon_client::mobs::camel::is_camel(m.species()) {
             horizon_client::mobs::camel::finish_load(&mut m, self.world.game_time);

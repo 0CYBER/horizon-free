@@ -2383,7 +2383,13 @@ mod hub_tests {
             "entities": {},
         }))
         .unwrap();
-        let done = crate::lan::import::import_player(hub, &attributes, uuid, request)?;
+        let done = crate::lan::import::import_player(
+            hub,
+            &attributes,
+            &Default::default(),
+            uuid,
+            request,
+        )?;
         if done.place {
             hub.confirm_arrival(uuid, done.handover)?;
         }

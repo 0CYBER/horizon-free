@@ -1870,7 +1870,7 @@ impl Game<'_> {
             }
         }
         if drops {
-            let dynamic = self.pending.dynamic(pos);
+            let dynamic = self.pending.dynamic(pos, &self.items().component_defaults);
             // LootContextParams.EXPLOSION_RADIUS under DESTROY_WITH_DECAY: the
             // tables' survives_explosion and explosion_decay draw from their
             // random sequence.

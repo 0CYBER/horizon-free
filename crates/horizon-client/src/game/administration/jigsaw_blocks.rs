@@ -41,6 +41,8 @@ impl Game<'_> {
             tag,
             &self.data_block_name([pos.0, pos.1, pos.2]),
         )?;
+        // A command's or a mod's NBT is a saved block entity this world takes in.
+        entity.clean_stacks(&self.items().component_defaults);
         if let BlockEntity::JigsawBlock(b) = &mut entity
             && tag.get("joint").is_none()
             && let Some(front) = self.jigsaw_front(pos)
