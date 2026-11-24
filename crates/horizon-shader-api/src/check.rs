@@ -16,7 +16,7 @@ use crate::package::Pack;
 use crate::stages::{
     Composed, GROUP, KEPT_BINDING, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING,
     RAY_LIGHTS_BINDING, RAY_LOOKS_BINDING, RAY_SCENE_BINDING, STEP_NAMES, StageKind, TRACE_NAMES,
-    compose_traced, identifiers, lights_on,
+    compose_traced, identifiers,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::{HashMap, HashSet};
@@ -461,18 +461,11 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
             (m.kept.before_world.iter().enumerate())
                 .map(|(i, s)| (StageKind::BeforeWorld, s, Some(i))),
         )
+        // Each `[[post]]` entry is built as its own entry says: two may share a file and differ
+        // in the rest, `files` among it (#16234).
         .chain(m.post.iter().enumerate().map(|(i, s)| match s.compute {
             true => (StageKind::Compute, s, Some(i)),
-            // In a pack without kept resources, compute passes or the light sources an ordinary
-            // pass keeps the first entry with its file, as such packs were built before, so they
-            // compose byte-identically; with them, each entry's own `reads` and `files` decide
-            // its declarations and whether it binds the light sources. So do they where an
-            // entry of the file has `trace_step`, which each entry's own files decide.
-            false => (
-                StageKind::Post,
-                s,
-                (m.computes() || lights_on(pack) || steps_in(pack, &s.file)).then_some(i),
-            ),
+            false => (StageKind::Post, s, Some(i)),
         }))
         .chain(m.tonemap.iter().map(|s| (StageKind::Tonemap, s, None)))
         .chain(m.entity.iter().map(|s| (StageKind::Entity, s, None)));
@@ -736,14 +729,6 @@ fn check_entry(
 /// stage's files name one of `STEP_NAMES`).
 fn stepped(composed: &Composed) -> bool {
     composed.text[composed.parts[0].1.clone()].contains("fn trace_step(")
-}
-
-/// Whether an ordinary `[[post]]` entry of `pack` whose file is `file` has `trace_step`: its own
-/// files name one of `STEP_NAMES` under `[ray_tracing] step = true`.
-fn steps_in(pack: &Pack, file: &str) -> bool {
-    (pack.manifest.post.iter().enumerate())
-        .filter(|(_, e)| !e.compute && e.file == file)
-        .any(|(i, _)| stepped(&compose_traced(pack, StageKind::Post, file, Some(i), false)))
 }
 
 /// naga's validation of a composed stage, for a device with `capabilities`.

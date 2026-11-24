@@ -979,34 +979,30 @@ fn a_material_can_read_hdr_light_sources_and_ray_hit_looks_together() {
     assert!(!report.looks());
 }
 
-/// Ordinary `[[post]]` entries sharing a file are built from the first entry's, `files` and all,
-/// as before compute passes: only compute entries are built per entry.
+/// Ordinary `[[post]]` entries sharing a file are each built with their own `files` ("before
+/// this stage's file", docs/api/shaders.md), in a pack without compute passes too (#16234).
 #[test]
-fn ordinary_post_entries_sharing_a_file_build_as_the_first() {
+fn ordinary_post_entries_sharing_a_file_build_each_with_its_own_files() {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
                     [[post]]\nfile = \"post.wgsl\"\nfiles = [\"first.wgsl\"]\n\
                     [[post]]\nfile = \"post.wgsl\"\nfiles = [\"second.wgsl\"]\n";
     let post = "fn post(input: PostInput) -> vec4<f32> { return input.color * tint(); }\n";
+    let first = "fn tint() -> vec4<f32> { return vec4<f32>(1.0); }\n";
+    let second = "fn tint() -> vec4<f32> { return vec4<f32>(0.5); }\n";
     let files = [
         (MANIFEST, manifest),
         ("post.wgsl", post),
-        (
-            "first.wgsl",
-            "fn tint() -> vec4<f32> { return vec4<f32>(1.0); }\n",
-        ),
-        ("second.wgsl", "fn shade() -> f32 { return 0.5; }\n"),
+        ("first.wgsl", first),
+        ("second.wgsl", second),
     ]
     .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
     .into();
-    let pack = Pack::from_files(files).unwrap();
-    // The second entry's `files` would leave `tint` undefined.
-    let report = check(&pack).unwrap();
+    let report = check(&Pack::from_files(files).unwrap()).unwrap();
     let [a, b] = &report.stages[..] else {
         panic!("two stages")
     };
-    assert_eq!(format!("{:?}", a.module), format!("{:?}", b.module));
-    let composed = horizon_shader_api::compose(&pack, StageKind::Post, "post.wgsl").text;
-    assert!(composed.contains("fn tint") && !composed.contains("fn shade"));
+    assert!(a.source.contains(first) && !a.source.contains(second));
+    assert!(b.source.contains(second) && !b.source.contains(first));
 }
 
 #[test]
