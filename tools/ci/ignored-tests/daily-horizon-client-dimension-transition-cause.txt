@@ -1,0 +1,2 @@
+# The loading screen and packet test needs prepared client resources.
+horizon-client game::remote::dimension_transition_tests::dimension_transition_draw_distinguishes_login_death_respawn_and_travel lib daily resources

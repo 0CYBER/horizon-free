@@ -1,3 +1,4 @@
 pub use world::dimension_transition::{
-    DimensionTransition, DimensionTransitionReason, DimensionTransitionScreen,
+    DimensionTransition, DimensionTransitionCause, DimensionTransitionReason,
+    DimensionTransitionScreen,
 };

@@ -4,6 +4,7 @@ use crate::{
     hud::{HudAtlas, HudBatch},
     text::Text,
 };
+use mod_api::DimensionTransitionCause;
 
 /// `Minecraft.doWorldLoad`: `max(5, 3) + ChunkLevel.RADIUS_AROUND_FULL_CHUNK + 1`.
 pub const STATUS_RADIUS: i32 = 8;
@@ -103,6 +104,7 @@ pub struct PlayerCheck {
 pub struct LevelLoadTracker {
     state: Option<ClientState>,
     transition_screen: Option<usize>,
+    transition_cause: Option<DimensionTransitionCause>,
     close_delay_ms: u64,
     /// `LevelLoadingScreen.reason`.
     pub reason: Reason,
@@ -112,6 +114,7 @@ impl LevelLoadTracker {
         Self {
             state: None,
             transition_screen: None,
+            transition_cause: None,
             close_delay_ms,
             reason: Reason::Other,
         }
@@ -123,12 +126,14 @@ impl LevelLoadTracker {
         });
         self.reason = reason;
         self.transition_screen = None;
+        self.transition_cause = None;
     }
     /// The tracker's work is over and the screen has closed
     /// (`ClientPacketListener.tick` drops it once the level is ready).
     pub fn finish(&mut self) {
         self.state = None;
         self.transition_screen = None;
+        self.transition_cause = None;
     }
     /// Retain the presentation selected once at dimension entry, until this load finishes.
     pub fn set_transition_screen(&mut self, screen: Option<usize>) {
@@ -139,6 +144,16 @@ impl LevelLoadTracker {
     /// The selected presentation, absent for vanilla or after completion.
     pub fn transition_screen(&self) -> Option<usize> {
         self.transition_screen
+    }
+    /// Retain the packet's cause for the life of this load.
+    pub fn set_transition_cause(&mut self, cause: DimensionTransitionCause) {
+        if self.is_active() {
+            self.transition_cause = Some(cause);
+        }
+    }
+    /// The cause of the active client load, once its packet has been handled.
+    pub fn transition_cause(&self) -> Option<DimensionTransitionCause> {
+        self.transition_cause
     }
     /// A load is under way, so its screen is up.
     pub fn is_active(&self) -> bool {

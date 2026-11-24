@@ -1,6 +1,7 @@
 //! `apply_packet`: one play packet from the server, applied to the window's game.
 
 use super::*;
+use mod_api::DimensionTransitionCause;
 
 impl Game<'_> {
     pub(super) fn apply_packet_body(&mut self, packet: C) -> Result<()> {
@@ -129,8 +130,12 @@ impl Game<'_> {
                 // and ClientPacketListener.broadcastClientInformation sends it
                 // again only when an option changes it.
                 self.remote_chat_login();
-                if let Some(remote) = &self.remote {
-                    self.native_client_player_logging_in(p.player_id, remote.profile);
+                if let Some(remote) = &mut self.remote {
+                    remote
+                        .level_load
+                        .set_transition_cause(DimensionTransitionCause::Login);
+                    let profile = remote.profile;
+                    self.native_client_player_logging_in(p.player_id, profile);
                 }
             }
             C::Respawn(p) => {
@@ -202,6 +207,12 @@ impl Game<'_> {
                 let before: std::collections::HashSet<u32> =
                     self.mobs.iter().map(|m| m.id).collect();
                 if let Some(r) = self.remote.as_mut() {
+                    let cause = if died {
+                        DimensionTransitionCause::DeathRespawn
+                    } else {
+                        DimensionTransitionCause::Travel
+                    };
+                    r.level_load.set_transition_cause(cause);
                     r.ticked_before_player = before;
                 }
                 if dimension_changed {

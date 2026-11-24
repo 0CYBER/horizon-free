@@ -17,8 +17,11 @@ outgoing. The first registration for each transition wins; malformed ids and scr
 
 The screen is selected once at `ClientPacketListener.startWaitingForNewLevel`, including login
 (where there is no source dimension) and respawn. Instead of a Java screen factory, the selected
-id reaches `Hooks::dimension_transition_screen_draw` with its reason and current optional server
-progress. Draw the complete presentation using `event.draw`; ignore screen ids you do not own.
+id reaches `Hooks::dimension_transition_screen_draw` with its vanilla reason and current optional
+server progress. Read `event.cause(host)` to distinguish `Login`, `DeathRespawn` or `Travel`.
+A death respawn uses the client player's observed death state. Travel also covers portal
+transitions, whose presentation still uses `event.reason`. Draw the complete presentation using
+`event.draw` and ignore screen ids you do not own.
 The existing level-load tracker owns readiness, the player-section wait, timeout, and closing.
 No registration changes any of those rules. An unmatched transition draws vanilla's screen.
 

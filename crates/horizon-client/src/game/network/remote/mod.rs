@@ -2465,6 +2465,9 @@ mod interaction_event_tests;
 mod native_entity_tests;
 
 #[cfg(test)]
+mod dimension_transition_tests;
+
+#[cfg(test)]
 mod effect_blend_tests;
 #[cfg(test)]
 mod level_sound_tests;

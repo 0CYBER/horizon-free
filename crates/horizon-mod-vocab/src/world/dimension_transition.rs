@@ -42,6 +42,27 @@ pub enum DimensionTransitionReason {
     Other,
 }
 
+/// The client event that began a level load. Read it alongside the
+/// vanilla screen style in [`DimensionTransitionReason`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum DimensionTransitionCause {
+    /// The client received its play login packet.
+    Login,
+    /// The client received a respawn while it knew the player was dead.
+    DeathRespawn,
+    /// The client received a respawn while the player was alive, including portal travel.
+    Travel,
+}
+
+impl crate::DimensionTransitionScreenDrawEvent<'_> {
+    /// What started this screen's load. The optional read belongs to the
+    /// selected screen and expires when its load finishes or is replaced.
+    pub fn cause(&self, host: &dyn crate::ClientHost) -> Option<DimensionTransitionCause> {
+        host.dimension_transition_cause(self.screen)
+    }
+}
+
 #[cfg(test)]
 mod dimension_transition_tests {
     use crate::*;
