@@ -123,6 +123,38 @@ class PreparationStepTests(unittest.TestCase):
             self.assertNotIn('SECRET', again.stdout + again.stderr)
             self.assertTrue((root / 'source/minecraft/26.3/prepared.json').exists())
 
+    def test_a_given_preparer_is_run_and_cargo_is_not(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "tools/ci").mkdir(parents=True)
+            for name in ("vanilla-data.sh", "preparation_step.py"):
+                shutil.copy(SCRIPT.parent / name, root / "tools/ci" / name)
+            (root / "research-lock.json").write_text('{"version": "26.3"}\n')
+            (root / "source/minecraft/26.3").mkdir(parents=True)
+            (root / "source/minecraft/26.3/prepared.json").write_text('{}')
+            (root / "bin").mkdir()
+            cargo = root / "bin/cargo"
+            cargo.write_text(f'#!/bin/sh\ntouch "{(root / "cargo-ran").as_posix()}"\nexit 1\n')
+            cargo.chmod(0o755)
+            (root / "built").mkdir()
+            given = root / "built/horizon-prepare"
+            given.write_text('#!/bin/sh\necho "the given preparer"\nexit 23\n')
+            given.chmod(0o755)
+            env = dict(os.environ, HORIZON_PERSISTENT_CACHE="true", HORIZON_PREPARED_CACHE=str(root / "cache"),
+                       HORIZON_SHARED_SOURCE=str(root / "source"), HORIZON_PREPARE_KEY="0123456789abcdef",
+                       RUNNER_TEMP=str(root), CARGO_TARGET_DIR=str(root / "target"),
+                       HORIZON_PREPARE_BINARY=str(given), PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])
+            result = subprocess.run(["bash", "tools/ci/vanilla-data.sh"], cwd=root, env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 23, (result.stdout, result.stderr))
+            self.assertIn("step=resource-export exit=23", result.stdout)
+            self.assertFalse((root / "cargo-ran").exists())
+            missing = subprocess.run(["bash", "tools/ci/vanilla-data.sh"], cwd=root, capture_output=True, text=True,
+                                     env=dict(env, HORIZON_PREPARE_BINARY=str(root / "built/none")))
+            self.assertEqual(missing.returncode, 1, missing.stderr)
+            self.assertIn("HORIZON_PREPARE_BINARY is not a program", missing.stdout)
+            self.assertFalse((root / "cargo-ran").exists())
+
     def test_a_kept_preparation_is_reused_only_unchanged_and_each_job_gets_its_own_copy(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

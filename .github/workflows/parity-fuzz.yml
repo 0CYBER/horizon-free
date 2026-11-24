@@ -1,0 +1,511 @@
+name: parity-fuzz
+# The scenario fuzzer (tools/parity_fuzz.py, docs/parity-workflow.md#fuzzing-scenarios) on Blacksmith's runners, started
+# by hand only: gh workflow run parity-fuzz.yml --ref <branch> -f family=commands -f seed=1 -f count=200 -f runners=2
+# (a wide search), or -f seeds=1017,1325 -f shrink_rounds=4 (those seeds again, one slice each, shrunk).
+# The vanilla data is handled as in the hosted parity workflow and by its rules (docs/ci-runners.md#hosted-parity): only a
+# commit on a branch of this repository, the fetch script from the default branch's commit, and the one step that
+# holds a secret copied from that file line for line (tests/test_ci_parity_fuzz.py compares them). It differs in what
+# it leaves out: no event but a hand start; no cache read or written by any job (so nothing one job could leave for
+# another's step with a secret); and everything Cargo builds, the game and the preparer, built in a job of its own
+# that has no secret and no data.
+on:
+  workflow_dispatch:
+    inputs:
+      family:
+        description: The fuzzer's family
+        type: choice
+        options: [commands, items, blockdata, persist, spawn, shulker, retype]
+        default: commands
+      seed:
+        description: The first seed
+        type: string
+        default: '1'
+      count:
+        description: Seeds per slice (a runner runs 8 slices side by side)
+        type: string
+        default: '200'
+      runners:
+        description: 16-vCPU runners, 1 to 8
+        type: string
+        default: '2'
+      seeds:
+        description: Or these seeds, comma-separated (at most 64), one slice each; seed, count and runners then do not count
+        type: string
+        default: ''
+      ordinary:
+        description: Only what a command or a played world gives (--ordinary)
+        type: boolean
+        default: true
+      shrink_rounds:
+        description: Shrink rounds per group, 0 to 6 (0 for a wide search)
+        type: string
+        default: '0'
+concurrency:
+  group: parity-fuzz-${{ github.run_id }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+# No job restores or saves a cache entry: the fuzz jobs would restore before their step with a secret, in the cache
+# scope of the dispatched branch, which the build job's code could have written. Said to the cache service too,
+# for a runner whose service honours it; the file has no cache step either way (tests/test_ci_parity_fuzz.py).
+cache-mode: none
+env:
+  # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
+  HORIZON_TELEMETRY_URL: "off"
+
+jobs:
+  # Which seeds, on how many runners: no secret and no game data here.
+  plan:
+    name: fuzz plan
+    cache-mode: none
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
+    outputs:
+      data: ${{ steps.access.outputs.data }}
+      head: ${{ steps.head.outputs.sha }}
+      java: ${{ steps.keys.outputs.java }}
+      trusted: ${{ steps.trusted.outputs.sha }}
+      matrix: ${{ steps.slices.outputs.matrix }}
+      slices: ${{ steps.slices.outputs.slices }}
+    steps:
+      # The file has one trigger. Checked in the shell too, so a trigger added later runs nothing until this job and
+      # its review say what that event may reach.
+      - name: Started by hand only
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          [ "$EVENT" = workflow_dispatch ] || { echo "::error::parity-fuzz runs on a hand start only"; exit 1; }
+      # As hosted parity's plan job, line for line: whether the secrets are set, the default branch's commit whose
+      # scripts the fuzz jobs use, and the tested commit, which must be on a branch of this repository.
+      - name: Access to the vanilla data
+        id: access
+        env:
+          SET: ${{ secrets.VANILLA_DATA_DEPLOY_KEY != '' && secrets.VANILLA_DATA_PASSPHRASE != '' }}
+        run: echo "data=$SET" >> "$GITHUB_OUTPUT"
+      # Not a green run that tested nothing: without the secrets (a fork's dispatch, a repository without them) the
+      # plan fails here and no other job starts.
+      - name: No run without the data
+        env:
+          DATA: ${{ steps.access.outputs.data }}
+        run: |
+          [ "$DATA" = true ] || { echo "::error::no access to the vanilla data: nothing was fuzzed"; exit 1; }
+      - name: The commit of the trusted scripts
+        id: trusted
+        if: steps.access.outputs.data == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # The branch by its explicit ref: a tag or another ref of the same name never stands in for it.
+          [[ "$DEFAULT" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::bad default branch name"; exit 1; }
+          ref="repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT"
+          sha=$(gh api "$ref" --jq 'select(.object.type == "commit") | .object.sha')
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no commit for heads/$DEFAULT"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/ci/fetch-vanilla-data.sh?ref=$sha" --silent ||
+            { echo "::error::no tools/ci/fetch-vanilla-data.sh on $DEFAULT"; exit 1; }
+          sealed=true
+          if ! gh api "repos/$GITHUB_REPOSITORY/contents/tools/ci/sealed-cache.sh?ref=$sha" --silent 2> /dev/null; then
+            sealed=false
+            echo "::warning::no tools/ci/sealed-cache.sh on $DEFAULT: no sealed cache this run"
+          fi
+          { echo "sha=$sha"; echo "sealed=$sealed"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.access.outputs.data == 'true'
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The commit to test, on a branch of this repository
+        id: head
+        if: steps.access.outputs.data == 'true'
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          git fetch -q --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if [ -z "$(git branch -r --contains "$sha")" ]; then
+            echo "::error::$sha is on no branch of $GITHUB_REPOSITORY: hosted parity tests only its own branches' commits"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # The JDK the fuzz jobs set up before they check anything out; they check its shape before it names anything.
+      - name: The JDK, for the fuzz jobs
+        id: keys
+        if: steps.access.outputs.data == 'true'
+        run: |
+          set -euo pipefail
+          echo "java=$(sed -n 's/.*"java_major": *\([0-9]*\).*/\1/p' research-lock.json | head -1)" >> "$GITHUB_OUTPUT"
+      # The inputs reach a shell only as variables, and count only in the shapes checked here.
+      - name: The slices, by runner
+        id: slices
+        if: steps.access.outputs.data == 'true'
+        env:
+          FAMILY: ${{ inputs.family }}
+          SEED: ${{ inputs.seed }}
+          COUNT: ${{ inputs.count }}
+          RUNNERS: ${{ inputs.runners }}
+          SEEDS: ${{ inputs.seeds }}
+          SHRINK: ${{ inputs.shrink_rounds }}
+        run: |
+          set -euo pipefail
+          case "$FAMILY" in
+            commands|items|blockdata|persist|spawn|shulker|retype) ;;
+            *) echo "::error::no such family"; exit 1 ;;
+          esac
+          [[ "$SHRINK" =~ ^[0-6]$ ]] || { echo "::error::shrink_rounds is not a number from 0 to 6"; exit 1; }
+          [[ -z "$SEEDS" || "$SEEDS" =~ ^[0-9]{1,8}(,[0-9]{1,8}){0,63}$ ]] ||
+            { echo "::error::seeds is not a list of at most 64 numbers"; exit 1; }
+          include=""
+          if [ -n "$SEEDS" ]; then
+            # As numbers: 1 and 01 are one seed, and two slices of one seed would share a work folder.
+            IFS=, read -ra given <<< "$SEEDS"
+            list=()
+            for seed in "${given[@]}"; do
+              seed=$(( 10#$seed ))
+              case " ${list[*]} " in *" $seed "*) echo "::error::seed $seed is named twice"; exit 1 ;; esac
+              list+=("$seed")
+            done
+            of=$(( (${#list[@]} + 7) / 8 ))
+            for (( at = 0; at < ${#list[@]}; at += 8 )); do
+              chunk=$(IFS=,; echo "${list[*]:at:8}")
+              include+="${include:+,}{\"runner\":$(( at / 8 + 1 )),\"of\":$of,\"first\":0,\"seeds\":\"$chunk\"}"
+            done
+            total=${#list[@]}
+            echo "$FAMILY: ${#list[@]} seeds again, one slice each, on $of runners" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            # Only here: with seeds given, seed, count and runners do not count, whatever they hold.
+            [[ "$SEED" =~ ^[0-9]{1,8}$ && "$COUNT" =~ ^[1-9][0-9]{0,2}$ && "$RUNNERS" =~ ^[1-8]$ ]] ||
+              { echo "::error::seed, count (1 to 400) or runners (1 to 8) is not a number in its range"; exit 1; }
+            [ "$COUNT" -le 400 ] || { echo "::error::at most 400 seeds a slice"; exit 1; }
+            total=$(( RUNNERS * 8 ))
+            for runner in $(seq "$RUNNERS"); do
+              first=$(( 10#$SEED + (runner - 1) * 8 * COUNT ))
+              include+="${include:+,}{\"runner\":$runner,\"of\":$RUNNERS,\"first\":$first,\"seeds\":\"\"}"
+            done
+            echo "$FAMILY: seeds $(( 10#$SEED )) to $(( 10#$SEED + RUNNERS * 8 * COUNT - 1 )), $COUNT a slice, on $RUNNERS runners" |
+              tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          { echo "matrix={\"include\":[$include]}"; echo "slices=$total"; } >> "$GITHUB_OUTPUT"
+
+  # Everything Cargo builds, once, from the tested commit: the game and the preparer (horizon-prepare, which makes the
+  # prepared resources from the data). No secret, no data, no cache: its build scripts run here, where there is
+  # nothing of the maintainers' to read. The fuzz jobs run no Cargo; they run what this job uploads, after their step
+  # with a secret.
+  build:
+    name: fuzz build (no secret, no data)
+    cache-mode: none
+    needs: plan
+    if: needs.plan.outputs.data == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      HORIZON_NO_SCCACHE: "1"
+      CARGO_BUILD_JOBS: "16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.head }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - name: Build packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends pkg-config libasound2-dev libudev-dev > /dev/null
+      # The harnesses' own selection (tools/fast_bins.py), so the game is the one a harness would build; the preparer
+      # as tools/ci/vanilla-data.sh builds it.
+      - name: The game in the fast profile, and the preparer
+        run: |
+          set -euo pipefail
+          mapfile -t build < <(python3 -I -c 'import sys; sys.path.insert(0, "tools"); import fast_bins; print("\n".join(fast_bins.command("horizon-client")))')
+          "${build[@]}"
+          cargo build --release --locked -p horizon-prepare
+          mkdir "$RUNNER_TEMP/built"
+          cp target/fast/horizon-client target/release/horizon-prepare "$RUNNER_TEMP/built/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: parity-fuzz-built
+          path: ${{ runner.temp }}/built/
+          if-no-files-found: error
+          retention-days: 1
+
+  # One runner: the data, the resources prepared from it, then 8 slices of the fuzzer side by side against the built
+  # game, on a 16-vCPU runner with no GPU (Xvfb and Mesa's software Vulkan). It restores no cache entry and saves
+  # none: the data is downloaded and the resources are prepared in every job, by the preparer the build job made.
+  #
+  # The one step that holds a secret (fetch) is hosted parity's run job's, line for line. Before it the runner has
+  # only pinned actions' work (the JDK) and no file of the tested commit, of the build job or of a cache; the first
+  # checkout comes right after it.
+  fuzz:
+    name: fuzz ${{ matrix.runner }}/${{ matrix.of }}
+    needs: [plan, build]
+    if: needs.plan.outputs.data == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 90
+    cache-mode: none
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      # No compiler cache, should a tool of the runner offer one (tools/ci/runner-env.sh): this job compiles nothing.
+      HORIZON_NO_SCCACHE: "1"
+      DATASET: 26.3-linux-x64
+    steps:
+      - name: Folders for the data, outside the checkout
+        run: |
+          {
+            echo "HORIZON_SHARED_SOURCE=$RUNNER_TEMP/vanilla/shared-local"
+            echo "HORIZON_PREPARED_CACHE=$RUNNER_TEMP/vanilla/prepared"
+            echo "PARITY_SHARED=$RUNNER_TEMP/vanilla/parity-shared"
+            echo "VANILLA_DATA_CACHE=$RUNNER_TEMP/vanilla-encrypted"
+            echo "SEALED=$RUNNER_TEMP/sealed"
+            echo "UNSEALED=$RUNNER_TEMP/unsealed"
+            # The oracle shim's memo of JDK file hashes, guarded by this machine's stat data (tools/parity_shim.py):
+            # never sealed, restored or placed.
+            echo "RUNTIME_MEMO=$GITHUB_WORKSPACE/.local/parity-runner/runtime-memo"
+            # This run's harness logs: one restored from an earlier run would read as this run's (a first-run log as
+            # an unfinished retry).
+            echo "PARITY_LOGS=$GITHUB_WORKSPACE/.local/parity-runner/logs"
+          } >> "$GITHUB_ENV"
+      # The JDK, by a pinned action, before anything of the tested commit is on the runner.
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: ${{ needs.plan.outputs.java }}
+      # The plan job's value comes from the tested tree: checked, though the action above has already read it.
+      - name: The plan's JDK is a number
+        env:
+          JAVA_MAJOR: ${{ needs.plan.outputs.java }}
+        run: |
+          [[ "$JAVA_MAJOR" =~ ^[0-9]+$ ]] || { echo "::error::the plan's JDK is not what it computes"; exit 1; }
+      # The only step with a secret (hosted parity's, line for line). No chunks were restored: it downloads the dataset.
+      - name: Fetch the vanilla data
+        id: fetch
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          VANILLA_DATA_DEPLOY_KEY: ${{ secrets.VANILLA_DATA_DEPLOY_KEY }}
+          VANILLA_DATA_PASSPHRASE: ${{ secrets.VANILLA_DATA_PASSPHRASE }}
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_SHA: ${{ needs.plan.outputs.trusted }}
+          BASH_ENV: ''
+          ENV: ''
+        run: |
+          # The trusted script in a fixed environment (see the run job's comment).
+          export PATH=/usr/bin:/bin
+          unset BASH_ENV ENV CDPATH
+          if [ -w /usr/bin ] || [ -w /bin ]; then echo "::error::/usr/bin is writable: no step with a secret"; exit 1; fi
+          [[ "$TRUSTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no trusted commit"; exit 1; }
+          private=$(mktemp -d /tmp/trusted.XXXXXXXX)
+          trap 'rm -rf "$private"' EXIT
+          mkdir "$private/home"
+          api() {  # api ACCEPT PATH FILE; the token goes on stdin, never on a command line
+            printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN" |
+              env -i HOME="$private/home" PATH=/usr/bin:/bin curl -q -fsS --proto =https --retry 3 --max-time 120 -K - \
+                -H "Accept: $1" -o "$3" "https://api.github.com/repos/$GITHUB_REPOSITORY/$2"
+          }
+          # verified FILE ID: FILE is not empty and its git blob id, sha1 of "blob <length>\0" and its bytes, is ID.
+          verified() {
+            [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ -s "$1" ] &&
+              [ "$({ printf 'blob %d\0' "$(stat -c %s "$1")"; cat "$1"; } | sha1sum | cut -c1-40)" = "$2" ]
+          }
+          # fetched NAME: tools/ci/NAME at the trusted commit into the private folder, its bytes checked against the
+          # blob id the API names for that path at that commit, asked for separately.
+          fetched() {
+            api application/vnd.github+json "contents/tools/ci/$1?ref=$TRUSTED_SHA" "$private/$1.json" &&
+              api application/vnd.github.raw "contents/tools/ci/$1?ref=$TRUSTED_SHA" "$private/$1" &&
+              verified "$private/$1" "$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["sha"])' \
+                "$private/$1.json" 2> /dev/null)"
+          }
+          isolated() {
+            local secrets=$1 name extra=()
+            shift
+            while [ "$1" != -- ]; do extra+=("$1"); shift; done
+            shift
+            for name in $secrets; do printf '%s\0' "${!name}"; done |
+              env -i PATH=/usr/bin:/bin HOME="$private/home" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" RUNNER_TEMP="$RUNNER_TEMP" \
+                GITHUB_OUTPUT="$GITHUB_OUTPUT" "${extra[@]}" bash --noprofile --norc -c \
+                'for name in $1; do IFS= read -r -d "" "$name"; export "$name"; done; shift; exec bash --noprofile --norc "$@"' \
+                isolated "$secrets" "$@"
+          }
+          fetched fetch-vanilla-data.sh || {
+            echo "::error::tools/ci/fetch-vanilla-data.sh at $TRUSTED_SHA did not download, or is not the blob the API" \
+              "names: no data, the shard stops"
+            exit 1
+          }
+          isolated "VANILLA_DATA_DEPLOY_KEY VANILLA_DATA_PASSPHRASE" VANILLA_DATA_CACHE="$VANILLA_DATA_CACHE" -- \
+            "$private/fetch-vanilla-data.sh" "$HORIZON_SHARED_SOURCE" "$DATASET"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.head }}
+          persist-credentials: false
+      - name: Build and screen packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends pkg-config libasound2-dev libudev-dev \
+            mesa-vulkan-drivers libvulkan1 xvfb x11-utils libx11-6 libxcursor1 libxrandr2 libxi6 libxinerama1 \
+            libxkbcommon0 libxkbcommon-x11-0 libgl1 libegl1 > /dev/null
+      - name: A virtual screen with software Vulkan
+        run: |
+          Xvfb :90 -screen 0 1280x720x24 -nolisten tcp > /dev/null 2>&1 &
+          for _ in $(seq 100); do xdpyinfo -display :90 > /dev/null 2>&1 && break; sleep 0.1; done
+          xdpyinfo -display :90 > /dev/null 2>&1 || { echo "::error::Xvfb did not answer within 10 s"; exit 1; }
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          [ -n "$icd" ] || { echo "::error::no lavapipe driver file"; exit 1; }
+          { echo "DISPLAY=:90"; echo "VK_DRIVER_FILES=$icd"; } >> "$GITHUB_ENV"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: parity-fuzz-built
+          path: ${{ runner.temp }}/built
+      # The resources, prepared here from the data by the preparer the build job made: no Cargo build beside the data.
+      - name: Vanilla data, and resources prepared by the built preparer
+        run: |
+          chmod +x "$RUNNER_TEMP/built/horizon-client" "$RUNNER_TEMP/built/horizon-prepare"
+          HORIZON_PREPARE_BINARY="$RUNNER_TEMP/built/horizon-prepare" bash tools/ci/vanilla-data.sh
+      # The fixed scenarios that must match, once per run: a fuzzer that cannot compare finds nothing and says so here.
+      - name: The fuzzer works (smoke)
+        if: matrix.runner == 1
+        run: |
+          python3 tools/parity_fuzz.py --smoke --binary "$RUNNER_TEMP/built/horizon-client" \
+            --work-dir "$GITHUB_WORKSPACE/.local/parity-fuzz-smoke"
+      # A slice that found differences is a result, not a failure; the step fails for a slice that compared nothing.
+      - name: The slices
+        id: slices
+        env:
+          FAMILY: ${{ inputs.family }}
+          FIRST: ${{ matrix.first }}
+          SEEDS: ${{ matrix.seeds }}
+          COUNT: ${{ inputs.count }}
+          SHRINK: ${{ inputs.shrink_rounds }}
+          ORDINARY: ${{ inputs.ordinary }}
+        run: |
+          ordinary=()
+          if [ "$ORDINARY" = true ]; then ordinary=(--ordinary); fi
+          which=(--seed "$FIRST" --count "$COUNT")
+          if [ -n "$SEEDS" ]; then which=(--seeds "$SEEDS"); fi
+          python3 tools/parity_fuzz_probe.py slices --binary "$RUNNER_TEMP/built/horizon-client" \
+            --out "$RUNNER_TEMP/parity-fuzz-results" --family "$FAMILY" "${which[@]}" \
+            --shrink-rounds "$SHRINK" "${ordinary[@]}"
+      # The upload follows links and takes all it finds. The slices step removes this folder when it starts and makes
+      # it new once its slices have ended, with only regular files it read itself (tools/parity_fuzz_probe.py,
+      # `staged`). This step runs only when the slices step ran (not after a preparer or a smoke that failed), and the
+      # upload only when this step passed and found results: the folder must hold slice-<seed> folders with the four
+      # files the slices step writes and nothing else, each a regular file with one name. Anything else, or a listing
+      # that fails, and nothing is uploaded. The results of slices that ended beside a lost one are staged too.
+      #
+      # The folder's shape is not enough: a slices step that stopped before it staged could leave a folder of the right
+      # shape that it never wrote. So the slices step says when it has staged, as its output `staged`: the digest of
+      # what it wrote (also when it then fails for a lost slice). Without that output nothing is uploaded, and with
+      # it only a folder whose files have that digest.
+      - name: Only the slices' staged results leave the runner
+        id: stage_results
+        if: always() && steps.slices.outcome != 'skipped'
+        env:
+          STAGED: ${{ steps.slices.outputs.staged }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/parity-fuzz-results"
+          refuse() { rm -rf -- "$out"; echo "::error::$1: nothing is uploaded"; exit 1; }
+          if [ -z "$STAGED" ]; then  # the slices step stopped before it had staged: whatever is there is not its work
+            rm -rf -- "$out"
+            echo "has_results=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$STAGED" =~ ^[0-9a-f]{64}$ ]] || refuse "the slices step's digest is no digest"
+          [ -d "$out" ] && [ ! -L "$out" ] || refuse "the results folder is no folder"
+          find "$out" -mindepth 1 -print0 > "$RUNNER_TEMP/parity-fuzz-results.list" || refuse "the results folder cannot be listed"
+          files=0
+          while IFS= read -r -d '' entry; do
+            path=${entry#"$out"/}
+            if [ -L "$entry" ]; then refuse "the results folder holds a link"; fi
+            if [ -d "$entry" ] && [[ "$path" =~ ^slice-[0-9]{1,10}$ ]]; then continue; fi
+            if [ -f "$entry" ] && [ "$(stat -c %h "$entry")" = 1 ] &&
+              [[ "$path" =~ ^slice-[0-9]{1,10}/(output\.txt|found\.json|report\.json|harness-tail\.txt)$ ]]; then
+              files=$(( files + 1 ))
+              continue
+            fi
+            refuse "the results folder holds what the slices step does not write"
+          done < "$RUNNER_TEMP/parity-fuzz-results.list"
+          # As `digest` in tools/parity_fuzz_probe.py: each file's sha256 and path, in the paths' byte order (tr: a
+          # sha256sum that marks a binary read with `*` gives the same lines; no name here has one).
+          found=$(cd "$out" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | tr '*' ' ' |
+            sha256sum | cut -c1-64)
+          [ "$found" = "$STAGED" ] || refuse "the results folder is not what the slices step staged"
+          if [ "$files" -gt 0 ]; then echo "has_results=true" >> "$GITHUB_OUTPUT"; else echo "has_results=false" >> "$GITHUB_OUTPUT"; fi
+      # Each slice's output, found.json and report.json (compared values and commands, as hosted parity's logs),
+      # kept 3 days; the two reports parsed as JSON and written again. A slice's output is what the tested game and
+      # tools printed. Nothing else of .local/ or the data leaves the runner.
+      - name: Upload the slices' results
+        if: always() && steps.stage_results.outcome == 'success' && steps.stage_results.outputs.has_results == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: parity-fuzz-results-${{ matrix.runner }}
+          path: ${{ runner.temp }}/parity-fuzz-results/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # The job to read: every slice's groups as one table of clusters, in its summary and in the parity-fuzz-merged
+  # artifact (kept 3 days, as the slices' results: it holds compared values too). It fails when a fuzz job failed
+  # (a slice compared nothing) or nothing could be merged.
+  summary:
+    name: fuzz summary
+    cache-mode: none
+    needs: [plan, fuzz]
+    if: always() && needs.plan.outputs.head != ''
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.head }}
+          persist-credentials: false
+      # May fail and leave some: what it left is still merged and shown, and the step below then fails the run.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        id: download
+        continue-on-error: true
+        with:
+          pattern: parity-fuzz-results-*
+          path: ${{ runner.temp }}/results
+      - name: The slices' groups as one
+        env:
+          FUZZ: ${{ needs.fuzz.result }}
+          DOWNLOAD: ${{ steps.download.outcome }}
+          PLANNED: ${{ needs.plan.outputs.slices }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/merged"
+          mapfile -d '' found < <(find "$RUNNER_TEMP/results" -name found.json -print0 2> /dev/null | sort -z)
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "::error::no slice left a result (the fuzz jobs ended $FUZZ)"
+            exit 1
+          fi
+          # The table may be of a part only: the run is good when every planned slice has a whole result in it. The
+          # merge counts those (a found.json it cannot count is a lost slice) and fails when they are not as planned.
+          bad=0
+          expect=()
+          if [[ "$PLANNED" =~ ^[1-9][0-9]*$ ]]; then
+            expect=(--expect "$PLANNED")
+          else
+            echo "::error::the plan gave no number of slices"
+            bad=1
+          fi
+          python3 tools/parity_fuzz_probe.py merge "${expect[@]}" "${found[@]}" > "$RUNNER_TEMP/merged/merged.txt" ||
+            { echo "::error::not every one of the $PLANNED planned slices has a whole result: the table is incomplete"; bad=1; }
+          # Values come from the tested tree and the game: shown as an indented block, no line of it Markdown.
+          { echo "The first 200 lines; all of it is in the parity-fuzz-merged artifact."; echo
+            head -200 "$RUNNER_TEMP/merged/merged.txt" | cut -c1-300 | sed 's/^/    /'; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$FUZZ" = success ] || { echo "::error::the fuzz jobs ended $FUZZ: a slice compared nothing, see its job"; bad=1; }
+          [ "$DOWNLOAD" = success ] || { echo "::error::the results' download ended $DOWNLOAD: the table is incomplete"; bad=1; }
+          exit "$bad"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: parity-fuzz-merged
+          path: ${{ runner.temp }}/merged/merged.txt
+          if-no-files-found: ignore
+          retention-days: 3

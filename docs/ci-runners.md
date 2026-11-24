@@ -280,6 +280,34 @@ gh workflow run parity-hosted.yml --ref <branch> -f full=true                   
     prebuild and the oracle results' reuse, not the selection: the plan job holds no secret, and its dependency
     lists are still to come from a hosted full run on main.
 
+### The fuzzer's workflow
+
+`.github/workflows/parity-fuzz.yml` runs the scenario fuzzer (docs/parity-workflow.md, "Fuzzing scenarios") on the same
+runners, started by hand only (`gh workflow run parity-fuzz.yml --ref <branch> -f family=commands -f seed=1 -f count=200
+-f runners=2` for a wide search, or `-f seeds=1017,1325 -f shrink_rounds=4` for those seeds again, one slice each,
+shrunk). It takes the data by the rules above and adds none:
+
+- **Same access.** Only a commit on a branch of this repository; the fetch script comes from the default branch's
+  commit; the one step that holds a secret is hosted parity's fetch step, line for line, and ends before the first
+  checkout. It is a copy, not a shared step: an action or a reusable workflow would be one more file whose ref a
+  run has to trust. `tests/test_ci_parity_fuzz.py` compares the two files instead, so a change to one that is not
+  made in the other fails. Without the secrets the plan job fails: no green run that fuzzed nothing.
+- **No cache.** No job restores or saves a cache entry, and the file says `cache-mode: none` for a cache service
+  that honours it. A hand start may write to its branch's cache scope, so an entry restored before the step with a
+  secret could be one the same run's build job wrote. Each fuzz job therefore downloads the dataset and prepares
+  the resources itself; the sealed entries stay hosted parity's.
+- **No Cargo beside the data.** The game and the preparer (`horizon-prepare`) are built once, in a job with no
+  secret, no data and no cache. The fuzz jobs run those two programs (`HORIZON_PREPARE_BINARY` tells
+  `tools/ci/vanilla-data.sh` to use the built preparer), so no build script of the tested commit runs on a runner
+  that holds the data. The tested commit's game, preparer and Python tools do run there, as in hosted parity.
+- **What leaves the runner.** Each fuzz job uploads a folder made new after its slices ended: each slice's output,
+  and `found.json` and `report.json` (compared values and commands, as hosted parity's logs) parsed as JSON and
+  written again. Only regular files are read, through no link (`staged` in `tools/parity_fuzz_probe.py`). A
+  step that runs only when the slices step ran checks that folder against the exact names the slices step
+  writes, and against the digest the slices step gives as its output once it has staged (also when it then fails for a lost slice); the upload runs only when that check passed and found results, so never a folder the slices step did not finish. The summary job uploads its merged
+  table. All are kept 3 days.
+- **Cost.** One 16-vCPU runner per 8 slices, plus one for the build.
+
 ## Which jobs, and when
 
 The repository variable `SELF_HOSTED_CI` decides, from the next job queued (queued jobs keep the runner they asked

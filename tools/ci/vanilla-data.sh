@@ -131,12 +131,18 @@ if [ ! -f "$prepared/.entries" ]; then
   # In the job's turn at compiling on the self-hosted Mac (tools/compile_lock.py; a no-op elsewhere).
   # Its own name: `lock` is the preparation lock's folder, which the EXIT trap above removes.
   in_turn=""; [ ! -f tools/ci/compile-lock.sh ] || in_turn="bash tools/ci/compile-lock.sh ${HORIZON_COMPILE_LOCK_ROLE:-pr} --"
-  if [ "$persistent" = true ]; then
+  # HORIZON_PREPARE_BINARY: this checkout's preparer, built where the data is not (parity-fuzz.yml's build job), so
+  # no Cargo build and none of its build scripts run beside the data.
+  preparer="${HORIZON_PREPARE_BINARY:-}"
+  if [ -n "$preparer" ]; then
+    [ -f "$preparer" ] && [ -x "$preparer" ] || { echo "::error::HORIZON_PREPARE_BINARY is not a program"; exit 1; }
+  elif [ "$persistent" = true ]; then
     $in_turn python3 tools/ci/preparation_step.py preparer-build "$RUNNER_TEMP/prepare-build.log" cargo build --release --locked -p horizon-prepare
   else
     $in_turn cargo build --release --locked -p horizon-prepare
   fi
-  if python3 tools/ci/preparation_step.py resource-export "$RUNNER_TEMP/prepare.log" "${CARGO_TARGET_DIR:-target}/release/horizon-prepare" --root "$PWD"; then
+  [ -n "$preparer" ] || preparer="${CARGO_TARGET_DIR:-target}/release/horizon-prepare"
+  if python3 tools/ci/preparation_step.py resource-export "$RUNNER_TEMP/prepare.log" "$preparer" --root "$PWD"; then
     :
   else
     status=$?

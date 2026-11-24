@@ -116,12 +116,14 @@ def parse_snbt(text):
 
 # Lists whose order vanilla doesn't fix, compared sorted by this key: AttributeMap keeps its instances in an
 # Object2ObjectOpenHashMap keyed by Holder.Reference, which hashes by identity, so the saved order changes run to run.
-UNORDERED = {'attributes': 'id'}
+# `Tags` is Entity.tags, a HashSet of strings: saved in hash order, not the order the tags were added in.
+UNORDERED = {'attributes': 'id', 'Tags': None}
 
 
 def diff(a, b, path=''):
-    key = UNORDERED.get(path.rsplit('.', 1)[-1])
-    if key and isinstance(a, list) and isinstance(b, list):
+    name = path.rsplit('.', 1)[-1]
+    if name in UNORDERED and isinstance(a, list) and isinstance(b, list):
+        key = UNORDERED[name]
         a, b = (sorted(v, key=lambda e: str(e.get(key)) if isinstance(e, dict) else str(e)) for v in (a, b))
     if isinstance(a, dict) and isinstance(b, dict):
         return [d for key in sorted(set(a) | set(b))
