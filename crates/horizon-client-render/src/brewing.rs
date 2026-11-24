@@ -300,17 +300,12 @@ impl Brewing {
             if v["type"] != "minecraft:brewing" {
                 continue;
             }
-            // `ItemStackTemplate.CODEC` reads the output id via `Item.CODEC`,
-            // which reads via `Identifier.parse`: a bare id names `minecraft`'s.
-            let mut output = ItemStack::new(
-                &parse_or_keep(v["output"]["id"].as_str().unwrap_or("minecraft:potion")),
-                v["output"]["count"].as_u64().unwrap_or(1) as u32,
-            );
-            if let Some(potion) =
-                v["output"]["components"]["minecraft:potion_contents"]["potion"].as_str()
-            {
-                output = output.with_potion(potion);
-            }
+            // BrewingRecipe.output is an ItemStackTemplate: decode the whole
+            // stack, not just its potion id, so custom_name, custom_effects
+            // and component removals from a data pack survive the brew.
+            let tag = horizon_client_core::scoreboard::json_to_tag(&v["output"]);
+            let output = crate::item_data::template_from(&tag)
+                .unwrap_or_else(|| ItemStack::new("minecraft:potion", 1));
             recipes.push(BrewingRecipe {
                 id,
                 input: PotionIngredient::parse(&v["input"], items),
@@ -692,6 +687,40 @@ mod tests {
             .find(|r| r.id == "minecraft:brewing/bare")
             .unwrap();
         assert_eq!(&*bare.output.item, "minecraft:emerald");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `BrewingRecipe.output` is a whole `ItemStackTemplate`: a pack's
+    /// custom name and potion contents beyond the potion id reach the brew.
+    #[test]
+    fn output_keeps_its_components() {
+        let root = content_brewing_root("components", "");
+        std::fs::write(
+            root.join("data/example/recipe/brewing/named.json"),
+            br#"{"type":"minecraft:brewing","input":{"item":"minecraft:potion"},"reagent":{"item":"minecraft:sugar"},"output":{"id":"minecraft:splash_potion","count":2,"components":{"minecraft:custom_name":"Zoom","minecraft:potion_contents":{"potion":"minecraft:swiftness","custom_color":16711680,"custom_effects":[{"id":"minecraft:speed","duration":600,"amplifier":2}]}}}}"#,
+        )
+        .unwrap();
+        let items = Items::for_tests(Default::default());
+        let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);
+        let out = &recipes
+            .recipes
+            .iter()
+            .find(|r| r.id == "example:brewing/named")
+            .unwrap()
+            .output;
+        assert_eq!(&*out.item, "minecraft:splash_potion");
+        assert_eq!(out.count, 2);
+        assert_eq!(out.custom_name().as_deref(), Some("Zoom"));
+        assert_eq!(out.potion(), Some("minecraft:swiftness"));
+        assert_eq!(
+            out.custom_potion_effects(),
+            vec![("minecraft:speed".to_owned(), 600, 2)]
+        );
+        let color = out
+            .data()
+            .and_then(|d| d.potion_extra.iter().find(|(k, _)| k == "custom_color"))
+            .and_then(|(_, t)| horizon_client_core::nbt_value::number(Some(t)));
+        assert_eq!(color, Some(16711680));
         std::fs::remove_dir_all(root).unwrap();
     }
 

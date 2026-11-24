@@ -1366,7 +1366,9 @@ pub fn all_bricks(sides: &[Option<ItemStack>; 4]) -> bool {
             .is_some_and(|s| &*s.item == "minecraft:brick" && s.count == 1 && s.extra.is_none())
     })
 }
-fn template_from(tag: &Tag) -> Option<ItemStack> {
+/// Decodes an `ItemStackTemplate` (an id string, or `{id, count, components}`), as
+/// brewing outputs and `show_item` hover events carry it; `None` when it doesn't decode.
+pub fn template_from(tag: &Tag) -> Option<ItemStack> {
     use horizon_world::datafix::dynamic::namespaced;
 
     match tag {
