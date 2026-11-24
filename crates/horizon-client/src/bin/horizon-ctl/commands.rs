@@ -825,6 +825,14 @@ pub fn markdown() -> String {
                 }
             ));
         }
+        if group == Group::World {
+            out.push_str(
+                "\n`tp`, `give`, `xp`, `enchant`, `potion`, `effect`, `time`, `summon`, and a writing\n\
+                 `container` require the world's host. To ask a multiplayer server to act, use `command`\n\
+                 with the corresponding server command; the server checks the player's permissions.\n\
+                 Reading `container` as a guest returns the items the client currently knows.\n",
+            );
+        }
     }
     out.push_str(
         "\n## Replies\n\nThe reply fields of the commands described so far (more follow, a group at a \

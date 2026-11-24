@@ -135,6 +135,11 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 | `render-distance N` | CLI only | Chunks, 2..128 | `chunks` (integer, required): render distance |
 | `wait TICKS` | `wait` | Wait until TICKS game ticks have passed (20 per second) | `ticks` (integer, required): game ticks |
 
+`tp`, `give`, `xp`, `enchant`, `potion`, `effect`, `time`, `summon`, and a writing
+`container` require the world's host. To ask a multiplayer server to act, use `command`
+with the corresponding server command; the server checks the player's permissions.
+Reading `container` as a guest returns the items the client currently knows.
+
 ## Scripting and benchmarks
 
 | Command | MCP tool | What it does | Arguments |
