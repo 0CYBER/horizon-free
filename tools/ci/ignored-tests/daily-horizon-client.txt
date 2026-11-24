@@ -140,6 +140,8 @@ horizon-client game::native_hooks::runtime_environment::server_data_version_test
 horizon-client game::native_hooks::sky_environment::sky_environment_tests::a_client_mod_draws_its_own_time_and_weather lib daily game-boot
 horizon-client game::native_item_places::tests::editing_worn_equipment_updates_in_place_without_reequipping lib daily resources
 horizon-client game::native_menu_places::tests::a_backing_names_why_it_refuses lib daily resources
+horizon-client game::native_menu_places::tests::a_backpack_in_a_mod_place_backs_the_menu_never_goes_into_itself_and_closes_once_gone lib daily resources
+horizon-client game::native_menu_places::tests::a_click_once_a_place_no_longer_resolves_closes_the_menu_and_moves_nothing lib daily resources
 horizon-client game::native_menu_places::tests::a_creative_shift_click_fills_the_held_backpack_not_a_copy lib daily resources
 horizon-client game::native_menu_places::tests::a_shift_click_into_a_held_backpack_writes_through_its_handler lib daily resources
 horizon-client game::native_menu_places::tests::a_write_into_the_box_is_mirrored_at_its_notice lib daily resources

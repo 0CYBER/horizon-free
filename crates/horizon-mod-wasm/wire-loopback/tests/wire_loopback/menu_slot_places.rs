@@ -10,6 +10,11 @@ fn menu_slot_places_round_trip() {
             slot: 26,
         },
         mod_api::MenuSlotPlace::EntityItems { entity, slot: 4 },
+        mod_api::MenuSlotPlace::ModItem {
+            provider: "example:back",
+            key: 7,
+            slot: 3,
+        },
     ] {
         let mut out = Writer::new();
         out.put(&place);

@@ -36,6 +36,22 @@ pub enum MenuSlotPlace {
         /// The slot's index in the handler.
         slot: usize,
     },
+    /// Slot `slot` of the container inside the stack at the mod place
+    /// [`ItemPlace::Mod { provider, key }`](ItemPlace::Mod), through that stack's [`ITEM_ITEMS`]
+    /// handler: a backpack worn in an accessory slot (`StackCopySlot` over a mod's
+    /// `ItemAccess`). The stack is bound when the slots are backed, as [`HeldItem`](Self::HeldItem)'s:
+    /// the menu closes, before the next click or at the next change notice, once the place holds
+    /// no container or another stack. A click that would take the stack out of its place (the
+    /// place is one of the menu's slots, such as a provider that keeps it in the player's
+    /// inventory) is undone whole, so the stack can't go into itself.
+    ModItem {
+        /// The place provider's registered name.
+        provider: &'static str,
+        /// The provider's own key for the place.
+        key: u64,
+        /// The slot's index in the container.
+        slot: usize,
+    },
 }
 
 /// Why [`PlayerRef::back_mod_menu_slots`] backed nothing; the menu and its slots stay as they
@@ -51,8 +67,8 @@ pub enum MenuSlotBackRefusal {
     UnsupportedMenu,
     /// More places than the menu has container slots.
     TooManyPlaces,
-    /// `places[index]` names no storage now (no container in that hand, the entity gone or
-    /// without an item handler, a slot past the handler's size).
+    /// `places[index]` names no storage now (no container in that hand or at that mod place,
+    /// the entity gone or without an item handler, a slot past the handler's size).
     PlaceUnresolved {
         /// The place's index in `places`.
         index: usize,
@@ -91,6 +107,14 @@ impl MenuSlotPlace {
             }
             Self::EntityItems { entity, slot } => {
                 Some((entity.capability(host, &ENTITY_ITEMS, ())?, slot))
+            }
+            Self::ModItem {
+                provider,
+                key,
+                slot,
+            } => {
+                let place = ItemPlace::Mod { provider, key };
+                Some((place.capability(host, &ITEM_ITEMS)?, slot))
             }
         }
     }

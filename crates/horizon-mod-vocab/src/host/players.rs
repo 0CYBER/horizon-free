@@ -925,10 +925,12 @@ pub trait PlayersBackendMut {
     /// that storage's own handler, journalled; the client sees ordinary synced slots, mirrored
     /// after each click and each write through an `ItemPlace` of that storage, never each tick.
     /// A slot past `places` stays the mods' own (`native_menu_clicked`). The menu closes once a
-    /// place stops resolving (the backpack left the hand, the entity is gone) or a held stack is
-    /// no longer the one bound when the slots were backed, checked before each click and at
-    /// each change notice. A `MenuSlotPlace::HeldItem` locks the inventory slot holding that
-    /// stack while the menu is open, so it can't go into itself. Backing again replaces the
+    /// place stops resolving (the backpack left the hand or the mod place, the entity is gone)
+    /// or a held or mod place's stack is no longer the one bound when the slots were backed,
+    /// checked before each click and at each change notice. A `MenuSlotPlace::HeldItem` locks
+    /// the inventory slot holding that stack while the menu is open, and a click that would take
+    /// a `MenuSlotPlace::ModItem` place's stack out of its place is undone, so neither can go
+    /// into itself. Backing again replaces the
     /// places; a slot no longer backed (an empty list, a shorter one) is emptied, never left
     /// holding the copy it showed. A [`MenuSlotBackRefusal`], and nothing changes, for a player
     /// not online or a window that is not their open menu, a menu that is not a blockless mod

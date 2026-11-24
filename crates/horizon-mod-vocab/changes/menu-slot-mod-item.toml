@@ -1,0 +1,9 @@
+ids = [
+    "type:MenuSlotPlace",
+    "type:MenuSlotPlace.ModItem",
+    "type:MenuSlotBacking",
+    "call:Backend::menu_slot_backing",
+    "call:BackendMut::player_back_mod_menu_slots",
+]
+why = "A mod menu's slots can show the contents of a stack kept at a mod place (ItemPlace::Mod, a PlaceProvider's, such as an accessory slot), written through that stack's ITEM_ITEMS handler (#18335). MenuSlotPlace gains the ModItem variant, so its wire layout, MenuSlotBacking's and those of the calls that carry them (Backend::menu_slot_backing, BackendMut::player_back_mod_menu_slots) change for wasm mods."
+migrate = "Existing MenuSlotPlace matches keep their non_exhaustive fallback. Rebuild wasm mods against this SDK for the changed wire layout."
