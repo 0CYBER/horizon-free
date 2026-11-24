@@ -9,6 +9,7 @@ pub mod audio;
 pub mod auth;
 pub mod autotune;
 pub mod ban_notice;
+mod better_grass;
 pub mod bidi;
 pub mod biome;
 pub mod block_edit;

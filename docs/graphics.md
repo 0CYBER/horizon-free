@@ -16,6 +16,13 @@ Tab, the arrows, Enter and Space work it from the keyboard (Left and Right step 
 
 Every setting applies at once, except worker threads, the graphics API, translucent batching, ray tracing turned on in a game started without it, and the sizes battery mode halves the client's pools to (chunk building, the tick's helpers, chunk decoding, saves, network and chunk encoding), which apply at the next start (battery mode's frame cap applies at once). Ray tracing turned on (On, or Auto with a pack that traces) applies at once only in a game that started with it: ray queries are part of the device the game opens, so after a start without them (Off, or Auto with no such pack) it waits for the next start, as the shader pack screen says of a pack that traces. A preset sets the quality settings together; changing one of them turns it into Custom. Display preferences (FOV, framerate, VSync, GUI scale, fullscreen, present mode, pacing) leave the preset as it is.
 
+**Video Settings → Quality → Textures → Better Grass** controls how grass-like blocks use their top
+texture on their sides. **Pack default** uses Fancy only if an enabled resource pack supplies
+`optifine/bettergrass.properties`; otherwise it leaves vanilla block sides unchanged. **Off** disables
+the effect even with a pack. **Fast** uses the top texture without checking neighboring blocks;
+**Fancy** checks neighboring blocks to blend terrain edges. Fast and Fancy use built-in rules if no
+pack supplies the file. The selected mode is saved in `options.txt` and is not changed by graphics presets.
+
 With VSync off, **Present Mode: Mailbox** uses FIFO on surfaces that do not support Mailbox, so
 the explicit tear-free choice never becomes Immediate. **Auto** still follows vanilla's selection.
 The F3 display shows the mode that the surface actually uses.

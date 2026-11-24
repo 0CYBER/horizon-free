@@ -249,6 +249,7 @@ static TABLE: LazyLock<Vec<Def>> = LazyLock::new(|| {
         pb("startedCleanly", true),
         n("musicToast", MUSIC_TOAST, 0),
         n("musicFrequency", MUSIC_FREQUENCY, 0),
+        n("horizonBetterGrass", &["auto", "off", "fast", "fancy"], 0),
     ];
     for (name, key, _) in crate::keybinds::MAPPINGS {
         t.push(def(

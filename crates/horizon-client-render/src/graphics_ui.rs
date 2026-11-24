@@ -362,6 +362,11 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             "Leaves with see-through gaps. Off draws them solid.",
                         ),
                         v(
+                            Opt::BetterGrass,
+                            Low,
+                            "horizon.options.better_grass.tooltip",
+                        ),
+                        v(
                             Opt::ImprovedTransparency,
                             Medium,
                             "Sorts water and glass more exactly behind each other.",
@@ -1396,6 +1401,7 @@ impl Item {
                         | Opt::Vignette
                         | Opt::Autosave
                         | Opt::AttackIndicator
+                        | Opt::BetterGrass
                         | Opt::FovEffects
                 )
         );
@@ -1507,6 +1513,7 @@ fn read(s: &Settings) -> impl std::fmt::Debug + '_ {
         s.cutout_leaves,
         s.improved_transparency,
         &s.graphics_preset,
+        s.better_grass_mode(),
     );
     let window = (
         s.fullscreen,
@@ -1649,6 +1656,7 @@ impl Screen for GraphicsScreen {
         s.chunk_fade = b.chunk_fade;
         s.mipmap_levels = b.mipmap_levels;
         s.cutout_leaves = b.cutout_leaves;
+        s.better_grass = b.better_grass_mode();
         s.improved_transparency = b.improved_transparency;
         s.prioritize_chunk_updates = b.prioritize_chunk_updates;
         // Presets set it beside the options above.

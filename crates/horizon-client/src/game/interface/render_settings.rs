@@ -171,18 +171,21 @@ impl Game<'_> {
                 s.biome_blend,
                 s.smooth_lighting,
                 s.cutout_leaves,
+                s.better_grass_mode(),
                 s.horizon.opaque_ice,
                 leaf_culling,
             ) != (
                 st.biome_blend,
                 st.smooth_lighting,
                 st.cutout_leaves,
+                st.better_grass_mode,
                 st.opaque_ice,
                 st.leaf_culling,
             );
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
+        self.streaming.better_grass_mode = self.settings.better_grass_mode();
         self.streaming.opaque_ice = self.settings.horizon.opaque_ice;
         self.streaming.leaf_culling = leaf_culling;
         if reload {

@@ -45,6 +45,7 @@ pub(super) fn mesh_section(
         biomes: &context.biomes,
         visibility,
     };
+    scratch.better_grass_mode = settings.better_grass_mode;
     let mut mesh = mesher.mesh_reusing(&borrow(region), sy, recycled, scratch);
     if settings.shader_pack {
         mesh.apply_block_layers(&settings.block_layers, &context.tables);
@@ -67,6 +68,7 @@ impl Streaming {
             blend_radius: self.biome_blend,
             smooth_lighting: self.smooth_lighting,
             cutout_leaves: self.cutout_leaves,
+            better_grass_mode: self.better_grass_mode,
             opaque_ice: self.opaque_ice,
             translucent_layers: self.translucent_layers.clone(),
             block_layers: self.block_layers.clone(),

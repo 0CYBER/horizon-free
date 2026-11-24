@@ -103,6 +103,7 @@ pub struct RenderAssets {
     pub connected: crate::connected::ConnectedTextures,
     /// Fusion connected textures (empty without Fusion's connecting textures and models).
     pub fusion: crate::fusion::FusionTextures,
+    pub(crate) better_grass: Option<crate::better_grass::BetterGrass>,
     /// The keyframe animations mods and packs ship (`neoforge/animations/entity`), by id.
     pub mod_animations: crate::mod_animations::Animations,
     /// The mods' registered render pipelines as this load built them.
@@ -467,6 +468,9 @@ impl RenderAssets {
         } else {
             Default::default()
         };
+        let better_grass = draws
+            .then(|| crate::better_grass::BetterGrass::load(root, registry, &mut sprites))
+            .transpose()?;
         // After the connected tiles: a tile identical to a block shares its layer, and the
         // overlays skip shared layers.
         if draws {
@@ -500,6 +504,7 @@ impl RenderAssets {
             pbr_size: sprites.pbr_size,
             connected,
             fusion,
+            better_grass,
             mod_animations: crate::mod_animations::Animations::load(root.source()),
             // A required pipeline that doesn't build fails the load: nothing of it is published.
             mod_pipelines: crate::mod_pipelines::Pipelines::load(root.source(), generation)?,

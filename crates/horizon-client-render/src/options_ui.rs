@@ -5,6 +5,7 @@
 mod draw;
 mod pack_drop;
 
+use horizon_optifine::better_grass::Mode as BetterGrassMode;
 use std::time::Instant;
 
 pub use crate::settings::Opt;
@@ -272,6 +273,7 @@ impl Opt {
             Opt::Particles => "options.particles",
             Opt::EntityDistance => "options.entityDistanceScaling",
             Opt::EntityShadows => "options.entityShadows",
+            Opt::BetterGrass => "horizon.options.better_grass",
             Opt::BiomeBlend => "options.biomeBlendRadius",
             Opt::Preset => "options.graphics.preset",
             Opt::Mipmaps => "options.mipmapLevels",
@@ -839,6 +841,12 @@ impl Opt {
                 "options.particles.minimal",
             ][usize::from(s.particles.min(2))]),
             Opt::EntityShadows => on_off(s.entity_shadows),
+            Opt::BetterGrass => tr(match s.better_grass_mode() {
+                BetterGrassMode::Auto => "horizon.options.better_grass.auto",
+                BetterGrassMode::Off => "options.off",
+                BetterGrassMode::Fast => "options.clouds.fast",
+                BetterGrassMode::Fancy => "options.clouds.fancy",
+            }),
             Opt::Vignette => on_off(s.vignette),
             Opt::Autosave => on_off(s.autosave_indicator),
             Opt::CutoutLeaves => on_off(s.cutout_leaves),
@@ -1175,6 +1183,19 @@ impl Opt {
             }
             Opt::Particles => s.particles = next(s.particles, 3),
             Opt::EntityShadows => s.entity_shadows = !s.entity_shadows,
+            Opt::BetterGrass => {
+                let order = [
+                    BetterGrassMode::Auto,
+                    BetterGrassMode::Off,
+                    BetterGrassMode::Fast,
+                    BetterGrassMode::Fancy,
+                ];
+                let i = order
+                    .iter()
+                    .position(|&mode| mode == s.better_grass_mode())
+                    .unwrap();
+                s.better_grass = order[usize::from(next(i as u8, order.len() as u8))];
+            }
             Opt::Vignette => s.vignette = !s.vignette,
             Opt::Autosave => s.autosave_indicator = !s.autosave_indicator,
             Opt::CutoutLeaves => s.cutout_leaves = !s.cutout_leaves,
@@ -2897,6 +2918,7 @@ impl OptionsUi {
                     Opt::Vignette,
                     Opt::AttackIndicator,
                     Opt::ChunkFade,
+                    Opt::BetterGrass,
                 ]));
                 self.filter_option_rows(rows)
             }
