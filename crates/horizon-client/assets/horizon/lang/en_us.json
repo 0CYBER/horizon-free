@@ -125,6 +125,8 @@
   "horizon.options.keyboard.auto": "Auto",
   "horizon.options.keyboard.horizon": "Horizon",
   "horizon.options.keyboard.steam": "Steam",
+  "horizon.keybinds.owner.minecraft": "Minecraft",
+  "horizon.keybinds.owner.horizon": "Horizon",
   "horizon.options.unavailable": "This feature is not yet available in Horizon.",
   "horizon.options.search": "Search settings...",
   "horizon.studio.record.usage": "Usage: /studio record <start [name]|stop|status>",

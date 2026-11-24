@@ -1,1 +1,1 @@
-pub use client::key_mapping::{KeyConflictContext, KeyRegistration};
+pub use client::key_mapping::{KeyConflictContext, KeyRegistration, RegisteredKeyBind};

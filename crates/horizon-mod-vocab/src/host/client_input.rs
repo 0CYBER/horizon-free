@@ -46,6 +46,17 @@ pub trait ClientInputClientHost {
     #[access(ClientSetup)]
     fn mapping(&self, name: &str) -> Result<Option<KeyMapping>, TextFormError>;
     /// Side: client.
+    /// Every registered key mapping across Minecraft vanilla controls, Horizon built-ins,
+    /// and loaded mods, with translated labels, current/default keys, modifiers, and conflict scenes.
+    #[access(ClientSetup)]
+    fn all_keybinds(&self) -> Vec<RegisteredKeyBind>;
+    /// Side: client.
+    /// Rebinds a mapping (`owner == ""` for Vanilla/Horizon id like `"key.forward"`;
+    /// non-empty `owner` for a mod's registration id), saves settings, and syncs live bindings.
+    /// Returns `false` if `owner`/`id` is unknown or `key` is not a valid key/mouse name.
+    #[access(ClientSetup)]
+    fn set_keybind(&mut self, owner: &str, id: &str, key: &str, modifiers: u32) -> bool;
+    /// Side: client.
     /// Holds the vanilla gameplay mapping `key` down or lets it go (`KeyMapping.setDown`): the
     /// held state its key gives it, without the click a press adds. `key` is a mapping of the
     /// movement, gameplay or inventory category (`key.attack`, `key.use`, `key.sprint`,

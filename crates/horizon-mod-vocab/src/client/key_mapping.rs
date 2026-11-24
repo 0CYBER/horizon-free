@@ -88,3 +88,30 @@ impl KeyRegistration {
         self
     }
 }
+
+/// One key binding entry (Vanilla, Horizon, or Mod) returned by [`ClientHost::all_keybinds`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct RegisteredKeyBind {
+    /// Owner mod id (`""` for Vanilla/Horizon mappings, e.g. `"autofish"` or `"ipn"`).
+    pub owner: String,
+    /// Owner display title (`"Minecraft"`, `"Horizon"`, or the mod's display title).
+    pub owner_title: String,
+    /// Binding id (`"key.forward"` for vanilla/horizon; `"toggle"` for a mod mapping).
+    pub id: String,
+    /// Human-readable action label (already translated via client language table).
+    pub label: String,
+    /// Category label (already translated via client language table, or empty if uncategorized).
+    pub category: String,
+    /// Current key or mouse button name (`"key.keyboard.w"`, `"key.mouse.left"`, `"key.keyboard.unknown"`).
+    pub key: String,
+    /// Current modifier bitmask (`1` Shift, `2` Ctrl, `4` Alt; always `0` for vanilla bindings).
+    pub modifiers: u32,
+    /// Default key name (`"key.keyboard.w"`, ...).
+    pub default_key: String,
+    /// Default modifier bitmask.
+    pub default_modifiers: u32,
+    /// Conflict scene declared for this binding (`Universal`, `InGame`, `Gui`).
+    pub context: KeyConflictContext,
+}

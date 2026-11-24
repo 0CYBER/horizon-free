@@ -121,6 +121,11 @@ pub trait ScreensClientHost {
     #[access(ClientSetup)]
     fn mod_screen(&self) -> Option<&str>;
     /// Side: client.
+    /// Name of the active Options page (`"key_binds"`, `"controls"`, `"main"`, etc.)
+    /// when `Screen::Options` is open, or `None` when another screen is active.
+    #[access(ClientSetup)]
+    fn options_page(&self) -> Option<String>;
+    /// Side: client.
     /// The open menu's title (the block's name, or the one it was given),
     /// as plain text.
     #[access(ClientSetup)]

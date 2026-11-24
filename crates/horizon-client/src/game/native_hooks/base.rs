@@ -4740,6 +4740,11 @@ impl Game<'_> {
             .as_deref()
             .filter(|_| self.screen == Screen::Mod)
     }
+    /// Active Options page name (`"key_binds"`, `"controls"`, `"main"`, ...) when
+    /// `Screen::Options` is open, or `None` otherwise.
+    pub(in crate::game) fn options_page(&self) -> Option<String> {
+        options_page_name(self.screen, self.ui.options.page())
+    }
     /// The open menu's title (the block's name, or the one it was given),
     /// as plain text.
     pub(in crate::game) fn screen_title(&self) -> Option<String> {
@@ -4979,6 +4984,51 @@ impl Game<'_> {
     ) -> Result<(), String> {
         let item = mod_api::__private::item_key_id(item).ok_or("unknown item key")?;
         self.recipe_give(item, count)
+    }
+}
+
+fn options_page_name(screen: Screen, page: horizon_client::options_ui::Page) -> Option<String> {
+    if screen != Screen::Options {
+        return None;
+    }
+    use horizon_client::options_ui::Page;
+    Some(match page {
+        Page::Main => "main",
+        Page::Video => "video",
+        Page::Sound => "sound",
+        Page::Controls => "controls",
+        Page::KeyBinds => "key_binds",
+        Page::Mouse => "mouse",
+        Page::Chat => "chat",
+        Page::Accessibility => "accessibility",
+        Page::Language => "language",
+        Page::Font => "font",
+        Page::Packs => "packs",
+        Page::Mods => "mods",
+        Page::Graphics => "graphics",
+        Page::ShaderPacks => "shader_packs",
+        _ => "other",
+    }
+    .to_owned())
+}
+
+#[cfg(test)]
+mod options_page_tests {
+    use super::*;
+
+    #[test]
+    fn options_page_returns_none_outside_options_and_names_active_page() {
+        use horizon_client::options_ui::Page;
+        assert_eq!(options_page_name(Screen::Playing, Page::KeyBinds), None);
+        assert_eq!(options_page_name(Screen::Paused, Page::Main), None);
+        assert_eq!(
+            options_page_name(Screen::Options, Page::KeyBinds).as_deref(),
+            Some("key_binds")
+        );
+        assert_eq!(
+            options_page_name(Screen::Options, Page::Controls).as_deref(),
+            Some("controls")
+        );
     }
 }
 
