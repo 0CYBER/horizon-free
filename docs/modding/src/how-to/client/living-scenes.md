@@ -1,4 +1,4 @@
-# Entities and particles in screen scenes
+# Entities, particles and textured faces in screen scenes
 
 `DrawContext::draw_scene` draws a `Scene` in a screen, as a guide page or a Ponder scene
 shows a structure. A scene of blocks alone is drawn as it always was and keeps nothing. A
@@ -71,6 +71,43 @@ game's Particles option applies, as it does in the world. Scenes make no sound.
 At most four scenes with entities or particles animate in one frame. A fifth still draws
 its blocks and its last state, but its clock does not advance, and the call returns
 `TooManyScenes`.
+
+## Textured faces
+
+Use `DrawContext::draw_scene_with_quads` to put a sprite on a scene-local face, for
+example a fluid surface or a panel. It takes the same `Scene` and `SceneView` as
+`draw_scene`, plus a slice of faces. Quads do not need or change the clock, and can
+be used in an empty `Scene`. Both sides draw. The same scene box and depth buffer
+apply to blocks, entities, particles and faces, so a nearer block can hide a quad.
+
+```rust
+use mod_api::{Scene, SceneTexturedQuad};
+
+// A flat surface one block across, cropped to part of the flowing water sprite.
+let surface = SceneTexturedQuad::new(
+    "minecraft:block/water_flow",
+    [[0.0, 0.8, 0.0], [1.0, 0.8, 0.0], [1.0, 0.8, 1.0], [0.0, 0.8, 1.0]],
+    [[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]],
+    0xA03F_76E4,
+);
+draw.draw_scene_with_quads(rect, &Scene::new(blocks), view, &[surface])?;
+```
+
+List the four corners in order around the face, in blocks. Give each corner its own
+normalized UV in the sprite (`[0, 0]` at its top left, `[1, 1]` at its bottom right).
+The tint multiplies the sampled RGBA, including alpha; use `0xFFFF_FFFF` for no tint.
+Use a sprite from the scene's existing GUI atlas, such as `block/water_still`,
+`minecraft:block/water_overlay` or `mymod:gui/panel`. The atlas uses the player's
+resource packs and updates animated sprites; no separate texture upload is needed.
+
+`SceneWithQuadsError::BadTexturedQuad { index }` means a non-finite or out-of-range
+corner (coordinates must be within 30 million blocks on each axis) or a UV outside
+`0..=1`. `UnknownSprite { index }` means no sprite by that name is packed.
+`TooManyTexturedQuads` means more than `SCENE_MAX_TEXTURED_QUADS` (4096) faces. These
+errors draw nothing and leave the scene's state unchanged. Other scene refusals come
+back wrapped in `SceneWithQuadsError::Scene`; for `TooManyScenes` the textured faces
+draw along with the blocks and whatever last state is available, without advancing
+the clock. The existing `draw_scene` call is unchanged.
 
 ## Refusals
 

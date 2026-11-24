@@ -298,3 +298,63 @@ pub enum SceneError {
     /// Entities or particles without a clock.
     NoClock,
 }
+
+/// The most textured quads one scene draw takes.
+pub const SCENE_MAX_TEXTURED_QUADS: usize = 4096;
+
+/// A two-sided textured face in the scene, drawn at its own depth and clipped with
+/// the blocks. Draw with [`DrawContext::draw_scene_with_quads`](crate::DrawContext::draw_scene_with_quads).
+#[derive(Clone, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneTexturedQuad {
+    /// An existing sprite in the GUI/scene atlas, e.g. `minecraft:block/water_still`
+    /// (also `block/water_still`) or `mymod:gui/panel`.
+    pub sprite: String,
+    /// Scene-local corners in order around the face, in blocks.
+    pub corners: [[f32; 3]; 4],
+    /// One `[u, v]` per corner, each component in `0..=1` relative to the sprite;
+    /// `[0, 0]` is its top left.
+    pub uv: [[f32; 2]; 4],
+    /// Sprite multiplier, including alpha, in `0xAARRGGBB` (opaque white leaves it unchanged).
+    pub tint: u32,
+}
+
+impl SceneTexturedQuad {
+    /// A face with its four corners and matching sprite coordinates, and an ARGB tint.
+    pub fn new(
+        sprite: impl Into<String>,
+        corners: [[f32; 3]; 4],
+        uv: [[f32; 2]; 4],
+        tint: u32,
+    ) -> Self {
+        Self {
+            sprite: sprite.into(),
+            corners,
+            uv,
+            tint,
+        }
+    }
+}
+
+/// Why [`DrawContext::draw_scene_with_quads`](crate::DrawContext::draw_scene_with_quads)
+/// refused a scene. Invalid quads leave the drawing and scene's clock unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum SceneWithQuadsError {
+    /// The underlying scene draw's result. [`SceneError::TooManyScenes`] still draws
+    /// the blocks, textured quads and last state without advancing the clock.
+    Scene(SceneError),
+    /// More than [`SCENE_MAX_TEXTURED_QUADS`] textured quads.
+    TooManyTexturedQuads,
+    /// One of the quad's coordinates isn't finite or is more than 30 million blocks
+    /// from the origin on an axis, or a UV component is not in `0..=1`.
+    BadTexturedQuad {
+        /// The quad's index in `quads`.
+        index: u32,
+    },
+    /// The quad's sprite isn't in the GUI/scene atlas.
+    UnknownSprite {
+        /// The quad's index in `quads`.
+        index: u32,
+    },
+}

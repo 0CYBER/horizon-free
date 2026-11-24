@@ -143,6 +143,19 @@ pub trait DrawContext {
     ) -> Result<(), SceneError> {
         Err(SceneError::Unavailable)
     }
+    /// Draw a [`Scene`] with additional textured faces in its own coordinates. They
+    /// use the scene's projection, scissor and depth along with its blocks, entities
+    /// and particles, and do not need or change its clock. Invalid faces refuse the
+    /// whole draw before it changes the scene's state.
+    fn draw_scene_with_quads(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        quads: &[SceneTexturedQuad],
+    ) -> Result<(), SceneWithQuadsError> {
+        Err(SceneWithQuadsError::Scene(SceneError::Unavailable))
+    }
     /// `GuiGraphics.enableScissor`: what this hook call draws from now on, until the matching
     /// [`pop_clip`](Self::pop_clip), is cut to `rect` (`[x, y, w, h]` in GUI pixels, as
     /// [`fill`](Self::fill) takes it), the visible part of a sprite, glyph or item kept.

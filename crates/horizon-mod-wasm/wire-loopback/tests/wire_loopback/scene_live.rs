@@ -2,13 +2,18 @@ use super::*;
 use mod_api::BlockMetadata as _;
 use mod_api::{
     BlockState, Compound, DrawContext, EntityRef, GuiEntity, Scene, SceneBlock, SceneClock,
-    SceneEntity, SceneError, SceneParticle, SceneView,
+    SceneEntity, SceneError, SceneParticle, SceneTexturedQuad, SceneView, SceneWithQuadsError,
 };
+
+type TexturedDraw = ([f32; 4], Scene, SceneView, Vec<SceneTexturedQuad>);
 
 /// A screen's drawing that keeps each scene it is asked to draw and answers with the
 /// refusal its clock's id names (`REFUSALS[id]`), so every named refusal crosses back.
 #[derive(Default)]
-struct Draw(Vec<([f32; 4], Scene, SceneView)>);
+struct Draw {
+    original: Vec<([f32; 4], Scene, SceneView)>,
+    textured: Vec<TexturedDraw>,
+}
 impl DrawContext for Draw {
     fn draw_scene(
         &mut self,
@@ -16,11 +21,25 @@ impl DrawContext for Draw {
         scene: &Scene,
         view: SceneView,
     ) -> Result<(), SceneError> {
-        self.0.push((rect, scene.clone(), view));
+        self.original.push((rect, scene.clone(), view));
         match scene.clock {
             Some(clock) => REFUSALS.get(clock.id as usize).copied().unwrap_or(Ok(())),
             None => Ok(()),
         }
+    }
+
+    fn draw_scene_with_quads(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        quads: &[SceneTexturedQuad],
+    ) -> Result<(), SceneWithQuadsError> {
+        self.textured
+            .push((rect, scene.clone(), view, quads.to_vec()));
+        scene
+            .clock
+            .map_or(Ok(()), |clock| TEXTURED_ANSWERS[clock.id as usize])
     }
 }
 
@@ -42,6 +61,14 @@ const REFUSALS: [Result<(), SceneError>; 16] = [
     Err(SceneError::BadClock),
     Err(SceneError::NoClock),
     Ok(()),
+];
+
+const TEXTURED_ANSWERS: [Result<(), SceneWithQuadsError>; 5] = [
+    Ok(()),
+    Err(SceneWithQuadsError::UnknownSprite { index: 0 }),
+    Err(SceneWithQuadsError::BadTexturedQuad { index: 1 }),
+    Err(SceneWithQuadsError::TooManyTexturedQuads),
+    Err(SceneWithQuadsError::Scene(SceneError::TooManyScenes)),
 ];
 
 /// What a guide page draws: a scene of blocks alone, then a living one with each part (a
@@ -159,7 +186,7 @@ fn a_native_mods_screen_draw_reaches_the_draw_contexts_scene() {
             .into_iter()
             .map(|(r, s, v, _)| (r, s, v))
             .collect();
-        assert_eq!(draw.0, sent);
+        assert_eq!(draw.original, sent);
     });
 }
 
@@ -193,6 +220,60 @@ fn a_wasm_mods_scene_crosses_whole_with_each_part_and_each_refusal_comes_back() 
             assert_eq!(answers.last(), Some(&answer));
             sent.push((rect, scene, view));
         }
+        let (rect, control, view) = sent[0].clone();
+        let quads = vec![
+            SceneTexturedQuad::new(
+                "guide:gui/checker",
+                [
+                    [0.0, 0.5, -1.0],
+                    [2.0, 0.5, -1.0],
+                    [2.0, 2.0, -1.0],
+                    [0.0, 2.0, -1.0],
+                ],
+                [[0.125, 0.75], [0.75, 0.875], [0.75, 0.0], [0.125, 0.0]],
+                0xD025_4080,
+            ),
+            SceneTexturedQuad::new(
+                "minecraft:block/water_flow",
+                [
+                    [0.0, 1.25, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 1.25, 1.0],
+                ],
+                [[0.75, 0.875], [0.5, 0.25], [0.25, 0.125], [0.125, 0.25]],
+                0x803F_76E4,
+            ),
+        ];
+        let mut textured = Vec::new();
+        for (id, answer) in (0u32..).zip(TEXTURED_ANSWERS) {
+            let scene = control.clone().with_clock(SceneClock::new(id, 1, 0.25));
+            assert_eq!(
+                guest::Guest.draw_scene_with_quads(rect, &scene, view, &quads),
+                answer
+            );
+            textured.push((rect, scene, view, quads.clone()));
+        }
+
+        // Link the pre-feature import by its Wasm name and replay a block-only call
+        // in the old positional wire form, without the current Scene encoder.
+        let id = boundary::import_by_name("DrawContext::draw_scene#d4bf886d1a93fd8c").unwrap();
+        let mut input = Writer::new();
+        input.put(&rect);
+        input.put(&[0u32; 3]); // Empty blocks, entities and particles lists.
+        input.put(&0u8); // No clock.
+        input.put(&view.center);
+        input.put(&view.yaw);
+        input.put(&view.pitch);
+        input.put(&view.scale);
+        let mut output = Writer::new();
+        // SAFETY: the same live frame is used synchronously.
+        unsafe { boundary::serve(id, pointer, input.bytes(), &mut output) }.unwrap();
+        assert_eq!(
+            Reader::decode::<Result<(), SceneError>>(output.bytes()),
+            Ok(Ok(()))
+        );
+        sent.push((rect, Scene::new(Vec::new()), view));
         guest::set_transport(None);
         drop(cx);
         // Every named refusal came back as itself, and the host was handed exactly what
@@ -200,10 +281,11 @@ fn a_wasm_mods_scene_crosses_whole_with_each_part_and_each_refusal_comes_back() 
         let mut expected = vec![Ok(())];
         expected.extend(REFUSALS);
         assert_eq!(answers, expected);
-        assert_eq!(draw.0.len(), 17);
-        assert_eq!(draw.0[1].1.blocks.len(), 2);
-        assert_eq!(draw.0[1].1.entities.len(), 2);
-        assert_eq!(draw.0[1].1.particles.len(), 1);
-        assert_eq!(draw.0, sent);
+        assert_eq!(draw.original.len(), 18);
+        assert_eq!(draw.original[1].1.blocks.len(), 2);
+        assert_eq!(draw.original[1].1.entities.len(), 2);
+        assert_eq!(draw.original[1].1.particles.len(), 1);
+        assert_eq!(draw.original, sent);
+        assert_eq!(draw.textured, textured);
     });
 }

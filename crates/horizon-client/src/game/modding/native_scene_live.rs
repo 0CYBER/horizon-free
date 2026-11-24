@@ -9,7 +9,7 @@
 use super::api_values::TryIntoEngine as _;
 use super::{
     Game,
-    native_scene::{SceneBlock, SceneQuad, face_shade, shaded},
+    native_scene::{SceneBlock, SceneFrame, SceneQuad, face_shade, shaded},
 };
 use glam::{DVec3, Quat, Vec3};
 use horizon_client::{
@@ -201,28 +201,25 @@ fn entity_refusal(error: GuiEntityError, index: u32) -> SceneError {
 }
 
 impl Game<'_> {
-    /// `DrawContext::draw_scene`: `blocks` (`scene.blocks`, prepared) into `rect` seen as
-    /// `view` says. A scene of blocks alone takes the block-only path before any state
-    /// work: no clock read, nothing kept. A living one is drawn with its entities and the
-    /// particles its clock ticks. Refused whole, nothing drawn and nothing kept, for input
-    /// that fails `check`, an entity `DrawContext::entity` refuses or a particle; past the
-    /// frame's animating budget the blocks and the scene's last state are drawn, its clock
-    /// does not advance, and the call returns `TooManyScenes`.
+    /// Draws the prepared `blocks` into the given `frame`, with its textured quads.
+    /// A static scene keeps no state and reads no clock. A living one is drawn with
+    /// its entities and the particles its clock ticks. Invalid input draws nothing.
+    /// Past the frame's animating budget, the blocks, textured quads and the scene's
+    /// last state are drawn, its clock does not advance, and this returns `TooManyScenes`.
     pub(super) fn native_draw_scene(
         &self,
         batch: &mut HudBatch,
-        rect: [f32; 4],
         blocks: &[SceneBlock<'_>],
         scene: &Scene,
-        view: SceneView,
+        frame: SceneFrame,
     ) -> Result<(), SceneError> {
         if !self.native_window() {
             return Err(SceneError::Unavailable);
         }
         if !lives(scene) {
-            return self.draw_scene_quads(batch, rect, blocks, view, |_| {});
+            return self.draw_scene_quads(batch, blocks, frame, |_| {});
         }
-        let clock = check(rect, scene, view)?;
+        let clock = check(frame.rect, scene, frame.view)?;
         // Checked whole before anything is kept; an empty list allocates nothing.
         let added = scene
             .particles
@@ -263,17 +260,17 @@ impl Game<'_> {
                     .zip(&scene.entities)
                     .all(|(a, b)| *a == b.entity)
         };
-        let frame = self.frames;
-        if !scenes.admit(frame, owner, clock.id) {
-            // Past the budget: the blocks, and the scene's last state when it is this one's.
+        let frame_id = self.frames;
+        if !scenes.admit(frame_id, owner, clock.id) {
+            // Still draw the fixed geometry, and the last state when it is this scene's.
             let last = at.filter(|&i| same(&scenes.live[i]));
             match last {
                 Some(i) => {
                     let l = &mut scenes.live[i];
-                    l.frame = frame;
-                    self.draw_live(batch, rect, blocks, view, l, clock.partial)?;
+                    l.frame = frame_id;
+                    self.draw_live(batch, blocks, frame, l, clock.partial)?;
                 }
-                None => self.draw_scene_quads(batch, rect, blocks, view, |_| {})?,
+                None => self.draw_scene_quads(batch, blocks, frame, |_| {})?,
             }
             return Err(SceneError::TooManyScenes);
         }
@@ -299,7 +296,7 @@ impl Game<'_> {
             at.unwrap_or_default()
         };
         let l = &mut scenes.live[i];
-        l.frame = frame;
+        l.frame = frame_id;
         for (index, mob) in existing {
             l.mobs[index] = mob;
         }
@@ -307,16 +304,15 @@ impl Game<'_> {
         for (mob, e) in l.mobs.iter_mut().zip(&scene.entities) {
             pose(mob, e, clock);
         }
-        self.draw_live(batch, rect, blocks, view, l, clock.partial)
+        self.draw_live(batch, blocks, frame, l, clock.partial)
     }
 
     /// `l`'s blocks, entities and particles as they are, `partial` into the next tick.
     fn draw_live(
         &self,
         batch: &mut HudBatch,
-        rect: [f32; 4],
         blocks: &[SceneBlock<'_>],
-        view: SceneView,
+        frame: SceneFrame,
         l: &mut Live,
         partial: f32,
     ) -> Result<(), SceneError> {
@@ -326,7 +322,8 @@ impl Game<'_> {
             verts,
             ..
         } = l;
-        self.draw_scene_quads(batch, rect, blocks, view, |quads| {
+        let view = frame.view;
+        self.draw_scene_quads(batch, blocks, frame, |quads| {
             for mob in mobs.iter() {
                 verts.clear();
                 // `DrawContext::entity`'s submission, in the scene's coordinates.

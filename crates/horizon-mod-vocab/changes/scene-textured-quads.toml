@@ -1,0 +1,2 @@
+ids = ["method:DrawContext::draw_scene_with_quads", "type:SceneTexturedQuad", "type:SceneWithQuadsError"]
+why = "Screen mods can draw a bounded list of textured faces in a Scene (horizon-rust/horizon#19772), with per-corner sprite UVs and ARGB tint. The faces use the existing scene atlas, scissor and depth buffer with the scene's blocks and other geometry. The original draw_scene method and wire layout are unchanged."

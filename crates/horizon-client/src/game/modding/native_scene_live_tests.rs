@@ -7,11 +7,14 @@ use super::{
     native_scene::{SceneBlock, scene_matrix},
     native_scene_live::{LiveScenes, check, facing_viewer, lives, scene_key, ticks_to_run},
 };
+use crate::game::host::draw::GameDrawContext;
 use glam::Vec3;
+use horizon_client::hud::{Blend, HudBatch};
 use horizon_world::registry::BlockStateId;
 use mod_api::{
-    Compound, GuiEntity, SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES,
-    SCENE_MAX_PARTICLES, Scene, SceneClock, SceneEntity, SceneError, SceneParticle, SceneView,
+    Compound, DrawContext as _, GuiEntity, SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES,
+    SCENE_MAX_PARTICLES, SCENE_MAX_TEXTURED_QUADS, Scene, SceneClock, SceneEntity, SceneError,
+    SceneParticle, SceneTexturedQuad, SceneView, SceneWithQuadsError,
 };
 
 fn cow(pos: [f64; 3]) -> SceneEntity {
@@ -183,10 +186,159 @@ fn lit_furnace(game: &super::Game<'_>) -> mod_api::BlockState {
 
 /// Draws `scene` as `DrawContext::draw_scene` does: the result and the vertices drawn.
 fn draw(game: &super::Game<'_>, scene: &Scene, view: SceneView) -> (Result<(), SceneError>, usize) {
-    let mut batch = horizon_client::hud::HudBatch::scratch([320, 240]);
-    let result = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)
-        .and_then(|prepared| game.native_draw_scene(&mut batch, RECT, &prepared, scene, view));
+    let mut batch = HudBatch::scratch([320, 240]);
+    let result = GameDrawContext::new(game, &mut batch).draw_scene(RECT, scene, view);
     (result, batch.vertices.len())
+}
+
+#[test]
+#[ignore = "daily"]
+fn textured_faces_use_the_real_atlas_and_share_the_scene_clip_and_depth() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let scene = Scene::new(vec![mod_api::SceneBlock::new(
+            [0, 0, 0],
+            lit_furnace(game),
+            None,
+        )]);
+        let view = SceneView::new([0.5; 3], 0.0, 0.0, 20.0);
+        let corners = [
+            [0.0, 1.0, 2.0],
+            [1.0, 1.0, 2.0],
+            [1.0, 0.0, 2.0],
+            [0.0, 0.0, 2.0],
+        ];
+        let uv = [[0.25, 0.125], [0.75, 0.0], [1.0, 0.875], [0.0, 1.0]];
+        let quad = SceneTexturedQuad::new("minecraft:block/water_still", corners, uv, 0xA010_80FF);
+        let mut batch = HudBatch::scratch([320, 240]);
+        assert_eq!(
+            GameDrawContext::new(game, &mut batch).draw_scene_with_quads(
+                RECT,
+                &scene,
+                view,
+                &[quad]
+            ),
+            Ok(())
+        );
+        assert!(
+            batch.vertices.len() > 6,
+            "faces and block share the same run"
+        );
+        assert_eq!(
+            batch.blends,
+            vec![(
+                0..batch.vertices.len() as u32,
+                Blend::Depth([10, 10, 100, 80])
+            )]
+        );
+        let sprite = game.gui.atlas.sprites["block/water_still"];
+        let pos = [[70.0, 40.0], [50.0, 40.0], [50.0, 60.0], [70.0, 60.0]];
+        for (v, i) in batch.vertices[..6].iter().zip([0, 1, 2, 0, 2, 3]) {
+            assert_eq!(v.pos, pos[i]);
+            assert_eq!(v.color, 0xA0FF_8010);
+            assert_eq!(v.depth, 1.0, "the rear face is farthest");
+            let [u, w] = uv[i];
+            assert!((v.uv[0] - ((1.0 - u) * sprite.u0 + u * sprite.u1)).abs() < 1e-6);
+            assert!((v.uv[1] - ((1.0 - w) * sprite.v0 + w * sprite.v1)).abs() < 1e-6);
+        }
+        assert!(batch.vertices[6..].iter().all(|v| v.depth < 1.0));
+        assert_eq!(game.live_scenes.borrow().len(), 0);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn invalid_textured_faces_do_not_touch_the_batch_or_keep_or_advance_a_scene() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let scene = |id, tick| Scene::new(Vec::new()).with_clock(SceneClock::new(id, tick, 0.0));
+        let quad = SceneTexturedQuad::new(
+            "block/water_flow",
+            [
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            0xFFFF_FFFF,
+        );
+        assert_eq!(draw(game, &scene(4, 0), view()).0, Ok(()));
+        game.frames += 1;
+        let mut batch = HudBatch::scratch([320, 240]);
+        let mut bad_uv = quad.clone();
+        bad_uv.uv[3][1] = 1.01;
+        let mut bad_pos = quad.clone();
+        bad_pos.corners[2][0] = f32::NAN;
+        let mut bad_name = quad.clone();
+        bad_name.sprite = "guide:missing".into();
+        let check = |batch: &mut HudBatch, input: &[SceneTexturedQuad], error| {
+            assert_eq!(
+                GameDrawContext::new(game, batch).draw_scene_with_quads(
+                    RECT,
+                    &scene(4, 1),
+                    view(),
+                    input
+                ),
+                Err(error)
+            );
+            assert!(
+                batch.vertices.is_empty() && batch.blends.is_empty() && batch.patches.is_empty()
+            );
+            assert_eq!(game.scene_tick("", 4), Some(0));
+        };
+        check(
+            &mut batch,
+            &[quad.clone(), bad_uv],
+            SceneWithQuadsError::BadTexturedQuad { index: 1 },
+        );
+        check(
+            &mut batch,
+            &[quad.clone(), bad_pos],
+            SceneWithQuadsError::BadTexturedQuad { index: 1 },
+        );
+        check(
+            &mut batch,
+            &[quad.clone(), bad_name],
+            SceneWithQuadsError::UnknownSprite { index: 1 },
+        );
+        check(
+            &mut batch,
+            &vec![quad.clone(); SCENE_MAX_TEXTURED_QUADS + 1],
+            SceneWithQuadsError::TooManyTexturedQuads,
+        );
+        for id in 0..4 {
+            assert_eq!(draw(game, &scene(id, 0), view()).0, Ok(()), "scene {id}");
+        }
+        // Neither refusal spent a slot. Both kinds of budget fallback still draw the
+        // current frame's quads: with a cached scene (4) or without one (5).
+        for id in [4, 5] {
+            let before = batch.vertices.len();
+            assert_eq!(
+                GameDrawContext::new(game, &mut batch).draw_scene_with_quads(
+                    RECT,
+                    &scene(id, 1),
+                    view(),
+                    std::slice::from_ref(&quad),
+                ),
+                Err(SceneWithQuadsError::Scene(SceneError::TooManyScenes))
+            );
+            assert_eq!(batch.vertices.len(), before + 6);
+        }
+        assert_eq!(game.scene_tick("", 4), Some(0));
+        assert_eq!(game.scene_tick("", 5), None);
+        game.frames += 1;
+        let before = batch.vertices.len();
+        assert_eq!(
+            GameDrawContext::new(game, &mut batch).draw_scene_with_quads(
+                RECT,
+                &scene(4, 1),
+                view(),
+                &[quad]
+            ),
+            Ok(())
+        );
+        assert_eq!(batch.vertices.len(), before + 6);
+        assert_eq!(game.scene_tick("", 4), Some(1));
+    });
 }
 
 /// A lit furnace's scene `id` run from tick 0 to each of `ticks` in turn, one frame each.

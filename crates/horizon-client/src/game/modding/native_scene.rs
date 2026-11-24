@@ -6,9 +6,16 @@
 use super::Game;
 use super::native_block_entity_draw::{BlockEntityDraw, place_turning};
 use glam::{Mat4, Vec3};
-use horizon_client::{block_entity_render::diffuse_lights, hud::HudBatch, mesher::Vertex};
+use horizon_client::{
+    block_entity_render::diffuse_lights,
+    hud::{HudAtlas, HudBatch},
+    hud_layout::abgr,
+    mesher::Vertex,
+};
 use horizon_world::level::data::state_flags;
-use mod_api::SceneView;
+use mod_api::{
+    SCENE_MAX_TEXTURED_QUADS, SceneError, SceneTexturedQuad, SceneView, SceneWithQuadsError,
+};
 /// Prepared scene data. Entity fields remain borrowed for the duration of the draw.
 pub(super) struct SceneBlock<'a> {
     pub pos: [i32; 3],
@@ -16,13 +23,96 @@ pub(super) struct SceneBlock<'a> {
     pub entity: Option<&'a mod_api::SceneBlockEntity>,
 }
 
-/// A quad in the scene's blocks, before it is seen: its corners, UVs in the
-/// atlas, ABGR colour, and its outward normal.
+/// A scene quad projected into GUI coordinates, with atlas UVs and ABGR colour.
 struct ProjectedQuad {
     depth: f32,
     corners: [[f32; 3]; 4],
     uv: [[f32; 2]; 4],
     color: u32,
+}
+
+impl ProjectedQuad {
+    fn new(m: Mat4, corners: [Vec3; 4], uv: [[f32; 2]; 4], color: u32) -> Self {
+        let pos = corners.map(|c| m.transform_point3(c));
+        Self {
+            depth: pos.iter().map(|v| v.z).sum::<f32>() / 4.0,
+            corners: pos.map(|v| v.to_array()),
+            uv,
+            color,
+        }
+    }
+
+    fn finite(&self) -> bool {
+        self.depth.is_finite() && self.corners.iter().flatten().all(|v| v.is_finite())
+    }
+}
+
+/// The view for one draw, with any textured faces already resolved and projected.
+pub(super) struct SceneFrame {
+    pub(super) rect: [f32; 4],
+    pub(super) view: SceneView,
+    matrix: Mat4,
+    projected: Vec<ProjectedQuad>,
+}
+
+impl SceneFrame {
+    pub(super) fn new(rect: [f32; 4], view: SceneView) -> Self {
+        Self {
+            rect,
+            view,
+            matrix: scene_matrix(rect, view),
+            projected: Vec::new(),
+        }
+    }
+
+    /// Resolve and validate the caller's faces before any draw or live scene work.
+    pub(super) fn with_textured_quads(
+        mut self,
+        atlas: &HudAtlas,
+        quads: &[SceneTexturedQuad],
+    ) -> Result<Self, SceneWithQuadsError> {
+        if quads.len() > SCENE_MAX_TEXTURED_QUADS {
+            return Err(SceneWithQuadsError::TooManyTexturedQuads);
+        }
+        if !self.view.scale.is_finite()
+            || self.view.scale <= 0.0
+            || !self.matrix.is_finite()
+            || !self.rect.iter().all(|v| v.is_finite())
+        {
+            return Err(SceneWithQuadsError::Scene(SceneError::BadView));
+        }
+        self.projected.reserve_exact(quads.len());
+        for (index, q) in (0u32..).zip(quads) {
+            if !q.corners.iter().flatten().all(|v| v.abs() <= 30_000_000.0)
+                || !q.uv.iter().flatten().all(|v| (0.0..=1.0).contains(v))
+            {
+                return Err(SceneWithQuadsError::BadTexturedQuad { index });
+            }
+            // The atlas packs Minecraft textures by their path and other namespaces verbatim.
+            let name = q.sprite.strip_prefix("minecraft:").unwrap_or(&q.sprite);
+            let sprite = atlas
+                .sprites
+                .get(name)
+                .ok_or(SceneWithQuadsError::UnknownSprite { index })?;
+            let uv = q.uv.map(|[u, v]| {
+                [
+                    sprite.u0 + u * (sprite.u1 - sprite.u0),
+                    sprite.v0 + v * (sprite.v1 - sprite.v0),
+                ]
+            });
+            let quad = ProjectedQuad::new(
+                self.matrix,
+                q.corners.map(Vec3::from_array),
+                uv,
+                abgr(q.tint),
+            );
+            if !quad.finite() {
+                return Err(SceneWithQuadsError::Scene(SceneError::BadView));
+            }
+            self.projected.push(quad);
+        }
+        Ok(self)
+    }
 }
 
 pub(super) struct SceneQuad {
@@ -83,16 +173,21 @@ impl Game<'_> {
     /// it never covers the screen's other drawing or is covered by it but in
     /// the order drawn. `extra` adds quads in the scene's coordinates before
     /// the scene is seen and sorted (a living scene's entities and particles,
-    /// `native_scene_live`); a scene of blocks alone passes none. Nothing is
-    /// drawn when a quad seen through the view isn't finite. API 422.
+    /// `native_scene_live`). Nothing is drawn when a quad seen through the
+    /// view isn't finite. API 422.
     pub(super) fn draw_scene_quads(
         &self,
         batch: &mut HudBatch,
-        rect: [f32; 4],
         blocks: &[SceneBlock<'_>],
-        view: SceneView,
+        frame: SceneFrame,
         extra: impl FnOnce(&mut Vec<SceneQuad>),
     ) -> Result<(), mod_api::SceneError> {
+        let SceneFrame {
+            rect,
+            view,
+            matrix: m,
+            projected: mut seen,
+        } = frame;
         if !self.native_window() {
             return Err(mod_api::SceneError::Unavailable);
         }
@@ -210,27 +305,19 @@ impl Game<'_> {
             }
         }
         extra(&mut quads);
-        let m = scene_matrix(rect, view);
-        let mut seen: Vec<ProjectedQuad> = quads
+        let projected = quads
             .into_iter()
             .filter(|q| !q.cull || m.transform_vector3(q.normal).z > 0.0)
-            .map(|q| {
-                let p = q.corners.map(|c| m.transform_point3(c));
-                let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
-                ProjectedQuad {
-                    depth,
-                    corners: p.map(|v| v.to_array()),
-                    uv: q.uv,
-                    color: q.color,
-                }
-            })
-            .collect();
-        // Mod-chosen views and positions may overflow: refuse before any vertex.
-        let finite = |q: &ProjectedQuad| {
-            q.depth.is_finite() && q.corners.iter().flatten().all(|v| v.is_finite())
-        };
-        if !seen.iter().all(finite) {
-            return Err(mod_api::SceneError::BadView);
+            .map(|q| ProjectedQuad::new(m, q.corners, q.uv, q.color));
+        let textured_count = seen.len();
+        if textured_count == 0 {
+            seen = projected.collect();
+        } else {
+            seen.extend(projected);
+        }
+        // Textured faces were checked before the live scene could advance.
+        if !seen[textured_count..].iter().all(ProjectedQuad::finite) {
+            return Err(SceneError::BadView);
         }
         // Far to near, for the faces that let others show through.
         seen.sort_by(|a, b| a.depth.total_cmp(&b.depth));

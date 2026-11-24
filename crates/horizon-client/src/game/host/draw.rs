@@ -1,5 +1,5 @@
 //! The game's side of the `draw` area (`horizon-mod-api/src/host/draw.rs`).
-use crate::game::{Game, api_values::TryIntoEngine};
+use crate::game::{Game, api_values::TryIntoEngine, native_scene::SceneFrame};
 use mod_api::{prelude::*, *};
 
 /// [`DrawContext`] on the game's `crate::hud::HudBatch`: one per hook call.
@@ -96,8 +96,29 @@ impl DrawContext for GameDrawContext<'_, '_> {
         view: SceneView,
     ) -> Result<(), mod_api::SceneError> {
         let blocks = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)?;
+        self.game.native_draw_scene(
+            &mut *self.surface,
+            &blocks,
+            scene,
+            SceneFrame::new(rect, view),
+        )
+    }
+    fn draw_scene_with_quads(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        quads: &[SceneTexturedQuad],
+    ) -> Result<(), SceneWithQuadsError> {
+        if !self.game.native_window() {
+            return Err(SceneWithQuadsError::Scene(SceneError::Unavailable));
+        }
+        let frame = SceneFrame::new(rect, view).with_textured_quads(&self.game.gui.atlas, quads)?;
+        let blocks = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)
+            .map_err(SceneWithQuadsError::Scene)?;
         self.game
-            .native_draw_scene(&mut *self.surface, rect, &blocks, scene, view)
+            .native_draw_scene(&mut *self.surface, &blocks, scene, frame)
+            .map_err(SceneWithQuadsError::Scene)
     }
     fn push_clip(&mut self, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
         self.clips.push(self.surface, rect)
