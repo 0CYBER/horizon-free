@@ -753,7 +753,8 @@ impl FishingHookRef {
 }
 
 /// A villager or wandering trader (vanilla's `AbstractVillager`, a `Merchant`),
-/// narrowed from an entity with `host.merchant(entity)`. If a villager's saved
+/// narrowed from an entity with `host.merchant(entity)`, or on a client with
+/// `host.client_merchant(entity)` for what the server syncs of it. If a villager's saved
 /// profession is unresolved, offers read empty and merchant mutations are
 /// refused until its profession is available again; saved offers are retained.
 #[derive(horizon_mod_api_macros::Wire)]

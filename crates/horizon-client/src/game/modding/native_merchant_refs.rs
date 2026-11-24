@@ -1,11 +1,13 @@
-//! Merchant handles for native server mods: villagers and wandering traders.
+//! Merchant handles for native mods: villagers and wandering traders on the
+//! server, and on a client what the server syncs of them (a villager's
+//! `VillagerData`) and the offers of the trade the local player has open.
 use super::{Game, commands::Target};
 use horizon_client::{
     merchant::{MerchantOffer, Trader},
     mobs::{Species, render::VILLAGER_TYPES, villager},
 };
 use horizon_core::identifier::Identifier;
-use mod_api::{EntityRef, MerchantRef, PlayerRef};
+use mod_api::{EntityRef, LevelReadError, MenuRef, MerchantRef, PlayerRef};
 
 /// The index of a `minecraft:` registry id in a table of bare names.
 fn registry_index(id: &str, names: &[&str]) -> Option<u8> {
@@ -47,6 +49,29 @@ impl Game<'_> {
     fn native_villager_index(&self, merchant: MerchantRef) -> Option<usize> {
         let index = self.native_merchant_index(merchant)?;
         (self.mobs[index].species() == Species::Villager).then_some(index)
+    }
+
+    /// A client's own copy of the villager or wandering trader a handle names:
+    /// one the server tracks to it, whose `VillagerData` the server syncs
+    /// (`remote_mob_data`). None on a server, or for a stale handle.
+    fn client_merchant_mob(&self, merchant: MerchantRef) -> Option<&horizon_client::mobs::Mob> {
+        if self.is_logical_server() {
+            return None;
+        }
+        let Target::Mob(id) = self.native_client_entity_target(merchant.entity())? else {
+            return None;
+        };
+        self.mobs.iter().find(|m| {
+            m.id == id
+                && !m.removed
+                && matches!(m.species(), Species::Villager | Species::WanderingTrader)
+        })
+    }
+
+    /// A client's own copy of the villager a handle names (not a trader).
+    fn client_villager(&self, merchant: MerchantRef) -> Option<&horizon_client::mobs::Mob> {
+        self.client_merchant_mob(merchant)
+            .filter(|m| m.species() == Species::Villager)
     }
 
     /// Reads the offers, experience and level (1 for a trader) of the mob at
@@ -150,6 +175,34 @@ impl Game<'_> {
         self.native_merchant_index(merchant).map(|_| merchant)
     }
 
+    /// For a client mod: narrows an entity the server shows this window to a
+    /// villager or wandering trader, whose synced `VillagerData` its handle
+    /// reads. None for another kind, a stale handle, or no client world.
+    pub(super) fn client_merchant(&self, entity: EntityRef) -> Option<MerchantRef> {
+        let merchant = MerchantRef::new(entity);
+        self.client_merchant_mob(merchant).map(|_| merchant)
+    }
+
+    /// The local player's open merchant menu's offers as the merchant screen
+    /// shows them (`MerchantMenu.getOffers`): the latest
+    /// `ClientboundMerchantOffersPacket`'s, kept by `remote_merchant_offers`
+    /// (`MerchantMenu.setOffers`). `Ok(None)` for a stale or foreign handle or
+    /// another menu; `Unavailable` when the merchant screen's copy is missing.
+    pub(super) fn menu_merchant_offers(
+        &self,
+        menu: MenuRef,
+    ) -> Result<Option<&[MerchantOffer]>, LevelReadError> {
+        if self.native_client_menu_name(menu) != Some("minecraft:merchant") {
+            return Ok(None);
+        }
+        let merchant = self
+            .station
+            .as_ref()
+            .and_then(|station| station.merchant.as_ref())
+            .ok_or(LevelReadError::Unavailable)?;
+        Ok(Some(merchant.session.offers.as_slice()))
+    }
+
     /// `AbstractVillager.getOffers`, as they are now (a copy). Offers not
     /// rolled yet read as empty: they are rolled when a player first trades,
     /// or by `add_offer`; reading never draws a random.
@@ -230,8 +283,12 @@ impl Game<'_> {
     }
 
     /// `VillagerData.profession`, a registry id (`minecraft:farmer`; none is
-    /// `minecraft:none`). None for a wandering trader.
+    /// `minecraft:none`). None for a wandering trader. On a client, the
+    /// profession the server last synced to it.
     pub(super) fn merchant_profession(&self, merchant: MerchantRef) -> Option<String> {
+        if !self.is_logical_server() {
+            return Some(self.client_villager(merchant)?.extra.profession.id());
+        }
         let mob = &self.mobs[self.native_villager_index(merchant)?];
         Some(mob.extra.profession.id())
     }
@@ -270,8 +327,12 @@ impl Game<'_> {
         true
     }
 
-    /// `VillagerData.level`, at least 1.
+    /// `VillagerData.level`, at least 1. On a client, the level the server
+    /// last synced to it.
     pub(super) fn merchant_level(&self, merchant: MerchantRef) -> Option<i32> {
+        if !self.is_logical_server() {
+            return Some(self.client_villager(merchant)?.extra.villager_level.max(1));
+        }
         let index = self.native_villager_index(merchant)?;
         Some(self.merchant_read(index, |_, _, level| level.max(1)))
     }
@@ -291,9 +352,14 @@ impl Game<'_> {
         })
     }
 
-    /// `VillagerData.type`, a registry id (`minecraft:plains`).
+    /// `VillagerData.type`, a registry id (`minecraft:plains`). On a client,
+    /// the type the server last synced to it.
     pub(super) fn merchant_villager_type(&self, merchant: MerchantRef) -> Option<String> {
-        let mob = &self.mobs[self.native_villager_index(merchant)?];
+        let mob = if self.is_logical_server() {
+            &self.mobs[self.native_villager_index(merchant)?]
+        } else {
+            self.client_villager(merchant)?
+        };
         let name = VILLAGER_TYPES[mob.extra.variant as usize % VILLAGER_TYPES.len()];
         Some(format!("minecraft:{name}"))
     }
@@ -574,6 +640,235 @@ pub(super) mod tests {
             let taken = game.mobs.lift();
             assert_eq!(villager.level(game), None);
             game.mobs = taken;
+        });
+    }
+
+    /// A window joined to a server through memory and logged in as entity 7,
+    /// fed the server's packets as it would receive them.
+    #[test]
+    #[ignore = "daily"]
+    fn a_client_reads_the_villager_data_the_server_synced() {
+        use horizon_protocol::entity_data::{Value, serializer};
+        use horizon_protocol::packets::play::{self, Clientbound as C};
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let (pipe, _server) = horizon_protocol::connection::Pipe::pair();
+            game.connect_local(pipe, "Steve").unwrap();
+            let builtin = game.remote.as_ref().unwrap().builtin.clone();
+            let id = |registry: &str, name: &str| builtin.get(registry).unwrap().id(name).unwrap();
+            game.handle_packet(C::Login(play::Login {
+                player_id: 7,
+                hardcore: false,
+                levels: vec!["minecraft:overworld".into()],
+                max_players: 20,
+                chunk_radius: 8,
+                simulation_distance: 8,
+                reduced_debug_info: false,
+                show_death_screen: true,
+                limited_crafting: false,
+                spawn: play::SpawnInfo {
+                    dimension_type: 0,
+                    dimension: "minecraft:overworld".into(),
+                    seed: 1,
+                    game_type: 0,
+                    previous_game_type: None,
+                    debug: false,
+                    flat: false,
+                    last_death: None,
+                    portal_cooldown: 0,
+                    sea_level: 63,
+                },
+                online_mode: false,
+                enforces_secure_chat: false,
+            }))
+            .unwrap();
+            game.handle_packet(C::PlayerPosition(play::PlayerPosition {
+                teleport: 1,
+                position: [0.5, 65.0, 0.5],
+                delta: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                relatives: 0,
+            }))
+            .unwrap();
+            for (entity, kind) in [
+                (20, "minecraft:villager"),
+                (21, "minecraft:wandering_trader"),
+                (22, "minecraft:pig"),
+            ] {
+                game.handle_packet(C::AddEntity(play::AddEntity {
+                    id: entity,
+                    uuid: entity as u128,
+                    kind: id("minecraft:entity_type", kind),
+                    position: [f64::from(entity), 64.0, 0.0],
+                    velocity: [0.0; 3],
+                    pitch: 0,
+                    yaw: 0,
+                    head_yaw: 0,
+                    data: 0,
+                }))
+                .unwrap();
+            }
+            let entity = game.entity(20).expect("the villager is tracked");
+            assert_eq!(game.merchant(entity), None, "the server's narrowing");
+            let villager = game.client_merchant(entity).expect("a villager trades");
+            // Vanilla's default data until the server sends its own.
+            assert_eq!(villager.profession(game).as_deref(), Some("minecraft:none"));
+            assert_eq!(villager.level(game), Some(1));
+            game.handle_packet(C::SetEntityData(play::SetEntityData {
+                id: 20,
+                values: vec![(
+                    19,
+                    serializer::VILLAGER_DATA,
+                    Value::Ids(vec![
+                        id("minecraft:villager_type", "minecraft:desert"),
+                        id("minecraft:villager_profession", "minecraft:librarian"),
+                        3,
+                    ]),
+                )],
+            }))
+            .unwrap();
+            assert_eq!(
+                villager.profession(game).as_deref(),
+                Some("minecraft:librarian")
+            );
+            assert_eq!(villager.level(game), Some(3));
+            assert_eq!(
+                villager.villager_type(game).as_deref(),
+                Some("minecraft:desert")
+            );
+            // What the server keeps to itself: the offers come with an open trade.
+            assert_eq!(villager.offers(game), None);
+            assert_eq!(villager.xp(game), None);
+
+            let trader = game
+                .client_merchant(game.entity(21).unwrap())
+                .expect("a wandering trader trades");
+            assert_eq!(trader.profession(game), None);
+            assert_eq!(trader.level(game), None);
+            assert_eq!(game.client_merchant(game.entity(22).unwrap()), None);
+            assert_eq!(game.client_merchant(game.entity(7).unwrap()), None);
+            let stale = MerchantRef::new(EntityRef::new(
+                WorldEpoch::new(entity.epoch().get() + 1),
+                entity.id(),
+            ));
+            assert_eq!(stale.profession(game), None);
+        });
+    }
+
+    /// An offer as its payments, its result and the numbers the packet carries.
+    fn trade(offer: &MerchantOffer) -> (String, Option<String>, String, [i32; 5]) {
+        let stack = |s: &ItemStack| format!("{} {}", s.count, s.item);
+        (
+            stack(&offer.base_cost_a.stack),
+            offer.cost_b.as_ref().map(|b| stack(&b.stack)),
+            stack(&offer.result),
+            [
+                offer.uses,
+                offer.max_uses,
+                offer.xp,
+                offer.special_price_diff,
+                offer.demand,
+            ],
+        )
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_client_reads_the_open_merchant_menus_offers() {
+        use horizon_core::nbt::Tag;
+        use horizon_protocol::{
+            item::Stack,
+            packets::play::{self, Clientbound as C},
+        };
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let (client, _server) = horizon_protocol::connection::Pipe::pair();
+            game.connect_local(client, "merchant-offers").unwrap();
+            let remote = game.remote.as_mut().unwrap();
+            remote.logged_in = true;
+            remote.entity_id = 7;
+            remote.profile = 42;
+            let builtin = remote.builtin.clone();
+            let id = |registry: &str, name: &str| builtin.get(registry).unwrap().id(name).unwrap();
+            let stack = |name: &str, count| Stack::new(id("minecraft:item", name), count);
+            let player = game.local_player().unwrap();
+            let inventory = game.player_container_menu(player).unwrap();
+            assert_eq!(
+                inventory.merchant_offers(game),
+                Ok(None),
+                "not a merchant's"
+            );
+
+            game.handle_packet(C::OpenScreen(play::OpenScreen {
+                container: 3,
+                menu: id("minecraft:menu", "minecraft:merchant"),
+                title: Tag::String("Librarian".into()),
+            }))
+            .unwrap();
+            let menu = game.player_container_menu(player).unwrap();
+            assert_eq!(menu.merchant_offers(game), Ok(Some(Vec::new())));
+            assert_eq!(inventory.merchant_offers(game), Ok(None), "replaced");
+            game.handle_packet(C::MerchantOffers(play::MerchantOffers {
+                container: 3,
+                offers: vec![
+                    play::NetOffer {
+                        cost_a: stack("minecraft:paper", 24).into(),
+                        result: stack("minecraft:emerald", 1),
+                        cost_b: None,
+                        out_of_stock: false,
+                        uses: 3,
+                        max_uses: 16,
+                        xp: 2,
+                        special_price: -4,
+                        price_multiplier: 0.05,
+                        demand: 5,
+                    },
+                    play::NetOffer {
+                        cost_a: stack("minecraft:emerald", 9).into(),
+                        result: stack("minecraft:bookshelf", 1),
+                        cost_b: Some(stack("minecraft:book", 1).into()),
+                        out_of_stock: true,
+                        uses: 2,
+                        max_uses: 12,
+                        xp: 10,
+                        special_price: 0,
+                        price_multiplier: 0.2,
+                        demand: 0,
+                    },
+                ],
+                level: 2,
+                xp: 15,
+                show_progress: true,
+                can_restock: true,
+            }))
+            .unwrap();
+            let offers = menu
+                .merchant_offers(game)
+                .unwrap()
+                .expect("the merchant menu's offers")
+                .try_into_engine(game.items())
+                .unwrap();
+            assert_eq!(
+                offers.iter().map(trade).collect::<Vec<_>>(),
+                [
+                    (
+                        "24 minecraft:paper".to_owned(),
+                        None,
+                        "1 minecraft:emerald".to_owned(),
+                        [3, 16, 2, -4, 5],
+                    ),
+                    // Sent out of stock: `setToOutOfStock` uses it up.
+                    (
+                        "9 minecraft:emerald".to_owned(),
+                        Some("1 minecraft:book".to_owned()),
+                        "1 minecraft:bookshelf".to_owned(),
+                        [12, 12, 10, 0, 0],
+                    ),
+                ]
+            );
+
+            game.handle_packet(C::ContainerClose(play::ContainerClose { container: 3 }))
+                .unwrap();
+            assert_eq!(menu.merchant_offers(game), Ok(None), "closed");
         });
     }
 }

@@ -1,0 +1,4 @@
+# A client mod's merchant reads (synced villager data, the open trade's offers) need prepared resources.
+# PACKAGE TEST TARGET daily REASON
+horizon-client game::native_merchant_refs::tests::a_client_reads_the_villager_data_the_server_synced lib daily resources
+horizon-client game::native_merchant_refs::tests::a_client_reads_the_open_merchant_menus_offers lib daily resources

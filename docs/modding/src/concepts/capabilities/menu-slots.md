@@ -127,6 +127,19 @@ unavailable and `Some(None)` for an empty slot. Each read checks the world epoch
 so a handle cannot read a replacement, reopened or respawned menu. These methods do not click or
 change slots.
 
+A client mod reads the trades of an open villager or wandering trader screen with
+`menu.merchant_offers(host)`: a copy of the offers the server last sent for that menu
+(`ClientboundMerchantOffersPacket`, which vanilla's `MerchantMenu.setOffers` keeps), in the order
+the merchant screen lists them. Each `MerchantOffer` has the first payment, the optional second
+one, the result with its components, and the stock and price data; an offer the server sent out
+of stock has its uses at its maximum, so `offer.out_of_stock()` is true, and
+`offer.cost_a_count(host)` is the first payment's count after demand and discounts. `Ok(None)`
+means the handle is no longer current, isn't the local player's, or isn't a merchant menu; an
+open merchant menu reads `Ok(Some(vec![]))` until its offers arrive; `Err(LevelReadError::Unavailable)`
+means the copy couldn't be read. Reading selects nothing, buys nothing and sends nothing; the
+server still decides every trade. The villager's own profession and level are on its
+`MerchantRef` ([Villager professions](../../how-to/entities/villager-professions.md#reading-a-villager-on-the-client)).
+
 Mutable client hooks can submit a vanilla click with
 `menu.click(host, &[mod_api::MenuClick::QuickMove { slot }])`. The slot is the same menu-order
 index used by `slot`, not a hotbar index or a GUI slot id. For example:

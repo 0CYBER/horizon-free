@@ -139,6 +139,24 @@ pub trait MenusClientBackend {
     /// Built per call with one Vec allocation and a table lookup; cache for the menu.
     #[access(WorldOnly)]
     fn menu_slot_kinds(&self, menu: MenuRef) -> Option<Vec<MenuSlotKind>>;
+    /// Side: client.
+    /// The local player's open merchant menu's offers, copied in display order
+    /// (`MerchantMenu.getOffers`): the latest `ClientboundMerchantOffersPacket` the server
+    /// sent for it (`MerchantMenu.setOffers`), what the merchant screen shows. Includes both
+    /// payments, the result with its components, and the synchronized stock and price data;
+    /// an offer the server sent out of stock has its uses at its maximum. Use
+    /// [`MerchantOffer::cost_a_count`] for the adjusted first payment. Reading does not
+    /// select or take a trade or send a packet.
+    ///
+    /// `Ok(None)` means the menu is stale, foreign, closed, or not a merchant menu.
+    /// An open merchant menu without offers returns `Ok(Some(Vec::new()))`.
+    /// Returns [`LevelReadError::Unavailable`] when the phase or backend cannot supply the
+    /// read, or an offer cannot be converted to an API value.
+    #[access(WorldOnly)]
+    fn menu_merchant_offers(
+        &self,
+        menu: MenuRef,
+    ) -> Result<Option<Vec<MerchantOffer>>, LevelReadError>;
 }
 /// The handles' client writes of the `menus` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

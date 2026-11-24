@@ -6,9 +6,25 @@ use crate::*;
 pub trait MerchantsServerHost {
     /// Side: server.
     /// Narrows an entity to a villager or wandering trader, or None for
-    /// another kind, a stale handle, or a client.
+    /// another kind, a stale handle, or a client (a client mod narrows with
+    /// `client_merchant`).
     #[access(WorldOnly)]
     fn merchant(&self, entity: EntityRef) -> Option<MerchantRef>;
+}
+/// The client host's methods of the `merchants` area, implemented by the game and reached through [`crate::ClientHost`].
+#[horizon_mod_api_macros::host_area]
+pub trait MerchantsClientHost {
+    /// Side: client.
+    /// For a client mod: narrows an entity the server shows this window
+    /// (`ClientLevel.getEntity`) to a villager or wandering trader, the
+    /// client's half of `merchant`. Its handle reads what the server syncs of
+    /// a villager's entity data (`Villager.DATA_VILLAGER_DATA`): `profession`,
+    /// `level` and `villager_type`. Its other reads are the server's and
+    /// answer None here; the offers of a trade the local player has open are
+    /// `MenuRef::merchant_offers`. None for another kind, a stale handle, or
+    /// no client world.
+    #[access(WorldOnly)]
+    fn client_merchant(&self, entity: EntityRef) -> Option<MerchantRef>;
 }
 /// The handles' reads of the `merchants` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -18,7 +34,8 @@ pub trait MerchantsBackend {
     /// Side: server.
     /// `AbstractVillager.getOffers`, as they are now (a copy). Offers not
     /// rolled yet read as empty: they are rolled when a player first trades,
-    /// or by `add_offer`; reading never draws a random.
+    /// or by `add_offer`; reading never draws a random. None on a client,
+    /// which reads the open trade's offers with `MenuRef::merchant_offers`.
     #[access(WorldOnly)]
     fn merchant_offers(&self, merchant: MerchantRef) -> Option<Vec<MerchantOffer>>;
     /// Side: server.
@@ -26,17 +43,20 @@ pub trait MerchantsBackend {
     /// it. None when nobody trades, or the screen is the host window's.
     #[access(WorldOnly)]
     fn merchant_trading_player(&self, merchant: MerchantRef) -> Option<PlayerRef>;
-    /// Side: server.
+    /// Side: both.
     /// `VillagerData.profession`, a registry id (`minecraft:farmer`; none is
-    /// `minecraft:none`). None for a wandering trader.
+    /// `minecraft:none`). None for a wandering trader. On a client (a handle
+    /// from `client_merchant`), the profession the server last synced to it.
     #[access(WorldOnly)]
     fn merchant_profession(&self, merchant: MerchantRef) -> Option<String>;
-    /// Side: server.
-    /// `VillagerData.level`, at least 1.
+    /// Side: both.
+    /// `VillagerData.level`, at least 1. None for a wandering trader. On a
+    /// client, the level the server last synced to it.
     #[access(WorldOnly)]
     fn merchant_level(&self, merchant: MerchantRef) -> Option<i32>;
-    /// Side: server.
-    /// `VillagerData.type`, a registry id (`minecraft:plains`).
+    /// Side: both.
+    /// `VillagerData.type`, a registry id (`minecraft:plains`). None for a
+    /// wandering trader. On a client, the type the server last synced to it.
     #[access(WorldOnly)]
     fn merchant_villager_type(&self, merchant: MerchantRef) -> Option<String>;
     /// Side: server.
