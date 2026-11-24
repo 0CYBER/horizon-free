@@ -293,6 +293,7 @@ fn frame<'a>(
         water_plane: Default::default(),
         cave_culling: Default::default(),
         title: Default::default(),
+        gui_only: false,
         sky_blocked: Default::default(),
         skybox: true,
         end_sky: Default::default(),

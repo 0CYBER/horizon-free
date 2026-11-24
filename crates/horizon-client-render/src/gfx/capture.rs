@@ -520,6 +520,7 @@ impl Scene {
             water_plane: f.water_plane,
             cave_culling: f.cave_culling,
             title: false,
+            gui_only: false,
             sky_blocked: f.sky_blocked,
             skybox: f.skybox,
             end_sky: f.end_sky,

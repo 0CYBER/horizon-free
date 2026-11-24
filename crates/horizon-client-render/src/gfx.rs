@@ -1237,6 +1237,8 @@ pub struct Frame<'a> {
     pub cave_culling: bool,
     /// Title screen: only the dedicated panorama cube map and the HUD.
     pub title: bool,
+    /// Present the HUD and screens over black, without a world or a panorama.
+    pub gui_only: bool,
     /// Lava, powder snow, blindness, darkness or a boss bar's world fog leaves out the sky pass
     /// (`fog::sky_pass_skipped`).
     pub sky_blocked: bool,
@@ -2157,6 +2159,7 @@ pub struct Renderer {
     /// `draw_frame`'s frames past its early returns, and the one whose statistics are shown.
     frame_serial: u64,
     stats_frame: u64,
+    gui_only: bool,
     pub uploaded_bytes: u64,
     started: Instant,
     /// The next frame to write to a PNG path (control socket, F2, world icon).
@@ -5254,6 +5257,7 @@ impl Renderer {
             section_draw_calls: 0,
             frame_serial: 0,
             stats_frame: 0,
+            gui_only: false,
             uploaded_bytes: 0,
             started: Instant::now(),
             screenshot: None,
@@ -8154,7 +8158,10 @@ impl Renderer {
             self.flush_frame_export_uploads();
             return Ok(false);
         }
-        if let Some(request) = self.capture.take() {
+        // A scene capture describes a world, unlike a screenshot of what was presented.
+        if !frame.gui_only
+            && let Some(request) = self.capture.take()
+        {
             let result = self.write_capture(&request, frame);
             self.capture_result = Some(result.map_err(|e| e.to_string()));
         }
@@ -8332,11 +8339,17 @@ impl Renderer {
         if std::mem::take(&mut self.frame_lost) {
             self.upload_again();
         }
+        // A GUI-only interval interrupts world history even if the surface refuses its frame.
+        if frame.gui_only && !self.gui_only {
+            self.world_post.reset_temporal_sequence();
+            self.reset_shader_pack_history();
+        }
+        self.gui_only = frame.gui_only;
         // World frames alone follow the shader pack: the game loads the picked one
         // before it draws one. Title frames draw no terrain and keep the layout
         // through a pack dropped (Shader Options) or not loaded yet (`Renderer::new`),
         // so the next world's sections, which the level loading screen uploads, stay.
-        if !frame.title {
+        if !frame.title && !frame.gui_only {
             self.follow_terrain_looks();
             self.follow_translucent_layout();
             self.follow_packed_layout();
@@ -8443,7 +8456,8 @@ impl Renderer {
         // into frames of its own. Not over menus that blur the frame, a shader pack's own post
         // passes, HDR output without the HUD's layer (or the float frame HDR was started
         // with) or the title screen.
-        let fg = self.frame_export.is_none()
+        let fg = !frame.gui_only
+            && self.frame_export.is_none()
             && self.frame_gen.on
             && !(self.frame_gen.paused || self.frame_gen.refused || self.frame_gen.no_room)
             && (self.hdr.as_ref()).map_or(
@@ -8568,7 +8582,7 @@ impl Renderer {
         };
         // The section copies staged since the last frame, in a command buffer of their own
         // submitted before the frame's: a frame given up (`abandon_frame`) still submits them.
-        let mut copies = self.take_section_copies();
+        let copies = self.take_section_copies();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -8603,6 +8617,66 @@ impl Renderer {
                 );
                 self.last_hud_animated_tick = Some(frame.ticks);
             }
+        }
+        if frame.gui_only {
+            self.frame_serial += 1;
+            self.show_stats(self.frame_serial, [0; 3]);
+            self.hud.prepare(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                frame.hud,
+                size,
+            );
+            if let Some(timer) = &mut self.gpu_timer {
+                timer.begin(&mut encoder);
+            }
+            let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.output.frame.format),
+                ..Default::default()
+            });
+            // Clear the actual frame, including the world-light target under the layered
+            // HDR HUD. No previous world pixels can show through.
+            let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view_target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            drop(
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("GUI background"),
+                    timestamp_writes: self
+                        .own_timing
+                        .as_mut()
+                        .and_then(|t| t.writes("GUI background")),
+                    color_attachments: &color_attachments,
+                    ..Default::default()
+                }),
+            );
+            return self.present_frame(PresentFrame {
+                frame,
+                overlay: Overlay {
+                    real: true,
+                    ..Default::default()
+                },
+                target_texture,
+                view_target,
+                encoder,
+                copies,
+                surface_frame,
+                reconfigure,
+                fg_frames,
+                fg_made,
+                checks,
+                backstop,
+                started,
+                laps,
+                world: None,
+            });
         }
         self.update_lightmap(
             &mut encoder,
@@ -12725,6 +12799,63 @@ impl Renderer {
                 });
             }
         }
+        let overlay = Overlay {
+            hand_quads: hand_quads * u32::from(!pack_draws_hand && !hand_in_world),
+            first_hand_vertex: match fg_made && frame_gen::generated_only() && self.hdr.is_some() {
+                true => made_hand_vertex,
+                false => ((world_quads + additive_quads) * 4) as i32,
+            },
+            crosshair,
+            first_crosshair: debug_depth + debug_top,
+            world_depth: scaled.is_none(),
+            msaa_depth: !fg && self.msaa_samples() > 1,
+            real: true,
+            hand_drawn: !pack_draws_hand,
+            hand_view_proj,
+        };
+        self.present_frame(PresentFrame {
+            frame,
+            overlay,
+            target_texture,
+            view_target,
+            encoder,
+            copies,
+            surface_frame,
+            reconfigure,
+            fg_frames,
+            fg_made,
+            checks,
+            backstop,
+            started,
+            laps,
+            world: Some(DrawnWorld {
+                visible,
+                visible_lods,
+                shadow_visible,
+                culling,
+                gpu_stats: gpu_frame.then_some((serial, cpu)),
+            }),
+        })
+    }
+
+    fn present_frame(&mut self, present: PresentFrame<'_, '_>) -> Result<bool> {
+        let PresentFrame {
+            frame,
+            overlay,
+            target_texture,
+            view_target,
+            mut encoder,
+            mut copies,
+            surface_frame,
+            reconfigure,
+            fg_frames,
+            fg_made,
+            checks,
+            backstop,
+            started,
+            mut laps,
+            world,
+        } = present;
         // A 0.2 pack in SDR: its picture finishes on 8 bits before the hand, the camera overlays
         // and the HUD draw over it (`overlay_format`).
         let finished = (self.output.frame.overlay_format != self.output.frame.format)
@@ -12748,28 +12879,20 @@ impl Renderer {
             }
             None => (target_texture, view_target, self.output.frame.format),
         };
-        let overlay = Overlay {
-            hand_quads: hand_quads * u32::from(!pack_draws_hand && !hand_in_world),
-            first_hand_vertex: match fg_made && frame_gen::generated_only() && self.hdr.is_some() {
-                true => made_hand_vertex,
-                false => ((world_quads + additive_quads) * 4) as i32,
-            },
-            crosshair,
-            first_crosshair: debug_depth + debug_top,
-            world_depth: scaled.is_none(),
-            msaa_depth: !fg && self.msaa_samples() > 1,
-            real: true,
-            hand_drawn: !pack_draws_hand,
-            hand_view_proj,
-        };
         let readback =
             self.draw_overlay(&mut encoder, frame, &view_target, &target_texture, &overlay);
-        if culling && let Some(cull) = &mut self.cull {
-            cull.end(&self.device, &mut encoder);
-        }
-        // GPU culling's counts once its world passes are done (phase 2's too).
-        if gpu_frame && let Some(gpu) = &mut self.gpu_culling {
-            gpu.copy_stats(&mut encoder, serial, cpu);
+        if let Some(world) = &world {
+            if world.culling
+                && let Some(cull) = &mut self.cull
+            {
+                cull.end(&self.device, &mut encoder);
+            }
+            // GPU culling's counts once its world passes are done (phase 2's too).
+            if let Some((serial, cpu)) = world.gpu_stats
+                && let Some(gpu) = &mut self.gpu_culling
+            {
+                gpu.copy_stats(&mut encoder, serial, cpu);
+            }
         }
         if let Some(timer) = &mut self.gpu_timer {
             timer.end(&self.device, &mut encoder, (&view_target, overlay_format));
@@ -12790,7 +12913,7 @@ impl Renderer {
         };
         let readback = readback.or_else(|| {
             self.screenshot
-                .take()
+                .take_if(|request| !frame.gui_only || request.size.is_none())
                 .and_then(|request| self.take_readback(request, &mut encoder, shown_texture))
         });
         let exporting = self
@@ -12922,9 +13045,7 @@ impl Renderer {
                     // The frame's waits for the previous one on the submit thread.
                     self.last_wait += self.queue.take_waited();
                     self.last_encode = started.elapsed().saturating_sub(self.last_wait);
-                    self.visible = visible;
-                    self.visible_lods = visible_lods;
-                    self.shadow_visible = shadow_visible;
+                    self.restore_drawn_world(world);
                     return Ok(true);
                 }
                 Err((back, first)) => {
@@ -13081,10 +13202,16 @@ impl Renderer {
         self.queue.take_waited();
         self.last_encode = started.elapsed().saturating_sub(self.last_wait);
         let _ = self.started;
-        self.visible = visible;
-        self.visible_lods = visible_lods;
-        self.shadow_visible = shadow_visible;
+        self.restore_drawn_world(world);
         export_result.map(|()| true)
+    }
+
+    fn restore_drawn_world(&mut self, world: Option<DrawnWorld>) {
+        if let Some(world) = world {
+            self.visible = world.visible;
+            self.visible_lods = world.visible_lods;
+            self.shadow_visible = world.shadow_visible;
+        }
     }
 }
 impl Renderer {
@@ -13109,8 +13236,9 @@ impl Renderer {
         // HDR output's layered frame takes the hand and the camera overlays as light, with the
         // world (`Hdr::layered`).
         let layered = self.hdr.as_ref().is_some_and(|h| h.layered());
+        let world = !frame.title && !frame.gui_only;
         if let Some(hdr) = &self.hdr {
-            hdr.begin_staged(&mut self.uploads, encoder, !frame.title);
+            hdr.begin_staged(&mut self.uploads, encoder, world);
         }
         if overlay.hand_quads > 0 {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -13143,7 +13271,7 @@ impl Renderer {
             pass.draw_indexed(0..overlay.hand_quads * 6, overlay.first_hand_vertex, 0..1);
         }
         // A native mod's turn after the hand, on the real frame only.
-        if overlay.real && !frame.title && native_render::hand_drawn_hooked() {
+        if overlay.real && world && native_render::hand_drawn_hooked() {
             native_render::hand_drawn(&mut native_render::HandDrawn {
                 device: &self.device,
                 queue: &self.queue,
@@ -13160,23 +13288,25 @@ impl Renderer {
             });
         }
         // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
-        self.entity_outline.draw(
-            encoder,
-            view_target,
-            &self.entity_group,
-            &self.indices,
-            &self.entity_buffer,
-            timing.as_mut(),
-        );
+        if !frame.gui_only {
+            self.entity_outline.draw(
+                encoder,
+                view_target,
+                &self.entity_group,
+                &self.indices,
+                &self.entity_buffer,
+                timing.as_mut(),
+            );
+        }
         // The world icon grabs here: after the level and the hand, before
         // the effects and the HUD draw over them (`tryTakeScreenshotIfNeeded`
         // runs right after `renderLevel`).
         let readback = self
             .screenshot
-            .take_if(|request| overlay.real && request.size.is_some())
+            .take_if(|request| !frame.gui_only && overlay.real && request.size.is_some())
             .and_then(|request| self.take_readback(request, encoder, target_texture));
         // GameRenderer.render: applyPostEffects, after the level and before the GUI.
-        if !frame.title
+        if world
             && !frame.post_effects.effects.is_empty()
             && target_texture
                 .usage()
@@ -13218,7 +13348,7 @@ impl Renderer {
         // The layered frame's light eases into the peak, before the camera overlays draw on it,
         // unless a 0.2 pack's own `[tonemap]` did.
         let pack_tonemap = self.executor.is_some_and(|c| c.tone_curve);
-        if horizon_tone_curve(layered, !frame.title, pack_tonemap)
+        if horizon_tone_curve(layered, world, pack_tonemap)
             && let Some(hdr) = &self.hdr
         {
             hdr.tonemap(encoder, timing.as_mut());
@@ -13561,7 +13691,35 @@ fn camera_section(camera: DVec3, min_y: i32) -> SectionKey {
 /// The near plane of the world's projection, in blocks.
 const NEAR_PLANE: f32 = 0.05;
 
+/// The inputs shared by world and GUI-only frames after preparing their color target.
+struct PresentFrame<'frame, 'data> {
+    frame: &'frame Frame<'data>,
+    overlay: Overlay,
+    target_texture: wgpu::Texture,
+    view_target: wgpu::TextureView,
+    encoder: wgpu::CommandEncoder,
+    copies: Option<wgpu::CommandBuffer>,
+    surface_frame: Option<wgpu::SurfaceTexture>,
+    reconfigure: bool,
+    fg_frames: Option<(wgpu::Texture, wgpu::Texture)>,
+    fg_made: bool,
+    checks: Option<GpuChecks>,
+    backstop: Option<GpuChecks>,
+    started: Instant,
+    laps: crate::spans::Laps,
+    world: Option<DrawnWorld>,
+}
+
+struct DrawnWorld {
+    visible: Vec<resident::Visible>,
+    visible_lods: Vec<lod::Visible>,
+    shadow_visible: Vec<resident::Visible>,
+    culling: bool,
+    gpu_stats: Option<(u64, [usize; 3])>,
+}
+
 /// Counts and offsets `Renderer::draw_overlay` draws from this frame's buffers.
+#[derive(Default)]
 struct Overlay {
     /// Zero when a shader pack draws the hand.
     hand_quads: u32,

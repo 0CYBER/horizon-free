@@ -40,6 +40,15 @@ the sign's block position and whether its front side is being edited. It returns
 editor open, or outside a world. A close of the sign editor always sends the sign update, however it
 closes; there is no close that skips it, because the vanilla client never omits that packet.
 
+## GUI-only in-world frames
+
+A full-screen map can return `Flow::Cancel` from `render_frame` while `host.mod_screen()` is its
+own screen. Paint the map in `screen_render_post` and use the regular screen input hooks. The
+game presents the GUI over black in its usual SDR or HDR output, without preparing or drawing the
+world. Full-frame screenshots and video export include the GUI; world icons and scene captures
+wait for a world draw. Normal world rendering resumes on the next frame that does not request
+GUI-only presentation, with fresh temporal history.
+
 ## Decorating Multiplayer rows
 
 Implement the client hook `server_list_row_decorations` to draw on the saved servers in the title's

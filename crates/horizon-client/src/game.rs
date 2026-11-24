@@ -8272,6 +8272,30 @@ impl Game<'_> {
             return Ok(false);
         };
         pr.lap("pr_setup");
+        if mod_api::__private::listened(mod_api::HookId::RenderFrame)
+            && self.title.is_none()
+            && self.player.is_some()
+            && !self.remote_screen_up()
+            && self
+                .remote
+                .as_ref()
+                .is_none_or(|remote| remote.reconfiguring.is_none())
+            && self.pending_save.is_none()
+        {
+            let mut gui_only = false;
+            self.native_render_frame(&mut gui_only);
+            if gui_only {
+                self.native_camera_frame = None;
+                self.locator_camera = None;
+                self.screen_blur_requested.set(false);
+                let mut hud = self.prepare_frame_hud(size);
+                hud.patches.append(&mut self.map_patches);
+                hud.patches.append(self.text_patches.get_mut());
+                pr.lap("pr_hud");
+                drop(prepare);
+                return self.draw_gui_only_frame(hud, consume);
+            }
+        }
         let alpha = self.frame_world_partial_tick();
         // Camera.getCameraEntityPartialTicks: the view, the hand and the
         // player's own model stay smooth while the level is frozen.
@@ -8662,11 +8686,7 @@ impl Game<'_> {
         let _projection_frame = (!title).then(|| self.activate_projection_frame());
         pr.lap("pr_projection");
         // GUI hooks project against this frame's camera, including its bob/spin and FOV.
-        let mut hud = std::mem::replace(&mut self.hud_batch, HudBatch::scratch([1, 1]));
-        horizon_client::spans::time("hud", || self.hud_into(size, &mut hud));
-        self.flush_ime(&mut hud);
-        self.native_gui_render_post(&mut hud, self.ui.hide_gui, self.focused);
-        self.resolve_inline_profiles(&hud.inline_profiles);
+        let mut hud = self.prepare_frame_hud(size);
         pr.lap("pr_hud");
         self.locator_camera =
             (!title).then_some((camera.to_array(), view_yaw, view_pitch, fov_degrees));
@@ -8826,11 +8846,7 @@ impl Game<'_> {
             self.gather_dynamic_lights(camera, alpha);
         }
         pr.lap("pr_lights");
-        pack_inputs.frame_timing = self
-            .screenshot_sequence
-            .as_ref()
-            .map(screenshot_sequence::Sequence::timing)
-            .or_else(|| self.export.as_ref().map(export::Session::timing));
+        pack_inputs.frame_timing = self.frame_timing();
         pr.lap("pr_shader_inputs");
         // Fog hooks may clear particles too. They must run before the final clear
         // boundary, not while constructing Frame after geometry has been extracted.
@@ -8895,6 +8911,7 @@ impl Game<'_> {
                 self.water_plane(camera)
             },
             title,
+            gui_only: false,
             sky_blocked: horizon_client::fog::sky_pass_skipped(
                 self.camera_submersion([camera.x, camera.y, camera.z]),
                 self.potions.effects.get("blindness").is_some()
@@ -9020,18 +9037,13 @@ impl Game<'_> {
         let mut prepared_draws = std::mem::take(&mut *self.prepared_model_draws.borrow_mut());
         let result = match self.renderer.as_mut() {
             Some(renderer) => {
-                use horizon_client::client_perf::request::GpuSwitch;
-                let capture_gpu = self.profile.gpu();
-                let recording = capture_gpu != GpuSwitch::Off;
-                renderer.set_pass_timing(debug_passes || self.gpu_passes || recording);
-                renderer.set_keep_timed_frames(recording);
-                renderer.set_pass_detail(self.gpu_pass_detail || capture_gpu == GpuSwitch::Detail);
-                // `gpu_passes` and a capture's `--gpu` are measurements: they take every sample they can.
-                renderer.set_pass_timing_gap(if self.gpu_passes || recording {
-                    Duration::ZERO
-                } else {
-                    horizon_client::debug_overlay::GPU_TIMING_GAP
-                });
+                configure_frame_timing(
+                    renderer,
+                    self.profile.gpu(),
+                    debug_passes,
+                    self.gpu_passes,
+                    self.gpu_pass_detail,
+                );
                 self.native_shaders.hand_over(renderer);
                 renderer.stage_prepared_draws(&prepared_draws);
                 consume(renderer, &frame)
@@ -9067,6 +9079,75 @@ impl Game<'_> {
         self.see_through_vertices = see_through;
         result
     }
+
+    /// Takes `hud_batch` for this frame's HUD; the frame gives it back when it ends.
+    fn prepare_frame_hud(&mut self, size: [u32; 2]) -> HudBatch {
+        let mut hud = std::mem::replace(&mut self.hud_batch, HudBatch::scratch([1, 1]));
+        horizon_client::spans::time("hud", || self.hud_into(size, &mut hud));
+        self.flush_ime(&mut hud);
+        self.native_gui_render_post(&mut hud, self.ui.hide_gui, self.focused);
+        self.resolve_inline_profiles(&hud.inline_profiles);
+        hud
+    }
+
+    fn frame_timing(&self) -> Option<horizon_client::gfx::pack_uniforms::FrameTiming> {
+        self.screenshot_sequence
+            .as_ref()
+            .map(screenshot_sequence::Sequence::timing)
+            .or_else(|| self.export.as_ref().map(export::Session::timing))
+    }
+
+    fn draw_gui_only_frame(
+        &mut self,
+        hud: HudBatch,
+        consume: impl FnOnce(&mut Renderer, &Frame<'_>) -> Result<bool>,
+    ) -> Result<bool> {
+        let mut frame = loading_frame(&hud);
+        frame.title = false;
+        frame.gui_only = true;
+        frame.ticks = self.texture_clock();
+        frame.glint_alpha = self.glint_frame.alpha;
+        frame.glint_ticks = self.glint_frame.scroll_ticks();
+        frame.pack.frame_timing = self.frame_timing();
+        frame.menu_blur = self.menu_blur();
+        let debug_passes = self.debug_lists_gpu_passes();
+        let renderer = self
+            .renderer
+            .as_mut()
+            .expect("renderer checked before GUI preparation");
+        configure_frame_timing(
+            renderer,
+            self.profile.gpu(),
+            debug_passes,
+            self.gpu_passes,
+            self.gpu_pass_detail,
+        );
+        let result = consume(renderer, &frame);
+        self.frame_drawn = matches!(result, Ok(true));
+        drop(frame);
+        self.hud_batch = hud;
+        result
+    }
+}
+
+fn configure_frame_timing(
+    renderer: &mut Renderer,
+    capture_gpu: horizon_client::client_perf::request::GpuSwitch,
+    debug_passes: bool,
+    gpu_passes: bool,
+    pass_detail: bool,
+) {
+    use horizon_client::client_perf::request::GpuSwitch;
+    let recording = capture_gpu != GpuSwitch::Off;
+    renderer.set_pass_timing(debug_passes || gpu_passes || recording);
+    renderer.set_keep_timed_frames(recording);
+    renderer.set_pass_detail(pass_detail || capture_gpu == GpuSwitch::Detail);
+    // `gpu_passes` and a capture's `--gpu` are measurements: they take every sample they can.
+    renderer.set_pass_timing_gap(if gpu_passes || recording {
+        Duration::ZERO
+    } else {
+        horizon_client::debug_overlay::GPU_TIMING_GAP
+    });
 }
 /// `computeNextAutosaveInterval`'s arithmetic: `Math.max(100, (int)(rate * 300.0F))`.
 fn autosave_interval(rate: f32) -> i64 {

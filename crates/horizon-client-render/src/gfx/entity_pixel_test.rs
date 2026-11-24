@@ -627,6 +627,7 @@ fn probe_frame(hud: &HudBatch) -> super::Frame<'_> {
         underwater: false,
         cave_culling: false,
         title: false,
+        gui_only: false,
         sky_blocked: false,
         skybox: false,
         end_sky: false,

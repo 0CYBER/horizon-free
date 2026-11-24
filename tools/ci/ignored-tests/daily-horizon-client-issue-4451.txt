@@ -1558,6 +1558,7 @@ horizon-client game::native_hooks::player_game_mode_changed::player_game_mode_ch
 horizon-client game::native_hooks::player_heart_type::player_heart_type_tests::a_client_mod_changes_the_health_bars_hearts lib daily resources
 horizon-client game::native_hooks::register_enchantment_damage_effects::tests::custom_enchantment_changes_real_hit_damage_and_observes_hit_context lib daily resources
 horizon-client game::native_hooks::register_preset_editors::tests::preset_editor_test_mod_draws_and_edits_through_real_client_hooks lib daily resources
+horizon-client game::native_hooks::render_frame::tests::a_mod_map_presents_without_the_world_pass lib daily resources
 horizon-client game::native_hooks::render_frame_pre::tests::frame_interpolation_matches_draw_and_holds_while_paused_or_frozen lib daily resources
 horizon-client game::native_hooks::render_gui_pre::local_sound_tests::a_screen_hooks_sound_reaches_audio_at_the_next_update lib daily resources
 horizon-client game::native_hooks::render_tooltip_texture::render_tooltip_texture_tests::a_mod_gives_a_tooltip_its_own_texture_or_colours lib daily resources

@@ -935,6 +935,7 @@ fn fixture_frame(hud: &HudBatch) -> Frame<'_> {
         water_plane: None,
         cave_culling: false,
         title: false,
+        gui_only: false,
         sky_blocked: false,
         skybox: false,
         end_sky: false,

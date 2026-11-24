@@ -215,6 +215,7 @@ pub(super) fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         water_plane: None,
         cave_culling: false,
         title: true,
+        gui_only: false,
         sky_blocked: false,
         skybox: false,
         end_sky: false,
