@@ -38,6 +38,7 @@ fn main() {
     horizon_guest_stack::prepare_main();
     horizon_mod_host::exit_if_compile_child();
     let startup = horizon_client::entry::prepare();
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     std::hint::black_box(&horizon_mod_package::holder::CAPABILITY);
     if std::env::var_os("HORIZON_HOT_PATHS_MODS").is_some_and(|mods| mods == "native") {
         horizon_mod_host::main_with(

@@ -2,11 +2,9 @@
 //! game/interface/dedicated/mod.rs). It reads the vanilla files the supervisor writes, takes console commands on stdin and
 //! logs on stdout.
 
-use horizon_platform::mod_package::{
-    holder,
-    runtime_leases::{self, Claim},
-    selection::LaunchArguments,
-};
+use horizon_platform::mod_package::runtime_leases::Claim;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use horizon_platform::mod_package::{holder, runtime_leases, selection::LaunchArguments};
 use horizon_server_launch::config::Entities;
 use std::process::Command;
 use std::{
@@ -180,6 +178,7 @@ pub fn spawn(
 /// and held. The supervisor re-reads the release before every start, so this covers the restart an
 /// update switches to; a game installed outside a launcher registry takes no leases, and nothing is
 /// written into its folder.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn lease(program: &Path, command: &Command, dir: &Path) -> Result<Vec<Claim>, String> {
     let program =
         std::path::absolute(program).map_err(|e| format!("{}: {e}", program.display()))?;
@@ -218,6 +217,12 @@ fn lease(program: &Path, command: &Command, dir: &Path) -> Result<Vec<Claim>, St
     }
     runtime_leases::lease_units(&program, &selection, &data, &directory)
         .map_err(|e| format!("{}: {e}", install.display()))
+}
+
+/// Platforms without the desktop runtime holder take no leases and write no completion markers.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn lease(_program: &Path, _command: &Command, _dir: &Path) -> Result<Vec<Claim>, String> {
+    Ok(Vec::new())
 }
 
 /// The command `spawn` runs.
@@ -701,6 +706,7 @@ mod tests {
     }
 
     /// The launcher's data folder with a registry, a release it copied and the server's folder.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     fn managed(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
         let data = root.join("data");
         std::fs::create_dir_all(data.join("run-leases")).unwrap();
@@ -713,6 +719,7 @@ mod tests {
         (install, server, data)
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn a_managed_release_gets_its_marker_and_its_units() {
         let root =
@@ -755,6 +762,7 @@ mod tests {
     /// `[engine] engine.path` may name a launcher version whose marker Windows cleanup removed
     /// because it couldn't rename the folder. The game still takes its leases there, but the marker
     /// is what lists the version as installed: only the runtime's own release copies are completed.
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn a_launcher_version_keeps_the_marker_the_cleanup_removed() {
         let root =
