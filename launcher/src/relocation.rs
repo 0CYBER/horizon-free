@@ -92,6 +92,14 @@ pub fn prepare_paths(stage: &Roots, source: &Roots, target: &Roots) -> Result<()
     Ok(())
 }
 
+/// The running processes as JSON, in UTF-8. Windows PowerShell writes a pipe in the console code page (GBK on
+/// Chinese Windows), and one path or command line with non-ASCII text in it then made the list unreadable (#16685).
+#[cfg(windows)]
+const PROCESS_LIST: &str = concat!(
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8; ",
+    "Get-CimInstance Win32_Process | Select-Object Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress",
+);
+
 /// Refuse live games/build tools even if the window that started them has already exited.
 fn ensure_idle(source: &Roots) -> Result<(), String> {
     // A background service may run the server runtime's program from the launcher's data, and
@@ -106,7 +114,7 @@ fn ensure_idle(source: &Roots) -> Result<(), String> {
     }
     #[cfg(windows)]
     let output = process::command("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Select-Object Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress"])
+        .args(["-NoProfile", "-NonInteractive", "-Command", PROCESS_LIST])
         .output();
     #[cfg(not(windows))]
     let output = process::command("ps")

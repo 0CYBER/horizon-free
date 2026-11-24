@@ -176,6 +176,30 @@ fn windows_managed_paths_are_matched_without_case_sensitive_prefixes() {
     );
 }
 
+/// #16685: one running process with non-ASCII text in its command line made the process list unreadable, and every
+/// move stopped. The text holds a character of each common console code page (Western, Cyrillic, Chinese), so the old
+/// list isn't UTF-8 on any of them.
+#[cfg(windows)]
+#[test]
+fn a_non_ascii_command_line_does_not_stop_the_process_check() {
+    let mut other = process::command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep 60 # é тест 微信",
+        ])
+        .spawn()
+        .unwrap();
+    let fixture = Fixture::new();
+    let result = ensure_idle(&fixture.roots("source"));
+    let _ = other.kill();
+    // A game or build running on this machine is a fair answer; a list it couldn't read is not.
+    if let Err(error) = result {
+        assert!(error.starts_with("Close games"), "{error}");
+    }
+}
+
 #[test]
 fn progress_follows_a_move_part_by_part() {
     let fixture = Fixture::new();
