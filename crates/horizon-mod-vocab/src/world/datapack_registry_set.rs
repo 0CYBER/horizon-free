@@ -351,32 +351,58 @@ pub(super) fn resolve_references(
     for declaration in declarations {
         for (entry, decoded) in &registries[&declaration.key] {
             for field in &declaration.fields {
-                let DatapackFieldKind::Reference { registry } = &field.kind else {
+                let Some(value) = decoded.get(&field.name) else {
                     continue;
                 };
-                let Some(targets) = registries.get(registry) else {
+                let Some((path, registry, target)) =
+                    dangling_reference(&field.kind, value, &field.name, registries)
+                else {
                     continue;
                 };
-                let Some(DatapackValue::Text(target)) = decoded.get(&field.name) else {
-                    continue;
-                };
-                if !targets.contains_key(target) {
-                    return Err(Box::new(DatapackLoadError {
-                        registry: declaration.key.clone(),
-                        entry: entry.clone(),
-                        file: declaration.entry_file(entry).unwrap_or_default(),
-                        pack: String::new(),
-                        reason: DatapackLoadReason::UnresolvedReference {
-                            field: field.name.clone(),
-                            registry: registry.clone(),
-                            target: target.clone(),
-                        },
-                    }));
-                }
+                return Err(Box::new(DatapackLoadError {
+                    registry: declaration.key.clone(),
+                    entry: entry.clone(),
+                    file: declaration.entry_file(entry).unwrap_or_default(),
+                    pack: String::new(),
+                    reason: DatapackLoadReason::UnresolvedReference {
+                        field: path,
+                        registry: registry.to_owned(),
+                        target: target.to_owned(),
+                    },
+                }));
             }
         }
     }
     Ok(())
+}
+
+/// The first reference in `value`, nested lists and objects included, whose declared registry
+/// lacks its target: `(field path, registry, target)`, the path named as the decoder names it
+/// (`tags[0]`, `display.spell`).
+fn dangling_reference<'a>(
+    kind: &'a DatapackFieldKind,
+    value: &'a DatapackValue,
+    path: &str,
+    registries: &BTreeMap<String, BTreeMap<String, DatapackEntry>>,
+) -> Option<(String, &'a str, &'a str)> {
+    match (kind, value) {
+        (DatapackFieldKind::Reference { registry }, DatapackValue::Text(target)) => registries
+            .get(registry)
+            .is_some_and(|targets| !targets.contains_key(target))
+            .then(|| (path.to_owned(), registry.as_str(), target.as_str())),
+        (DatapackFieldKind::List { element, .. }, DatapackValue::List(values)) => {
+            values.iter().enumerate().find_map(|(index, value)| {
+                dangling_reference(element, value, &format!("{path}[{index}]"), registries)
+            })
+        }
+        (DatapackFieldKind::Object { fields, .. }, DatapackValue::Object(values)) => {
+            values.iter().find_map(|(name, value)| {
+                let field = fields.iter().find(|field| field.name == *name)?;
+                dangling_reference(&field.kind, value, &format!("{path}.{name}"), registries)
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Why a set could not move to a new generation.
@@ -719,6 +745,74 @@ mod tests {
                     target: "addon:ice".into(),
                 },
             }))
+        );
+    }
+
+    /// A reference inside a list or an object is resolved too, and the refusal names its path.
+    #[test]
+    fn nested_references_resolve_and_name_their_path() {
+        let slot = DatapackRegistryDeclaration {
+            mod_id: "example".into(),
+            key: "example:slot".into(),
+            fields: vec![
+                DatapackField::with_default(
+                    "spells",
+                    DatapackFieldKind::List {
+                        element: Box::new(DatapackFieldKind::Reference {
+                            registry: "example:spell".into(),
+                        }),
+                        max_len: 4,
+                    },
+                    DatapackValue::List(Vec::new()),
+                ),
+                DatapackField::with_default(
+                    "display",
+                    DatapackFieldKind::Object {
+                        fields: vec![DatapackField::with_default(
+                            "spell",
+                            DatapackFieldKind::Reference {
+                                registry: "example:spell".into(),
+                            },
+                            DatapackValue::Text("example:fire".into()),
+                        )],
+                        max_len: 256,
+                    },
+                    DatapackValue::Object(vec![(
+                        "spell".into(),
+                        DatapackValue::Text("example:fire".into()),
+                    )]),
+                ),
+            ],
+            sync: DatapackRegistrySync::ServerOnly,
+        };
+        let fire = file("data/example/example/spell/fire.json", &[r#"{"power": 1}"#]);
+        let build = |slot_json: &str| {
+            let files = [
+                fire.clone(),
+                file("data/example/example/slot/ring.json", &[slot_json]),
+            ];
+            DatapackCandidate::build(&[spell(), slot.clone()], &files)
+                .map(|_| ())
+                .map_err(|error| error.reason)
+        };
+        assert_eq!(
+            build(r#"{"spells": ["example:fire"], "display": {"spell": "example:fire"}}"#),
+            Ok(())
+        );
+        let unresolved = |field: &str| {
+            Err(DatapackLoadReason::UnresolvedReference {
+                field: field.into(),
+                registry: "example:spell".into(),
+                target: "addon:ice".into(),
+            })
+        };
+        assert_eq!(
+            build(r#"{"spells": ["example:fire", "addon:ice"]}"#),
+            unresolved("spells[1]")
+        );
+        assert_eq!(
+            build(r#"{"display": {"spell": "addon:ice"}}"#),
+            unresolved("display.spell")
         );
     }
 

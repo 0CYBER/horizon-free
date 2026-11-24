@@ -26,6 +26,9 @@ POLICIES = {
     "ModelPart": "JSON preflight before serde; wire/depth_tests.rs",
     "serde_json::Value": "iterative preflight before serde; wire/depth_tests.rs",
     "serde_json::Map": "iterative preflight before serde; wire/depth_tests.rs",
+    "DatapackField": "schema depth <= 8 at registration; generic wire depth; wire/depth_tests.rs",
+    "DatapackFieldKind": "schema depth <= 8 at registration; generic wire depth; wire/depth_tests.rs",
+    "DatapackValue": "generic wire depth; value length bounded by its field kind; wire/depth_tests.rs",
     "WalkedIngredient": "no Wire; private parser work tree",
 }
 

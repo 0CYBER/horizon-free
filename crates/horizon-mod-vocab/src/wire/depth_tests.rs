@@ -1,5 +1,6 @@
 use super::*;
 use crate::item::crafting::Shape;
+use crate::world::datapack_registry::{DatapackField, DatapackFieldKind, DatapackValue};
 use crate::world::snapshots::LootEntity;
 use crate::{Ingredient, ItemPlace, RecipeSlotDisplay, Tag, Text};
 
@@ -109,6 +110,55 @@ fn structural_families_fit_the_guest_shadow_stack() {
             let mut out = Writer::new();
             out.put(&parent);
             assert_eq!(out.error(), Some(WireError::Depth));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn datapack_schema_families_fit_the_guest_shadow_stack() {
+    std::thread::Builder::new()
+        .stack_size(GUEST_STACK)
+        .spawn(|| {
+            let mut kind = DatapackFieldKind::Bool;
+            for _ in 0..8 {
+                kind = DatapackFieldKind::List {
+                    element: Box::new(kind),
+                    max_len: 2,
+                };
+            }
+            let mut out = Writer::new();
+            out.put(&kind);
+            assert_eq!(out.error(), None);
+            assert!(Reader::decode::<DatapackFieldKind>(out.bytes()).is_ok());
+            let mut reader = Reader::new(out.bytes());
+            reader.depth = MAX_DEPTH - 1;
+            assert!(matches!(
+                reader.take::<DatapackFieldKind>(),
+                Err(WireError::Depth)
+            ));
+
+            let field = DatapackField::required("a", kind);
+            let mut out = Writer::new();
+            out.put(&field);
+            assert_eq!(out.error(), None);
+            assert!(Reader::decode::<DatapackField>(out.bytes()).is_ok());
+
+            let mut value = DatapackValue::Bool(true);
+            for _ in 0..8 {
+                value = DatapackValue::List(vec![value]);
+            }
+            let mut out = Writer::new();
+            out.put(&value);
+            assert_eq!(out.error(), None);
+            assert!(Reader::decode::<DatapackValue>(out.bytes()).is_ok());
+            let mut reader = Reader::new(out.bytes());
+            reader.depth = MAX_DEPTH - 1;
+            assert!(matches!(
+                reader.take::<DatapackValue>(),
+                Err(WireError::Depth)
+            ));
         })
         .unwrap()
         .join()

@@ -29,18 +29,7 @@ impl DatapackRegistriesRegistrar for PartRegistrar {
             {
                 return Err(DatapackRegistrationError::Duplicate);
             }
-            for field in &mut fields {
-                if matches!(
-                    field.kind,
-                    crate::DatapackFieldKind::Identifier
-                        | crate::DatapackFieldKind::Reference { .. }
-                ) && let Some(crate::DatapackValue::Text(value)) = &mut field.default
-                {
-                    *value = crate::Identifier::parse(value)
-                        .map_err(|_| DatapackRegistrationError::InvalidDefault)?
-                        .to_string();
-                }
-            }
+            mod_vocab::canonicalize_datapack_defaults(&mut fields)?;
             mod_vocab::__private::parts_installation::validate_datapack_schema(&fields)?;
             self.datapack_registries.push(DatapackRegistryDeclaration {
                 mod_id: self.mod_id.to_owned(),

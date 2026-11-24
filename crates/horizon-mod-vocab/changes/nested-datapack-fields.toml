@@ -1,0 +1,13 @@
+ids = [
+  "call:Backend::level_datapack_read",
+  "call:Registrar::declare_datapack_registry",
+  "type:DatapackField",
+  "type:DatapackFieldKind",
+  "type:DatapackRegistryDeclaration",
+  "type:DatapackSnapshot",
+  "type:DatapackSnapshotEntry",
+  "type:DatapackSnapshotRegistry",
+  "type:DatapackValue",
+]
+why = "Data-pack registry schemas can describe a bounded list of one field kind and an object with a nested field schema. DatapackValue grows matching List and Object variants, and a decoded nested default is canonicalized recursively. The appended Wire variants keep the old variant tags, but the layout hashes of the reached registry, value and snapshot types change."
+migrate = "Rebuild mods against this SDK. A mod that declares a registry can replace flattened sibling fields and text blobs with List and Object fields; existing declarations keep decoding. For each object field, max_len is the compact JSON length of the decoded value, and a nested id default written as `stone` is canonicalized to `minecraft:stone` on registration."
