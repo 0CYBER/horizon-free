@@ -14,7 +14,7 @@ use horizon_client::{
     screen_draw::Measure,
 };
 use serde_json::{Value, json};
-use std::{fmt::Write as _, fs, path::PathBuf};
+use std::{collections::VecDeque, fmt::Write as _, fs, path::PathBuf};
 use winit::keyboard::KeyCode as K;
 #[path = "chat_screen_fixture/registries.rs"]
 mod registries;
@@ -41,7 +41,7 @@ pub fn main() -> horizon_client::Result<()> {
     {
         let case: Value = serde_json::from_str(line)?;
         let int = |v: &Value| v.as_i64().unwrap_or(0) as i32;
-        let history: Vec<String> = case["history"]
+        let history: VecDeque<String> = case["history"]
             .as_array()
             .into_iter()
             .flatten()

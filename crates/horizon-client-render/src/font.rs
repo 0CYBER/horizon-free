@@ -1914,10 +1914,15 @@ impl Font {
     /// `max_width` (never the first visible one) at the last space so far, or
     /// before that character; the `\n` or space at the break is dropped.
     pub fn split_lines(&self, t: &Text, max_width: f32) -> Vec<(Text, bool)> {
+        let mut out = Vec::new();
+        self.for_each_split_line(t, max_width, |line, wrapped| out.push((line, wrapped)));
+        out
+    }
+
+    fn for_each_split_line(&self, t: &Text, max_width: f32, mut emit: impl FnMut(Text, bool)) {
         let max_width = max_width.max(1.0);
         let chars: Vec<(char, &Style)> = t.chars().collect();
         let n = chars.len();
-        let mut out = Vec::new();
         let (mut start, mut wrapped, mut force_new_line) = (0, false, false);
         loop {
             // LineBreakFinder over what is left.
@@ -1944,16 +1949,15 @@ impl Font {
             let new_line = chars[at].0 == '\n';
             let skip = usize::from(new_line || chars[at].0 == ' ');
             force_new_line = new_line;
-            out.push((t.slice(start, at), wrapped));
+            emit(t.slice(start, at), wrapped);
             wrapped = !new_line;
             start = at + skip;
         }
         if start < n {
-            out.push((t.slice(start, n), wrapped));
+            emit(t.slice(start, n), wrapped);
         } else if force_new_line {
-            out.push((Text::empty(), false));
+            emit(Text::empty(), false);
         }
-        out
     }
     /// `Font.split`: `StringSplitter.splitLines(text, width, Style.EMPTY)` over
     /// the text's parts with their `§` codes in. A code styles what follows
@@ -2032,23 +2036,31 @@ impl Font {
     /// `ComponentRenderUtils.wrapComponents`: the split lines, wrapped ones
     /// indented by an unstyled space; one empty line for empty text.
     pub fn wrap_components(&self, t: &Text, max_width: i32) -> Vec<Text> {
-        let lines: Vec<Text> = self
-            .split_lines(t, max_width as f32)
-            .into_iter()
-            .map(|(line, wrapped)| {
-                if wrapped {
-                    let mut spans = Text::literal(" ").into_spans();
-                    spans.extend(line.into_spans());
-                    Text::from_spans(spans)
-                } else {
-                    line
-                }
-            })
-            .collect();
-        if lines.is_empty() {
-            vec![Text::empty()]
-        } else {
-            lines
+        let mut lines = Vec::new();
+        self.for_each_wrapped_component(t, max_width, |line| lines.push(line));
+        lines
+    }
+
+    /// Emit wrapped lines in reading order without collecting the entire output.
+    pub(crate) fn for_each_wrapped_component(
+        &self,
+        t: &Text,
+        max_width: i32,
+        mut emit: impl FnMut(Text),
+    ) {
+        let mut empty = true;
+        self.for_each_split_line(t, max_width as f32, |line, wrapped| {
+            empty = false;
+            if wrapped {
+                let mut spans = Text::literal(" ").into_spans();
+                spans.extend(line.into_spans());
+                emit(Text::from_spans(spans));
+            } else {
+                emit(line);
+            }
+        });
+        if empty {
+            emit(Text::empty());
         }
     }
     /// StringSplitter.splitLines: wrap at the last space that fits (or

@@ -1,4 +1,4 @@
-//! Chat: the message list (ChatComponent: wrapping, 100-line history,
+//! Chat: the message list (ChatComponent: wrapping, bounded history,
 //! 200-tick fade, scrolling, system message indicator) and the chat screen
 //! (ChatScreen + EditBox + CommandSuggestions: history navigation, argument
 //! colouring, usage hints, parse errors and tab completion).
@@ -11,6 +11,7 @@ use crate::{
     screen_draw::{self as d, Draw, Measure, TextField},
     text::{self, ClickEvent, Style, Text},
 };
+use std::collections::VecDeque;
 
 #[cfg(test)]
 #[path = "chat_tests.rs"]
@@ -65,6 +66,9 @@ pub fn filtered_message(
 /// `CommandHistory.PERSISTED_COMMANDS_FILE_NAME` and its size cap.
 const COMMAND_HISTORY_FILE: &str = "command_history.txt";
 const MAX_PERSISTED_COMMAND_HISTORY: usize = 50;
+/// The vanilla `ChatComponent` cap on each of its three histories.
+pub const DEFAULT_HISTORY_CAPACITY: u32 = 100;
+const MAX_HISTORY_CAPACITY: u32 = 16_384;
 /// GuiMessageTag.systemSinglePlayer's indicator colour.
 pub const SYSTEM_INDICATOR: u32 = 0xD0D0D0;
 /// `GuiMessageTag.CHAT_MODIFIED_INDICATOR_COLOR`.
@@ -322,11 +326,12 @@ fn time_alpha(ticks: f32, added: u64) -> f32 {
 }
 #[derive(Default)]
 pub struct Chat {
-    messages: Vec<Message>,
+    messages: VecDeque<Message>,
     /// Wrapped lines, newest first.
-    lines: Vec<Line>,
+    lines: VecDeque<Line>,
     /// Sent messages and commands (ChatComponent.recentChat).
-    pub recent: Vec<String>,
+    pub recent: VecDeque<String>,
+    history_capacity: Option<usize>,
     /// `CommandHistory`: the last commands, kept in `command_history.txt`
     /// in the game folder once `load_history` has set it.
     commands: Vec<String>,
@@ -380,6 +385,22 @@ pub fn queue_line(queued: usize) -> Text {
     })
 }
 impl Chat {
+    /// Apply the local client's history policy without reserving space or rewrapping chat.
+    /// A request can enlarge the histories, up to 16,384 entries each.
+    pub fn configure_history_capacity(&mut self, requested: u32) {
+        let capacity = requested.clamp(DEFAULT_HISTORY_CAPACITY, MAX_HISTORY_CAPACITY) as usize;
+        self.history_capacity = Some(capacity);
+        self.messages.truncate(capacity);
+        self.lines.truncate(capacity);
+        self.recent
+            .drain(..self.recent.len().saturating_sub(capacity));
+    }
+
+    fn history_capacity(&self) -> usize {
+        self.history_capacity
+            .unwrap_or(DEFAULT_HISTORY_CAPACITY as usize)
+    }
+
     pub fn lines_per_page(&self, focused: bool) -> usize {
         (self.options.height_px(focused) / self.options.line_height().max(1)) as usize
     }
@@ -387,7 +408,7 @@ impl Chat {
     fn max_width(&self) -> i32 {
         (f64::from(self.options.width_px()) / self.options.scale).floor() as i32
     }
-    /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines. A
+    /// ChatComponent.addMessage: wrap, prepend and trim the display history. A
     /// message the Chat option hides is dropped, unlogged.
     #[horizon_mod_api_macros::replaceable]
     pub fn add(
@@ -489,11 +510,11 @@ impl Chat {
         message.time = self.now();
         self.received += 1;
         if self.qol.compact
-            && let Some(last) = self.messages.first()
+            && let Some(last) = self.messages.front()
             && repeats(last, &message)
         {
             // The newest lines are that message's: they make way for its lines with the count.
-            let mut last = self.messages.remove(0);
+            let mut last = self.messages.pop_front().unwrap();
             let shown = last.wrapped.min(self.lines.len());
             self.lines.drain(..shown);
             // A reader scrolled up keeps their view: only lines the merge adds move it.
@@ -507,12 +528,14 @@ impl Chat {
                 self.new_since_scroll = new_since_scroll;
                 self.scroll_by(last.wrapped as i32 - shown as i32, focused);
             }
-            self.messages.insert(0, last);
+            self.messages.push_front(last);
             return;
         }
         message.wrapped = self.add_lines(font, &message, focused);
-        self.messages.insert(0, message);
-        self.messages.truncate(100);
+        if self.messages.len() == self.history_capacity() {
+            self.messages.pop_back();
+        }
+        self.messages.push_front(message);
     }
     fn now(&self) -> (u8, u8) {
         #[cfg(test)]
@@ -541,30 +564,26 @@ impl Chat {
         };
         let width = self.max_width() - icon;
         let content = self.message_text(message);
-        // Only the last 100 wrapped lines can survive the trim, so keep just those
-        // instead of shifting the whole list once per line.
-        let before = self.lines.len();
-        let mut kept = std::collections::VecDeque::with_capacity(101);
-        for line in font.wrap_components(&content, width) {
-            count += 1;
+        let capacity = self.history_capacity();
+        let previous_lines = self.lines.len();
+        font.for_each_wrapped_component(&content, width, |line| {
             if focused && self.scroll > 0 {
                 self.new_since_scroll = true;
-                // The list is `before + count - 1` long when this line is added.
-                self.scroll_by_len(1, before + count - 1, focused);
+                // Vanilla scrolls against the pre-trim size, including earlier lines
+                // of this message. Keep that anchor without allocating those extra slots.
+                self.scroll_by_len(1, previous_lines + count, focused);
             }
-            if kept.len() == 100 {
-                kept.pop_front();
+            count += 1;
+            if self.lines.len() == capacity {
+                self.lines.pop_back();
             }
-            kept.push_back(Line {
+            self.lines.push_front(Line {
                 added: message.added,
                 content: line,
                 tag: message.tag.clone(),
                 message: whole.clone(),
             });
-        }
-        // Newest first, as if each had been inserted at the front.
-        self.lines.splice(0..0, kept.into_iter().rev());
-        self.lines.truncate(100);
+        });
         count
     }
     /// What a message's lines wrap (ComponentRenderUtils.wrapComponents):
@@ -757,11 +776,11 @@ impl Chat {
     /// `ChatComponent.addRecentChat`: a command also goes to the saved history.
     #[horizon_mod_api_macros::replaceable]
     pub fn add_recent(&mut self, message: &str) {
-        if self.recent.last().map(String::as_str) != Some(message) {
-            if self.recent.len() >= 100 {
-                self.recent.remove(0);
+        if self.recent.back().map(String::as_str) != Some(message) {
+            if self.recent.len() >= self.history_capacity() {
+                self.recent.pop_front();
             }
-            self.recent.push(message.to_owned());
+            self.recent.push_back(message.to_owned());
         }
         if message.starts_with('/') && self.commands.last().map(String::as_str) != Some(message) {
             if self.commands.len() >= MAX_PERSISTED_COMMAND_HISTORY {
@@ -1950,7 +1969,7 @@ impl ChatScreen {
         &mut self,
         m: &Measure,
         c: &Commands,
-        history: &[String],
+        history: &VecDeque<String>,
         key: winit::keyboard::KeyCode,
         shift: bool,
         ctrl: bool,
@@ -2045,7 +2064,13 @@ impl ChatScreen {
         }
     }
     /// `ChatScreen.moveInHistory`.
-    fn move_in_history(&mut self, m: &Measure, c: &Commands, history: &[String], dir: isize) {
+    fn move_in_history(
+        &mut self,
+        m: &Measure,
+        c: &Commands,
+        history: &VecDeque<String>,
+        dir: isize,
+    ) {
         let max = history.len();
         let new = (self.history_pos as isize + dir).clamp(0, max as isize) as usize;
         if new == self.history_pos {

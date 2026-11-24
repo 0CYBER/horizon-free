@@ -12,4 +12,12 @@ impl Game<'_> {
     pub(in crate::game) fn native_menu_background(&self, radius: &mut Option<f32>) {
         self.fire_menu_background(radius);
     }
+    /// The client reads this once, before any world or server can populate chat.
+    pub(in crate::game) fn native_chat_history_capacity(
+        &self,
+        vanilla: u32,
+        capacity: &mut Option<u32>,
+    ) {
+        self.fire_chat_history_capacity(vanilla, capacity);
+    }
 }

@@ -153,6 +153,18 @@ fn with_studio_commands(base: &Dispatcher) -> Dispatcher {
 }
 
 impl Game<'_> {
+    /// Resolve the mod policy once for the local chat, not on receipt, layout or submit.
+    pub(super) fn configure_chat_history(&mut self) {
+        let mut capacity = None;
+        self.native_chat_history_capacity(
+            horizon_client::chat::DEFAULT_HISTORY_CAPACITY,
+            &mut capacity,
+        );
+        if let Some(capacity) = capacity {
+            self.ui.chat.configure_history_capacity(capacity);
+        }
+    }
+
     /// The tree the chat box colours, completes and parses with for the
     /// world's connection: `base`, the tree the server sent, or the game's own
     /// before it does. Built where that base changes — once per connection —

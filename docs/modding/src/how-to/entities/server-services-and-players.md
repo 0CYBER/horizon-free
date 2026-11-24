@@ -24,6 +24,20 @@ the local chat HUD and history. It sends no packet and does not fire
 `client_chat_received`. Handle its `Result<(), mod_api::TextFormError>`: text
 exceeding the boundary's size or nesting limits is refused before reaching the HUD.
 
+### Client chat history
+
+Implement `Hooks::chat_history_capacity` to extend the local chat's history. The
+query runs once at client startup; it is not repeated when joining a world or
+server, receiving a message, or opening the chat screen. The event's `vanilla`
+field is `100`. Return `None` to leave the choice to the next listener, or
+`Some(16_384)` for the largest history. The first answer wins in hook order;
+the client clamps it to `100..=16_384`.
+
+The resulting cap applies separately to retained messages, wrapped display
+lines, and the submissions recalled with the Up and Down arrows. A message
+wrapping to several lines occupies one message slot but several display slots.
+The separate persisted command history in `command_history.txt` is unchanged.
+
 ## Running a command as an entity
 
 `host.commands().run_command` runs as the console. To run a line as a player or another entity instead, at a level

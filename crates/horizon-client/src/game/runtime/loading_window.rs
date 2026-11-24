@@ -353,6 +353,9 @@ pub(super) fn start_game<'a>(
     // Benchmarks measure the game alone.
     if game.options.benchmark.is_none() {
         game.start_mods();
+        if game.options.execution_role.is_client() {
+            game.configure_chat_history();
+        }
     }
     // The initial load's client reload listeners, registered and staged by
     // the loader thread, publish now that the game owns the assets.
