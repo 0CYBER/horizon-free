@@ -23,6 +23,20 @@ Vanilla enchantment descriptions, including those on enchanted books, retain
 their root `TextContent::Translatable { key, .. }`. Match that key (for example,
 `enchantment.minecraft.sharpness`), not the displayed name, level, or color.
 
+To restrict a tooltip edit to the enchanting table, read the live topmost
+screen from the hook's `&dyn ClientHost`:
+
+```rust,ignore
+let enchanting_table_is_open = host.current_screen().is_some_and(|screen| {
+    screen.id == "inventory" && screen.menu.as_deref() == Some("minecraft:enchantment")
+});
+```
+
+A chest and the player's inventory also report `inventory`, but with a
+different or absent menu type. If a dialog or prompt covers the enchanting
+table, the query reports the covering screen instead. Normal play returns
+`None`. The query works on native and Wasm without subscribing to screen hooks.
+
 ## Drawing a second world camera
 
 Native internals mods can request extra world cameras through `world_views` and

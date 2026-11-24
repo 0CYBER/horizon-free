@@ -724,6 +724,17 @@ pub struct ScreenId {
     pub id: String,
 }
 
+/// The topmost screen's identity, without render or input state.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+// exhaustive: the game builds it with a literal; mods only read it
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct ScreenIdentity {
+    /// The same stable identifier as [`ScreenView::id`], such as `inventory` or `dialog`.
+    pub id: String,
+    /// The same menu type as [`ScreenView::menu`], if the screen has one.
+    pub menu: Option<String>,
+}
+
 /// The sign the sign editor is on (`ScreensClientHost::sign_editor`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 // exhaustive: the game builds it with a literal; mods only read it

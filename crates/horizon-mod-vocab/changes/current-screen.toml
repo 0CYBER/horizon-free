@@ -1,0 +1,2 @@
+ids = ["method:prelude::ScreensClientHost::current_screen", "type:ScreenIdentity"]
+why = "Read the live topmost screen and its menu from client hooks, including item_tooltip, without a render view or a screen listener."

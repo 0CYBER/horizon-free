@@ -1,6 +1,6 @@
 use super::*;
 use mod_api::prelude::*;
-use mod_api::{BlockPos, SignEditView};
+use mod_api::{BlockPos, ScreenIdentity, SignEditView};
 use std::cell::RefCell;
 
 /// A client whose screen of its own opens and closes, whose inventory opens,
@@ -11,6 +11,7 @@ struct Client {
     screen_open: RefCell<bool>,
     inventory: RefCell<bool>,
     sign: RefCell<Option<SignEditView>>,
+    screen: Option<ScreenIdentity>,
 }
 impl mod_api::Host for Client {}
 mod_api::impl_host_areas!(Client);
@@ -29,6 +30,9 @@ impl ScreensClientHost for Client {
     }
     fn sign_editor(&self) -> Option<SignEditView> {
         *self.sign.borrow()
+    }
+    fn current_screen(&self) -> Option<ScreenIdentity> {
+        self.screen.clone()
     }
 }
 
@@ -65,4 +69,36 @@ fn a_wasm_mod_closes_opens_and_reads_the_sign_through_the_wire() {
         })
     );
     guest::set_transport(None);
+}
+
+#[test]
+fn a_wasm_mod_reads_the_current_screen_through_a_read_only_client_host() {
+    mod_api::__private::initialize().unwrap();
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    for (id, menu) in [
+        (Some("inventory"), Some("minecraft:enchantment")),
+        (Some("dialog"), None),
+        (None, None),
+    ] {
+        let client = Client {
+            screen: id.map(|id| ScreenIdentity {
+                id: id.into(),
+                menu: menu.map(str::to_owned),
+            }),
+            ..Client::default()
+        };
+        let mut frame = boundary::Frame::default();
+        frame.set_client_host(&client);
+        let mut cx = boundary::Cx::default();
+        cx.frames.push(frame);
+        let cx = std::cell::RefCell::new(cx);
+        guest::set_transport(Some(Rc::new(move |id, bytes| {
+            let mut out = Writer::new();
+            // SAFETY: client and its frame remain live for this synchronous transport.
+            unsafe { boundary::serve(id, &mut *cx.borrow_mut(), bytes, &mut out) }.unwrap();
+            out.into_bytes()
+        })));
+        assert_eq!(guest::Guest.current_screen(), client.screen);
+        guest::set_transport(None);
+    }
 }

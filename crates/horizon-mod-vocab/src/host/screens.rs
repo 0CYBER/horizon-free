@@ -133,6 +133,15 @@ pub trait ScreensClientHost {
     /// The same screen identifier provided to screen hooks.
     #[access(ClientSetup)]
     fn observed_screen_id(&self) -> Option<ScreenId>;
+    /// The topmost open screen, including dialogs and prompts, without needing a rendered view.
+    /// `None` during normal play or when no screen represented by the screen hooks is open.
+    /// A covering screen does not report an underlying screen's menu.
+    ///
+    /// Available in read-only client hooks, including `Hooks::item_tooltip`. The enchanting
+    /// table reports `id == "inventory"` and `menu.as_deref() == Some("minecraft:enchantment")`
+    /// on native and wasm alike.
+    #[access(ClientSetup)]
+    fn current_screen(&self) -> Option<ScreenIdentity>;
     /// Side: client.
     /// Whether a specific key is currently held down.
     /// `key` is the vanilla physical key name (`key.keyboard.left.shift`, for example).

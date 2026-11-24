@@ -133,8 +133,8 @@ mod client_screen_tests {
         reader
     }
 
-    /// The chest menu's network id, from the prepared registries report.
-    fn chest_menu() -> i32 {
+    /// A menu's network id, from the prepared registries report.
+    fn menu_type(name: &str) -> i32 {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES")
                 .expect("set HORIZON_TEST_RESOURCES to prepared resources"),
@@ -142,11 +142,7 @@ mod client_screen_tests {
         let report = horizon_protocol::registry::Builtin::find(&root)
             .expect("the prepared resources carry registries.json");
         let builtin = horizon_protocol::registry::Builtin::load(&report).unwrap();
-        builtin
-            .get("minecraft:menu")
-            .unwrap()
-            .id("minecraft:generic_9x3")
-            .unwrap()
+        builtin.get("minecraft:menu").unwrap().id(name).unwrap()
     }
 
     #[test]
@@ -154,7 +150,7 @@ mod client_screen_tests {
     fn closing_a_chest_sends_its_menu_id_and_closes_the_client_menu() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
-            let menu = chest_menu();
+            let menu = menu_type("minecraft:generic_9x3");
             game.handle_packet(C::OpenScreen(play::OpenScreen {
                 container: 7,
                 menu,
@@ -176,6 +172,100 @@ mod client_screen_tests {
             };
             assert_eq!(close.container, 7);
         });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn item_tooltip_reads_the_live_topmost_screen() {
+        use horizon_core::nbt::Tag;
+        use mod_api::{ClientHost, Hooks, ItemTooltipEvent, ModEntry};
+        use std::sync::{Arc, Mutex};
+
+        type Seen = Arc<Mutex<Vec<Option<mod_api::ScreenIdentity>>>>;
+        struct Probe(Seen);
+        #[mod_api::__subscriptions]
+        impl Hooks for Probe {
+            fn item_tooltip(&self, host: &dyn ClientHost, _: &mut ItemTooltipEvent<'_>) {
+                self.0.lock().unwrap().push(host.current_screen());
+            }
+        }
+
+        let seen = Seen::default();
+        let mods = vec![ModEntry::new("screen_probe", Box::new(Probe(seen.clone())))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let _reader = logged_in(game);
+                game.remote.as_mut().unwrap().level_load.finish();
+                assert!(
+                    game.renderer.is_none(),
+                    "identity does not need a render view"
+                );
+                let stack = horizon_client::items::ItemStack::new("minecraft:enchanted_book", 1);
+                let sample = |game: &Game<'_>| {
+                    drop(game.stack_tooltip(&stack));
+                };
+                let open_menu = |game: &mut Game<'_>, menu: &str| {
+                    game.handle_packet(C::OpenScreen(play::OpenScreen {
+                        container: 7,
+                        menu: menu_type(menu),
+                        // Deliberately identical: a title-based gate would not
+                        // distinguish the chest and enchanting table.
+                        title: Tag::String("Same title".into()),
+                    }))
+                    .unwrap();
+                };
+
+                sample(game);
+                assert!(game.open_inventory());
+                sample(game);
+                assert!(game.close_screen());
+                open_menu(game, "minecraft:generic_9x3");
+                sample(game);
+                assert!(game.close_screen());
+                open_menu(game, "minecraft:enchantment");
+                sample(game);
+                game.handle_packet(C::ShowDialog(play::ShowDialog {
+                    dialog: play::DialogHolder::Direct(Tag::compound([
+                        ("type", Tag::String("minecraft:notice".into())),
+                        ("title", Tag::String("Notice".into())),
+                    ])),
+                }))
+                .unwrap();
+                sample(game);
+                game.link_prompt = Some("https://example.com".into());
+                sample(game);
+                game.link_prompt = None;
+                sample(game);
+                game.handle_packet(C::ClearDialog(horizon_protocol::packets::Empty))
+                    .unwrap();
+                sample(game);
+                assert!(game.close_screen());
+                sample(game);
+            });
+        });
+        let seen = seen.lock().unwrap();
+        let seen: Vec<_> = seen
+            .iter()
+            .map(|screen| {
+                screen
+                    .as_ref()
+                    .map(|screen| (screen.id.as_str(), screen.menu.as_deref()))
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                None,
+                Some(("inventory", None)),
+                Some(("inventory", Some("minecraft:generic_9x3"))),
+                Some(("inventory", Some("minecraft:enchantment"))),
+                Some(("dialog", None)),
+                Some(("link_prompt", None)),
+                Some(("dialog", None)),
+                Some(("inventory", Some("minecraft:enchantment"))),
+                None,
+            ]
+        );
     }
 
     #[test]

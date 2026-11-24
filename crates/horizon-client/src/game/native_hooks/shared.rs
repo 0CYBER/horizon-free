@@ -39,9 +39,9 @@ fn observed_overlay_id(overlays: &[(bool, &'static str)]) -> Option<&'static str
 }
 
 impl Game<'_> {
-    pub(super) fn observed_screen_view(&self) -> Option<ScreenView<'_>> {
+    fn observed_prefix_screen_id(&self) -> Option<&'static str> {
         let book = self.book.as_ref().map(super::books::BookScreen::id);
-        let overlay = observed_overlay_id(&[
+        observed_overlay_id(&[
             (self.command_prompt.is_some(), "command_prompt"),
             (self.link_prompt.is_some(), "link_prompt"),
             (self.code_of_conduct.is_some(), "code_of_conduct"),
@@ -49,8 +49,26 @@ impl Game<'_> {
             (self.dialog_open(), "dialog"),
             (book.is_some(), book.unwrap_or("book_view")),
             (self.sign_edit.is_some(), "sign_editor"),
-        ]);
-        let Some(id) = overlay else {
+        ])
+    }
+
+    /// Classify the live screen without constructing a render/input view.
+    pub(super) fn current_screen_parts(&self) -> Option<(&'static str, Option<&str>)> {
+        if let Some(id) = self.observed_prefix_screen_id() {
+            return Some((id, None));
+        }
+        if self.remote_screen_up() {
+            return None;
+        }
+        let screen = self.screen;
+        if screen != Screen::Playing {
+            return Some((screen.id(), self.screen_menu(screen)));
+        }
+        self.title.as_ref().map(|title| (title.mode.id(), None))
+    }
+
+    pub(super) fn observed_screen_view(&self) -> Option<ScreenView<'_>> {
+        let Some(id) = self.observed_prefix_screen_id() else {
             return self.screen_view_now();
         };
         let renderer = self.renderer.as_ref()?;
@@ -195,7 +213,7 @@ impl Game<'_> {
         let none = screen == Screen::Playing;
         ScreenView::from(mod_api::__private::built::ScreenView {
             id: screen.id(),
-            menu: self.remote_menu_type().filter(|m| !none && !m.is_empty()),
+            menu: self.screen_menu(screen),
             title: self
                 .remote
                 .as_ref()
@@ -894,13 +912,23 @@ impl Game<'_> {
     pub(super) fn screen_view(&self, batch: &HudBatch, screen: Screen) -> ScreenView<'_> {
         self.screen_view_at(screen, self.screen_rect(batch, screen))
     }
+
+    /// Only the inventory screen renders a server-opened container.
+    fn screen_menu(&self, screen: Screen) -> Option<&str> {
+        if screen == Screen::Inventory {
+            self.remote_menu_type().filter(|menu| !menu.is_empty())
+        } else {
+            None
+        }
+    }
+
     /// `screen_view` with the panel `rect` the caller is laying out: the
     /// container build tells a mod the panel it is about to draw, not the one
     /// the previous frame drew.
     pub(super) fn screen_view_at(&self, screen: Screen, rect: [f32; 4]) -> ScreenView<'_> {
         ScreenView::from(mod_api::__private::built::ScreenView {
             id: screen.id(),
-            menu: self.remote_menu_type().filter(|m| !m.is_empty()),
+            menu: self.screen_menu(screen),
             title: self.remote.as_ref().and_then(|r| r.menu_title_snapshot()),
             rect,
             slots: self.slot_count(),

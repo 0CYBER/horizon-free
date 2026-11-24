@@ -2,6 +2,7 @@
 horizon-client game::native_client_screens::client_screen_tests::closing_a_chest_sends_its_menu_id_and_closes_the_client_menu lib daily resources
 horizon-client game::native_client_screens::client_screen_tests::closing_the_inventory_sends_the_close_for_id_zero lib daily resources
 horizon-client game::native_client_screens::client_screen_tests::closing_with_no_screen_reports_false_and_sends_nothing lib daily resources
+horizon-client game::native_client_screens::client_screen_tests::item_tooltip_reads_the_live_topmost_screen lib daily resources
 horizon-client game::native_client_screens::client_screen_tests::opening_the_inventory_is_local_and_needs_no_screen lib daily resources
 horizon-client game::native_client_screens::client_screen_tests::opening_the_inventory_riding_a_horse_sends_the_player_command lib daily resources
 horizon-client game::native_client_screens::client_screen_tests::the_sign_editor_reports_its_sign_and_closing_sends_the_update lib daily resources
