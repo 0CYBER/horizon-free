@@ -1,0 +1,2 @@
+horizon-client game::functions::recursion_tests::a_deep_recursion_runs_to_its_end_and_a_runaway_one_ends_at_the_quota_or_the_native_bound lib daily resources
+horizon-client game::functions::recursion_tests::a_function_tag_condition_stops_at_its_first_return lib daily resources

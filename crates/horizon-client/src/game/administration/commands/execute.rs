@@ -1110,10 +1110,14 @@ impl Game<'_> {
         let Some(Arg::Resource(name)) = c.get("name").cloned() else {
             return Ok((false, 0));
         };
+        // The tag stops at its first `return`, the last result; the callback
+        // tests only that one (`check.test(result)`).
         let results = self.call_function_ref(&name, None)?;
-        let keep = results.iter().any(|r| r.is_some_and(|v| (v != 0) == want));
-        let fallthrough = !results.is_empty() && results.iter().all(Option::is_none);
-        Ok((keep || (!want && fallthrough), 0))
+        Ok(match results.last() {
+            None => (false, 0),
+            Some(Some(v)) => ((*v != 0) == want, 0),
+            Some(None) => (!want, 0),
+        })
     }
     /// `ExecuteCommand.isChunkLoaded`: an entity-ticking loading status and
     /// completed entity loading, rather than merely a retained lit column.
