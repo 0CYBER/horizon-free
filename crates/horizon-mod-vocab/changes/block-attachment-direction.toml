@@ -1,0 +1,3 @@
+ids = ["method:Hooks::blocks", "type:Block"]
+why = "Block gains an optional attachment_direction (\"down\" for a floor block, \"up\" for a ceiling block) so any content block with a wall_block forms a standing-and-wall pair, not only signs (#19552). The Block record a mod hands over carries the new field, so the blocks hook changes layout."
+migrate = "Rebuild mods that declare blocks against this version. A block without attachment_direction behaves as before; set it to \"up\" with a wall_block for a ceiling-and-wall pair."

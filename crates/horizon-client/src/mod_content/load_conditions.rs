@@ -491,7 +491,16 @@ pub fn build_with_conditions(
             by_item(|i| i.crafting_remainder.as_deref()),
         ),
         (MOD_ITEM_TEMPLATES, by_item(|i| i.template.as_deref())),
-        (MOD_ITEM_BLOCKS, by_item(|i| i.block.as_deref())),
+        // A wall form can be earlier in the block registry than its primary form.
+        // The shared Block.asItem is not enough to choose the item's primary block.
+        (
+            MOD_ITEM_BLOCKS,
+            by_item(|i| {
+                i.block
+                    .as_deref()
+                    .or_else(|| i.wall_pair.as_ref().map(|_| i.rename.to.as_str()))
+            }),
+        ),
     ] {
         if !map.is_empty() {
             overlay.write(name, &serde_json::to_vec(&map)?)?;

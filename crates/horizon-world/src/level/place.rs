@@ -1621,6 +1621,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `BlockItem.place` (and its subclasses' overrides).
     /// `BlockPlaceContext` resolution, `updatePlacementContext` and the item's
     /// `getPlacementState` (survival and obstruction checks included).
+    ///
+    /// `StandingAndWallBlockItem.getPlacementState`: both vanilla and mod items
+    /// ask each block for its own state in the same context.
     pub(crate) fn placement(
         &mut self,
         input: &PlaceContext,

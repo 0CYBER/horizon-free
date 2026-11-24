@@ -497,6 +497,7 @@ struct BlockFile {
     wood_type: Option<String>,
     #[serde(default)]
     wall_block: Option<String>,
+    attachment_direction: Option<String>,
     #[serde(default)]
     sign_text_color: Option<String>,
     #[serde(default)]
@@ -572,11 +573,11 @@ pub struct Block {
     /// background: `<namespace>:<path>` a mod's texture, a bare name vanilla's.
     /// The template's when unset.
     pub wood_type: Option<String>,
-    /// The block a standing or ceiling sign's item places on a wall
-    /// (`StandingAndWallBlockItem.wallBlock`): one of this mod's blocks, whose
-    /// template is the matching wall sign and which has no item. The
-    /// template's when unset.
+    /// The wall form placed by this block's item, another block of this mod.
+    /// Signs require the matching wall sign template.
     pub wall_block: Option<String>,
+    /// `"down"` for a floor or `"up"` for a ceiling; requires `wall_block`.
+    pub attachment_direction: Option<String>,
     /// A sign's new text colour (`SignBlockEntity.createDefaultSignText`): a `DyeColor` name,
     /// black when unset. Applies to a sign when it is placed, front and back.
     pub sign_text_color: Option<String>,
@@ -1165,7 +1166,7 @@ impl Content {
             }
         }
         let all: Vec<&Block> = self.blocks.iter().chain(blocks).collect();
-        check_sign_walls(&all)?;
+        check_wall_pairs(&all)?;
         for item in items {
             let id = item.id.as_str();
             if !in_own(id) {
@@ -1355,6 +1356,7 @@ impl Content {
                 thickness: file.thickness,
                 wood_type: file.wood_type,
                 wall_block: file.wall_block,
+                attachment_direction: file.attachment_direction,
                 sign_text_color: file.sign_text_color,
                 sign_text_glow: file.sign_text_glow,
                 base_block: file.base_block,
@@ -1366,7 +1368,7 @@ impl Content {
             self.blocks.push(block);
         }
         // After every block, so a wall form may be declared in a later file.
-        check_sign_walls(&self.blocks.iter().collect::<Vec<_>>())?;
+        check_wall_pairs(&self.blocks.iter().collect::<Vec<_>>())?;
         let mut remainders = Vec::new();
         for (item, name) in items {
             let file: ItemFile =
@@ -1865,8 +1867,8 @@ fn check_block(file: &Block) -> Result<(), String> {
         return Err("pick_item is an item id, namespace:path".into());
     }
     if let Some(wall) = &file.wall_block {
-        if !sign || file.template.contains("_wall_") {
-            return Err("wall_block needs a standing or ceiling sign template".into());
+        if sign && file.template.contains("_wall_") {
+            return Err("wall_block needs a standing or ceiling sign, not a wall sign".into());
         }
         if !file.item {
             return Err("wall_block is where the item places the block, and item is false".into());
@@ -1875,47 +1877,68 @@ fn check_block(file: &Block) -> Result<(), String> {
             return Err("wall_block is a block id, namespace:path".into());
         }
     }
+    if let Some(direction) = file.attachment_direction.as_deref() {
+        if file.wall_block.is_none() || !matches!(direction, "down" | "up") {
+            return Err(
+                "attachment_direction needs wall_block and must be \"down\" or \"up\"".into(),
+            );
+        }
+        if sign && (direction == "up") != file.template.ends_with("_hanging_sign") {
+            return Err("attachment_direction must match the sign template".into());
+        }
+    }
     Ok(())
 }
 
-/// A sign's `wall_block` is one of the mod's own blocks: the wall form of its
-/// kind, with no item of its own and no other sign. Checked here, a pair that
-/// doesn't fit leaves out its mod alone.
-fn check_sign_walls(blocks: &[&Block]) -> Result<(), String> {
+/// A wall form is owned by exactly one block item in the same mod. A wall form
+/// cannot itself be a primary form, so chains and cycles are invalid.
+fn check_wall_pairs(blocks: &[&Block]) -> Result<(), String> {
     let mut paired = BTreeMap::new();
-    for sign in blocks {
-        let Some(wall) = &sign.wall_block else {
+    for primary in blocks {
+        let Some(wall) = &primary.wall_block else {
             continue;
         };
-        let id = &sign.id;
-        let form = if sign.template.ends_with("_hanging_sign") {
-            "_wall_hanging_sign"
-        } else {
-            "_wall_sign"
-        };
+        let id = &primary.id;
+        if id == wall {
+            return Err(format!("{id}: wall_block must be a distinct block"));
+        }
         let Some(block) = blocks.iter().find(|b| b.id == *wall) else {
             return Err(format!(
                 "{id}: wall_block {wall} is not one of this mod's blocks"
             ));
         };
-        if !block.template.ends_with(form) {
+        let form = if primary.template.ends_with("_hanging_sign") {
+            Some("_wall_hanging_sign")
+        } else if primary.template.ends_with("_sign") {
+            Some("_wall_sign")
+        } else {
+            None
+        };
+        if let Some(form) = form
+            && !block.template.ends_with(form)
+        {
             return Err(format!(
                 "{id}: wall_block {wall} needs a template ending in {form}"
             ));
         }
+        if block.wall_block.is_some() {
+            return Err(format!(
+                "{id}: wall_block {wall} cannot itself declare wall_block"
+            ));
+        }
         if block.block_item.is_some() {
             return Err(format!(
-                "{id}: wall_block {wall} has this sign's item, so it declares no block_item"
+                "{id}: wall_block {wall} shares the primary block's item, so it declares no block_item"
             ));
         }
         if block.pick_item.is_some() {
             return Err(format!(
-                "{id}: wall_block {wall} picks this sign's item, so it declares no pick_item"
+                "{id}: wall_block {wall} picks the primary block's item, so it declares no pick_item"
             ));
         }
         if block.item {
             return Err(format!(
-                "{id}: wall_block {wall} has this sign's item, so its own \"item\" is false"
+                "{id}: wall_block {wall} shares the primary block's item, so its own \"item\" is false"
             ));
         }
         fn text(b: &Block) -> (&str, bool) {
@@ -1924,7 +1947,7 @@ fn check_sign_walls(blocks: &[&Block]) -> Result<(), String> {
                 b.sign_text_glow.unwrap_or(false),
             )
         }
-        if text(sign) != text(block) {
+        if form.is_some() && text(primary) != text(block) {
             return Err(format!(
                 "{id}: wall_block {wall} declares a different sign_text_color or sign_text_glow"
             ));
@@ -2395,6 +2418,7 @@ capabilities = ["registries"]
                 thickness: None,
                 wood_type: None,
                 wall_block: None,
+                attachment_direction: None,
                 sign_text_color: None,
                 sign_text_glow: None,
                 base_block: None,
@@ -3311,7 +3335,17 @@ capabilities = ["registries"]
                 .contains("sign_text_glow")
         );
         for bad in [
-            r#"{"template": "minecraft:stone", "wall_block": "ruby:notice_wall"}"#,
+            r#"{"template":"minecraft:stone","attachment_direction":"up"}"#,
+            r#"{"template":"minecraft:stone","wall_block":"ruby:wall","attachment_direction":"north"}"#,
+            r#"{"template":"minecraft:oak_sign","wall_block":"ruby:wall","attachment_direction":"up"}"#,
+            r#"{"template":"minecraft:oak_hanging_sign","wall_block":"ruby:wall","attachment_direction":"down"}"#,
+        ] {
+            assert!(
+                block(bad).unwrap_err().contains("attachment_direction"),
+                "{bad}"
+            );
+        }
+        for bad in [
             r#"{"template": "minecraft:oak_wall_sign", "wall_block": "ruby:notice_wall", "item": false}"#,
             r#"{"template": "minecraft:oak_sign", "wall_block": "notice_wall"}"#,
             r#"{"template": "minecraft:oak_sign", "wall_block": ":wall"}"#,
@@ -3414,6 +3448,69 @@ capabilities = ["registries"]
         let wall = block("ruby:wall", "minecraft:oak_wall_sign", false, None);
         content.declare(&[sign, wall], &[]).unwrap();
         assert_eq!(content.blocks.len(), 2);
+    }
+
+    #[test]
+    fn a_non_sign_wall_pair_has_one_owner_and_no_other_item() {
+        let block = |id: &str, item, wall: Option<&str>| Block {
+            id: id.into(),
+            template: "minecraft:stone".into(),
+            item,
+            wall_block: wall.map(str::to_owned),
+            ..Block::default()
+        };
+        let primary = block("ruby:sconce", true, Some("ruby:wall"));
+        let wall = block("ruby:wall", false, None);
+        let check = |blocks: &[Block]| Content::declared("ruby").declare(blocks, &[]);
+        assert!(check(&[primary.clone(), wall.clone()]).is_ok());
+
+        for (pair, why) in [
+            (
+                vec![block("ruby:sconce", true, Some("ruby:sconce"))],
+                "distinct block",
+            ),
+            (
+                vec![block("ruby:sconce", true, Some("other:wall")), wall.clone()],
+                "not one of this mod's blocks",
+            ),
+            (
+                vec![
+                    primary.clone(),
+                    block("ruby:wall", true, Some("ruby:sconce")),
+                ],
+                "cannot itself declare wall_block",
+            ),
+            (
+                vec![
+                    primary.clone(),
+                    wall.clone(),
+                    block("ruby:other", true, Some("ruby:wall")),
+                ],
+                "already paired",
+            ),
+            (
+                vec![
+                    primary.clone(),
+                    Block {
+                        block_item: Some("minecraft:stick".into()),
+                        ..wall.clone()
+                    },
+                ],
+                "declares no block_item",
+            ),
+            (
+                vec![
+                    primary,
+                    Block {
+                        pick_item: Some("minecraft:stick".into()),
+                        ..wall
+                    },
+                ],
+                "declares no pick_item",
+            ),
+        ] {
+            assert!(check(&pair).unwrap_err().contains(why), "{why}");
+        }
     }
 
     /// A creative tab: a title, an icon and its items, all item ids.

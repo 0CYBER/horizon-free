@@ -23,7 +23,7 @@ use horizon_core::{
 };
 use horizon_world::{
     fluid::FluidKind,
-    level::{PlaceContext, PlaceOutcome},
+    level::{ItemKind, PlaceContext, PlaceOutcome},
     registry::BlockStateId,
 };
 use std::sync::Arc;
@@ -694,7 +694,22 @@ impl Game<'_> {
             "minecraft:brush" => self.dispense_brush(pos, facing, stack),
             "minecraft:honeycomb" => self.dispense_honeycomb(pos, facing, stack)?,
             "minecraft:potion" => self.dispense_potion(pos, facing, stack)?,
-            _ if item.ends_with("shulker_box") => self.dispense_shulker_box(pos, facing, stack)?,
+            // A declared standing/wall item has no built-in placement behavior,
+            // even if its id happens to end with the shulker-box suffix.
+            _ if item.ends_with("shulker_box")
+                && !self
+                    .res
+                    .behaviours()
+                    .item_binding(&item)
+                    .is_some_and(|binding| {
+                        matches!(
+                            binding.kind,
+                            ItemKind::StandingAndWall | ItemKind::HangingSign
+                        )
+                    }) =>
+            {
+                self.dispense_shulker_box(pos, facing, stack)?
+            }
             _ if self.dispenses_as_filled_bucket(&item) => {
                 self.dispense_filled_bucket(pos, facing, stack)?
             }

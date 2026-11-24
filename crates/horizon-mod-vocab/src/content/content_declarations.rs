@@ -249,11 +249,13 @@ pub struct Block {
     /// background: `<namespace>:<path>` a mod's texture, a bare name vanilla's.
     /// The template's when unset.
     pub wood_type: Option<String>,
-    /// The block a standing or ceiling sign's item places on a wall
-    /// (`StandingAndWallBlockItem.wallBlock`): one of this mod's blocks (a bare
-    /// name is this mod's), whose template is the matching wall sign and which
-    /// has no item. The template's when unset.
+    /// The block this item's wall placement uses (`StandingAndWallBlockItem.wallBlock`):
+    /// a distinct block of this mod with `item` false and no item overrides. A bare name
+    /// is this mod's. Signs need their matching wall form and inherit the template's if unset.
     pub wall_block: Option<String>,
+    /// Direction from the primary block to its support: `"down"` for a floor (default),
+    /// `"up"` for a ceiling. Requires `wall_block`; signs use their template's direction.
+    pub attachment_direction: Option<String>,
     /// A sign's new text colour (`SignBlockEntity.createDefaultSignText`): a `DyeColor` name,
     /// black when unset. Applies to a sign when it is placed, front and back.
     pub sign_text_color: Option<String>,
@@ -331,6 +333,7 @@ impl Default for Block {
             thickness: None,
             wood_type: None,
             wall_block: None,
+            attachment_direction: None,
             sign_text_color: None,
             sign_text_glow: None,
             base_block: None,
