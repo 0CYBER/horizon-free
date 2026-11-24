@@ -1,0 +1,2 @@
+horizon-client game::native_render_pair_tests::living_pre_and_player_post_gating_matches_per_hook_mask lib daily resources
+horizon-client game::native_render_pair_tests::single_pre_hook_runs_pre_only_and_skips_post_phase lib daily resources

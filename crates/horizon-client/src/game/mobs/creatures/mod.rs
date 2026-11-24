@@ -7974,7 +7974,7 @@ impl Game<'_> {
         // Who watches (`Entity.isInvisibleTo`): the local player's team.
         let viewer = self.player_team();
         self.rendered_mobs.set(0);
-        let (skinning, listened) = (self.skinning(), self.mob_render_listened());
+        let (skinning, hooks) = (self.skinning(), self.mob_render_listened());
         let mob_data = self.res.mob_data();
         // What custom entity model animations read of the frame (only when CEM packs are loaded).
         if !mob_data
@@ -8102,7 +8102,7 @@ impl Game<'_> {
                 .then(|| self.remote_player_name(mob.id))
                 .flatten()
                 .map(|name| PlayerRender { name, local: false });
-            let pre = self.mod_render_pre(mob, who, listened, alpha as f32, camera, packed, out);
+            let pre = self.mod_render_pre(mob, who, hooks, alpha as f32, camera, packed, out);
             let Some(hidden) = pre else {
                 // What the mods drew in its place is culled as the entity's own would be.
                 if culling.rays_only() {
@@ -8152,6 +8152,7 @@ impl Game<'_> {
                     Species::Blaze | Species::MagmaCube | Species::GlowSquid | Species::SulfurCube
                 );
             let (mut skinned, mut parts, added) = (None, None, self.mod_layers(mob));
+            let want_parts = hooks.any_post_for(is_player) || added.is_some();
             if posable {
                 let mut models = self.skin_models.borrow_mut();
                 let mut frame = self.skin_frame.borrow_mut();
@@ -8166,7 +8167,7 @@ impl Game<'_> {
                     self.res.mob_data(),
                     &worn,
                     hidden,
-                    (listened || added.is_some()).then_some(&mut parts),
+                    want_parts.then_some(&mut parts),
                     out,
                     &mut skin,
                 );
@@ -8183,7 +8184,7 @@ impl Game<'_> {
                         &worn,
                         &armor,
                         hidden,
-                        (listened || added.is_some()).then_some(&mut parts),
+                        want_parts.then_some(&mut parts),
                         out,
                     );
                 } else if layers_only {
@@ -8196,7 +8197,7 @@ impl Game<'_> {
                         self.res.mob_data(),
                         &worn,
                         &armor,
-                        (listened || added.is_some()).then_some(&mut parts),
+                        want_parts.then_some(&mut parts),
                         out,
                     );
                 } else {
@@ -8210,7 +8211,7 @@ impl Game<'_> {
                         &worn,
                         &armor,
                         hidden,
-                        (listened || added.is_some()).then_some(&mut parts),
+                        want_parts.then_some(&mut parts),
                         out,
                     );
                 }

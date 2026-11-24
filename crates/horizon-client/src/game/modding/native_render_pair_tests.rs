@@ -283,3 +283,120 @@ fn a_spectator_draws_no_layers_but_gets_its_post_hooks() {
         assert_eq!(events(&heard), ["living_pre 94", "living_post 94"]);
     });
 }
+
+/// A mod subscribed only to `render_living_pre` (no post hooks, no player hooks).
+struct LivingPreOnly(Arc<Mutex<Heard>>);
+
+#[mod_api::__subscriptions]
+impl Hooks for LivingPreOnly {
+    fn render_living_pre(
+        &self,
+        _: &dyn mod_api::ClientHost,
+        event: &mut RenderLivingPreEvent<'_>,
+    ) -> mod_api::Flow {
+        let mut heard = self.0.lock().unwrap();
+        heard.events.push(format!("living_pre {}", event.entity.id));
+        event.cancelled = heard.cancel_living.contains(&event.entity.id);
+        mod_api::Flow::Continue
+    }
+}
+
+/// A mod subscribed only to `render_living_pre` and `render_player_post` (no `render_living_post`,
+/// no `render_player_pre`).
+struct LivingPreAndPlayerPost(Arc<Mutex<Heard>>);
+
+#[mod_api::__subscriptions]
+impl Hooks for LivingPreAndPlayerPost {
+    fn render_living_pre(
+        &self,
+        _: &dyn mod_api::ClientHost,
+        event: &mut RenderLivingPreEvent<'_>,
+    ) -> mod_api::Flow {
+        let mut heard = self.0.lock().unwrap();
+        heard.events.push(format!("living_pre {}", event.entity.id));
+        event.cancelled = heard.cancel_living.contains(&event.entity.id);
+        mod_api::Flow::Continue
+    }
+    fn render_player_post(
+        &self,
+        _: &dyn mod_api::ClientHost,
+        event: &mut RenderPlayerPostEvent<'_>,
+    ) {
+        let mut heard = self.0.lock().unwrap();
+        heard
+            .events
+            .push(format!("player_post {}", event.who.local));
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn single_pre_hook_runs_pre_only_and_skips_post_phase() {
+    let heard: Arc<Mutex<Heard>> = Arc::default();
+    let mods = vec![mod_api::ModEntry::new(
+        "living_pre_only",
+        Box::new(LivingPreOnly(heard.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::native_entity_refs::tests::with_client_game(|game| {
+            game.mobs.clear();
+            game.mobs.push(mob(game, "minecraft:zombie", 91, 0.0));
+            mob_frame(game);
+            let hooks = game.mob_render_listened();
+            assert!(hooks.any_pre());
+            assert!(!hooks.any_post());
+            assert!(!hooks.any_post_for(false));
+            assert!(!hooks.any_post_for(true));
+            assert_eq!(events(&heard), ["living_pre 91"]);
+
+            // Entering `mod_render_post` directly with no post hooks active is a no-op.
+            let mut out = Vec::new();
+            game.mod_render_post(&game.mobs[0], None, None, 1.0, CAMERA, 0, &mut out);
+            assert!(out.is_empty());
+            assert!(events(&heard).is_empty());
+
+            // Player pass also runs only `living_pre` and skips player/living post hooks.
+            own_player_frame(game, false);
+            assert_eq!(events(&heard), ["living_pre 4321"]);
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn living_pre_and_player_post_gating_matches_per_hook_mask() {
+    let heard: Arc<Mutex<Heard>> = Arc::default();
+    let mods = vec![mod_api::ModEntry::new(
+        "living_pre_and_player_post",
+        Box::new(LivingPreAndPlayerPost(heard.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::native_entity_refs::tests::with_client_game(|game| {
+            game.mobs.clear();
+            game.mobs.push(mob(game, "minecraft:zombie", 91, 0.0));
+            mob_frame(game);
+            let hooks = game.mob_render_listened();
+            assert!(hooks.any_pre());
+            assert!(hooks.any_post());
+            assert!(!hooks.any_post_for(false));
+            assert!(hooks.any_post_for(true));
+            assert_eq!(
+                events(&heard),
+                ["living_pre 91"],
+                "non-player mob does not fire player_post or unsubscribed living_post"
+            );
+
+            // Uncanceled player fires living_pre then player_post.
+            own_player_frame(game, false);
+            assert_eq!(events(&heard), ["living_pre 4321", "player_post true"]);
+
+            // Canceled living_pre on a player still triggers player_post.
+            heard.lock().unwrap().cancel_living.push(4321);
+            own_player_frame(game, false);
+            assert_eq!(events(&heard), ["living_pre 4321", "player_post true"]);
+            assert!(game.own_render_canceled());
+        });
+    });
+}
