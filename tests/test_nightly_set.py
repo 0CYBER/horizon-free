@@ -303,7 +303,7 @@ class RefusalTests(unittest.TestCase):
         def gh(*args, **kwargs):
             if args[1] == "repos/owner/repo/pulls/123":
                 return json.dumps({"state": "open", "head": {"sha": "a" * 40}, "title": "paths",
-                                   "user": {"login": "dev"}, "base": {"ref": "main"}})
+                                   "user": {"login": "dev"}, "base": {"ref": "main"}, "changed_files": 3})
             return "\n".join(paths) if "--jq" in args else json.dumps(pages)
 
         with mock.patch.object(ns, "gh", gh):
@@ -313,6 +313,30 @@ class RefusalTests(unittest.TestCase):
         self.assertIn("only the council merges", ns.check(candidate, 123, patterns))
         self.assertIsNone(ns.check(pr(124, files=["unowned/café.rs"]), 124, patterns))
 
+
+    def test_a_listing_cut_at_the_cap_is_refused(self):
+        # GitHub lists at most 3000 files; a guarded file past that would be unseen, so the pick fails closed.
+        items = [{"filename": f"unowned/f{i}.txt"} for i in range(ns.LISTING_CAP)]
+
+        def gh_for(changed):
+            def gh(*args, **kwargs):
+                if args[1] == "repos/owner/repo/pulls/123":
+                    return json.dumps({"state": "open", "head": {"sha": "a" * 40}, "title": "big",
+                                       "user": {"login": "dev"}, "base": {"ref": "main"},
+                                       "changed_files": changed})
+                return json.dumps([items])
+            return gh
+
+        for changed in (ns.LISTING_CAP + 40, ns.LISTING_CAP):
+            with mock.patch.object(ns, "gh", gh_for(changed)):
+                candidate = ns.lookup("owner/repo")(123)
+            self.assertIn("can't be checked", ns.check(candidate, 123, PATTERNS), changed)
+        items[:] = items[:5]
+        # Below the cap too: five listed of six changed is an incomplete listing, whatever the cap.
+        with mock.patch.object(ns, "gh", gh_for(6)):
+            self.assertIn("can't be checked", ns.check(ns.lookup("owner/repo")(123), 123, PATTERNS))
+        with mock.patch.object(ns, "gh", gh_for(5)):
+            self.assertIsNone(ns.check(ns.lookup("owner/repo")(123), 123, PATTERNS))
 
     def test_a_set_with_a_refused_pull_request_changes_nothing(self):
         state = {"prs": []}
