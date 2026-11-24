@@ -925,6 +925,8 @@ pub struct Streaming {
     gone_scratch: Vec<(i32, i32)>,
     mesh_candidates_scratch: Vec<(i64, i32, i32, SectionMask)>,
     mesh_columns_scratch: Vec<((i32, i32), SectionMask)>,
+    /// The mesh jobs an update makes, queued together (`submit_mesh_candidates`).
+    mesh_jobs_scratch: Vec<Queued>,
     sequence: u64,
     pub center: (i32, i32),
     /// The view distance around `center`; below 0, no area there (a dedicated
@@ -1560,6 +1562,7 @@ impl Streaming {
             gone_scratch: Vec::new(),
             mesh_candidates_scratch: Vec::new(),
             mesh_columns_scratch: Vec::new(),
+            mesh_jobs_scratch: Vec::new(),
             sequence: 0,
             center: (0, 0),
             radius: 8,
@@ -2695,7 +2698,11 @@ impl Streaming {
         hz_laps.lap("st_candidates");
         if room > 0 && !candidates.is_empty() {
             let settings = self.mesh_settings();
-            let mut queue = self.shared.queue.lock().unwrap();
+            // Made before the queue's lock is taken, and pushed under it together: a worker
+            // choosing its next job asks every source's queue (`Jobs::next`), so ranking the
+            // columns and building their regions under this lock held every worker that
+            // finished a job meanwhile, whatever it would have run next.
+            let mut batch = std::mem::take(&mut self.mesh_jobs_scratch);
             let submitted = submit_mesh_candidates(
                 world,
                 &mut candidates,
@@ -2705,9 +2712,12 @@ impl Streaming {
                 &mut self.meshing,
                 &mut self.sequence,
                 &mut self.order,
-                &mut queue,
+                &mut batch,
             );
-            drop(queue);
+            if !batch.is_empty() {
+                self.shared.queue.lock().unwrap().extend(batch.drain(..));
+            }
+            self.mesh_jobs_scratch = batch;
             candidates.clear();
             if submitted > 1 {
                 self.jobs.notify_all();
@@ -3982,9 +3992,11 @@ fn order_column_sections(
     count
 }
 
-/// Submit up to `room` dirty sections from the nearest candidate columns.
-/// Enforces the section budget inside each column's section loop and re-marks
-/// any unsubmitted sections dirty so no section is lost after `take_column`.
+/// Makes the mesh jobs of up to `room` dirty sections from the nearest
+/// candidate columns, into `jobs` for the caller to queue: none of it needs the
+/// queue's lock. Enforces the section budget inside each column's section loop
+/// and re-marks any unsubmitted sections dirty so no section is lost after
+/// `take_column`. Returns how many jobs it made.
 fn submit_mesh_candidates(
     world: &mut World,
     candidates: &mut Vec<(i64, i32, i32, SectionMask)>,
@@ -3994,7 +4006,7 @@ fn submit_mesh_candidates(
     meshing: &mut FxHashMap<(i32, i32, i32), u64>,
     sequence: &mut u64,
     order: &mut u64,
-    queue: &mut BinaryHeap<Queued>,
+    jobs: &mut Vec<Queued>,
 ) -> usize {
     if room == 0 || candidates.is_empty() {
         return 0;
@@ -4033,7 +4045,7 @@ fn submit_mesh_candidates(
             *sequence += 1;
             *order += 1;
             meshing.insert((x, sy, z), *sequence);
-            queue.push(Queued {
+            jobs.push(Queued {
                 priority,
                 at: Some((x, z)),
                 bias,
@@ -5147,9 +5159,11 @@ mod tests {
         let mut meshing = FxHashMap::default();
         let mut sequence = 0u64;
         let mut order = 0u64;
-        let mut queue = BinaryHeap::new();
+        let mut jobs = Vec::new();
 
-        let drain_sections = |queue: &mut BinaryHeap<Queued>| -> Vec<(i32, i32, i32)> {
+        // A pass's jobs in the order the queue runs them once they are in it.
+        let drain_sections = |jobs: &mut Vec<Queued>| -> Vec<(i32, i32, i32)> {
+            let mut queue = BinaryHeap::from(std::mem::take(jobs));
             let mut out = Vec::new();
             while let Some(item) = queue.pop() {
                 if let Job::Mesh(x, sy, z, _, _, _) = item.job {
@@ -5174,10 +5188,10 @@ mod tests {
             &mut meshing,
             &mut sequence,
             &mut order,
-            &mut queue,
+            &mut jobs,
         );
         assert_eq!(submitted, 3);
-        let first_batch = drain_sections(&mut queue);
+        let first_batch = drain_sections(&mut jobs);
         assert_eq!(first_batch, vec![(0, 7, 0), (0, 6, 0), (0, 8, 0)]);
         assert!(!meshed.contains(&(0, 0)));
         assert_eq!(world.dirty_sections.len(), 21 + 4);
@@ -5206,10 +5220,10 @@ mod tests {
             &mut meshing,
             &mut sequence,
             &mut order,
-            &mut queue,
+            &mut jobs,
         );
         assert_eq!(submitted, 22);
-        let second_batch = drain_sections(&mut queue);
+        let second_batch = drain_sections(&mut jobs);
         assert!(meshed.contains(&(0, 0)));
         assert!(!meshed.contains(&(1, 0)));
         assert_eq!(world.dirty_sections.len(), 3);
@@ -5233,10 +5247,10 @@ mod tests {
             &mut meshing,
             &mut sequence,
             &mut order,
-            &mut queue,
+            &mut jobs,
         );
         assert_eq!(submitted, 3);
-        let third_batch = drain_sections(&mut queue);
+        let third_batch = drain_sections(&mut jobs);
         assert!(meshed.contains(&(1, 0)));
         assert!(world.dirty_sections.is_empty());
 
