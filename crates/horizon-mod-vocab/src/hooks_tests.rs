@@ -902,6 +902,36 @@ fn passages_take_a_server_host(server: &mut dyn ServerHost, level: LevelRef, pas
     let _: bool = level.remove_passage(server, id.unwrap());
 }
 
+#[test]
+fn player_item_mend_lets_a_listener_change_repair_and_experience() {
+    struct Bonus;
+    #[mod_api::__subscriptions]
+    impl Hooks for Bonus {
+        fn player_item_mend(&self, _: &mut dyn ServerHost, event: &mut PlayerItemMendEvent<'_>) {
+            event.repair += 3;
+            event.experience += 2;
+        }
+    }
+
+    testing::with_dispatch(
+        vec![ModEntry::new("mend_bonus", Box::new(Bonus))].into(),
+        || {
+            let mut repair = 14;
+            let mut experience = 7;
+            dispatch_player_item_mend(
+                &mut FakeHost::new(),
+                1,
+                "Alex",
+                "minecraft:diamond_pickaxe",
+                &mut repair,
+                &mut experience,
+            );
+            assert_eq!(repair, 17);
+            assert_eq!(experience, 9);
+        },
+    );
+}
+
 /// Literal values: one category's limit changes, the others stay vanilla's, and Misc is refused.
 #[test]
 fn set_spawn_limit_changes_one_category_and_refuses_misc() {

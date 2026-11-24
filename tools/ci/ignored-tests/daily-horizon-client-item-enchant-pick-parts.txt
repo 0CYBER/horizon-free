@@ -3,3 +3,4 @@ horizon-client game::enchant_pick_parts_tests::a_client_refresh_keeps_and_a_worl
 horizon-client game::enchant_pick_parts_tests::apply_enchantments_starts_from_vanilla_and_refuses_another_count lib daily resources
 horizon-client game::enchant_pick_parts_tests::pick_asks_each_hotbar_stack_until_one_may_be_replaced lib daily resources
 horizon-client game::enchant_pick_parts_tests::primary_answers_are_asked_at_install_and_read_by_selection lib daily resources
+horizon-client game::mending_pick_tests::mending_stops_when_a_listener_zeroes_repair_without_spending_xp lib daily resources

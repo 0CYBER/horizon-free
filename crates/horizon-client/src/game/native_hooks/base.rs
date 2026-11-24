@@ -2378,15 +2378,17 @@ impl Game<'_> {
     ) {
         self.fire_player_item_frame_change(player, name, entity_id, action, item, rotation);
     }
-    /// Mending repaired a server player's item with experience from an orb. `repair` is durability
-    /// restored and `experience` is the orb's value. Server-side.
+    /// Mending is about to repair a server player's item with experience from an
+    /// orb. `repair` is the durability vanilla would restore and `experience`
+    /// the orb's value; what a listener leaves in them is what the game applies.
+    /// Server-side.
     pub(in crate::game) fn native_player_item_mend(
         &mut self,
         player: u128,
         name: &str,
         item: &str,
-        repair: u32,
-        experience: u32,
+        repair: &mut u32,
+        experience: &mut u32,
     ) {
         self.fire_player_item_mend(player, name, item, repair, experience);
     }
