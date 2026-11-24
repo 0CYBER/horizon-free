@@ -94,7 +94,6 @@
   "command_parse": "#18133: SNBT error text and empty-suggestion ranges differ from Brigadier",
   "crafter": "#18133: hopper minecart slot0 record missing",
   "datafix": "#18133: runner's .local resolves into shared-local, so every shard refuses its default root",
-  "dedicated_server": "#18133: extra config custom_payload horizon:payloads and one extra recipe_book_add entry",
   "dispenser": "#18133: container-entity slot0 and sapling-growth `set` records missing",
   "dragon_render": "#18133: dragon tests exit 101; Rust log not in the artifact",
   "portal_cooldown": "#18133: cooldown test fails; Rust log not in the artifact",

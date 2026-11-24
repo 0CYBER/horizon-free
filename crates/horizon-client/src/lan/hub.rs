@@ -3794,12 +3794,13 @@ impl Hub {
                             now,
                             &mut g.advancements,
                             &mut g.recipe_book,
+                            &mut g.recipes_unlocked,
                         );
                         if let Some(add) = first.recipe_book_add {
                             g.send(&raw(ids::RECIPE_BOOK_ADD, add));
                         }
                         g.send(&raw(ids::UPDATE_ADVANCEMENTS, first.update_advancements));
-                        g.advancements_visible = sync.advancements.visibility(&g.advancements);
+                        g.advancements_visible = first.visible;
                         g.advancements_changed.clear();
                     }
                 });

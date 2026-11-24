@@ -28,12 +28,16 @@ exactly:
 - the legacy (pre-1.7, 0xFE) ping reply;
 - the login and configuration packets in order (compression, profile,
   brand (Horizon's server says "horizon", vanilla's "vanilla"), features,
-  known packs, every registry, tags);
+  known packs, every registry, tags), allowing only the ordered Horizon
+  build and payload advertisements between enabled features and known packs;
 - the play packets up to the first chunk batch, in order, with entity ids,
   keep-alive ids and times and the anticheat's pings left out (the recipe property sets and
   advancements, which vanilla keeps in hash maps, sorted); the command tree
   node by node; the chunks sent and their bytes; the replies to the chat
   message, /list and the failing commands, as text components;
+- the fresh player's recipe book: an empty replacement at join, then one
+  crafting table unlock after inventory initialization and before the first
+  advancement snapshot; no second unlock in the rest of this fixture;
 - the reply to the command run while dead (ServerGamePacketListenerImpl
   runs a dead player's commands, #973);
 - after /kill, the packets from the death screen to the respawned
@@ -381,6 +385,27 @@ def run_side(label, command, directory, client):
             + ['file ' + l for l in server_files(directory)])
 
 
+def comparable_horizon(lines):
+    """Keep the raw transcript intact; allow only the dedicated join's config advertisements."""
+    brand = 'config minecraft:custom_payload BrandPayload[brand={}]'
+    if brand.format('horizon') not in lines:
+        return lines, ['error: Horizon\'s server did not send the brand "horizon"']
+    out = [brand.format('vanilla') if line == brand.format('horizon') else line for line in lines]
+    # A vanilla client discards these. The server advertises its build before the payload
+    # query, immediately after enabled features and before the known-packs barrier.
+    extensions = [
+        'config minecraft:custom_payload DiscardedPayload[id=horizon:build]',
+        'config minecraft:custom_payload DiscardedPayload[id=horizon:payloads]',
+    ]
+    for i in range(1, len(out) - 2):
+        if (out[i - 1].startswith('config minecraft:update_enabled_features ')
+                and out[i:i + 2] == extensions
+                and out[i + 2].startswith('config minecraft:select_known_packs ')):
+            del out[i:i + 2]
+            break
+    return out, []
+
+
 PROPERTIES_PORTS = {}
 
 
@@ -403,6 +428,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
         env = lab.game_env(HORIZON_NET_REPORT=report)
         with (build / 'horizon-client-run.log').open('w') as log:
             run_game([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
+                                             '--game-dir', client_dir,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
                            cwd=client_dir, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300, check=True)
         server.wait_for(r'left the game', timeout=30)
@@ -454,7 +480,7 @@ def main():
                                                   cwd=lab.ROOT, text=True))
     binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [binary, '--resources', lab.RESOURCES, '--dedicated', '--nogui']
+    horizon_server = [binary, '--resources', lab.RESOURCES]
 
     # The world, generated once by vanilla.
     generate = build / 'generate'
@@ -486,8 +512,8 @@ def main():
     def client(port, out):
         try:
             oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
-                           'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
-                          out.stem, timeout=300)
+                           'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out, 'dedicated'],
+                          build, out.stem, timeout=300)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             log = (build / f'{out.stem}.log').read_text(encoding='utf-8', errors='replace').splitlines()
             raise AssertionError(f'{out.stem}: {error}:\n' + '\n'.join(log[-30:])) from None
@@ -497,15 +523,14 @@ def main():
         PROPERTIES_PORTS[label] = free_port()
         directory = build / label
         write_server_dir(directory, PROPERTIES_PORTS[label], world)
+        if label == 'horizon':
+            # After --dedicated the game accepts only vanilla server arguments.
+            command = [*command, '--game-dir', directory, '--dedicated', '--nogui']
         results[label] = run_side(label, command, directory, client)
         (build / f'{label}.txt').write_text('\n'.join(results[label]) + '\n', encoding='utf-8')
     client_checks = horizon_client_joins(vanilla_server, binary, world, build, results['vanilla'])
-    vanilla, horizon = results['vanilla'], results['horizon']
-    # The one intended difference: MinecraftServer.getServerModName is "vanilla" there, and Horizon's server names
-    # itself "horizon" as a modded server does (#3756). Check that, then compare the rest as vanilla's.
-    brand = 'config minecraft:custom_payload BrandPayload[brand={}]'
-    errors_brand = [] if brand.format('horizon') in horizon else ['error: Horizon\'s server did not send the brand "horizon"']
-    horizon = [brand.format('vanilla') if l == brand.format('horizon') else l for l in horizon]
+    vanilla = results['vanilla']
+    horizon, errors_brand = comparable_horizon(results['horizon'])
     errors = [l for l in vanilla + horizon if l.startswith('error')] + [l for l in client_checks if not l.endswith(': ok')] + errors_brand
     for line in client_checks:
         print(line)
@@ -524,7 +549,7 @@ def main():
         notes = [line for name in ('vanilla', 'vanilla-client', 'horizon', 'horizon-client')
                  for line in notable_lines(build / f'{name}.log')]
         raise AssertionError(f'{len([d for d in differences if d[:1] in "+-" and d[:3] not in ("+++", "---")])} differing lines '
-                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80] + notes))
+                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(errors + differences[:80] + notes))
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],

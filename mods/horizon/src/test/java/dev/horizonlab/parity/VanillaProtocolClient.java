@@ -59,6 +59,7 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerChatPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
 import net.minecraft.network.protocol.game.ClientboundSystemChatPacket;
 import net.minecraft.network.protocol.game.GameProtocols;
 import net.minecraft.network.protocol.game.ServerboundAcceptTeleportationPacket;
@@ -114,6 +115,7 @@ public final class VanillaProtocolClient {
     private ProtocolInfo<?> inbound;
     private ProtocolInfo<?> outbound;
     private String state;
+    private boolean dedicated;
     /** With a fifth argument {@code entities}: the entity transcript mode (EntityTranscript). */
     private EntityTranscript entities;
     /** With {@code ride}: the entity mode, plus the order of what the player sees of a ride through a portal (RideTranscript). */
@@ -128,6 +130,7 @@ public final class VanillaProtocolClient {
         String name = args[2];
         Path output = Path.of(args[3]);
         VanillaProtocolClient client = new VanillaProtocolClient();
+        client.dedicated = args.length > 4 && args[4].equals("dedicated");
         if (args.length > 4 && args[4].equals("entities")) client.entities = new EntityTranscript();
         if (args.length > 4 && args[4].equals("ride")) {
             client.entities = new EntityTranscript();
@@ -454,6 +457,8 @@ public final class VanillaProtocolClient {
     }
 
     private static final String[] REPLIES = {"random value 7..7", "random value x", "trigger nope"};
+    // RecipeManager's display id for the pinned 26.3 minecraft:crafting_table recipe.
+    private static final int CRAFTING_TABLE_DISPLAY = 339;
 
     private void play() throws Exception {
         state = "play";
@@ -524,6 +529,10 @@ public final class VanillaProtocolClient {
         int furnaceBefore = 0;
         // The furnace's lit and cooking totals received: the server sends them a tick after what changed them.
         int furnaceData = 0;
+        boolean initialBook = false;
+        boolean initialInventory = false;
+        boolean firstAdvancements = false;
+        int craftingTableUnlocks = 0;
         while (System.currentTimeMillis() < deadline) {
             Received r;
             try {
@@ -545,6 +554,36 @@ public final class VanillaProtocolClient {
                 if (ride != null) ride.self(packet);
                 if (phased != null) phased.accept(packet);
                 if (r.type.equals("minecraft:chunk_batch_start")) ordered = false;
+                if (dedicated) {
+                    // PlayerList sends an empty replacement book and initializes the inventory. Only
+                    // then does ServerPlayer.tick award the crafting table, before flushDirty.
+                    if (packet instanceof ClientboundRecipeBookAddPacket p) {
+                        if (p.replace() && !firstAdvancements) {
+                            if (initialBook || !p.entries().isEmpty()) {
+                                record("error", "fresh player's initial recipe book is not a single empty replacement");
+                            }
+                            initialBook = true;
+                        }
+                        for (var entry : p.entries()) {
+                            if (entry.contents().id().index() != CRAFTING_TABLE_DISPLAY) continue;
+                            craftingTableUnlocks++;
+                            if (!ordered) record("play-recipe", r.type + " " + summary(r));
+                            if (p.replace() || !initialBook || !initialInventory || firstAdvancements
+                                || craftingTableUnlocks != 1 || entry.notification() || !entry.highlight()) {
+                                record("error", "crafting table added outside its first-tick reward or with wrong flags");
+                            }
+                        }
+                    } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket p
+                        && p.containerId() == 0) {
+                        initialInventory = true;
+                    } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundUpdateAdvancementsPacket p
+                        && p.shouldReset() && !firstAdvancements) {
+                        firstAdvancements = true;
+                        if (craftingTableUnlocks != 1) {
+                            record("error", "first advancement snapshot preceded its single crafting table reward");
+                        }
+                    }
+                }
                 if (respawning && !respawned) {
                     String line = respawnLine(r, playerId);
                     // PlayerList.respawn ends with initInventoryMenu: what follows is the
@@ -875,6 +914,7 @@ public final class VanillaProtocolClient {
                 && (pearlTeleports > 0 && pearlHealth >= 0 || now - stepAt > PATIENCE)) {
                 // ThrownEnderpearl.onHit: the thrower is teleported and takes 5 damage.
                 record("play-pearl", "teleported " + pearlTeleports + " time(s), health " + pearlHealth);
+                if (dedicated && !firstAdvancements) record("error", "missing first advancement snapshot");
                 return;
             }
         }
