@@ -222,8 +222,93 @@ fn own_player_frame(game: &mut Game<'_>, spectator: bool) -> Vec<Vertex> {
     game.player_model.as_mut().unwrap().extra.spectator = spectator;
     game.prepare_entity_culling(glam::DVec3::ZERO);
     let mut out = Vec::new();
-    game.player_model_geometry(CAMERA, 1.0, &mut out);
+    game.player_model_geometry(CAMERA, 1.0, None, &mut out);
     out
+}
+
+struct FirstPersonProbe(Arc<Mutex<Option<([f32; 3], bool)>>>);
+
+#[mod_api::__subscriptions]
+impl Hooks for FirstPersonProbe {
+    fn render_first_person_body(
+        &self,
+        _: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderFirstPersonBodyEvent<'_>,
+    ) {
+        let Some((offset, hide_helmet)) = *self.0.lock().unwrap() else {
+            return;
+        };
+        assert_eq!(event.player.id, 4321);
+        event.body.show = true;
+        event.body.offset = offset;
+        event.body.hidden.hide(mod_api::HumanoidPart::Head);
+        if hide_helmet {
+            event.body.hide_layer(mod_api::FirstPersonBodyLayer::Helmet);
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn first_person_listener_admits_offsets_and_filters_the_local_world_model() {
+    use horizon_client::{camera::CameraType, items::ItemStack};
+
+    // Share the fixture's answer with the registered listener, not with the render path.
+    let answer = Arc::new(Mutex::new(None));
+    let mods = vec![mod_api::ModEntry::new(
+        "body",
+        Box::new(FirstPersonProbe(answer.clone())),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::native_entity_refs::tests::with_client_game(|game| {
+            game.armor[0] = Some(ItemStack::new("minecraft:iron_helmet", 1));
+            let third_person = own_player_frame(game, false);
+            assert!(!third_person.is_empty());
+            let draw = |game: &Game<'_>| {
+                let mut out = Vec::new();
+                let body = game.first_person_body(1.0);
+                game.player_model_geometry(CAMERA, 1.0, body.as_ref(), &mut out);
+                out
+            };
+            game.camera_type = CameraType::FirstPerson;
+            assert!(
+                draw(game).is_empty(),
+                "a listener that doesn't opt in draws nothing"
+            );
+
+            *answer.lock().unwrap() = Some(([0.0; 3], false));
+            let with_helmet = draw(game);
+            assert!(
+                with_helmet.len() < third_person.len(),
+                "the head was hidden"
+            );
+            *answer.lock().unwrap() = Some(([0.0; 3], true));
+            let bare = draw(game);
+            assert!(
+                !bare.is_empty() && bare.len() < with_helmet.len(),
+                "only the helmet was removed"
+            );
+
+            let delta = glam::Vec3::new(0.25, -0.125, -0.5);
+            *answer.lock().unwrap() = Some((delta.to_array(), true));
+            let shifted = draw(game);
+            assert_eq!(shifted.len(), bare.len());
+            for (base, moved) in bare.iter().zip(shifted) {
+                let actual = glam::Vec3::from_array(moved.pos) - glam::Vec3::from_array(base.pos);
+                assert!((actual - delta).length() < 1e-5);
+            }
+
+            game.camera_type = CameraType::ThirdPersonBack;
+            let third_after = draw(game);
+            assert!(
+                third_person
+                    .iter()
+                    .map(|v| v.pos)
+                    .eq(third_after.iter().map(|v| v.pos))
+            );
+        });
+    });
 }
 
 #[test]

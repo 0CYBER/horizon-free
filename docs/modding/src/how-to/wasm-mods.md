@@ -18,6 +18,54 @@ calls wait without this bound. Same-thread reentry shares the enclosing call's
 remaining deadline. A contended prepared release invalidates the token
 immediately and runs the guest cleanup on the next call into that mod.
 
+## Smoke-test a local first-person body
+
+In a client-side mod scaffold, replace `src/lib.rs` with this nonblocking listener.
+Use the SDK for the game under test. The same source registers natively or in Wasm.
+
+```rust,ignore
+use mod_api::{ClientHost, FirstPersonBodyLayer, Hooks, HumanoidPart, RenderFirstPersonBodyEvent};
+
+#[derive(Default)]
+pub struct Mod;
+
+#[mod_api::horizon_mod]
+impl Hooks for Mod {
+    fn render_first_person_body(&self, _: &dyn ClientHost, event: &mut RenderFirstPersonBodyEvent<'_>) {
+        let (sin, cos) = event.player.yaw.to_radians().sin_cos();
+        event.body.show = true;
+        // World axes: east, up, south. Move back from the view without moving the camera.
+        event.body.offset = [0.22 * sin, 0.0, -0.22 * cos];
+        for part in [HumanoidPart::Head, HumanoidPart::LeftArm, HumanoidPart::RightArm] {
+            event.body.hidden.hide(part);
+        }
+        for layer in [
+            FirstPersonBodyLayer::Helmet,
+            FirstPersonBodyLayer::HeadItem,
+            FirstPersonBodyLayer::Ears,
+            FirstPersonBodyLayer::Cosmetics,
+            FirstPersonBodyLayer::HeldItems,
+            FirstPersonBodyLayer::StuckItems,
+            FirstPersonBodyLayer::Elytra,
+            FirstPersonBodyLayer::CustomLayers,
+        ] {
+            event.body.hide_layer(layer);
+        }
+    }
+}
+```
+
+Build and install with `cargo horizon-mod build --wasm` as below. In a disposable
+creative world, wear brightly dyed leggings and a helmet. Empty your main hand,
+stand still and look steeply down. The local legs and leggings should appear in
+first person, with neither head nor helmet clipping into the view. Crouch, then
+look down while seated in a boat: the body keeps the normal crouch and seat poses.
+The callback can use `event.player.living` and `event.riding` to change its offset
+in those poses. Test with an item in hand: only the separate hand pass draws it.
+Cycle F5 to both third-person views and compare against a run without the mod:
+the full model and helmet should be unchanged there, and the legs should be
+absent in plain first person without the mod.
+
 ## Owned values and `Wire`
 
 Native and wasm use the same owned-value encoding. Choose which of your own

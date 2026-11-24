@@ -2,8 +2,9 @@
 
 pub trait Hooks {
     /// Before a player is drawn (NeoForge's `RenderPlayerEvent.Pre`): once a frame for each other
-    /// player in view and for this window's player in third person (and F5 front view), before its
-    /// `render_living_pre`. `player` is its render state, `who` its profile name and whether it is
+    /// player in view and for this window's player in third person (including F5 front view)
+    /// or when `render_first_person_body` opted in. It runs before `render_living_pre`.
+    /// `player` is its render state, `who` its profile name and whether it is
     /// this window's own player, and `draw` the frame `render_living_pre` gets. Set `canceled` to
     /// skip all of the player's drawing this frame, `render_living_pre`, `render_living_post` and
     /// `render_player_post` included. Left uncanceled, `hidden.hide(part)` (or

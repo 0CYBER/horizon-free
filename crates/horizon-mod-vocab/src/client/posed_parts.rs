@@ -198,6 +198,58 @@ impl TryFrom<HiddenPartsWire> for HiddenParts {
     }
 }
 
+/// A layer of the opted-in local first-person world body. These switches do not
+/// affect the separate first-person hand pass or third-person rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum FirstPersonBodyLayer {
+    /// Helmet armor, including its trim, overlays and glint.
+    Helmet,
+    /// Non-armor head items, including skulls and pumpkins.
+    HeadItem,
+    /// The vanilla extra ears.
+    Ears,
+    /// Cosmetics attached to the world body (not the vanilla cape).
+    Cosmetics,
+    /// Both held items on the world body, including a spyglass held to the eye.
+    HeldItems,
+    /// Stuck arrows and bee stingers.
+    StuckItems,
+    /// Elytra wings, including glint and emissive overlays.
+    Elytra,
+    /// All layers registered through `register_entity_layers`.
+    CustomLayers,
+}
+
+/// The frame-local answer to `render_first_person_body`. The game draws the
+/// ordinary animated player model, including its crouching and vehicle poses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct FirstPersonBody {
+    /// Opt into rendering. False by default, even when a mod listens.
+    pub show: bool,
+    /// Translation from the vanilla model origin in blocks, along world axes:
+    /// +X east, +Y up, +Z south. If any component is non-finite, the game uses
+    /// zero translation. Applied to the world model and all its layers.
+    pub offset: [f32; 3],
+    /// Model parts to leave out. The ensuing pre hooks may hide more parts.
+    /// Hiding a body part does not hide its separate equipment or cosmetic layers.
+    pub hidden: HiddenParts,
+    layers: u32,
+}
+
+impl FirstPersonBody {
+    /// Leave a layer out without affecting any other layer.
+    pub fn hide_layer(&mut self, layer: FirstPersonBodyLayer) {
+        self.layers |= 1 << (layer as u32);
+    }
+
+    /// Whether `layer` is hidden.
+    pub fn layer_hidden(&self, layer: FirstPersonBodyLayer) -> bool {
+        self.layers & (1 << (layer as u32)) != 0
+    }
+}
+
 /// One humanoid part as posed this frame: its pose relative to its parent, and whether it draws
 /// (`ModelPart.visible` as the body drew it: after Skin Customization and the parts
 /// `render_player_pre` hid).

@@ -1,0 +1,3 @@
+ids = ["hook:render_first_person_body", "type:RenderFirstPersonBodyEvent", "type:FirstPersonBody", "type:FirstPersonBodyLayer"]
+why = "Client mods can opt into drawing the local world model in first person, offset its pose, and suppress model parts or layers without touching the separate first-person hand."
+migrate = "Additive. The existing player and hand render hooks are unchanged; register render_first_person_body only when the mod wants the local player to appear in first person."

@@ -5605,12 +5605,14 @@ impl Game<'_> {
             }
         }
         laps.lap("eg_mobs");
-        // In first person only a shader pack's shadow pass draws the player.
-        self.mark_player(out.len(), !self.own_body_in_view());
+        let player_alpha = self.own_player_alpha();
+        let first_person = self.first_person_body(player_alpha as f32);
+        // Without opt-in, a first-person player only goes into the pack's shadow pass.
+        let shadow_only = first_person.is_none() && !self.own_body_in_view();
+        self.mark_player(out.len(), shadow_only);
         let player_start = out.len();
         self.mark_motion(player_start, Self::MOTION_OWN_PLAYER);
-        let player_alpha = self.own_player_alpha();
-        self.player_model_geometry(camera, player_alpha, &mut out);
+        self.player_model_geometry(camera, player_alpha, first_person.as_ref(), &mut out);
         if self.own_body_in_view()
             && let Some(p) = &self.player
             && p.fire_ticks > 0
@@ -5641,7 +5643,7 @@ impl Game<'_> {
             }
         }
         // A native pack's shadow pass alone gets the first-person model (no per-entity draws).
-        if self.pack_ids.is_none() && !self.own_body_in_view() {
+        if self.pack_ids.is_none() && shadow_only {
             self.shadow_only_vertices
                 .borrow_mut()
                 .extend(out.drain(player_start..));
