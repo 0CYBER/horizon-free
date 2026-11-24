@@ -2130,7 +2130,7 @@ pub fn remember_direct_join(saves: &Path, address: &str) {
 
 /// Direct Connection's address; a full invite code pasted there joins the
 /// friend (a short relay code could be a host name, so it needs Join a Friend).
-fn direct_address(address: &str) -> String {
+pub(crate) fn direct_address(address: &str) -> String {
     let code: String = address.chars().filter(|c| !c.is_whitespace()).collect();
     if crate::net::is_invite(&code, true) {
         format!("{}{code}", crate::net::FRIEND)

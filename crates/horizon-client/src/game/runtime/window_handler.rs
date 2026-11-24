@@ -169,6 +169,7 @@ impl Game<'_> {
         self.with_user_input(input, |game| {
             game.handle_window_event_as(event_loop, id, event, origin);
         });
+        self.forget_stale_native_title_request();
     }
 
     pub(super) fn handle_window_event_as(
@@ -383,6 +384,12 @@ impl Game<'_> {
         if let Some(folder) = self.title.as_mut().and_then(|t| t.take_open_request())
             && let Err(error) = self.open_world(&folder, None, None, false, None)
         {
+            self.error = Some(error);
+            event_loop.exit();
+            return;
+        }
+        // A native mod's own title page asked for a button's work (`request_title`).
+        if let Err(error) = self.drain_native_title_request(event_loop) {
             self.error = Some(error);
             event_loop.exit();
             return;

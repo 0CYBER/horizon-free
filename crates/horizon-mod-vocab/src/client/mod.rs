@@ -63,6 +63,7 @@ pub(crate) mod screenshot;
 pub(crate) mod skull_models;
 pub(crate) mod special_model_renderers;
 pub(crate) mod terrain_draw;
+pub(crate) mod title_request;
 pub(crate) mod types;
 /// Buttons and text fields for mod screens.
 pub mod widgets;

@@ -103,7 +103,7 @@ fn adjacent_manifests(executable: &Path) -> Vec<horizon_mod_package::Manifest> {
 }
 
 impl Game<'_> {
-    fn title_state(&self) -> TitleState {
+    pub(in crate::game) fn title_state(&self) -> TitleState {
         if self.screen != Screen::Playing {
             return TitleState::Elsewhere;
         }
