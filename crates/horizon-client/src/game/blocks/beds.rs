@@ -9,7 +9,7 @@ use super::native_hooks::SleepProblem;
 use super::{Dim, Game};
 use horizon_client::Result;
 use horizon_client::bed_geometry::{SleepOn, pos_to_bed, shape_top, slept_on};
-use horizon_core::geometry::Vec3;
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::registry::BlockStateId;
 
 impl Game<'_> {
@@ -174,5 +174,53 @@ impl Game<'_> {
     pub(super) fn sleeping_position(&self, head: [i32; 3]) -> Option<Vec3> {
         self.sleep_height(head)
             .map(|height| pos_to_bed(head, height))
+    }
+}
+
+/// Whether a monster whose bounding box is `bounds` is in the box
+/// `ServerPlayer.startSleepInBed` searches: 8 blocks sideways and 5 up and
+/// down from the bottom centre of the bed's head (`Vec3.atBottomCenterOf`),
+/// wherever the player stands. `getEntitiesOfClass` takes an entity whose box
+/// intersects it (`EntitySection.getEntities`, `AABB.intersects`).
+pub(super) fn near_bed(head: [i32; 3], bounds: Aabb) -> bool {
+    let (x, y, z) = (
+        f64::from(head[0]) + 0.5,
+        f64::from(head[1]),
+        f64::from(head[2]) + 0.5,
+    );
+    Aabb::new(
+        Vec3::new(x - 8.0, y - 5.0, z - 8.0),
+        Vec3::new(x + 8.0, y + 5.0, z + 8.0),
+    )
+    .intersects(bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::near_bed;
+    use horizon_core::geometry::{Aabb, Vec3};
+
+    /// A half-block-wide, 2-tall box from `(x, y, z)` up.
+    fn body(x: f64, y: f64, z: f64) -> Aabb {
+        Aabb::new(Vec3::new(x, y, z), Vec3::new(x + 0.5, y + 2.0, z + 0.5))
+    }
+
+    #[test]
+    fn monsters_count_by_box_around_the_bed_head() {
+        // The search box: x 2.5..18.5, y 59..69, z -27.5..-11.5.
+        let head = [10, 64, -20];
+        // Centred 8 east of the head's centre, its box reaches 7.75: caught.
+        assert!(near_bed(head, body(18.25, 64.0, -19.75)));
+        // A box that only touches a face is outside (the test is strict).
+        assert!(!near_bed(head, body(18.5, 64.0, -19.75)));
+        assert!(near_bed(head, body(2.25, 64.0, -19.75)));
+        assert!(!near_bed(head, body(2.0, 64.0, -19.75)));
+        // Feet 6.75 below the head, the box's top 4.75: caught.
+        assert!(near_bed(head, body(10.25, 57.25, -19.75)));
+        assert!(!near_bed(head, body(10.25, 57.0, -19.75)));
+        assert!(near_bed(head, body(10.25, 68.75, -19.75)));
+        assert!(!near_bed(head, body(10.25, 69.0, -19.75)));
+        assert!(near_bed(head, body(10.25, 64.0, -11.75)));
+        assert!(!near_bed(head, body(10.25, 64.0, -11.5)));
     }
 }

@@ -7550,8 +7550,8 @@ impl Game<'_> {
         }
     }
     /// ServerPlayer.startSleepInBed: in reach, not obstructed, night or thunder,
-    /// and (outside creative) no monsters within 8 blocks; the bed becomes the
-    /// respawn point either way.
+    /// and (outside creative) no monsters within 8 blocks of the head; the bed
+    /// becomes the respawn point either way.
     fn try_sleep(&mut self, pos: [i32; 3]) {
         if self.fake_blocks(mod_api::FakeEffect::Sleep) {
             return;
@@ -7658,9 +7658,7 @@ impl Game<'_> {
                     && (m.species() != horizon_client::mobs::Species::ZombifiedPiglin
                         || (m.extra.anger > 0 && m.ai.target.is_some()))
                     && m.alive()
-                    && (m.position.x - position.x).abs() < 8.0
-                    && (m.position.y - position.y).abs() < 5.0
-                    && (m.position.z - position.z).abs() < 8.0
+                    && beds::near_bed(head, m.bounds())
             })
         {
             problem = Some("not_safe");
