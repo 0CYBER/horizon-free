@@ -4,18 +4,120 @@
 //! `AmphibiousNodeEvaluator`), ported rule for rule.
 use super::{
     MobWorld,
-    data::{self, PathComputationType},
+    data::{self, PathComputationType, ResolvedState},
 };
 use crate::blocks::Fluid;
+use crate::chunk::Chunk;
 use crate::fast_hash::FxHashMap;
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_core::position::BlockPos;
+use horizon_world::registry::BlockStateId;
+use smallvec::SmallVec;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 
 /// The node kinds, moved to `mod_api` so mods can name them (arismoko/horizon#944).
 pub use mod_api::PathType;
 pub const PATH_TYPES: usize = PathType::COUNT;
+const _: () = assert!(PathType::COUNT <= u32::BITS as usize);
+
+/// Pre-checked view of the `#minecraft:fire` block tag so `check_neighbours`
+/// avoids 24 HashMap + HashSet string lookups per node on the vanilla tag.
+#[derive(Clone, Copy)]
+enum FireTag<'a> {
+    /// Exact vanilla tag: `{"minecraft:fire", "minecraft:soul_fire"}`.
+    Vanilla,
+    /// Tag is absent or empty.
+    Empty,
+    /// Custom datapack or fixture tag; checked directly per block name.
+    Custom(&'a HashSet<String>),
+}
+impl<'a> FireTag<'a> {
+    #[inline]
+    fn of(block_tags: &'a HashMap<String, HashSet<String>>) -> Self {
+        match block_tags.get("minecraft:fire") {
+            None => Self::Empty,
+            Some(set) if set.is_empty() => Self::Empty,
+            Some(set)
+                if set.len() == 2
+                    && set.contains("minecraft:fire")
+                    && set.contains("minecraft:soul_fire") =>
+            {
+                Self::Vanilla
+            }
+            Some(set) => Self::Custom(set),
+        }
+    }
+}
+
+/// Fixed-capacity stack buffer for evaluated node neighbours (at most 26 across
+/// walk, amphibious, swim and fly evaluators, matching vanilla's `Node[32]`).
+struct Neighbors {
+    buf: [u32; 32],
+    len: usize,
+}
+impl Neighbors {
+    #[inline]
+    fn new() -> Self {
+        Self {
+            buf: [0; 32],
+            len: 0,
+        }
+    }
+    #[inline]
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+    #[inline]
+    fn push(&mut self, node: u32) {
+        debug_assert!(self.len < self.buf.len());
+        if let Some(slot) = self.buf.get_mut(self.len) {
+            *slot = node;
+            self.len += 1;
+        }
+    }
+    #[inline]
+    fn as_slice(&self) -> &[u32] {
+        &self.buf[..self.len]
+    }
+}
+
+/// Last-visited chunk entry cached inside [`Finder`] to avoid repeated
+/// `ChunkMap` lookups across a node's 24 neighbour reads.
+#[derive(Clone, Copy)]
+struct CachedChunk<'w> {
+    key: (i32, i32),
+    chunk: Option<&'w Chunk>,
+}
 
 impl MobWorld<'_> {
+    #[inline]
+    fn classify_state_resolved(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        resolved: &[ResolvedState],
+    ) -> PathType {
+        self.mob_hooks
+            .and_then(|hooks| hooks.block_path_type(state, pos))
+            .unwrap_or_else(|| {
+                resolved
+                    .get(state.0 as usize)
+                    .map_or_else(|| self.data.path_type(state), ResolvedState::path_type)
+            })
+    }
+    #[inline]
+    fn path_type_from_loaded_state(
+        &self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        resolved: &[ResolvedState],
+    ) -> PathType {
+        self.world
+            .cached_path_type(BlockPos::new(pos[0], pos[1], pos[2]), || {
+                self.classify_state_resolved(state, pos, resolved)
+            })
+    }
     pub fn path_type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
         self.world.cached_path_type(BlockPos::new(x, y, z), || {
             let state = self.world.block(x, y, z);
@@ -51,6 +153,21 @@ impl MobWorld<'_> {
     /// (`getAdjacentBlockPathType`) decides it. The neighbour step saturates, so a
     /// node at the edge of the `i32` range still reads its eight neighbours (arismoko/horizon#4443).
     pub fn check_neighbours(&self, x: i32, y: i32, z: i32, t: PathType) -> PathType {
+        let resolved = self.data.resolved_states(self.facts);
+        let fire_tag = FireTag::of(self.block_tags);
+        self.check_neighbours_with([x, y, z], t, resolved, fire_tag, |bx, by, bz| {
+            self.world.block(bx, by, bz)
+        })
+    }
+    #[inline]
+    fn check_neighbours_with(
+        &self,
+        origin: [i32; 3],
+        t: PathType,
+        resolved: &[ResolvedState],
+        fire_tag: FireTag<'_>,
+        mut block_at: impl FnMut(i32, i32, i32) -> BlockStateId,
+    ) -> PathType {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -58,37 +175,71 @@ impl MobWorld<'_> {
                         continue;
                     }
                     let pos = [
-                        x.saturating_add(dx),
-                        y.saturating_add(dy),
-                        z.saturating_add(dz),
+                        origin[0].saturating_add(dx),
+                        origin[1].saturating_add(dy),
+                        origin[2].saturating_add(dz),
                     ];
-                    let state = self.world.block(pos[0], pos[1], pos[2]);
-                    let own = self.path_type_from_state(pos[0], pos[1], pos[2]);
-                    let facts = self.facts.get(state);
-                    let default = if facts.name.as_ref() == "minecraft:sweet_berry_bush" {
-                        Some(PathType::DamagingInNeighbor)
-                    } else if data::vanilla_burning_block(
-                        &facts.name,
-                        facts.emission > 0,
-                        self.has_tag("minecraft:fire", &facts.name),
-                    ) {
-                        Some(PathType::FireInNeighbor)
+                    let state = block_at(pos[0], pos[1], pos[2]);
+                    let flags = resolved.get(state.0 as usize).map_or_else(
+                        || data::adjacent_flags_for_facts(self.facts.get(state)),
+                        ResolvedState::adjacent_flags,
+                    );
+                    if let Some(hooks) = self.mob_hooks {
+                        let own = self.path_type_from_loaded_state(pos, state, resolved);
+                        let default = if flags & data::ADJ_SWEET_BERRY_BUSH != 0 {
+                            Some(PathType::DamagingInNeighbor)
+                        } else if flags & data::ADJ_ALWAYS_BURNING != 0
+                            || match fire_tag {
+                                FireTag::Vanilla => flags & data::ADJ_VANILLA_FIRE != 0,
+                                FireTag::Empty => false,
+                                FireTag::Custom(set) => set.contains(&*self.facts.get(state).name),
+                            }
+                        {
+                            Some(PathType::FireInNeighbor)
+                        } else {
+                            None
+                        };
+                        if let Some(adjacent) =
+                            hooks.adjacent_block_path_type(state, pos, own, default)
+                        {
+                            return adjacent;
+                        }
+                        // A declined block answer keeps this neighbour's fluid
+                        // contribution before the vanilla type mappings.
+                        if flags & data::ADJ_WATER_FLUID != 0 {
+                            return PathType::WaterBorder;
+                        }
+                        if let Some(adjacent) = data::vanilla_adjacent(own) {
+                            return adjacent;
+                        }
                     } else {
-                        None
-                    };
-                    let adjacent = self.mob_hooks.map_or(default, |hooks| {
-                        hooks.adjacent_block_path_type(state, pos, own, default)
-                    });
-                    if let Some(adjacent) = adjacent {
-                        return adjacent;
-                    }
-                    // A declined block answer keeps this neighbour's fluid
-                    // contribution before the vanilla type mappings.
-                    if matches!(facts.fluid, Fluid::Water | Fluid::Modded) {
-                        return PathType::WaterBorder;
-                    }
-                    if let Some(adjacent) = data::vanilla_adjacent(own) {
-                        return adjacent;
+                        if flags != 0 {
+                            if flags & data::ADJ_SWEET_BERRY_BUSH != 0 {
+                                return PathType::DamagingInNeighbor;
+                            }
+                            if flags & data::ADJ_ALWAYS_BURNING != 0
+                                || (matches!(fire_tag, FireTag::Vanilla)
+                                    && flags & data::ADJ_VANILLA_FIRE != 0)
+                            {
+                                return PathType::FireInNeighbor;
+                            }
+                            if let FireTag::Custom(set) = fire_tag
+                                && set.contains(&*self.facts.get(state).name)
+                            {
+                                return PathType::FireInNeighbor;
+                            }
+                            if flags & data::ADJ_WATER_FLUID != 0 {
+                                return PathType::WaterBorder;
+                            }
+                        } else if let FireTag::Custom(set) = fire_tag
+                            && set.contains(&*self.facts.get(state).name)
+                        {
+                            return PathType::FireInNeighbor;
+                        }
+                        let own = self.path_type_from_loaded_state(pos, state, resolved);
+                        if let Some(adjacent) = data::vanilla_adjacent(own) {
+                            return adjacent;
+                        }
                     }
                 }
             }
@@ -336,6 +487,10 @@ pub struct Finder<'a, 'w> {
     entity_width: i32,
     entity_height: i32,
     entity_depth: i32,
+    resolved: &'w [ResolvedState],
+    fire_tag: FireTag<'w>,
+    last_chunk: Cell<Option<CachedChunk<'w>>>,
+    mob_on_rail: Cell<Option<bool>>,
 }
 
 impl<'a, 'w> Drop for Finder<'a, 'w> {
@@ -377,6 +532,57 @@ fn swim_cell_type(
     }
 }
 
+/// Reduce a bounding-box `PathType` bitmask into `WalkNodeEvaluator.getPathTypeOfMob`,
+/// visiting set bits in `EnumSet` declaration order (ascending bit index).
+#[inline]
+fn resolve_bb_mask(
+    mask: u32,
+    current: impl FnOnce() -> PathType,
+    entity_width: i32,
+    malus: impl Fn(PathType) -> f32,
+) -> PathType {
+    const FENCE_BIT: u32 = 1u32 << (PathType::Fence as u8);
+    const UNPASSABLE_RAIL_BIT: u32 = 1u32 << (PathType::UnpassableRail as u8);
+    if mask.count_ones() == 1 {
+        return PathType::ALL[mask.trailing_zeros() as usize];
+    }
+    if mask & FENCE_BIT != 0 {
+        return PathType::Fence;
+    }
+    if mask & UNPASSABLE_RAIL_BIT != 0 {
+        return PathType::UnpassableRail;
+    }
+    let mut highest = PathType::Blocked;
+    let mut highest_malus = malus(highest);
+    let mut rem = mask;
+    while rem != 0 {
+        let bit = rem.trailing_zeros() as usize;
+        rem &= rem - 1;
+        let t = PathType::ALL[bit];
+        let m = malus(t);
+        if m < 0.0 {
+            return t;
+        }
+        if m >= highest_malus {
+            highest_malus = m;
+            highest = t;
+        }
+    }
+    let current = current();
+    if entity_width > 1 {
+        let cheaper = malus(current) < highest_malus;
+        if cheaper && malus(PathType::BigMobsCloseToDanger) < highest_malus {
+            PathType::BigMobsCloseToDanger
+        } else {
+            highest
+        }
+    } else if current == PathType::Open && highest != PathType::Open && highest_malus == 0.0 {
+        PathType::Open
+    } else {
+        highest
+    }
+}
+
 impl<'a, 'w> Finder<'a, 'w> {
     pub fn new(w: &'a MobWorld<'w>, mob: &'a PathMob, eval: Evaluator) -> Self {
         let (nodes, index, heap, types, statics, collisions) = TLS_BUFFERS.with(|cell| {
@@ -414,6 +620,10 @@ impl<'a, 'w> Finder<'a, 'w> {
             entity_width: (mob.width + 1.0).floor() as i32,
             entity_height: (mob.height + 1.0).floor() as i32,
             entity_depth: (mob.width + 1.0).floor() as i32,
+            resolved: w.data.resolved_states(w.facts),
+            fire_tag: FireTag::of(w.block_tags),
+            last_chunk: Cell::new(None),
+            mob_on_rail: Cell::new(None),
         }
     }
     /// Mob.getPathfindingMalus; AmphibiousNodeEvaluator.prepare overrides three
@@ -436,20 +646,45 @@ impl<'a, 'w> Finder<'a, 'w> {
         self.path_type(x, y, z)
     }
     // --- world access -------------------------------------------------
+    #[inline(always)]
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        let key = (x >> 4, z >> 4);
+        let chunk = match self.last_chunk.get() {
+            Some(cached) if cached.key == key => cached.chunk,
+            _ => {
+                let fetched = self.w.world.chunks.get_chunk(key.0, key.1);
+                self.last_chunk.set(Some(CachedChunk {
+                    key,
+                    chunk: fetched,
+                }));
+                fetched
+            }
+        };
+        match chunk {
+            Some(chunk) => chunk.block(x & 15, y, z & 15),
+            None => self.w.world.air,
+        }
+    }
     fn state(&self, x: i32, y: i32, z: i32) -> data::StateData {
-        self.w.data.state(self.w.world.block(x, y, z))
+        self.w.data.state(self.block(x, y, z))
     }
     fn pathfindable(&self, x: i32, y: i32, z: i32, kind: PathComputationType) -> bool {
-        self.w.data.pathfindable(self.w.world.block(x, y, z), kind)
+        self.w
+            .data
+            .pathfindable_in(self.resolved, self.block(x, y, z), kind)
     }
     fn type_from_state(&self, x: i32, y: i32, z: i32) -> PathType {
-        self.w.path_type_from_state(x, y, z)
+        self.w.world.cached_path_type(BlockPos::new(x, y, z), || {
+            let state = self.block(x, y, z);
+            self.w
+                .classify_state_resolved(state, [x, y, z], self.resolved)
+        })
     }
     fn fluid(&self, x: i32, y: i32, z: i32) -> Fluid {
-        self.w.facts.get(self.w.world.block(x, y, z)).fluid
+        self.w.facts.get(self.block(x, y, z)).fluid
     }
     fn is_air(&self, x: i32, y: i32, z: i32) -> bool {
-        self.w.facts.is_air(self.w.world.block(x, y, z))
+        self.w.facts.is_air(self.block(x, y, z))
     }
     /// WalkNodeEvaluator.getFloorLevel(level, pos).
     pub fn static_floor(&self, x: i32, y: i32, z: i32) -> f64 {
@@ -525,10 +760,29 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
     }
     pub fn walk_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
-        self.w.path_type_static(x, y, z)
+        let t = self.type_from_state(x, y, z);
+        if t == PathType::Open && y > self.w.world.bottom_y() {
+            match self.type_from_state(x, y.saturating_sub(1), z) {
+                PathType::Open | PathType::Water | PathType::Lava | PathType::Walkable => {
+                    PathType::Open
+                }
+                PathType::Fire => PathType::Fire,
+                PathType::Damaging => PathType::Damaging,
+                PathType::StickyHoney => PathType::StickyHoney,
+                PathType::PowderSnow => PathType::OnTopOfPowderSnow,
+                PathType::DamageCautious => PathType::DamageCautious,
+                PathType::Trapdoor => PathType::OnTopOfTrapdoor,
+                _ => self.check_neighbours(x, y, z, PathType::Walkable),
+            }
+        } else {
+            t
+        }
     }
     fn check_neighbours(&self, x: i32, y: i32, z: i32, t: PathType) -> PathType {
-        self.w.check_neighbours(x, y, z, t)
+        self.w
+            .check_neighbours_with([x, y, z], t, self.resolved, self.fire_tag, |bx, by, bz| {
+                self.block(bx, by, bz)
+            })
     }
     fn fly_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut t = self.type_from_state(x, y, z);
@@ -555,17 +809,34 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         t
     }
-    fn within_bb(&self, x: i32, y: i32, z: i32) -> Vec<PathType> {
-        let mut out = Vec::with_capacity(4);
+    fn mob_on_rail(&self) -> bool {
+        if let Some(on_rail) = self.mob_on_rail.get() {
+            return on_rail;
+        }
         let mp = self.mob.block_position();
+        let on_rail = self.path_type(mp[0], mp[1], mp[2]) == PathType::Rail
+            || self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) == PathType::Rail;
+        self.mob_on_rail.set(Some(on_rail));
+        on_rail
+    }
+    /// `WalkNodeEvaluator.getPathTypeWithinMobBB`: `u32` bitmask of `PathType`s
+    /// across the mob's bounding box (`1u32 << (t as u8)`), plus the unmapped type
+    /// at `(x, y, z)` when the box is non-empty.
+    fn within_bb(&self, x: i32, y: i32, z: i32) -> (u32, Option<PathType>) {
+        let mut mask = 0u32;
+        let mut origin = None;
         for dx in 0..self.entity_width {
             for dy in 0..self.entity_height {
                 for dz in 0..self.entity_depth {
-                    let mut t = self.path_type(
+                    let raw = self.path_type(
                         x.saturating_add(dx),
                         y.saturating_add(dy),
                         z.saturating_add(dz),
                     );
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        origin = Some(raw);
+                    }
+                    let mut t = raw;
                     if t == PathType::DoorWoodClosed
                         && self.mob.can_open_doors
                         && self.mob.can_pass_doors
@@ -575,62 +846,27 @@ impl<'a, 'w> Finder<'a, 'w> {
                     if t == PathType::DoorOpen && !self.mob.can_pass_doors {
                         t = PathType::Blocked;
                     }
-                    if t == PathType::Rail
-                        && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
-                    {
+                    if t == PathType::Rail && !self.mob_on_rail() {
                         t = PathType::UnpassableRail;
                     }
-                    if !out.contains(&t) {
-                        out.push(t);
-                    }
+                    mask |= 1u32 << (t as u8);
                 }
             }
         }
-        out
+        (mask, origin)
     }
     /// WalkNodeEvaluator.getPathTypeOfMob.
     fn path_type_of_mob(&self, x: i32, y: i32, z: i32) -> PathType {
         if let Evaluator::Swim { .. } = self.eval {
             return self.swim_path_type(x, y, z);
         }
-        let mut types = self.within_bb(x, y, z);
-        // EnumSet iteration follows declaration order.
-        types.sort_by_key(|t| *t as u8);
-        if types.len() == 1 {
-            return types[0];
-        }
-        if types.contains(&PathType::Fence) {
-            return PathType::Fence;
-        }
-        if types.contains(&PathType::UnpassableRail) {
-            return PathType::UnpassableRail;
-        }
-        let mut highest = PathType::Blocked;
-        let mut highest_malus = self.malus(highest);
-        for t in &types {
-            let m = self.malus(*t);
-            if m < 0.0 {
-                return *t;
-            }
-            if m >= highest_malus {
-                highest_malus = m;
-                highest = *t;
-            }
-        }
-        let current = self.path_type(x, y, z);
-        if self.entity_width > 1 {
-            let cheaper = self.malus(current) < highest_malus;
-            if cheaper && self.malus(PathType::BigMobsCloseToDanger) < highest_malus {
-                PathType::BigMobsCloseToDanger
-            } else {
-                highest
-            }
-        } else if current == PathType::Open && highest != PathType::Open && highest_malus == 0.0 {
-            PathType::Open
-        } else {
-            highest
-        }
+        let (mask, origin) = self.within_bb(x, y, z);
+        resolve_bb_mask(
+            mask,
+            || origin.unwrap_or_else(|| self.path_type(x, y, z)),
+            self.entity_width,
+            |t| self.malus(t),
+        )
     }
     fn swim_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut last = (x, y, z);
@@ -697,7 +933,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         t != PathType::Open && self.malus(t) >= 0.0
     }
     fn start(&mut self) -> Option<u32> {
-        let m = self.mob.clone();
+        let m: &'a PathMob = self.mob;
         let p = m.position;
         let b = m.bounds();
         let (lo, hi) = (b.min_position(), b.max_position());
@@ -721,8 +957,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 let mut start_y;
                 if m.can_float && m.in_water {
                     start_y = p.y.floor() as i32;
-                    while &*self.w.facts.get(self.w.world.block(bx, start_y, bz)).name
-                        == "minecraft:water"
+                    while &*self.w.facts.get(self.block(bx, start_y, bz)).name == "minecraft:water"
                     {
                         start_y += 1;
                     }
@@ -759,9 +994,12 @@ impl<'a, 'w> Finder<'a, 'w> {
                 while y > self.w.world.bottom_y() {
                     start_y = y;
                     y -= 1;
-                    let s = self.w.world.block(bx, y, bz);
+                    let s = self.block(bx, y, bz);
                     if !self.w.facts.is_air(s)
-                        && !self.w.data.pathfindable(s, PathComputationType::Land)
+                        && !self
+                            .w
+                            .data
+                            .pathfindable_in(self.resolved, s, PathComputationType::Land)
                     {
                         break;
                     }
@@ -1014,7 +1252,7 @@ impl<'a, 'w> Finder<'a, 'w> {
             !n.closed && n.kind != PathType::WalkableDoor && n.cost_malus >= 0.0
         })
     }
-    fn walk_neighbors(&mut self, pos: u32, out: &mut Vec<u32>) {
+    fn walk_neighbors(&mut self, pos: u32, out: &mut Neighbors) {
         let (px, py, pz) = {
             let n = &self.nodes[pos as usize];
             (n.x, n.y, n.z)
@@ -1081,7 +1319,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 out.push(down.unwrap_or_default());
             }
             if prefers_shallow {
-                for &n in out.iter() {
+                for &n in out.as_slice() {
                     let node = &mut self.nodes[n as usize];
                     if node.kind == PathType::Water && node.y < 63 - 10 {
                         node.cost_malus += 1.0;
@@ -1106,7 +1344,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         None
     }
-    fn swim_neighbors(&mut self, pos: u32, out: &mut Vec<u32>) {
+    fn swim_neighbors(&mut self, pos: u32, out: &mut Neighbors) {
         let (px, py, pz) = {
             let n = &self.nodes[pos as usize];
             (n.x, n.y, n.z)
@@ -1157,7 +1395,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         }
         None
     }
-    fn fly_neighbors(&mut self, pos: u32, out: &mut Vec<u32>) {
+    fn fly_neighbors(&mut self, pos: u32, out: &mut Neighbors) {
         let (px, py, pz) = {
             let n = &self.nodes[pos as usize];
             (n.x, n.y, n.z)
@@ -1176,7 +1414,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 out.push(n.unwrap_or_default());
             }
         }
-        let push = |s: &mut Self, n: Option<u32>, ok: bool, out: &mut Vec<u32>| {
+        let push = |s: &mut Self, n: Option<u32>, ok: bool, out: &mut Neighbors| {
             if open(s, n) && ok {
                 out.push(n.unwrap_or_default());
             }
@@ -1388,7 +1626,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         max_visited: i32,
     ) -> Option<Path> {
         let from = self.start()?;
-        let mut targets: Vec<Target> = positions
+        let mut targets: SmallVec<[Target; 4]> = positions
             .iter()
             .map(|p| {
                 // AmphibiousNodeEvaluator.getTarget floors y + 0.5 (the same block).
@@ -1412,7 +1650,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         self.heap.clear();
         self.heap_insert(from);
         let mut count = 0;
-        let mut neighbors = Vec::with_capacity(32);
+        let mut neighbors = Neighbors::new();
         let (fx, fy, fz) = {
             let n = &self.nodes[from as usize];
             (n.x, n.y, n.z)
@@ -1445,7 +1683,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                 Evaluator::Swim { .. } => self.swim_neighbors(current, &mut neighbors),
                 Evaluator::Fly => self.fly_neighbors(current, &mut neighbors),
             }
-            for &neighbor in &neighbors {
+            for &neighbor in neighbors.as_slice() {
                 let (cx, cy, cz, cg, cw) = {
                     let c = &self.nodes[current as usize];
                     (c.x, c.y, c.z, c.g, c.walked)
@@ -1471,7 +1709,6 @@ impl<'a, 'w> Finder<'a, 'w> {
                 }
             }
         }
-        let reached: Vec<&Target> = targets.iter().filter(|t| t.reached).collect();
         let build = |s: &Self, t: &Target, reached: bool| -> Option<Path> {
             let mut n = t.best?;
             let mut nodes = vec![];
@@ -1491,9 +1728,10 @@ impl<'a, 'w> Finder<'a, 'w> {
             nodes.reverse();
             Some(Path::new(nodes, t.pos, reached))
         };
-        if !reached.is_empty() {
-            reached
+        if targets.iter().any(|t| t.reached) {
+            targets
                 .iter()
+                .filter(|t| t.reached)
                 .filter_map(|t| build(&self, t, true))
                 .min_by_key(|p| p.nodes.len())
         } else {
@@ -1658,5 +1896,487 @@ mod tests {
         let mut p = path(nodes.clone());
         p.raise_cauldron_nodes(|_, _, _| false);
         assert_eq!(p.nodes, nodes);
+    }
+
+    fn reference_reduce_bb(
+        raw: &[PathType],
+        current: PathType,
+        entity_width: i32,
+        malus: impl Fn(PathType) -> f32,
+    ) -> PathType {
+        let mut types = Vec::with_capacity(4);
+        for &t in raw {
+            if !types.contains(&t) {
+                types.push(t);
+            }
+        }
+        types.sort_by_key(|t| *t as u8);
+        if types.len() == 1 {
+            return types[0];
+        }
+        if types.contains(&PathType::Fence) {
+            return PathType::Fence;
+        }
+        if types.contains(&PathType::UnpassableRail) {
+            return PathType::UnpassableRail;
+        }
+        let mut highest = PathType::Blocked;
+        let mut highest_malus = malus(highest);
+        for &t in &types {
+            let m = malus(t);
+            if m < 0.0 {
+                return t;
+            }
+            if m >= highest_malus {
+                highest_malus = m;
+                highest = t;
+            }
+        }
+        if entity_width > 1 {
+            let cheaper = malus(current) < highest_malus;
+            if cheaper && malus(PathType::BigMobsCloseToDanger) < highest_malus {
+                PathType::BigMobsCloseToDanger
+            } else {
+                highest
+            }
+        } else if current == PathType::Open && highest != PathType::Open && highest_malus == 0.0 {
+            PathType::Open
+        } else {
+            highest
+        }
+    }
+
+    #[test]
+    fn bitmask_within_bb_matches_reference_enum_set_for_all_combinations() {
+        let malus_profiles: [fn(PathType) -> f32; 3] = [
+            PathType::malus,
+            |t: PathType| match t {
+                PathType::Water => 0.0,
+                PathType::Walkable => 6.0,
+                PathType::WaterBorder => 4.0,
+                _ => t.malus(),
+            },
+            |t: PathType| match t {
+                PathType::Open | PathType::Walkable => 0.0,
+                PathType::BigMobsCloseToDanger => 2.0,
+                PathType::WaterBorder | PathType::FireInNeighbor => 8.0,
+                PathType::DamagingInNeighbor => 8.0,
+                _ => t.malus(),
+            },
+        ];
+        let check =
+            |raw: &[PathType], current: PathType, width: i32, malus: fn(PathType) -> f32| {
+                let mask = raw.iter().fold(0u32, |acc, &t| acc | (1u32 << (t as u8)));
+                let want = reference_reduce_bb(raw, current, width, malus);
+                let got = resolve_bb_mask(mask, || current, width, malus);
+                assert_eq!(got, want, "raw={raw:?} current={current:?} width={width}");
+            };
+        // Empty bounding box edge case.
+        for width in [1, 2] {
+            for malus in malus_profiles {
+                check(&[], PathType::Open, width, malus);
+                check(&[], PathType::Walkable, width, malus);
+            }
+        }
+        // All 27 singletons (with duplicate inputs) and early-return laziness check.
+        for &t in &PathType::ALL {
+            let mask = 1u32 << (t as u8);
+            assert_eq!(
+                resolve_bb_mask(
+                    mask,
+                    || panic!("singleton mask must not query current"),
+                    1,
+                    PathType::malus
+                ),
+                t
+            );
+            for width in [1, 2] {
+                for malus in malus_profiles {
+                    check(&[t], t, width, malus);
+                    check(&[t, t], t, width, malus);
+                }
+            }
+        }
+        // All 27x27 pairs across both normal and big-mob widths and all malus profiles.
+        for &a in &PathType::ALL {
+            for &b in &PathType::ALL {
+                for width in [1, 2] {
+                    for malus in malus_profiles {
+                        check(&[a, b], a, width, malus);
+                        check(&[a, b], PathType::Open, width, malus);
+                    }
+                }
+            }
+        }
+        // Deterministic pseudo-random multi-element subsets (size 2..=6).
+        let mut seed: u64 = 0x5EED_CAFE_1234_5678;
+        let mut next = || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 33) as usize
+        };
+        let mut sample = Vec::with_capacity(6);
+        for _ in 0..500 {
+            sample.clear();
+            let len = 2 + (next() % 5);
+            for _ in 0..len {
+                sample.push(PathType::ALL[next() % PathType::COUNT]);
+            }
+            let current = sample[0];
+            for width in [1, 2] {
+                for malus in malus_profiles {
+                    check(&sample, current, width, malus);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fire_tag_classification_handles_vanilla_empty_and_custom_tags() {
+        let empty_map = HashMap::new();
+        assert!(matches!(FireTag::of(&empty_map), FireTag::Empty));
+
+        let mut tags = HashMap::new();
+        tags.insert("minecraft:fire".to_owned(), HashSet::new());
+        assert!(matches!(FireTag::of(&tags), FireTag::Empty));
+
+        let vanilla: HashSet<String> = ["minecraft:fire", "minecraft:soul_fire"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        tags.insert("minecraft:fire".to_owned(), vanilla);
+        assert!(matches!(FireTag::of(&tags), FireTag::Vanilla));
+
+        let partial: HashSet<String> = ["minecraft:fire"].into_iter().map(str::to_owned).collect();
+        tags.insert("minecraft:fire".to_owned(), partial);
+        assert!(matches!(FireTag::of(&tags), FireTag::Custom(_)));
+
+        let superset: HashSet<String> =
+            ["minecraft:fire", "minecraft:soul_fire", "minecraft:stone"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        tags.insert("minecraft:fire".to_owned(), superset);
+        assert!(matches!(FireTag::of(&tags), FireTag::Custom(_)));
+
+        let replaced: HashSet<String> = ["minecraft:fire", "minecraft:stone"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        tags.insert("minecraft:fire".to_owned(), replaced);
+        assert!(matches!(FireTag::of(&tags), FireTag::Custom(_)));
+    }
+
+    #[test]
+    fn stack_neighbors_buffer_preserves_order_and_capacity() {
+        let mut neighbors = Neighbors::new();
+        assert!(neighbors.as_slice().is_empty());
+        // Fly evaluator pushes at most 26 neighbours; stack buffer holds 32.
+        for i in 0..32u32 {
+            neighbors.push(i * 3 + 1);
+        }
+        assert_eq!(neighbors.as_slice().len(), 32);
+        for (idx, &val) in neighbors.as_slice().iter().enumerate() {
+            assert_eq!(val, idx as u32 * 3 + 1);
+        }
+        neighbors.clear();
+        assert!(neighbors.as_slice().is_empty());
+        neighbors.push(42);
+        assert_eq!(neighbors.as_slice(), &[42]);
+    }
+
+    fn reference_check_neighbours(
+        w: &MobWorld<'_>,
+        x: i32,
+        y: i32,
+        z: i32,
+        t: PathType,
+    ) -> PathType {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if dx == 0 && dz == 0 {
+                        continue;
+                    }
+                    let pos = [
+                        x.saturating_add(dx),
+                        y.saturating_add(dy),
+                        z.saturating_add(dz),
+                    ];
+                    let state = w.world.block(pos[0], pos[1], pos[2]);
+                    let own = w.path_type_from_state(pos[0], pos[1], pos[2]);
+                    let facts = w.facts.get(state);
+                    let default = if facts.name.as_ref() == "minecraft:sweet_berry_bush" {
+                        Some(PathType::DamagingInNeighbor)
+                    } else if data::vanilla_burning_block(
+                        &facts.name,
+                        facts.emission > 0,
+                        w.has_tag("minecraft:fire", &facts.name),
+                    ) {
+                        Some(PathType::FireInNeighbor)
+                    } else {
+                        None
+                    };
+                    if let Some(adjacent) = default {
+                        return adjacent;
+                    }
+                    if matches!(facts.fluid, Fluid::Water | Fluid::Modded) {
+                        return PathType::WaterBorder;
+                    }
+                    if let Some(adjacent) = data::vanilla_adjacent(own) {
+                        return adjacent;
+                    }
+                }
+            }
+        }
+        t
+    }
+
+    fn test_path_mob(position: Vec3, width: f32, height: f32) -> PathMob {
+        PathMob {
+            position,
+            width,
+            height,
+            on_ground: true,
+            in_water: false,
+            max_up_step: 0.6,
+            max_fall_distance: 3,
+            malus: [None; PATH_TYPES],
+            can_float: true,
+            can_open_doors: false,
+            can_pass_doors: true,
+            can_walk_over_fences: false,
+            stands_on_lava: false,
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn astar_and_check_neighbours_match_reference_across_hazards_chunks_and_evaluators() {
+        let build_scene = |enable_cache: bool| {
+            move |world: &mut crate::world::World,
+                  registry: &horizon_world::registry::BlockRegistry| {
+                if enable_cache {
+                    world.enable_path_type_cache();
+                }
+                for cx in -1..=1 {
+                    for cz in -1..=1 {
+                        world
+                            .chunks
+                            .insert((cx, cz), std::sync::Arc::new(Chunk::empty(cx, cz)));
+                    }
+                }
+                let st = |name: &str| registry.default_state(name).unwrap();
+                let stone = st("minecraft:stone");
+                let water = st("minecraft:water");
+                let lava = st("minecraft:lava");
+                let fire = st("minecraft:fire");
+                let soul_fire = st("minecraft:soul_fire");
+                let magma = st("minecraft:magma_block");
+                let berry = st("minecraft:sweet_berry_bush");
+                let cactus = st("minecraft:cactus");
+                let fence = st("minecraft:oak_fence");
+                let door = st("minecraft:oak_door");
+                let rail = st("minecraft:rail");
+                let campfire_lit = st("minecraft:campfire");
+                let campfire_unlit = (0..registry.len())
+                    .find_map(|i| {
+                        let id = BlockStateId(i as u32);
+                        let s = registry.state(id)?;
+                        (s.name == "minecraft:campfire"
+                            && s.properties.get("lit").map(String::as_str) == Some("false"))
+                        .then_some(id)
+                    })
+                    .unwrap_or(stone);
+
+                // Floor spanning chunk boundaries (-4..=20, -4..=20) at y = 64.
+                for x in -4..=20 {
+                    for z in -4..=20 {
+                        world.set(x, 64, z, stone).unwrap();
+                    }
+                }
+                // Obstacle wall with a gap crossing the x=16 chunk boundary.
+                for z in -2..=12 {
+                    if z != 10 {
+                        world.set(8, 65, z, stone).unwrap();
+                        world.set(8, 66, z, stone).unwrap();
+                    }
+                }
+                // Hazards and special path types.
+                world.set(3, 64, 3, magma).unwrap();
+                world.set(5, 65, 2, fire).unwrap();
+                world.set(5, 65, 5, soul_fire).unwrap();
+                world.set(6, 65, 7, berry).unwrap();
+                world.set(2, 65, 9, cactus).unwrap();
+                world.set(12, 64, 4, lava).unwrap();
+                world.set(14, 65, 6, campfire_lit).unwrap();
+                world.set(15, 65, 6, campfire_unlit).unwrap();
+                world.set(16, 65, 2, fence).unwrap();
+                world.set(16, 65, 4, door).unwrap();
+                world.set(0, 65, 0, rail).unwrap();
+                world.set(1, 65, 0, rail).unwrap();
+                // Water pool for swim/amphibious checks.
+                for x in -3..=2 {
+                    for z in -3..=2 {
+                        world.set(x, 64, z, water).unwrap();
+                        world.set(x, 63, z, water).unwrap();
+                        world.set(x, 62, z, stone).unwrap();
+                    }
+                }
+            }
+        };
+
+        let mut cached_paths: Vec<Option<Path>> = Vec::new();
+        let mut uncached_paths: Vec<Option<Path>> = Vec::new();
+        for (enable_cache, out) in [(true, &mut cached_paths), (false, &mut uncached_paths)] {
+            let ran = crate::mobs::world::with_built_test_world(
+                &[],
+                build_scene(enable_cache),
+                |w, _| {
+                    // 1. Differential check of check_neighbours & Finder::block across chunk boundaries
+                    //    (including unloaded chunk border at x = 31..33).
+                    let probe_mob = test_path_mob(Vec3::new(0.5, 65.0, 0.5), 0.6, 1.8);
+                    let probe_finder = Finder::new(w, &probe_mob, Evaluator::Walk);
+                    for x in -4..=19 {
+                        for z in -4..=19 {
+                            assert_eq!(
+                                probe_finder.block(x, 64, z),
+                                w.world.block(x, 64, z),
+                                "chunk cursor mismatch at ({x}, 64, {z})"
+                            );
+                            assert_eq!(
+                                w.check_neighbours(x, 65, z, PathType::Walkable),
+                                reference_check_neighbours(w, x, 65, z, PathType::Walkable),
+                                "check_neighbours mismatch at ({x}, 65, {z})"
+                            );
+                            assert_eq!(
+                                probe_finder.walk_path_type(x, 65, z),
+                                w.path_type_static(x, 65, z),
+                                "Finder::walk_path_type mismatch at ({x}, 65, {z})"
+                            );
+                        }
+                    }
+                    // Unloaded chunk cursor parity.
+                    for x in 31..=34 {
+                        assert_eq!(probe_finder.block(x, 65, 0), w.world.block(x, 65, 0));
+                    }
+
+                    // 2. Differential check under empty and custom #minecraft:fire tags.
+                    let empty_tags = HashMap::new();
+                    let mut w_empty = w.clone();
+                    w_empty.block_tags = &empty_tags;
+                    let mut custom_tags = HashMap::new();
+                    custom_tags.insert(
+                        "minecraft:fire".to_owned(),
+                        ["minecraft:stone"].into_iter().map(str::to_owned).collect(),
+                    );
+                    let mut w_custom = w.clone();
+                    w_custom.block_tags = &custom_tags;
+                    for (x, z) in [(4, 2), (4, 5), (6, 7), (14, 6), (15, 6), (10, 10)] {
+                        assert_eq!(
+                            w_empty.check_neighbours(x, 65, z, PathType::Walkable),
+                            reference_check_neighbours(&w_empty, x, 65, z, PathType::Walkable)
+                        );
+                        assert_eq!(
+                            w_custom.check_neighbours(x, 65, z, PathType::Walkable),
+                            reference_check_neighbours(&w_custom, x, 65, z, PathType::Walkable)
+                        );
+                    }
+
+                    // 3. Multi-evaluator A* paths (including big mob, rail-on/off, door-open, and >4 targets).
+                    let walk_mob = test_path_mob(Vec3::new(0.5, 65.0, 5.5), 0.6, 1.8);
+                    let big_mob = test_path_mob(Vec3::new(0.5, 65.0, 5.5), 1.4, 2.7);
+                    let rail_mob = test_path_mob(Vec3::new(0.5, 65.0, 0.5), 0.6, 1.8);
+                    let mut door_mob = test_path_mob(Vec3::new(14.5, 65.0, 4.5), 0.6, 1.8);
+                    door_mob.can_open_doors = true;
+                    let mut swim_mob = test_path_mob(Vec3::new(-2.5, 63.0, -2.5), 0.6, 0.6);
+                    swim_mob.in_water = true;
+                    let fly_mob = test_path_mob(Vec3::new(0.5, 67.0, 0.5), 0.6, 0.6);
+
+                    out.push(Finder::new(w, &walk_mob, Evaluator::Walk).find(
+                        &[[17, 65, 8]],
+                        32.0,
+                        0,
+                        512,
+                    ));
+                    out.push(Finder::new(w, &big_mob, Evaluator::Walk).find(
+                        &[[17, 65, 8]],
+                        32.0,
+                        0,
+                        512,
+                    ));
+                    out.push(Finder::new(w, &rail_mob, Evaluator::Walk).find(
+                        &[[2, 65, 0]],
+                        16.0,
+                        0,
+                        256,
+                    ));
+                    out.push(Finder::new(w, &door_mob, Evaluator::Walk).find(
+                        &[[18, 65, 4]],
+                        16.0,
+                        0,
+                        256,
+                    ));
+                    out.push(
+                        Finder::new(w, &swim_mob, Evaluator::Swim { breach: true }).find(
+                            &[[1, 63, 1]],
+                            16.0,
+                            0,
+                            256,
+                        ),
+                    );
+                    out.push(
+                        Finder::new(
+                            w,
+                            &swim_mob,
+                            Evaluator::Amphibious {
+                                prefers_shallow: true,
+                            },
+                        )
+                        .find(&[[4, 65, 4]], 24.0, 0, 512),
+                    );
+                    out.push(Finder::new(w, &fly_mob, Evaluator::Fly).find(
+                        &[[18, 68, 10]],
+                        32.0,
+                        0,
+                        512,
+                    ));
+                    // Six targets force SmallVec<[Target; 4]> spill path.
+                    let six_targets = [
+                        [17, 65, 8],
+                        [18, 65, 8],
+                        [17, 65, 9],
+                        [18, 65, 9],
+                        [17, 65, 10],
+                        [18, 65, 10],
+                    ];
+                    out.push(Finder::new(w, &walk_mob, Evaluator::Walk).find(
+                        &six_targets,
+                        32.0,
+                        0,
+                        512,
+                    ));
+                },
+            );
+            assert!(
+                ran,
+                "prepared vanilla test resources required for daily test"
+            );
+        }
+        assert_eq!(
+            cached_paths, uncached_paths,
+            "seqlock PathTypeCache must produce bit-exact identical paths to uncached search"
+        );
+        assert!(
+            cached_paths[0].as_ref().is_some_and(|p| p.reached),
+            "walk mob should navigate around the wall across the chunk boundary"
+        );
+        assert!(
+            cached_paths[6].as_ref().is_some_and(|p| p.reached),
+            "fly mob should reach across the maze"
+        );
+        assert!(
+            cached_paths[7].as_ref().is_some_and(|p| p.reached),
+            "multi-target (>4) query should reach a target"
+        );
     }
 }
