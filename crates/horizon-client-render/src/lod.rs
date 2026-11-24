@@ -2618,6 +2618,20 @@ impl Lod {
     pub fn surface(&self, x: i32, z: i32) -> Option<Surface> {
         surface_in(&self.ready, x, z)
     }
+    /// The highest retained material run in each cell of this exact ready tile,
+    /// in row-major order. Detailed tiles can hold runs without surface metadata.
+    /// No fallback to another level and no work scheduled for a missing tile.
+    pub fn tile_top_spans(
+        &self,
+        key: TileKey,
+    ) -> Option<impl ExactSizeIterator<Item = Option<Span>> + '_> {
+        let tile = self
+            .ready
+            .get(&key)
+            .filter(|tile| tile.len() == CELLS * CELLS)?;
+        Some((0..CELLS * CELLS).map(|index| tile.spans(index).last().copied()))
+    }
+
     /// A tile's samples as though its source had returned them, for a test
     /// outside this crate reading the far terrain.
     #[cfg(feature = "test-support")]

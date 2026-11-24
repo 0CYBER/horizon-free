@@ -203,6 +203,34 @@ pub mod built {
             biome,
         }
     }
+    /// A retained material run, constructed by the game from the LOD tile.
+    pub fn lod_column_footprint(
+        min_y: i16,
+        top_y: i16,
+        state: crate::BlockStateId,
+        biome: String,
+        sky_light: u8,
+        block_light: u8,
+    ) -> crate::LodColumnFootprint {
+        crate::LodColumnFootprint {
+            min_y,
+            top_y,
+            state,
+            biome,
+            sky_light,
+            block_light,
+        }
+    }
+    /// A retained LOD tile's exact cell ordering and scale.
+    pub fn lod_tile_footprint(
+        cell_width: i32,
+        columns: Vec<Option<crate::LodColumnFootprint>>,
+    ) -> crate::LodTileFootprint {
+        crate::LodTileFootprint {
+            cell_width,
+            columns,
+        }
+    }
     /// The replay this window plays, constructed by the game and only read by mods.
     pub fn replay_state(
         recording: String,

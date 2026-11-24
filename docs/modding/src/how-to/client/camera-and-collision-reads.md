@@ -111,6 +111,13 @@ after the player moves away: keep what you read. Inside the loaded chunks read t
 (`client_surface_heights`), since a far tile can lag an edit. No client world, or more than
 65,536 columns in one call, is `Err` and reads nothing.
 
+`client_lod_columns(&[(tile_x, tile_z, level)])` reads the exact retained CPU tiles, without
+substituting another level. Each ready tile returns its cell width and 256 cells in
+`z * 16 + x` order. A cell holds the top drawn material run, its half-open Y range, biome and
+retained light, or `None` when empty. This also covers detailed runs without ground-picking
+surface metadata. A missing tile is `None`, not 256 empty cells. A call can request at most
+256 tiles and never schedules terrain or reads anything new from the server.
+
 ## Crosshair reads
 
 `ClientHost::crosshair_target()` returns the ordinary interaction-range target as

@@ -112,6 +112,36 @@ pub struct TerrainColumn {
     /// The biome, such as `minecraft:plains`.
     pub biome: String,
 }
+
+/// The topmost material footprint in one retained LOD cell. It can be a
+/// solid, a fluid, or a reduced footprint covering many world columns.
+#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LodColumnFootprint {
+    /// The lowest Y in this material run, inclusive.
+    pub min_y: i16,
+    /// The top face of the run (its upper Y, exclusive).
+    pub top_y: i16,
+    /// The retained material as a state ID in the current game's registry.
+    pub state: BlockStateId,
+    /// The biome used to tint this run.
+    pub biome: String,
+    /// Retained sky light (0–15).
+    pub sky_light: u8,
+    /// Retained block light, including material emission (0–15).
+    pub block_light: u8,
+}
+
+/// An exact retained far-terrain tile read by `ClientHost::client_lod_columns`.
+#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct LodTileFootprint {
+    /// The width of a cell in world blocks (`1 << level`).
+    pub cell_width: i32,
+    /// The tile's 256 cells in order `z * 16 + x`; `None` is an empty cell.
+    pub columns: Vec<Option<LodColumnFootprint>>,
+}
+
 /// Why `upgrade_block_entity_nbt` or `upgrade_entity_nbt` gave no upgraded value. Depth is counted as the data is
 /// encoded (the root compound at 0): the compound the NBT writer puts around an element of a mixed list is a level
 /// of its own. There is no size refusal.

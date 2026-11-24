@@ -123,6 +123,20 @@ pub trait ClientViewClientHost {
         columns: &[(i32, i32)],
     ) -> Result<Vec<Option<TerrainColumn>>, String>;
     /// Side: client.
+    /// Read the CPU footprints of exact far-terrain tiles by `(tile_x, tile_z, level)`.
+    /// A tile's world origin is `(tile_x, tile_z) * (16 << level)`; each response
+    /// corresponds to one input. `None` means that exact tile is unavailable
+    /// or far terrain is off, not that its cells are empty. A ready tile still
+    /// covers the terrain the renderer keeps, which can lag live chunk edits.
+    /// It does not generate, request, or load anything and never substitutes
+    /// another level. Returns `Err` before reading if there is no client
+    /// world or more than 256 tiles (65,536 cells) were requested.
+    #[access(WorldOnly)]
+    fn client_lod_columns(
+        &self,
+        tiles: &[(i32, i32, u8)],
+    ) -> Result<Vec<Option<LodTileFootprint>>, String>;
+    /// Side: client.
     /// Points the view at `entity` (`Minecraft.setCameraEntity`), as a server's camera packet
     /// does; the local player's own ref puts it back. True when the view now follows it; false,
     /// with nothing changed, for a stale ref, an entity this window is not shown, or one the

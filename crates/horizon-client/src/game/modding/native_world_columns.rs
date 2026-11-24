@@ -3,7 +3,7 @@
 use super::Game;
 use super::block_edits::MAX_COLUMNS;
 use horizon_client::streaming::ChunkGenerator;
-use mod_api::TerrainColumn;
+use mod_api::{LodTileFootprint, TerrainColumn};
 
 /// The most columns one `terrain_surface` call asks about: each is a noise sample on the server tick.
 pub(super) const MAX_TERRAIN_COLUMNS: usize = 4096;
@@ -106,6 +106,51 @@ impl Game<'_> {
             })
             .collect())
     }
+
+    pub(super) fn client_lod_columns(
+        &self,
+        tiles: &[(i32, i32, u8)],
+    ) -> Result<Vec<Option<LodTileFootprint>>, String> {
+        use horizon_client::lod::TileKey;
+        use mod_api::__private::built::{lod_column_footprint, lod_tile_footprint};
+
+        const MAX_LOD_TILES: usize = MAX_COLUMNS / (16 * 16);
+        if !self.remote.as_ref().is_some_and(|r| r.logged_in) {
+            return Err("no client world is open".to_string());
+        }
+        if tiles.len() > MAX_LOD_TILES {
+            return Err(format!(
+                "{} tiles, more than {MAX_LOD_TILES} a call",
+                tiles.len()
+            ));
+        }
+        let Some(lod) = self.lod.as_ref() else {
+            return Ok(vec![None; tiles.len()]);
+        };
+        let biomes = world_biomes!(self);
+        Ok(tiles
+            .iter()
+            .map(|&(x, z, level)| {
+                let key = TileKey { x, z, level };
+                let columns = lod
+                    .tile_top_spans(key)?
+                    .map(|span| {
+                        let span = span?;
+                        Some(lod_column_footprint(
+                            span.min,
+                            span.max,
+                            mod_api::BlockStateId(span.state.0),
+                            biomes.name(span.biome).to_owned(),
+                            ((span.light >> 4) & 15) as u8,
+                            ((span.light >> 12) & 15) as u8,
+                        ))
+                    })
+                    .collect();
+                Some(lod_tile_footprint(key.size() / 16, columns))
+            })
+            .collect())
+    }
+
     /// For a server mod: each column's height by `heightmap` in the authoritative level `dimension` (the one being
     /// ticked), none for a column not loaded. `Err` says why nothing was read: another dimension or a client of a
     /// server, or more than 65,536 columns (`MAX_COLUMNS`).
