@@ -204,6 +204,54 @@ class PortReportTests(unittest.TestCase):
         self.assertEqual(report.primary_file(entry, set(), "n/Other"), "a/living_entity.rs")
         self.assertIsNone(report.primary_file({"rust": {f"{i}.rs": [] for i in range(4)}}, set(), "n/Other"))
 
+    def _empty_diff(self):
+        return {
+            "facts": {}, "packets": {}, "commands": {"added": [], "removed": [], "changed": {}},
+            "registries": {"added": {}, "removed": [], "changed": {}},
+            "blocks": {"added": [], "removed": [], "changed": {}, "format": [],
+                       "state_count": [4, 4], "state_ids_shifted": 0, "first_shifted": None},
+            "items": {"added": [], "removed": [], "changed": {}, "components": {}},
+            "classes": {"added": [], "removed": [], "moved": {}, "changed": {}, "horizon": {}},
+        }
+
+    def test_block_state_id_shift_produces_item_and_not_clean(self):
+        d = self._empty_diff()
+        d["blocks"]["state_ids_shifted"] = 2
+        d["blocks"]["first_shifted"] = "stone"
+        with mock.patch.object(report, "files_containing", return_value=["crates/w/src/blocks.rs"]):
+            built = report.build(d, {"classes": {}, "harnesses": {}}, "26.3", "26.4",
+                                 {"id": "26.3", "protocol_version": 777, "world_version": 1234})
+        self.assertNotIn("blocks", built["clean"])
+        [item] = [i for i in built["items"] if i["kind"] == "block-ids"]
+        self.assertIn("stone", item["title"])
+        self.assertIn("stone", report.markdown(built))
+
+    def test_block_state_count_change_alone_produces_item_and_not_clean(self):
+        d = self._empty_diff()
+        d["blocks"]["state_count"] = [4, 5]
+        with mock.patch.object(report, "files_containing", return_value=["crates/w/src/blocks.rs"]):
+            built = report.build(d, {"classes": {}, "harnesses": {}}, "26.3", "26.4",
+                                 {"id": "26.3", "protocol_version": 777, "world_version": 1234})
+        self.assertNotIn("blocks", built["clean"])
+        [item] = [i for i in built["items"] if i["kind"] == "block-ids"]
+        self.assertIn("4 -> 5", item["title"])
+
+    def test_changed_item_default_component_produces_item(self):
+        d = self._empty_diff()
+        d["items"]["changed"] = {"stone": {"added": [], "removed": [],
+                                           "changed": {"name": [("/text", "Stone", "Rock")]}}}
+        d["items"]["components"] = {"name": {"added": 0, "removed": 0, "changed": 1}}
+        with mock.patch.object(report, "files_naming", return_value=["crates/i/src/components.rs"]):
+            built = report.build(d, {"classes": {}, "harnesses": {}}, "26.3", "26.4",
+                                 {"id": "26.3", "protocol_version": 777, "world_version": 1234})
+        self.assertNotIn("items", built["clean"])
+        [item] = [i for i in built["items"] if i["kind"] == "item-components"]
+        self.assertIn("stone", item["title"])
+        self.assertIn("name", item["title"])
+        text = report.markdown(built)
+        self.assertIn("stone", text)
+        self.assertIn("name", text)
+
 
 class VersionPortReportTests(unittest.TestCase):
     def test_harness_results_merge_shards(self):

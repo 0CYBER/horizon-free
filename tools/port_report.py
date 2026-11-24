@@ -148,16 +148,39 @@ def blocking_items(diff, mapping, pinned_facts, root, regen=None):
         items.append(item(1, "report-format", f"blocks.json format: {', '.join(diff['blocks']['format'])}",
                           files=files_containing("blocks.json", root),
                           details={"fields": diff["blocks"]["format"]}))
-    # Block state IDs are the chunk palette and the network protocol: a shift is a blocking change
-    # even when no block was added, removed or given a different property.
-    if diff["blocks"].get("state_ids_shifted"):
-        first = diff["blocks"].get("first_shifted")
+    # Block state IDs are the chunk palette and the network protocol: a shift or state-count change
+    # is a blocking change even when no block was added, removed or given a different property.
+    blocks = diff["blocks"]
+    shifted = blocks.get("state_ids_shifted") or 0
+    count_change = blocks.get("state_count")
+    count_differs = isinstance(count_change, (list, tuple)) and len(count_change) == 2 and count_change[0] != count_change[1]
+    if shifted or count_differs:
+        first = blocks.get("first_shifted")
+        parts = []
+        if shifted:
+            parts.append(f"{shifted} blocks shifted" + (f" (first: {first})" if first else ""))
+        if count_differs:
+            parts.append(f"states {count_change[0]} -> {count_change[1]}")
         items.append(item(1, "block-ids",
-                          f"Block state IDs: {diff['blocks']['state_ids_shifted']} blocks shifted"
-                          + (f" (first: {first})" if first else ""),
+                          f"Block state IDs: {', '.join(parts)}",
                           files=files_containing("blocks.json", root),
-                          details={"shifted": diff["blocks"]["state_ids_shifted"], "first": first,
-                                   "state_count": diff["blocks"].get("state_count")}))
+                          details={"shifted": shifted, "first": first,
+                                   "state_count": count_change}))
+    items_changed = diff["items"].get("changed", {})
+    if items_changed:
+        comp_summary = diff["items"].get("components", {})
+        comp_names = sorted(comp_summary) if comp_summary else sorted({
+            k for entry in items_changed.values()
+            for kind in ("added", "removed", "changed")
+            for k in (entry.get(kind, {}).keys() if isinstance(entry.get(kind), dict) else entry.get(kind, []))
+        })
+        item_names = sorted(items_changed)[:12]
+        suffix = f" (+{len(items_changed) - 12})" if len(items_changed) > 12 else ""
+        comp_text = f"; components: {', '.join(comp_names[:12])}" if comp_names else ""
+        items.append(item(1, "item-components",
+                          f"Item default components: {len(items_changed)} items changed ({', '.join(item_names)}{suffix}){comp_text}",
+                          files=files_naming(comp_names[:12], root),
+                          details={"items": items_changed, "components": comp_summary}))
     covered = set()
     if regen is not None:
         for name, entry in regen["generators"].items():
@@ -294,10 +317,16 @@ def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT, regen=
     for number, entry in enumerate(items, 1):
         entry["id"] = number
     clean = [kind for kind in ("packets", "commands") if not diff[kind]]
-    clean += [kind for kind in ("blocks", "items") if not (diff[kind]["added"] or diff[kind]["removed"]
-                                                            or diff[kind]["changed"]
-                                                            or diff[kind].get("state_ids_shifted")
-                                                            or diff[kind].get("format"))]
+    blocks_changed = (diff["blocks"]["added"] or diff["blocks"]["removed"] or diff["blocks"]["changed"]
+                      or diff["blocks"].get("format") or diff["blocks"].get("state_ids_shifted")
+                      or (isinstance(diff["blocks"].get("state_count"), (list, tuple))
+                          and len(diff["blocks"]["state_count"]) == 2
+                          and diff["blocks"]["state_count"][0] != diff["blocks"]["state_count"][1]))
+    if not blocks_changed:
+        clean.append("blocks")
+    if not (diff["items"]["added"] or diff["items"]["removed"] or diff["items"]["changed"]
+            or diff["items"].get("format")):
+        clean.append("items")
     classes = diff["classes"]
     return {
         "old": old, "new": new,
