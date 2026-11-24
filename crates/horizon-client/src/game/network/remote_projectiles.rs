@@ -899,13 +899,7 @@ impl Game<'_> {
                     continue;
                 }
                 if let Some(m) = self.mobs.iter().find(|m| m.id == target) {
-                    // Another player's motion is not known here: its step.
-                    r.velocity = Vec3::new(
-                        m.position.x - r.previous.x,
-                        m.position.y - r.previous.y,
-                        m.position.z - r.previous.z,
-                    );
-                    r.position = m.position;
+                    Self::follow_holder(r, m);
                 }
             }
             self.rocket_spark(r);

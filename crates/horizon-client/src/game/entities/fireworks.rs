@@ -9,7 +9,7 @@ use horizon_client::{
     collisions::SceneCollisions,
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Damage, Species, Who},
+    mobs::{Damage, Mob, Species, Who},
     particles::{ParticleOptions, ParticleType},
     projectiles::{Hit as ProjectileHit, ProjectileWorld},
     random_source,
@@ -251,9 +251,12 @@ impl Game<'_> {
             |s: Option<&ItemStack>| s.is_some_and(|s| &*s.item == "minecraft:firework_rocket");
         let main = self.stack_in(self.selected);
         let offhand_only = is_rocket(self.offhand.as_ref()) && !is_rocket(main);
-        let right = offhand_only == self.settings.main_hand_left;
-        let arm = if right { 80 } else { -80 };
-        let v = view_vector(self.yaw + arm as f32, 0.0);
+        Self::hand_angle(self.yaw, offhand_only == self.settings.main_hand_left)
+    }
+    /// `Entity.getHandHoldingItemAngle`'s offset for a player turned to `yaw`
+    /// holding the item in its right arm or its left.
+    fn hand_angle(yaw: f32, right: bool) -> [f64; 3] {
+        let v = view_vector(yaw + if right { 80.0 } else { -80.0 }, 0.0);
         [v[0] * 0.5, v[1] * 0.5, v[2] * 0.5]
     }
     /// `FireworkRocketEntity.tick` for a rocket attached to the local player:
@@ -321,6 +324,35 @@ impl Game<'_> {
             self.native_player_elytra_boost(player, &name);
         }
         true
+    }
+    /// `FireworkRocketEntity.tick` on a client for a rocket attached to
+    /// another entity: at the rocket hand of a gliding player
+    /// (`getHandHoldingItemAngle`), else at its feet, with its motion. The
+    /// glide boost isn't applied to the copy: a server sends its motion and
+    /// position, and this client has no `RemotePlayer.lerpMotion` to blend it in.
+    pub(super) fn follow_holder(r: &mut Rocket, m: &Mob) {
+        let hand = if m.extra.fall_flying && &*m.kind.id == "minecraft:player" {
+            let is_rocket = |id: Option<&str>| id == Some("minecraft:firework_rocket");
+            let offhand_only =
+                is_rocket(m.extra.off_hand_id()) && !is_rocket(m.extra.main_hand_id());
+            Self::hand_angle(m.yaw, offhand_only == m.main_arm_left())
+        } else {
+            [0.0; 3]
+        };
+        r.position = m.position.add_vector(Vec3::new(hand[0], hand[1], hand[2]));
+        // A vanilla server sends a gliding entity's motion every update
+        // (`ServerEntity.sendChanges`), but Horizon's LAN and dedicated
+        // servers send a player's only when it needs a sync, so this copy's
+        // stays zero (#16260): then the holder's step this tick stands in.
+        r.velocity = if m.velocity == Vec3::ZERO {
+            Vec3::new(
+                m.position.x - m.previous.x,
+                m.position.y - m.previous.y,
+                m.position.z - m.previous.z,
+            )
+        } else {
+            m.velocity
+        };
     }
     pub(super) fn tick_rockets(&mut self) {
         let targets = if self.rockets.is_empty() {

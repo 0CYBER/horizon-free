@@ -645,6 +645,7 @@ horizon-client game::finalize_spawn::tests::the_striders_piglin_rider_needs_spaw
 horizon-client game::fireworks::events_tests::a_detonating_rocket_posts_one_explode_from_its_owner lib daily resources
 horizon-client game::fireworks::events_tests::a_falling_rocket_hits_the_ground_and_one_in_water_splashes lib daily resources
 horizon-client game::fireworks::events_tests::a_silent_rocket_bursts_without_blast_or_twinkle lib daily resources
+horizon-client game::fireworks::events_tests::another_players_boost_rocket_sits_at_their_rocket_hand lib daily resources
 horizon-client game::fireworks::events_tests::launching_from_a_block_and_while_gliding_use_the_rocket_up lib daily resources
 horizon-client game::fireworks::hit_attempt_tests::remaining_hit_callers_observe_refusals_and_zero_damage lib daily resources
 horizon-client game::fireworks::tests::a_flying_rocket_opens_a_motion_run_of_its_own lib daily resources
