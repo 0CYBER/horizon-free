@@ -79,6 +79,10 @@ pub struct WorldDrawn<'a> {
     /// The block textures the terrain samples, for drawing blocks with the player's own
     /// textures (`block_sprites` says where a block's are).
     pub block_sprites: BlockSpriteArrays<'a>,
+    /// The sky, fog, sun, light and water the frame was drawn under ([`WorldLook`]), for a pass
+    /// that should sit in the same light: the fog's colour and distances, the sun's and moon's
+    /// directions (with a shader pack's `sunPathRotation`), the light's colours, under water.
+    pub look: WorldLook,
 }
 
 /// The block sprite arrays ([`WorldDrawn::block_sprites`]): each texture a whole square layer,
@@ -385,6 +389,7 @@ pub fn celestial_sky(sky: &mut CelestialSky<'_>) {
 }
 
 pub use horizon_client_render::render_geometry::{EntitySpan, Vertex};
+pub use horizon_client_render::render_slots::WorldLook;
 
 /// Install the native render adapters before engine startup.
 pub fn install() {
@@ -417,6 +422,7 @@ pub fn install() {
                     nearest: v.block_sprites.nearest,
                     filtered: v.block_sprites.filtered,
                 },
+                look: v.look,
             })
         },
         hand_drawn: |v| {

@@ -4654,6 +4654,11 @@ impl PackPost {
         self.hand = Some((pass, geometry));
     }
 
+    /// The pack's `sunPathRotation` in degrees: how far it turns the sky's bodies' path.
+    pub fn sun_path_rotation(&self) -> f32 {
+        self.uniforms.shadow.sun_path_rotation
+    }
+
     /// Whether the pack draws the first-person hand itself.
     pub fn has_hand(&self) -> bool {
         self.hand.is_some()

@@ -524,6 +524,34 @@ fn day_fraction(degrees: f32) -> f32 {
     (degrees + 90.0) % 360.0 / 360.0
 }
 
+/// The frame's [`WorldLook`](crate::render_slots::WorldLook) for `world_drawn`:
+/// `sun_path_rotation` is the shader pack's, a `shaders/` or a native one (`None`: no pack drew the frame).
+pub fn world_look(frame: &Frame, sun_path_rotation: Option<f32>) -> crate::render_slots::WorldLook {
+    let tilt = sun_path_rotation.unwrap_or(0.0);
+    let sky = &frame.sky;
+    let (fog_color, fog) = super::fog_uniform(frame);
+    let rgb1 = |c: [f32; 3]| [c[0], c[1], c[2], 1.0];
+    crate::render_slots::WorldLook {
+        sky_color: rgb1(sky.sky_color),
+        fog_color,
+        fog,
+        sun_direction: body(sky.sun_angle, tilt).normalize(),
+        moon_direction: body(sky.moon_angle, tilt).normalize(),
+        light_direction: body(light_angle(frame), tilt).normalize(),
+        sun_angle: day_fraction(sky.sun_angle),
+        sky_light_factor: sky.sky_light_factor,
+        sky_light_color: sky.sky_light_color,
+        ambient_light_color: sky.ambient_light_color,
+        block_light_tint: sky.block_light_tint,
+        sunrise_color: sky.sunrise_color,
+        star_brightness: sky.star_brightness,
+        underwater: frame.underwater,
+        water_fog_color: frame.water_fog,
+        night_vision: frame.night_vision,
+        shader_pack: sun_path_rotation.is_some(),
+    }
+}
+
 /// `shadowAngle`: the day fraction of the body that casts the shadows, the sun by day and the
 /// moon (taken below 360) at night.
 fn shadow_angle(frame: &Frame) -> f32 {
@@ -2712,6 +2740,35 @@ pub(super) mod initial_history_tests {
         assert_eq!(float(&u, "ambientLight")[0], 0.25);
         assert_eq!(float(&u, "playerMood")[0], 0.0235);
         assert_eq!(float(&u, "constantMood")[0], 0.0235);
+    }
+
+    #[test]
+    fn world_look_gives_the_frames_sun_fog_and_water() {
+        let hud = HudBatch::scratch([1280, 720]);
+        let mut f = frame(&hud);
+        f.sky.sun_angle = 0.0;
+        f.sky.moon_angle = 180.0;
+        f.underwater = true;
+        f.water_fog = [0.1, 0.2, 0.6];
+        let look = world_look(&f, None);
+        // Noon: the sun straight up, the moon straight down, the sun lights the frame.
+        assert!(
+            look.sun_direction.abs_diff_eq(Vec3::Y, 1e-5),
+            "{:?}",
+            look.sun_direction
+        );
+        assert!(look.moon_direction.abs_diff_eq(-Vec3::Y, 1e-5));
+        assert_eq!(look.light_direction, look.sun_direction);
+        assert_eq!(look.sun_angle, 0.25);
+        let (color, fog) = super::super::fog_uniform(&f);
+        assert_eq!((look.fog_color, look.fog), (color, fog));
+        assert!(look.underwater && !look.shader_pack);
+        assert_eq!(look.water_fog_color, [0.1, 0.2, 0.6]);
+        // A pack's sunPathRotation turns the noon sun toward -Z (north), and says a pack drew.
+        let tilted = world_look(&f, Some(30.0));
+        assert!(tilted.shader_pack);
+        assert!(tilted.sun_direction.z < -0.4 && tilted.sun_direction.y > 0.8);
+        assert!((tilted.sun_direction.length() - 1.0).abs() < 1e-5);
     }
 
     pub(in crate::gfx) fn frame(hud: &HudBatch) -> Frame<'_> {

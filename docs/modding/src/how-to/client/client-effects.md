@@ -78,6 +78,18 @@ level's work and on one worker at a time, and their meshes stay 5 seconds after 
 names the level. Once views of a viewed level are drawn, such a view draws the sections
 meshed so far and nothing where a section is not meshed yet.
 
+## Matching the frame's sky and light
+
+A pass in `world_drawn` that draws its own picture (a map, a hologram, a view's
+composite) can sit in the frame's light with `WorldDrawn::look` (`WorldLook`): the
+fog's colour and distances as the terrain mixes them, unit world directions to the
+sun, the moon and the body lighting the frame, `sunAngle`, the sky, ambient and block
+light colours, the sunrise glow, star brightness, under water and water's fog colour,
+and night vision. With a shader pack on, the directions follow the pack's
+`sunPathRotation` and `shader_pack` is set: the pack's own sky, fog, lighting and
+tonemap are its shader code and are already in `color`, so copy from `color` to match
+them exactly, and use `look` for what the pack's uniforms were built from.
+
 ## Muffling sounds
 
 `ClientHost::muffle_sounds(amount, lowpass, ticks, exempt)` temporarily muffles the sound output, for example to accompany ringing ears after a nearby blast:
