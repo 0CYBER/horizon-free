@@ -487,18 +487,28 @@ impl Game<'_> {
         host.hub.teams.clone_from(&self.score.board.teams);
         let view = horizon_client::lan::scoreboard::View::of(&self.score.board);
         host.hub.guests.update_all(|g| {
-            if g.placed && g.scoreboard != view {
-                let packets = g.scoreboard.changes(&view);
-                if g.sent_sidebar_claims_slot
-                    && packets.iter().any(
-                        |packet| matches!(packet, Clientbound::SetDisplayObjective(d) if d.slot == 1),
-                    )
-                {
-                    g.sent_sidebar_claims_slot = false;
-                }
-                g.send_all(&packets);
-                g.scoreboard = view.clone();
+            if !g.placed {
+                return;
             }
+            let packets = if !g.scoreboard_synced {
+                g.scoreboard_synced = true;
+                view.initial_packets()
+            } else if g.scoreboard != view {
+                g.scoreboard.changes(&view)
+            } else {
+                return;
+            };
+            if g.sent_sidebar_claims_slot
+                && packets.iter().any(
+                    |packet| matches!(packet, Clientbound::SetDisplayObjective(d) if d.slot == 1),
+                )
+            {
+                g.sent_sidebar_claims_slot = false;
+            }
+            if !packets.is_empty() {
+                g.send_all(&packets);
+            }
+            g.scoreboard = view.clone();
         });
     }
     /// `ServerPlayer.doTick` score updates and the statistic criteria.
