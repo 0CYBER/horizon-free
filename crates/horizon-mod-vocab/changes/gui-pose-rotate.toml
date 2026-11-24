@@ -1,0 +1,3 @@
+ids = ["type:client::hud_layout::PoseOp", "type:client::hud_layout::PoseOp.Rotate", "type:GuiDraw", "method:DrawContext::gui_paint", "method:Hooks::health_hud"]
+why = "A mod's GUI pose can rotate (Matrix3x2fStack.rotate): PoseOp gains Rotate(radians), a positive angle turning +x toward +y (clockwise on the screen), applied after the ops before it like vanilla's pose stack. PoseOp gains a variant, so its wire layout and that of GuiDraw, which carries it, change, and so do DrawContext::gui_paint and Hooks::health_hud, which reach GuiDraw: wasm mods must rebuild."
+migrate = "A match on PoseOp needs an arm for Rotate (or a wildcard). Rebuild wasm mods against this SDK for the changed PoseOp and GuiDraw wire layouts."

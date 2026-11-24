@@ -98,7 +98,7 @@ pub enum GuiDraw {
 pub type Pose = [f32; 6];
 pub const IDENTITY: Pose = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
-/// Applies `op` like JOML's `translate` / `scale` (same float order).
+/// Applies `op` like JOML's `translate` / `scale` / `rotate` (same float order).
 pub fn pose_apply(m: &mut Pose, op: PoseOp) {
     match op {
         PoseOp::Translate(x, y) => {
@@ -110,6 +110,14 @@ pub fn pose_apply(m: &mut Pose, op: PoseOp) {
             m[1] *= x;
             m[2] *= y;
             m[3] *= y;
+        }
+        PoseOp::Rotate(angle) => {
+            let (sin, cos) = angle.sin_cos();
+            let (m00, m01, m10, m11) = (m[0], m[1], m[2], m[3]);
+            m[0] = m00 * cos + m10 * sin;
+            m[1] = m01 * cos + m11 * sin;
+            m[2] = m10 * cos - m00 * sin;
+            m[3] = m11 * cos - m01 * sin;
         }
     }
 }
@@ -1094,6 +1102,47 @@ fn opaque(color: u32) -> u32 {
 #[cfg(test)]
 #[path = "hud_layout_gradient_tests.rs"]
 mod gradient_tests;
+
+#[cfg(test)]
+mod pose_tests {
+    use super::*;
+
+    /// A quarter turn about a pivot (`translate`, then `rotate`, as a mod's compass needle
+    /// would push it) lays a fill's corners clockwise round that pivot on the screen.
+    #[test]
+    fn a_rotated_fill_turns_about_the_pivot() {
+        let atlas =
+            crate::hud::HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+                "/nonexistent/horizon-test-assets".into(),
+            ))
+            .unwrap();
+        let mut batch = crate::hud::HudBatch::scratch([854, 480]);
+        let draws = [
+            GuiDraw::Push(vec![
+                PoseOp::Translate(100.0, 50.0),
+                PoseOp::Rotate(std::f32::consts::FRAC_PI_2),
+            ]),
+            GuiDraw::Fill {
+                x0: 0,
+                y0: 0,
+                x1: 10,
+                y1: 4,
+                color: WHITE,
+            },
+            GuiDraw::Pop,
+        ];
+        paint(&mut batch, &atlas, &draws);
+        let mut corners: Vec<[i32; 2]> = batch
+            .vertices
+            .iter()
+            .map(|v| [v.pos[0].round() as i32, v.pos[1].round() as i32])
+            .collect();
+        corners.sort();
+        corners.dedup();
+        // (0,0) stays at the pivot, (10,0) goes 10 down, (0,4) 4 to the left.
+        assert_eq!(corners, [[96, 50], [96, 60], [100, 50], [100, 60]]);
+    }
+}
 
 #[cfg(test)]
 mod heart_blink_tests {

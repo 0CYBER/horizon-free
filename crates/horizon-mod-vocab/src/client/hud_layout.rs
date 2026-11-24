@@ -9,6 +9,9 @@ use std::borrow::Cow;
 pub enum PoseOp {
     Translate(f32, f32),
     Scale(f32, f32),
+    /// `Matrix3x2fStack.rotate(angle)`: radians, a positive angle turning +x toward +y
+    /// (clockwise on the screen, whose y grows downward).
+    Rotate(f32),
 }
 /// The render pipeline of a texture blit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
