@@ -1,5 +1,6 @@
 import contextlib
 import io
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -523,6 +524,33 @@ class CompareTests(unittest.TestCase):
             with self.subTest(name):
                 status, text = self.run_compare(base, {"hook-notes.md": NOTES, **files}, allow_added=True)
                 self.assertEqual(status, 1, text)
+
+    def test_reviewed_note_revision_does_not_exempt_other_changes(self):
+        root = Snapshots(self)
+        admitted = Path(root.tmp.name, gate.NOTE_UPDATES)
+        admitted.parent.mkdir()
+        revised = NOTES.replace("Old.", "Corrected.")
+        before, after = (page[page.index("## Existing"):].rstrip("\n") for page in (NOTES, revised))
+        admitted.write_text(
+            f"{sha256(before.encode()).hexdigest()} {sha256(after.encode()).hexdigest()} #18648 ## Existing\n"
+        )
+        base_wire = self.forwarders(self.BASE_CALLS)
+        addition = self.forwarders([*self.BASE_CALLS, ("Players::raw#dd", 1101)])
+        for name, notes, wire, allowed in [
+            ("exact revision", revised, addition, 0),
+            ("other text", revised.replace("Corrected.", "Different."), addition, 1),
+            ("renamed section", revised.replace("## Existing", "## Other"), addition, 1),
+            ("unrelated section", revised + "\n## Other\n\nNew.\n", addition, 1),
+            ("edited retained dispatch", revised, addition.replace("receiver.existing", "receiver.other"), 1),
+            ("no API addition", revised, base_wire, 1),
+        ]:
+            with self.subTest(name):
+                status, text = root.run(
+                    {"hook-notes.md": NOTES, "wire_guest_generated.rs": base_wire},
+                    {"hook-notes.md": notes, "wire_guest_generated.rs": wire},
+                    head_root=Path(root.tmp.name), allow_added=True,
+                )
+                self.assertEqual(status, allowed, text)
 
     def test_an_added_native_only_unsupported_stub_passes_with_the_flag(self):
         stub = ('#[cfg(not(target_arch = "wasm32"))]\n'

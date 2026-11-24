@@ -618,11 +618,16 @@ fails when:
   `--allow-added`, any other difference fails too; with it, added and changed entries are listed and pass:
   `cargo horizon-mod update` already reports signature-hash changes for declared internals;
 - any other generated file differs. With `--allow-added`, a new catalog hook may add its own guest dispatch and update
-  the catalog and its own hook-notes sections (the other sections stay as they were); existing guest dispatch must match
-  after accounting for the new hook and generated helper numbering. A new host call may add its own guest forwarder:
-  a wasm guest links a call by its name and signature hash, so the position numbers of the imports after it may move,
-  and so may the record numbers of the types after one it brings in, as long as they keep their order. Every other
-  forwarder and the hook notes stay as they were.
+  the catalog and its own new hook-notes sections; existing guest dispatch must match after accounting for the new
+  hook and generated helper numbering. A new host call may add its own guest forwarder: a wasm guest links a call
+  by its name and signature hash, so the import positions after it may move, as may the record numbers of the types
+  after one it brings in, as long as they keep their order. Every other forwarder stays as it was.
+
+An additive API change may correct existing generated prose if `tools/mod_api_hook_notes_updates.txt` names the
+exact revision: `OLD_SHA256 NEW_SHA256 #ISSUE ## Heading`. Hash each section's UTF-8 text as returned by the
+checker's `note_sections` (include its heading but not trailing newline characters). The preamble, heading and
+order still have to match; new sections still require a new hook. The list does not exempt any catalog or guest
+dispatch changes.
 
 The removal list is the only way an internal may go: one line per path, as `internals.json` writes it, then the issue
 (`horizon_mod_package::manifest::inject::Inject  #19576`). To retire some of a path's entries, name their kind, their
@@ -633,7 +638,7 @@ injection points (`[[inject]]`, #19576) are not compared; the mod API's types an
 
 CI runs it, with `--allow-added`, in `verify (mod API)` on a pull request that can reach the mod API: a change to
 `crates/horizon-client/src/game/`, `game.rs` or `entry.rs`, to the generator's crates (`crates/horizon-mod-*`), to the
-check or its removal list, to a `Cargo.toml`, `Cargo.lock` or the toolchain's config, to a Rust file that may hold a
+check or its review lists, to a `Cargo.toml`, `Cargo.lock` or the toolchain's config, to a Rust file that may hold a
 lower-crate internal `crates/horizon-mod-api-gen/internals.txt` declares, or to a Rust file under `crates/` that mentions
 `replaceable` before or after (`needs_mod_api` in `tools/ci/rust_changes.py`).
 

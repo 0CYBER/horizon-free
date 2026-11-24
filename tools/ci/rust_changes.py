@@ -114,7 +114,8 @@ MOD_API_PREFIXES = ("crates/horizon-client/src/game/", "crates/horizon-mod-", "c
 # The network NBT's tag ids and limits are in the core hash every wasm mod is checked by; the other core inputs live in
 # crates/horizon-mod-*.
 MOD_API_FILES = {"crates/horizon-client/src/game.rs", "crates/horizon-client/src/entry.rs",
-                 "tools/check_mod_api_unchanged.py", "tools/mod_api_removed_internals.txt", "Cargo.lock",
+                 "tools/check_mod_api_unchanged.py", "tools/mod_api_removed_internals.txt",
+                 "tools/mod_api_hook_notes_updates.txt", "Cargo.lock",
                  ".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools/ci/surface_report.py",
                  "tools/ci/surface.toml", "crates/horizon-core/src/nbt.rs",
                  # The toolchain the generator parses with and the layouts are compiled by.

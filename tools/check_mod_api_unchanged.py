@@ -10,9 +10,9 @@ the hook catalog (catalog.json, hook-notes.md) and the guest's generated hook di
   lists an entry the head still has; with --allow-added, added and changed entries are listed and pass
   (`cargo horizon-mod update` reports signature-hash changes for declared internals);
 - a path a native mod could declare without a kind that gains a second kind (E_INTERNAL_AMBIGUOUS), always;
-- any other difference in the generated files, except a catalog hook added with --allow-added, which explains its
-  generated catalog, new hook-notes sections (the others unchanged) and its own guest dispatch, and a host call added
-  with --allow-added, which explains its own guest forwarder and the guest's import numbers after it.
+- any other difference in the generated files, except an added hook's own catalog, note sections and dispatch,
+  or an added host call's guest forwarder and generated numbering, with --allow-added. An additive change
+  may also make an exact prose revision listed in tools/mod_api_hook_notes_updates.txt.
 The injection points' outputs (points.json, points_generated.rs) are never compared: `[[inject]]` and its points are
 removed (#19576), and a base that still writes them compares without them. The mod API's types and calls are the surface report's
 (tools/ci/surface_report.py), which runs beside this check.
@@ -63,6 +63,7 @@ MAX_DIFF_LINES = 120
 MAX_LISTED = 40
 ROOT_MARK = "<repository>"
 REMOVED = "tools/mod_api_removed_internals.txt"
+NOTE_UPDATES = "tools/mod_api_hook_notes_updates.txt"
 # Files the generator writes into the output folder that are not output: phase timings (and incremental-*/ or, from
 # older builds, interfaces-*/, its cache).
 SCRATCH_FILES = {"points-timing.txt"}
@@ -282,15 +283,47 @@ def note_sections(page):
     return ["".join(section).rstrip("\n") for section in sections]
 
 
-def notes_only_add_sections(base, head):
-    """Whether the head's hook notes are the base's with sections added: the text before the first section and every
-    base section stay, unchanged and in order. Which sections are an added hook's is not in the page (a hook's notes
-    may hold several), so an added section is not tied to its hook."""
+def load_note_updates(path):
+    """Read `OLD_SHA256 NEW_SHA256 #ISSUE ## Heading` entries for exact prose changes."""
+    revisions = set()
+    if not path.is_file():
+        return revisions
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        entry = re.fullmatch(r"([0-9a-f]{64})\s+([0-9a-f]{64})\s+#[1-9]\d*\s+(## .+)", line)
+        if not entry:
+            raise ValueError(f"{path}:{number}: write `OLD_SHA256 NEW_SHA256 #ISSUE ## Heading`")
+        old, new, heading = entry.groups()
+        key = (heading, old, new)
+        if old == new or key in revisions:
+            raise ValueError(f"{path}:{number}: repeated or unchanged note revision")
+        revisions.add(key)
+    return revisions
+
+
+def notes_only_add_sections(base, head, *, allow_new=True, revisions=()):
+    """Keep the preamble and every existing section in order, with only listed exact prose changes."""
     base, head = note_sections(base), note_sections(head)
-    if base[0] != head[0]:
+    if base[0] != head[0] or (not allow_new and len(base) != len(head)):
         return False
     remaining = iter(head[1:])
-    return all(any(section == other for other in remaining) for section in base[1:])
+    revisions = set(revisions)
+
+    def matches(section, other):
+        if section == other:
+            return True
+        heading = section.partition("\n")[0]
+        if revisions and heading == other.partition("\n")[0]:
+            key = (heading, hashlib.sha256(section.encode("utf-8")).hexdigest(),
+                   hashlib.sha256(other.encode("utf-8")).hexdigest())
+            if key in revisions:
+                revisions.remove(key)
+                return True
+        return False
+
+    return all(any(matches(section, other) for other in remaining) for section in base[1:])
 
 
 def guest_wire_without_calls(guest, base):
@@ -372,11 +405,13 @@ def explained_additions(base_dir, head_dir, diffs, base_root, head_root):
     hooks = added_catalog_hooks(base_dir, head_dir) if HOOK_CATALOG in changed else set()
     if HOOK_CATALOG in changed and not hooks:
         return nothing
-    # A hook's notes are their own `## ` sections; an added hook adds sections and changes no other.
-    if "hook-notes.md" in changed and (not hooks or not notes_only_add_sections(
-            read_text(base_dir / "hook-notes.md", [base_root] if base_root else []),
-            read_text(head_dir / "hook-notes.md", [head_root] if head_root else []))):
-        return nothing
+    if "hook-notes.md" in changed:
+        revisions = load_note_updates(Path(head_root or ROOT) / NOTE_UPDATES)
+        if not notes_only_add_sections(
+                read_text(base_dir / "hook-notes.md", [base_root] if base_root else []),
+                read_text(head_dir / "hook-notes.md", [head_root] if head_root else []),
+                allow_new=bool(hooks), revisions=revisions):
+            return nothing
     calls = set()
     if GUEST_WIRE in changed:
         base = read_text(base_dir / GUEST_WIRE, [base_root] if base_root else [])
