@@ -590,7 +590,10 @@ impl ItemPlace {
 
     /// Edit the whole stack here, keeping its item and count. Unlike exchanging one,
     /// this changes every item in the slot together, without splitting off a copy.
-    /// A missing stack, changed item/count or refused exchange returns false without
+    /// For live worn or held stacks (`Equipment`, `PlayerHand`, `PlayerSlot`), updates only
+    /// the changed components of the live stack in place without re-equipping it (no equip
+    /// sound, game event or attribute re-application).
+    /// A missing stack, changed item/count or refused write returns false without
     /// changing the place. Successful writes are journaled in `tx` like [`Self::exchange`].
     pub fn edit(
         &self,
@@ -607,7 +610,35 @@ impl ItemPlace {
         if stack.item() != item || stack.count() != count {
             return false;
         }
-        self.exchange(host, tx, &ItemResource::of(&stack), count) == count
+        let resource = ItemResource::of(&stack);
+        if let Some(target) = self.in_place_edit_target() {
+            let edited = host.transaction(|host, tx| {
+                if backend_mut_of(host)
+                    .and_then(|backend| backend.game_edit(target, &resource, tx).ok())
+                    == Some(true)
+                {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            });
+            return edited.is_ok();
+        }
+        self.exchange(host, tx, &resource, count) == count
+    }
+
+    /// Unwraps `Strict` wrappers to check if this place is a live worn/held slot that supports
+    /// in-place component edits without re-equipping.
+    fn in_place_edit_target(&self) -> Option<&ItemPlace> {
+        let mut place = self;
+        while let ItemPlace::Strict(inner) = place {
+            place = inner;
+        }
+        matches!(
+            place,
+            ItemPlace::Equipment { .. } | ItemPlace::PlayerHand { .. } | ItemPlace::PlayerSlot { .. }
+        )
+        .then_some(place)
     }
 
     /// `insert` or `extract`: the wrappers undone, outermost first, in a loop rather than by
@@ -905,3 +936,47 @@ impl ItemPlace {
 #[cfg(test)]
 #[path = "item_place_wrapper_tests.rs"]
 mod wrapper_tests;
+
+#[cfg(all(test, feature = "testing"))]
+mod edit_in_place_tests {
+    use super::*;
+    use crate::prelude::ItemsHost;
+    use crate::testing::FakeHost;
+
+    #[test]
+    fn item_place_edit_updates_held_stack_in_place_and_rolls_back_on_abort() {
+        let mut host = FakeHost::new();
+        let sword_id = crate::Identifier::parse("minecraft:diamond_sword").unwrap();
+        host.registries.resolve_items([sword_id.clone()]).unwrap();
+        let sword = ItemStack::new(host.item_key(&sword_id).unwrap(), 1).unwrap();
+        let player = host.join(42, 1);
+        player.slots.insert(0, sword.clone());
+        let hand = ItemPlace::PlayerHand {
+            player: 42,
+            hand: Hand::Main,
+        };
+        let mut damaged = sword.clone();
+        damaged.set_damage(10);
+
+        // Aborting the transaction rolls back the in-place edit.
+        let aborted: Result<(), ()> = host.transaction(|host, tx| {
+            assert!(hand.edit(host, tx, |stack| {
+                stack.set_damage(10);
+            }));
+            assert_eq!(hand.stack(host), Some(damaged.clone()));
+            Err(())
+        });
+        assert_eq!(aborted, Err(()));
+        assert_eq!(hand.stack(&mut host), Some(sword.clone()));
+
+        // Committing keeps the edited component in place.
+        let committed: Result<(), ()> = host.transaction(|host, tx| {
+            assert!(hand.edit(host, tx, |stack| {
+                stack.set_damage(10);
+            }));
+            Ok(())
+        });
+        assert_eq!(committed, Ok(()));
+        assert_eq!(hand.stack(&mut host), Some(damaged));
+    }
+}

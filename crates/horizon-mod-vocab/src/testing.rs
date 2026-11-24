@@ -777,6 +777,27 @@ impl crate::prelude::ItemsBackendMut for FakeHost {
             .place(place)
             .map_or(0, |(player, slot)| player.extract(slot, resource, amount)))
     }
+    fn game_edit(
+        &mut self,
+        place: &ItemPlace,
+        resource: &crate::ItemResource,
+        _: &Transaction,
+    ) -> Result<bool, crate::StackWriteError> {
+        let Some((player, slot)) = self.players.place(place) else {
+            return Ok(false);
+        };
+        let Some(held) = player.slots.get_mut(&slot) else {
+            return Ok(false);
+        };
+        if held.item() != resource.item() {
+            return Ok(false);
+        }
+        let Some(updated) = resource.to_stack(held.count()) else {
+            return Ok(false);
+        };
+        *held = updated;
+        Ok(true)
+    }
 }
 impl crate::prelude::FluidsEnergyBackendMut for FakeHost {
     fn fluid_tank_insert(

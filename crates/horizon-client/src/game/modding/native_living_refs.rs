@@ -946,6 +946,118 @@ impl Game<'_> {
     /// transaction — an abort stays quiet — while the equipment and the
     /// attribute map change at once, as later steps of the same transaction
     /// read them.
+    /// Update only the changed components of a living entity's live equipment stack in place
+    /// (keeping its item and count), without re-equipping it (no equip sound, game event or
+    /// attribute re-application), matching vanilla's `ItemStack.set`.
+    pub(super) fn edit_living_equipment_in_place(
+        &mut self,
+        living: LivingRef,
+        slot: EquipmentSlot,
+        resource: &ItemStack,
+    ) -> bool {
+        if self.remote.is_some() {
+            return false;
+        }
+        let Some(t) = self.native_living_target(living) else {
+            return false;
+        };
+        match t {
+            Target::Mob(id) => {
+                let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id) else {
+                    return false;
+                };
+                let old = if (slot as usize) <= 5 {
+                    horizon_client::mobs::finalize::item_stack(mob, slot as usize)
+                } else {
+                    mob.equipment_stacks()[slot as usize].clone()
+                };
+                let Some(old) = old.filter(|s| s.count > 0 && s.item == resource.item) else {
+                    return false;
+                };
+                let updated = ItemStack {
+                    count: old.count,
+                    ..resource.clone()
+                };
+                mob.set_equipment_stack(slot as usize, Some(updated))
+            }
+            Target::Stand(id) => {
+                let Some(stand) = self.armor_stands.iter_mut().find(|a| a.id == id) else {
+                    return false;
+                };
+                let Some(old) = stand
+                    .equipment
+                    .get(slot as usize)
+                    .filter(|s| s.count > 0 && s.item == resource.item)
+                else {
+                    return false;
+                };
+                let updated = ItemStack {
+                    count: old.count,
+                    ..resource.clone()
+                };
+                stand.equipment.set(slot as usize, Some(updated));
+                true
+            }
+            Target::Dragon(id) => {
+                let Some(dragon) = self.dragon.as_mut().filter(|d| d.id == id) else {
+                    return false;
+                };
+                let Some(old) = dragon
+                    .equipment
+                    .get(slot as usize)
+                    .filter(|s| s.count > 0 && s.item == resource.item)
+                else {
+                    return false;
+                };
+                let updated = ItemStack {
+                    count: old.count,
+                    ..resource.clone()
+                };
+                dragon.equipment.set(slot as usize, Some(updated));
+                true
+            }
+            Target::Player | Target::Guest(_) => self
+                .for_player(t, |g| {
+                    let old = match slot {
+                        EquipmentSlot::MainHand => {
+                            g.inventory.get(g.selected).and_then(Option::as_ref)
+                        }
+                        EquipmentSlot::OffHand => g.offhand.as_ref(),
+                        EquipmentSlot::Head => g.armor[0].as_ref(),
+                        EquipmentSlot::Chest => g.armor[1].as_ref(),
+                        EquipmentSlot::Legs => g.armor[2].as_ref(),
+                        EquipmentSlot::Feet => g.armor[3].as_ref(),
+                        EquipmentSlot::Body => g.equipment.get(6),
+                        EquipmentSlot::Saddle => g.equipment.get(7),
+                    };
+                    let Some(old) = old.filter(|s| s.count > 0 && s.item == resource.item) else {
+                        return false;
+                    };
+                    let updated = ItemStack {
+                        count: old.count,
+                        ..resource.clone()
+                    };
+                    match slot {
+                        EquipmentSlot::MainHand => g.inventory[g.selected] = Some(updated),
+                        EquipmentSlot::OffHand => g.offhand = Some(updated),
+                        EquipmentSlot::Head => g.armor[0] = Some(updated),
+                        EquipmentSlot::Chest => g.armor[1] = Some(updated),
+                        EquipmentSlot::Legs => g.armor[2] = Some(updated),
+                        EquipmentSlot::Feet => g.armor[3] = Some(updated),
+                        EquipmentSlot::Body => {
+                            let _ = g.equipment.set(6, Some(updated));
+                        }
+                        EquipmentSlot::Saddle => {
+                            let _ = g.equipment.set(7, Some(updated));
+                        }
+                    }
+                    true
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     pub(super) fn write_living_equipment(
         &mut self,
         living: LivingRef,

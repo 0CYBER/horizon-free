@@ -486,6 +486,17 @@ pub trait ItemsBackendMut {
         tx: &Transaction,
     ) -> Result<u32, StackWriteError>;
     /// Side: server.
+    /// Update the live stack at a worn or held place (`Equipment`, `PlayerHand`, `PlayerSlot`)
+    /// in place to `resource`'s components (keeping its item and count), without re-equipping it
+    /// or replaying equip sounds, game events or attribute updates.
+    #[access(WorldOnly)]
+    fn game_edit(
+        &mut self,
+        place: &ItemPlace,
+        resource: &ItemResource,
+        tx: &Transaction,
+    ) -> Result<bool, StackWriteError>;
+    /// Side: server.
     /// Drops `stack` at the middle of the block at `pos`, as a block entity's handler gives up
     /// what it can't put back.
     #[access(WorldOnly)]
