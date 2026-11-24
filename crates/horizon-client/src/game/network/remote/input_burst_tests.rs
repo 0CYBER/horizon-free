@@ -130,3 +130,90 @@ fn a_full_queue_refuses_the_entry_and_the_call_returns() {
         assert!(game.hotbar_presses.entries().is_empty());
     });
 }
+
+/// Sprint hits on targets whose `Entity.hurtClient` returns true (boats, minecarts, End crystals,
+/// shulker bullets) slow the attacker's horizontal velocity by 0.6 and end sprinting; targets
+/// whose `hurtClient` is false (primed TNT) leave sprint and velocity untouched.
+#[test]
+#[ignore = "daily"]
+fn sprint_hit_on_boat_cart_crystal_or_shulker_bullet_slows_attacker() {
+    with_pressing_game(|game, _, _| {
+        game.boats.push(crate::game::boats::Boat::new(
+            801,
+            "oak".into(),
+            Vec3::new(0.0, 65.0, 2.0),
+            0.0,
+        ));
+        game.carts.push(crate::game::minecarts::Minecart::new(
+            802,
+            crate::game::minecarts::CartKind::Rideable,
+            Vec3::new(0.0, 65.0, 2.0),
+        ));
+        game.crystals.push(crate::game::dragon::Crystal {
+            attachment_lifetime: Default::default(),
+            join: Default::default(),
+            id: 803,
+            position: Vec3::new(0.0, 65.0, 2.0),
+            show_bottom: false,
+            time: 0,
+            beam: None,
+            invulnerable: false,
+            fall: (false, 0.0),
+            motion: Vec3::ZERO,
+            rotation: [0.0, 0.0],
+        });
+        let mut bullet = horizon_client::projectiles::Projectile::new(
+            horizon_client::projectiles::ProjectileKind::ShulkerBullet {
+                target: None,
+                dir: Some(1),
+                steps: 0,
+                delta: [0.0; 3],
+                seed: 0,
+            },
+            Vec3::new(0.0, 65.0, 2.0),
+            None,
+        );
+        bullet.id = 804;
+        game.creatures.projectiles.push(bullet);
+        game.add_primed_tnt(
+            horizon_core::position::BlockPos::new(0, 65, 2),
+            0.0,
+            80,
+            None,
+            None,
+        );
+        let tnt_id = game.tnts[0].id as i32;
+
+        for (label, id, should_slow) in [
+            ("boat", 801, true),
+            ("minecart", 802, true),
+            ("end_crystal", 803, true),
+            ("shulker_bullet", 804, true),
+            ("primed_tnt", tnt_id, false),
+        ] {
+            game.hand_strength.ticker = 20;
+            let p = game.player.as_mut().unwrap();
+            p.sprinting = true;
+            p.velocity = Vec3::new(1.0, 0.25, -0.5);
+            assert!(game.remote_attack_entity(id, 2.0), "{label}");
+            let p = game.player.as_ref().unwrap();
+            if should_slow {
+                assert!(!p.sprinting, "{label} should stop sprinting");
+                assert!((p.velocity.x - 0.6).abs() < 1e-6, "{label}: {:?}", p.velocity);
+                assert!(
+                    (p.velocity.y - 0.25).abs() < 1e-6,
+                    "{label}: {:?}",
+                    p.velocity
+                );
+                assert!(
+                    (p.velocity.z - -0.3).abs() < 1e-6,
+                    "{label}: {:?}",
+                    p.velocity
+                );
+            } else {
+                assert!(p.sprinting, "{label} must not stop sprinting");
+                assert!((p.velocity.x - 1.0).abs() < 1e-6, "{label}: {:?}", p.velocity);
+            }
+        }
+    });
+}

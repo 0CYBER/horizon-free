@@ -28,9 +28,15 @@ impl Game<'_> {
             {
                 if !crate::game::deflect::redirectable(projectile) {
                     self.remote_sweep_event("minecraft:shulker_bullet", false);
+                    self.remote_attacker_extra_knockback();
                 }
             } else if let Some((kind, living)) = self.remote_attacked_object(id) {
                 self.remote_sweep_event(&kind, living);
+                // Boats, minecarts and End crystals override `Entity.hurtClient` to return true,
+                // so a sprint hit runs the attacker's side of `causeExtraKnockback`.
+                if !living && kind != "minecraft:tnt" {
+                    self.remote_attacker_extra_knockback();
+                }
             }
         }
         self.reset_attack_strength();

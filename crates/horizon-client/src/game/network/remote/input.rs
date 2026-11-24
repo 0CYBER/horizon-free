@@ -108,18 +108,39 @@ impl Game<'_> {
             .then(|| ("minecraft:end_crystal".to_owned(), false))
     }
     /// `MultiPlayerGameMode.attack` runs `Player.attack` on this client too.
-    /// For a mob `hurtOrSimulate` fails here (`Entity.hurtClient`), so the
-    /// hit has no attacker side; but `RemotePlayer.hurtClient` is true, so a
-    /// hit on another player with extra knockback runs the attacker's side of
-    /// `causeExtraKnockback`: the 0.6 horizontal speed cut and the sprint
-    /// stop. Without it the next move outruns the server's player.
-    pub(super) fn remote_player_attack_body(&mut self, mob: usize) {
-        // Java dispatches this through the target's RemotePlayer type. The
-        // level_players map is profile bookkeeping and can lag the entity;
-        // mobs must stay out because their hurtClient returns false.
-        if self.mobs[mob].kind.id != "minecraft:player" {
+    /// For targets whose `Entity.hurtClient` returns true (`RemotePlayer`, boats, minecarts,
+    /// End crystals and shulker bullets), a hit with extra knockback runs the attacker's side of
+    /// `causeExtraKnockback`: the 0.6 horizontal speed cut and the sprint stop. Without it the
+    /// next move outruns the server's player.
+    pub(super) fn remote_attacker_extra_knockback(&mut self) {
+        let (strength, damage, knockback, sprinting) = self.remote_attack_inputs();
+        self.apply_remote_attacker_extra_knockback(strength, damage, knockback, sprinting);
+    }
+
+    fn apply_remote_attacker_extra_knockback(
+        &mut self,
+        strength: f32,
+        damage: f32,
+        knockback: f32,
+        sprinting: bool,
+    ) {
+        if !horizon_client::attack_strength::attacker_slows_after_hit(
+            damage, knockback, strength, sprinting,
+        ) {
             return;
         }
+        if let Some(p) = self.player.as_mut() {
+            let slowdown = horizon_client::attack_strength::ATTACKER_SLOWDOWN;
+            p.velocity = Vec3::new(
+                p.velocity.x * slowdown,
+                p.velocity.y,
+                p.velocity.z * slowdown,
+            );
+        }
+        self.stop_sprint_after_extra_knockback();
+    }
+
+    fn remote_attack_inputs(&mut self) -> (f32, f32, f32, bool) {
         // `getAttackStrengthScale(0.5)`: here the ticker is `hand_strength`'s
         // (`attack_ticks` only counts in the local world), and the attack
         // speed is the player's synced attribute, which a server may change.
@@ -140,6 +161,22 @@ impl Game<'_> {
             .own_attribute("minecraft:attack_knockback")
             .map_or(0.0, |v| v as f32);
         let sprinting = self.player.as_ref().is_some_and(|p| p.sprinting);
+        (strength, damage, knockback, sprinting)
+    }
+
+    /// `MultiPlayerGameMode.attack` runs `Player.attack` on this client too.
+    /// For a mob `hurtOrSimulate` fails here (`Entity.hurtClient`), so the
+    /// hit has no attacker side; but `RemotePlayer.hurtClient` is true, so a
+    /// hit on another player emits local crit particles and runs the attacker's
+    /// side of `causeExtraKnockback`.
+    pub(super) fn remote_player_attack_body(&mut self, mob: usize) {
+        // Java dispatches this through the target's RemotePlayer type. The
+        // level_players map is profile bookkeeping and can lag the entity;
+        // mobs must stay out because their hurtClient returns false.
+        if self.mobs[mob].kind.id != "minecraft:player" {
+            return;
+        }
+        let (strength, damage, knockback, sprinting) = self.remote_attack_inputs();
         // attackVisualEffects: a RemotePlayer's hurtClient is true, so a
         // critical hit (full strength, canCriticalAttack) with damage left
         // after baseDamageScaleFactor runs LocalPlayer.crit, this client's
@@ -154,20 +191,7 @@ impl Game<'_> {
                 mob_tracking_body(m),
             );
         }
-        if !horizon_client::attack_strength::attacker_slows_after_hit(
-            damage, knockback, strength, sprinting,
-        ) {
-            return;
-        }
-        if let Some(p) = self.player.as_mut() {
-            let slowdown = horizon_client::attack_strength::ATTACKER_SLOWDOWN;
-            p.velocity = Vec3::new(
-                p.velocity.x * slowdown,
-                p.velocity.y,
-                p.velocity.z * slowdown,
-            );
-        }
-        self.stop_sprint_after_extra_knockback();
+        self.apply_remote_attacker_extra_knockback(strength, damage, knockback, sprinting);
     }
     /// The latency the server's player list gives this player
     /// (`PlayerInfo.getLatency`), none before the server lists it. A new entry reads 0 until the

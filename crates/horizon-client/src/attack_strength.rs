@@ -89,7 +89,8 @@ pub fn extra_knockback(knockback: f32, strength: f32, sprinting: bool) -> (f32, 
 pub const ATTACKER_SLOWDOWN: f64 = 0.6;
 
 /// What the attacking client's own `Player.attack` does to itself on a hit
-/// at another player, whose `RemotePlayer.hurtClient` lets the hit through:
+/// at a target whose `Entity.hurtClient` override lets the hit through
+/// (`RemotePlayer`, boats, minecarts, End crystals and shulker bullets):
 /// whether `causeExtraKnockback` cuts its horizontal speed and stops its
 /// sprint. This runs on the client's player, not the server's: held items and
 /// effects only change attributes on a server and neither of these two is
