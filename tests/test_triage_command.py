@@ -198,6 +198,15 @@ class RefusalTests(unittest.TestCase):
         with self.assertRaises(tc.Refused):
             do("/label bug, release-now")
 
+    def test_the_labels_that_gate_what_runs_or_merges(self):
+        for verb in ("/label", "/unlabel"):
+            with self.assertRaisesRegex(tc.Refused, "gate", msg=verb):
+                do(f"{verb} Run-Parity", Fake(labels=("run-parity",)))
+        with self.assertRaisesRegex(tc.Refused, "gate"):
+            do("/unlabel needs-proof", Fake({5: thread(labels=("needs-proof",), pr=True)}, labels=("needs-proof",)))
+        _, api = do("/label needs-proof", Fake({5: thread(pr=True)}, labels=("needs-proof",)))  # holding back is fine
+        self.assertIn(("add", 5, ["needs-proof"]), [c[:3] for c in api.calls])
+
     def test_ludovics_threads(self):
         for text in ("/close", "/label bug", "/unlabel bug", "/reopen"):
             for t in (thread(user="ludovic111", state="closed" if text == "/reopen" else "open"),

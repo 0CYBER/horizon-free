@@ -12,7 +12,7 @@ numeric ID, never by login), on the first line:
     /label bug, good first issue       existing labels only; never creates one
     /unlabel bug
 
-Refused with a one-line answer: a label with `release` in it or `full-parity`; anything by a council member (their
+Refused with a one-line answer: a label with `release` in it, `full-parity`, `run-parity`, or removing `needs-proof`; anything by a council member (their
 issues and pull requests); a merged pull request; a locked thread; more than 60 actions per reviewer in 24 hours. No
 code of any pull request is read or run: only the comment's text, its author and the API's answers, which reach this
 script as env vars.
@@ -91,10 +91,14 @@ def parse(body: str) -> Command | None:
     return Command(verb, labels=names)
 
 
-def label_refusal(name: str) -> str | None:
+def label_refusal(name: str, verb: str = "label") -> str | None:
     low = name.lower()
     if "release" in low or low == "full-parity":
         return f"`{safe(name)}` is a release or parity label: only the council touches those."
+    # run-parity runs a fork's code on the Mac mini once a maintainer has read it; needs-proof holds a risky pull
+    # request back until its proof is in, so a reviewer may add it but not lift it.
+    if low == "run-parity" or (low == "needs-proof" and verb == "unlabel"):
+        return f"`{safe(name)}` is a gate on what runs or merges: only the council touches it this way."
     return None
 
 
@@ -206,7 +210,7 @@ def run(api, cmd: Command, actor: ns.Actor, number: int, url: str, reviewers: ns
     authorize(actor, reviewers)
     login = actor.login
     for name in cmd.labels:
-        if (why := label_refusal(name)):
+        if (why := label_refusal(name, cmd.verb)):
             raise Refused(why)
     issue = api.issue(number)
     if issue is None:
@@ -238,7 +242,7 @@ def run(api, cmd: Command, actor: ns.Actor, number: int, url: str, reviewers: ns
         found = api.label(name)
         if found is None:
             raise Refused(f"There is no label `{safe(name)}` in Horizon: triage doesn't create new ones.")
-        if (why := label_refusal(found)):
+        if (why := label_refusal(found, cmd.verb)):
             raise Refused(why)
         real.append(found)
     if cmd.verb == "label":

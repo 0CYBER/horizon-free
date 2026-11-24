@@ -801,7 +801,7 @@ Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and for Ludovic, with 
   linking the comment that asked; a refusal answers too. Claims are their own workflow
   (`.github/workflows/claim-command.yml`, `tools/ci/claim_command.py`), open to everyone for their own claim.
 - **Refused.** Any label with `release` in its name (`release-now`, `release-blocker`, `skip-release`) and
-  `full-parity`; anything on Ludovic's own issues and pull requests; a merged pull request; a locked thread; more
+  `full-parity`, `run-parity`, and removing `needs-proof` (adding it is fine); anything on Ludovic's own issues and pull requests; a merged pull request; a locked thread; more
   than 60 actions per reviewer in 24 hours (counted from the workflow's own comments).
 - **Safety.** Same as `/nightly`: main's copy of the workflow runs, no pull request's code is checked out or run,
   the comment reaches the script as env vars, and the token has `issues` and `pull-requests` write only.
