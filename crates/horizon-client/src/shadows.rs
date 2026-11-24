@@ -490,6 +490,7 @@ mod tests {
             crate::test_resources::server_loop_context(),
             level,
             None,
+            |_| {},
         );
         let mobs = [seen, flagged, potion];
         let casters: Vec<_> = mob_casters(&mobs, 0.5).collect();

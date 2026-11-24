@@ -137,6 +137,8 @@ def scenarios():
         'mob minecraft:enderman 0.5 -60 0.5 0 352 persistent',
     ], 'rain')
     # Not onto ground that holds water (Enderman.canRandomlyTeleportTo): a floor of waterlogged slabs.
+    # LandRandomPos still accepts the walkable space above those slabs: their
+    # own path type is BLOCKED, not WATER, so they do not contribute WATER_BORDER.
     add('enderman_rain_waterlogged', 190, [
         'fill -32 -61 -32 32 -61 32 minecraft:oak_slab[type=top,waterlogged=true]',
         'fill -3 -61 -3 3 -61 3 minecraft:stone',

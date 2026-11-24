@@ -206,7 +206,8 @@ impl MobWorld<'_> {
                         }
                         // A declined block answer keeps this neighbour's fluid
                         // contribution before the vanilla type mappings.
-                        if flags & data::ADJ_WATER_FLUID != 0 {
+                        if flags & data::ADJ_WATER_FLUID != 0 && self.fluid_water_border(state, own)
+                        {
                             return PathType::WaterBorder;
                         }
                         if let Some(adjacent) = data::vanilla_adjacent(own) {
@@ -228,7 +229,12 @@ impl MobWorld<'_> {
                             {
                                 return PathType::FireInNeighbor;
                             }
-                            if flags & data::ADJ_WATER_FLUID != 0 {
+                            if flags & data::ADJ_WATER_FLUID != 0
+                                && self.fluid_water_border(
+                                    state,
+                                    self.path_type_from_loaded_state(pos, state, resolved),
+                                )
+                            {
                                 return PathType::WaterBorder;
                             }
                         } else if let FireTag::Custom(set) = fire_tag
@@ -245,6 +251,17 @@ impl MobWorld<'_> {
             }
         }
         t
+    }
+    /// Whether a neighbour's fluid alone makes a water border. Vanilla uses the
+    /// neighbour's path type, not raw water: waterlogged solids with a non-Water
+    /// type do not make a border. Keep the fluid fallback for modded fluids and
+    /// for water whose normally Water classification a positional hook replaced.
+    fn fluid_water_border(&self, state: BlockStateId, own: PathType) -> bool {
+        match self.facts.get(state).fluid {
+            Fluid::Modded => true,
+            Fluid::Water => own != PathType::Water && self.data.path_type(state) == PathType::Water,
+            _ => false,
+        }
     }
     /// WalkNodeEvaluator.getFloorLevel(level, pos). Saturating, as the
     /// neighbour step is: a follower asking under a node at `i32::MIN` lands on
