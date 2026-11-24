@@ -168,6 +168,255 @@ impl Beardifier {
         self.kernel_junctions = junctions;
         self
     }
+    /// True when the volume and every vanilla piece/junction stay strictly inside
+    /// non-wrapping `i32` bounds (including the ±12 beard radius), so per-piece
+    /// range clipping produces bit-identical `f32` sums to scanning every point.
+    fn can_scatter(
+        &self,
+        minimum: [i32; 3],
+        steps: [i32; 3],
+        low: [i32; 3],
+        high: [i32; 3],
+    ) -> bool {
+        const SAFE_MIN: i64 = i32::MIN as i64 + 16;
+        const SAFE_MAX: i64 = i32::MAX as i64 - 16;
+        let mut vol_min = [0i64; 3];
+        let mut vol_max = [0i64; 3];
+        for i in 0..3 {
+            if low[i] > high[i] {
+                return true;
+            }
+            vol_min[i] = i64::from(minimum[i]) + i64::from(low[i]) * i64::from(steps[i]);
+            vol_max[i] = i64::from(minimum[i]) + i64::from(high[i]) * i64::from(steps[i]);
+            if vol_min[i] < SAFE_MIN || vol_max[i] > SAFE_MAX {
+                return false;
+            }
+        }
+        for piece in &self.pieces {
+            let p_lo = piece.bounds.minimum;
+            let p_hi = piece.bounds.maximum;
+            for i in 0..3 {
+                let lo = i64::from(p_lo[i]);
+                let hi = i64::from(p_hi[i]);
+                if lo < SAFE_MIN || hi > SAFE_MAX {
+                    return false;
+                }
+                if (vol_max[i] - lo).abs() > SAFE_MAX || (hi - vol_min[i]).abs() > SAFE_MAX {
+                    return false;
+                }
+            }
+            let ground = i64::from(p_lo[1]) + i64::from(piece.ground_level_delta);
+            if !(SAFE_MIN..=SAFE_MAX).contains(&ground)
+                || (vol_max[1] - ground).abs() > SAFE_MAX
+                || (ground - vol_min[1]).abs() > SAFE_MAX
+            {
+                return false;
+            }
+        }
+        for junction in &self.junctions {
+            let coords = [
+                junction.source_x,
+                junction.source_ground_y,
+                junction.source_z,
+            ];
+            for i in 0..3 {
+                let c = i64::from(coords[i]);
+                if !(SAFE_MIN..=SAFE_MAX).contains(&c)
+                    || (vol_max[i] - c).abs() > SAFE_MAX
+                    || (c - vol_min[i]).abs() > SAFE_MAX
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Accumulates each piece and junction in vanilla order, visiting only lattice
+    /// cells within that component's non-zero support (`±12` for beard/encapsulate/
+    /// junction, `±6`/`±12` for bury). Since skipped terms are exact `+0.0` and
+    /// `buffer` is initialized to `+0.0` with no `-0.0` contributions, the final
+    /// `f32` bits match [`Self::sample_unchecked`] at every cell.
+    fn scatter_vanilla(
+        &self,
+        buffer: &mut [f32],
+        sizes: [usize; 3],
+        minimum: [i32; 3],
+        steps: [i32; 3],
+        low: [i32; 3],
+        high: [i32; 3],
+    ) {
+        if low[0] > high[0] || low[1] > high[1] || low[2] > high[2] {
+            return;
+        }
+        let clip_axis = |axis: usize, world_lo: i64, world_hi: i64| -> Option<(i32, i32)> {
+            let min = i64::from(minimum[axis]);
+            let step = i64::from(steps[axis]);
+            let start = (world_lo - min + step - 1)
+                .div_euclid(step)
+                .max(i64::from(low[axis]));
+            let end = (world_hi - min).div_euclid(step).min(i64::from(high[axis]));
+            (start <= end).then_some((start as i32, end as i32))
+        };
+        let kernel = kernel();
+        let [sx, sy, _] = sizes;
+        for piece in &self.pieces {
+            if piece.adjustment == TerrainAdjustment::None {
+                continue;
+            }
+            let p_lo = piece.bounds.minimum;
+            let p_hi = piece.bounds.maximum;
+            let ground = p_lo[1] + piece.ground_level_delta;
+            let (xz_pad, y_lo, y_hi) = match piece.adjustment {
+                TerrainAdjustment::None => continue,
+                TerrainAdjustment::Bury => (5i64, i64::from(ground) - 11, i64::from(ground) + 11),
+                TerrainAdjustment::BeardThin => {
+                    (11i64, i64::from(ground) - 12, i64::from(ground) + 11)
+                }
+                TerrainAdjustment::BeardBox => {
+                    (11i64, i64::from(ground) - 11, i64::from(p_hi[1]) + 11)
+                }
+                TerrainAdjustment::Encapsulate => {
+                    (11i64, i64::from(p_lo[1]) - 11, i64::from(p_hi[1]) + 11)
+                }
+            };
+            let Some((x0, x1)) =
+                clip_axis(0, i64::from(p_lo[0]) - xz_pad, i64::from(p_hi[0]) + xz_pad)
+            else {
+                continue;
+            };
+            let Some((z0, z1)) =
+                clip_axis(2, i64::from(p_lo[2]) - xz_pad, i64::from(p_hi[2]) + xz_pad)
+            else {
+                continue;
+            };
+            let Some((y0, y1)) = clip_axis(1, y_lo, y_hi) else {
+                continue;
+            };
+            for z in z0..=z1 {
+                let pz = minimum[2] + z * steps[2];
+                let dz = 0.max((p_lo[2] - pz).max(pz - p_hi[2]));
+                let z_base = z as usize * sx;
+                for x in x0..=x1 {
+                    let px = minimum[0] + x * steps[0];
+                    let dx = 0.max((p_lo[0] - px).max(px - p_hi[0]));
+                    let col_base = (x as usize + z_base) * sy;
+                    match piece.adjustment {
+                        TerrainAdjustment::None => {}
+                        TerrainAdjustment::Bury => {
+                            let x_sq = dx as f32 * dx as f32;
+                            let z_sq = dz as f32 * dz as f32;
+                            if x_sq + z_sq >= 36. {
+                                continue;
+                            }
+                            for y in y0..=y1 {
+                                let py = minimum[1] + y * steps[1];
+                                let fy = (py - ground) as f32 / 2.;
+                                let squared = (x_sq + fy * fy) + z_sq;
+                                if squared < 36. {
+                                    buffer[col_base + y as usize] += 1. - squared.sqrt() / 6.;
+                                }
+                            }
+                        }
+                        TerrainAdjustment::BeardThin => {
+                            let x_sq = dx as f32 * dx as f32;
+                            let z_sq = dz as f32 * dz as f32;
+                            let kcol = &kernel[((dz + 12) * 24 + (dx + 12)) as usize * 24..][..24];
+                            for y in y0..=y1 {
+                                let py = minimum[1] + y * steps[1];
+                                let dy = py - ground;
+                                let vertical = dy as f32 + 0.5;
+                                let squared = (x_sq + vertical * vertical) + z_sq;
+                                let factor = (-vertical
+                                    * fast_inverse_sqrt(f64::from(squared / 2.)) as f32)
+                                    / 2.;
+                                buffer[col_base + y as usize] +=
+                                    (factor * kcol[(dy + 12) as usize]) * 0.8;
+                            }
+                        }
+                        TerrainAdjustment::BeardBox => {
+                            let x_sq = dx as f32 * dx as f32;
+                            let z_sq = dz as f32 * dz as f32;
+                            let kcol = &kernel[((dz + 12) * 24 + (dx + 12)) as usize * 24..][..24];
+                            for y in y0..=y1 {
+                                let py = minimum[1] + y * steps[1];
+                                let dy = py - ground;
+                                let distance_y = 0.max((ground - py).max(py - p_hi[1]));
+                                let vertical = dy as f32 + 0.5;
+                                let squared = (x_sq + vertical * vertical) + z_sq;
+                                let factor = (-vertical
+                                    * fast_inverse_sqrt(f64::from(squared / 2.)) as f32)
+                                    / 2.;
+                                buffer[col_base + y as usize] +=
+                                    (factor * kcol[(distance_y + 12) as usize]) * 0.8;
+                            }
+                        }
+                        TerrainAdjustment::Encapsulate => {
+                            let fx = dx as f32 / 2.;
+                            let fz = dz as f32 / 2.;
+                            let x_sq = fx * fx;
+                            let z_sq = fz * fz;
+                            if x_sq + z_sq >= 36. {
+                                continue;
+                            }
+                            for y in y0..=y1 {
+                                let py = minimum[1] + y * steps[1];
+                                let distance_y = 0.max((p_lo[1] - py).max(py - p_hi[1]));
+                                let fy = distance_y as f32 / 2.;
+                                let squared = (x_sq + fy * fy) + z_sq;
+                                if squared < 36. {
+                                    buffer[col_base + y as usize] +=
+                                        (1. - squared.sqrt() / 6.) * 0.8;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for junction in &self.junctions {
+            let Some((x0, x1)) = clip_axis(
+                0,
+                i64::from(junction.source_x) - 12,
+                i64::from(junction.source_x) + 11,
+            ) else {
+                continue;
+            };
+            let Some((z0, z1)) = clip_axis(
+                2,
+                i64::from(junction.source_z) - 12,
+                i64::from(junction.source_z) + 11,
+            ) else {
+                continue;
+            };
+            let Some((y0, y1)) = clip_axis(
+                1,
+                i64::from(junction.source_ground_y) - 12,
+                i64::from(junction.source_ground_y) + 11,
+            ) else {
+                continue;
+            };
+            for z in z0..=z1 {
+                let dz = (minimum[2] + z * steps[2]) - junction.source_z;
+                let z_sq = dz as f32 * dz as f32;
+                let z_base = z as usize * sx;
+                for x in x0..=x1 {
+                    let dx = (minimum[0] + x * steps[0]) - junction.source_x;
+                    let x_sq = dx as f32 * dx as f32;
+                    let kcol = &kernel[((dz + 12) * 24 + (dx + 12)) as usize * 24..][..24];
+                    let col_base = (x as usize + z_base) * sy;
+                    for y in y0..=y1 {
+                        let dy = (minimum[1] + y * steps[1]) - junction.source_ground_y;
+                        let vertical = dy as f32 + 0.5;
+                        let squared = (x_sq + vertical * vertical) + z_sq;
+                        let factor =
+                            (-vertical * fast_inverse_sqrt(f64::from(squared / 2.)) as f32) / 2.;
+                        buffer[col_base + y as usize] += (factor * kcol[(dy + 12) as usize]) * 0.4;
+                    }
+                }
+            }
+        }
+    }
     fn sample_unchecked(&self, [x, y, z]: [i32; 3]) -> f32 {
         let mut value = 0.;
         // The kernel is a process-wide constant; resolving it once keeps the
@@ -278,6 +527,13 @@ impl DensitySampler for Beardifier {
                     .div_euclid(steps[i]),
             )
         });
+        if self.kernel_pieces.is_empty()
+            && self.kernel_junctions.is_empty()
+            && self.can_scatter(minimum, steps, low, high)
+        {
+            self.scatter_vanilla(buffer, sizes, minimum, steps, low, high);
+            return Ok(());
+        }
         for z in low[2]..=high[2] {
             for x in low[0]..=high[0] {
                 for y in low[1]..=high[1] {
@@ -424,5 +680,105 @@ mod tests {
                 .wrapping_add(u64::from(value.to_bits()));
         }
         assert_eq!(hash, 0xb44d_13f8_c3d9_8c65);
+    }
+
+    #[test]
+    fn sample_volume_scatter_matches_pointwise_bit_for_bit() {
+        let pieces = vec![
+            RigidPiece {
+                bounds: StructureBounds::new([-6, 62, -4], [6, 70, 5]).unwrap(),
+                adjustment: TerrainAdjustment::BeardThin,
+                ground_level_delta: 2,
+            },
+            RigidPiece {
+                bounds: StructureBounds::new([8, 60, 6], [18, 68, 16]).unwrap(),
+                adjustment: TerrainAdjustment::BeardBox,
+                ground_level_delta: 1,
+            },
+            RigidPiece {
+                bounds: StructureBounds::new([2, 50, -8], [10, 58, 2]).unwrap(),
+                adjustment: TerrainAdjustment::Bury,
+                ground_level_delta: 0,
+            },
+            RigidPiece {
+                bounds: StructureBounds::new([-10, 40, 8], [-2, 48, 18]).unwrap(),
+                adjustment: TerrainAdjustment::Encapsulate,
+                ground_level_delta: -2,
+            },
+            RigidPiece {
+                bounds: StructureBounds::new([0, 64, 0], [4, 68, 4]).unwrap(),
+                adjustment: TerrainAdjustment::None,
+                ground_level_delta: 0,
+            },
+            // BeardBox with ground > high[1] edge case
+            RigidPiece {
+                bounds: StructureBounds::new([4, 65, 4], [8, 66, 8]).unwrap(),
+                adjustment: TerrainAdjustment::BeardBox,
+                ground_level_delta: 30,
+            },
+        ];
+        let junctions = vec![
+            JigsawJunction {
+                source_x: 3,
+                source_ground_y: 64,
+                source_z: 4,
+            },
+            JigsawJunction {
+                source_x: -5,
+                source_ground_y: 55,
+                source_z: 12,
+            },
+        ];
+        let affected = StructureBounds::new([-24, 20, -24], [36, 100, 36]);
+        let beardifier = Beardifier::new(pieces, junctions, affected);
+        let volumes = [
+            DensityVolume::new([5, 49, 5], [0, -64, 0], [4, 8, 4]).unwrap(),
+            DensityVolume::new([16, 48, 16], [-8, 36, -8], [1, 1, 1]).unwrap(),
+            DensityVolume::new([7, 25, 7], [-20, 28, -18], [3, 3, 3]).unwrap(),
+        ];
+        let mut ctx = SamplerContext::default();
+        for volume in volumes {
+            let mut got = vec![99.0_f32; volume.size()];
+            beardifier
+                .sample_volume(&mut ctx, &mut got, volume)
+                .unwrap();
+            let [sx, sy, _] = volume.sizes();
+            let min = volume.minimum();
+            let steps = volume.steps();
+            let bounds = beardifier.affected.unwrap();
+            let low: [i32; 3] = std::array::from_fn(|i| {
+                bounds.minimum[i]
+                    .wrapping_sub(min[i])
+                    .max(0)
+                    .div_euclid(steps[i])
+            });
+            let high: [i32; 3] = std::array::from_fn(|i| {
+                ((volume.sizes()[i] - 1) as i32)
+                    .min(bounds.maximum[i].wrapping_sub(min[i]).div_euclid(steps[i]))
+            });
+            let mut expected = vec![0.0_f32; volume.size()];
+            for z in low[2]..=high[2] {
+                for x in low[0]..=high[0] {
+                    for y in low[1]..=high[1] {
+                        let idx = (x as usize + z as usize * sx) * sy + y as usize;
+                        let pt = [
+                            min[0].wrapping_add(x.wrapping_mul(steps[0])),
+                            min[1].wrapping_add(y.wrapping_mul(steps[1])),
+                            min[2].wrapping_add(z.wrapping_mul(steps[2])),
+                        ];
+                        expected[idx] = beardifier.sample_unchecked(pt);
+                    }
+                }
+            }
+            for i in 0..volume.size() {
+                assert_eq!(
+                    got[i].to_bits(),
+                    expected[i].to_bits(),
+                    "mismatch at index {i} for volume {volume:?}: got {} vs expected {}",
+                    got[i],
+                    expected[i]
+                );
+            }
+        }
     }
 }
