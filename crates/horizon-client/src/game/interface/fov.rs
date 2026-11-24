@@ -21,7 +21,9 @@ use horizon_client::{
     fog::{FogType, fog_type},
     hud::HudBatch,
     hud_layout, hud_overlays,
+    living_attributes::Live,
 };
+use horizon_world::attribute_map::ValueKind;
 
 fn valid_fov_modifier(modifier: f32, fallback: f32) -> f32 {
     if modifier.is_finite() && (0.01..=10.0).contains(&modifier) {
@@ -29,6 +31,19 @@ fn valid_fov_modifier(modifier: f32, fallback: f32) -> f32 {
     } else {
         fallback
     }
+}
+
+/// The movement speed `AbstractClientPlayer.getFieldOfViewModifier` reads:
+/// `getAttributeValue(MOVEMENT_SPEED)` of the player's `attributes` as they
+/// are now. `kept` is `speed`, the copy `Player.aiStep` takes, which only the
+/// on-foot movement step refreshes here: a passenger's is stale, and a player
+/// made anew in its boat by a dimension change keeps 0, half the field of view
+/// (#19117). It stands in only for a map without the attribute.
+fn fov_movement_speed(attributes: &Live, kept: f32) -> f64 {
+    attributes
+        .key("minecraft:movement_speed")
+        .and_then(|key| attributes.value(Some(key), ValueKind::Computed).ok())
+        .unwrap_or(f64::from(kept))
 }
 
 impl Game<'_> {
@@ -79,8 +94,7 @@ impl Game<'_> {
         Some(FovPlayer {
             flying: p.flying,
             walking_speed: self.remote_walking_speed(),
-            // Player.aiStep keeps `speed` as the float movement speed attribute.
-            movement_speed: f64::from(p.speed),
+            movement_speed: fov_movement_speed(&p.attributes, p.speed),
             using,
         })
     }
@@ -321,7 +335,110 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{camera_effects_enabled, studio_draws_hand, valid_fov_modifier};
+    use super::{
+        FovPlayer, camera_effects_enabled, field_of_view_modifier, fov_movement_speed,
+        studio_draws_hand, valid_fov_modifier,
+    };
+    #[test]
+    fn a_player_made_anew_in_its_boat_keeps_its_field_of_view() {
+        // A dimension change makes the player anew in its boat: its movement speed attribute is
+        // the walking speed, 0.1, but no on-foot step has copied it into `speed`, still 0.
+        // Vanilla reads the attribute: (0.1 / 0.1 + 1) / 2 = 1, the view unchanged. Read from
+        // `speed` it was (0 / 0.1 + 1) / 2 = 0.5, half the field of view (#19117).
+        let bits = |v: f64| format!("{:016x}", v.to_bits());
+        // Attributes.MOVEMENT_SPEED (0.7 in [0, 1024]) and Player.createAttributes' 0.1.
+        let catalog = horizon_world::attributes::entity::Catalog::from_json(&serde_json::json!({
+            "data_version": horizon_world::DATA_VERSION,
+            "attributes": [{
+                "id": "minecraft:movement_speed",
+                "default": bits(0.7),
+                "min": bits(0.0),
+                "max": bits(1024.0),
+                "syncable": true,
+            }],
+            "entities": {"minecraft:player": {"minecraft:movement_speed": bits(0.1)}},
+        }))
+        .unwrap();
+        let attributes = horizon_client::living_attributes::new_live(
+            &std::sync::Arc::new(catalog),
+            "minecraft:player",
+        )
+        .unwrap();
+        let player = FovPlayer {
+            flying: false,
+            walking_speed: 0.1,
+            movement_speed: fov_movement_speed(&attributes, 0.0),
+            using: None,
+        };
+        assert_eq!(field_of_view_modifier(&player, true, 1.0), 1.0);
+    }
+
+    /// #19117 through the client: a portal's `ClientboundRespawnPacket` makes the window's
+    /// player anew once its position comes, its `speed` 0 until an on-foot step copies the
+    /// movement speed attribute, a step a passenger in its boat never takes. `Camera.tickFov`
+    /// eases toward `getFieldOfViewModifier`, which reads the attribute, 0.1: the target stays
+    /// 1 and the view as the portal found it. Read from `speed` the target was 0.5, and the view
+    /// narrowed to 0.75 in a tick.
+    #[test]
+    #[ignore = "daily"]
+    fn the_field_of_view_holds_through_a_portal() {
+        use horizon_protocol::packets::play::{self, Clientbound as C};
+        let mut resources = None;
+        let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+        game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+        let (pipe, _server) = horizon_protocol::connection::Pipe::pair();
+        game.connect_local(pipe, "Steve").unwrap();
+        let spawn = |dimension: &str| play::SpawnInfo {
+            dimension_type: 0,
+            dimension: dimension.into(),
+            seed: 1,
+            game_type: 0,
+            previous_game_type: None,
+            debug: false,
+            flat: false,
+            last_death: None,
+            portal_cooldown: 0,
+            sea_level: 63,
+        };
+        game.handle_packet(C::Login(play::Login {
+            player_id: 7,
+            hardcore: false,
+            levels: vec!["minecraft:overworld".into()],
+            max_players: 20,
+            chunk_radius: 8,
+            simulation_distance: 8,
+            reduced_debug_info: false,
+            show_death_screen: true,
+            limited_crafting: false,
+            spawn: spawn("minecraft:overworld"),
+            online_mode: false,
+            enforces_secure_chat: false,
+        }))
+        .unwrap();
+        let position = |teleport| {
+            C::PlayerPosition(play::PlayerPosition {
+                teleport,
+                position: [0.5, 65.0, 0.5],
+                delta: [0.0; 3],
+                yaw: 0.0,
+                pitch: 0.0,
+                relatives: 0,
+            })
+        };
+        game.handle_packet(position(1)).unwrap();
+        // Through a Nether portal: the Respawn keeps all data, the position makes the player.
+        game.handle_packet(C::Respawn(play::Respawn {
+            spawn: spawn("minecraft:the_nether"),
+            keep: 3,
+        }))
+        .unwrap();
+        game.handle_packet(position(2)).unwrap();
+        // The view as it was before the portal, settled at 1.
+        game.view.fov_modifier = 1.0;
+        game.tick_fov();
+        assert_eq!(game.view.fov_modifier, 1.0);
+    }
+
     #[test]
     fn modifier_validation() {
         assert_eq!(valid_fov_modifier(0.5, 1.0), 0.5);
