@@ -38,7 +38,7 @@ EMBEDDED = {
     "docs/media/village.webp": ("launcher/src/glass_server_dialog.rs",),
     "docs/modpacks/atm10-mods.csv": ("crates/horizon-port-pack/src/classify.rs",),
     "docs/parity/random-chance-seeded.jsonl": (
-        "crates/horizon-client/src/advancements.rs",
+        "crates/horizon-client/src/advancements/tests.rs",
         "crates/horizon-client/src/game/interface/advancements/mod.rs",
     ),
 }
