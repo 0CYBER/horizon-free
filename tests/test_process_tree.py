@@ -82,6 +82,38 @@ class ProcessTreeTests(unittest.TestCase):
         self.assertIsNotNone(harness.returncode)
         self.assertTrue(output.closed(30), "the harness's child outlived it")
 
+    @unittest.skipUnless(os.name != "nt" and hasattr(os, "waitid"), "POSIX with os.waitid (Python 3.13+ on macOS)")
+    def test_wait_signals_the_group_before_reaping_the_leader(self):
+        """wait() must signal while the leader is an unreaped zombie: a reaped id may name another group."""
+        harness, output = self.start([sys.executable, "-c", HARNESS, "exit"])
+        real_killpg = process_tree.os.killpg
+        signaled = []
+
+        def record_killpg(group, sig):
+            # Still waitable without reaping (WNOWAIT): the kernel, not returncode, says the leader is unreaped.
+            waitable = os.waitid(os.P_PID, harness.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            signaled.append((group, waitable is not None and waitable.si_pid == harness.pid))
+            return real_killpg(group, sig)
+
+        with mock.patch.object(process_tree.os, "killpg", record_killpg):
+            self.assertEqual(process_tree.wait(harness, 30), 0)
+        self.assertEqual(len(signaled), 1, "the group was not signalled exactly once")
+        self.assertEqual(signaled[0][0], harness.pid)
+        self.assertTrue(signaled[0][1], "the group was signalled after the leader had been reaped")
+        self.assertTrue(output.closed(30), "the harness's child outlived wait()")
+
+    @unittest.skipUnless(os.name != "nt", "POSIX-only: a reaped leader's group id is unsafe to signal")
+    def test_a_reaped_leader_is_never_signalled(self):
+        """A leader reaped before cleanup must not be killpg'd: its numeric group id may name another group."""
+        harness, output = self.start([sys.executable, "-c", HARNESS, "exit"])
+        self.addCleanup(self.stop_child, output)  # the child survives; end it by its own pid, not by group
+        harness.wait(30)  # simulate an old caller reaping the leader before cleanup
+        self.assertIsNotNone(harness.returncode)
+        with mock.patch.object(process_tree.os, "killpg") as killpg:
+            process_tree.kill(harness)
+            self.assertTrue(process_tree.ended(harness))
+        killpg.assert_not_called()
+
     def test_killing_a_harness_kills_what_it_started(self):
         harness, output = self.start([sys.executable, "-c", HARNESS, "hang"])
         while not output.lines:

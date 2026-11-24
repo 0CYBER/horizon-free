@@ -170,6 +170,17 @@ class PrReadyTests(unittest.TestCase):
             pr_ready.run_script([step], "local", verbose=False)
         self.assertNotIn(pr_ready.CLIPPY_CACHE_HINT, log.getvalue())
 
+    @unittest.skipUnless(POSIX_BASH and os.name != "nt" and hasattr(os, "waitid"), "POSIX with os.waitid")
+    def test_a_check_that_leaves_a_child_holding_its_output_does_not_block(self):
+        """#17707: a background child keeps the shell's stdout open after the shell exits; its group ends instead."""
+        step = pr_ready.Step("tests", "sleep 60 & printf 'ran\\n'")
+        runner = threading.Thread(target=pr_ready.run_script, args=([step], "local", False), daemon=True)
+        with contextlib.redirect_stderr(io.StringIO()):
+            runner.start()
+            runner.join(30)
+        self.assertFalse(runner.is_alive(), "run_script waited for the check's leftover child")
+        self.assertEqual((step.status, step.output.strip()), ("pass", "ran"))
+
     def test_data_backed_summary_with_and_without_prepared_data(self):
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.object(pr_ready, "ROOT", Path(directory) / "checkout/repo"), \

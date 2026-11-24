@@ -737,27 +737,37 @@ def run_script(steps, host, verbose):
     else:
         command = [str(RBUILD), host, "--", "bash", "-c", script]
     current = None
-    with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                          errors="replace") as process:
-        for line in process.stdout:
-            marker = re.match(r"@@pr_ready:(begin|end):(\d+)(?::(\d+):(\d+))?$", line.strip())
-            if marker and marker.group(1) == "begin":
-                current = steps[int(marker.group(2))]
-                print(f"  {current.name}...", file=sys.stderr, flush=True)
-            elif marker:
-                step = steps[int(marker.group(2))]
-                step.status = "pass" if marker.group(3) == "0" else "fail"
-                step.seconds = int(marker.group(4))
-                finish(step, verbose)
-                current = None
-            elif line.startswith("@@pr_ready:hint:"):
-                print(line.removeprefix("@@pr_ready:hint:"), end="", file=sys.stderr, flush=True)
-            elif current is not None:
-                current.output += line
-                if verbose:
+    with process_tree.popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, errors="replace") as process:
+        # The shell's group ends when the shell does, before it is reaped: a check that left a child holding the
+        # shell's output would otherwise keep this reader waiting for its end (#17707, tools/process_tree.py).
+        reaper = threading.Thread(target=lambda: (process_tree.wait(process), process_tree.ended(process)),
+                                  daemon=True)
+        reaper.start()
+        try:
+            for line in process.stdout:
+                marker = re.match(r"@@pr_ready:(begin|end):(\d+)(?::(\d+):(\d+))?$", line.strip())
+                if marker and marker.group(1) == "begin":
+                    current = steps[int(marker.group(2))]
+                    print(f"  {current.name}...", file=sys.stderr, flush=True)
+                elif marker:
+                    step = steps[int(marker.group(2))]
+                    step.status = "pass" if marker.group(3) == "0" else "fail"
+                    step.seconds = int(marker.group(4))
+                    finish(step, verbose)
+                    current = None
+                elif line.startswith("@@pr_ready:hint:"):
+                    print(line.removeprefix("@@pr_ready:hint:"), end="", file=sys.stderr, flush=True)
+                elif current is not None:
+                    current.output += line
+                    if verbose:
+                        print("    " + line, end="", file=sys.stderr)
+                elif verbose or host != "local":
                     print("    " + line, end="", file=sys.stderr)
-            elif verbose or host != "local":
-                print("    " + line, end="", file=sys.stderr)
+        except BaseException:  # its own session: Ctrl-C reaches only this process, so end the checks here
+            process_tree.kill(process)
+            raise
+        reaper.join()
     for step in steps:
         if step.status is None:
             step.status, step.detail = "fail", ("did not finish" if step.output else f"not run: {host} unreachable?")
@@ -829,8 +839,9 @@ def run_windows(steps, verbose, environment=None):
             with process_tree.popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, errors="replace") as process:
                 def release(process):
-                    # The check's exit ends what it left running, which would otherwise hold the output open.
-                    process.wait()
+                    # Signal the check's whole group before reaping its leader, which would otherwise hold the
+                    # output open through a surviving child (tools/process_tree.py).
+                    process_tree.wait(process)
                     process_tree.ended(process)
                 # A daemon: interrupted, this process exits at once, and its jobs end the checks with it.
                 reaper = threading.Thread(target=release, args=(process,), daemon=True)

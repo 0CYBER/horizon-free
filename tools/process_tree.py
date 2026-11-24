@@ -6,7 +6,9 @@ A harness that crashes, is killed or times out used to leave its games running: 
 - POSIX: the process leads its own session (process group). When it exits, or is killed, the rest of the group
   goes too. The group is killed while the exited leader is still unreaped, so its id can't name another group
   (os.waitid: macOS has it from Python 3.13; before, only a kill ends the group). A process that starts its own
-  session (start_new_session) leaves the group, and ends only if it ends itself.
+  session (start_new_session) leaves the group, and ends only if it ends itself. Callers wait with wait() or poll
+  with ended(), never a bare Popen.wait(): reaping the leader first would leave that id unsafe to signal, and what
+  it left running would hold the reader of its output open.
 - Windows: the process starts suspended, joins its own Job Object, then resumes, so whatever it starts joins the
   job too. When it exits, or is killed, the job ends the rest. The job is closed on exit
   (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE), so a runner that dies takes its harnesses' processes with it. A process
@@ -20,6 +22,7 @@ Only the process and what it started are ever killed: nothing is found by name, 
 import os
 import signal
 import subprocess
+import time
 
 if os.name == "nt":
     import ctypes
@@ -187,6 +190,32 @@ def ended(process):
         return False
     _release(process)
     return True
+
+
+def wait(process, timeout=None):
+    """Wait for a process, ending its group before reaping its leader (see the module docstring).
+
+    A drop-in for Popen.wait(): blocks until the process exits, returns its exit code and raises
+    subprocess.TimeoutExpired when timeout passes. Unlike a bare Popen.wait(), POSIX signals the group while the
+    leader is still an unreaped zombie (os.waitid's WNOWAIT), so its id cannot name another group and nothing it
+    left running holds the reader of its output open. A leader already reaped elsewhere is not signalled: its
+    group id is no longer safe to use.
+    """
+    if os.name != "nt" and process.returncode is None and hasattr(os, "waitid"):
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            try:
+                # WNOWAIT: see that it exited without reaping it, so kill() still owns an id no other group can use.
+                exited = bool(os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT))
+            except OSError:  # reaped elsewhere already: its group id may be reused, so never signal it
+                return process.wait(timeout=timeout)
+            if exited:
+                kill(process)  # signal the group while the leader is still a zombie
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            time.sleep(0.02)
+    return process.wait(timeout=timeout)
 
 
 BUILD_SERVERS = []  # their jobs stay open until this process ends, and end the servers then
