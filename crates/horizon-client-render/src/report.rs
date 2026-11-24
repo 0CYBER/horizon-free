@@ -358,71 +358,91 @@ mod tests {
         assert_eq!(limits.trailing_context_message_count, 0);
     }
 
-    /// One loopback server answering the four routes a redirect test needs.
-    fn loopback() -> String {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let routes = [
-                (
-                    "POST /moved",
-                    "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n",
-                ),
-                (
-                    "POST /final",
-                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
-                ),
-                (
-                    "POST /accepted",
-                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
-                ),
-                (
-                    "POST /refused",
-                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 47\r\n\r\n{\"error\":\"X\",\"errorMessage\":\"the reason field\"}",
-                ),
-            ];
-            for _ in 0..3 {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut buffer = [0; 1024];
-                let read = stream.read(&mut buffer).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
-                let route = request
-                    .split("\r\n")
-                    .next()
-                    .and_then(|line| routes.iter().find(|(name, _)| line.starts_with(name)));
-                let answer = route
-                    .map(|(_, answer)| *answer)
-                    .unwrap_or("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
-                let _ = stream.write_all(answer.as_bytes());
-                // Half-close and wait out the client's read: dropping now
-                // resets the connection mid-answer.
-                let _ = stream.shutdown(std::net::Shutdown::Write);
-                let _ = stream.read(&mut buffer);
-            }
-        });
-        format!("http://{address}")
-    }
-
     /// Redirects are off: the 302 is the answer (an error, the body never
     /// went to /final), the endpoint's 2xx is acceptance, and the service's
     /// `errorMessage` names the error.
     #[test]
     fn submission_accepts_only_the_endpoints_answer() {
-        let base = loopback();
-        assert_eq!(
-            submit_report(&format!("{base}/moved"), "bearer", "{}"),
-            Err("the report service answered 302".to_owned()),
-        );
-        assert_eq!(
-            submit_report(&format!("{base}/accepted"), "bearer", "{}"),
-            Ok(())
-        );
-        assert_eq!(
-            submit_report(&format!("{base}/refused"), "bearer", "{}"),
-            Err("the reason field".to_owned()),
-        );
+        use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::Instant;
+
+        const BODY: &str = "{}";
+        const TIMEOUT: Duration = Duration::from_secs(5);
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        thread::scope(|scope| {
+            let server = scope.spawn(move || {
+                for (path, status, headers, body) in [
+                    ("/moved", "302 Found", "Location: /final\r\n", ""),
+                    ("/accepted", "200 OK", "", "ok"),
+                    (
+                        "/refused",
+                        "400 Bad Request",
+                        "Content-Type: application/json\r\n",
+                        r#"{"error":"X","errorMessage":"the reason field"}"#,
+                    ),
+                ] {
+                    let deadline = Instant::now() + TIMEOUT;
+                    let (stream, _) = loop {
+                        match listener.accept() {
+                            Ok(connection) => break connection,
+                            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                                assert!(Instant::now() < deadline, "no request for {path}");
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(error) => panic!("could not accept request for {path}: {error}"),
+                        }
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+                    stream.set_write_timeout(Some(TIMEOUT)).unwrap();
+
+                    // Drain the complete POST before closing the connection.
+                    let mut request = BufReader::new(stream);
+                    let mut line = String::new();
+                    request.read_line(&mut line).unwrap();
+                    assert_eq!(line, format!("POST {path} HTTP/1.1\r\n"));
+                    let mut content_length = None;
+                    loop {
+                        line.clear();
+                        assert_ne!(request.read_line(&mut line).unwrap(), 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                        let (name, value) = line.split_once(':').unwrap();
+                        if name.eq_ignore_ascii_case("Content-Length") {
+                            content_length = Some(value.trim().parse::<usize>().unwrap());
+                        }
+                    }
+                    assert_eq!(content_length, Some(BODY.len()));
+                    let mut payload = [0; BODY.len()];
+                    request.read_exact(&mut payload).unwrap();
+                    assert_eq!(&payload[..], BODY.as_bytes());
+
+                    let answer = format!(
+                        "HTTP/1.1 {status}\r\nConnection: close\r\n{headers}Content-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    request.into_inner().write_all(answer.as_bytes()).unwrap();
+                }
+            });
+            assert_eq!(
+                submit_report(&format!("{base}/moved"), "bearer", BODY),
+                Err("the report service answered 302".to_owned()),
+            );
+            assert_eq!(
+                submit_report(&format!("{base}/accepted"), "bearer", BODY),
+                Ok(())
+            );
+            assert_eq!(
+                submit_report(&format!("{base}/refused"), "bearer", BODY),
+                Err("the reason field".to_owned()),
+            );
+            server.join().unwrap();
+        });
     }
 }

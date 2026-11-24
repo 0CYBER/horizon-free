@@ -2,7 +2,7 @@
 //! `.blocks(&["press"])` holds the block `press` the same mod declares.
 use std::{collections::BTreeSet, fs, path::Path};
 
-use horizon_client::mod_content::{BLOCK_ENTITY_TYPES, accept_declared, resource_root};
+use horizon_client::mod_content::{BLOCK_ENTITY_TYPES, accept_declared, build};
 use horizon_mod_package::enabled::EnabledMods;
 use mod_api::Side;
 use mod_api::{__private::game::RegistrationContextNew, BlocksEvent, Hooks, Registrar};
@@ -41,7 +41,6 @@ fn base(root: &Path) {
         ),
         ("items.json", "{}"),
         ("assets/minecraft/blockstates/stone.json", "{}"),
-        ("horizon-resources.json", "{}"),
     ] {
         fs::write(root.join(file), text).unwrap();
     }
@@ -65,25 +64,16 @@ fn a_bare_block_name_binds_the_type_to_the_mods_own_block() {
     let mut content = Vec::new();
     let errors = accept_declared(&mut content, &blocks, &[], &types, &BTreeSet::new());
     assert!(errors.is_empty(), "{errors:?}");
-    let scratch = std::env::temp_dir().join(format!(
-        "horizon-bare-declaration-names-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&scratch);
-    let base_root = scratch.join("base");
+    let scratch = tempfile::tempdir().unwrap();
+    let base_root = scratch.path().join("base");
     base(&base_root);
     let inventory = EnabledMods::new([("press_mod".to_owned(), Side::Both)]);
-    let root = resource_root(
-        &base_root,
-        Path::new(""),
-        &content,
-        &scratch.join("cache"),
-        &inventory,
-    )
-    .unwrap();
+    let root = scratch.path().join("overlay");
+    // Build the declaration table without starting a detached cache prune.
+    build(&base_root, Path::new(""), &content, &root, &inventory).unwrap();
     assert_eq!(
         fs::read_to_string(root.join(BLOCK_ENTITY_TYPES)).unwrap(),
         r#"{"press_mod:press":"press_mod:press"}"#
     );
-    fs::remove_dir_all(scratch).unwrap();
+    scratch.close().unwrap();
 }
