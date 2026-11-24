@@ -7,6 +7,10 @@
 #[path = "recipe_book/mod_screen.rs"]
 mod mod_screen;
 
+#[cfg(test)]
+#[path = "recipe_book/animation_draw_tests.rs"]
+mod animation_draw_tests;
+
 use super::{Game, Screen};
 use horizon_client::{
     containers::{BlockEntity, FurnaceKind},
@@ -2163,7 +2167,14 @@ impl Game<'_> {
             text_width: &text_width,
         };
         let calls = screen::draw(&layout);
+        let (panel_x, panel_y) = layout.origin;
         let tooltip = self.paint_book(batch, &calls);
+        let covers_menu = batch.width < NARROW;
+        self.native_recipe_book_render(
+            batch,
+            [panel_x as f32, panel_y as f32, WIDTH, HEIGHT],
+            covers_menu,
+        );
         // The squeeze animations run down with the frames.
         let frame = self.frame_ticks;
         for e in &mut self.recipe_ui.tab_anim {

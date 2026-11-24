@@ -29,4 +29,14 @@ impl Game<'_> {
     ) {
         self.fire_screen_render_foreground(draw, screen);
     }
+
+    /// After the open stock book's panel, page and alternatives, before the screen's tooltips.
+    pub(in crate::game) fn native_recipe_book_render(
+        &self,
+        draw: &mut HudBatch,
+        rect: [f32; 4],
+        covers_menu: bool,
+    ) {
+        self.fire_recipe_book_render(draw, rect, covers_menu);
+    }
 }

@@ -1,0 +1,2 @@
+horizon-client game::recipe_book::animation_draw_tests::inventory_animation_draw_book_and_controls lib daily resources
+horizon-client game::recipe_book::animation_draw_tests::inventory_animation_draw_hotbar_and_translated_items lib daily resources

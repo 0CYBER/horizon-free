@@ -5,6 +5,43 @@ is one of vanilla's `GuiGraphics` calls: `fill`, `text`, `sprite`, `item_stack` 
 takes a buffer of `GuiDraw` ops for the same calls, with `Push` / `Pop` for the pose. Native and wasm mods use
 the same methods and the same ops.
 
+## Inventory and hotbar animation
+
+Use `screen_render_background` to draw between the container panel and its slots, or
+`screen_render_foreground` to draw over the slots but under the carried stack and tooltips.
+`screen_render_pre` can cancel stock screen drawing; `screen_render_post` runs after
+tooltips even if Pre cancelled. These are the actual container render stages.
+
+`recipe_book_render` draws on the same batch after the **open stock** recipe book's panel,
+current page and alternatives, before Foreground and deferred tooltips. `event.rect` is
+the panel in GUI pixels (`[x, y, width, height]`); `event.covers_menu` marks the narrow
+mode in which the book owns input over the container slots. A closed book, a cancelled
+screen, or a book supplied by a native mod screen does not fire this hook.
+
+For an item redraw, save the callback's translation with `draw.push_translation()`,
+apply a GUI-pixel offset with `draw.translate([dx, dy])`, and restore it with
+`draw.pop_translation()`. `draw.translation()` reads the cumulative offset. It starts
+at zero for each hook call, and a clip follows the translation **when opened**, then
+stays fixed on screen. Translate the drawing without offsetting its input coordinates again.
+Every listener of a hook call shares the translation and the clips, so pop and close what
+you open: the game discards what is left open only when the hook call returns.
+
+`gui_draw_item_with` draws both the icon and its decorations. Use
+`gui_draw_item_decorations_with` to redraw **only** the bar, cooldown and count over an
+already drawn icon, with `Some(text)` to override the count or `None` for the usual count.
+The decoration-only helper does not re-enter `item_decorations`.
+
+`draw.game_time_delta_ticks()` gives the gameplay timer's advance for the frame, not
+`ScreenView.partial_tick` or the GUI easing delta. While the stock hotbar's items draw,
+and in `gui_layer_post` for `minecraft:hotbar`, `draw.hotbar_origin()` gives the panel's
+absolute GUI top-left. It is absent in other layers, on container slots, and when the
+stock hotbar is hidden, cancelled, or replaced by the spectator hotbar.
+
+On the engine side, `Game::draw_slot_item` and the HUD's `Game::draw_item` use the same
+item-decoration path, with absolute GUI coordinates. `Game::draw_recipe_book` routes an
+open stock book through its own painter, while native screens keep their own book draw
+path. None of these draw stages changes the menu or sends a click.
+
 ## Replace the ping bars in the player list
 
 Use the client hooks `tab_list_latency_width` and `tab_list_latency_draw` together. The first runs

@@ -12,8 +12,13 @@ use mod_api::{TextFieldLayout, TextFieldView};
 
 impl Game<'_> {
     /// Paint GUI extraction calls through this window's atlas, including player faces.
-    pub(super) fn native_gui_paint(&self, batch: &mut HudBatch, draws: &[GuiDraw]) {
-        horizon_client::hud_layout::paint(batch, &self.gui.atlas, draws);
+    pub(super) fn native_gui_paint(
+        &self,
+        batch: &mut HudBatch,
+        draws: &[GuiDraw],
+        translation: [f32; 2],
+    ) {
+        horizon_client::hud_layout::paint_translated(batch, &self.gui.atlas, draws, translation);
     }
     /// `GuiGraphics.fillGradient` for [`mod_api::DrawContext::fill_gradient`]: `rect` is
     /// `[x, y, w, h]` and `top` / `bottom` are ARGB at `y` / `y + h`. Zero area,
@@ -84,8 +89,8 @@ impl Game<'_> {
         &self,
         batch: &mut HudBatch,
         field: &TextFieldView,
+        [x, y, w, h]: [f32; 4],
     ) -> TextFieldLayout {
-        let [x, y, w, h] = field.rect;
         let mut edit = horizon_client::ui::EditBox::new(x, y, w, h);
         edit.max_length = field.max_length;
         edit.value = field.value.clone();
@@ -118,6 +123,22 @@ impl Game<'_> {
     ) {
         self.draw_item_model(batch, stack, at[0], at[1]);
         self.draw_item_decorations(batch, stack, at[0], at[1], text.map(str::to_owned));
+    }
+
+    /// Vanilla's decoration pass without the icon or another item decoration callback.
+    pub(super) fn native_gui_draw_item_decorations_with(
+        &self,
+        batch: &mut HudBatch,
+        stack: &EngineStack,
+        at: [f32; 2],
+        text: Option<&str>,
+    ) {
+        if stack.count != 0
+            && &*stack.item != "minecraft:air"
+            && self.items().get(&stack.item).is_some()
+        {
+            self.paint_item_decorations(batch, stack, at[0], at[1], text.map(str::to_owned));
+        }
     }
     /// Whether a specific key is currently held down.
     /// `key` is the vanilla physical key name (`key.keyboard.left.shift`, for example).
@@ -192,7 +213,8 @@ mod tests {
             impl mod_api::DrawContext for Draws<'_, '_> {
                 fn widget_text_field(&mut self, field: &TextFieldView) -> TextFieldLayout {
                     self.2.push(field.clone());
-                    self.0.native_widget_text_field(&mut self.1, field)
+                    self.0
+                        .native_widget_text_field(&mut self.1, field, field.rect)
                 }
             }
             let mut widgets = Widgets::new();
@@ -204,7 +226,8 @@ mod tests {
             widgets.draw(&mut draws, &*game, [0.0, 0.0]).unwrap();
             let view = draws.2[0].clone();
             assert!(!draws.1.vertices.is_empty());
-            let layout = game.native_widget_text_field(&mut HudBatch::scratch([320, 240]), &view);
+            let layout =
+                game.native_widget_text_field(&mut HudBatch::scratch([320, 240]), &view, view.rect);
             // The cursor is at the end, so the field scrolled on to show it.
             assert!(layout.scroll > 0);
             let shown = layout.edges.len() - 1;

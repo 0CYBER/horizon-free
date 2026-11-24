@@ -104,6 +104,19 @@ impl Game<'_> {
         y: f32,
         count_text: Option<String>,
     ) {
+        self.paint_item_decorations(batch, stack, x, y, count_text);
+        self.native_item_decorations(stack, x, y, batch);
+    }
+
+    /// The stock decorations, shared by normal item draws and standalone redraws.
+    pub(super) fn paint_item_decorations(
+        &self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+        count_text: Option<String>,
+    ) {
         // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
         // moved to (x, y): the damage bar, the cooldown shade and the count.
         let info = self.items().get(&stack.item);
@@ -131,18 +144,8 @@ impl Game<'_> {
             bar,
             cooldown: self.cooldowns.percent(&cooldown, partial),
         };
-        let mut draws = vec![hud_layout::GuiDraw::Push(vec![
-            hud_layout::PoseOp::Translate(x, y),
-        ])];
-        draws.extend(hud_overlays::item_decorations(
-            0,
-            0,
-            &decorations,
-            &self.gui.atlas.font,
-        ));
-        draws.push(hud_layout::GuiDraw::Pop);
-        hud_layout::paint(batch, &self.gui.atlas, &draws);
-        self.native_item_decorations(stack, x, y, batch);
+        let draws = hud_overlays::item_decorations(0, 0, &decorations, &self.gui.atlas.font);
+        hud_layout::paint_translated(batch, &self.gui.atlas, &draws, [x, y]);
     }
     /// The open container screen's player-inventory origin (`getXOrigin`/
     /// `getYOrigin`): the build's, or the frame's own arithmetic with no

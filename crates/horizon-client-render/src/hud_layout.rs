@@ -259,6 +259,11 @@ pub struct HotbarInputs {
     pub attack: Option<f32>,
 }
 
+/// The origin of the stock item hotbar panel in absolute GUI pixels.
+pub fn hotbar_origin(w: i32, h: i32) -> [i32; 2] {
+    [w / 2 - 91, h - 22]
+}
+
 /// `Hud.extractItemHotbar`.
 pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
     let mut out = Vec::new();
@@ -269,11 +274,12 @@ pub fn hotbar(w: i32, h: i32, i: &HotbarInputs) -> Vec<GuiDraw> {
 /// Appends [`hotbar`] draws to `out` without allocating a new buffer.
 pub fn hotbar_into(w: i32, h: i32, i: &HotbarInputs, out: &mut Vec<GuiDraw>) {
     let center = w / 2;
-    out.push(sprite("hud/hotbar", center - 91, h - 22, 182, 22));
+    let [x, y] = hotbar_origin(w, h);
+    out.push(sprite("hud/hotbar", x, y, 182, 22));
     out.push(sprite(
         "hud/hotbar_selection",
-        center - 91 - 1 + i.selected * 20,
-        h - 22 - 1,
+        x - 1 + i.selected * 20,
+        y - 1,
         24,
         23,
     ));
@@ -320,14 +326,7 @@ pub fn hotbar_into(w: i32, h: i32, i: &HotbarInputs, out: &mut Vec<GuiDraw>) {
     let mut seed = 1;
     for (n, pop) in i.slots.iter().enumerate() {
         if let Some(pop) = pop {
-            slot(
-                n as u32,
-                center - 90 + n as i32 * 20 + 2,
-                h - 16 - 3,
-                seed,
-                *pop,
-                out,
-            );
+            slot(n as u32, x + 3 + n as i32 * 20, y + 3, seed, *pop, out);
         }
         seed += 1;
     }
@@ -849,11 +848,7 @@ impl HealthHud {
 /// the caller (they need the item renderer) and so are the vignette and
 /// nausea blits (their blending needs the screen-effect pipeline).
 pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, draws: &[GuiDraw]) {
-    if draws.is_empty() {
-        return;
-    }
-    let mut scratch = crate::hud::HudGlyphScratch::new();
-    paint_with_scratch(batch, atlas, draws, &mut scratch);
+    paint_translated(batch, atlas, draws, [0.0; 2]);
 }
 
 /// [`paint`], reusing `scratch` for staged glyphs across any [`GuiDraw::Text`] calls.
@@ -863,11 +858,36 @@ pub fn paint_with_scratch(
     draws: &[GuiDraw],
     scratch: &mut crate::hud::HudGlyphScratch,
 ) {
+    paint_translated_with_scratch(batch, atlas, draws, [0.0; 2], scratch);
+}
+
+/// Paints the same calls starting at `translation` instead of the origin.
+pub fn paint_translated(
+    batch: &mut crate::hud::HudBatch,
+    atlas: &crate::hud::HudAtlas,
+    draws: &[GuiDraw],
+    translation: [f32; 2],
+) {
+    if draws.is_empty() {
+        return;
+    }
+    let mut scratch = crate::hud::HudGlyphScratch::new();
+    paint_translated_with_scratch(batch, atlas, draws, translation, &mut scratch);
+}
+
+/// [`paint_translated`], reusing `scratch` for staged glyphs.
+fn paint_translated_with_scratch(
+    batch: &mut crate::hud::HudBatch,
+    atlas: &crate::hud::HudAtlas,
+    draws: &[GuiDraw],
+    [dx, dy]: [f32; 2],
+    scratch: &mut crate::hud::HudGlyphScratch,
+) {
     if draws.is_empty() {
         return;
     }
     const GUI_SPRITE_PREFIX: &str = "gui/sprites/";
-    let mut stack: SmallVec<[Pose; 4]> = smallvec![IDENTITY];
+    let mut stack: SmallVec<[Pose; 4]> = smallvec![[1.0, 0.0, 0.0, 1.0, dx, dy]];
     // Stack buffer for typical `gui/sprites/<name>` keys; spills only on >116-byte sprite names.
     let mut name_buf = [0u8; 128];
     name_buf[..GUI_SPRITE_PREFIX.len()].copy_from_slice(GUI_SPRITE_PREFIX.as_bytes());

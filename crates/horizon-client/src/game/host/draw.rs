@@ -12,6 +12,8 @@ pub(crate) struct GameDrawContext<'a, 'g> {
     pub(crate) surface: &'a mut crate::hud::HudBatch,
     /// The call's open clips (`push_clip`), closed when the call returns.
     clips: crate::game::gui_clips::GuiClips,
+    translations: [[f32; 2]; 9],
+    translation_depth: usize,
 }
 impl<'a, 'g> GameDrawContext<'a, 'g> {
     pub(crate) fn new(game: &'a Game<'g>, surface: &'a mut crate::hud::HudBatch) -> Self {
@@ -19,7 +21,24 @@ impl<'a, 'g> GameDrawContext<'a, 'g> {
             game,
             surface,
             clips: Default::default(),
+            translations: [[0.0; 2]; 9],
+            translation_depth: 0,
         }
+    }
+
+    fn translated_at(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let [dx, dy] = self.translation();
+        [x + dx, y + dy]
+    }
+
+    fn translated_rect(&self, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+        let [x, y] = self.translated_at([x, y]);
+        [x, y, w, h]
+    }
+
+    fn translated_corners(&self, [x0, y0, x1, y1]: [f32; 4]) -> [f32; 4] {
+        let [dx, dy] = self.translation();
+        [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
     }
 }
 impl Drop for GameDrawContext<'_, '_> {
@@ -35,20 +54,25 @@ impl DrawContext for GameDrawContext<'_, '_> {
         let Some(item) = mod_api::__private::item_key_id(item) else {
             return false;
         };
+        let at = self.translated_at(at);
         self.game
             .native_item_model(&mut *self.surface, item, model, at, size)
     }
     fn quad(&mut self, points: [[f32; 2]; 4], argb: u32) {
+        let points = points.map(|point| self.translated_at(point));
         self.game.native_quad(&mut *self.surface, points, argb)
     }
     fn fill(&mut self, rect: [f32; 4], argb: u32) {
+        let rect = self.translated_rect(rect);
         self.game.native_fill(&mut *self.surface, rect, argb)
     }
     fn fill_gradient(&mut self, rect: [f32; 4], top: u32, bottom: u32) {
+        let rect = self.translated_rect(rect);
         self.game
             .native_fill_gradient(&mut *self.surface, rect, top, bottom)
     }
     fn sprite(&mut self, name: &str, src: [f32; 4], dst: [f32; 4], tint: Option<u32>) -> bool {
+        let dst = self.translated_rect(dst);
         self.game
             .native_sprite(&mut *self.surface, name, src, dst, tint)
     }
@@ -56,9 +80,11 @@ impl DrawContext for GameDrawContext<'_, '_> {
         let Some(item) = mod_api::__private::item_key_id(item) else {
             return false;
         };
+        let at = self.translated_at(at);
         self.game.native_item(&mut *self.surface, item, at, size)
     }
     fn text(&mut self, text: &str, at: [f32; 2], argb: u32, shadow: bool) {
+        let at = self.translated_at(at);
         self.game
             .native_text(&mut *self.surface, text, at, argb, shadow)
     }
@@ -66,15 +92,19 @@ impl DrawContext for GameDrawContext<'_, '_> {
         let Ok(stack) = crate::game::api_values::stack_value(stack) else {
             return false;
         };
+        let at = self.translated_at(at);
         self.game
             .native_item_stack(&mut *self.surface, &stack, at, size)
     }
     fn gui_paint(&mut self, draws: &[GuiDraw]) -> Result<(), mod_api::text::TextFormError> {
         let draws = draws.try_into_engine(&())?;
-        self.game.native_gui_paint(&mut *self.surface, &draws);
+        let translation = self.translation();
+        self.game
+            .native_gui_paint(&mut *self.surface, &draws, translation);
         Ok(())
     }
     fn gui_nine_slice(&mut self, sprite: &str, rect: [f32; 4], color: u32) {
+        let rect = self.translated_rect(rect);
         self.game
             .native_gui_nine_slice(&mut *self.surface, sprite, rect, color)
     }
@@ -84,6 +114,7 @@ impl DrawContext for GameDrawContext<'_, '_> {
         at: [f32; 2],
     ) -> Result<(), mod_api::text::TextFormError> {
         let lines = lines.try_into_engine(&())?;
+        let at = self.translated_at(at);
         self.game.native_gui_tooltip(&mut *self.surface, &lines, at);
         Ok(())
     }
@@ -91,6 +122,7 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game.native_text_width(&*self.surface, text)
     }
     fn fluid(&mut self, fluid: &str, at: [f32; 2], size: f32) {
+        let at = self.translated_at(at);
         self.game.native_fluid(&mut *self.surface, fluid, at, size)
     }
     fn draw_scene(
@@ -100,6 +132,7 @@ impl DrawContext for GameDrawContext<'_, '_> {
         view: SceneView,
     ) -> Result<(), mod_api::SceneError> {
         let blocks = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)?;
+        let rect = self.translated_corners(rect);
         self.game.native_draw_scene(
             &mut *self.surface,
             &SceneBlocks::stationary(&blocks),
@@ -117,6 +150,7 @@ impl DrawContext for GameDrawContext<'_, '_> {
         if !self.game.native_window() {
             return Err(SceneWithQuadsError::Scene(SceneError::Unavailable));
         }
+        let rect = self.translated_corners(rect);
         let frame = SceneFrame::new(rect, view).with_textured_quads(&self.game.gui.atlas, quads)?;
         let blocks = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)
             .map_err(SceneWithQuadsError::Scene)?;
@@ -150,16 +184,26 @@ impl DrawContext for GameDrawContext<'_, '_> {
         Ok(())
     }
     fn push_clip(&mut self, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
+        let rect = self.translated_rect(rect);
         self.clips.push(self.surface, rect)
     }
     fn pop_clip(&mut self) -> Result<(), GuiClipRefusal> {
         self.clips.pop(self.surface)
     }
-    fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
+    fn entity(
+        &mut self,
+        entity: &GuiEntity,
+        mut view: GuiEntityView,
+    ) -> Result<(), GuiEntityError> {
+        view.rect = self.translated_corners(view.rect);
+        if let GuiEntityLook::At(at) = view.look {
+            view.look = GuiEntityLook::At(self.translated_at(at));
+        }
         self.game
             .native_draw_entity(&mut *self.surface, entity, view)
     }
     fn draw_menu_background(&mut self, rect: [f32; 4], in_world: bool) {
+        let rect = self.translated_rect(rect);
         self.game
             .native_draw_menu_background(&mut *self.surface, rect, in_world)
     }
@@ -167,6 +211,7 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game.native_blur_behind(&mut *self.surface)
     }
     fn tiled_sprite(&mut self, sprite: &str, rect: [f32; 4], size: f32, argb: u32) -> bool {
+        let rect = self.translated_rect(rect);
         self.game
             .native_tiled_sprite(&mut *self.surface, sprite, rect, size, argb)
     }
@@ -174,6 +219,7 @@ impl DrawContext for GameDrawContext<'_, '_> {
         let Ok(stack) = crate::game::api_values::stack_value(stack) else {
             return;
         };
+        let at = self.translated_at(at);
         self.game
             .native_gui_draw_item_with(&mut *self.surface, &stack, at, text)
     }
@@ -185,13 +231,62 @@ impl DrawContext for GameDrawContext<'_, '_> {
         highlighted: bool,
     ) -> Result<(), mod_api::text::TextFormError> {
         let label = label.try_into_engine(&())?;
+        let rect = self.translated_rect(rect);
         self.game
             .native_widget_button(&mut *self.surface, rect, &label, active, highlighted);
         Ok(())
     }
     fn widget_text_field(&mut self, field: &TextFieldView) -> TextFieldLayout {
+        let rect = self.translated_rect(field.rect);
         self.game
-            .native_widget_text_field(&mut *self.surface, field)
+            .native_widget_text_field(&mut *self.surface, field, rect)
+    }
+
+    fn push_translation(&mut self) -> bool {
+        let translation = self.translation();
+        let Some(next) = self.translations.get_mut(self.translation_depth + 1) else {
+            return false;
+        };
+        *next = translation;
+        self.translation_depth += 1;
+        true
+    }
+    fn translate(&mut self, by: [f32; 2]) -> bool {
+        let translated = self.translated_at(by);
+        if !translated.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        self.translations[self.translation_depth] = translated;
+        true
+    }
+    fn translation(&self) -> [f32; 2] {
+        self.translations[self.translation_depth]
+    }
+    fn pop_translation(&mut self) -> bool {
+        let Some(previous) = self.translation_depth.checked_sub(1) else {
+            return false;
+        };
+        self.translation_depth = previous;
+        true
+    }
+    fn game_time_delta_ticks(&self) -> f32 {
+        self.game.clock.game_time_delta_ticks()
+    }
+    fn hotbar_origin(&self) -> Option<[f32; 2]> {
+        self.surface.stock_hotbar_origin
+    }
+    fn gui_draw_item_decorations_with(
+        &mut self,
+        stack: &ItemStack,
+        at: [f32; 2],
+        text: Option<&str>,
+    ) {
+        let Ok(stack) = crate::game::api_values::stack_value(stack) else {
+            return;
+        };
+        let at = self.translated_at(at);
+        self.game
+            .native_gui_draw_item_decorations_with(&mut *self.surface, &stack, at, text)
     }
 }
 /// [`BlockEntityDrawContext`] on the game's `crate::game::native_block_entity_draw::BlockEntityDraw`.

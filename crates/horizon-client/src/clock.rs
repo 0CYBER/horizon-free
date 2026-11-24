@@ -423,6 +423,10 @@ impl FixedStep {
         self.timer = Timer::new(20.0, self.now_ms());
         self.timer.update_pause_state(self.pause);
     }
+    /// `DeltaTracker.getGameTimeDeltaTicks` for the frame the game is drawing.
+    pub fn game_time_delta_ticks(&self) -> f32 {
+        self.timer.game_time_delta_ticks()
+    }
     /// The partial tick for interpolation (`getGameTimeDeltaPartialTick(false)`).
     pub fn fraction(&self) -> f64 {
         f64::from(self.timer.game_time_delta_partial_tick(false))

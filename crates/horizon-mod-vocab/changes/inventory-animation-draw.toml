@@ -1,0 +1,13 @@
+ids = [
+    "hook:recipe_book_render",
+    "method:Hooks::recipe_book_render",
+    "type:RecipeBookRenderEvent",
+    "method:DrawContext::push_translation",
+    "method:DrawContext::translate",
+    "method:DrawContext::translation",
+    "method:DrawContext::pop_translation",
+    "method:DrawContext::game_time_delta_ticks",
+    "method:DrawContext::hotbar_origin",
+    "method:DrawContext::gui_draw_item_decorations_with",
+]
+why = "Inventory animation callbacks can draw above the open stock recipe book and translate GUI drawing for the duration of a callback. They can read the gameplay time advance and the stock HUD hotbar origin, and redraw only an item's normal decorations with count text, without drawing a second icon or re-entering item decoration callbacks (#19744)."
