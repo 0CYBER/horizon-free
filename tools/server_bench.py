@@ -38,6 +38,10 @@ Both run with the same heap as vanilla (`--heap`).
 
 `--profile[=ARGS]` has Horizon record its measure window with `horizon-report ARGS` and attaches the run's record with `horizon-perf attach` (docs/hosting.md).
 
+`--spread N` measures a server whose players are spread out (#11755): once the bots are in, the console teleports
+each to a random point in an N × N square centred on the spawn, as high above it as the bots fly, before the
+warm-up. The points come from `--seed`, so every run and every server gets the same ones.
+
 `pumpkin` runs Pumpkin (github.com/Pumpkin-MC/Pumpkin, GPL-3.0), a binary you built yourself and name with
 `--pumpkin`: a black box, nothing of it is read or shipped. A first start in a scratch folder (on 127.0.0.1
 only, without telemetry) writes its default configuration; every run gets that file with the same settings
@@ -47,11 +51,13 @@ has the comparison and its commands.
 """
 
 import argparse
+import collections
 import datetime
 import json
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import shutil
 import statistics
@@ -462,6 +468,64 @@ def bots_command(args):
     return [args.bots_bin or BIN / f'horizon-bots{EXE}']
 
 
+# How far above the spawn the bots fly: horizon-bots' default --height (--ground passes 0; fight bots keep the
+# spawn's height). --spread puts them there, as high as they fly at the spawn: lower, a hill would bury them and
+# the server refuse their moves.
+BOT_HEIGHT = 24
+
+
+def drain(stream, keep=40):
+    """Reads a process's stream to its end on a thread of its own, so the process never blocks on a full pipe
+    (horizon-bots' stderr), and keeps its last `keep` lines to explain a failure. Returns the lines and the
+    thread, which ends with the stream."""
+    tail = collections.deque(maxlen=keep)
+    thread = threading.Thread(target=lambda: tail.extend(line.rstrip('\n') for line in stream), daemon=True)
+    thread.start()
+    return tail, thread
+
+
+def spread_points(bots, size, seed):
+    """`--spread N`: each bot's offset from the spawn in whole blocks, (dx, dz) inside the N × N square centred on
+    it. The same seed gives the same points."""
+    rng = random.Random(seed)
+    half = size // 2
+    return [(rng.randint(-half, half), rng.randint(-half, half)) for _ in range(bots)]
+
+
+def bots_status(lines):
+    """From horizon-bots' stdout so far: the first bot's spawn position and the bots online and failed in the
+    latest second's line."""
+    spawn, online, failed = None, 0, 0
+    for line in lines:
+        try:
+            sample = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(sample, dict) and 'spawn' in sample:
+            spawn = sample['spawn']
+        elif isinstance(sample, dict) and 't' in sample:
+            online, failed = sample.get('online', 0), sample.get('failed', 0)
+    return spawn, online, failed
+
+
+def spread(server, bot_lines, bots, size, seed, wait, height=0):
+    """Teleports Bot0, Bot1... to their spread points around the first bot's spawn, `height` blocks above it,
+    once horizon-bots says every bot is online or failed, or after `wait` seconds. A bot takes a far teleport as
+    its position and the new centre of its walk, not as a pull-back. Returns how many bots were online."""
+    deadline = time.time() + wait
+    while True:
+        spawn, online, failed = bots_status(list(bot_lines))
+        if spawn is not None and online + failed >= bots or time.time() >= deadline:
+            break
+        time.sleep(0.5)
+    if spawn is None:
+        raise RuntimeError(f'--spread: no bot spawned within {wait} s')
+    x, y, z = spawn
+    for i, (dx, dz) in enumerate(spread_points(bots, size, seed)):
+        server.console(f'tp Bot{i} {x + dx} {y + height} {z + dz}')
+    return online
+
+
 def populate(server, spec, seed):
     """Fills the level around the players with `spec` = "items,carts,mobs" (counts), as a busy server has it: the
     entity tracker and the entity states cost by what is in the level, not only by how many players walk in it.
@@ -525,14 +589,21 @@ def run_once(kind, bots, behaviour, args, out):
              *(['--explore-speed', str(args.explore_speed)] if args.explore_speed else []),
              *(['--height', '0', '--ground'] if args.ground else []),
              *(['--capture', str(args.capture)] if args.capture else [])],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
-        # All bots in, then the warm-up.
-        if args.entities:
+        # Unread, a chatty run's stderr fills the pipe and the bots block on it.
+        bot_errors, errors_read = drain(bot_process.stderr)
+        # All bots in, then the warm-up; --spread waits for the last bots inside it.
+        if args.entities or (args.spread and bots):
             time.sleep(bots * args.join_every)
-            populate(server, args.entities, args.seed)
-            time.sleep(args.warmup)
+            warm_until = time.time() + args.warmup
+            if args.spread and bots:
+                result['spread_online'] = spread(server, bot_lines, bots, args.spread, args.seed, args.warmup,
+                                                 0 if args.ground or behaviour == 'fight' else BOT_HEIGHT)
+            if args.entities:
+                populate(server, args.entities, args.seed)
+            time.sleep(max(0.0, warm_until - time.time()))
         else:
             time.sleep(bots * args.join_every + args.warmup)
         profiling = start_profile(server, kind, args)
@@ -554,6 +625,10 @@ def run_once(kind, bots, behaviour, args, out):
                 next_query = now + 5
         bot_process.wait(timeout=total + 120)
         time.sleep(0.5)
+        errors_read.join(timeout=5)
+        if bot_process.returncode and bot_errors:
+            # Why horizon-bots stopped, or which bots failed.
+            result['bots_stderr'] = list(bot_errors)
         measured, rest = [], []
         for line in list(bot_lines):
             try:
@@ -585,9 +660,10 @@ def run_once(kind, bots, behaviour, args, out):
             'cpu_percent': mean(cpu),
             'chunks_per_second': mean([l['chunks_per_second'] for l in window]),
             # Over the measured window: different chunks reaching the bots, chunks they had dropped and got
-            # again (walking back), and ticks the bots stood still waiting for their own chunk.
+            # again (walking back), ticks the bots stood still waiting for their own chunk, and moves the server
+            # refused.
             **({k + '_per_second': round((window[-1][k] - window[0][k]) / max(len(window) - 1, 1), 2)
-                for k in ('unique', 'forgotten', 'waited_ticks')} if len(window) > 1 else {}),
+                for k in ('unique', 'forgotten', 'waited_ticks', 'pulled_back')} if len(window) > 1 else {}),
             'chunks_total': summary.get('chunks'),
             # Per bot over the whole run: every chunk received, the different ones, and those sent again
             # while the bot still held them.
@@ -655,7 +731,7 @@ def versions(kinds):
     return out
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--servers', default='horizon,vanilla', help='horizon, vanilla, paper, fabric (Lithium), pumpkin')
     parser.add_argument('--bots', default='1,10,25,50')
@@ -673,6 +749,9 @@ def main():
                              "no locator bar yet)")
     parser.add_argument('--entities', default='', metavar='ITEMS,CARTS,MOBS',
                         help='fill the level with this many dropped items, minecarts and chickens once the bots are in')
+    parser.add_argument('--spread', type=int, default=0, metavar='N',
+                        help='once the bots are in, teleport them to random points (from --seed) in an N × N square '
+                             'centred on the spawn: a server whose players are spread out')
     parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla, Paper, Fabric)')
     parser.add_argument('--out', type=Path, default=None, help='the report (JSON)')
     parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
@@ -694,7 +773,14 @@ def main():
                              "--profile=--no-samples) and attach the run's record to the capture")
     parser.add_argument('--repeat', type=int, default=1,
                         help='rounds: every server and bot count once per round, the servers alternated')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.spread < 0:
+        parser.error('--spread is the side of the square in blocks, 0 (off) or more')
+    return args
+
+
+def main():
+    args = parse_args()
     args.pumpkin_files = None
     out = lab.LOCAL / 'server-bench'
     out.mkdir(parents=True, exist_ok=True)

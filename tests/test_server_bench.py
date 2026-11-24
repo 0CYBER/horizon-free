@@ -4,11 +4,13 @@ import re
 
 import json
 import subprocess
+import sys
 import tempfile
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
+from tools.server_bench import drain, parse_args, spread, spread_points
 from tools.server_bench import (DONE, PERF, PUMPKIN_READY, RUN_RECORD, TICK_AVERAGE, TICK_PERCENTILES, finish_profile,
                                 pumpkin_config, report_line, start_profile, work)
 
@@ -262,6 +264,56 @@ class ServerBenchProfileTests(unittest.TestCase):
             finish_profile(FakeServer([SAVED_LINE]), Path(folder), result, run=fails)
         self.assertNotIn('profile', result)
         self.assertIn('profile_error', result)
+
+
+class SpreadTests(unittest.TestCase):
+    def test_spread_is_off_unless_asked_and_takes_the_side_of_the_square(self):
+        self.assertEqual(parse_args([]).spread, 0)
+        args = parse_args(['--spread', '2000', '--seed', '7'])
+        self.assertEqual((args.spread, args.seed), (2000, 7))
+        with self.assertRaises(SystemExit):
+            parse_args(['--spread', '-5'])
+
+    def test_the_points_repeat_with_the_seed_and_stay_in_the_square(self):
+        points = spread_points(200, 2000, 12345)
+        self.assertEqual(len(points), 200)
+        self.assertEqual(points, spread_points(200, 2000, 12345))
+        self.assertNotEqual(points, spread_points(200, 2000, 12346))
+        self.assertTrue(all(-1000 <= dx <= 1000 and -1000 <= dz <= 1000 for dx, dz in points))
+        # Spread over the square, not bunched near the spawn: every quarter of it gets bots.
+        self.assertEqual({(dx > 0, dz > 0) for dx, dz in points}, {(False, False), (False, True), (True, False),
+                                                                   (True, True)})
+
+    def test_every_bot_goes_to_its_point_around_the_first_spawn_at_its_flying_height(self):
+        lines = ['{"spawn":[8.5,71.0,-3.5]}\n', '{"t":3,"online":3,"failed":0,"chunks":0}\n']
+        server = FakeServer()
+        self.assertEqual(spread(server, lines, 3, 100, 12345, wait=0, height=24), 3)
+        self.assertEqual(len(server.typed), 3)
+        for i, line in enumerate(server.typed):
+            tp, name, x, y, z = line.split()
+            self.assertEqual((tp, name, float(y)), ('tp', f'Bot{i}', 95.0))
+            self.assertLessEqual(abs(float(x) - 8.5), 50)
+            self.assertLessEqual(abs(float(z) + 3.5), 50)
+
+    def test_no_spawned_bot_fails_the_run(self):
+        server = FakeServer()
+        with self.assertRaises(RuntimeError):
+            spread(server, ['{"t":1,"online":0,"failed":2}\n'], 2, 100, 12345, wait=0)
+        self.assertEqual(server.typed, [])
+
+
+class BotStderrTests(unittest.TestCase):
+    def test_a_chatty_process_never_blocks_and_its_last_lines_stay(self):
+        # Far more than a pipe holds: unread, the child blocks on its stderr and never exits.
+        code = "import sys\nfor i in range(20000):\n    print(f'line {i}', file=sys.stderr)\n"
+        process = subprocess.Popen([sys.executable, '-I', '-c', code], stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.PIPE, text=True)
+        self.addCleanup(process.stderr.close)
+        self.addCleanup(process.kill)
+        tail, reader = drain(process.stderr, keep=3)
+        self.assertEqual(process.wait(timeout=30), 0)
+        reader.join(timeout=30)
+        self.assertEqual(list(tail), ['line 19997', 'line 19998', 'line 19999'])
 
 
 if __name__ == "__main__":
