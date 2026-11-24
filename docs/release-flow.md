@@ -719,6 +719,11 @@ release.
   5 minutes, or the oldest 1 hour: a fix to installs or updates starts its release at most ~70 minutes after it
   merges, as the decision runs every 10 minutes, then builds and publishes), `release-now`, `skip-release` and
   `RELEASES_PAUSED`.
+- A fix merged through a security advisory's private fork has no pull request, so the decision doesn't count it.
+  Release it by hand: `gh workflow run launcher --ref main -f dry_run=false -f force=true`, but only after the
+  `checks` run on the fix's commit on `main` has passed. The dispatch releases the newest commit on `main` whose
+  `checks` passed, so one sent earlier ships a commit without the fix. Confirm the release's commit contains the
+  fix, then publish the advisory.
 - The tag is `launcher@X.Y.Z` on the release line (`launcher@0.2.0` first; the game and the launcher count their
   patches separately). Without `.github/release-line.txt`, `launcher-vX.Y.Z`: the patch after the last launcher tag,
   or the next minor (`X.Y+1.0`) when one of those pull requests is labelled `feature`. `launcher-v0.2.0` was taken
