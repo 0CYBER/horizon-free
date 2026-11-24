@@ -8,8 +8,8 @@ use super::{
 };
 use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{
-    ClientHost, PAYLOAD_DECODE_BUDGET, PayloadCodec, PlayerRef, ServerHost, decode_payload,
-    encode_payload, payload_schema,
+    ChunkRef, ClientHost, EntityRef, LevelRef, PAYLOAD_DECODE_BUDGET, PayloadCodec, PlayerRef,
+    ServerHost, decode_payload, encode_payload, payload_schema,
 };
 use std::{marker::PhantomData, sync::Arc};
 
@@ -187,6 +187,30 @@ impl<T: PayloadCodec> ToServer<T> {
 }
 
 impl<T: PayloadCodec> ToClient<T> {
+    fn prepare_body(
+        &self,
+        host: &dyn ServerHost,
+        value: &T,
+    ) -> Result<PayloadBytes, PayloadSendError> {
+        self.token
+            .claims(self.value_schema, PayloadDirection::ToClient)?;
+        host.check_payload_token(&self.token)?;
+        self.token.body(value)
+    }
+
+    fn send_group(
+        &self,
+        host: &mut dyn ServerHost,
+        players: Vec<PlayerRef>,
+        body: PayloadBytes,
+    ) -> Vec<(PlayerRef, Result<PayloadAccepted, PayloadSendError>)> {
+        if players.is_empty() {
+            return Vec::new();
+        }
+        let outcomes = host.send_payload_to_players(&players, &self.token.id, body);
+        players.into_iter().zip(outcomes).collect()
+    }
+
     /// Queue `value` to `player` through [`PlayerRef::send_payload`], with its results, after
     /// checking the token: `StaleToken` for one the registrar did not hand out for this type.
     ///
@@ -203,11 +227,91 @@ impl<T: PayloadCodec> ToClient<T> {
         player: PlayerRef,
         value: &T,
     ) -> Result<PayloadAccepted, PayloadSendError> {
-        self.token
-            .claims(self.value_schema, PayloadDirection::ToClient)?;
-        host.check_payload_token(&self.token)?;
-        let body = self.token.body(value)?;
+        let body = self.prepare_body(host, value)?;
         player.send_payload(host, &self.token.id, body)
+    }
+
+    /// Queue `value` to every online player on the server in one host call.
+    pub fn send_to_all(
+        &self,
+        host: &mut dyn ServerHost,
+        value: &T,
+    ) -> Result<Vec<(PlayerRef, Result<PayloadAccepted, PayloadSendError>)>, PayloadSendError> {
+        let body = self.prepare_body(host, value)?;
+        let players = host.players().server_players();
+        Ok(self.send_group(host, players, body))
+    }
+
+    /// Queue `value` to every online player in `level` in one host call.
+    pub fn send_in_level(
+        &self,
+        host: &mut dyn ServerHost,
+        level: LevelRef,
+        value: &T,
+    ) -> Result<Vec<(PlayerRef, Result<PayloadAccepted, PayloadSendError>)>, PayloadSendError> {
+        let body = self.prepare_body(host, value)?;
+        let players = level
+            .online_players(host)
+            .ok_or(PayloadSendError::StaleEpoch)?;
+        Ok(self.send_group(host, players, body))
+    }
+
+    /// Queue `value` to every online player in `level` within `radius` blocks of `center`
+    /// (excluding `exclude` when given), in one host call.
+    pub fn send_near(
+        &self,
+        host: &mut dyn ServerHost,
+        level: LevelRef,
+        center: [f64; 3],
+        radius: f64,
+        exclude: Option<PlayerRef>,
+        value: &T,
+    ) -> Result<Vec<(PlayerRef, Result<PayloadAccepted, PayloadSendError>)>, PayloadSendError> {
+        let body = self.prepare_body(host, value)?;
+        let online = level
+            .online_players(host)
+            .ok_or(PayloadSendError::StaleEpoch)?;
+        if !radius.is_finite() || radius < 0.0 || !center.iter().all(|c| c.is_finite()) {
+            return Ok(Vec::new());
+        }
+        let max_sq = radius * radius;
+        let players = online
+            .into_iter()
+            .filter(|&p| exclude != Some(p))
+            .filter(|&p| {
+                p.entity().position(host).is_some_and(|pos| {
+                    let dx = pos[0] - center[0];
+                    let dy = pos[1] - center[1];
+                    let dz = pos[2] - center[2];
+                    dx * dx + dy * dy + dz * dz < max_sq
+                })
+            })
+            .collect();
+        Ok(self.send_group(host, players, body))
+    }
+
+    /// Queue `value` to every online player watching `chunk` in one host call.
+    pub fn send_tracking_chunk(
+        &self,
+        host: &mut dyn ServerHost,
+        chunk: ChunkRef,
+        value: &T,
+    ) -> Result<Vec<(PlayerRef, Result<PayloadAccepted, PayloadSendError>)>, PayloadSendError> {
+        let body = self.prepare_body(host, value)?;
+        let players = chunk.watchers(host).ok_or(PayloadSendError::StaleEpoch)?;
+        Ok(self.send_group(host, players, body))
+    }
+
+    /// Queue `value` to every online player tracking `entity` in one host call.
+    pub fn send_tracking_entity(
+        &self,
+        host: &mut dyn ServerHost,
+        entity: EntityRef,
+        value: &T,
+    ) -> Result<Vec<(PlayerRef, Result<PayloadAccepted, PayloadSendError>)>, PayloadSendError> {
+        let body = self.prepare_body(host, value)?;
+        let players = entity.trackers(host).ok_or(PayloadSendError::StaleEpoch)?;
+        Ok(self.send_group(host, players, body))
     }
 }
 

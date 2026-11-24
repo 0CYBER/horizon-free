@@ -4,7 +4,7 @@
 //! reads, and resolve each through `Host::player`, so a guest's turn names its
 //! player once and a player whose handle cannot resolve is left out.
 use super::Game;
-use mod_api::{ChunkRef, LevelRef, PlayerRef};
+use mod_api::{ChunkRef, EntityRef, LevelRef, PlayerRef};
 
 impl Game<'_> {
     /// `ServerLevel.players`: the online players of an open server level, each once.
@@ -28,6 +28,26 @@ impl Game<'_> {
                 .iter()
                 .flat_map(|h| h.hub.guests.iter())
                 .filter(|g| g.tracks_chunk(dimension, (x, z)))
+                .filter_map(|g| self.player(g.uuid))
+                .collect(),
+        )
+    }
+
+    /// `TrackedEntity.seenBy`: the online players currently tracking `entity` (in its level
+    /// or via a viewed level), excluding the entity itself.
+    pub(super) fn entity_trackers(&self, entity: EntityRef) -> Option<Vec<PlayerRef>> {
+        if self.remote.is_some() || !self.entity_is_valid(entity) {
+            return None;
+        }
+        let level = entity.level(self)?;
+        self.native_level_world(level)?;
+        let dimension = level.dimension_id();
+        let id = entity.id() as i32;
+        Some(
+            self.lan
+                .iter()
+                .flat_map(|h| h.hub.guests.iter())
+                .filter(|g| g.tracks_entity(dimension, id))
                 .filter_map(|g| self.player(g.uuid))
                 .collect(),
         )
@@ -204,6 +224,22 @@ mod tests {
                 uuids(ChunkRef::new(level, [i32::MIN, i32::MAX]).watchers(game)),
                 Some(vec![])
             );
+        });
+    }
+
+    /// `EntityRef::trackers` lists the online players tracking an entity (in its level),
+    /// excluding the entity itself, and returns `None` for a stale or invalid handle.
+    #[test]
+    #[ignore = "daily"]
+    fn entity_trackers_lists_tracking_guests_and_handles_stale() {
+        with_guests(|game| {
+            let _serving = super::super::integrated::tests::install_serving(game, false);
+            let level = game.level(game.dim.id()).unwrap();
+            let target = game.player(12).unwrap().entity();
+            assert_eq!(uuids(target.trackers(game)), Some(vec![]));
+            let stale =
+                super::EntityRef::new(WorldEpoch::new(level.epoch().get() + 1), target.id());
+            assert_eq!(stale.trackers(game), None);
         });
     }
 }

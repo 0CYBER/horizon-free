@@ -19,6 +19,23 @@ pub trait PayloadsBackendMut {
     ) -> Result<PayloadAccepted, PayloadSendError>;
 }
 
+/// Server group payload sends, used by [`ToClient`]'s group-send helpers and available
+/// directly for raw payloads.
+#[horizon_mod_api_macros::host_area]
+pub trait PayloadsServerHost {
+    /// Side: server.
+    /// Queue exact application bytes to every live player in `players` in one host call,
+    /// returning each player's send outcome in the same order. Publication waits for root
+    /// commit; abort publishes nothing.
+    #[access(WorldOnly)]
+    fn send_payload_to_players(
+        &mut self,
+        players: &[PlayerRef],
+        id: &PayloadId,
+        bytes: PayloadBytes,
+    ) -> Vec<Result<PayloadAccepted, PayloadSendError>>;
+}
+
 /// Client connection sends, available during configuration as well as play.
 #[horizon_mod_api_macros::host_area]
 pub trait PayloadsClientHost {

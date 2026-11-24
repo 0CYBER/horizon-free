@@ -178,6 +178,12 @@ pub trait EntitiesBackend {
     /// False for a stale handle or on a client.
     #[access(WorldOnly)]
     fn entity_added_to_level(&self, entity: EntityRef) -> bool;
+    /// Side: server.
+    /// The online players currently tracking this entity (in its level or via a viewed level),
+    /// in the order the server keeps its players. Does not include the entity itself when it is
+    /// a player. None on a client, for a stale handle, or for an invalid/removed entity.
+    #[access(WorldOnly)]
+    fn entity_trackers(&self, entity: EntityRef) -> Option<Vec<PlayerRef>>;
     /// Side: both.
     /// The entity's position (`Entity.position`): its feet, the middle of
     /// its box for a painting or an item frame. A client display reports the

@@ -63,6 +63,17 @@ impl Game<'_> {
             .clone();
         self.queue_current_payload(Endpoint::server(sender), id, bytes)
     }
+    pub(super) fn send_payload_to_players(
+        &mut self,
+        players: &[PlayerRef],
+        id: &PayloadId,
+        bytes: PayloadBytes,
+    ) -> Vec<Result<PayloadAccepted, PayloadSendError>> {
+        players
+            .iter()
+            .map(|&player| self.player_send_payload(player, id, bytes.clone()))
+            .collect()
+    }
     pub(super) fn send_payload_to_server(
         &mut self,
         id: &PayloadId,
