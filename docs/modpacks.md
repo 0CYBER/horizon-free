@@ -133,7 +133,7 @@ derivative work. These rules are part of the pipeline, not advice to users:
    Minecraft's own files: nothing is redistributed.
 2. **The licence is recorded per mod** in the inventory (`license` from `mods.toml` or
    `fabric.mod.json`, plus Modrinth's SPDX id where one exists) and travels with the port into
-   its `horizon-mod.toml` (`ported-from = { id, version, license, url }`).
+   its `horizon-mod.toml` (`ported_from = { id, version, license, url }`).
 3. **Publishing needs permission.** A port can go into a mod index, the launcher browser or a
    server's download list only if its licence allows redistributing derivatives (permissive,
    or copyleft with the port under the same licence and its source published) or the author

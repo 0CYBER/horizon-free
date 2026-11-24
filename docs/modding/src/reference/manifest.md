@@ -152,6 +152,18 @@ graph. `LoadBefore` is ordering-only: its version `*` is a marker, order is `Bef
 is `Both`, not an API library declaration. The metadata is the same on client and server (NeoForge's
 `ModContainer.getModInfo`, `IModInfo` and `getModProperties`).
 
+A port of a Java mod records the mod it came from as top-level `ported_from`, so its licence travels with the port
+([Porting Java modpacks](https://github.com/horizon-rust/horizon/blob/main/docs/modpacks.md#licences)):
+
+```toml
+ported_from = { id = "totemcounter", version = "1.14.0+mc26.3-fabric", license = "MIT", url = "https://modrinth.com/mod/totemcounter" }
+```
+
+`id` is the original's mod id (`fabric.mod.json` `id`, `mods.toml` `modId`), `license` an SPDX id or the original's
+own licence string; `id`, `version` and `license` are not empty and at most 256 bytes each. `url` is the original's
+page, an `http://` or `https://` link of at most 2048 characters. All four are required, and an unknown key inside
+the table refuses the manifest. Launchers older than this key refuse a manifest that carries it.
+
 Load rules name other mods without linking against them (NeoForge's `INCOMPATIBLE`, `DISCOURAGED` and
 `ordering = "BEFORE"`). The game checks them alongside ordinary dependencies for the selected content and loaded code:
 

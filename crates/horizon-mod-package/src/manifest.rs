@@ -111,6 +111,23 @@ pub struct Manifest {
     /// Free-form values other mods read through `PackageInfo::property`.
     #[serde(default)]
     pub properties: std::collections::BTreeMap<String, Property>,
+    /// The Java mod a port was made from, so its licence travels with the port
+    /// (docs/modpacks.md, Licences). Recorded only: nothing checks it yet.
+    #[serde(default)]
+    pub ported_from: Option<PortedFrom>,
+}
+
+/// `ported_from = { id, version, license, url }`: the original mod as its own metadata names it.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PortedFrom {
+    /// The original's mod id (`fabric.mod.json` `id`, `mods.toml` `modId`).
+    pub id: String,
+    pub version: String,
+    /// An SPDX id or the original's own licence string.
+    pub license: String,
+    /// The original's page, such as its Modrinth or CurseForge project.
+    pub url: String,
 }
 
 /// Why a manifest that declares `[[inject]]` is refused.
@@ -624,6 +641,23 @@ impl Manifest {
             {
                 return Err(format!(
                     "{MANIFEST}: {field} is an http(s) link of at most 2048 characters"
+                ));
+            }
+        }
+        if let Some(from) = &m.ported_from {
+            if [&from.id, &from.version, &from.license]
+                .iter()
+                .any(|text| text.trim().is_empty() || text.len() > 256)
+            {
+                return Err(format!(
+                    "{MANIFEST}: ported_from needs id, version and license, each at most 256 bytes"
+                ));
+            }
+            if from.url.len() > 2048
+                || !(from.url.starts_with("https://") || from.url.starts_with("http://"))
+            {
+                return Err(format!(
+                    "{MANIFEST}: ported_from url is an http(s) link of at most 2048 characters"
                 ));
             }
         }
@@ -1957,6 +1991,37 @@ issues = \"http://example.org/issues\"
             .unwrap_err();
             assert!(e.contains(field), "{e}");
         }
+    }
+
+    #[test]
+    fn a_port_records_the_mod_it_came_from() {
+        assert_eq!(Manifest::parse(EXAMPLE).unwrap().ported_from, None);
+        let port = |row: &str| Manifest::parse(&format!("{EXAMPLE}ported_from = {{ {row} }}\n"));
+        let m = port(
+            "id = \"totemcounter\", version = \"1.14.0+mc26.3-fabric\", license = \"MIT\", \
+             url = \"https://modrinth.com/mod/totemcounter\"",
+        )
+        .unwrap();
+        assert_eq!(
+            m.ported_from,
+            Some(PortedFrom {
+                id: "totemcounter".into(),
+                version: "1.14.0+mc26.3-fabric".into(),
+                license: "MIT".into(),
+                url: "https://modrinth.com/mod/totemcounter".into(),
+            })
+        );
+        let e = port("id = \"a\", version = \"1\", license = \" \", url = \"https://a.b\"")
+            .unwrap_err();
+        assert!(e.contains("ported_from needs"), "{e}");
+        let e = port("id = \"a\", version = \"1\", license = \"MIT\", url = \"file:///x\"")
+            .unwrap_err();
+        assert!(e.contains("ported_from url"), "{e}");
+        assert!(port("id = \"a\", version = \"1\", license = \"MIT\"").is_err());
+        assert!(
+            port("id = \"a\", version = \"1\", license = \"MIT\", url = \"https://a.b\", x = 1")
+                .is_err()
+        );
     }
 
     #[test]
