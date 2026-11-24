@@ -7,8 +7,9 @@ The component harnesses (tools/test_block_update_parity.py and the others) call 
 synthetic level. This runs whole machines: each is a list of /setblock commands (a random "soup" of
 redstone components from --seed, or a hand-built circuit) with commands that change it at set ticks,
 in a frozen world that steps one tick at a time (`tick freeze`, `tick step 1`). After the setup and
-after every tick both games report the machine's blocks (with their properties), and the first tick
-where the blocks differ is printed with the ones that differ. The entities near the machine are recorded
+after every tick both games report the machine's blocks (with their properties, and a comparator's output
+strength, `OutputSignal`, beside its state), and the first tick where the blocks differ is printed with the
+ones that differ. The entities near the machine are recorded
 too (see --keep) but not compared yet.
 
 Vanilla is the client of tools/perf_bench.py's driver (mods/horizon/src/bench: RedstoneDiff snapshots
@@ -277,11 +278,18 @@ def norm(state):
     return name + '[' + ','.join(sorted(props.split(','))) + ']'
 
 
-def clean_blocks(lines):
+def clean_blocks(lines, signals=()):
+    """{pos: state} from "x y z state" lines. signals ("x y z strength", one per comparator block entity) go
+    beside the comparator's state, as "state OutputSignal=N": a comparator that kept an old strength differs
+    from vanilla even where its block state (`powered`) still agrees."""
     out = {}
     for line in lines:
         x, y, z, state = line.split(' ', 3)
         out[(int(x), int(y), int(z))] = norm(state)
+    for line in signals:
+        x, y, z, strength = line.split()
+        pos = (int(x), int(y), int(z))
+        out[pos] = f"{out.get(pos, 'air')} OutputSignal={int(strength)}"
     return out
 
 
@@ -342,7 +350,7 @@ def run_vanilla(batch, args, work):
         e = json.loads(line)
         if e.get('event') == 'redstone':
             result[e['machine']] = [
-                {'tick': s['tick'], 'blocks': clean_blocks(s['blocks']), 'entities': s['entities']}
+                {'tick': s['tick'], 'blocks': clean_blocks(s['blocks'], s['signals']), 'entities': s['entities']}
                 for s in e['snapshots']]
         if e.get('event') == 'timeout':
             raise SystemExit('vanilla driver timed out in ' + e.get('phase', '?'))
@@ -410,7 +418,8 @@ def run_horizon(batch, args, work):
                 # in the next tick's broadcast, as vanilla's clients get them.
                 reply = ctl.json('simulation', 'blocks', *box)
                 near = ctl.json('entities', 16)
-                frames.append({'tick': tick, 'blocks': clean_blocks([' '.join(map(str, b[:3])) + ' ' + b[3] for b in reply['blocks']]),
+                frames.append({'tick': tick, 'blocks': clean_blocks([' '.join(map(str, b[:3])) + ' ' + b[3] for b in reply['blocks']],
+                                                                    [' '.join(map(str, s)) for s in reply['signals']]),
                                'entities': near})
 
             snapshot(0)

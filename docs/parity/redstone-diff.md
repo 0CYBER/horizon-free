@@ -38,7 +38,9 @@ fix 144 soups (seeds 1-3, 40 ticks) are identical.
 
 ## Limits
 
-- **Only blocks are compared.** Both sides record the entities near the machine in the timelines (`--keep`),
+- **Only blocks are compared**, each with its properties and, for a comparator, its output strength
+  (`OutputSignal`: the bench mod reads `ComparatorBlockEntity.getOutputSignal`, `simulation blocks` lists
+  `signals`), so a comparator left on an old strength shows even where its `powered` state agrees. Both sides record the entities near the machine in the timelines (`--keep`),
   but nothing diffs them: vanilla's come from the server level, Horizon's from `entities`, which is this
   window's view. Items, TNT and falling blocks need a server-side `entities` before they can be compared.
 - Random soups mostly find ordering at placement time; long-running clocks need `--ticks` of a few hundred.

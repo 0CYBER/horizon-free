@@ -63,5 +63,17 @@ class DiffFramesTest(unittest.TestCase):
                                 ('b', 'minecraft:air', rd.MISSING_TICK)])
 
 
+class ComparatorStrengthTest(unittest.TestCase):
+    def test_same_state_with_another_strength_is_a_difference(self):
+        state = '0 0 0 minecraft:comparator[mode=compare,powered=true,facing=north]'
+        woken = rd.clean_blocks([state], ['0 0 0 14'])
+        stale = rd.clean_blocks([state], ['0 0 0 13'])
+        self.assertEqual(
+            rd.diff_frames([{'tick': 3, 'blocks': woken}], [{'tick': 3, 'blocks': stale}]),
+            (3, [((0, 0, 0), 'minecraft:comparator[facing=north,mode=compare,powered=true] OutputSignal=14',
+                  'minecraft:comparator[facing=north,mode=compare,powered=true] OutputSignal=13')]),
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

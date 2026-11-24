@@ -9,6 +9,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.ComparatorBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.AABB;
@@ -20,7 +21,7 @@ import net.minecraft.world.phys.AABB;
  * for each tick {@code tick step 1} and a snapshot of the tick's result. A frozen server still calls
  * {@code ServerLevel.tick} every 50 ms and does nothing in it, so a tick counts only when the game time
  * moved during the call. A snapshot is the box's non-air blocks as "x y z id[property=value,...]", with
- * the properties sorted by name, and the entities in or beside the box with their position and motion;
+ * the properties sorted by name, each comparator's output strength as "x y z signal", and the entities in or beside the box with their position and motion;
  * tools/redstone_diff.py reads them from the events file.
  */
 public final class RedstoneDiff {
@@ -113,6 +114,7 @@ public final class RedstoneDiff {
         s.addProperty("tick", tick);
         s.addProperty("game_time", level.getGameTime());
         List<String> blocks = new ArrayList<>();
+        List<String> signals = new ArrayList<>();
         BlockPos.MutableBlockPos at = new BlockPos.MutableBlockPos();
         for (int x = box[0]; x <= box[3]; x++) {
             for (int y = box[1]; y <= box[4]; y++) {
@@ -120,12 +122,18 @@ public final class RedstoneDiff {
                     at.set(x, y, z);
                     BlockState state = level.getBlockState(at);
                     if (!state.isAir()) blocks.add(x + " " + y + " " + z + " " + describe(state));
+                    if (level.getBlockEntity(at) instanceof ComparatorBlockEntity comparator) {
+                        signals.add(x + " " + y + " " + z + " " + comparator.getOutputSignal());
+                    }
                 }
             }
         }
         JsonArray list = new JsonArray();
         blocks.forEach(list::add);
         s.add("blocks", list);
+        JsonArray outputs = new JsonArray();
+        signals.forEach(outputs::add);
+        s.add("signals", outputs);
         JsonArray entities = new JsonArray();
         AABB area = new AABB(box[0], box[1], box[2], box[3] + 1, box[4] + 1, box[5] + 1).inflate(1.0);
         List<String> found = new ArrayList<>();

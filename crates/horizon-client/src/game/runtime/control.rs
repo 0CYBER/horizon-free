@@ -708,10 +708,10 @@ impl Game<'_> {
                     }
                     return Ok(Some(if let Some(server) = &self.integrated {
                         server
-                            .call(move |g| g.in_owner_level(move |g| g.blocks_json(lo, hi)))
+                            .call(move |g| g.in_owner_level(move |g| g.server_blocks_json(lo, hi)))
                             .ok_or(super::integrated::NO_ANSWER)?
                     } else {
-                        self.blocks_json(lo, hi)
+                        self.server_blocks_json(lo, hi)
                     }));
                 }
                 let value = if let Some(server) = &self.integrated {

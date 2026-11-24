@@ -358,6 +358,33 @@ impl Game<'_> {
         }
         json!({ "from": lo, "to": hi, "counts": census, "blocks": list })
     }
+    /// `simulation blocks`: [`Self::blocks_json`] plus each comparator's
+    /// `ComparatorBlockEntity.getOutputSignal` as `[x, y, z, signal]` (tools/redstone_diff.py).
+    /// Only the server's world keeps comparator outputs; a window's copy would read 0.
+    pub(super) fn server_blocks_json(&self, lo: [i32; 3], hi: [i32; 3]) -> Value {
+        let mut value = self.blocks_json(lo, hi);
+        let mut signals = Vec::new();
+        for y in lo[1]..=hi[1] {
+            for z in lo[2]..=hi[2] {
+                for x in lo[0]..=hi[0] {
+                    let state = self.world.block(x, y, z);
+                    if &*self.res.facts().get(state).name != "minecraft:comparator" {
+                        continue;
+                    }
+                    let pos = horizon_core::position::BlockPos::new(x, y, z);
+                    let signal = self
+                        .block_ticks
+                        .comparator_outputs
+                        .get(&pos)
+                        .copied()
+                        .unwrap_or(0);
+                    signals.push(json!([x, y, z, signal]));
+                }
+            }
+        }
+        value["signals"] = json!(signals);
+        value
+    }
     pub(super) fn state_string(&self, state: BlockStateId) -> String {
         self.block_state_string(state).unwrap_or_else(|| "?".into())
     }
