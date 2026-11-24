@@ -2118,11 +2118,23 @@ fn posed_parts(poses: &Poses) -> Option<mod_api::PosedParts> {
         Some((poses.pose_of(name)?, !poses.is_hidden_named(name)))
     })
 }
-// Validate names against this frame's model before mutating its body poses.
+/// The part of a player's cape layer (`PlayerCapeModel`'s `cape`): hidden by a mod's
+/// `render_player_pre`, the player draws no cape this frame (`AvatarRenderState.showCape`).
+pub const CAPE_PART: &str = "cape";
+/// Whether `hidden` leaves out `m`'s cape: [`CAPE_PART`], on a model that has a cape layer.
+pub fn hides_cape(m: &Mob, hidden: &mod_api::HiddenParts) -> bool {
+    m.kind.layer("player#cape").is_some() && hidden.contains_named(CAPE_PART)
+}
+// Validate names against this frame's model before mutating its body poses; the cape is a
+// part of the cape layer's model (`hides_cape`), which the body's poses don't hold.
 // Return the borrowed name so a repeated refusal never allocates an error string.
-fn hide_parts<'a>(poses: &mut Poses, hidden: &'a mod_api::HiddenParts) -> Result<(), &'a str> {
+fn hide_parts<'a>(
+    poses: &mut Poses,
+    hidden: &'a mod_api::HiddenParts,
+    has_cape: bool,
+) -> Result<(), &'a str> {
     for name in hidden.names() {
-        if poses.pose_of(name).is_none() {
+        if poses.pose_of(name).is_none() && !(has_cape && name == CAPE_PART) {
             return Err(name);
         }
     }
@@ -2319,7 +2331,8 @@ fn render_visible(
     } else {
         let hp = hidden_poses.get_or_insert_with(Poses::pooled);
         hp.copy_from(&poses);
-        if let Err(name) = hide_parts(hp, &hidden) {
+        let has_cape = m.kind.layer("player#cape").is_some();
+        if let Err(name) = hide_parts(hp, &hidden, has_cape) {
             report_unknown_hidden_part(&m.kind.id, name);
             return;
         }

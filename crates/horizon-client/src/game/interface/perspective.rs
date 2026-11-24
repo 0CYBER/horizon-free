@@ -869,8 +869,9 @@ impl Game<'_> {
         // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
         if horizon_client::mobs::render::layers_shown(m) {
             let chest = self.armor[1].as_ref().map(|s| &*s.item);
-            // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks).
-            if !self.own_invisible() {
+            // CapeLayer: no cape on an invisible player (`isInvisible`, whoever looks), nor
+            // when a mod's `render_player_pre` hid it.
+            if !self.own_invisible() && !horizon_client::mobs::render::hides_cape(m, &hidden) {
                 self.player_cape_geometry(m, chest, camera, alpha as f32, packed, out);
             }
             self.player_ears_geometry(

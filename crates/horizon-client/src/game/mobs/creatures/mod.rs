@@ -8261,8 +8261,9 @@ impl Game<'_> {
                 // and SpinAttackEffectLayer. Only the cape hides with the body;
                 // the others have no `isInvisible` check.
                 let chest = mob.extra.slot_id(horizon_items::equipment::CHEST);
-                // `CapeLayer` and `Deadmau5EarsLayer`: `!state.isInvisible`, whoever sees the body.
-                if !invisible {
+                // `CapeLayer` and `Deadmau5EarsLayer`: `!state.isInvisible`, whoever sees the body;
+                // the cape also not when a mod's `render_player_pre` hid it.
+                if !invisible && !horizon_client::mobs::render::hides_cape(mob, &hidden) {
                     self.player_cape_geometry(mob, chest, camera, alpha as f32, packed, out);
                 }
                 if !invisible

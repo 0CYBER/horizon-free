@@ -197,6 +197,8 @@ Typed humanoid parts have separate storage, so all twelve fit alongside the eigh
 - The body loses the part, and so do the layers drawn on the body's own model, as vanilla's
   `getParentModel()` layers do: a villager's type, profession and level, a spider's eyes. The
   armour, held items and other layers keep every part, and the cape, a layer of its own, stays.
+- In `render_player_pre`, `hidden.hide_named("cape")` leaves out the player's cape instead (vanilla's
+  `showCape`): what a mod's armour over the back needs, as Mekanism's MekaSuit hides it.
 
 ## A player's skin for your own model
 

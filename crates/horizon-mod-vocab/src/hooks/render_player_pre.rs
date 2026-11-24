@@ -10,7 +10,9 @@ pub trait Hooks {
     /// `hidden.hide_named(name)`) leaves only that part out of the vanilla model this frame (after
     /// Skin Customization), as a mod drawing its own outer skin layer does: a hidden part takes its
     /// children with it (the hat goes with the head), while its armour, held items and other
-    /// layers, the cape among them, keep every part.
+    /// layers keep every part. The name `cape` leaves the player's cape out this frame (vanilla's
+    /// `AvatarRenderState.showCape`, `PlayerCapeModel`'s part), as a mod's armour over the back
+    /// does.
     #[hook(
         side = "client",
         contract = "cancel",
