@@ -287,8 +287,9 @@ impl Server {
                 move |stream: TcpStream| {
                     let _ = stream.set_nodelay(true);
                     let mut stream = Stream::Tcp(stream);
-                    authenticate(&mut stream, &token).then_some(stream)
+                    authenticate(&mut stream, &token, AUTH_TIMEOUT).then_some(stream)
                 },
+                MAX_UNAUTHENTICATED,
             )?;
         } else {
             #[cfg(unix)]
@@ -300,6 +301,8 @@ impl Server {
                     counted,
                     closed.clone(),
                     |s| Some(Stream::Unix(s)),
+                    // The socket's file permissions keep other users out and it takes no auth line.
+                    usize::MAX,
                 )?;
             }
         }
@@ -340,15 +343,24 @@ impl Server {
     }
 }
 
-/// Accept connections on a thread, one more thread per client.
+/// How long a TCP client has to send its `auth` line, in all.
+const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How many connections may wait on that line at once; more are closed unread, so a local process
+/// cannot pile up idle threads in the game.
+const MAX_UNAUTHENTICATED: usize = 8;
+
+/// Accept connections on a thread, one more thread per client. At most `max_pending` may be inside
+/// `accept` (still authenticating) at once.
 fn spawn_listener<S: Send + 'static>(
     mut accept_next: impl FnMut() -> io::Result<S> + Send + 'static,
     sender: mpsc::Sender<Request>,
     clients: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
     accept: impl Fn(S) -> Option<Stream> + Send + Sync + 'static,
+    max_pending: usize,
 ) -> io::Result<()> {
     let accept = std::sync::Arc::new(accept);
+    let pending = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name("horizon-control".into())
         .spawn(move || {
@@ -361,29 +373,45 @@ fn spawn_listener<S: Send + 'static>(
                     thread::sleep(std::time::Duration::from_millis(10));
                     continue;
                 };
+                if pending.fetch_add(1, Ordering::AcqRel) >= max_pending {
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                    continue;
+                }
                 let sender = sender.clone();
                 let accept = accept.clone();
                 let clients = clients.clone();
-                let _ = thread::Builder::new()
+                let counted = pending.clone();
+                let spawned = thread::Builder::new()
                     .name("horizon-control-client".into())
                     .spawn(move || {
-                        if let Some(stream) = accept(stream) {
+                        let accepted = accept(stream);
+                        counted.fetch_sub(1, Ordering::AcqRel);
+                        if let Some(stream) = accepted {
                             clients.fetch_add(1, Ordering::Relaxed);
                             serve(stream, &sender);
                             clients.fetch_sub(1, Ordering::Relaxed);
                         }
                     });
+                if spawned.is_err() {
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                }
             }
         })?;
     Ok(())
 }
 
-/// The first line of a TCP client must be `auth TOKEN`.
-fn authenticate(stream: &mut Stream, token: &str) -> bool {
+/// The first line of a TCP client must be `auth TOKEN`, sent within `timeout` in all.
+fn authenticate(stream: &mut Stream, token: &str, timeout: std::time::Duration) -> bool {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
+    let deadline = std::time::Instant::now() + timeout;
     // Read the line byte by byte so nothing after it is buffered away.
     while line.len() < 256 {
+        // A deadline for the whole line, so a client sending a byte at a time cannot hold on.
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
         match stream.read(&mut byte) {
             Ok(1) if byte[0] == b'\n' => break,
             Ok(1) => line.push(byte[0]),
@@ -401,7 +429,8 @@ fn authenticate(stream: &mut Stream, token: &str) -> bool {
         r#"{"error":"bad or missing token: the first line must be auth TOKEN"}"#
     };
     let _ = writeln!(stream, "{reply}");
-    ok
+    // An authenticated client may idle between commands.
+    ok && stream.set_read_timeout(None).is_ok()
 }
 
 impl Drop for Server {
@@ -500,6 +529,104 @@ mod tests {
 
     use super::*;
     use std::time::Duration;
+
+    /// A listener on 127.0.0.1 as the game runs it, with the given auth timeout and cap.
+    fn silent_listener(timeout: Duration, max_pending: usize) -> u16 {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sender, _requests) = mpsc::channel();
+        spawn_listener(
+            move || listener.accept().map(|(s, _)| s),
+            sender,
+            Arc::default(),
+            Arc::default(),
+            move |s: TcpStream| {
+                let mut stream = Stream::Tcp(s);
+                authenticate(&mut stream, "token", timeout).then_some(stream)
+            },
+            max_pending,
+        )
+        .unwrap();
+        port
+    }
+
+    /// Whether the game closed the connection (end of stream or reset), rather than the read timing out.
+    fn closed_by_game(client: &mut TcpStream) -> bool {
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.read(&mut [0u8; 1]).map_or_else(
+            |e| {
+                !matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                )
+            },
+            |n| n == 0,
+        )
+    }
+
+    #[test]
+    fn a_connection_that_sends_nothing_is_closed_after_the_timeout() {
+        let port = silent_listener(Duration::from_millis(200), 8);
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let start = std::time::Instant::now();
+        assert!(closed_by_game(&mut client));
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_connection_that_drips_bytes_is_closed_at_the_deadline_of_the_whole_line() {
+        // A byte every 100 ms never leaves a 300 ms gap, and never ends the line: only a deadline for
+        // the whole line closes it (a fresh timeout per byte would hold it for the 3 s of dripping).
+        let port = silent_listener(Duration::from_millis(300), 8);
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let mut dripping = client.try_clone().unwrap();
+        let drip = std::thread::spawn(move || {
+            for _ in 0..30 {
+                if dripping.write_all(b"a").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let start = std::time::Instant::now();
+        assert!(closed_by_game(&mut client));
+        assert!(start.elapsed() < Duration::from_millis(1500));
+        drip.join().unwrap();
+    }
+
+    #[test]
+    fn connections_beyond_the_pending_cap_are_closed_at_once() {
+        // Two silent clients fill the cap; with a long timeout only the cap can close the third.
+        let port = silent_listener(Duration::from_secs(60), 2);
+        let _held: Vec<_> = (0..2)
+            .map(|_| TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap())
+            .collect();
+        let mut third = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        assert!(closed_by_game(&mut third));
+    }
+
+    #[test]
+    fn an_authenticated_client_may_idle_past_the_timeout() {
+        let port = silent_listener(Duration::from_millis(100), 8);
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        writeln!(client, "auth token").unwrap();
+        let mut reply = String::new();
+        BufReader::new(client.try_clone().unwrap())
+            .read_line(&mut reply)
+            .unwrap();
+        assert!(reply.contains("ok"));
+        std::thread::sleep(Duration::from_millis(400));
+        client
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let idle = client.read(&mut [0u8; 1]).unwrap_err();
+        assert!(matches!(
+            idle.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+    }
 
     /// The check agrees with the system at every length around its limit.
     #[cfg(unix)]
