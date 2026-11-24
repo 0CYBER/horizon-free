@@ -117,6 +117,9 @@ The shared interpolation defaults also compile with `glsl-in` alone, without nee
 SPIR-V or WGSL frontend to enable them.
 The HLSL backend's texture-sampling offset cast preserves the offset's scalar or vector width,
 including `int` for 1D and `int3` for 3D textures instead of always using `int2`.
+The SPIR-V backend leaves out the counter and exit it adds to every loop (`force_loop_bounding`) where
+`back/bounded_loop.rs`, a module of Horizon's, proves that the loop ends by itself: a local integer
+counter that only the loop's own step changes, compared with a bound it cannot wrap past.
 
 ## DirectX Shader Compiler
 

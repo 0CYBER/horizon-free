@@ -27,6 +27,9 @@ pub mod wgsl;
 #[cfg(any(hlsl_out, msl_out, spv_out, glsl_out))]
 pub mod pipeline_constants;
 
+/// Horizon: the loops a backend need not bound (THIRD_PARTY_NOTICES.md).
+pub mod bounded_loop;
+
 #[cfg(any(hlsl_out, glsl_out))]
 mod continue_forward;
 

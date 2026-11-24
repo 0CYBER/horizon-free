@@ -13,6 +13,7 @@ mod naga_glsl_atomics;
 mod naga_glsl_overloads;
 mod naga_hlsl_offsets;
 mod naga_hlsl_zero_lod;
+mod naga_spv_bounded_loops;
 mod pack_compat;
 mod real_packs;
 mod required_blending;

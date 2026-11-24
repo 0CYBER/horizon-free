@@ -3688,7 +3688,17 @@ impl BlockContext<'_> {
                         spirv::SelectionControl::NONE,
                     ));
 
-                    if self.force_loop_bounding {
+                    // Horizon: a loop that ends by itself needs no bound, and keeps a trip
+                    // count the driver's compiler can see (`back::bounded_loop`).
+                    let bound = self.force_loop_bounding
+                        && !(crate::back::bounded_loop::enabled()
+                            && crate::back::bounded_loop::is_finite(
+                                self.ir_module,
+                                self.ir_function,
+                                body,
+                                continuing,
+                            ));
+                    if bound {
                         block = self.write_force_bounded_loop_instructions(block, merge_id);
                     }
                     self.function.consume(block, Instruction::branch(body_id));

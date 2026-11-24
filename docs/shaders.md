@@ -56,7 +56,10 @@ my_pack 0.1.0 (shader API 0.2): FAILED
 Put the pack folder (or its `.hshader`) in `shaderpacks/` beside `options.txt` (Open Pack Folder opens it) and pick
 it on Options > Video Settings > Shaders > Shader Packs..., which lists Horizon's packs, marked (Horizon), beside packs in the
 `shaders/` format; one runs at a time, and clicking it again turns it off. `HORIZON_SHADER_PACK=<its folder or file
-name>` runs a pack whatever the page says, for development. `HORIZON_TERRAIN_LOOKS=1` makes terrain keep each quad's
+name>` runs a pack whatever the page says, for development. wgpu bounds every loop of a shader. On Vulkan, a loop that provably ends by itself (a counter stepped toward a
+bound it cannot wrap past, as in `for (int i = 0; i < 9; i++)`) gets no such bound, in a pack's programs as in
+Horizon's own shaders, so the driver can still unroll it; `HORIZON_SHADER_LOOP_PROOFS=0` bounds every loop again,
+for comparing. DirectX 12 and Metal still bound every loop. `HORIZON_TERRAIN_LOOKS=1` makes terrain keep each quad's
 own tint, directional shade, ambient occlusion and face beside its vertices while one of Horizon's packs
 runs, as a pack whose material or vertex stage reads `tint`, `shade`, `ao` or `face` does, for the engine's
 own tests: they take a third again the terrain's memory, and the world loads again when such a pack starts or stops. The game checks the pack first, and refuses one that
