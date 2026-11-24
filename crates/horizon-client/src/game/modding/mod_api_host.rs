@@ -403,6 +403,9 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
     fn state_block(&self, state: mod_api::BlockState) -> Option<&str> {
         self.native_state_block(state.try_into_engine(&()).ok()?)
     }
+    fn state_property(&self, state: mod_api::BlockState, key: &str) -> Option<&str> {
+        self.native_state_property(state.try_into_engine(&()).ok()?, key)
+    }
     fn state_string(&self, state: mod_api::BlockState) -> Option<String> {
         self.registry
             .state(state.try_into_engine(&()).ok()?)
@@ -548,6 +551,13 @@ impl mod_api::LevelHost for super::native_hooks::HitLevel<'_> {
             .state(state.try_into_engine(&()).ok()?)
             .map(|s| &*s.name)
     }
+    fn state_property(&self, state: mod_api::BlockState, key: &str) -> Option<&str> {
+        super::native_hooks::state_property(
+            self.0.registry(),
+            state.try_into_engine(&()).ok()?,
+            key,
+        )
+    }
     fn state_string(&self, state: mod_api::BlockState) -> Option<String> {
         self.0
             .registry()
@@ -624,6 +634,9 @@ impl<'a: 'b, 'b, L: std::ops::Deref<Target = super::GameLevel<'a>>> mod_api::Lev
     }
     fn state_block(&self, state: mod_api::BlockState) -> Option<&str> {
         mod_api::LevelHost::state_block(&*self.level, state)
+    }
+    fn state_property(&self, state: mod_api::BlockState, key: &str) -> Option<&str> {
+        mod_api::LevelHost::state_property(&*self.level, state, key)
     }
     fn state_string(&self, state: mod_api::BlockState) -> Option<String> {
         mod_api::LevelHost::state_string(&*self.level, state)

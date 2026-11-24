@@ -146,7 +146,11 @@ pick its ground by tag as vanilla's plants do.
 Level hooks use access-specific hosts rather than `Host`. `LevelHost` provides
 `block_state` through `LevelAccess::block_state`, client-side detection and
 `state_with_property`. `state_string(state)` serializes the full name and properties, or returns `None`
-for an unknown state; `min_y()` and `height()` read the level's build range. It also reads light and loaded state, through the game's own queries:
+for an unknown state; `min_y()` and `height()` read the level's build range. `state_block(state)` and
+`state_property(state, key)` are the same registry lookup split into its two cheap parts: the block a
+state belongs to, and one of its properties (a machine's `facing`), without serializing the whole
+state string first — useful from a hook that only gets a `LevelHost` (`block_signal`,
+`is_signal_source`) and wants to answer from its own blockstate. It also reads light and loaded state, through the game's own queries:
 `brightness(LightLayer::Block | Sky, pos)` (`getBrightness`, the stored 0 to 15),
 `raw_brightness(pos, sky_darken)` (`getRawBrightness`, which `CropBlock.randomTick` asks with 0)
 and `is_loaded(pos)` (`Level.isLoaded`: inside the build height and in a loaded chunk),

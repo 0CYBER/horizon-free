@@ -1364,6 +1364,13 @@ pub trait LevelHost {
     fn state_block(&self, _state: BlockState) -> Option<&str> {
         unimplemented!("LevelHost::state_block")
     }
+    /// Property `key` of block state `state` (a machine's `facing`), if it has one. A registry
+    /// lookup, no access to the world: cheap even from a hook that only gets a `LevelHost`
+    /// (`block_signal`, `is_signal_source`). None for an unknown state or a property it doesn't
+    /// have.
+    fn state_property(&self, _state: BlockState, _key: &str) -> Option<&str> {
+        unimplemented!("LevelHost::state_property")
+    }
     /// Parse a block name and properties as `BlockStateParser.parseForBlock`; None for invalid input or unavailable context.
     fn block_state_id(&self, _name: &str) -> Option<BlockState> {
         unimplemented!("LevelHost::block_state_id")
