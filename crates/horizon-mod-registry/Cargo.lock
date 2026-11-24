@@ -505,6 +505,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-addresses"
+version = "0.1.0"
+
+[[package]]
 name = "horizon-bench"
 version = "0.1.0"
 dependencies = [
@@ -602,6 +606,7 @@ dependencies = [
  "base64",
  "getrandom 0.3.4",
  "hmac",
+ "horizon-addresses",
  "horizon-platform",
  "horizon-release-sign",
  "http-body-util",

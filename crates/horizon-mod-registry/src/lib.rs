@@ -1422,21 +1422,24 @@ async fn request_native_build(
 
     if !recent {
         let gh = inner.config.github.clone();
-        let target = request.target.clone();
-        let base = request.base.clone();
-        let mods_str = request
-            .mods
-            .iter()
-            .map(|m| format!("{}@{}", m.id, m.version))
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        tokio::task::spawn_blocking(move || {
-            gh.dispatch_native_build("main", &target, &base, &mods_str)
+        tokio::task::spawn_blocking(move || -> Result<(), Refusal> {
+            if !gh.native_base_on_main(&request.base).map_err(github_down)? {
+                return Err(bad("the base commit must be on Horizon's main branch"));
+            }
+            let mut mods_str = String::new();
+            for m in &request.mods {
+                if !mods_str.is_empty() {
+                    mods_str.push(' ');
+                }
+                mods_str.push_str(&m.id);
+                mods_str.push('@');
+                mods_str.push_str(&m.version);
+            }
+            gh.dispatch_native_build("main", &request.target, &request.base, &mods_str)
+                .map_err(github_down)
         })
         .await
-        .map_err(|e| Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(github_down)?;
+        .map_err(|e| Refusal::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
 
         inner
             .dispatched

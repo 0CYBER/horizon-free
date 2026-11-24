@@ -42,6 +42,10 @@ struct Mock {
     slow_pull: Option<std::time::Duration>,
     /// Branches moved back to main.
     resets: Vec<String>,
+    native_comparisons: HashMap<String, (StatusCode, Value)>,
+    native_checks: usize,
+    native_dispatches: Vec<Value>,
+    native_release: Option<(String, String)>,
     /// Every request GitHub got, as "METHOD path".
     requests: Vec<String>,
 }
@@ -151,6 +155,39 @@ async fn mock_github() -> (String, Shared) {
                     .map(|(_, (_, message, _))| json!({"commit": {"message": message}}))
                     .collect();
                 Json(json!({"ahead_by": commits.len(), "commits": commits}))
+            }),
+        )
+        .route(
+            "/repos/horizon-rust/horizon/compare/{spec}",
+            get(|State(s): State<Shared>, UrlPath(spec): UrlPath<String>| async move {
+                let base = spec.strip_prefix("main...").unwrap();
+                let mut s = s.lock().unwrap();
+                s.native_checks += 1;
+                let (status, body) = s
+                    .native_comparisons
+                    .get(base)
+                    .cloned()
+                    .unwrap_or((StatusCode::NOT_FOUND, json!({})));
+                (status, Json(body))
+            }),
+        )
+        .route(
+            "/repos/o/r/releases/tags/{tag}",
+            get(|State(s): State<Shared>, UrlPath(tag): UrlPath<String>| async move {
+                let s = s.lock().unwrap();
+                match &s.native_release {
+                    Some((expected, archive)) if expected == &tag => {
+                        Ok(Json(json!({"assets": [{"name": archive}]})))
+                    }
+                    _ => Err(StatusCode::NOT_FOUND),
+                }
+            }),
+        )
+        .route(
+            "/repos/o/r/actions/workflows/native-build.yml/dispatches",
+            post(|State(s): State<Shared>, Json(body): Json<Value>| async move {
+                s.lock().unwrap().native_dispatches.push(body);
+                StatusCode::NO_CONTENT
             }),
         )
         .route(
@@ -1304,6 +1341,151 @@ async fn an_owner_edits_the_page_without_a_version() {
     let csrf = client.sign_in().await;
     let (status, json) = edit(&mut client, &csrf, |f| f["tags"] = json!(["x"])).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+}
+
+const BUILD_TARGET: &str = "x86_64-unknown-linux-gnu";
+const BUILD_BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const BUILD_SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+impl Client {
+    async fn request_native_build(&mut self, base: &str) -> (StatusCode, Value) {
+        let body = json!({
+            "target": BUILD_TARGET,
+            "base": base,
+            "mods": [{"id": "native_example", "version": "1.0.0", "sha256": BUILD_SHA}],
+        });
+        let (status, json, _) = self
+            .send(
+                Request::post("/api/mods/native-builds")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await;
+        (status, json)
+    }
+}
+
+#[tokio::test]
+async fn native_dispatch_requires_exact_main_ancestry() {
+    let (mut client, mock) = setup().await;
+    mock.lock().unwrap().main.insert(
+        "mods/native_example.toml".into(),
+        format!(
+            r#"id = "native_example"
+kind = "native-mod"
+owners = ["alice"]
+
+[[versions]]
+version = "1.0.0"
+published = "2026-01-01"
+game = "26.3"
+file = "native_example.hmod"
+sha256 = "{BUILD_SHA}"
+"#
+        ),
+    );
+
+    let responses = [
+        (Some("behind"), Some(true), StatusCode::OK),
+        (Some("identical"), Some(true), StatusCode::OK),
+        (Some("behind"), Some(false), StatusCode::BAD_REQUEST),
+        (Some("ahead"), Some(true), StatusCode::BAD_REQUEST),
+        (Some("diverged"), Some(false), StatusCode::BAD_REQUEST),
+        (None, Some(true), StatusCode::BAD_GATEWAY),
+        (Some("behind"), None, StatusCode::BAD_GATEWAY),
+    ];
+    for (i, (comparison, exact, expected)) in responses.into_iter().enumerate() {
+        let base = format!("b{i:039x}");
+        let sha = exact.map(|exact| if exact { base.as_str() } else { BUILD_BASE });
+        mock.lock().unwrap().native_comparisons.insert(
+            base.clone(),
+            (
+                StatusCode::OK,
+                json!({"status": comparison, "merge_base_commit": {"sha": sha}}),
+            ),
+        );
+        let (status, body) = client.request_native_build(&base).await;
+        assert_eq!(status, expected, "{body}");
+        if expected == StatusCode::OK {
+            assert_eq!(body["status"], "queued");
+        }
+    }
+
+    // No comparison available and a refused provider request are both service failures.
+    let (status, _) = client.request_native_build(BUILD_BASE).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    mock.lock().unwrap().native_comparisons.insert(
+        BUILD_BASE.into(),
+        (StatusCode::FORBIDDEN, json!({"message": "denied"})),
+    );
+    let (status, _) = client.request_native_build(BUILD_BASE).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+
+    // A recent dispatch doesn't queue a second build or need another comparison.
+    let admitted = format!("b{:039x}", 0);
+    mock.lock().unwrap().native_comparisons.remove(&admitted);
+    let (status, body) = client.request_native_build(&admitted).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "queued");
+
+    let s = mock.lock().unwrap();
+    assert_eq!(s.native_checks, responses.len() + 2);
+    assert_eq!(
+        s.native_dispatches,
+        [0, 1].map(|i| {
+            json!({
+                "ref": "main",
+                "inputs": {
+                    "targets": BUILD_TARGET,
+                    "base": format!("b{i:039x}"),
+                    "mods": "native_example@1.0.0",
+                },
+            })
+        })
+    );
+}
+
+#[tokio::test]
+async fn native_cache_and_status_do_not_dispatch() {
+    use horizon_release_sign::native_build::{self, Mod, Request as BuildRequest};
+
+    let (mut client, mock) = setup().await;
+    let build = BuildRequest::new(
+        BUILD_TARGET,
+        BUILD_BASE,
+        vec![Mod {
+            id: "native_example".into(),
+            version: "1.0.0".into(),
+            sha256: BUILD_SHA.into(),
+        }],
+    )
+    .unwrap();
+    let key = build.key();
+    let tag = native_build::release_tag(BUILD_BASE);
+    let archive = native_build::archive(&key, BUILD_TARGET);
+    let uri = format!("/api/mods/native-builds?target={BUILD_TARGET}&base={BUILD_BASE}&key={key}");
+
+    let response = client
+        .app
+        .clone()
+        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["status"], "queued");
+
+    mock.lock().unwrap().native_release = Some((tag, archive));
+    let (status, body) = client.request_native_build(BUILD_BASE).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["key"], key);
+
+    let s = mock.lock().unwrap();
+    assert_eq!(s.native_checks, 0);
+    assert!(s.native_dispatches.is_empty());
 }
 
 /// The limits count the TCP peer unless the service is told a proxy fronts it: a client reaching

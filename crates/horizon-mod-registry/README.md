@@ -108,6 +108,12 @@ put the key file where the service user can read it (mode 0400), add the three v
 restart: `GITHUB_BOT_TOKEN` may stay. To switch back, remove the three variables and restart. A pull request opened
 before the switch keeps its author.
 
+Native build dispatches also need to read commit comparisons in `horizon-rust/horizon` as the
+bot, token or App. The game repository is public, and GitHub lets both a fine-grained token and an
+App installation token read a public repository outside the ones they were given, so neither needs
+access to it, nor the App an installation there. If the comparison cannot be read, the registry
+does not dispatch the build.
+
 Production runs on Ludovic's home server **ludothinkpad** (NixOS) since 2026-11-22, next to the website, declared in
 `nixos/ludothinkpad/horizon.nix` of ludovic111/LifeOS: the system service `horizon-registry` (user `horizon`, a
 low-priority slice with capped CPU and memory) on `127.0.0.1:8183`, no public domain; the website sends `/api/mods/*`

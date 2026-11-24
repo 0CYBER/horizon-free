@@ -69,6 +69,9 @@ and some are waiting for Ludovic:
   a secret of GitHub's `release` environment, which only real releases from main can use. The job that signs runs
   nothing from the repository but a short script calling OpenSSL, so no pull request can read the key by changing
   the code that gets built. Nobody, Ludovic included, ever needs to see it.
+- **Native build queue.** Before dispatching a new build, the public registry requires GitHub to confirm that
+  the exact requested game commit is `horizon-rust/horizon`'s `main` tip or one of its ancestors. Older releases
+  on `main` can still build. This admission check is separate from the signature check on downloaded artifacts.
 - **A test SDK key, developer builds only.** An SDK is checked against the release keys like a release is. The
   function-replacement check (`tools/ci/fn_replace_check.sh`), run by hand as `docs/release-flow.md` describes since
   the daily run is gone, can check an unpublished SDK signed with a throwaway key made for the dry run that built
