@@ -398,4 +398,86 @@ mod tests {
             ])
         );
     }
+
+    #[test]
+    fn can_place_item_part_filters_by_slot_and_item() {
+        use crate::{
+            BlockEntityPart, BlockPart, CanPlaceItemEvent, HookId, Hooks, ItemKey, ItemStack,
+            ModEntry, Mods,
+        };
+        use std::sync::Arc;
+
+        struct SmelterFilter(ItemKey);
+        impl BlockPart for SmelterFilter {
+            fn block_subscribed(&self) -> &'static [Option<HookId>] {
+                &[]
+            }
+        }
+        impl BlockEntityPart for SmelterFilter {
+            fn block_entity_subscribed(&self) -> &'static [Option<HookId>] {
+                &[Some(HookId::CanPlaceItem)]
+            }
+            fn can_place_item(&self, event: &mut CanPlaceItemEvent<'_>) -> Option<bool> {
+                match event.slot {
+                    0 => Some(event.stack.item() == self.0),
+                    1 => None,
+                    _ => Some(false),
+                }
+            }
+        }
+
+        struct TestMod;
+        impl Hooks for TestMod {
+            fn subscribed(&self) -> &'static [Option<HookId>] {
+                &[]
+            }
+        }
+
+        let iron_ore = ItemKey(10);
+        let dirt = ItemKey(11);
+        let mods: Mods = vec![ModEntry::new("testmod", Box::new(TestMod))].into();
+        let mut parts = crate::parts::installation::PartsInput::default();
+        parts.block_entity_kinds.insert(
+            "testmod:smelter".into(),
+            vec![crate::parts::installation::AttachedInput {
+                mod_id: "testmod",
+                mod_index: 0,
+                order: 0,
+                type_name: "SmelterFilter",
+                part: Arc::new(SmelterFilter(iron_ore)),
+            }],
+        );
+        crate::testing::with_parts_scope(|| {
+            crate::testing::with_dispatch(mods, || {
+                crate::parts::install_input(crate::parts::installation::InstalledInput {
+                    keys: parts,
+                    ..Default::default()
+                });
+                let smelter =
+                    ModBlockEntity::new("testmod:smelter".into(), ModBlockEntityFields::default());
+                let other =
+                    ModBlockEntity::new("testmod:other".into(), ModBlockEntityFields::default());
+                let ore_stack = ItemStack::of(iron_ore);
+                let dirt_stack = ItemStack::of(dirt);
+
+                let ask = |entity: &ModBlockEntity, slot: u32, stack: &ItemStack| {
+                    let mut allowed = None;
+                    crate::generated::dispatch_can_place_item(
+                        [1, 64, 2],
+                        entity,
+                        slot,
+                        stack,
+                        &mut allowed,
+                    );
+                    allowed
+                };
+
+                assert_eq!(ask(&smelter, 0, &ore_stack), Some(true));
+                assert_eq!(ask(&smelter, 0, &dirt_stack), Some(false));
+                assert_eq!(ask(&smelter, 1, &dirt_stack), None);
+                assert_eq!(ask(&smelter, 2, &ore_stack), Some(false));
+                assert_eq!(ask(&other, 0, &dirt_stack), None);
+            });
+        });
+    }
 }

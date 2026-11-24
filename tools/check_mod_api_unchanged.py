@@ -76,7 +76,12 @@ HOOK_FILES = {HOOK_CATALOG, "hook-notes.md", GUEST_WIRE}
 # The guest's `hook` function and its arms, one per export a mod is called through, in the generator's method order.
 GUEST_DISPATCH = "pub fn hook(id: u32,"
 GUEST_ARM = re.compile(r"^\d+ => \{.*?(?=^\d+ => \{|^_ =>)", re.MULTILINE | re.DOTALL)
-GUEST_HOOK_ARM = re.compile(r"\d+ => \{ let receiver = super::hooks\(\); ")
+GUEST_HOOK_ARM = re.compile(
+    r"\d+ => \{ let receiver = (?:"
+    r"super::hooks\(\)"
+    r"|crate::wire::guest::handler::<dyn crate\s*::\s*(?:Block|BlockEntity|Item|Menu|Fluid|Entity)Part>\(input\.take\(\)\?\)\?"
+    r"); "
+)
 GUEST_HOOK_CALL = re.compile(r"\blet answer = receiver\.([a-zA-Z0-9_]+)\(")
 WIRE_RECORD = re.compile(r"\b__wire_record_(\d+)\b")
 # A guest forwarder's host call: the import's name (with its signature hash) and the generator's position number for it.

@@ -455,7 +455,29 @@ impl Containers<'_> {
     /// empty: the item rule of the slot, whatever it holds now.
     fn accepts(&self, view: &View, slot: usize, stack: &ItemStack) -> bool {
         if let Some(c) = &view.container {
-            return c.inputs.contains(&slot);
+            if !c.inputs.contains(&slot) {
+                return false;
+            }
+            if !mod_api::__private::has_part_hook(mod_api::HookId::CanPlaceItem) {
+                return true;
+            }
+            let Some((pos, index)) = view.locate(slot) else {
+                return false;
+            };
+            let Some(BlockEntity::Mod(entity)) = self.world.block_entities.get(&pos) else {
+                return true;
+            };
+            let mut allowed = None;
+            if let Ok(api) = crate::game::api_values::TryIntoApi::try_into_api(entity.as_ref()) {
+                Game::native_can_place_item(
+                    [pos.0, pos.1, pos.2],
+                    &api,
+                    index as u32,
+                    stack,
+                    &mut allowed,
+                );
+            }
+            return allowed.unwrap_or(true);
         }
         match view.kind {
             // ComposterBlock.InputContainer.canPlaceItemThroughFace; output never accepts.
@@ -3675,5 +3697,114 @@ mod stack_size_tests {
             transfer(&mut game, vec![Some(stone(None, 1))], stone(None, 2)),
             (Some(2), Some(1))
         );
+    }
+
+    /// `BlockEntityPart::can_place_item` gates shared container insertion paths
+    /// (`/loot insert` via `block_can_place`, hopper/dropper via `add_item`, and the
+    /// `ITEMS` capability via `container_capacity`).
+    #[test]
+    fn can_place_item_gates_hopper_loot_and_capability_insertion() {
+        if std::env::var_os("HORIZON_TEST_RESOURCES").is_none() {
+            return;
+        }
+        use crate::game::api_values::install_parts;
+        use horizon_client::containers::{ModBlockEntity, ModContainer};
+        use mod_api::{
+            BlockEntityPart, BlockPart, CanPlaceItemEvent, Hooks, ItemKey, ModEntry, Mods,
+            Registrar, RegistrationContext,
+        };
+        use std::sync::Arc;
+
+        struct SmelterFilter(ItemKey);
+        #[mod_api::horizon_part]
+        impl BlockPart for SmelterFilter {}
+        #[mod_api::horizon_part]
+        impl BlockEntityPart for SmelterFilter {
+            fn can_place_item(&self, event: &mut CanPlaceItemEvent<'_>) -> Option<bool> {
+                match event.slot {
+                    0 => Some(event.stack.item() == self.0),
+                    1 => None,
+                    _ => Some(false),
+                }
+            }
+        }
+
+        struct TestMod;
+        #[mod_api::__subscriptions]
+        impl Hooks for TestMod {
+            fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+                let iron_ore = r.item_key("minecraft:iron_ore");
+                let kind = r.block_entity_type("smelter").blocks(&[]).build();
+                r.block_entity_part(&kind, SmelterFilter(iron_ore)).unwrap();
+            }
+        }
+
+        let mods: Mods = vec![ModEntry::new("testmod", Box::new(TestMod))].into();
+        mod_api::testing::with_parts_scope(|| {
+            mod_platform::testing::with_mods(mods.clone(), || {
+                let mut game = server_game();
+                install_parts(&mods).unwrap();
+                let pos = (2, 4, 3);
+                let state = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                game.world.set(pos.0, pos.1, pos.2, state).unwrap();
+                let mut faces: [Vec<usize>; 6] = Default::default();
+                faces[Direction::Up as usize] = vec![0];
+                faces[Direction::North as usize] = vec![1];
+                let container = Arc::new(ModContainer {
+                    slots: 3,
+                    inputs: vec![0, 1],
+                    outputs: vec![2],
+                    faces,
+                    ..Default::default()
+                });
+                game.world
+                    .block_entities
+                    .set_mod_containers([(state.0, container)].into_iter().collect());
+                game.world.block_entities.insert(
+                    pos,
+                    BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                        "testmod:smelter".into(),
+                        Default::default(),
+                    ))),
+                );
+
+                let ore = ItemStack::new("minecraft:iron_ore", 2);
+                let dirt = ItemStack::new("minecraft:dirt", 2);
+
+                // `/loot insert` (`block_can_place`)
+                assert!(game.block_can_place([pos.0, pos.1, pos.2], 0, &ore));
+                assert!(!game.block_can_place([pos.0, pos.1, pos.2], 0, &dirt));
+                assert!(game.block_can_place([pos.0, pos.1, pos.2], 1, &dirt));
+                assert!(!game.block_can_place([pos.0, pos.1, pos.2], 2, &ore));
+
+                // `ITEMS` capability (`container_capacity`)
+                let level = <dyn mod_api::Host>::level(&game, "minecraft:overworld").unwrap();
+                let top = BlockSide {
+                    level,
+                    pos: [pos.0, pos.1, pos.2],
+                    side: Some(Direction::Up),
+                };
+                assert_eq!(game.container_capacity(top, 0, &dirt), 0);
+                assert_eq!(game.container_capacity(top, 0, &ore), 64);
+
+                // Hopper / dropper insertion through top face (slot 0 only)
+                let view = game.containers().view(pos, false).expect("mod view");
+                let rejected = game.add_item(None, &view, dirt.clone(), Some(Direction::Up));
+                assert_eq!(rejected.as_ref().map(|s| s.count), Some(2));
+                assert!(game.containers().get(&view, 0).is_none());
+
+                let accepted = game.add_item(None, &view, ore, Some(Direction::Up));
+                assert!(accepted.is_none());
+                assert_eq!(
+                    game.containers().get(&view, 0).map(|s| (&*s.item, s.count)),
+                    Some(("minecraft:iron_ore", 2))
+                );
+            });
+        });
     }
 }
