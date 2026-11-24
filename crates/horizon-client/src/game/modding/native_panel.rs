@@ -95,6 +95,24 @@ impl Panel {
             _ => self.styles.insert(mod_id.to_owned(), style),
         };
     }
+    /// `panel_search`: replaces the search box text (cut to 50 chars) if `mod_id` owns the panel.
+    pub(super) fn set_search(&mut self, mod_id: &str, text: &str) {
+        let owned = self
+            .native
+            .as_ref()
+            .is_some_and(|s| s.owner.native_id() == mod_id);
+        if !owned {
+            return;
+        }
+        let search = self.search.get_or_insert_with(|| {
+            let mut edit = EditBox::new(0.0, 0.0, 0.0, 0.0);
+            edit.max_length = 50;
+            edit.focused = false;
+            edit
+        });
+        let truncated: String = text.chars().take(50).collect();
+        search.set_value(&truncated);
+    }
     /// How `owner`'s panel looks: Horizon's own Recipes panel is the viewer's.
     fn style(&self, owner: &Owner) -> PanelStyle {
         match owner.native_id() {
@@ -325,6 +343,11 @@ impl Game<'_> {
     /// the session, whether or not its panel is showing.
     pub(in crate::game) fn panel_style(&mut self, mod_id: &str, style: PanelStyle) {
         self.panel.set_style(mod_id, style);
+    }
+    /// Replaces mod `mod_id`'s item panel search box text (cut to 50 chars). Only the panel's
+    /// current owner may set it; the owning mod hears `panel_event Search(text)` on the next draw.
+    pub(in crate::game) fn panel_search(&mut self, mod_id: &str, text: &str) {
+        self.panel.set_search(mod_id, text);
     }
     /// Shows these recipes in mod `mod_id`'s panel instead of its items
     /// (`RecipesClientHost::panel_recipes`), as `native_panel_recipes` does
@@ -654,6 +677,8 @@ impl Game<'_> {
     /// Draw the browser's contents once, leaving its tooltip for the screen's
     /// overlay phase. The carried stack belongs to the enclosing screen.
     pub(super) fn draw_mod_browser(&mut self, batch: &mut HudBatch) -> Option<BrowserTooltip> {
+        self.browser_sync()?;
+        self.browser_searched();
         self.browser_sync()?;
         let layout = self.browser_layout(batch)?;
         let cursor = self.cursor;
@@ -1225,5 +1250,33 @@ mod tests {
             panel.shown(|_| true).is_none(),
             "an empty list cannot take ownership"
         );
+    }
+
+    #[test]
+    fn panel_search_updates_only_for_owner_and_truncates_to_fifty_chars() {
+        keys();
+        let mut panel = Panel::default();
+        // No owner yet: ignored.
+        panel.set_search("recipes", "iron");
+        assert!(panel.search.is_none());
+
+        panel.show_items("recipes", vec![stack("minecraft:stone")]);
+        // Non-owner cannot overwrite the panel's search text.
+        panel.set_search("other", "gold");
+        assert!(panel.search.is_none());
+
+        // Owner sets the search text and leaves it pending for the next draw (`value != sent`).
+        panel.set_search("recipes", "iron");
+        assert_eq!(panel.search.as_ref().unwrap().value, "iron");
+        assert_ne!(panel.search.as_ref().unwrap().value, panel.sent);
+
+        // Overlong queries are truncated to 50 characters.
+        let long_query = "a".repeat(65);
+        panel.set_search("recipes", &long_query);
+        assert_eq!(panel.search.as_ref().unwrap().value, "a".repeat(50));
+
+        // Non-owner still cannot overwrite an existing search box.
+        panel.set_search("other", "diamond");
+        assert_eq!(panel.search.as_ref().unwrap().value, "a".repeat(50));
     }
 }

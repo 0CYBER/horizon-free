@@ -96,6 +96,12 @@ pub trait RecipesClientHost {
     #[access(WorldOnly)]
     fn panel_style(&mut self, mod_id: &str, style: PanelStyle);
     /// Side: client.
+    /// Replaces mod `mod_id`'s item panel search box text (cut to 50 characters).
+    /// Only the panel's current owner may set it; the owning mod hears the new
+    /// query as `panel_event` `Search(text)` on the next draw.
+    #[access(WorldOnly)]
+    fn panel_search(&mut self, mod_id: &str, text: &str);
+    /// Side: client.
     /// Places a recipe in the open screen's grid as a click in the recipe
     /// book does (`ServerboundPlaceRecipePacket`): the inventory's grid or a
     /// crafting table's. `all` places as many as the items allow, as with
