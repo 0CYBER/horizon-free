@@ -3,8 +3,9 @@
 //! own screens (a `shaders/` pack's `screen.NAME`s, a Horizon pack's `[[pages]]`), read from the
 //! pack each time the rows are built; the shell draws and drives them, searches every screen,
 //! collapses the screens into one row when the page list has no room for them, and has Undo. A
-//! `shaders/` pack's options apply when Apply is pressed or the screen closes, as the pack loads
-//! again with them; a Horizon pack's apply at once.
+//! pack's changed options (both `shaders/` and Horizon packs) apply when Apply is pressed, when
+//! switching packs, or when the screen closes, so multi-option tweaks rebuild the pack once in
+//! the background instead of on every click.
 use crate::gfx::output::RayStatus;
 use crate::shader_pack_list::Kind;
 use crate::{
@@ -59,6 +60,7 @@ const PACK_SETTINGS: &str = "Settings made by the pack's author: they change onl
 const NO_PACKS: &str = "No shader packs yet: open the pack folder and put some in it.";
 const PICK_A_PACK: &str = "Pick a shader pack. Picking the one in use turns shaders off.";
 const PENDING: &str = "Changed options apply with Apply, or when you leave.";
+const APPLYING: &str = "Applying shader pack...";
 /// Pack descriptions run longer than Horizon's own: the strip has room for a line more.
 const NOTE_LINES: usize = 3;
 /// Why a picked pack that declares `[ray_tracing]` draws without it.
@@ -458,16 +460,22 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
     }
 }
 
-/// The shader screen. Its rows read the settings; what it keeps is for Undo and a drag.
+/// The shader screen. Its rows read the settings; what it keeps is for Undo and batched Apply.
 #[derive(Default)]
 pub(crate) struct ShaderScreen {
-    /// The Horizon pack whose slider a drag moved: saved once, when it lets go.
-    drag_changed: Option<usize>,
+    /// The last saved values of each Horizon pack edited while this screen is open, by `Entry::key`:
+    /// a pack whose current `values` differ from these waits for Apply, leaving, or switching packs.
+    native_saved: BTreeMap<String, Vec<f64>>,
+    /// The values this screen actually saved to disk for a Horizon pack (via Apply or switching
+    /// away), by `Entry::key`: Undo writes `before`'s values back over them.
+    native_written: BTreeMap<String, Vec<f64>>,
     /// The values this screen saved to a `shaders/` pack's file (picking another pack, Apply),
     /// by pack: Undo puts back the ones the screen opened with over them.
     written: BTreeMap<String, BTreeMap<String, String>>,
     /// What the renderer's ray tracing is to a pack that asks for it (`OptionsUi::draw`).
     pub(crate) rays: Option<RayStatus>,
+    /// Whether a shader pack is currently compiling in the background (`OptionsUi::draw`).
+    pub(crate) loading: bool,
 }
 
 impl ShaderScreen {
@@ -476,6 +484,46 @@ impl ShaderScreen {
         if let Some(o) = s.shader_options.as_ref() {
             self.written.insert(o.pack.clone(), o.chosen.clone());
         }
+    }
+
+    /// Remembers a Horizon pack's on-disk values before the first unsaved edit to it.
+    fn record_native_saved(&mut self, pack: &crate::shader_pack_list::Entry) {
+        self.native_saved
+            .entry(pack.key.clone())
+            .or_insert_with(|| pack.values.clone());
+    }
+
+    /// Whether `pack` has unsaved option edits waiting for Apply or leaving.
+    fn native_pack_pending(&self, pack: &crate::shader_pack_list::Entry) -> bool {
+        self.native_saved
+            .get(&pack.key)
+            .is_some_and(|saved| *saved != pack.values)
+    }
+
+    /// Saves pending edits of Horizon pack `i`, if any, returning its `NativePackOptions` event.
+    fn save_native_pack(&mut self, s: &Settings, i: usize) -> Option<Event> {
+        let pack = s.shader_packs.get(i)?;
+        if !self.native_pack_pending(pack) {
+            return None;
+        }
+        self.native_saved
+            .insert(pack.key.clone(), pack.values.clone());
+        self.native_written
+            .insert(pack.key.clone(), pack.values.clone());
+        Some(Event::NativePackOptions(i))
+    }
+
+    /// Flushes any unsaved Horizon pack option edits when leaving the shader screen.
+    pub(crate) fn flush_native(&mut self, s: &Settings) -> Vec<Event> {
+        let mut events = Vec::new();
+        for i in 0..s.shader_packs.len() {
+            if let Some(event) = self.save_native_pack(s, i) {
+                events.push(event);
+            }
+        }
+        self.native_saved.clear();
+        self.native_written.clear();
+        events
     }
 }
 
@@ -488,14 +536,29 @@ impl shell::Screen for ShaderScreen {
     fn note_lines(&self) -> usize {
         NOTE_LINES
     }
-    /// The rows read the packs, the pick, its options and the Shadow Cache.
+    fn side(&self) -> Vec<String> {
+        if self.loading {
+            vec![lang::get(APPLYING)]
+        } else {
+            Vec::new()
+        }
+    }
+    /// The rows read the packs, the pick, its options, the Shadow Cache and the loading state.
     fn stamp(&self, s: &Settings) -> u64 {
         let packs: Vec<_> = (s.shader_packs.iter())
             .map(|p| (&p.key, &p.title, &p.values, p.options.len(), p.pages.len()))
             .collect();
         let options = (s.shader_options.as_ref()).map(|o| (&o.pack, &o.chosen, o.changed));
         let h = &s.horizon;
-        shell::stamp_of(&(&h.shader_pack, h.shadow_cache, packs, options, self.rays))
+        shell::stamp_of(&(
+            &h.shader_pack,
+            h.shadow_cache,
+            packs,
+            options,
+            self.rays,
+            self.loading,
+            self.pending(s),
+        ))
     }
     /// The pack list, then the picked pack's screens under its name: those the main screen links
     /// to in the page list, the ones farther in opened by their links.
@@ -531,7 +594,7 @@ impl shell::Screen for ShaderScreen {
         }
     }
     /// A pack is picked (or turned off) and saved, the last pack's changed options first; an
-    /// option steps (back with Shift); the folder opens.
+    /// option steps (back with Shift) and waits for Apply or leaving; the folder opens.
     fn press(&mut self, s: &mut Settings, item: Item, back: bool) -> Vec<Output> {
         let changed = vec![Output::Event(Event::Changed)];
         let pack = s.horizon.shader_pack.clone();
@@ -541,7 +604,7 @@ impl shell::Screen for ShaderScreen {
                 let Some(p) = s.shader_packs.get(usize::from(i)) else {
                     return Vec::new();
                 };
-                s.horizon.shader_pack = if s.horizon.shader_pack == p.key {
+                let next_pack = if s.horizon.shader_pack == p.key {
                     String::new()
                 } else {
                     p.key.clone()
@@ -552,6 +615,12 @@ impl shell::Screen for ShaderScreen {
                     self.saving(s);
                     outputs.push(Output::Event(Event::ShaderOptions));
                 }
+                if let Some(prev) = native
+                    && let Some(event) = self.save_native_pack(s, prev)
+                {
+                    outputs.push(Output::Event(event));
+                }
+                s.horizon.shader_pack = next_pack;
                 outputs.push(Output::Event(Event::ShaderPack));
                 outputs.push(Output::Event(Event::OpenShaderOptions));
                 outputs
@@ -572,8 +641,9 @@ impl shell::Screen for ShaderScreen {
             },
             Item::Reset => match native {
                 Some(p) => {
+                    self.record_native_saved(&s.shader_packs[p]);
                     s.shader_packs[p].reset_options();
-                    vec![Output::Event(Event::NativePackOptions(p))]
+                    changed
                 }
                 None => match s.shader_options.as_mut().filter(|o| o.pack == pack) {
                     Some(o) => {
@@ -584,10 +654,14 @@ impl shell::Screen for ShaderScreen {
                 },
             },
             Item::Option(i) => match native {
-                Some(p) if s.shader_packs[p].step_option(usize::from(i), back, false) => {
-                    vec![Output::Event(Event::NativePackOptions(p))]
+                Some(p) => {
+                    self.record_native_saved(&s.shader_packs[p]);
+                    if s.shader_packs[p].step_option(usize::from(i), back, false) {
+                        changed
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Some(_) => Vec::new(),
                 None => {
                     let options = s.shader_options.as_mut().filter(|o| o.pack == pack);
                     match options.and_then(|o| Some((option_name(o, i)?.to_owned(), o))) {
@@ -601,15 +675,14 @@ impl shell::Screen for ShaderScreen {
             },
         }
     }
-    /// A slider moves an option to the value nearest it.
+    /// A slider moves an option to the value nearest it; changes wait for Apply or leaving.
     fn slide(&mut self, s: &mut Settings, item: Item, position: f32) {
         let Item::Option(i) = item else {
             return;
         };
         if let Some((p, _)) = native(s) {
-            if s.shader_packs[p].set_slider_position(usize::from(i), position) {
-                self.drag_changed = Some(p);
-            }
+            self.record_native_saved(&s.shader_packs[p]);
+            s.shader_packs[p].set_slider_position(usize::from(i), position);
             return;
         }
         let pack = s.horizon.shader_pack.clone();
@@ -618,13 +691,6 @@ impl shell::Screen for ShaderScreen {
         {
             o.set_position(&name, position);
         }
-    }
-    /// A Horizon pack's options are saved, and the pack rebuilt, once a drag.
-    fn slider_released(&mut self) -> Vec<Output> {
-        let changed = self.drag_changed.take();
-        changed.map_or_else(Vec::new, |p| {
-            vec![Output::Event(Event::NativePackOptions(p))]
-        })
     }
     /// With the "Scroll wheel changes settings" extra, the wheel steps an option between `<` `>`
     /// and the profile (up goes back); the other rows leave it to scroll the list.
@@ -644,16 +710,29 @@ impl shell::Screen for ShaderScreen {
     fn undoes(&self) -> bool {
         true
     }
-    /// The pick, the Shadow Cache, the Horizon packs' options (saved again) and the options of the
-    /// `shaders/` pack picked when the screen opened (saved when it closes, or Apply), as the
-    /// screen opened with them. Another `shaders/` pack keeps what was saved for it.
+    /// The pick, the Shadow Cache, the Horizon packs' options (saved back when this screen had
+    /// already written over them) and the options of the `shaders/` pack picked when the screen
+    /// opened (saved when it closes, or Apply), as the screen opened with them. Another
+    /// `shaders/` pack keeps what was saved for it.
     fn undo(&mut self, s: &mut Settings, before: &Settings) -> Vec<Output> {
         let mut outputs = Vec::new();
         s.horizon.shadow_cache = before.horizon.shadow_cache;
         for (i, pack) in s.shader_packs.iter_mut().enumerate() {
-            let was = before.shader_packs.iter().find(|p| p.key == pack.key);
-            if let Some(was) = was.filter(|was| was.values != pack.values) {
+            let Some(was) = before.shader_packs.iter().find(|p| p.key == pack.key) else {
+                continue;
+            };
+            if was.values != pack.values {
                 pack.values = was.values.clone();
+            }
+            if self
+                .native_written
+                .get(&pack.key)
+                .is_some_and(|written| *written != was.values)
+            {
+                self.native_saved
+                    .insert(pack.key.clone(), was.values.clone());
+                self.native_written
+                    .insert(pack.key.clone(), was.values.clone());
                 outputs.push(Output::Event(Event::NativePackOptions(i)));
             }
         }
@@ -678,12 +757,18 @@ impl shell::Screen for ShaderScreen {
         }
         outputs
     }
-    /// Undo shows exactly while the pick, the Shadow Cache or a pack's options differ from what
-    /// the screen opened with: an option stepped back to its value isn't a change.
+    /// Undo shows exactly while the pick, the Shadow Cache or a pack's options (visible or already
+    /// written to disk by Apply) differ from what the screen opened with.
     fn differs(&self, s: &Settings, before: &Settings) -> Option<bool> {
         let native = s.shader_packs.iter().any(|pack| {
             let was = before.shader_packs.iter().find(|p| p.key == pack.key);
-            was.is_some_and(|was| was.values != pack.values)
+            was.is_some_and(|was| {
+                was.values != pack.values
+                    || self
+                        .native_written
+                        .get(&pack.key)
+                        .is_some_and(|written| *written != was.values)
+            })
         });
         let options = match (classic(s), before.shader_options.as_ref()) {
             (Some(o), Some(was)) => o.pack == was.pack && o.chosen != was.chosen,
@@ -693,17 +778,25 @@ impl shell::Screen for ShaderScreen {
         let pick = h.0.shader_pack != h.1.shader_pack;
         Some(pick || h.0.shadow_cache != h.1.shadow_cache || native || options)
     }
-    /// A `shaders/` pack's options wait for Apply until the pack loads again with them.
+    /// Changed options of either kind wait for Apply until the pack rebuilds with them.
     fn pending(&self, s: &Settings) -> bool {
         classic(s).is_some_and(|o| o.changed)
+            || native(s).is_some_and(|(_, pack)| self.native_pack_pending(pack))
     }
-    /// The options are saved, and the pack loads again with them.
+    /// The options are saved, and the pack rebuilds with them.
     fn apply(&mut self, s: &mut Settings) -> Vec<Output> {
-        self.saving(s);
-        vec![
-            Output::Event(Event::ShaderOptions),
-            Output::Event(Event::OpenShaderOptions),
-        ]
+        let mut outputs = Vec::new();
+        if classic(s).is_some_and(|o| o.changed) {
+            self.saving(s);
+            outputs.push(Output::Event(Event::ShaderOptions));
+            outputs.push(Output::Event(Event::OpenShaderOptions));
+        }
+        if let Some((p, _)) = native(s)
+            && let Some(event) = self.save_native_pack(s, p)
+        {
+            outputs.push(Output::Event(event));
+        }
+        outputs
     }
 }
 
@@ -1070,25 +1163,117 @@ mod tests {
     }
 
     #[test]
-    fn a_horizon_packs_slider_drag_is_saved_once_when_released_and_a_key_step_at_once() {
+    fn a_horizon_packs_edits_batch_behind_apply_and_flush_on_leave() {
         let mut s = horizon_pack();
         let mut shell = shell_at(Tab::Screen(0));
+        let is_pending = |shell: &mut Shell<ShaderScreen>, s: &Settings| {
+            shell.foot_at(s, SIZE).iter().any(|f| f.0 == Target::Apply)
+        };
+        assert!(!is_pending(&mut shell, &s));
         let (_, y) = shell.point_at(&s, SIZE, Item::Option(0));
         let (track, width) = crate::settings_shell::Columns::of(SIZE.0, SIZE.1).track();
         let start = shell.click(&mut s, (track + 2.0, y), SIZE, false, false, false);
         assert_eq!(start, [Output::Event(Event::SliderDrag)]);
         shell.click(&mut s, (track + width, y), SIZE, true, false, false);
         assert_eq!(s.shader_packs[0].values[0], 1.0);
-        let saved = vec![Output::Event(Event::NativePackOptions(0))];
-        assert_eq!(shell.release(), Some(saved.clone()));
+        // Drag release does not trigger an immediate save/rebuild: edits wait for Apply or leaving.
+        assert_eq!(shell.release(), Some(Vec::new()));
         assert_eq!(shell.release(), None);
-        // Left steps it one of its steps, saved as it goes.
+        assert!(is_pending(&mut shell, &s));
+        // Left steps it one step without immediately saving either.
         let stepped = shell.key(&mut s, K::ArrowLeft, None, false, SIZE);
-        assert_eq!(
-            stepped,
-            [&[Output::Event(Event::SliderDrag)][..], &saved].concat()
-        );
+        assert_eq!(stepped, [Output::Event(Event::SliderDrag)]);
         assert!((s.shader_packs[0].values[0] - 0.9).abs() < 1e-6);
+        assert!(is_pending(&mut shell, &s));
+        // Clicking Apply saves once and clears pending.
+        let apply = shell
+            .foot_at(&s, SIZE)
+            .into_iter()
+            .find(|f| f.0 == Target::Apply)
+            .unwrap();
+        let [x, y, w, h] = apply.1;
+        let applied = shell.click(
+            &mut s,
+            (x + w / 2.0, y + h / 2.0),
+            SIZE,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(applied, [CLICK, Output::Event(Event::NativePackOptions(0))]);
+        assert!(!is_pending(&mut shell, &s));
+        // A further edit left unapplied flushes cleanly when leaving the screen.
+        assert!(press(&mut shell, &mut s, Item::Option(0)).is_empty());
+        let stepped = shell.key(&mut s, K::ArrowLeft, None, false, SIZE);
+        assert_eq!(stepped, [Output::Event(Event::SliderDrag)]);
+        assert!((s.shader_packs[0].values[0] - 0.8).abs() < 1e-6);
+        assert!(is_pending(&mut shell, &s));
+        assert_eq!(shell.screen.flush_native(&s), [Event::NativePackOptions(0)]);
+        assert!(!is_pending(&mut shell, &s));
+    }
+
+    #[test]
+    fn undo_stays_available_when_edited_back_to_opening_value_after_apply() {
+        let mut s = horizon_pack();
+        let mut shell = shell_at(Tab::Screen(0));
+        let has_foot = |shell: &mut Shell<ShaderScreen>, s: &Settings, target| {
+            shell.foot_at(s, SIZE).iter().any(|f| f.0 == target)
+        };
+        // Open at 0.5, step to 0.6 and Apply (disk now holds 0.6).
+        assert!(press(&mut shell, &mut s, Item::Option(0)).is_empty());
+        let stepped = shell.key(&mut s, K::ArrowRight, None, false, SIZE);
+        assert_eq!(stepped, [Output::Event(Event::SliderDrag)]);
+        assert!((s.shader_packs[0].values[0] - 0.6).abs() < 1e-6);
+        let apply = shell
+            .foot_at(&s, SIZE)
+            .into_iter()
+            .find(|f| f.0 == Target::Apply)
+            .unwrap();
+        let [ax, ay, aw, ah] = apply.1;
+        let applied = shell.click(
+            &mut s,
+            (ax + aw / 2.0, ay + ah / 2.0),
+            SIZE,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(applied, [CLICK, Output::Event(Event::NativePackOptions(0))]);
+        // Edit back to opening value 0.5 without applying: disk still differs from opening 0.5.
+        assert!(press(&mut shell, &mut s, Item::Option(0)).is_empty());
+        let stepped = shell.key(&mut s, K::ArrowLeft, None, false, SIZE);
+        assert_eq!(stepped, [Output::Event(Event::SliderDrag)]);
+        assert!((s.shader_packs[0].values[0] - 0.5).abs() < 1e-6);
+        assert!(
+            has_foot(&mut shell, &s, Target::Undo),
+            "Undo must stay visible while the applied on-disk value still differs"
+        );
+        assert!(has_foot(&mut shell, &s, Target::Apply));
+        // Clicking Undo restores the on-disk value to 0.5 immediately and clears pending.
+        let undo = shell
+            .foot_at(&s, SIZE)
+            .into_iter()
+            .find(|f| f.0 == Target::Undo)
+            .unwrap();
+        let [ux, uy, uw, uh] = undo.1;
+        let outputs = shell.click(
+            &mut s,
+            (ux + uw / 2.0, uy + uh / 2.0),
+            SIZE,
+            false,
+            false,
+            false,
+        );
+        assert!(
+            outputs.contains(&Output::Event(Event::NativePackOptions(0))),
+            "Undo must rewrite the opening value over the applied one: {outputs:?}"
+        );
+        assert!(!has_foot(&mut shell, &s, Target::Undo));
+        assert!(!has_foot(&mut shell, &s, Target::Apply));
+        assert!(
+            shell.screen.flush_native(&s).is_empty(),
+            "leaving after Undo must not trigger another save/rebuild"
+        );
     }
 
     #[test]
@@ -1114,12 +1299,27 @@ mod tests {
         );
         // The game reads the next pack's options: a Horizon pack has none of these.
         s.shader_options = None;
-        // Its slider, a step on from the keyboard.
+        // Its slider, a step on from the keyboard, then applied so Undo must write back over it.
         shell.show(Tab::Screen(0));
         shell.set_focus(Some(Target::Row(Item::Option(0))));
         shell.key(&mut s, K::Enter, None, false, SIZE);
         shell.key(&mut s, K::ArrowRight, None, false, SIZE);
         assert_ne!(s.shader_packs[2].values[0], 0.5);
+        let apply = shell
+            .foot_at(&s, SIZE)
+            .into_iter()
+            .find(|f| f.0 == Target::Apply)
+            .unwrap();
+        let [ax, ay, aw, ah] = apply.1;
+        let applied = shell.click(
+            &mut s,
+            (ax + aw / 2.0, ay + ah / 2.0),
+            SIZE,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(applied, [CLICK, Output::Event(Event::NativePackOptions(2))]);
         let undo = shell
             .foot_at(&s, SIZE)
             .into_iter()
@@ -1149,16 +1349,49 @@ mod tests {
     }
 
     #[test]
+    fn undo_before_apply_on_a_horizon_pack_skips_disk_write_and_rebuild() {
+        let mut s = horizon_pack();
+        let mut shell = shell_at(Tab::Screen(0));
+        shell.set_focus(Some(Target::Row(Item::Option(0))));
+        shell.key(&mut s, K::Enter, None, false, SIZE);
+        shell.key(&mut s, K::ArrowRight, None, false, SIZE);
+        assert_ne!(s.shader_packs[0].values[0], 0.5);
+        let undo = shell
+            .foot_at(&s, SIZE)
+            .into_iter()
+            .find(|f| f.0 == Target::Undo)
+            .unwrap();
+        let [x, y, w, h] = undo.1;
+        let outputs = shell.click(
+            &mut s,
+            (x + w / 2.0, y + h / 2.0),
+            SIZE,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(s.shader_packs[0].values[0], 0.5);
+        assert!(
+            !outputs
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::NativePackOptions(_)))),
+            "unapplied edits need no save/rebuild on Undo: {outputs:?}"
+        );
+    }
+
+    #[test]
     fn every_text_is_in_the_language_table() {
         let mut s = settings();
         let (_, mut missed) = lang::scoped(lang::Language::load(&[], "de_de"), || {
-            let screen = ShaderScreen::default();
+            let mut screen = ShaderScreen::default();
             screen.sheets(&s);
+            screen.loading = true;
+            assert!(!screen.side().is_empty());
             s.shader_packs[0].kind = Kind::Horizon;
             screen.sheets(&s);
             s.shader_packs.clear();
             screen.sheets(&s);
-            for text in [TITLE, PENDING, "Apply", "Undo", "Search options"] {
+            for text in [TITLE, PENDING, APPLYING, "Apply", "Undo", "Search options"] {
                 lang::get(text);
             }
         });

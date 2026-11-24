@@ -188,6 +188,11 @@ impl Game<'_> {
         if self.settings.running_pack.as_deref() != pack {
             self.settings.running_pack = pack.map(str::to_owned);
         }
+        self.ui.options.set_shader_pack_loading(
+            self.renderer
+                .as_ref()
+                .is_some_and(|r| r.shader_pack_loading()),
+        );
         let output = self
             .renderer
             .as_ref()
@@ -514,6 +519,7 @@ impl Game<'_> {
                 Event::NativePackOptions(i) => {
                     if let Some(pack) = self.settings.shader_packs.get(i) {
                         pack.save_values(&Self::shader_packs_dir());
+                        self.native_shaders.check_now();
                     }
                 }
                 Event::OpenShaderPackFolder => {

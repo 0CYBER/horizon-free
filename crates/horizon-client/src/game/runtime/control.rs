@@ -1164,6 +1164,9 @@ impl Game<'_> {
                 ok()
             }
             "screenshot" => {
+                // Reconcile any newly picked pack, saved options, or in-flight async native build
+                // before arming the screenshot so the captured frame uses the requested pack.
+                self.settle_native_shader_pack();
                 let renderer = self.renderer.as_mut().ok_or("no renderer yet")?;
                 arg(1)?;
                 // The rest of the line: a path may hold spaces.

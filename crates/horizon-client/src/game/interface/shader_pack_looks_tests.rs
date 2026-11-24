@@ -248,6 +248,7 @@ fn a_world_held_for_a_pack_that_no_longer_builds_follows_no_pack() {
         file(horizon_shader_api::MANIFEST, &manifest(false));
         file("material.wgsl", "fn material(input: MaterialInput) -> Surface {");
         game.tick_native_shader_pack(files.path());
+        game.wait_native_shader_pack();
         frame(game);
         frame(game);
         let renderer = game.renderer.as_ref().unwrap();

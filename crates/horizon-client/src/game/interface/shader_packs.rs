@@ -1297,23 +1297,25 @@ mod block_id_tests {
 /// their sprite layer, not their block. A layer takes the id of the block named like its sprite
 /// (`block/oak_leaves` for `oak_leaves`, and still/flow sprites for their fluid), else the id
 /// most blocks drawing it share (ties: the lowest); -1 when no block drawing it has one.
-/// y is 1 for the fluid sprites, 0 otherwise (`fluid_pairs`).
-pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec<i32> {
-    let layers = pack
-        .render
-        .sprite_layers
-        .values()
-        .max()
-        .map_or(0, |l| l + 1) as usize;
-    let sprite = |name: &str| pack.render.sprite_layers.get(name).copied();
+/// Sprite-layer `(id, fluid)` pairs from `block.properties` using the `Arc`-backed parts of
+/// `PackResources` so a background native shader build can compute material block IDs without
+/// borrowing `Game`. `y` is 1 for fluid sprites, 0 otherwise (`fluid_pairs`).
+pub(super) fn block_id_table_from(
+    render: &horizon_client::assets::RenderAssets,
+    assets: &horizon_client::assets::Assets,
+    layer_names: &HashMap<u32, String>,
+    ids: &BlockIds,
+) -> Vec<i32> {
+    let layers = render.sprite_layers.values().max().map_or(0, |l| l + 1) as usize;
+    let sprite = |name: &str| render.sprite_layers.get(name).copied();
     let fluids = ["water_still", "water_flow", "lava_still", "lava_flow"]
         .map(|f| sprite(&format!("minecraft:block/{f}")));
     let mut table = fluid_pairs(layers, fluids.into_iter().flatten());
     if ids.is_empty() {
         return table;
     }
-    let registry = pack.assets.registry;
-    let catalog = &pack.render.model_catalog;
+    let registry = assets.registry;
+    let catalog = &render.model_catalog;
     // (layer, id) -> (a block named like the sprite, the blocks).
     let mut votes = BlockIdVotes::default();
     for i in 0..registry.len() {
@@ -1330,7 +1332,7 @@ pub(super) fn block_id_table(pack: &super::PackResources, ids: &BlockIds) -> Vec
                 layer,
                 id,
                 &state.name,
-                pack.layer_names.get(&layer).map(String::as_str),
+                layer_names.get(&layer).map(String::as_str),
             );
         };
         // Fluids draw from their own sprites.

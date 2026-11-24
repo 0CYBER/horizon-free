@@ -1398,6 +1398,11 @@ impl Loading {
             if self.settings.running_pack.as_deref() != pack {
                 self.settings.running_pack = pack.map(str::to_owned);
             }
+            self.menu.options.set_shader_pack_loading(
+                self.renderer
+                    .as_ref()
+                    .is_some_and(|r| r.shader_pack_loading()),
+            );
             let output = self
                 .renderer
                 .as_ref()

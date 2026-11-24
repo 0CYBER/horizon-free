@@ -563,6 +563,7 @@
   "No shader packs yet: open the pack folder and put some in it.": "Noch keine Shader-Pakete: Öffne den Paketordner und lege welche hinein.",
   "Pick a shader pack. Picking the one in use turns shaders off.": "Wähle ein Shader-Paket. Das verwendete erneut zu wählen schaltet Shader aus.",
   "Changed options apply with Apply, or when you leave.": "Geänderte Optionen gelten mit Anwenden oder beim Verlassen.",
+  "Applying shader pack...": "Shader-Paket wird angewendet …",
   "Pack settings": "Paketeinstellungen",
   "Built-in settings": "Integrierte Einstellungen",
   "%s settings": "Einstellungen für %s",

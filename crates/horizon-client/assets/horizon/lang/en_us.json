@@ -730,6 +730,7 @@
   "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.": "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.",
   "Restart needed": "Restart needed",
   "Changed options apply with Apply, or when you leave.": "Changed options apply with Apply, or when you leave.",
+  "Applying shader pack...": "Applying shader pack...",
   "Pack settings": "Pack settings",
   "Whole pack": "Whole pack",
   "Reset all": "Reset all",

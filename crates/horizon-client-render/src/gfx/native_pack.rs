@@ -2,10 +2,33 @@
 //! read, its sky, material, entity and post stages, and the timer of their passes.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Mat4;
 use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
+
+/// Failure to build a `NativePack`: either cancelled because a newer build superseded it, or
+/// refused with the reason to show the player.
+#[derive(Debug)]
+pub enum BuildError {
+    Cancelled,
+    Refused(String),
+}
+
+impl From<String> for BuildError {
+    fn from(reason: String) -> Self {
+        Self::Refused(reason)
+    }
+}
+
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), BuildError> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(BuildError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
 
 use crate::mesher::Vertex;
 
@@ -303,6 +326,34 @@ impl NativePack {
         constants: &[(String, f64)],
         (lights, sources): (super::block_light::LightTable, super::ray_lights::Sources),
     ) -> Result<(Self, Vec<String>), String> {
+        let cancel = AtomicBool::new(false);
+        Self::new_cancellable(
+            device,
+            queue,
+            terrain,
+            report,
+            constants,
+            (lights, sources),
+            &cancel,
+        )
+        .map_err(|e| match e {
+            BuildError::Refused(reason) => reason,
+            BuildError::Cancelled => "cancelled".into(),
+        })
+    }
+
+    /// As [`Self::new`], checking `cancel` between stages and passes so a superseded background
+    /// build stops early and drops partial GPU pipelines on the worker thread.
+    pub fn new_cancellable(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        terrain: &TerrainShape<'_>,
+        report: Report,
+        constants: &[(String, f64)],
+        (lights, sources): (super::block_light::LightTable, super::ray_lights::Sources),
+        cancel: &AtomicBool,
+    ) -> Result<(Self, Vec<String>), BuildError> {
+        check_cancelled(cancel)?;
         // A backend may refuse a layout or pipeline the pack asks for (a stage's bindings
         // past its sampled-texture limit, say, as OpenGL's 16 was before #10095): the pack
         // is refused with that error instead of a validation panic in the renderer. A stage
@@ -310,12 +361,23 @@ impl NativePack {
         // internal error, which a validation scope lets through: each scope takes both.
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let built = Self::build(device, queue, terrain, report, constants, (lights, sources));
+        let built = Self::build(
+            device,
+            queue,
+            terrain,
+            report,
+            constants,
+            (lights, sources),
+            cancel,
+        );
         let internal = pollster::block_on(internal.pop());
         let refused = internal.or(pollster::block_on(validation.pop()));
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BuildError::Cancelled);
+        }
         match (built, refused) {
             (Ok(built), None) => Ok(built),
-            (Ok(_), Some(e)) => Err(e.to_string()),
+            (Ok(_), Some(e)) => Err(BuildError::Refused(e.to_string())),
             (Err(e), _) => Err(e),
         }
     }
@@ -327,10 +389,13 @@ impl NativePack {
         report: Report,
         constants: &[(String, f64)],
         (lights, sources): (super::block_light::LightTable, super::ray_lights::Sources),
-    ) -> Result<(Self, Vec<String>), String> {
+        cancel: &AtomicBool,
+    ) -> Result<(Self, Vec<String>), BuildError> {
+        check_cancelled(cancel)?;
         let (globals, format) = (terrain.globals, terrain.format);
         let kept = super::native_post::kept::Signature::of(&report, constants);
         let textures = super::native_post::pack_textures(device, queue, &report);
+        check_cancelled(cancel)?;
         // `[shadow]`, unless its option is off, at the size its options pick.
         let chosen = report
             .shadow
@@ -361,6 +426,7 @@ impl NativePack {
         }
         let reach = report.manifest.kept.reach;
         frame.epochs = (kept.as_ref()).map(|_| super::native_post::kept::Epochs::new(reach));
+        check_cancelled(cancel)?;
         // `[displacement]`, unless its option is off; nothing to displace without heights.
         let displacement = report
             .manifest
@@ -386,6 +452,7 @@ impl NativePack {
                     terrain.looks,
                 )
             });
+        check_cancelled(cancel)?;
         let shadow = chosen
             .as_ref()
             .map(|s| {
@@ -432,6 +499,7 @@ impl NativePack {
         let vanilla_sun = keeps(|s| s.sun);
         let vanilla_moon = keeps(|s| s.moon);
         let vanilla_stars = keeps(|s| s.stars);
+        check_cancelled(cancel)?;
         let weather = report
             .stages
             .iter()
@@ -460,6 +528,7 @@ impl NativePack {
                 StageKind::Post | StageKind::Compute | StageKind::BeforeWorld
             )
         });
+        check_cancelled(cancel)?;
         let sky = others
             .iter()
             .find(|s| s.kind == StageKind::Sky)
@@ -473,6 +542,7 @@ impl NativePack {
                 NativeSky::new(device, globals, (&frame, kept), stage, constants, format)
             })
             .transpose()?;
+        check_cancelled(cancel)?;
         let mut material = others
             .iter()
             .find(|s| s.kind == StageKind::Material)
@@ -499,6 +569,7 @@ impl NativePack {
                 )
             })
             .transpose()?;
+        check_cancelled(cancel)?;
         let mut entity = others
             .iter()
             .find(|s| s.kind == StageKind::Entity)
@@ -512,6 +583,7 @@ impl NativePack {
                 NativeEntity::new(device, format, groups, &frame, stage, constants, manifest)
             })
             .transpose()?;
+        check_cancelled(cancel)?;
         // The decode and the tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         // A `[ray_tracing]` pack's post passes as the check built them against the scene; its
@@ -525,7 +597,10 @@ impl NativePack {
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
             .collect();
         let manifest = &report.manifest;
-        let mut post = NativePost::new(device, post, manifest, constants, format, &frame, tonemap)?;
+        let mut post = NativePost::new_cancellable(
+            device, post, manifest, constants, format, &frame, tonemap, cancel,
+        )?;
+        check_cancelled(cancel)?;
         // One scene for every stage, as `frame.has_ray_tracing` says: where the material or the
         // entity stage traces and the device refuses its pipelines, the other stages keep
         // missing too.
@@ -545,12 +620,13 @@ impl NativePack {
         let tracing = !scenes.is_empty() || post.computes_trace();
         let posted = tracing && !refused && {
             let shape = super::native_post::trace::TraceShape::of(terrain, entities, lights);
-            post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
+            post.trace_scene_cancellable(device, scenes, constants, &shape, &frame.pbr, cancel)?
         };
         if refused || (tracing && !posted) {
             material.iter_mut().for_each(|m| m.scene = None);
             entity.iter_mut().for_each(|e| e.scene = None);
         }
+        check_cancelled(cancel)?;
         // Nothing is built against the scene that reads them (refused, or past the device's
         // limits): no list to keep.
         let terrain_lights = material.as_ref().and_then(|m| m.scene.as_ref());

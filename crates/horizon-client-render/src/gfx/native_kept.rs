@@ -243,21 +243,27 @@ fn before_world_binds(e: &wgpu::BindGroupLayoutEntry) -> bool {
 /// layouts hold the group's `shared` entries (a `[[before_world]]` pass's of them, as
 /// `before_world_binds`) and its kept ones. None without `[[resource]]`: a compute pass would
 /// have nothing to write, so it doesn't run. An error where the device can't run or make them
-/// (`unmet`) or refuses a compute pipeline.
-pub(super) fn chain(
+/// (`unmet`) or refuses a compute pipeline. Checks `cancel` between passes.
+pub(super) fn chain_cancellable(
     device: &wgpu::Device,
     manifest: &Manifest,
     stages: Vec<CheckedStage>,
     shared: &[wgpu::BindGroupLayoutEntry],
     constants: &[(String, f64)],
-) -> Result<(Vec<CheckedStage>, Option<KeptStore>), String> {
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(Vec<CheckedStage>, Option<KeptStore>), super::super::native_pack::BuildError> {
+    use super::super::native_pack::BuildError;
+    use std::sync::atomic::Ordering;
     let kept = &manifest.kept;
     let computing = |s: &CheckedStage| s.kind != StageKind::Post;
     if kept.resources.is_empty() {
         return Ok((stages.into_iter().filter(|s| !computing(s)).collect(), None));
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(BuildError::Cancelled);
+    }
     if let Some(why) = unmet(device, manifest, &stages, shared) {
-        return Err(why);
+        return Err(BuildError::Refused(why));
     }
     let (computes, ordinary): (Vec<_>, Vec<_>) = stages.into_iter().partition(computing);
     let mut store = KeptStore::declared(kept, [1, 1]);
@@ -311,12 +317,18 @@ pub(super) fn chain(
     let world = kept.before_world.iter().map(|entry| (entry, None));
     let (mut computes, mut worlds) = (computes.into_iter(), worlds.into_iter());
     for (entry, at) in post.chain(world) {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BuildError::Cancelled);
+        }
         let stage = match at {
             Some(_) => computes.next(),
             None => worlds.next(),
         };
         let Some(stage) = stage else {
-            return Err(format!("{}: no checked compute stage", entry.file));
+            return Err(BuildError::Refused(format!(
+                "{}: no checked compute stage",
+                entry.file
+            )));
         };
         let layout = &store.passes[ordinary.len() + store.computes.len()].pipeline;
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -324,7 +336,7 @@ pub(super) fn chain(
         let pipeline = compute_pipeline(device, &stage.label, layout, stage.module, constants);
         let internal = pollster::block_on(internal.pop());
         if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
-            return Err(format!("{}: {e}", stage.file));
+            return Err(BuildError::Refused(format!("{}: {e}", stage.file)));
         }
         store.computes.push(ComputePass {
             label: stage.label,

@@ -571,6 +571,8 @@ pub mod native_entity;
 mod native_executor;
 mod native_material;
 mod native_pack;
+mod native_pack_async;
+pub use native_pack_async::{NativePackData, NativePackOutcome};
 mod native_post;
 use crate::render_slots as native_render;
 mod native_shadow;
@@ -1867,6 +1869,10 @@ pub struct Renderer {
     /// past the ones in use, the Mipmap Levels option's levels), for native mods
     /// (`WorldDrawn::block_sprites`).
     sprite_views: Vec<wgpu::TextureView>,
+    /// Incremented whenever `sprite_views` is rebuilt (e.g. Mipmap Levels or texture filtering
+    /// changes), so an in-flight async native RT pack build compiled against older views is
+    /// rejected as stale and rebuilt.
+    sprite_views_generation: u64,
     /// Nearest, repeating, nearest mip level: for drawing a sprite's texels sharp elsewhere.
     sprite_nearest: wgpu::Sampler,
     mip_levels: u32,
@@ -2064,6 +2070,8 @@ pub struct Renderer {
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// A `shaders/` pack whose pipelines build on a thread of their own (`load_shader_pack`).
     pack_loading: Option<PackLoading>,
+    /// Horizon's own shader pack building on a background worker thread (`load_native_shader_pack`).
+    native_pack_loader: native_pack_async::NativePackLoader,
     /// The manifest of the Horizon pack `external` runs, as the game reads it.
     pack_metadata: Option<native_pack::Metadata>,
     /// What `external` does in the renderer's place, kept from its install on (`replace_executor`).
@@ -5084,6 +5092,7 @@ impl Renderer {
             sprite_unused,
             sprite_arrays: bound_arrays,
             sprite_views,
+            sprite_views_generation: 0,
             mip_levels,
             mipmaps: mip_levels - 1,
             terrain_layout: bindings,
@@ -5185,6 +5194,7 @@ impl Renderer {
             hdr_driver,
             pack_post: None,
             pack_loading: None,
+            native_pack_loader: native_pack_async::NativePackLoader::default(),
             pack_metadata: None,
             executor: None,
             pass_timing: false,
@@ -7415,9 +7425,19 @@ impl Renderer {
         let report = self.install_shader_pack(loading.dimension, built.map(Some));
         Some((loading.dimension, loading.label, loading.started, report))
     }
-    /// Whether a `shaders/` pack is still building (`load_shader_pack`).
+    /// Whether a shader pack (either `shaders/` or Horizon native) is still building in the
+    /// background.
     pub fn shader_pack_loading(&self) -> bool {
-        self.pack_loading.is_some()
+        self.pack_loading.is_some() || self.native_pack_loader.is_loading()
+    }
+    /// Whether a Horizon native shader pack is still building in the background
+    /// (`load_native_shader_pack`).
+    pub fn native_pack_loading(&self) -> bool {
+        self.native_pack_loader.is_loading()
+    }
+    /// Cancels any queued or in-flight background build of a Horizon native shader pack.
+    pub fn cancel_native_shader_pack(&mut self) {
+        self.native_pack_loader.cancel();
     }
     /// The finalized classic pack's material-map demand, even while no maps are loaded.
     pub fn shader_pack_material_maps(&self) -> bool {
@@ -7437,6 +7457,7 @@ impl Renderer {
     pub fn drop_shader_packs(&mut self) {
         self.world_held = false;
         self.pack_loading = None;
+        self.native_pack_loader.cancel();
         self.pack_post = None;
         self.replace_executor(None);
         self.pack_atlas = None;
@@ -7456,20 +7477,196 @@ impl Renderer {
     pub fn set_pack_lava_layers(&mut self, layers: Vec<u16>) {
         self.pack_lava_layers = layers;
     }
+    /// Builds one of Horizon's own shader packs on a background worker thread while the
+    /// currently running pack (if any) keeps drawing. A newer call supersedes and cancels any
+    /// earlier in-flight build (latest-wins).
+    ///
+    /// `prepare` runs on the worker thread and produces the checked pack data plus caller metadata
+    /// `M`, or `Err(problems)`. Poll with [`Self::poll_native_shader_pack`] or block
+    /// deterministically with [`Self::wait_native_shader_pack`].
+    pub fn load_native_shader_pack<C, M, F>(
+        &mut self,
+        context: C,
+        prepare: F,
+    ) -> std::result::Result<(), (C, String)>
+    where
+        C: Send + 'static,
+        M: Send + 'static,
+        F: FnOnce(
+                &std::sync::atomic::AtomicBool,
+            ) -> std::result::Result<(NativePackData, M), Vec<String>>
+            + Send
+            + 'static,
+    {
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let adapter = self.adapter.clone();
+        let owned = native_pack_async::OwnedTerrainShape {
+            globals: self.terrain_layout.clone(),
+            flat: self.flat.as_ref().map(|f| f.draw_layout.clone()),
+            sprites: self.terrain_sprites,
+            sprite_views: self.sprite_views.clone(),
+            format: self.output.frame.format,
+            linear: self.output.frame.linear_light,
+            msaa: self.msaa.built(),
+            entities: self.entity_bindings.clone(),
+            retained_entities: self.static_entity_pipeline.get_bind_group_layout(1),
+            weather_groups: [
+                self.weather.entity_layout.clone(),
+                self.weather.time_layout.clone(),
+            ],
+            pbr: self
+                .pbr_maps
+                .as_ref()
+                .and_then(|arrays| arrays.first().cloned()),
+            looks_layout: self.looks_layout.clone(),
+        };
+        let snapshot = self.native_build_snapshot();
+        self.native_pack_loader
+            .submit(context, move |cancel| {
+                use std::sync::atomic::Ordering;
+                if cancel.load(Ordering::Relaxed) {
+                    return native_pack_async::WorkerOutcome::Cancelled;
+                }
+                let ((report, constants, sprite_tags, sprite_materials, lights), meta) =
+                    match prepare(cancel) {
+                        Ok(prepared) => prepared,
+                        Err(_) if cancel.load(Ordering::Relaxed) => {
+                            return native_pack_async::WorkerOutcome::Cancelled;
+                        }
+                        Err(problems) => {
+                            return native_pack_async::WorkerOutcome::Refused(problems);
+                        }
+                    };
+                if cancel.load(Ordering::Relaxed) {
+                    return native_pack_async::WorkerOutcome::Cancelled;
+                }
+                let terrain_looks = match looks::wanted(&adapter, report.looks()) {
+                    Ok(wanted) => wanted,
+                    Err(why) => return native_pack_async::WorkerOutcome::Refused(vec![why]),
+                };
+                let looks_layout = terrain_looks.then(|| {
+                    owned
+                        .looks_layout
+                        .clone()
+                        .unwrap_or_else(|| looks::layout(&device))
+                });
+                let metadata = native_pack::Metadata::of(&report);
+                let terrain =
+                    owned.as_shape(&sprite_tags, &sprite_materials, looks_layout.as_ref());
+                match native_pack::NativePack::new_cancellable(
+                    &device, &queue, &terrain, report, &constants, lights, cancel,
+                ) {
+                    Ok((pack, labels)) => native_pack_async::WorkerOutcome::Ready {
+                        built: Box::new(native_pack_async::BuiltNativePack {
+                            pack,
+                            labels,
+                            metadata,
+                            looks_layout,
+                            snapshot,
+                        }),
+                        meta: Box::new(meta),
+                    },
+                    Err(native_pack::BuildError::Cancelled) => {
+                        native_pack_async::WorkerOutcome::Cancelled
+                    }
+                    Err(native_pack::BuildError::Refused(why)) => {
+                        native_pack_async::WorkerOutcome::Refused(vec![why])
+                    }
+                }
+            })
+            .map_err(|(context, e)| (context, format!("no thread to build shader pack on: {e}")))
+    }
+    fn native_build_snapshot(&self) -> native_pack_async::BuildSnapshot {
+        native_pack_async::BuildSnapshot {
+            format: self.output.frame.format,
+            linear: self.output.frame.linear_light,
+            sprite_views_generation: self.sprite_views_generation,
+        }
+    }
+    /// Non-blocking poll for a finished background native shader pack build. Installs the pack
+    /// into the renderer when ready.
+    pub fn poll_native_shader_pack<C: 'static, M: 'static>(
+        &mut self,
+    ) -> Option<NativePackOutcome<C, M>> {
+        let done = self.native_pack_loader.poll()?;
+        Some(self.finish_native_shader_pack(done))
+    }
+    /// Waits for any in-flight background native shader pack build to finish and installs it.
+    /// Returns `None` if no native pack build is in flight.
+    pub fn wait_native_shader_pack<C: 'static, M: 'static>(
+        &mut self,
+    ) -> Option<NativePackOutcome<C, M>> {
+        let done = self.native_pack_loader.wait()?;
+        Some(self.finish_native_shader_pack(done))
+    }
+    fn finish_native_shader_pack<C: 'static, M: 'static>(
+        &mut self,
+        done: native_pack_async::CompletedJob,
+    ) -> NativePackOutcome<C, M> {
+        let context = *done
+            .context
+            .downcast::<C>()
+            .expect("native shader pack context type");
+        let outcome = match done.outcome {
+            Ok(outcome) => outcome,
+            Err(panic) => {
+                return NativePackOutcome::Refused {
+                    context,
+                    problems: vec![format!("building it panicked: {panic}")],
+                };
+            }
+        };
+        match outcome {
+            native_pack_async::WorkerOutcome::Cancelled => NativePackOutcome::Cancelled,
+            native_pack_async::WorkerOutcome::Refused(problems) => {
+                NativePackOutcome::Refused { context, problems }
+            }
+            native_pack_async::WorkerOutcome::Ready { built, meta } => {
+                let meta = *meta
+                    .downcast::<M>()
+                    .expect("native shader pack metadata type");
+                if built.snapshot != self.native_build_snapshot() {
+                    return NativePackOutcome::Stale;
+                }
+                self.world_held = false;
+                if self.output.frame.format != LINEAR_FRAME
+                    && !std::mem::replace(&mut self.frame_kept_logged, true)
+                {
+                    log::info!(
+                        "Horizon renderer: the {:?} frame stays until the renderer is made again; a shader pack picked or dropped since runs on it",
+                        self.output.frame.format
+                    );
+                }
+                if let Some(layout) = built.looks_layout {
+                    self.looks_layout.get_or_insert(layout);
+                }
+                if let Some(refused) = self.replace_executor(Some(Box::new(built.pack))) {
+                    return NativePackOutcome::Refused {
+                        context,
+                        problems: vec![refused],
+                    };
+                }
+                self.pack_metadata = Some(built.metadata);
+                self.pack_post = None;
+                self.pack_atlas = None;
+                self.pack_material_atlases = None;
+                NativePackOutcome::Installed {
+                    context,
+                    labels: built.labels,
+                    meta,
+                }
+            }
+        }
+    }
     /// Runs the sky, material and post stages of one of Horizon's own shader packs from now
     /// on (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
     /// stages' labels; on an error the pack that ran keeps running.
     pub fn set_native_shader_pack(
         &mut self,
-        pack: Option<(
-            horizon_shader_api::Report,
-            Vec<(String, f64)>,
-            Vec<(u32, u32)>,
-            Vec<(u32, u32)>,
-            // The `[[lights]]` colours, and the light sources rays read (`NativePack::new`).
-            (block_light::LightTable, ray_lights::Sources),
-        )>,
+        pack: Option<NativePackData>,
     ) -> std::result::Result<Vec<String>, String> {
+        self.native_pack_loader.cancel();
         self.world_held = false;
         let linear = pack.is_some();
         if (linear || self.output.frame.format == LINEAR_FRAME)
@@ -7680,6 +7877,7 @@ impl Renderer {
             Some(self.mipmaps + 1),
             self.sprite_arrays,
         );
+        self.sprite_views_generation = self.sprite_views_generation.wrapping_add(1);
         self.group = terrain_group(
             &self.device,
             "Horizon terrain resources",

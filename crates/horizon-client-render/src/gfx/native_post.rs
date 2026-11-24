@@ -1130,6 +1130,7 @@ impl NativePost {
     /// store runs the compute ones) with the option values `constants`, the last onto `picture`,
     /// and `tonemap` (else Horizon's) onto a screen of `format`. Errors name the pass wgpu
     /// refused.
+    #[cfg(test)]
     pub fn new(
         device: &wgpu::Device,
         stages: Vec<CheckedStage>,
@@ -1139,6 +1140,29 @@ impl NativePost {
         frame: &NativeFrame,
         tonemap: Option<&CheckedStage>,
     ) -> Result<Self, String> {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        Self::new_cancellable(
+            device, stages, manifest, constants, format, frame, tonemap, &cancel,
+        )
+        .map_err(|e| match e {
+            super::native_pack::BuildError::Refused(reason) => reason,
+            super::native_pack::BuildError::Cancelled => "cancelled".into(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_cancellable(
+        device: &wgpu::Device,
+        stages: Vec<CheckedStage>,
+        manifest: &horizon_shader_api::Manifest,
+        constants: &[(String, f64)],
+        format: wgpu::TextureFormat,
+        frame: &NativeFrame,
+        tonemap: Option<&CheckedStage>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self, super::native_pack::BuildError> {
+        use super::native_pack::BuildError;
+        use std::sync::atomic::Ordering;
         let targets = manifest.post_targets();
         let plan = plan(&kept::outputs(manifest, &targets));
         let float = wgpu::TextureSampleType::Float { filterable: true };
@@ -1166,7 +1190,8 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
-        let (stages, kept) = kept::chain(device, manifest, stages, &entries, constants)?;
+        let (stages, kept) =
+            kept::chain_cancellable(device, manifest, stages, &entries, constants, cancel)?;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,
@@ -1180,6 +1205,9 @@ impl NativePost {
         });
         let mut passes = Vec::with_capacity(stages.len());
         for (i, stage) in stages.into_iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(BuildError::Cancelled);
+            }
             let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
             let target = kept::target(&kept, plan[i].writes);
@@ -1188,9 +1216,12 @@ impl NativePost {
             let pipeline = post_pipeline(device, label, layout, stage.module, constants, target);
             let internal = pollster::block_on(internal.pop());
             if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
-                return Err(format!("{}: {e}", stage.file));
+                return Err(BuildError::Refused(format!("{}: {e}", stage.file)));
             }
             passes.push((stage.label, pipeline));
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BuildError::Cancelled);
         }
         let source = tonemap.map_or_else(
             || StageKind::Tonemap.prelude() + DEFAULT_TONEMAP,
@@ -1198,7 +1229,7 @@ impl NativePost {
         ) + &tonemap_entries(tonemap.is_none());
         let file = tonemap.map_or("<tonemap>", |s| s.file.as_str());
         let module = naga::front::wgsl::parse_str(&source)
-            .map_err(|e| format!("{file}: {}", e.emit_to_string(&source)))?;
+            .map_err(|e| BuildError::Refused(format!("{file}: {}", e.emit_to_string(&source))))?;
         let present = present_constants(&module, constants);
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -1214,7 +1245,7 @@ impl NativePost {
         let pipeline = fullscreen_pipeline(device, "Tonemap", &module, stages, format, &present);
         let internal = pollster::block_on(internal.pop());
         if let Some(e) = internal.or(pollster::block_on(validation.pop())) {
-            return Err(format!("{file}: {e}"));
+            return Err(BuildError::Refused(format!("{file}: {e}")));
         }
         let display = Display {
             decoder: frame.decoder.clone(),

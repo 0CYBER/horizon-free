@@ -112,6 +112,10 @@ impl Game<'_> {
             || self.remote_backlog_delays_frame()
             || !self.world.dirty_light.is_empty()
             || !self.world.dirty_sections.is_empty()
+            || self
+                .renderer
+                .as_ref()
+                .is_some_and(|r| r.native_pack_loading())
     }
 
     /// Why a sequence can't start (or go on) now, if it can't.
@@ -197,6 +201,9 @@ impl Game<'_> {
         if self.screenshot_sequence.is_some() || self.export.is_some() {
             return Err("a capture is already running".into());
         }
+        // Reconcile any newly picked pack, saved options, or in-flight async native build before
+        // snapshotting the scene so the sequence never captures a stale or half-applied pack.
+        self.settle_native_shader_pack();
         let renderer = self.renderer.as_ref().ok_or("no renderer yet")?;
         if self.pending_screenshot.is_some() || renderer.screenshot.is_some() {
             return Err("a screenshot is already pending".into());

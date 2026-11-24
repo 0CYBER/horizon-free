@@ -356,6 +356,7 @@ fn with_scene<T>(
         .map(|e| e.to_string());
     let built = match (built, refused) {
         (Ok(built), None) => built,
+        (Err(e), _) if e == "cancelled" => return None,
         (Err(e), _) | (_, Some(e)) => {
             log::warn!("Horizon renderer: the shader pack's rays miss everything: {e}");
             return None;
@@ -498,21 +499,28 @@ impl NativePost {
     /// compute passes whose files trace (`ComputePass::scene`), where the device traces rays and
     /// takes the bindings; else every pass keeps missing every ray, and the log says why once.
     /// Returns whether they trace. `pbr` is the frame's LabPBR maps (`NativeFrame::pbr`).
-    pub(in crate::gfx) fn trace_scene(
+    /// Checks `cancel` before each pass pipeline so a superseded build stops early.
+    pub(in crate::gfx) fn trace_scene_cancellable(
         &mut self,
         device: &wgpu::Device,
         scenes: Vec<(String, naga::Module)>,
         constants: &[(String, f64)],
         shape: &TraceShape<'_>,
         pbr: &[wgpu::TextureView; 2],
-    ) -> bool {
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<bool, crate::gfx::native_pack::BuildError> {
+        use crate::gfx::native_pack::BuildError;
+        use std::sync::atomic::Ordering;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BuildError::Cancelled);
+        }
         let computes: Vec<_> = (self.kept.iter_mut())
             .flat_map(|k| k.computes.iter_mut())
             .map(|p| Some((p.label.clone(), p.scene.take()?)))
             .collect();
         let ordinary = self.passes.len();
         if scenes.len() != ordinary || scenes.is_empty() && computes.iter().all(Option::is_none) {
-            return false;
+            return Ok(false);
         }
         let none = Binds {
             looks: false,
@@ -568,27 +576,38 @@ impl NativePost {
                 })
             };
             let pipeline_layouts: Vec<_> = layouts.iter().map(pipeline_layout).collect();
-            let pipelines: Vec<wgpu::RenderPipeline> = (scenes.into_iter().enumerate())
-                .map(|(i, (label, module))| {
-                    let layout = &pipeline_layouts[i.min(pipeline_layouts.len() - 1)];
-                    let target = super::kept::target(kept, plan[i].writes);
-                    post_pipeline(device, &label, layout, module, constants, target)
-                })
-                .collect();
+            let mut pipelines = Vec::with_capacity(scenes.len());
+            for (i, (label, module)) in scenes.into_iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("cancelled".into());
+                }
+                let layout = &pipeline_layouts[i.min(pipeline_layouts.len() - 1)];
+                let target = super::kept::target(kept, plan[i].writes);
+                pipelines.push(post_pipeline(
+                    device, &label, layout, module, constants, target,
+                ));
+            }
             // The tracing compute passes' layouts come after the post passes'.
             let mut own = pipeline_layouts.iter().skip(ordinary);
-            let computes: Vec<Option<wgpu::ComputePipeline>> = (computes.into_iter())
-                .map(|scene: Option<(String, naga::Module)>| {
-                    let (label, module) = scene?;
-                    let layout = own.next()?;
-                    Some(super::kept::compute_pipeline(
-                        device, &label, layout, module, constants,
-                    ))
-                })
-                .collect();
-            Ok((pipelines, computes))
+            let mut built_computes = Vec::with_capacity(computes.len());
+            for scene in computes {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("cancelled".into());
+                }
+                let built = match scene {
+                    Some((label, module)) => own.next().map(|layout| {
+                        super::kept::compute_pipeline(device, &label, layout, module, constants)
+                    }),
+                    None => None,
+                };
+                built_computes.push(built);
+            }
+            Ok((pipelines, built_computes))
         };
         let traced = with_scene(device, (groups, &[]), shape, build);
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BuildError::Cancelled);
+        }
         self.trace = traced.map(|(made, (pipelines, computes), rays)| {
             let mut made = made.into_iter();
             let layouts = match &self.kept {
@@ -612,7 +631,7 @@ impl NativePost {
                 pbr: pbr.clone(),
             }
         });
-        self.trace.is_some()
+        Ok(self.trace.is_some())
     }
 
     /// This frame's `frame.ray_distance` when the passes trace `scene` (`run` with the same

@@ -3942,6 +3942,7 @@ impl OptionsUi {
                 } else {
                     s.shader_options = None;
                 }
+                events.extend(self.shader.screen.flush_native(s));
             }
             Page::Language => {
                 if let Some(code) = self.language_choice.take()

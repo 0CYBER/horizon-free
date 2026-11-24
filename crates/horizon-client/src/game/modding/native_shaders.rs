@@ -131,12 +131,48 @@ impl NativeShaders {
         self.looked = None;
     }
 
+    /// Forces the next `tick_native_shader_pack` to check the pack's files immediately instead of
+    /// waiting for `LOOK_EVERY` (used after explicit option Apply/save).
+    pub fn check_now(&mut self) {
+        self.looked = None;
+    }
+
+    /// Reconciles a due fingerprint scan for `path` against the last recorded stamp.
+    /// Records `stamp` on cached refusals as well as new builds so reverting to a previously
+    /// refused revision while another revision is building, then restoring the cancelled revision,
+    /// triggers a fresh build instead of hitting `stamp == self.stamp`.
+    fn reconcile_stamp(&mut self, path: &Path, stamp: Option<u64>, now: Instant) -> ScanAction {
+        self.looked = Some(now);
+        if stamp == self.stamp {
+            return ScanAction::Poll {
+                empty_stamp: stamp.is_none(),
+            };
+        }
+        if refused(path, stamp) {
+            self.stamp = stamp;
+            return ScanAction::CachedRefusal;
+        }
+        let reload = self.stamp.is_some();
+        self.stamp = stamp;
+        ScanAction::Build { stamp, reload }
+    }
+
     pub fn picking(name: &str) -> Self {
         Self {
             picked: name.to_owned(),
             ..Self::default()
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScanAction {
+    /// Fingerprint unchanged since the last scan: keep polling any in-flight build.
+    Poll { empty_stamp: bool },
+    /// The requested revision is already in the refusal cache: cancel any superseded build.
+    CachedRefusal,
+    /// A new unrefused revision should be submitted for compilation.
+    Build { stamp: Option<u64>, reload: bool },
 }
 
 impl Game<'_> {
@@ -196,146 +232,372 @@ impl Game<'_> {
         self.lit_posed_entity(start..out.len(), posed);
     }
 
-    /// Builds the pack at `path` when its files changed since it was last read.
-    pub(in crate::game) fn tick_native_shader_pack(&mut self, path: &Path) {
+    /// Polls any completed background native shader pack build and installs/reports its outcome.
+    /// Returns `true` if a finished build was discarded as stale (renderer state changed
+    /// mid-compile) and needs a rebuild.
+    pub(in crate::game) fn poll_native_shader_pack(&mut self) -> bool {
+        if self.screenshot_sequence.is_some() {
+            return false;
+        }
+        let outcome = self
+            .renderer
+            .as_mut()
+            .and_then(|r| r.poll_native_shader_pack::<NativePackJobContext, NativePackBuiltMeta>());
+        match outcome {
+            Some(outcome) => self.apply_native_pack_outcome(outcome),
+            None => false,
+        }
+    }
+
+    /// Blocks until any in-flight background native shader pack build completes and applies its
+    /// outcome. Returns `true` if the finished build was discarded as stale (renderer state
+    /// changed mid-compile) and needs a rebuild. Used by deterministic capture paths
+    /// (`HORIZON_STILL`, `screenshot-sequence`, `horizon-ctl screenshot`) and tests.
+    pub(in crate::game) fn wait_native_shader_pack(&mut self) -> bool {
+        let outcome = self
+            .renderer
+            .as_mut()
+            .and_then(|r| r.wait_native_shader_pack::<NativePackJobContext, NativePackBuiltMeta>());
+        match outcome {
+            Some(outcome) => self.apply_native_pack_outcome(outcome),
+            None => false,
+        }
+    }
+
+    /// Reconciles the currently selected native shader pack before arming a deterministic capture
+    /// (`horizon-ctl screenshot`, `screenshot-sequence`): resolves any newly picked pack or saved
+    /// option values, starts its build immediately, and waits for it to finish and install.
+    pub(in crate::game) fn settle_native_shader_pack(&mut self) {
+        let selected = super::shader_packs::picked_pack(&self.settings).to_owned();
+        let path = self.native_shaders.resolve_path(
+            &Self::shader_packs_dir(),
+            &selected,
+            super::shader_packs::dev_pack().is_some(),
+        );
+        let file = path.file_name().unwrap_or_default().to_string_lossy();
+        let picked = if selected.is_empty()
+            || super::shader_packs::active_pack(&file, &self.settings.mods).is_empty()
+        {
+            String::new()
+        } else {
+            path.to_string_lossy().into_owned()
+        };
+        if self.native_shaders.picked != picked {
+            self.native_shaders.select(&picked);
+            self.set_translucent_layers(Vec::new());
+            self.pack_ids = None;
+            if let Some(renderer) = &mut self.renderer {
+                renderer.drop_shader_packs();
+            }
+        }
+        // Ensure the renderer's frame format matches the newly selected pack before compiling it.
+        self.follow_frame();
+        let native = !picked.is_empty()
+            && ((super::shader_packs::dev_pack().is_none() && selected.starts_with("horizon:"))
+                || horizon_shader_api::package::is_pack(&path));
+        if native {
+            for _ in 0..2 {
+                self.native_shaders.check_now();
+                let mut stale = self.tick_native_shader_pack(&path);
+                if !stale
+                    && self
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|r| r.native_pack_loading())
+                {
+                    stale = self.wait_native_shader_pack();
+                }
+                if !stale {
+                    break;
+                }
+            }
+        } else if self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.native_pack_loading())
+        {
+            self.wait_native_shader_pack();
+        }
+    }
+
+    /// Builds the pack at `path` on a background worker thread when its files changed since it was
+    /// last read, while the currently running pack keeps drawing. Under `HORIZON_STILL`, waits for
+    /// the build synchronously so every frame stays deterministic. Returns `true` if a finished
+    /// build was discarded as stale and needs a rebuild.
+    pub(in crate::game) fn tick_native_shader_pack(&mut self, path: &Path) -> bool {
         // A reload would replace the pack a `screenshot-sequence` draws: it waits for the reply.
         if self.screenshot_sequence.is_some() {
-            return;
+            return false;
         }
         let now = Instant::now();
-        let state = &mut self.native_shaders;
-        if state.looked.is_some_and(|t| now - t < LOOK_EVERY) {
-            return;
+        let scan_due = self
+            .native_shaders
+            .looked
+            .is_none_or(|t| now - t >= LOOK_EVERY);
+        // Reconcile any due fingerprint scan BEFORE polling completions so applying a newer
+        // revision supersedes and discards a just-finished build of an older revision rather than
+        // installing it for one frame and resetting TAA history needlessly.
+        if !scan_due {
+            return self.poll_native_shader_pack();
         }
-        state.looked = Some(now);
         let stamp = fingerprint(path);
-        if stamp == state.stamp {
-            // A pack gone (no stamp) is never read: a renderer made again holds the world for
-            // nothing (`release_world`, which leaves a running pack's alone).
-            if stamp.is_none()
-                && let Some(renderer) = &mut self.renderer
-            {
-                renderer.release_world();
+        let (stamp, reload) = match self.native_shaders.reconcile_stamp(path, stamp, now) {
+            ScanAction::Poll { empty_stamp } => {
+                let stale = self.poll_native_shader_pack();
+                // A pack gone (no stamp) is never read: a renderer made again holds the world for
+                // nothing (`release_world`, which leaves a running pack's alone).
+                if empty_stamp
+                    && let Some(renderer) = &mut self.renderer
+                    && !renderer.native_pack_loading()
+                {
+                    renderer.release_world();
+                }
+                return stale;
             }
-            return;
-        }
-        if refused(path, stamp) {
-            // A renderer made again for this pack holds the world for it (`release_world`).
-            if let Some(renderer) = &mut self.renderer {
-                renderer.release_world();
+            ScanAction::CachedRefusal => {
+                // The requested revision is already known to fail: cancel any in-flight build for
+                // an older revision so it cannot install over this refusal.
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.cancel_native_shader_pack();
+                    renderer.release_world();
+                }
+                return false;
             }
-            return;
-        }
-        let reload = state.stamp.is_some();
-        state.stamp = stamp;
-        let Some(renderer) = &mut self.renderer else {
-            return;
+            ScanAction::Build { stamp, reload } => (stamp, reload),
         };
-        let manifest_refused = manifest_refused(path);
-        let running = renderer.shader_pack_kind() == Some("native");
-        let read = match &manifest_refused {
-            Some(why) => Err(vec![why.clone()]),
-            None => Pack::read(path).map_err(|e| vec![e]),
-        };
-        let result = read.and_then(|pack| {
-            let report = check(&pack)
-                .map_err(|p| p.iter().map(ToString::to_string).collect::<Vec<String>>())?;
-            // The player's values (the pack's Shader Options page), else the defaults.
-            let options = &pack.manifest.options;
-            let values_pack =
-                horizon_client::shader_pack_list::native_values_pack(path, &pack.manifest.id);
-            let values = horizon_client::shader_pack_list::load_values(&values_pack, options);
-            let constants = options.iter().map(|o| o.id.clone()).zip(values).collect();
-            let sprites = || {
-                let layers = self.pack.render.sprite_layers.iter();
-                layers.map(|(name, layer)| (name.as_str(), *layer))
-            };
-            let tags = pack.manifest.sprite_tags(sprites());
-            let mut materials = pack.manifest.sprite_materials(sprites());
-            // `blocks` lists: the sprites their models draw with, where no pattern named them.
-            let listed = pack.manifest.material_blocks();
-            if !listed.is_empty() {
-                let macros = horizon_shaders::Macros::standard();
-                let properties = horizon_shaders::Properties::parse(&listed, &macros);
-                let ids = horizon_shaders::BlockIds::parse(&properties);
-                let table = super::shader_packs::block_id_table(&self.pack, &ids);
-                for (layer, id) in table.iter().step_by(2).enumerate() {
-                    let layer = layer as u32;
-                    if *id > 0 && !materials.iter().any(|m| m.0 == layer) {
-                        materials.push((layer, *id as u32));
-                    }
-                }
-                materials.sort_unstable();
-            }
-            let layers = sprites().map(|(_, l)| l as usize + 1).max().unwrap_or(0);
-            let translucent = pack.manifest.translucent_layers(&materials, layers);
-            // Each light-giving block state's `[[lights]]` colour, with its level.
-            let mut lights = horizon_client::gfx::block_light::LightTable::default();
-            if !pack.manifest.lights.is_empty() {
-                for (id, state) in self.res.facts().states.iter().enumerate() {
-                    if state.emission == 0 {
-                        continue;
-                    }
-                    if let Some(color) = pack.manifest.light_of(&state.name) {
-                        lights.insert(id as u32, (color, state.emission));
-                    }
-                }
-            }
-            // Each light source a `[ray_tracing] lights = true` pack's rays read: its
-            // `[[lights]]` colour, its level and its model's `[[materials]]` id (lava left out),
-            // where a stage reads them and the device traces.
-            let mut sources = horizon_client::gfx::ray_lights::Sources::default();
-            let traces_lights = report.stages.iter().any(|s| s.traces_lights());
-            if traces_lights && renderer.ray_queries() {
-                let catalog = &self.pack.render.model_catalog;
-                let origin = horizon_core::position::BlockPos::new(0, 0, 0);
-                for (id, state) in self.res.facts().states.iter().enumerate() {
-                    if state.emission == 0 {
-                        continue;
-                    }
-                    let state_id = horizon_world::registry::BlockStateId(id as u32);
-                    let models = catalog.collect(state_id, origin).unwrap_or_default();
-                    let layers = models
-                        .iter()
-                        .flat_map(|(_, m)| m.faces.iter().map(|f| f.layer));
-                    let color = pack.manifest.light_of(&state.name);
-                    let light = (state.emission, state.fluid);
-                    let source = horizon_client::gfx::ray_lights::source;
-                    if let Some(s) = source(light, color, layers, &materials) {
-                        sources.insert(id as u32, s);
-                    }
-                }
-            }
-            let labels = renderer
-                .set_native_shader_pack(Some((
-                    report,
-                    constants,
-                    tags,
-                    materials,
-                    (lights, sources),
-                )))
-                .map_err(|e| vec![e])?;
-            Ok((pack.manifest, labels, translucent))
-        });
-        remember_look(
-            path,
+        if self.renderer.is_none() {
+            return false;
+        }
+        let manifest_refused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let context = NativePackJobContext {
+            path: path.to_path_buf(),
             stamp,
-            result.is_ok(),
-            manifest_refused.is_some(),
+            reload,
+            started: now,
+            manifest_refused: manifest_refused.clone(),
+        };
+        let path_owned = path.to_path_buf();
+        let render = self.pack.render.clone();
+        let assets = self.pack.assets.clone();
+        let layer_names = self.pack.layer_names.clone();
+        let res = self.res.clone();
+        let ray_queries = self
+            .renderer
+            .as_ref()
+            .is_some_and(|renderer| renderer.ray_queries());
+        let submit = self
+            .renderer
+            .as_mut()
+            .expect("renderer checked above")
+            .load_native_shader_pack(context, move |cancel| {
+                use std::sync::atomic::Ordering;
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(Vec::new());
+                }
+                // Validate manifest compatibility on the exact `Pack` snapshot read by the worker
+                // so a concurrent manifest edit cannot bypass `not_drawn` checks (no TOCTOU).
+                let pack = match validate_pack_snapshot(&path_owned, Pack::read(&path_owned)) {
+                    Ok(pack) => pack,
+                    Err((why, refused_manifest)) => {
+                        manifest_refused.store(refused_manifest, Ordering::Release);
+                        return Err(vec![why]);
+                    }
+                };
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(Vec::new());
+                }
+                let report = check(&pack)
+                    .map_err(|p| p.iter().map(ToString::to_string).collect::<Vec<String>>())?;
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(Vec::new());
+                }
+                // The player's values (the pack's Shader Options page), else the defaults.
+                let options = &pack.manifest.options;
+                let values_pack = horizon_client::shader_pack_list::native_values_pack(
+                    &path_owned,
+                    &pack.manifest.id,
+                );
+                let values = horizon_client::shader_pack_list::load_values(&values_pack, options);
+                let constants = options.iter().map(|o| o.id.clone()).zip(values).collect();
+                let sprites = || {
+                    let layers = render.sprite_layers.iter();
+                    layers.map(|(name, layer)| (name.as_str(), *layer))
+                };
+                let tags = pack.manifest.sprite_tags(sprites());
+                let mut materials = pack.manifest.sprite_materials(sprites());
+                // `blocks` lists: the sprites their models draw with, where no pattern named them.
+                let listed = pack.manifest.material_blocks();
+                if !listed.is_empty() {
+                    let macros = horizon_shaders::Macros::standard();
+                    let properties = horizon_shaders::Properties::parse(&listed, &macros);
+                    let ids = horizon_shaders::BlockIds::parse(&properties);
+                    let table = super::shader_packs::block_id_table_from(
+                        &render,
+                        &assets,
+                        &layer_names,
+                        &ids,
+                    );
+                    for (layer, id) in table.iter().step_by(2).enumerate() {
+                        let layer = layer as u32;
+                        if *id > 0 && !materials.iter().any(|m| m.0 == layer) {
+                            materials.push((layer, *id as u32));
+                        }
+                    }
+                    materials.sort_unstable();
+                }
+                let layers = sprites().map(|(_, l)| l as usize + 1).max().unwrap_or(0);
+                let translucent = pack.manifest.translucent_layers(&materials, layers);
+                // Each light-giving block state's `[[lights]]` colour, with its level.
+                let mut lights = horizon_client::gfx::block_light::LightTable::default();
+                if !pack.manifest.lights.is_empty() {
+                    for (id, state) in res.facts().states.iter().enumerate() {
+                        if state.emission == 0 {
+                            continue;
+                        }
+                        if let Some(color) = pack.manifest.light_of(&state.name) {
+                            lights.insert(id as u32, (color, state.emission));
+                        }
+                    }
+                }
+                // Each light source a `[ray_tracing] lights = true` pack's rays read: its
+                // `[[lights]]` colour, its level and its model's `[[materials]]` id (lava left
+                // out), where a stage reads them and the device traces.
+                let mut sources = horizon_client::gfx::ray_lights::Sources::default();
+                let traces_lights = report.stages.iter().any(|s| s.traces_lights());
+                if traces_lights && ray_queries {
+                    let catalog = &render.model_catalog;
+                    let origin = horizon_core::position::BlockPos::new(0, 0, 0);
+                    for (id, state) in res.facts().states.iter().enumerate() {
+                        if state.emission == 0 {
+                            continue;
+                        }
+                        let state_id = horizon_world::registry::BlockStateId(id as u32);
+                        let models = catalog.collect(state_id, origin).unwrap_or_default();
+                        let layers = models
+                            .iter()
+                            .flat_map(|(_, m)| m.faces.iter().map(|f| f.layer));
+                        let color = pack.manifest.light_of(&state.name);
+                        let light = (state.emission, state.fluid);
+                        let source = horizon_client::gfx::ray_lights::source;
+                        if let Some(s) = source(light, color, layers, &materials) {
+                            sources.insert(id as u32, s);
+                        }
+                    }
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(Vec::new());
+                }
+                Ok((
+                    (report, constants, tags, materials, (lights, sources)),
+                    NativePackBuiltMeta {
+                        manifest: pack.manifest,
+                        translucent,
+                    },
+                ))
+            });
+        if let Err((context, why)) = submit {
+            self.apply_native_pack_refusal(context, vec![why], false);
+            return false;
+        }
+        if self.clock.still() {
+            return self.wait_native_shader_pack();
+        }
+        false
+    }
+
+    fn apply_native_pack_outcome(
+        &mut self,
+        outcome: horizon_client::gfx::NativePackOutcome<NativePackJobContext, NativePackBuiltMeta>,
+    ) -> bool {
+        match outcome {
+            horizon_client::gfx::NativePackOutcome::Cancelled => false,
+            horizon_client::gfx::NativePackOutcome::Stale => {
+                // Renderer state (e.g. sprite-view mipmaps or frame format) changed while this
+                // build was compiling: clear our stamp so the next tick rebuilds cleanly against
+                // the current renderer state.
+                self.native_shaders.stamp = None;
+                self.native_shaders.check_now();
+                true
+            }
+            horizon_client::gfx::NativePackOutcome::Installed {
+                context,
+                labels,
+                meta,
+            } => {
+                remember_look(&context.path, context.stamp, true, false, true);
+                self.sync_native_material_maps(meta.manifest.material.is_some());
+                self.set_translucent_layers(meta.translucent);
+                log::info!(
+                    "shader pack {} {}: {} in {} ms",
+                    meta.manifest.id,
+                    meta.manifest.version,
+                    labels.join(", "),
+                    context.started.elapsed().as_millis()
+                );
+                if context.reload {
+                    self.system_message(Text::literal(format!(
+                        "Shader pack {} reloaded",
+                        meta.manifest.name
+                    )));
+                }
+                false
+            }
+            horizon_client::gfx::NativePackOutcome::Refused { context, problems } => {
+                let manifest_refused = context
+                    .manifest_refused
+                    .load(std::sync::atomic::Ordering::Acquire);
+                self.apply_native_pack_refusal(context, problems, manifest_refused);
+                false
+            }
+        }
+    }
+
+    fn apply_native_pack_refusal(
+        &mut self,
+        context: NativePackJobContext,
+        problems: Vec<String>,
+        manifest_refused: bool,
+    ) {
+        let running = self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.shader_pack_kind() == Some("native"));
+        remember_look(
+            &context.path,
+            context.stamp,
+            false,
+            manifest_refused,
             running,
         );
         // A refused manifest stops its preceding pack; other failed hot reloads keep it.
         // Only a pack that still runs can retain its preceding material-map demand.
-        let material_maps = match &result {
-            Ok((manifest, _, _)) => manifest.material.is_some(),
-            Err(_) => {
-                manifest_refused.is_none()
-                    && renderer.shader_pack_kind() == Some("native")
-                    && horizon_client::sprites::labpbr_maps()
+        let material_maps = !manifest_refused && running && horizon_client::sprites::labpbr_maps();
+        if manifest_refused {
+            if let Some(renderer) = &mut self.renderer {
+                renderer.drop_shader_packs();
             }
-        };
+            self.set_translucent_layers(Vec::new());
+        } else if let Some(renderer) = &mut self.renderer {
+            renderer.release_world();
+        }
+        self.sync_native_material_maps(material_maps);
+        let name = context
+            .path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        log::warn!("shader pack {name} refused: {}", problems.join("; "));
+        self.system_message(Text::colored(format!("Shader pack {name} refused:"), RED));
+        for p in problems {
+            self.system_message(Text::colored(p, RED));
+        }
+    }
+
+    fn sync_native_material_maps(&mut self, material_maps: bool) {
         if material_maps != horizon_client::sprites::labpbr_maps() {
-            renderer.drop_shader_packs();
+            if let Some(renderer) = &mut self.renderer {
+                renderer.drop_shader_packs();
+            }
             // An existing resource load resets this pack's stamp when it applies. Let it
             // finish before changing what its workers read; the next build rechecks demand.
             if self.rest_loader.is_none() && self.pack_reload.is_none() && !self.pending_pack_reload
@@ -345,36 +607,41 @@ impl Game<'_> {
                 self.reload_packs();
             }
         }
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        match result {
-            Ok((m, labels, translucent)) => {
-                self.set_translucent_layers(translucent);
-                log::info!(
-                    "shader pack {} {}: {} in {} ms",
-                    m.id,
-                    m.version,
-                    labels.join(", "),
-                    now.elapsed().as_millis()
-                );
-                if reload {
-                    self.system_message(Text::literal(format!("Shader pack {} reloaded", m.name)));
-                }
-            }
-            Err(problems) => {
-                if manifest_refused.is_some() {
-                    if let Some(renderer) = &mut self.renderer {
-                        renderer.drop_shader_packs();
-                    }
-                    self.set_translucent_layers(Vec::new());
-                } else if let Some(renderer) = &mut self.renderer {
-                    renderer.release_world();
-                }
-                log::warn!("shader pack {name} refused: {}", problems.join("; "));
-                self.system_message(Text::colored(format!("Shader pack {name} refused:"), RED));
-                for p in problems {
-                    self.system_message(Text::colored(p, RED));
-                }
-            }
+    }
+}
+
+struct NativePackJobContext {
+    path: PathBuf,
+    stamp: Option<u64>,
+    reload: bool,
+    started: Instant,
+    manifest_refused: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct NativePackBuiltMeta {
+    manifest: Manifest,
+    translucent: Vec<bool>,
+}
+
+/// Validates a loaded pack snapshot against renderer compatibility (`not_drawn`) without a
+/// separate manifest read on another thread. On error, returns `(reason, manifest_refused)`:
+/// `true` when the manifest itself failed to read or asks for an unserved feature (stops any
+/// previously running pack), `false` when only a stage file could not be read.
+fn validate_pack_snapshot(
+    path: &Path,
+    read: std::result::Result<Pack, String>,
+) -> std::result::Result<Pack, (String, bool)> {
+    match read {
+        Ok(pack) => match not_drawn(&pack.manifest) {
+            Some(why) => Err((why.into(), true)),
+            None => Ok(pack),
+        },
+        Err(err) => {
+            let refused_manifest = match Pack::read_manifest(path) {
+                Ok(manifest) => not_drawn(&manifest).is_some(),
+                Err(_) => true,
+            };
+            Err((err, refused_manifest))
         }
     }
 }
@@ -383,6 +650,7 @@ impl Game<'_> {
 /// line this build doesn't serve, a mistake in it), or it asks for what isn't drawn yet
 /// (`not_drawn`). A pack that ran before stops then; one whose stages fail keeps its last good
 /// version drawing.
+#[cfg(test)]
 fn manifest_refused(path: &Path) -> Option<String> {
     match Pack::read_manifest(path) {
         Ok(manifest) => not_drawn(&manifest).map(Into::into),
@@ -553,9 +821,9 @@ mod tests {
         std::fs::write(pack.join("post.wgsl"), "not wgsl").unwrap();
         write("0.2", "");
         assert_eq!(manifest_refused(&pack), None);
-        assert!(
-            horizon_shader_api::check(&horizon_shader_api::Pack::read(&pack).unwrap()).is_err()
-        );
+        let snapshot =
+            super::validate_pack_snapshot(&pack, horizon_shader_api::Pack::read(&pack)).unwrap();
+        assert!(horizon_shader_api::check(&snapshot).is_err());
         for (api, extra, why) in [
             ("0.1", "", "needs shader API 0.1; this Horizon serves 0.2"),
             (
@@ -568,8 +836,52 @@ mod tests {
             write(api, extra);
             let refused = manifest_refused(&pack).unwrap_or_default();
             assert!(refused.contains(why), "{api} {extra}: {refused}");
+            let (err, refused_manifest) =
+                super::validate_pack_snapshot(&pack, horizon_shader_api::Pack::read(&pack))
+                    .expect_err("manifest refusal");
+            assert!(refused_manifest, "{api} {extra} must stop running pack");
+            assert!(err.contains(why), "{api} {extra}: {err}");
         }
         std::fs::remove_dir_all(pack).unwrap();
+    }
+
+    #[test]
+    fn cached_refusal_updates_stamp_so_restoring_cancelled_revision_rebuilds() {
+        use super::{NativeShaders, ScanAction, remember};
+        let path =
+            std::env::temp_dir().join(format!("horizon-cached-refusal-{}", std::process::id()));
+        let now = std::time::Instant::now();
+        let stamp_a = Some(1_u64);
+        let stamp_b = Some(2_u64);
+        // Revision B was previously refused.
+        remember(&path, stamp_b, false);
+        let mut state = NativeShaders::picking(&path.to_string_lossy());
+        // Revision A starts building.
+        assert_eq!(
+            state.reconcile_stamp(&path, stamp_a, now),
+            ScanAction::Build {
+                stamp: stamp_a,
+                reload: false,
+            }
+        );
+        // Reverting to cached-refused revision B cancels A and records B's stamp.
+        assert_eq!(
+            state.reconcile_stamp(&path, stamp_b, now),
+            ScanAction::CachedRefusal
+        );
+        // Remaining on B does not loop rebuilds or cancellations.
+        assert_eq!(
+            state.reconcile_stamp(&path, stamp_b, now),
+            ScanAction::Poll { empty_stamp: false }
+        );
+        // Restoring revision A must trigger a fresh build rather than hitting the cancelled A stamp.
+        assert_eq!(
+            state.reconcile_stamp(&path, stamp_a, now),
+            ScanAction::Build {
+                stamp: stamp_a,
+                reload: true,
+            }
+        );
     }
 
     #[test]

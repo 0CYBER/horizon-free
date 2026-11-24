@@ -95,6 +95,10 @@ impl OptionsUi {
     pub fn set_controller_context(&mut self, context: crate::controller_ui::Context) {
         self.controller.screen.context = context;
     }
+    /// Whether a shader pack is compiling in the background: the game sets it before each draw.
+    pub fn set_shader_pack_loading(&mut self, loading: bool) {
+        self.shader.screen.loading = loading;
+    }
     /// The binding the screen waits on: a controller button's, else a key's.
     pub(super) fn waiting(&self) -> Option<shell::Capture> {
         let pad = self.selected_pad_action.map(shell::Capture::Pad);
