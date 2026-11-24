@@ -34,6 +34,8 @@ pub trait ConfigFiles {
     ) -> Result<Vec<ConfigEntry>, ConfigFileError>;
     /// What is at `path`; None where nothing is.
     fn stat(&self, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError>;
+    /// Deletes the file at `file` inside the calling mod's owned root.
+    fn delete(&self, file: &ConfigPath) -> Result<(), ConfigFileError>;
 }
 
 /// A relative, `/`-separated path, checked once. Each component must satisfy

@@ -325,6 +325,28 @@ fn stat(root: &FileRoot, path: &ConfigPath) -> Result<Option<ConfigStat>, Config
     }
 }
 
+fn delete(root: &FileRoot, file: &ConfigPath) -> Result<(), ConfigFileError> {
+    let mod_id =
+        mod_api::content::crash::current_native_mod().ok_or(ConfigFileError::NoCallingMod)?;
+    delete_for(root, file, mod_id)
+}
+
+fn delete_for(root: &FileRoot, file: &ConfigPath, mod_id: &str) -> Result<(), ConfigFileError> {
+    // Neither the implicit bulk root nor a config mod folder can be deleted as a file.
+    if file.as_str().is_empty() || (!root.bulk && file.as_str() == mod_id) {
+        return Err(ConfigFileError::NotAFile);
+    }
+    let (directory, name) = resolve_for(root, file, false, mod_id)?;
+    let meta = directory.symlink_metadata(&name).map_err(io)?;
+    if meta.file_type().is_symlink() {
+        return Err(ConfigFileError::Symlink);
+    }
+    if !meta.is_file() {
+        return Err(ConfigFileError::NotAFile);
+    }
+    directory.remove_file(&name).map_err(io)
+}
+
 impl GameConfigFiles {
     fn root(&self) -> Result<FileRoot, ConfigFileError> {
         Ok(FileRoot {
@@ -369,6 +391,9 @@ macro_rules! files {
             }
             fn stat(&self, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError> {
                 stat(&$root(self)?, path)
+            }
+            fn delete(&self, file: &ConfigPath) -> Result<(), ConfigFileError> {
+                delete(&$root(self)?, file)
             }
         }
     };
@@ -1022,6 +1047,53 @@ mod tests {
                     });
                 });
             });
+        });
+    }
+
+    #[test]
+    fn delete_removes_owned_files_and_refuses_foreign_dirs_and_missing() {
+        let config_root = Root::new("delete-config");
+        assert_eq!(
+            delete(&config_root.0, &path("fd/settings.toml")),
+            Err(ConfigFileError::NoCallingMod)
+        );
+        as_mod("fd", || {
+            write(&config_root.0, &path("fd/settings.toml"), b"a = 1").unwrap();
+            assert!(stat(&config_root.0, &path("fd/settings.toml")).unwrap().is_some());
+            assert_eq!(
+                delete(&config_root.0, &path("fd")),
+                Err(ConfigFileError::NotAFile)
+            );
+            assert_eq!(
+                delete(&config_root.0, &ConfigPath::root()),
+                Err(ConfigFileError::NotAFile)
+            );
+            assert_eq!(
+                delete(&config_root.0, &path("other/settings.toml")),
+                Err(ConfigFileError::NotOwned)
+            );
+            delete(&config_root.0, &path("fd/settings.toml")).unwrap();
+            assert_eq!(stat(&config_root.0, &path("fd/settings.toml")).unwrap(), None);
+            assert_eq!(
+                delete(&config_root.0, &path("fd/settings.toml")),
+                Err(ConfigFileError::NotFound)
+            );
+        });
+
+        let mut bulk_root = Root::new("delete-bulk");
+        bulk_root.0.bulk = true;
+        as_mod("fd", || {
+            write(&bulk_root.0, &path("tiles/0_0.bin"), b"tile").unwrap();
+            assert_eq!(
+                delete(&bulk_root.0, &path("tiles")),
+                Err(ConfigFileError::NotAFile)
+            );
+            assert_eq!(
+                delete(&bulk_root.0, &ConfigPath::root()),
+                Err(ConfigFileError::NotAFile)
+            );
+            delete(&bulk_root.0, &path("tiles/0_0.bin")).unwrap();
+            assert_eq!(stat(&bulk_root.0, &path("tiles/0_0.bin")).unwrap(), None);
         });
     }
 }
