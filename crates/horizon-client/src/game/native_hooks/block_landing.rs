@@ -77,7 +77,7 @@ mod landing_crossing_tests {
                     let mut damage = 7.0;
                     let mut writes = original.clone();
                     let mut level = horizon_client::health::TestLevel::new(0);
-                    HitLevel(level.level()).native_fall_on(super::super::fire::FallOnCall {
+                    HitLevel::new(level.level()).native_fall_on(super::super::fire::FallOnCall {
                         dimension: "minecraft:overworld",
                         entity: 1,
                         kind: "minecraft:player",

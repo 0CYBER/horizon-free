@@ -104,17 +104,9 @@ mod inside_walk_tests {
             bounce_on: |_, _, _, _, _| {},
             // The production binding's own shape: the whole callback staged,
             // a panic contained with it.
-            inside_fire: |_level,
-                          _dimension,
-                          _entity,
-                          _kind,
-                          _state,
-                          at,
-                          _precise,
-                          staged,
-                          _writes| {
+            inside_fire: |_level, _dimension, contact, _precise, _swept, staged, _writes| {
                 let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    fire_like_a_part(at, staged);
+                    fire_like_a_part(contact.position, staged);
                 }));
                 let _ = fired;
             },
@@ -1678,16 +1670,26 @@ impl crate::block_contact::InsideWalk for MobInside<'_, '_, '_> {
         {
             let mut staged = mod_api::InsideEffects::default();
             let mut writes = Vec::new();
-            let kind = self.m.kind.id.clone();
-            let id = self.m.id as i32;
+            let m = &*self.m;
             (hooks.inside_fire)(
                 self.level,
                 dimension,
-                id,
-                &kind,
-                state,
-                at,
+                crate::block_contact::Contact {
+                    entity: m.id as i32,
+                    kind: &m.kind.id,
+                    state,
+                    position: at,
+                },
                 precise,
+                &mod_api::SweptEntity::new(
+                    m.position,
+                    m.previous,
+                    m.velocity,
+                    m.extra.avatar_pose == crate::pose::Pose::Crouching,
+                    m.extra.crouching,
+                    m.fall_distance,
+                    true,
+                ),
                 &mut staged,
                 &mut writes,
             );

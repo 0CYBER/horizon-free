@@ -874,14 +874,15 @@ mod tests {
             });
             {
                 use mod_api::LevelHost;
-                let hit =
-                    super::super::native_hooks::HitLevel(horizon_client::health::DamageLevel::of(
+                let hit = super::super::native_hooks::HitLevel::new(
+                    horizon_client::health::DamageLevel::of(
                         &mut game.world,
                         game.pack.assets.registry,
                         Some(world_items!(game)),
                         Some(&game.pack.block_registries),
                         &game.damage_hooks,
-                    ));
+                    ),
+                );
                 assert_eq!(
                     hit.block_state_id("minecraft:oak_slab[waterlogged=true]"),
                     parsed
@@ -912,14 +913,15 @@ mod tests {
             }
             {
                 use mod_api::LevelHost;
-                let hit =
-                    super::super::native_hooks::HitLevel(horizon_client::health::DamageLevel::of(
+                let hit = super::super::native_hooks::HitLevel::new(
+                    horizon_client::health::DamageLevel::of(
                         &mut game.world,
                         game.pack.assets.registry,
                         None,
                         None,
                         &game.damage_hooks,
-                    ));
+                    ),
+                );
                 assert_eq!(hit.block_state_id("minecraft:stone"), None);
                 assert_eq!(
                     hit.block_state_default(mod_platform::__private::part_tests::block_key(

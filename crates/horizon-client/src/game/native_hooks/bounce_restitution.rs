@@ -26,7 +26,7 @@ const RESTITUTION_HOOKS: horizon_client::block_contact::RestitutionHooks =
             )
         },
         restitution: |level, c, factor| {
-            HitLevel(level.reborrow())
+            HitLevel::new(level.reborrow())
                 .native_bounce_restitution(c.entity, c.kind, c.state, c.position, factor);
         },
     };

@@ -124,6 +124,8 @@ mod sweep_tests {
     #[derive(Clone, Default)]
     struct InsidePart {
         contacts: std::sync::Arc<std::sync::Mutex<Vec<[i32; 3]>>>,
+        swept: std::sync::Arc<std::sync::Mutex<Vec<mod_api::SweptEntity>>>,
+        movement_only: bool,
         wither: std::sync::Arc<std::sync::Mutex<Option<mod_api::EffectKey>>>,
         speed: std::sync::Arc<std::sync::Mutex<Option<mod_api::EffectKey>>>,
         kill_after: Option<usize>,
@@ -140,6 +142,18 @@ mod sweep_tests {
             contacts.push([event.pos.x, event.pos.y, event.pos.z]);
             let seen = contacts.len();
             drop(contacts);
+            let swept = host
+                .swept_entity()
+                .expect("contact must expose its own entity");
+            self.swept.lock().unwrap().push(swept);
+            if self.movement_only
+                && (!swept.living
+                    || swept.crouching
+                    || swept.shift_key_down
+                    || swept.position == swept.previous_position)
+            {
+                return;
+            }
             // A level draw, in vanilla's order: between the vanilla contacts.
             let _ = host.with_random(horizon_core::random::RandomSource::next_long);
             if self.panic_after.is_some_and(|after| seen > after) {
@@ -317,6 +331,69 @@ mod sweep_tests {
                     .expect("the wither effect crossed to the server");
                 assert_eq!(effect, ("minecraft:wither", 40));
                 assert!(horizon_client::block_contact::take_pending().is_empty());
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_part_distinguishes_movement_pose_and_sneak_during_a_player_sweep() {
+        use crate::game::native_entity_refs::tests::with_game;
+        use horizon_client::{motion::PlayerMotion, pose::Pose};
+        use horizon_core::geometry::Vec3;
+
+        let part = InsidePart {
+            movement_only: true,
+            ..InsidePart::default()
+        };
+        let mods = install_inside_mod("sweep-reads-pose", &part);
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                let _ = horizon_client::block_contact::HOOKS.set(super::BLOCK_CONTACT_HOOKS);
+                let at = Vec3::new(2.5, 100.0, 0.5);
+                for (moved, crouching, shift_key_down) in [
+                    (true, false, false),
+                    (true, true, false),
+                    (true, false, true),
+                    (false, false, false),
+                ] {
+                    let mut player = PlayerMotion::new(game.motion, at).unwrap();
+                    player.old_position = Vec3::new(if moved { 0.5 } else { 2.5 }, 100.0, 0.5);
+                    player.velocity = Vec3::new(0.25, -0.5, 0.125);
+                    player.pose = if crouching {
+                        Pose::Crouching
+                    } else {
+                        Pose::Standing
+                    };
+                    player.shift_key_down = shift_key_down;
+                    player.fall_distance = 3.25;
+                    game.player = Some(player);
+                    part.swept.lock().unwrap().clear();
+
+                    let (before, after, dead) = sweep_game_player(game);
+                    let reads = part.swept.lock().unwrap();
+                    assert_eq!(reads.len(), 2, "inspect both contacted blocks");
+                    for read in &*reads {
+                        assert_eq!(read.position, [2.5, 100.0, 0.5]);
+                        assert_eq!(
+                            read.previous_position,
+                            [if moved { 0.5 } else { 2.5 }, 100.0, 0.5]
+                        );
+                        assert_eq!(read.velocity, [0.25, -0.5, 0.125]);
+                        assert_eq!(read.fall_distance, 3.25);
+                        assert_eq!(
+                            (read.crouching, read.shift_key_down, read.living),
+                            (crouching, shift_key_down, true)
+                        );
+                    }
+                    assert!(!dead);
+                    let push = if moved && !crouching && !shift_key_down {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    assert_eq!(after - before, push);
+                }
             });
         });
     }
@@ -641,6 +718,13 @@ mod sweep_tests {
                     (item.velocity.x - before - 1.0).abs() < 1e-9,
                     "both pushes reached the item"
                 );
+                let swept = part.swept.lock().unwrap();
+                assert_eq!(swept.len(), 2);
+                for read in &*swept {
+                    assert_eq!(read.position, [2.5, 100.0, 0.5]);
+                    assert_eq!(read.previous_position, [0.5, 100.0, 0.5]);
+                    assert!(!read.living);
+                }
                 assert!(horizon_client::block_contact::take_pending().is_empty());
             });
         });

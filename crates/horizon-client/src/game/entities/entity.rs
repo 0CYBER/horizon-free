@@ -605,9 +605,28 @@ impl horizon_client::block_contact::InsideWalk for ItemInside<'_, '_> {
         precise: bool,
         effects: &mut mod_api::InsideEffects,
     ) -> std::result::Result<(), ()> {
-        let id = self.item.id;
-        self.game
-            .fire_batch_inside(id as i32, "minecraft:item", state, at, precise, effects);
+        let item = &*self.item;
+        self.game.fire_batch_inside(
+            horizon_client::block_contact::Contact {
+                entity: item.id as i32,
+                kind: "minecraft:item",
+                state,
+                position: at,
+            },
+            precise,
+            effects,
+            || {
+                mod_api::SweptEntity::new(
+                    item.position,
+                    item.previous,
+                    item.velocity,
+                    false,
+                    false,
+                    item.fall_distance,
+                    false,
+                )
+            },
+        );
         Ok(())
     }
 }
@@ -657,9 +676,28 @@ impl horizon_client::block_contact::InsideWalk for ProjectileInside<'_, '_> {
         precise: bool,
         effects: &mut mod_api::InsideEffects,
     ) -> std::result::Result<(), ()> {
-        let (id, kind) = (self.shot.id, self.shot.entity_type());
-        self.game
-            .fire_batch_inside(id as i32, kind, state, at, precise, effects);
+        let shot = &*self.shot;
+        self.game.fire_batch_inside(
+            horizon_client::block_contact::Contact {
+                entity: shot.id as i32,
+                kind: shot.entity_type(),
+                state,
+                position: at,
+            },
+            precise,
+            effects,
+            || {
+                mod_api::SweptEntity::new(
+                    shot.position,
+                    shot.previous,
+                    shot.velocity,
+                    false,
+                    false,
+                    shot.fall_distance,
+                    false,
+                )
+            },
+        );
         Ok(())
     }
 }
@@ -915,19 +953,17 @@ impl Game<'_> {
     /// discipline).
     pub(in crate::game) fn fire_batch_inside(
         &mut self,
-        entity: i32,
-        kind: &'static str,
-        state: horizon_world::registry::BlockStateId,
-        at: horizon_core::position::BlockPos,
+        contact: horizon_client::block_contact::Contact<'_>,
         precise: bool,
         effects: &mut mod_api::InsideEffects,
+        swept: impl FnOnce() -> mod_api::SweptEntity,
     ) {
         let Some(dimension) = horizon_client::block_contact::current_level() else {
             return;
         };
         if !horizon_client::block_contact::HOOKS
             .get()
-            .is_some_and(|hooks| (hooks.inside_listens)(state))
+            .is_some_and(|hooks| (hooks.inside_listens)(contact.state))
         {
             return;
         }
@@ -946,18 +982,16 @@ impl Game<'_> {
             (hooks.inside_fire)(
                 &mut level,
                 dimension,
-                entity,
-                kind,
-                state,
-                at,
+                contact,
                 precise,
+                &swept(),
                 &mut staged,
                 &mut writes,
             );
         }
         lent.give_back(&mut self.world);
         effects.absorb_step(staged);
-        horizon_client::block_contact::inside_written(state, at, writes);
+        horizon_client::block_contact::inside_written(contact.state, contact.position, writes);
     }
 
     pub(super) fn tick_item_with_block_contacts(
@@ -2406,6 +2440,7 @@ impl Entity for FallingBlock {
 
 impl Entity for Projectile {
     fn reset_fall_distance(&mut self) {
+        self.fall_distance = 0.0;
         if let Some(arrow) = self.arrow.as_deref_mut() {
             arrow.fall_distance = 0.0;
         }

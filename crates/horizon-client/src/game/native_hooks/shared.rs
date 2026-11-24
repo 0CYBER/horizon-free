@@ -1317,7 +1317,7 @@ pub(super) fn use_totem(level: DamageLevel<'_>, hurting: Hurting<'_>, off_hand: 
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
     let hand = if off_hand { Hand::Off } else { Hand::Main };
     let mut cancel = false;
-    HitLevel(level).native_living_use_totem(
+    HitLevel::new(level).native_living_use_totem(
         entity,
         kind,
         &source,
@@ -1332,7 +1332,16 @@ pub(super) fn use_totem(level: DamageLevel<'_>, hurting: Hurting<'_>, off_hand: 
 /// own attachments. Not `GameLevel`, which a hit can't build: a mob's hit lands in the mob
 /// tick, where the world is read by every mob and its random is lent out, and building one
 /// per hit would allocate its entity boxes.
-pub(super) struct HitLevel<'a>(pub(super) DamageLevel<'a>);
+pub(super) struct HitLevel<'a>(
+    pub(super) DamageLevel<'a>,
+    pub(super) Option<&'a mod_api::SweptEntity>,
+);
+
+impl<'a> HitLevel<'a> {
+    pub(in crate::game) fn new(level: DamageLevel<'a>) -> Self {
+        Self(level, None)
+    }
+}
 
 /// Let listeners override the vanilla invulnerability decision for this hit.
 pub(super) fn invulnerability_check(
@@ -1345,7 +1354,7 @@ pub(super) fn invulnerability_check(
     }
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
     let mut invulnerable = vanilla;
-    HitLevel(level).native_entity_invulnerability_check(
+    HitLevel::new(level).native_entity_invulnerability_check(
         entity,
         kind,
         &source,
@@ -1373,15 +1382,17 @@ pub(super) fn incoming_damage(
         return false;
     };
     let mut snapshot = (*container).try_into_api().expect("scalar damage snapshot");
-    HitLevel(level).native_living_incoming_damage(mod_api::__private::LivingIncomingDamageCall {
-        entity,
-        kind,
-        source: &source,
-        victim: &victim,
-        weapon: weapon.as_ref(),
-        container: &mut snapshot,
-        canceled: &mut canceled,
-    });
+    HitLevel::new(level).native_living_incoming_damage(
+        mod_api::__private::LivingIncomingDamageCall {
+            entity,
+            kind,
+            source: &source,
+            victim: &victim,
+            weapon: weapon.as_ref(),
+            container: &mut snapshot,
+            canceled: &mut canceled,
+        },
+    );
     *container = snapshot
         .try_into_engine(&())
         .expect("scalar damage snapshot");
@@ -1399,7 +1410,7 @@ pub(super) fn damage_pre(
     }
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
     let mut snapshot = (*container).try_into_api().expect("scalar damage snapshot");
-    HitLevel(level).native_living_damage_pre(entity, kind, &source, &mut snapshot);
+    HitLevel::new(level).native_living_damage_pre(entity, kind, &source, &mut snapshot);
     *container = snapshot
         .try_into_engine(&())
         .expect("scalar damage snapshot");
@@ -1416,7 +1427,7 @@ pub(super) fn damage_post(
     }
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
     let snapshot = (*container).try_into_api().expect("scalar damage snapshot");
-    HitLevel(level).native_living_damage_post(entity, kind, &source, &snapshot);
+    HitLevel::new(level).native_living_damage_post(entity, kind, &source, &snapshot);
 }
 
 /// `native_living_shield_block` for the damage code. Its one
@@ -1429,7 +1440,7 @@ pub(super) fn shield_block(
     block: &mut ShieldBlock,
 ) {
     let (entity, kind, source) = hurt_server_args(hurting, level.attack());
-    HitLevel(level).native_living_shield_block(
+    HitLevel::new(level).native_living_shield_block(
         entity,
         kind,
         &source,
@@ -1534,7 +1545,7 @@ pub(super) fn knockback(level: DamageLevel<'_>, pushed: Hurting<'_>, knock: &mut
         return false;
     };
     let entry = level.knockback_entry();
-    HitLevel(level).native_living_knockback(mod_api::__private::LivingKnockbackCall {
+    HitLevel::new(level).native_living_knockback(mod_api::__private::LivingKnockbackCall {
         entity,
         kind,
         source: &source,
@@ -1593,18 +1604,18 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
         bounce_listens: |state| {
             crate::game::api_values::block_state::block_listens(mod_api::HookId::BounceOn, state)
         },
-        inside_fire: |level, dimension, entity, kind, state, pos, precise, staged, writes| {
+        inside_fire: |level, dimension, contact, precise, swept, staged, writes| {
             // The whole callback is staged: a panic is contained and the walk
             // keeps the caller's collector and write list as they were (arismoko/horizon#2247's
             // rule: a mod's panic never breaks the model).
             let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                HitLevel(level.reborrow()).native_entity_inside(
+                HitLevel(level.reborrow(), Some(swept)).native_entity_inside(
                     crate::game::native_hooks::fire::EntityInsideCall {
                         dimension,
-                        entity,
-                        kind,
-                        state,
-                        pos,
+                        entity: contact.entity,
+                        kind: contact.kind,
+                        state: contact.state,
+                        pos: contact.position,
                         precise,
                         effects: staged,
                         writes,
@@ -1620,7 +1631,7 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
             }
         },
         fall_on: |dimension, level, c, distance, damage, writes| {
-            HitLevel(level.reborrow()).native_fall_on(
+            HitLevel::new(level.reborrow()).native_fall_on(
                 crate::game::native_hooks::fire::FallOnCall {
                     dimension,
                     entity: c.entity,
@@ -1635,7 +1646,7 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
         },
         bounce_on: |dimension, level, c, fall_distance, movement| {
             let mut answer = [movement.x, movement.y, movement.z];
-            HitLevel(level.reborrow()).native_bounce_on(
+            HitLevel::new(level.reborrow()).native_bounce_on(
                 crate::game::native_hooks::fire::BounceOnCall {
                     dimension,
                     entity: c.entity,

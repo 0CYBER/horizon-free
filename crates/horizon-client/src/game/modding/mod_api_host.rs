@@ -589,6 +589,10 @@ impl mod_api::AttachmentHost for super::native_hooks::HitLevel<'_> {
 }
 
 impl mod_api::LevelRandomHost for super::native_hooks::HitLevel<'_> {
+    fn swept_entity(&self) -> Option<mod_api::SweptEntity> {
+        self.1.copied()
+    }
+
     fn attachments(&mut self) -> &mut dyn mod_api::AttachmentStore {
         self
     }

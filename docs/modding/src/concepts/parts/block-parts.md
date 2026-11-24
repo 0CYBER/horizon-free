@@ -113,6 +113,15 @@ its original landed state. That guard runs once, so a first write can change the
 without suppressing the next write. SetBlock notifies neighbors and clients; DestroyBlock
 preserves the requested resource-drop flag.
 
+## Swept entity reads
+
+In `BlockPart::entity_inside`, call `host.swept_entity()` to get the entity currently crossing
+the block. Its current and previous positions, velocity and fall distance come from its own
+movement tick, even while the level's entity row is borrowed. A part can distinguish living
+entities, the crouching pose and the separate sneak flag before deciding whether to queue an
+effect. Reading the snapshot grants no writes; use the existing event queues. The method
+returns `None` outside an `entity_inside` callback.
+
 ## Storage changes
 
 `BlockPart::contents_changed(host, event)` observes a world block's storage at `setChanged`,

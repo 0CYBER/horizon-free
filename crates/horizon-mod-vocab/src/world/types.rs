@@ -1445,8 +1445,61 @@ pub trait LevelHost {
     }
 }
 
+/// An entity's read-only motion and posture during a block's `entity_inside` callback.
+/// These are the entity's own values, not the endpoints of a block-intersection segment.
+#[derive(Clone, Copy, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SweptEntity {
+    /// Current world position in blocks (`Entity.position`).
+    pub position: [f64; 3],
+    /// World position at the start of this tick (`xOld`, `yOld`, `zOld`).
+    pub previous_position: [f64; 3],
+    /// Current velocity in blocks per tick (`Entity.getDeltaMovement`).
+    pub velocity: [f64; 3],
+    /// Crouching pose (`Entity.isCrouching`).
+    pub crouching: bool,
+    /// Sneak flag (`Entity.isShiftKeyDown`), which need not match the pose.
+    pub shift_key_down: bool,
+    /// Distance accumulated by the current fall, in blocks.
+    pub fall_distance: f64,
+    /// Whether the swept entity is a living entity, including a player.
+    pub living: bool,
+}
+
+impl SweptEntity {
+    // hidden: the engine builds this snapshot from the entity it is ticking.
+    #[doc(hidden)]
+    pub fn new(
+        position: horizon_core::geometry::Vec3,
+        previous_position: horizon_core::geometry::Vec3,
+        velocity: horizon_core::geometry::Vec3,
+        crouching: bool,
+        shift_key_down: bool,
+        fall_distance: f64,
+        living: bool,
+    ) -> Self {
+        let xyz = |v: horizon_core::geometry::Vec3| [v.x, v.y, v.z];
+        Self {
+            position: xyz(position),
+            previous_position: xyz(previous_position),
+            velocity: xyz(velocity),
+            crouching,
+            shift_key_down,
+            fall_distance,
+            living,
+        }
+    }
+}
+
 /// Access vanilla's `Level.random`, so draws come in vanilla's order.
 pub trait LevelRandomHost: LevelHost {
+    /// The exact entity named by the current `entity_inside` callback. Returns
+    /// `None` on a level host outside that callback. This read does not change
+    /// the entity or add any writes to the effect collector.
+    fn swept_entity(&self) -> Option<SweptEntity> {
+        None
+    }
+
     /// The holders' server-owned attachments; `TYPE.get(host, holder)` reads one through it.
     fn attachments(&mut self) -> &mut dyn AttachmentStore {
         unimplemented!("LevelRandomHost::attachments")

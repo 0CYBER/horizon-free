@@ -2100,7 +2100,6 @@ impl MotionWorld<'_, '_, '_> {
         precise: bool,
         effects: &mut mod_api::InsideEffects,
     ) {
-        let entity = self.player.entity_id;
         let Some(dimension) = crate::block_contact::current_level() else {
             return;
         };
@@ -2127,11 +2126,22 @@ impl MotionWorld<'_, '_, '_> {
             (hooks.inside_fire)(
                 &mut level,
                 dimension,
-                entity,
-                "minecraft:player",
-                state,
-                p,
+                crate::block_contact::Contact {
+                    entity: self.player.entity_id,
+                    kind: "minecraft:player",
+                    state,
+                    position: p,
+                },
                 precise,
+                &mod_api::SweptEntity::new(
+                    self.player.position,
+                    self.player.old_position,
+                    self.player.velocity,
+                    self.player.pose == crate::pose::Pose::Crouching,
+                    self.player.shift_key_down,
+                    self.player.fall_distance,
+                    true,
+                ),
                 &mut staged,
                 &mut writes,
             );

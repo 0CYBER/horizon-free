@@ -244,11 +244,9 @@ pub struct Hooks {
     pub inside_fire: fn(
         &mut DamageLevel<'_>,
         &'static str,
-        i32,
-        &str,
-        BlockStateId,
-        BlockPos,
+        Contact<'_>,
         bool,
+        &mod_api::SweptEntity,
         &mut mod_api::InsideEffects,
         &mut Vec<InsideWrite>,
     ),
