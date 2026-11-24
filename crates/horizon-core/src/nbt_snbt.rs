@@ -1,5 +1,6 @@
 //! `SnbtGrammar`/`TagParser` over NbtOps, shared by commands and persistent codecs.
 use super::{Compound, JavaString, Tag};
+use std::borrow::Cow;
 
 /// A grammar failure, with an input-relative cursor and its completion suppliers.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,16 +26,46 @@ enum Input<'a> {
     Utf8(&'a str),
     Utf16(&'a [u16]),
 }
+#[inline]
+fn is_ascii_snbt_whitespace(b: u8) -> bool {
+    matches!(b, 0x09..=0x0d | 0x1c..=0x20)
+}
+
+#[inline]
+fn is_ascii_digit_radix(b: u8, radix: u32) -> bool {
+    match radix {
+        2 => matches!(b, b'0' | b'1'),
+        10 => b.is_ascii_digit(),
+        16 => b.is_ascii_hexdigit(),
+        _ => char::from(b).is_digit(radix),
+    }
+}
+
 impl Input<'_> {
+    #[inline]
     fn at(self, cursor: usize) -> Option<u32> {
         match self {
-            Self::Utf8(text) => text.get(cursor..)?.chars().next().map(u32::from),
+            Self::Utf8(text) => {
+                let b = *text.as_bytes().get(cursor)?;
+                if b < 0x80 {
+                    Some(u32::from(b))
+                } else {
+                    text.get(cursor..)?.chars().next().map(u32::from)
+                }
+            }
             Self::Utf16(text) => text.get(cursor).copied().map(u32::from),
         }
     }
+    #[inline]
     fn width(self, value: u32) -> usize {
         match self {
-            Self::Utf8(_) => char::from_u32(value).expect("UTF-8 scalar").len_utf8(),
+            Self::Utf8(_) => {
+                if value < 0x80 {
+                    1
+                } else {
+                    char::from_u32(value).expect("UTF-8 scalar").len_utf8()
+                }
+            }
             Self::Utf16(_) => 1,
         }
     }
@@ -166,7 +197,30 @@ impl<'a> Parser<'a> {
             }
         }
     }
+    #[inline]
     fn skip(&mut self) {
+        if let Input::Utf8(text) = self.input {
+            let bytes = text.as_bytes();
+            while let Some(&b) = bytes.get(self.cursor) {
+                if b < 0x80 {
+                    if is_ascii_snbt_whitespace(b) {
+                        self.cursor += 1;
+                    } else {
+                        return;
+                    }
+                } else {
+                    let Some(c) = text[self.cursor..].chars().next() else {
+                        return;
+                    };
+                    if snbt_whitespace(u32::from(c)) {
+                        self.cursor += c.len_utf8();
+                    } else {
+                        return;
+                    }
+                }
+            }
+            return;
+        }
         while self.peek().is_some_and(snbt_whitespace) {
             self.bump();
         }
@@ -246,8 +300,25 @@ impl<'a> Parser<'a> {
             _ => self.word(),
         }
     }
-    fn unquoted(&mut self) -> Result<String, SnbtError> {
+    fn unquoted(&mut self) -> Result<Cow<'a, str>, SnbtError> {
         self.skip();
+        if let Input::Utf8(text) = self.input {
+            let bytes = text.as_bytes();
+            let start = self.cursor;
+            let mut end = start;
+            while let Some(&b) = bytes.get(end) {
+                if !b.is_ascii_alphanumeric() && !matches!(b, b'_' | b'-' | b'.' | b'+') {
+                    break;
+                }
+                end += 1;
+            }
+            self.cursor = end;
+            return if start == end {
+                Err(self.error("snbt.parser.expected_unquoted_string"))
+            } else {
+                Ok(Cow::Borrowed(&text[start..end]))
+            };
+        }
         let mut value = String::new();
         while let Some(c) = self.peek().and_then(|c| u8::try_from(c).ok()) {
             if !c.is_ascii_alphanumeric() && !matches!(c, b'_' | b'-' | b'.' | b'+') {
@@ -259,17 +330,57 @@ impl<'a> Parser<'a> {
         if value.is_empty() {
             Err(self.error("snbt.parser.expected_unquoted_string"))
         } else {
-            Ok(value)
+            Ok(Cow::Owned(value))
         }
     }
     fn string(&mut self) -> Result<JavaString, SnbtError> {
         self.skip();
         let Some(quote @ (0x22 | 0x27)) = self.peek() else {
             self.record(self.cursor, &["\"", "'"]);
-            return self.unquoted().map(|value| value.as_str().into());
+            return self.unquoted().map(|value| {
+                // Unquoted strings are strictly ASCII.
+                JavaString(value.as_bytes().iter().map(|&b| u16::from(b)).collect())
+            });
         };
-        self.bump();
+        self.cursor += 1;
         let mut units = Vec::new();
+        if let Input::Utf8(text) = self.input {
+            let bytes = text.as_bytes();
+            let quote_byte = quote as u8;
+            loop {
+                let start = self.cursor;
+                let mut i = start;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if b == quote_byte || b == b'\\' || b >= 0x80 {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i > start {
+                    units.extend(bytes[start..i].iter().map(|&b| u16::from(b)));
+                    self.cursor = i;
+                }
+                if i >= bytes.len() {
+                    let mut error = self.error("snbt.parser.invalid_string_contents");
+                    error.suggestions = ["\"", "'", "\\"].map(str::to_owned).to_vec();
+                    return Err(error);
+                }
+                let b = bytes[i];
+                if b == quote_byte {
+                    self.cursor = i + 1;
+                    return Ok(JavaString(units));
+                }
+                if b == b'\\' {
+                    self.cursor = i + 1;
+                    self.escape(&mut units)?;
+                } else {
+                    let c = text[i..].chars().next().expect("valid UTF-8");
+                    self.cursor = i + c.len_utf8();
+                    push_code_point(&mut units, u32::from(c));
+                }
+            }
+        }
         loop {
             match self.bump() {
                 Some(c) if c == quote => return Ok(JavaString(units)),
@@ -401,14 +512,37 @@ impl<'a> Parser<'a> {
         if typed.is_none() {
             self.cursor = start;
         }
+        if let Some(kind) = typed {
+            let mut bytes = Vec::new();
+            let mut ints = Vec::new();
+            let mut longs = Vec::new();
+            if !self.eat(b']') {
+                loop {
+                    let value = integer_value(self.integer(Some(kind))?);
+                    match kind {
+                        0 => bytes.push(value as u8),
+                        2 => ints.push(value as i32),
+                        _ => longs.push(value),
+                    }
+                    if self.eat(b']') {
+                        break;
+                    }
+                    self.expect(b',')?;
+                    if self.eat(b']') {
+                        break;
+                    }
+                }
+            }
+            return Ok(match kind {
+                0 => Tag::ByteArray(bytes),
+                2 => Tag::IntArray(ints),
+                _ => Tag::LongArray(longs),
+            });
+        }
         let mut values = Vec::new();
         if !self.eat(b']') {
             loop {
-                values.push(if let Some(kind) = typed {
-                    self.integer(Some(kind))?
-                } else {
-                    self.value()?
-                });
+                values.push(self.value()?);
                 if self.eat(b']') {
                     break;
                 }
@@ -418,22 +552,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Ok(match typed {
-            Some(0) => Tag::ByteArray(
-                values
-                    .into_iter()
-                    .map(|value| integer_value(value) as u8)
-                    .collect(),
-            ),
-            Some(2) => Tag::IntArray(
-                values
-                    .into_iter()
-                    .map(|value| integer_value(value) as i32)
-                    .collect(),
-            ),
-            Some(3) => Tag::LongArray(values.into_iter().map(integer_value).collect()),
-            _ => Tag::List(values),
-        })
+        Ok(Tag::List(values))
     }
     fn sign(&mut self) -> bool {
         self.eat(b'-') || {
@@ -441,8 +560,28 @@ impl<'a> Parser<'a> {
             false
         }
     }
-    fn digits(&mut self, radix: u32) -> Result<Option<String>, SnbtError> {
+    fn digits(&mut self, radix: u32) -> Result<Option<Cow<'a, str>>, SnbtError> {
         self.skip();
+        if let Input::Utf8(text) = self.input {
+            let bytes = text.as_bytes();
+            let start = self.cursor;
+            let mut end = start;
+            while let Some(&b) = bytes.get(end) {
+                if b != b'_' && !is_ascii_digit_radix(b, radix) {
+                    break;
+                }
+                end += 1;
+            }
+            self.cursor = end;
+            if start == end {
+                return Ok(None);
+            }
+            let slice = &text[start..end];
+            if slice.starts_with('_') || slice.ends_with('_') {
+                return Err(self.error("snbt.parser.underscore_not_allowed"));
+            }
+            return Ok(Some(Cow::Borrowed(slice)));
+        }
         let mut text = String::new();
         while let Some(c) = self.peek().and_then(char::from_u32) {
             if c != '_' && !c.is_digit(radix) {
@@ -457,10 +596,10 @@ impl<'a> Parser<'a> {
         if text.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(text))
+            Ok(Some(Cow::Owned(text)))
         }
     }
-    fn required_digits(&mut self, radix: u32) -> Result<String, SnbtError> {
+    fn required_digits(&mut self, radix: u32) -> Result<Cow<'a, str>, SnbtError> {
         self.digits(radix)?.ok_or_else(|| {
             self.error(match radix {
                 2 => "snbt.parser.expected_binary_numeral",
@@ -469,43 +608,34 @@ impl<'a> Parser<'a> {
             })
         })
     }
-    fn exponent(&mut self, text: &mut String) -> Result<bool, SnbtError> {
+    fn parse_exponent(&mut self) -> Result<Option<(bool, Cow<'a, str>)>, SnbtError> {
         if !self.eat(b'e') && !self.eat(b'E') {
-            return Ok(false);
+            return Ok(None);
         }
-        text.push('e');
-        if self.sign() {
-            text.push('-');
-        }
-        text.push_str(&self.required_digits(10)?);
-        Ok(true)
+        let exp_minus = self.sign();
+        let exp_digits = self.required_digits(10)?;
+        Ok(Some((exp_minus, exp_digits)))
     }
     fn float(&mut self) -> Result<Option<Tag>, SnbtError> {
         let start = self.cursor;
         let minus = self.sign();
         let whole = self.digits(10)?;
-        let mut text = String::new();
-        if minus {
-            text.push('-');
-        }
-        if let Some(whole) = &whole {
-            text.push_str(whole);
-        }
         let dot = self.eat(b'.');
-        if dot {
-            text.push('.');
+        let fraction = if dot {
             match self.digits(10)? {
-                Some(fraction) => text.push_str(&fraction),
+                Some(fraction) => Some(fraction),
                 None if whole.is_none() => {
                     return Err(self.error("snbt.parser.expected_decimal_numeral"));
                 }
-                None => {}
+                None => None,
             }
         } else if whole.is_none() {
             self.cursor = start;
             return Ok(None);
-        }
-        let exponent = self.exponent(&mut text)?;
+        } else {
+            None
+        };
+        let exponent = self.parse_exponent()?;
         let suffix_start = self.cursor;
         let suffix = self.lower().filter(|suffix| matches!(suffix, b'f' | b'd'));
         if suffix.is_none() {
@@ -516,11 +646,51 @@ impl<'a> Parser<'a> {
         } else {
             self.cursor = suffix_start;
         }
-        if !dot && !exponent && suffix.is_none() {
+        if !dot && exponent.is_none() && suffix.is_none() {
             self.cursor = start;
             return Ok(None);
         }
-        text.retain(|c| c != '_');
+        let mut stack = [0u8; 64];
+        let mut len = 0usize;
+        let mut heap = String::new();
+        let mut push_bytes = |slice: &[u8]| {
+            for &b in slice {
+                if b == b'_' {
+                    continue;
+                }
+                if !heap.is_empty() {
+                    heap.push(char::from(b));
+                } else if len < stack.len() {
+                    stack[len] = b;
+                    len += 1;
+                } else {
+                    heap.reserve(96);
+                    heap.push_str(std::str::from_utf8(&stack[..len]).expect("ASCII float"));
+                    heap.push(char::from(b));
+                }
+            }
+        };
+        if minus {
+            push_bytes(b"-");
+        }
+        if let Some(whole) = &whole {
+            push_bytes(whole.as_bytes());
+        }
+        if dot {
+            push_bytes(b".");
+            if let Some(fraction) = &fraction {
+                push_bytes(fraction.as_bytes());
+            }
+        }
+        if let Some((exp_minus, exp_digits)) = &exponent {
+            push_bytes(if *exp_minus { b"e-" } else { b"e" });
+            push_bytes(exp_digits.as_bytes());
+        }
+        let text = if !heap.is_empty() {
+            heap.as_str()
+        } else {
+            std::str::from_utf8(&stack[..len]).expect("ASCII float")
+        };
         if suffix == Some(b'f') {
             let value = text
                 .parse::<f32>()
@@ -549,7 +719,7 @@ impl<'a> Parser<'a> {
     }
     fn integer(&mut self, array: Option<u8>) -> Result<Tag, SnbtError> {
         let minus = self.sign();
-        let (mut digits, radix) = if self.eat(b'0') {
+        let (digits, radix) = if self.eat(b'0') {
             if self.eat(b'x') || self.eat(b'X') {
                 (self.required_digits(16)?, 16)
             } else {
@@ -567,7 +737,7 @@ impl<'a> Parser<'a> {
                         return Err(self.error("snbt.parser.leading_zero_not_allowed"));
                     }
                     self.cursor = after_zero;
-                    ("0".to_owned(), 10)
+                    (Cow::Borrowed("0"), 10)
                 }
             }
         } else {
@@ -613,10 +783,14 @@ impl<'a> Parser<'a> {
         if minus && !signed {
             return Err(self.error("snbt.parser.expected_non_negative_number"));
         }
-        digits.retain(|c| c != '_');
+        let cleaned: Cow<'_, str> = if digits.as_bytes().contains(&b'_') {
+            Cow::Owned(digits.chars().filter(|&c| c != '_').collect())
+        } else {
+            digits
+        };
         let bits = [8, 16, 32, 64][usize::from(kind)];
-        let magnitude = u64::from_str_radix(&digits, radix)
-            .map_err(|_| self.integer_error(&digits, minus, kind, signed, radix, None))?;
+        let magnitude = u64::from_str_radix(&cleaned, radix)
+            .map_err(|_| self.integer_error(&cleaned, minus, kind, signed, radix, None))?;
         let max = if signed {
             (1u64 << (bits - 1)) - 1 + u64::from(minus)
         } else if bits == 64 {
@@ -625,7 +799,7 @@ impl<'a> Parser<'a> {
             (1u64 << bits) - 1
         };
         if magnitude > max {
-            return Err(self.integer_error(&digits, minus, kind, signed, radix, Some(magnitude)));
+            return Err(self.integer_error(&cleaned, minus, kind, signed, radix, Some(magnitude)));
         }
         let value = if minus {
             magnitude.wrapping_neg() as i64
@@ -657,7 +831,7 @@ impl<'a> Parser<'a> {
                 self.cursor = start;
                 return Err(self.error("snbt.parser.invalid_unquoted_start"));
             }
-            Ok(Tag::String(word.as_str().into()))
+            Ok(Tag::String(word.as_ref().into()))
         }
     }
     fn arguments(&mut self, word: &str) -> Result<Tag, SnbtError> {
