@@ -7916,17 +7916,42 @@ mod tests {
                 Page::ModBrowser,
             ]
         );
-        // No AI hides the AI Agent page.
+        // No AI greys AI Agent... out and moves neither it nor the switch (#18635).
+        let agent_and_switch = |ui: &mut OptionsUi, s: &Settings| {
+            let (widgets, _, _, _) = ui.layout(s, 427.0, 240.0);
+            widgets
+                .into_iter()
+                .filter_map(|w| match w.kind {
+                    WKind::Button {
+                        act: act @ (Act::Push(Page::Agent) | Act::Extra(crate::extras::Item::NoAi)),
+                        active,
+                        ..
+                    } => Some((act, active, [w.x, w.y, w.w, w.h])),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
         let mut no_ai = Settings::default();
         no_ai.extras.no_ai = true;
-        let (widgets, _, _, _) = ui.layout(&no_ai, 427.0, 240.0);
-        assert!(!widgets.iter().any(|w| matches!(
-            &w.kind,
-            WKind::Button {
-                act: Act::Push(Page::Agent),
-                ..
-            }
-        )));
+        let off = agent_and_switch(&mut ui, &s);
+        let on = agent_and_switch(&mut ui, &no_ai);
+        let states = |buttons: &[(Act, bool, [f32; 4])]| -> Vec<(Act, bool)> {
+            buttons
+                .iter()
+                .map(|(act, active, _)| (act.clone(), *active))
+                .collect()
+        };
+        let agent = Act::Push(Page::Agent);
+        let switch = Act::Extra(crate::extras::Item::NoAi);
+        assert_eq!(
+            states(&off),
+            [(agent.clone(), true), (switch.clone(), true)]
+        );
+        assert_eq!(states(&on), [(agent, false), (switch, true)]);
+        let places = |buttons: &[(Act, bool, [f32; 4])]| -> Vec<[f32; 4]> {
+            buttons.iter().map(|b| b.2).collect()
+        };
+        assert_eq!(places(&on), places(&off));
         // The AI Agent page: the switch, Copy and the status the game sets.
         ui.push(Page::Agent);
         ui.agent_status = vec!["Waiting for an agent.".into()];

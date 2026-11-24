@@ -108,6 +108,15 @@ impl OptionsUi {
         // registry's mod browser is Horizon's own and opens from here, not from the
         // two-button Mods footer.
         let open = |key: &str, page: Page| button(0.0, 0.0, 150.0, tr(key), Act::Push(page));
+        // No AI keeps AI Agent... in its place but greyed out, as vanilla's Options screen
+        // does with a Difficulty it can't change: a row that changed shape moved the switch
+        // away from the cursor that had just clicked it (#18635).
+        let agent = open("horizon.pages.open.agent", Page::Agent);
+        let agent = if s.extras.no_ai {
+            inactive(agent)
+        } else {
+            agent
+        };
         let mut rows: Vec<Row> = vec![
             Row::Buttons(
                 open("horizon.pages.open.extras", Page::Extras),
@@ -124,15 +133,7 @@ impl OptionsUi {
                 ),
                 Some(open("horizon.pages.open.studio", Page::Studio)),
             ),
-            // No AI hides the AI Agent page and everything AI.
-            if s.extras.no_ai {
-                Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
-            } else {
-                Row::Buttons(
-                    open("horizon.pages.open.agent", Page::Agent),
-                    Some(self.extra_button(s, crate::extras::Item::NoAi)),
-                )
-            },
+            Row::Buttons(agent, Some(self.extra_button(s, crate::extras::Item::NoAi))),
             Row::Buttons(open("horizon.mods.browse", Page::ModBrowser), None),
         ];
         self.added_entries(&mut rows);

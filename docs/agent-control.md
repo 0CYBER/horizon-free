@@ -172,7 +172,7 @@ The switch is in three places: Settings > AI in the launcher, Horizon Settings i
 
 | Surface | What happens |
 | --- | --- |
-| Game | opens no control socket, even with `--control` (it logs the refusal); Horizon Settings hides AI Agent...; turning it on in a running game closes the socket at once |
+| Game | opens no control socket, even with `--control` (it logs the refusal); Horizon Settings greys out AI Agent... in its place; turning it on in a running game closes the socket at once |
 | `horizon-ctl` | every command refuses: exit status 4, `{"error": REFUSAL, "kind": "denied"}` |
 | `horizon-ctl mcp` | refuses to start (exit 4, REFUSAL on stderr); a session already running refuses each call |
 | `horizon-launcher mcp` | refuses to start; a running session answers each `tools/call` with error -32000 and REFUSAL |
@@ -505,7 +505,7 @@ of the frame ([#8750](https://github.com/horizon-rust/horizon/issues/8750)).
     network annotations;
   - the launcher: generated tools, `confirm`, the reference, the agent configs;
   - `horizon_core::no_ai`;
-  - `options_ui`: the AI Agent page, and that No AI hides it;
+  - `options_ui`: the AI Agent page, and that No AI greys its button out without moving the switch;
   - `input_trace`: origins, the ring, the intrusion rule, `input-log` and the recording writer;
   - `repro`: the format's round trip, the folder slug and the world copy.
 - **`tools/agent_control_e2e.py`** drives a real game, offscreen on macOS and on a virtual screen
