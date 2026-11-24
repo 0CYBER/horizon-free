@@ -113,6 +113,79 @@ pub struct Layer {
     pub full_bright: bool,
     /// `RenderTypes.breezeWind`: the texture scrolls with the entity's age.
     pub scroll: f32,
+    /// The slot of what the mob wears that this layer draws (its armour, its body armour), which
+    /// a mod's `render_worn_equipment` can hide or tint; None for the mob's own layers.
+    pub worn: Option<mod_api::EquipmentRenderSlot>,
+}
+
+thread_local! {
+    /// What the mods' `render_worn_equipment` left of the worn and held items of the entity
+    /// being drawn on this thread ([`EquipmentScope`]); everything shown outside one.
+    static SHOWN_EQUIPMENT: std::cell::Cell<mod_api::EquipmentRender> =
+        const { std::cell::Cell::new(mod_api::EquipmentRender::new()) };
+}
+
+/// Draws one entity's worn and held items as a mod's `render_worn_equipment` left them, until
+/// it is dropped: its armour and body layers here, and the game's armour, wings, held and head
+/// items, read it ([`shown_equipment`]). Draws outside one (a screen's preview of the player)
+/// show everything.
+#[must_use]
+pub struct EquipmentScope(mod_api::EquipmentRender);
+impl EquipmentScope {
+    /// Shows the entity's equipment as `shown` says until the scope is dropped.
+    pub fn enter(shown: mod_api::EquipmentRender) -> Self {
+        Self(SHOWN_EQUIPMENT.replace(shown))
+    }
+}
+impl Drop for EquipmentScope {
+    fn drop(&mut self) {
+        SHOWN_EQUIPMENT.set(self.0);
+    }
+}
+/// How the entity being drawn shows its equipment ([`EquipmentScope`]).
+pub fn shown_equipment() -> mod_api::EquipmentRender {
+    SHOWN_EQUIPMENT.get()
+}
+/// A vertex colour (RGBA8, red in the low byte) times a mod's tint `rgb` (`0xRRGGBB`), each
+/// channel times the tint's over 255; the alpha stays.
+pub fn tinted(color: u32, rgb: u32) -> u32 {
+    if rgb & 0xFF_FFFF == 0xFF_FFFF {
+        return color;
+    }
+    let channel = |c: u32, t: u32| (c & 0xFF) * (t & 0xFF) / 255;
+    color & 0xFF00_0000
+        | channel(color >> 16, rgb) << 16
+        | channel(color >> 8, rgb >> 8) << 8
+        | channel(color, rgb >> 16)
+}
+/// [`tinted`] on every vertex of a slot's draws.
+pub fn tint_vertices(vertices: &mut [Vertex], rgb: u32) {
+    if rgb & 0xFF_FFFF != 0xFF_FFFF {
+        for v in vertices {
+            v.color = tinted(v.color, rgb);
+        }
+    }
+}
+/// One draw of `slot` in `color` with `overlay`, its base or its trim (`part`), as `shown` lets
+/// it be drawn: None when it is hidden, else its colour tinted and its overlay without the
+/// armour glint when the glint is hidden.
+pub fn shown_draw(
+    shown: &mod_api::EquipmentRender,
+    slot: mod_api::EquipmentRenderSlot,
+    part: mod_api::EquipmentRenderPart,
+    color: u32,
+    overlay: u32,
+) -> Option<(u32, u32)> {
+    if shown.hides(slot, part) {
+        return None;
+    }
+    let overlay =
+        if overlay == ARMOR_GLINT && shown.hides(slot, mod_api::EquipmentRenderPart::Glint) {
+            0
+        } else {
+            overlay
+        };
+    Some((tinted(color, shown.tint_color(slot)), overlay))
 }
 /// DyeColor.getTextureDiffuseColor (RGB).
 pub const DYE: [u32; 16] = [
@@ -626,7 +699,20 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
             color,
             full_bright,
             scroll: 0.0,
+            worn: None,
         })
+    }
+    /// `push` for a layer of what the mob wears in its body slot.
+    fn push_body(
+        v: &mut Vec<Layer>,
+        model: impl Into<Cow<'static, str>>,
+        texture: impl Into<Cow<'static, str>>,
+        color: u32,
+    ) {
+        push(v, model, texture, color, false);
+        if let Some(layer) = v.last_mut() {
+            layer.worn = Some(mod_api::EquipmentRenderSlot::Body);
+        }
     }
     match m.species() {
         // WolfArmorLayer, then WolfCollarLayer.
@@ -640,23 +726,21 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
             if !m.is_baby() && m.extra.body_id() == Some("minecraft:wolf_armor") {
                 let left = (super::WOLF_ARMOR_DURABILITY - m.extra.body_damage()) as f32
                     / super::WOLF_ARMOR_DURABILITY as f32;
-                push(
+                push_body(
                     &mut v,
                     "wolf_armor#main",
                     "entity/equipment/wolf_body/armadillo_scute",
                     white,
-                    false,
                 );
                 let crack = [(0.32, "high"), (0.69, "medium"), (0.95, "low")]
                     .iter()
                     .find(|(t, _)| left < *t);
                 if let Some((_, level)) = crack {
-                    push(
+                    push_body(
                         &mut v,
                         "wolf_armor#main",
                         interned(format_args!("entity/wolf/wolf_armor_crackiness_{level}")),
                         white,
-                        false,
                     );
                 }
             }
@@ -677,13 +761,7 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
             if !m.is_baby()
                 && let Some(texture) = &harness
             {
-                push(
-                    &mut v,
-                    "happy_ghast_harness#main",
-                    texture.clone(),
-                    white,
-                    false,
-                );
+                push_body(&mut v, "happy_ghast_harness#main", texture.clone(), white);
             }
             // RopesLayer: the ropes over a harnessed body while the ghast
             // holds a quad lead (`isLeashHolder`), the baby's model for a baby.
@@ -712,6 +790,7 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
                 color: white,
                 full_bright: false,
                 scroll: scroll_offset(age, BREEZE_WIND_SCROLL),
+                worn: None,
             });
             push(
                 &mut v,
@@ -724,7 +803,12 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
         // LlamaDecorLayer: the carpet, or the trader's blanket.
         S::Llama | S::TraderLlama => {
             if let Some((model, texture)) = super::llama::decor(m) {
-                push(&mut v, model, texture, white, false);
+                // The carpet is worn in the body slot; the trader's own blanket is not.
+                if super::llama::carpet(m).is_some() && !m.is_baby() {
+                    push_body(&mut v, model, texture, white);
+                } else {
+                    push(&mut v, model, texture, white, false);
+                }
             }
         }
         // HorseMarkingLayer, the saddle and the horse armour.
@@ -764,7 +848,7 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
                 } else {
                     "horse_armor#main"
                 };
-                push(&mut v, layer, tex, color, false);
+                push_body(&mut v, layer, tex, color);
             }
         }
         // SimpleEquipmentLayer: pig and strider saddles.
@@ -806,7 +890,7 @@ pub fn layers(m: &Mob, age: f32, worn: &WornArmor) -> Vec<Layer> {
         // NautilusRenderer: the armour and saddle SimpleEquipmentLayers.
         S::Nautilus | S::ZombieNautilus if !m.is_baby() => {
             if let Some(texture) = m.extra.body_id().and_then(super::nautilus::armor_texture) {
-                push(&mut v, "nautilus_armor#main", texture, white, false);
+                push_body(&mut v, "nautilus_armor#main", texture, white);
             }
             if m.extra.saddled() {
                 push(
@@ -1049,8 +1133,14 @@ fn humanoid_armor(m: &Mob, worn: &WornArmor, v: &mut Vec<Layer>) {
     let Some(base) = model.strip_suffix("#main") else {
         return;
     };
-    let slots = ["helmet", "chestplate", "leggings", "boots"];
-    for (i, (slot, layer)) in horizon_items::equipment::ARMOR
+    use mod_api::EquipmentRenderSlot as Worn;
+    let slots = [
+        ("helmet", Worn::Head),
+        ("chestplate", Worn::Chest),
+        ("leggings", Worn::Legs),
+        ("boots", Worn::Feet),
+    ];
+    for (i, (slot, (layer, part))) in horizon_items::equipment::ARMOR
         .into_iter()
         .zip(slots)
         .enumerate()
@@ -1067,6 +1157,7 @@ fn humanoid_armor(m: &Mob, worn: &WornArmor, v: &mut Vec<Layer>) {
                 color: armor_tint(*undyed, stack),
                 full_bright: false,
                 scroll: 0.0,
+                worn: Some(part),
             });
         }
     }
@@ -2035,6 +2126,7 @@ pub fn drawn_textures(m: &Mob, data: &MobData, worn: &WornArmor) -> Vec<String> 
                 color: 0,
                 full_bright: true,
                 scroll: 0.0,
+                worn: None,
             });
         }
     }
@@ -2288,6 +2380,7 @@ fn render_visible(
                     color: ((a.clamp(0.0, 1.0) * 255.0) as u32) << 24 | 0x00FF_FFFF,
                     full_bright: true,
                     scroll: 0.0,
+                    worn: None,
                 });
             }
         }
@@ -2410,6 +2503,7 @@ fn render_visible(
     // its maps' capacity. Only borrow from the pool when this mob actually has layers or swirl.
     let mut layer_poses = Option::<anim::PooledPoses>::None;
     let body_keys = [&*model_key, cem_key];
+    let shown = shown_equipment();
     for (i, layer) in all_layers.iter().enumerate() {
         let custom = (!cem.is_empty()).then(|| cem.layer(&layer.model)).flatten();
         // `layer.texture` stays the vanilla name (the villager hats below look for its
@@ -2479,6 +2573,17 @@ fn render_visible(
             Some(_) => 0,
             None => overlay,
         };
+        // What it wears, as a mod's `render_worn_equipment` lets it be drawn.
+        let (color, overlay) = match layer.worn {
+            Some(slot) => {
+                let base_part = mod_api::EquipmentRenderPart::Base;
+                match shown_draw(&shown, slot, base_part, layer.color, overlay) {
+                    Some(color_and_overlay) => color_and_overlay,
+                    None => continue,
+                }
+            }
+            None => (layer.color, overlay),
+        };
         let start = out.len();
         let first_job = skin.as_deref().map(|skin| skin.frame.jobs.len());
         put(
@@ -2488,7 +2593,7 @@ fn render_visible(
             active_poses,
             uv,
             layer.scroll,
-            layer.color,
+            color,
             light,
             overlay,
             out,
@@ -2501,7 +2606,7 @@ fn render_visible(
                 active_poses,
                 glow,
                 layer.scroll,
-                layer.color,
+                color,
                 FULL_BRIGHT,
                 0,
                 out,
@@ -3131,6 +3236,108 @@ mod tests {
                 assert_eq!(a, b, "{part:?}");
             }
         }
+    }
+
+    /// A mod's `render_worn_equipment` (horizon-rust/horizon#11072): inside its scope a mob's
+    /// worn armour is left out, drawn without its glint or tinted, slot by slot, while the body
+    /// and the other slots draw as before; outside it everything draws again.
+    #[test]
+    fn an_equipment_scope_hides_unglints_and_tints_a_mobs_armour() {
+        use horizon_items::equipment::{FEET, HEAD};
+        use mod_api::{EquipmentRender, EquipmentRenderPart as Drawn, EquipmentRenderSlot as Worn};
+        let (zombie, data) = humanoid_zombie();
+        let mut kind = (*zombie.kind).clone();
+        // The armour models: the body's own, one face a part.
+        for layer in ["zombie#helmet", "zombie#boots"] {
+            kind.layers.insert(layer.into(), kind.model.clone());
+        }
+        let mut mob = Mob::new(
+            1,
+            std::sync::Arc::new(kind),
+            horizon_core::geometry::Vec3::ZERO,
+            0.0,
+        );
+        mob.age = 37;
+        let atlas = |_: &str| Some([0.0, 0.0, 1.0, 1.0]);
+        // Iron's one equipment layer, as the game resolves it for each slot that wears it.
+        let iron = [("entity/equipment/humanoid/iron".to_owned(), None)];
+        let draw = |mob: &Mob| {
+            let worn: WornArmor = std::array::from_fn(|i| {
+                mob.extra
+                    .slot_stack(horizon_items::equipment::ARMOR[i])
+                    .map(|_| &iron[..])
+            });
+            let mut out = Vec::new();
+            render_with_hidden(
+                mob,
+                0.5,
+                glam::DVec3::ZERO,
+                &atlas,
+                0xf0f0,
+                &data,
+                &worn,
+                &[],
+                Default::default(),
+                None,
+                &mut out,
+            );
+            out
+        };
+        let whole = draw(&mob).len();
+        assert!(whole > 0);
+        let armour = |name: &str| Some(horizon_client::items::ItemStack::new(name, 1));
+        mob.extra
+            .equipment
+            .set(HEAD, armour("minecraft:iron_helmet"));
+        mob.extra
+            .equipment
+            .set(FEET, armour("minecraft:iron_boots"));
+        // An enchanted helmet: its layer has the glint.
+        let protection = vec![("minecraft:protection".into(), 1)];
+        crate::mobs::gear::set(&mut mob, crate::mobs::gear::HEAD, protection);
+        let worn = draw(&mob);
+        assert_eq!(worn.len(), 3 * whole, "the body, the helmet, the boots");
+        let (helmet, boots) = (&worn[whole..2 * whole], &worn[2 * whole..]);
+        assert!(
+            helmet
+                .iter()
+                .all(|v| v.layer == ARMOR_GLINT && v.color == 0xFFFF_FFFF)
+        );
+        assert!(boots.iter().all(|v| v.layer == 0 && v.color == 0xFFFF_FFFF));
+        let scoped = |shown: EquipmentRender| {
+            let _scope = EquipmentScope::enter(shown);
+            draw(&mob)
+        };
+        // The helmet hidden: the boots follow the body.
+        let mut shown = EquipmentRender::new();
+        shown.hide(Worn::Head, Drawn::Base);
+        let hidden = scoped(shown);
+        assert_eq!(hidden.len(), 2 * whole);
+        assert!(hidden[whole..].iter().all(|v| v.layer == 0));
+        // Its glint hidden: the helmet draws plain.
+        let mut shown = EquipmentRender::new();
+        shown.hide(Worn::Head, Drawn::Glint);
+        let plain = scoped(shown);
+        assert_eq!(plain.len(), 3 * whole);
+        assert!(
+            plain[whole..2 * whole]
+                .iter()
+                .all(|v| v.layer == 0 && v.glint_uv == [0.0, 0.0])
+        );
+        // The boots tinted red: their green and blue go, red and alpha stay; the rest is as it was.
+        let mut shown = EquipmentRender::new();
+        shown.tint(Worn::Feet, 0xFF_0000);
+        let red = scoped(shown);
+        assert_eq!(red.len(), 3 * whole);
+        assert!(red[2 * whole..].iter().all(|v| v.color == 0xFF00_00FF));
+        let colors = |v: &[Vertex]| v.iter().map(|v| v.color).collect::<Vec<_>>();
+        assert_eq!(colors(&red[..2 * whole]), colors(&worn[..2 * whole]));
+        // A slot it doesn't wear changes nothing, and outside the scope everything draws again.
+        let mut shown = EquipmentRender::new();
+        shown.hide(Worn::Chest, Drawn::Base);
+        assert_eq!(scoped(shown).len(), 3 * whole);
+        assert_eq!(shown_equipment(), EquipmentRender::new());
+        assert_eq!(colors(&draw(&mob)), colors(&worn));
     }
 
     #[test]

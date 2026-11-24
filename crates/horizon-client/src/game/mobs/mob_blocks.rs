@@ -143,6 +143,12 @@ impl Game<'_> {
         if !horizon_client::mobs::raider::is_captain(mob) {
             return;
         }
+        // The entity drawn now, as a mod's `render_worn_equipment` lets its head slot be drawn.
+        let shown = render::shown_equipment();
+        let worn = mod_api::EquipmentRenderSlot::Head;
+        if shown.hides(worn, mod_api::EquipmentRenderPart::Base) {
+            return;
+        }
         let Some((pole, flag)) = &self.entity_models.banner else {
             return;
         };
@@ -164,6 +170,7 @@ impl Game<'_> {
         );
         let still = Poses::new(pole);
         let white = 0xFFFF_FFFF;
+        let start = out.len();
         if let Some(r) = uv("entity/banner/banner_base") {
             render::draw(pole, m, &still, r, white, light, 0, out);
             render::draw(flag, m, &flag_poses, r, white, light, 0, out);
@@ -181,6 +188,7 @@ impl Game<'_> {
             let color = render::abgr(render::dye(index));
             render::draw(flag, m, &flag_poses, r, color, light, 0, out);
         }
+        render::tint_vertices(&mut out[start..], shown.tint_color(worn));
     }
     /// `BlockModelRenderState.submit` of a block state's baked model, as every block layer of
     /// a mob draws it (`CarriedBlockLayer`, `MushroomCowMushroomLayer`, `SnowGolemHeadLayer`,
@@ -399,6 +407,9 @@ impl Game<'_> {
         mut skin: Option<&mut super::creatures::Skinned>,
         out: &mut Vec<Vertex>,
     ) {
+        // The entity drawn now, as a mod's `render_worn_equipment` lets its hands be drawn.
+        let shown = render::shown_equipment();
+        use mod_api::{EquipmentRenderPart as Drawn, EquipmentRenderSlot as Worn};
         // ItemInHandLayer submits with OverlayTexture.NO_OVERLAY: no hurt tint.
         for (slot, off_hand) in [
             (horizon_items::equipment::MAINHAND, false),
@@ -407,6 +418,14 @@ impl Game<'_> {
             let Some(item) = mob.extra.slot_stack(slot).map(|s| &s.item) else {
                 continue;
             };
+            let worn_hand = if off_hand {
+                Worn::OffHand
+            } else {
+                Worn::MainHand
+            };
+            if shown.hides(worn_hand, Drawn::Base) {
+                continue;
+            }
             let left = off_hand != mob.main_arm_left();
             // PlayerItemInHandLayer.submitArmWithItem (avatars only): a spyglass
             // in use, with no swing in progress, is held to the eye (`heldOnHead`).
@@ -505,18 +524,28 @@ impl Game<'_> {
             } else {
                 horizon_client::cit::Hand::Main
             };
-            let state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, hand);
+            let mut state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, hand);
+            if shown.hides(worn_hand, Drawn::Glint) {
+                for layer in &mut state.layers {
+                    layer.foil = horizon_assets::item_model::FoilType::None;
+                }
+            }
+            // A tinted item is drawn on the CPU, where its colours are multiplied.
+            let tint = shown.tint_color(worn_hand);
             if lit
+                && tint == 0xFF_FFFF
                 && let Some(skinned) = skin.as_deref_mut()
                 && self.skin_item_into(&state, t, light, skinned)
             {
                 continue;
             }
+            let start = out.len();
             if lit {
                 self.submit_item_world(&state, t, light, out);
             } else {
                 self.submit_item_unlit(&state, t, light, out);
             }
+            render::tint_vertices(&mut out[start..], tint);
         }
     }
     /// `CustomHeadLayer`: non-armour items worn in the head slot (carved
@@ -540,6 +569,13 @@ impl Game<'_> {
         {
             return;
         }
+        // The entity drawn now, as a mod's `render_worn_equipment` lets its head slot be drawn.
+        let shown = render::shown_equipment();
+        let worn = mod_api::EquipmentRenderSlot::Head;
+        if shown.hides(worn, mod_api::EquipmentRenderPart::Base) {
+            return;
+        }
+        let unglinted = shown.hides(worn, mod_api::EquipmentRenderPart::Glint);
         let local_player = self
             .player_model
             .as_ref()
@@ -629,6 +665,7 @@ impl Game<'_> {
                     }
                 },
             };
+            let start = out.len();
             let mut sink = horizon_client::item_render::WorldSink {
                 out,
                 light,
@@ -648,7 +685,7 @@ impl Game<'_> {
                 .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
                 .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
                 .unwrap_or(serde_json::Value::Null);
-            let has_foil = stack.data().is_some_and(|d| !d.enchantments.is_empty());
+            let has_foil = !unglinted && stack.data().is_some_and(|d| !d.enchantments.is_empty());
             self.pack.item_renderer.submit_special(
                 &special,
                 &profile,
@@ -658,6 +695,7 @@ impl Game<'_> {
                 &self.item_host(),
                 &mut sink,
             );
+            render::tint_vertices(&mut sink.out[start..], shown.tint_color(worn));
             return;
         }
         use horizon_assets::item_model::DisplayContext;
@@ -671,12 +709,19 @@ impl Game<'_> {
             &mob.kind.id,
         );
         let seed = mob.id as i32 + 5;
-        let state = self.resolve_item(&stack, DisplayContext::Head, Some(&owner), seed);
+        let mut state = self.resolve_item(&stack, DisplayContext::Head, Some(&owner), seed);
+        if unglinted {
+            for layer in &mut state.layers {
+                layer.foil = horizon_assets::item_model::FoilType::None;
+            }
+        }
+        let start = out.len();
         if lit {
             self.submit_item_world(&state, pose, light, out);
         } else {
             self.submit_item_unlit(&state, pose, light, out);
         }
+        render::tint_vertices(&mut out[start..], shown.tint_color(worn));
     }
 }
 

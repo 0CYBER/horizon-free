@@ -380,15 +380,21 @@ impl Game<'_> {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = Vec::new();
-        for (item, (layer, slot)) in worn.into_iter().zip([
-            ("helmet", "head"),
-            ("chestplate", "chest"),
-            ("leggings", "legs"),
-            ("boots", "feet"),
+        // The entity drawn now, as a mod's `render_worn_equipment` lets its armour be drawn.
+        let shown = horizon_client::mobs::render::shown_equipment();
+        use mod_api::{EquipmentRenderPart as Drawn, EquipmentRenderSlot as Worn};
+        for (item, (layer, slot, worn_slot)) in worn.into_iter().zip([
+            ("helmet", "head", Worn::Head),
+            ("chestplate", "chest", Worn::Chest),
+            ("leggings", "legs", Worn::Legs),
+            ("boots", "feet", Worn::Feet),
         ]) {
             let Some((item, stack)) = item else {
                 continue;
             };
+            if shown.hides(worn_slot, Drawn::Base) {
+                continue;
+            }
             // HumanoidArmorLayer.renderArmorPiece: the stack's own
             // `equippable`, drawn when it has an asset and is worn in its slot.
             let equippable = match stack {
@@ -433,8 +439,18 @@ impl Game<'_> {
                 let Some(uv) = self.armor_layer_rect(cit, &asset, kind, texture) else {
                     continue;
                 };
-                let color = layer_color(*undyed, stack);
-                out.push((part, uv, color, if i == 0 { overlay } else { 0 }, false));
+                let first = if i == 0 { overlay } else { 0 };
+                let shown_layer = horizon_client::mobs::render::shown_draw(
+                    &shown,
+                    worn_slot,
+                    Drawn::Base,
+                    layer_color(*undyed, stack),
+                    first,
+                );
+                let Some((color, first)) = shown_layer else {
+                    continue;
+                };
+                out.push((part, uv, color, first, false));
                 // The layer's OptiFine emissive overlay, full bright without the glint.
                 if let Some(g) = emissive
                     .overlay(texture)
@@ -446,8 +462,15 @@ impl Game<'_> {
             if let Some(r) = stack
                 .and_then(|s| assets.trim_texture(&asset, kind, s))
                 .and_then(|t| self.gui.atlas.sprites.get(&t.sprite()))
+                && let Some((color, overlay)) = horizon_client::mobs::render::shown_draw(
+                    &shown,
+                    worn_slot,
+                    Drawn::Trim,
+                    0xFFFF_FFFF,
+                    overlay,
+                )
             {
-                out.push((part, [r.u0, r.v0, r.u1, r.v1], 0xFFFF_FFFF, overlay, false));
+                out.push((part, [r.u0, r.v0, r.u1, r.v1], color, overlay, false));
             }
         }
         out

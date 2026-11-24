@@ -1,0 +1,3 @@
+# A mod's render_worn_equipment (horizon-rust/horizon#11072): these tests draw players from the prepared 26.3 data.
+horizon-client game::native_equipment_render_tests::a_mod_hides_and_tints_another_players_armour lib daily resources
+horizon-client game::native_equipment_render_tests::a_mod_hides_this_windows_players_held_item lib daily resources

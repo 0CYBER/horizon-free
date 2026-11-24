@@ -864,6 +864,9 @@ impl Game<'_> {
         let Some(hidden) = pre else {
             return;
         };
+        // What it wears and holds as a mod's `render_worn_equipment` lets it be drawn: its
+        // armour, wings, held and head items read it; the screens' previews don't.
+        let _equipment = self.mod_render_equipment(m, true, alpha as f32);
         // The mods' layers' posed parts, kept from the draw below while they want them.
         let mut parts = None;
         let layers = if shows(Layer::CustomLayers) {
@@ -1153,6 +1156,21 @@ impl Game<'_> {
             .extra
             .slot_stack(horizon_items::equipment::CHEST)
             .filter(|s| chest == Some(&*s.item));
+        // As a mod's `render_worn_equipment` lets the wings be drawn.
+        let shown = horizon_client::mobs::render::shown_equipment();
+        let (wings, glint) = (
+            mod_api::EquipmentRenderSlot::Elytra,
+            mod_api::EquipmentRenderPart::Glint,
+        );
+        if shown.hides(wings, mod_api::EquipmentRenderPart::Base) {
+            return;
+        }
+        let overlay = if shown.hides(wings, glint) {
+            0
+        } else {
+            self.wings_overlay(stack)
+        };
+        let start = out.len();
         self.wings_geometry(
             chest,
             stack,
@@ -1162,9 +1180,10 @@ impl Game<'_> {
             m.extra.elytra.angles(partial),
             m.extra.crouching,
             light,
-            self.wings_overlay(stack),
+            overlay,
             out,
         );
+        horizon_client::mobs::render::tint_vertices(&mut out[start..], shown.tint_color(wings));
     }
     /// `WingsLayer` draws through `EquipmentLayerRenderer.renderLayers`: the
     /// armour glint when the worn elytra `hasFoil()`.

@@ -18,7 +18,9 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{Mob, Species, anim, render, villager},
 };
-use mod_api::{EntityRenderState, FirstPersonBody, HiddenParts, HookId, PosedParts};
+use mod_api::{
+    EntityRenderState, EquipmentRender, FirstPersonBody, HiddenParts, HookId, PosedParts,
+};
 use std::cell::RefCell;
 
 /// Which of the four mob/player render hooks have at least one listener this frame.
@@ -46,10 +48,12 @@ impl MobRenderHooks {
 }
 
 /// What the frame's entity pass decided about the mods' render hooks: which hooks have
-/// listeners (asked once a frame), and the entities a pre hook canceled.
+/// listeners (asked once a frame), whether any listens to `render_worn_equipment`, and the
+/// entities a pre hook canceled.
 #[derive(Default)]
 struct EntityFrame {
     listened: MobRenderHooks,
+    equipment: bool,
     canceled: FxHashSet<u32>,
 }
 
@@ -67,8 +71,10 @@ pub(in crate::game) fn begin_entity_frame() {
         player_pre: mod_api::__private::listened(HookId::RenderPlayerPre),
         player_post: mod_api::__private::listened(HookId::RenderPlayerPost),
     };
+    let equipment = mod_api::__private::listened(HookId::RenderWornEquipment);
     FRAME.with_borrow_mut(|frame| {
         frame.listened = hooks;
+        frame.equipment = equipment;
         frame.canceled.clear();
     });
 }
@@ -251,6 +257,25 @@ impl Game<'_> {
         let id = render_id(mob.id, local, self.own_entity_id());
         FRAME.with_borrow_mut(|frame| frame.canceled.insert(id));
         None
+    }
+    /// What the mods' `render_worn_equipment` left of what `mob` wears and holds, asked after
+    /// its pre hooks didn't cancel (`local` marks this window's own player): a scope that draws
+    /// its armour, body, wings and held items that way until it is dropped, or None when no mod
+    /// listens or none hid or tinted anything.
+    pub(super) fn mod_render_equipment(
+        &self,
+        mob: &Mob,
+        local: bool,
+        partial: f32,
+    ) -> Option<render::EquipmentScope> {
+        // Every mob in view each frame: only when a mod listens.
+        if !FRAME.with_borrow(|frame| frame.equipment) {
+            return None;
+        }
+        let entity = mob_render(mob, render_id(mob.id, local, self.own_entity_id()), partial);
+        let mut equipment = EquipmentRender::new();
+        self.native_render_worn_equipment(&entity, &mut equipment);
+        (!equipment.is_empty()).then(|| render::EquipmentScope::enter(equipment))
     }
     /// The renderer a mod registered for `mob`'s type (`register_entity_renderers`), drawn in place
     /// of its model and its vanilla layers, from a draw at its feet, not turned: true when it
