@@ -3,7 +3,7 @@ use std::{fs, io::Write, process::Command};
 
 #[test]
 #[ignore = "daily"]
-fn use_jar_records_exact_metadata_hash_and_order_without_copying_the_jar() {
+fn use_jar_records_exact_metadata_hash_order_and_stages_jar() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
         "target/use-jar-{}-{}",
         std::process::id(),
@@ -54,8 +54,10 @@ fn use_jar_records_exact_metadata_hash_and_order_without_copying_the_jar() {
             .unwrap();
         zip.finish().unwrap();
         let before = fs::read_to_string(&manifest).unwrap();
+        let home = root.join("home");
         let result = Command::new(binary)
             .current_dir(&project)
+            .env("HORIZON_HOME", &home)
             .arg("use-jar")
             .arg(&path)
             .output()
@@ -76,8 +78,10 @@ fn use_jar_records_exact_metadata_hash_and_order_without_copying_the_jar() {
                 jar.sha512(),
                 format!("{:x}", Sha512::digest(fs::read(&path).unwrap()))
             );
+            assert!(jar.cache_path(&home.join("jars")).is_file());
             let repeat = Command::new(binary)
                 .current_dir(&project)
+                .env("HORIZON_HOME", &home)
                 .arg("use-jar")
                 .arg(&path)
                 .output()
@@ -118,6 +122,7 @@ fn use_jar_records_exact_metadata_hash_and_order_without_copying_the_jar() {
         fs::write(&manifest, &input).unwrap();
         let result = Command::new(binary)
             .current_dir(&project)
+            .env("HORIZON_HOME", root.join("home"))
             .arg("use-jar")
             .arg(root.join(jar_name))
             .output()
@@ -164,7 +169,11 @@ fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
     zip.finish().unwrap();
     let use_jar = |take: &[&str]| {
         let mut command = Command::new(binary);
-        command.current_dir(&project).arg("use-jar").arg(&jar);
+        command
+            .current_dir(&project)
+            .env("HORIZON_HOME", root.join("home"))
+            .arg("use-jar")
+            .arg(&jar);
         for prefix in take {
             command.args(["--take", prefix]);
         }

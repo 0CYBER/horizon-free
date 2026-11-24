@@ -45,8 +45,8 @@ cargo horizon-mod check target/horizon-mod/my_mod.hmod   # the registry's checks
   with `--key <public key> --signature <file>.minisig`. It reads `.hmod`, `.hpack`, resource pack `.zip`
   and `.hshader` files.
 - `registry build|review|check|list|release|page` is the registry repository's CI ([the registry index](../reference/registry-index.md)).
-- `use-jar <path> [--take <prefix>]...` records an original Java jar as an external asset/data source, without
-  copying it into the mod, optionally layering only the prefixes it takes
+- `use-jar <path> [--take <prefix>]...` records an original Java jar as an external asset/data source (staging its
+  bytes in `<game home>/jars/<sha512>.jar` outside the mod project), optionally layering only the prefixes it takes
   ([Java jars as external assets](#java-jars-as-external-assets)).
 
 ## Declare content in code
@@ -151,9 +151,11 @@ file in it is refused. A jar that takes no `data/` is client-only: servers and h
 ([Taking part of a jar](../reference/manifest.md#original-java-jar-layers)). Listing a jar already listed with
 another `take` is an error; edit its entry instead.
 
-Jar bytes stay external. The launcher finds the exact hash locally or asks before downloading that exact file from
-Modrinth. Its `assets/` and `data/` are passive pack layers below the Horizon mod's own files; a player-local runtime
-cache is not part of the mod package. Do not copy a jar or its extracted files into the mod's source or `.hmod`.
+Jar bytes stay outside the mod project and `.hmod`: `cargo horizon-mod use-jar` stages the verified jar into
+`<game home>/jars/<sha512>.jar` (`$HORIZON_HOME/jars` when set), and `cargo horizon-mod run` copies staged jars into
+any custom `--home` passed to the game. Its `assets/` and `data/` are passive pack layers below the Horizon mod's own
+files; a player-local runtime cache is not part of the mod package. Do not copy a jar or its extracted files into the
+mod's source or `.hmod`.
 A jar reference supplies assets and data, not the original Java behavior: port that behavior through the mod API.
 
 ### Content mods (API 0.2)

@@ -169,12 +169,32 @@ fn flag<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String> {
     }
 }
 
+/// Rejects unknown flags or unexpected extra arguments passed to `cargo horizon-mod new`.
+fn validate_new_args(args: &[String]) -> Result<(), String> {
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--name" | "--template" | "--horizon" => match args.get(i + 1) {
+                Some(value) if !value.starts_with("--") => i += 2,
+                _ => return Err(format!("{} needs a value", args[i])),
+            },
+            other => {
+                return Err(format!(
+                    "unknown option `{other}` for `cargo horizon-mod new` (expected --name, --template, or --horizon)"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Makes the mod `args` asks for; a code mod's folder is returned, for its SDK to be fetched.
 fn new(args: &[String]) -> Result<Option<PathBuf>, String> {
     let path = args
         .first()
         .filter(|a| !a.starts_with("--"))
         .ok_or("cargo horizon-mod new <path>")?;
+    validate_new_args(args)?;
     let dir = Path::new(path);
     if dir.exists() {
         return Err(format!("{} already exists", dir.display()));
@@ -680,6 +700,8 @@ fn run(args: &[String]) -> Result<(), RunError> {
     let (game, extra) = run_options(args).map_err(RunError::Build)?;
     // `run` packs content mods only (a code mod goes through the launcher), which carry no table.
     let path = build_in(Path::new(".")).map_err(RunError::Build)?;
+    jar::stage_for_run(Path::new("."), extra, &jar::default_jar_store())
+        .map_err(RunError::Build)?;
     let game = game
         .map(str::to_string)
         .or_else(|| std::env::var("HORIZON_CLIENT").ok())
@@ -791,6 +813,15 @@ mod tests {
             ])
             .is_err()
         );
+        let bad_dir = dir.join("typo");
+        let err = new(&[
+            bad_dir.display().to_string(),
+            "--templat".into(),
+            "native".into(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("--templat"), "{err}");
+        assert!(!bad_dir.exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

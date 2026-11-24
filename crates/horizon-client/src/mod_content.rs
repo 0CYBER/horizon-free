@@ -3476,8 +3476,8 @@ fn load_layers<'a>(jar_store: &Path, mods: &'a [ContentMod]) -> Result<Vec<ModLa
 
 /// Builds generated content tables for `mods` over `base` in `out`.
 /// Asset layers remain in their sources and are resolved by `resolved_resources`.
-/// Each jar's file is `<sha512>.jar` in `jar_store`, where the launcher
-/// puts it. A missing file refuses the load before decoded output is written.
+/// Each jar's file is `<sha512>.jar` in `jar_store` (staged there by
+/// `cargo horizon-mod use-jar` / `run`). A missing file refuses the load before decoded output is written.
 /// Returns warnings for shared tag replacements and duplicate asset paths.
 pub fn build(
     base: &Path,
