@@ -143,6 +143,20 @@ pub trait DrawContext {
     ) -> Result<(), SceneError> {
         Err(SceneError::Unavailable)
     }
+    /// Draws the same scene as [`draw_scene`](Self::draw_scene), then draws `overlays`
+    /// in the order given, with the same view and clip. The overlays blend with the scene
+    /// according to their ARGB alpha and depth mode without occluding one another by depth.
+    /// A bad overlay or more than [`SCENE_MAX_OVERLAYS`] overlays refuses the whole draw,
+    /// without advancing the scene clock.
+    fn draw_scene_with_overlays(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        overlays: &[SceneOverlay],
+    ) -> Result<(), SceneOverlayError> {
+        Err(SceneError::Unavailable.into())
+    }
     /// Draw a [`Scene`] with additional textured faces in its own coordinates. They
     /// use the scene's projection, scissor and depth along with its blocks, entities
     /// and particles, and do not need or change its clock. Invalid faces refuse the

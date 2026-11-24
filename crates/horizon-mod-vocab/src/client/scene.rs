@@ -194,6 +194,69 @@ pub const SCENE_MAX_PARTICLES: usize = 512;
 /// The most scenes with entities or particles that animate in one frame
 /// ([`SceneError::TooManyScenes`]).
 pub const SCENE_MAX_ANIMATING: usize = 4;
+/// The most overlays one scene draw takes ([`SceneOverlayError::TooManyOverlays`]).
+pub const SCENE_MAX_OVERLAYS: usize = 4096;
+
+/// How an overlay is occluded by the scene. Neither mode writes depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum SceneDepth {
+    /// Visible where it is at or in front of the scene's geometry.
+    Tested,
+    /// Visible even behind the scene's geometry.
+    ThroughWalls,
+}
+
+/// A solid annotation in the scene's block coordinates, with a packed ARGB color.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum SceneOverlay {
+    /// A line whose thickness is measured in GUI pixels, independent of the view scale.
+    Line {
+        /// Starting point in scene coordinates.
+        from: [f32; 3],
+        /// Ending point in scene coordinates.
+        to: [f32; 3],
+        /// Finite, positive width in GUI pixels.
+        width: f32,
+        /// Packed ARGB color, including alpha.
+        argb: u32,
+        /// Occlusion by the scene.
+        depth: SceneDepth,
+    },
+    /// A filled, double-sided quad.
+    Quad {
+        /// Four corners in order around the quad, in scene coordinates.
+        corners: [[f32; 3]; 4],
+        /// Packed ARGB color, including alpha.
+        argb: u32,
+        /// Occlusion by the scene.
+        depth: SceneDepth,
+    },
+}
+
+impl SceneOverlay {
+    /// Describes a solid line. A line seen end-on draws nothing.
+    pub fn line(from: [f32; 3], to: [f32; 3], width: f32, argb: u32, depth: SceneDepth) -> Self {
+        Self::Line {
+            from,
+            to,
+            width,
+            argb,
+            depth,
+        }
+    }
+
+    /// Describes a solid quad. Give the corners in order around its perimeter.
+    pub fn quad(corners: [[f32; 3]; 4], argb: u32, depth: SceneDepth) -> Self {
+        Self::Quad {
+            corners,
+            argb,
+            depth,
+        }
+    }
+}
 
 /// A scene `DrawContext::draw_scene` draws: its blocks, and optionally the entities
 /// standing in it, the particles the mod adds and the clock that ticks them. A scene of
@@ -353,6 +416,30 @@ pub enum SceneError {
     BadClock,
     /// Entities or particles without a clock.
     NoClock,
+}
+
+/// Why `draw_scene_with_overlays` refused a scene or its overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum SceneOverlayError {
+    /// The base scene was refused. If the animation budget was exceeded, the scene's
+    /// blocks, last state and overlays were still drawn.
+    Scene(SceneError),
+    /// More than [`SCENE_MAX_OVERLAYS`] overlays.
+    TooManyOverlays,
+    /// Nonfinite overlay coordinates, nonfinite projected coordinates, or a nonfinite
+    /// or nonpositive line width.
+    BadOverlay {
+        /// The overlay's index in `overlays`.
+        index: u32,
+    },
+}
+
+impl From<SceneError> for SceneOverlayError {
+    fn from(error: SceneError) -> Self {
+        Self::Scene(error)
+    }
 }
 
 /// The most textured quads one scene draw takes.

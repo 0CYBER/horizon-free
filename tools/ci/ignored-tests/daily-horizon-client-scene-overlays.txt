@@ -1,0 +1,1 @@
+horizon-client game::native_scene_overlay_tests::native_scene_overlays_test_against_blocks_without_writing_depth lib daily game-boot # Prepared resources and software Vulkan required.
