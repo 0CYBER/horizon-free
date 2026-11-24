@@ -1,0 +1,3 @@
+ids = ["hook:build_stars", "hook:render_stars", "type:BuildStarsEvent", "type:RenderStarsEvent", "type:StarMeshEdit", "type:StarMeshRefusal"]
+why = "Lets native client mods edit the deterministic star geometry before upload, and client mods cancel the visible engine star draw without hiding the sun or moon. The resource-pack stars shader consumes the same mesh. A full shader-pack sky keeps ownership of its stars."
+migrate = "Nothing to change: additive. With no listener the same star triangles and draw state are used."

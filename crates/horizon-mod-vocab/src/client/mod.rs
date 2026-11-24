@@ -62,6 +62,7 @@ pub(crate) mod scene;
 pub(crate) mod screenshot;
 pub(crate) mod skull_models;
 pub(crate) mod special_model_renderers;
+pub(crate) mod star_mesh;
 pub(crate) mod terrain_draw;
 pub(crate) mod title_request;
 pub(crate) mod types;

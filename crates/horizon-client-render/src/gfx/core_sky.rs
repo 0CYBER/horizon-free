@@ -87,12 +87,13 @@ pub(crate) fn disc_triangles() -> Vec<[f32; 3]> {
         .collect()
 }
 
-/// One of the sky's pack pipelines with its vertices and uniforms.
+/// One of the sky's pack pipelines with its uniforms and, unless it draws a mesh it is given
+/// (the stars), its vertices.
 struct Part {
     pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
-    vertices: wgpu::Buffer,
+    vertices: Option<wgpu::Buffer>,
     indices: Option<wgpu::Buffer>,
     count: u32,
 }
@@ -212,10 +213,12 @@ impl Part {
         } else {
             indices.len()
         }) as u32;
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(name),
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+        let vertices = (!vertices.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(name),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
         });
         let index_buffer = (!indices.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -235,15 +238,26 @@ impl Part {
     }
 
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let Some(vertices) = &self.vertices else {
+            return;
+        };
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.group, &[]);
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_vertex_buffer(0, vertices.slice(..));
         if let Some(indices) = &self.indices {
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..self.count, 0, 0..1);
         } else {
             pass.draw(0..self.count, 0..1);
         }
+    }
+
+    /// Draw a mesh the part does not own, unindexed.
+    fn draw_mesh(&self, pass: &mut wgpu::RenderPass<'_>, vertices: &wgpu::Buffer, count: u32) {
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.group, &[]);
+        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.draw(0..count, 0..1);
     }
 }
 
@@ -290,14 +304,14 @@ impl CoreSky {
                     operation: wgpu::BlendOperation::Add,
                 },
             };
-            let triangles = super::stars::star_triangles();
-            Part::new(
+            // The mesh is the native stars' one, built (and edited by mods) at the star stage.
+            Part::new::<[f32; 3]>(
                 device,
                 format,
                 program,
                 "stars",
                 Some(overlay),
-                &triangles,
+                &[],
                 &[],
                 &wgpu::vertex_attr_array![0 => Float32x3],
             )
@@ -369,9 +383,14 @@ impl CoreSky {
     }
 
     /// The stars, in place of the native ones. The caller sets its own group 0 again after.
-    pub(super) fn draw_stars(&self, pass: &mut wgpu::RenderPass<'_>) {
+    pub(super) fn draw_stars(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        vertices: &wgpu::Buffer,
+        count: u32,
+    ) {
         if let Some(stars) = &self.stars {
-            stars.draw(pass);
+            stars.draw_mesh(pass, vertices, count);
         }
     }
 }
