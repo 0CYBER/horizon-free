@@ -445,7 +445,7 @@ impl Game<'_> {
                 && horizon_client::mobs::witch::holds_potion(item)
                 && &**item != "minecraft:potion"
             {
-                // A drinking witch's main hand holds the potion's type, drawn as a potion item.
+                // A witch an older Horizon saved mid-drink holds the potion's type: draw a potion.
                 ItemStack::new("minecraft:potion", 1).with_potion(item)
             } else {
                 // The stack the equipment packet (or the mob's own AI) left:
