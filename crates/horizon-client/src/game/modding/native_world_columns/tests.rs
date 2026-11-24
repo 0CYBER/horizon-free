@@ -170,3 +170,276 @@ fn a_client_reads_the_far_terrains_surface_past_its_chunks() {
         assert_eq!(game.world.chunks.len(), resident_count);
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn client_map_reads_retained_surfaces_and_chunk_deltas() {
+    use crate::game::{
+        api_values::TryIntoApi,
+        native_entity_refs::tests::with_client_game,
+        remote_chunks::ChunkFormat,
+        viewed_worlds::tests::{layered, spawn},
+    };
+    use horizon_protocol::{
+        connection::Pipe,
+        packets::play::{self, Clientbound as C},
+        registry::DimensionType,
+    };
+    use mod_api::{ChunkDeltaCursor, ChunkDeltas, ClientHost, Heightmap};
+    use std::sync::Arc;
+
+    with_client_game(|game| {
+        let columns = [(-1, -1), (32, -16), (-15, -16), (-16, -16), (-1, -1)];
+        let heights = Heightmap::WorldSurface;
+        assert!(
+            (game as &dyn ClientHost)
+                .client_surface_columns(&columns, heights)
+                .is_err()
+        );
+
+        // Real client packet handlers, on the same local session kind as an integrated world.
+        let (client, _server) = Pipe::pair();
+        game.connect_local(client, "ClientMapTest").unwrap();
+        let dimension = DimensionType::vanilla(OVERWORLD);
+        let biomes = game.res.biomes();
+        let biome_map = vec![biomes.id("minecraft:plains"), biomes.id("minecraft:desert")];
+        game.remote.as_mut().unwrap().chunk_format =
+            Arc::new(ChunkFormat::new(&dimension, biome_map, 1));
+        game.handle_packet(C::Login(play::Login {
+            player_id: 7,
+            hardcore: false,
+            levels: vec![OVERWORLD.into(), "minecraft:the_nether".into()],
+            max_players: 1,
+            chunk_radius: 8,
+            simulation_distance: 8,
+            reduced_debug_info: false,
+            show_death_screen: true,
+            limited_crafting: false,
+            spawn: spawn(OVERWORLD),
+            online_mode: false,
+            enforces_secure_chat: false,
+        }))
+        .unwrap();
+        let level = (game as &dyn ClientHost).level(OVERWORLD).unwrap();
+        let poll = |host: &dyn ClientHost, since| host.level_chunk_deltas(level, since).unwrap();
+        let initial = poll(game, None);
+        assert!(initial.full && initial.changes.is_empty());
+        assert_eq!(
+            (game as &dyn ClientHost)
+                .client_surface_columns(&columns, heights)
+                .unwrap(),
+            [None, None, None, None, None]
+        );
+
+        let registry = game.pack.assets.registry;
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let water = registry.default_state("minecraft:water").unwrap();
+        let air = registry.default_state("minecraft:air").unwrap();
+        let log = registry
+            .resolve(&horizon_world::chunk::BlockState {
+                name: "minecraft:oak_log".into(),
+                properties: [("axis".into(), "x".into())].into(),
+            })
+            .unwrap();
+
+        game.handle_packet(layered(1, -1, 0)).unwrap();
+        game.handle_packet(map_surface_packet([air.0, stone.0, water.0, log.0]))
+            .unwrap();
+        let order = [([-1, -1], true), ([1, -1], true)];
+        let roster = |deltas: &ChunkDeltas| {
+            deltas
+                .changes
+                .iter()
+                .map(|change| (change.pos, change.loaded))
+                .collect::<Vec<_>>()
+        };
+        let arrivals = poll(game, Some(initial.cursor));
+        assert!(!arrivals.full);
+        assert_eq!(roster(&arrivals), order, "reverse arrival order is sorted");
+        let snapshot = poll(game, None);
+        assert!(snapshot.full);
+        assert_eq!(roster(&snapshot), order);
+
+        let host: &dyn ClientHost = game;
+        let surface = host.client_surface_columns(&columns, heights).unwrap();
+        assert_eq!(
+            host.client_surface_heights(&columns, heights).unwrap(),
+            [Some(320), None, Some(65), Some(-64), Some(320)]
+        );
+        assert_eq!(
+            surface
+                .iter()
+                .map(|s| s.as_ref().map(|s| s.height))
+                .collect::<Vec<_>>(),
+            [Some(320), None, Some(65), Some(-64), Some(320)]
+        );
+        let top = surface[0].as_ref().unwrap();
+        assert_eq!(
+            top.block,
+            log.try_into_api().unwrap(),
+            "non-default state at the build ceiling"
+        );
+        let states = mod_api::HostBlockStates::block_states(host);
+        assert_eq!(
+            (
+                mod_api::BlockMetadata::name(&states, top.block.block()),
+                top.block.property(&states, "axis")
+            ),
+            (Ok("minecraft:oak_log"), Ok(Some("x")))
+        );
+        assert_eq!(
+            (&*top.biome, top.sky_light, top.block_light),
+            ("minecraft:desert", 9, 3)
+        );
+        let wet = surface[2].as_ref().unwrap();
+        assert_eq!(wet.block, water.try_into_api().unwrap());
+        let floor = host
+            .client_surface_columns(&[columns[2]], Heightmap::OceanFloor)
+            .unwrap();
+        let floor = floor[0].as_ref().unwrap();
+        assert_eq!(
+            (floor.height, floor.block),
+            (61, stone.try_into_api().unwrap())
+        );
+        let empty = surface[3].as_ref().unwrap();
+        assert_eq!(empty.block, air.try_into_api().unwrap());
+        assert_eq!(
+            (&*empty.biome, empty.sky_light, empty.block_light),
+            ("minecraft:plains", 6, 2)
+        );
+        assert_eq!(
+            surface[0], surface[4],
+            "duplicate columns stay in input order"
+        );
+        let limit = vec![columns[0]; 65_536];
+        assert!(host.client_surface_columns(&limit, heights).is_ok());
+        let too_many = vec![columns[0]; 65_537];
+        assert!(host.client_surface_columns(&too_many, heights).is_err());
+        let idle = poll(host, Some(arrivals.cursor));
+        assert!(
+            !idle.full && idle.changes.is_empty(),
+            "reads leave residency unchanged"
+        );
+        assert_eq!(idle.cursor, arrivals.cursor, "reads do not touch chunks");
+
+        // Repeated writes to one key and a removal, after a transported cursor.
+        let cursor = wire_round_trip(&arrivals).cursor;
+        for state in [stone, air] {
+            game.handle_packet(C::BlockUpdate(play::BlockUpdate {
+                pos: [-1, 319, -1],
+                state: state.0 as i32,
+            }))
+            .unwrap();
+        }
+        game.handle_packet(C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [1, -1] }))
+            .unwrap();
+        let changed = poll(game, Some(cursor));
+        assert!(!changed.full);
+        assert_eq!(roster(&changed), [order[0], ([1, -1], false)]);
+        let last = (game as &dyn ClientHost)
+            .client_surface_columns(&[(-1, -1), (16, -16)], heights)
+            .unwrap();
+        assert_eq!(
+            last[0].as_ref().unwrap().height,
+            -64,
+            "an in-place edit invalidates height"
+        );
+        assert_eq!(last[1], None, "a forgotten column is no longer readable");
+        assert_eq!(wire_round_trip(&surface), surface);
+
+        // More actual writes than the existing chunk journal retains.
+        for i in 0..9_000 {
+            let state = if i % 2 == 0 { stone } else { air };
+            game.world.set(-1, 319, -1, state).unwrap();
+        }
+        let old = poll(game, Some(changed.cursor));
+        assert!(old.full);
+        assert_eq!(roster(&old), order[..1]);
+        let (map, _) = old.cursor.for_level(level).unwrap();
+        let unknown = poll(game, Some(ChunkDeltaCursor::new(level, (map, u64::MAX))));
+        assert!(unknown.full);
+        assert_eq!(unknown.changes, old.changes);
+
+        game.world.chunks.clear();
+        let cleared = poll(game, Some(old.cursor));
+        assert!(cleared.full && cleared.changes.is_empty());
+
+        game.handle_packet(C::Respawn(play::Respawn {
+            spawn: spawn("minecraft:the_nether"),
+            keep: 0,
+        }))
+        .unwrap();
+        let host: &dyn ClientHost = game;
+        let new_level = host.level("minecraft:the_nether").unwrap();
+        assert_eq!(host.level_chunk_deltas(level, Some(cleared.cursor)), None);
+        let switched = host
+            .level_chunk_deltas(new_level, Some(cleared.cursor))
+            .unwrap();
+        assert!(switched.full && switched.changes.is_empty());
+    });
+}
+
+fn map_surface_packet(
+    [air, stone, water, log]: [u32; 4],
+) -> horizon_protocol::packets::play::Clientbound {
+    use horizon_protocol::{
+        buf::set_bit,
+        chunk::{ChunkData, LightData, Paletted, Section, Strategy},
+        packets::play::{Clientbound, LevelChunkWithLight},
+    };
+
+    let sections: Vec<_> = (0..24)
+        .map(|section| {
+            let mut states = [air as i32; 4096];
+            let mut biomes = [0; 64];
+            let (non_empty, fluids) = match section {
+                7 => {
+                    states[12 << 8 | 1] = stone as i32; // (-15, 60, -16)
+                    (1, 0)
+                }
+                8 => {
+                    states[1] = water as i32; // (-15, 64, -16)
+                    (1, 1)
+                }
+                23 => {
+                    states[4095] = log as i32; // (-1, 319, -1)
+                    biomes[63] = 1;
+                    (1, 0)
+                }
+                _ => (0, 0),
+            };
+            Section {
+                non_empty,
+                fluids,
+                states: Paletted::from_values(&states, Strategy::Blocks, 16),
+                biomes: Paletted::from_values(&biomes, Strategy::Biomes, 1),
+            }
+        })
+        .collect();
+    let mut mask = Vec::new();
+    set_bit(&mut mask, 1); // first block section
+    set_bit(&mut mask, 24); // last block section
+    Clientbound::LevelChunkWithLight(LevelChunkWithLight {
+        x: -1,
+        z: -1,
+        chunk: ChunkData {
+            heightmaps: Vec::new(),
+            buffer: ChunkData::from_sections(&sections),
+            block_entities: Vec::new(),
+        },
+        light: LightData {
+            sky_mask: mask.clone(),
+            block_mask: mask,
+            empty_sky_mask: Vec::new(),
+            empty_block_mask: Vec::new(),
+            sky: vec![vec![0x66; 2048], vec![0x99; 2048]],
+            block: vec![vec![0x22; 2048], vec![0x33; 2048]],
+        },
+    })
+}
+
+fn wire_round_trip<T: mod_api::wire::Wire>(value: &T) -> T {
+    let mut writer = mod_api::wire::Writer::new();
+    writer.put(value);
+    mod_api::wire::Reader::decode(writer.bytes()).unwrap()
+}

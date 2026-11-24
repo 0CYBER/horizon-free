@@ -107,6 +107,24 @@ levels too, but keeps the client level, so the old handle reads again after the 
 server-only reads, the other level reads and the entity reads (`entities_in`) refuse a viewed level.
 Native and wasm mods use the same handle methods.
 
+## Loaded map reads
+
+Use `client_surface_columns(&columns, heightmap)` to paint loaded terrain. It returns one
+entry per input `(x, z)`, in order: the same first-free Y as `client_surface_heights`, plus the
+complete block state, unblended biome name, and sky and block light at the surface (`height - 1`).
+For an empty column the state is air and biome and light are sampled at the build floor.
+Unloaded columns are `None`; no client world or more than 65,536 columns is `Err` without
+reading any column.
+
+Poll `level_chunk_deltas(level, None)` with the client's current `host.level(dimension)` to
+get the loaded chunk keys. Pass the returned `cursor` back on the next poll, including in
+singleplayer. If `full` is true, replace the old roster: redraw every returned chunk, since its
+blocks may have changed while the history was missed, and drop tiles for keys not in it. Otherwise
+redraw keys marked `loaded` and remove those marked not loaded. The keys are unique and sorted by
+chunk x and z. Reacquire the level handle when the client switches dimensions or reconnects (a
+handle from an earlier connection returns `None`, even for the same dimension); missed history
+automatically returns a full snapshot. Neither call loads chunks.
+
 ## Far terrain reads
 
 A map drawing past the loaded chunks reads the far terrain the player already sees there:
@@ -120,7 +138,7 @@ from the server.
 A column no tile covers yet is `None`, and every column is `None` while far terrain is off
 (LOD Distance 0) or not started. The tiles follow the camera, so a column can go back to `None`
 after the player moves away: keep what you read. Inside the loaded chunks read them instead
-(`client_surface_heights`), since a far tile can lag an edit. No client world, or more than
+(`client_surface_columns`), since a far tile can lag an edit. No client world, or more than
 65,536 columns in one call, is `Err` and reads nothing.
 
 `client_lod_columns(&[(tile_x, tile_z, level)])` reads the exact retained CPU tiles, without

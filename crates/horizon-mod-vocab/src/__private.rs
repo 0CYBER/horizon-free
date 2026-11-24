@@ -203,6 +203,38 @@ pub mod built {
             biome,
         }
     }
+    /// The loaded client surface snapshot, constructed by the game and only read by mods.
+    pub fn surface_column(
+        height: i32,
+        block: crate::BlockState,
+        biome: String,
+        sky_light: u8,
+        block_light: u8,
+    ) -> crate::SurfaceColumn {
+        crate::SurfaceColumn {
+            height,
+            block,
+            biome,
+            sky_light,
+            block_light,
+        }
+    }
+    /// A chunk journal entry, constructed by the game and read by mods.
+    pub fn chunk_delta(pos: [i32; 2], loaded: bool) -> crate::ChunkDelta {
+        crate::ChunkDelta { pos, loaded }
+    }
+    /// The current result of replaying a loaded chunk journal.
+    pub fn chunk_deltas(
+        cursor: crate::ChunkDeltaCursor,
+        full: bool,
+        changes: Vec<crate::ChunkDelta>,
+    ) -> crate::ChunkDeltas {
+        crate::ChunkDeltas {
+            cursor,
+            full,
+            changes,
+        }
+    }
     /// A retained material run, constructed by the game from the LOD tile.
     pub fn lod_column_footprint(
         min_y: i16,
@@ -262,7 +294,16 @@ pub mod built {
         bytes: u64,
     ) -> crate::ExportStatus {
         crate::ExportStatus {
-            request, name, state, frame, frames, width, height, fps_num, fps_den, bytes,
+            request,
+            name,
+            state,
+            frame,
+            frames,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            bytes,
         }
     }
     /// Wrap a slot in the persistent instance group store.

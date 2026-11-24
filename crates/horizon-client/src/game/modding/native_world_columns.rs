@@ -1,9 +1,9 @@
 //! Column reads for server mods, as helpers on the level being ticked: many columns' heights, and the blocks round
 //! them, in one call.
 use super::Game;
-use super::block_edits::MAX_COLUMNS;
+use super::block_edits::{MAX_COLUMNS, loaded_columns};
 use horizon_client::streaming::ChunkGenerator;
-use mod_api::{LodTileFootprint, TerrainColumn};
+use mod_api::{LodTileFootprint, SurfaceColumn, TerrainColumn};
 
 /// The most columns one `terrain_surface` call asks about: each is a noise sample on the server tick.
 pub(super) const MAX_TERRAIN_COLUMNS: usize = 4096;
@@ -71,6 +71,52 @@ impl Game<'_> {
             ));
         }
         Ok(self.loaded_column_heights(columns, heightmap))
+    }
+    /// The heightmap and retained block, biome and light of each loaded client column.
+    pub(super) fn client_surface_columns(
+        &self,
+        columns: &[(i32, i32)],
+        heightmap: mod_api::Heightmap,
+    ) -> Result<Vec<Option<SurfaceColumn>>, String> {
+        if !self.remote.as_ref().is_some_and(|r| r.has_level()) {
+            return Err("no client world is open".to_string());
+        }
+        if columns.len() > MAX_COLUMNS {
+            return Err(format!(
+                "{} columns, more than {MAX_COLUMNS} a call",
+                columns.len()
+            ));
+        }
+        let state_error = |error| format!("cannot read client surface states: {error:?}");
+        let states = super::api_values::block_state::current().map_err(state_error)?;
+        let biomes = world_biomes!(self);
+        let shape = self.world.shape;
+        let air = self.world.air;
+        let mut result = Vec::with_capacity(columns.len());
+        for (x, z, chunk) in loaded_columns(&self.world, columns) {
+            let Some(chunk) = chunk else {
+                result.push(None);
+                continue;
+            };
+            let height = self.loaded_column_height(chunk, heightmap, x, z);
+            let y = height - 1;
+            let sample_y = y.clamp(shape.min_y, shape.max_y() - 1);
+            let state = if y == sample_y {
+                chunk.block(x, y, z)
+            } else {
+                air
+            };
+            let block = states.to_api(state).map_err(state_error)?;
+            let light = chunk.light(x, sample_y, z);
+            result.push(Some(mod_api::__private::built::surface_column(
+                height,
+                block,
+                biomes.name(chunk.biome(x, sample_y, z)).to_owned(),
+                light >> 4,
+                light & 15,
+            )));
+        }
+        Ok(result)
     }
     /// For a client mod: each column's surface as this window's far terrain holds it (`Lod::surface`), whether
     /// or not the chunk is loaded; none where no far tile covers it and everywhere while far terrain is off. `Err`

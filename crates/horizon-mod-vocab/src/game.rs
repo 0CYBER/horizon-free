@@ -93,6 +93,22 @@ pub struct ColumnBlocks {
     pub blocks: Vec<u16>,
     pub tints: Vec<u32>,
 }
+/// The surface of a loaded client column as selected by a [`Heightmap`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct SurfaceColumn {
+    /// The first free Y according to the heightmap, as in `client_surface_heights`.
+    pub height: i32,
+    /// The complete state at `height - 1`, or air if that Y is outside the build height.
+    pub block: BlockState,
+    /// The stored, unblended biome at `height - 1`, clamped to the build height.
+    pub biome: String,
+    /// Stored sky light (0–15) at the same position as `biome`.
+    pub sky_light: u8,
+    /// Stored block light (0–15) at the same position as `biome`.
+    pub block_light: u8,
+}
 /// What `terrain_surface` found at one column of terrain nobody has loaded: the level's generator before its
 /// features (trees, ores, lava pools, cacti) are placed. `client_far_surface` gives the same fields for a
 /// client's far terrain, the surface its finest far tile holds there.
