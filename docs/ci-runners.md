@@ -38,6 +38,14 @@ maintainers' vanilla data.
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
 
+- **Native Clippy**: `checks` lints `horizon-client --no-default-features`, `horizon-threads`, `horizon-perf-format`,
+  `horizon-perf-share` and `horizon-server` on `windows-latest` and `macos-latest`, with all targets and warnings denied.
+  These two jobs start only after Linux `verify-lint` passes, skip documentation-only pull requests and run no tests or
+  release builds. Their result feeds the required `verify` aggregate: a failure or cancellation blocks it, while a
+  skipped job passes. Main and manual runs also lint; main saves the per-OS Rust caches that pull requests read. Hosted
+  runners keep untrusted builds away from the Mac mini's game files and signing setup; their tokens are read-only.
+  The merge queue skips `verify-lint` and therefore its native jobs too; each queued pull request was already linted.
+
 ## verify on Blacksmith
 
 `checks`' `verify` runs on Blacksmith's runners (blacksmith.sh sponsors our minutes) for every pull request, forks'
