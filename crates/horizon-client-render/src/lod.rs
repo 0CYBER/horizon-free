@@ -1163,6 +1163,7 @@ impl Column {
         }
         column
     }
+    #[inline]
     pub fn push(&mut self, span: Span) {
         if let Some(last) = self.spans.last_mut()
             && last.max == span.min
@@ -1177,6 +1178,7 @@ impl Column {
     }
     /// `kinds`: `state_kinds`, per block state; `water`: `water_source(kinds)`,
     /// what blocks holding water (kelp, seagrass, waterlogged ones) are drawn as.
+    #[cfg(test)]
     fn from_chunk(
         chunk: &Chunk,
         kinds: &[u8],
@@ -1268,12 +1270,580 @@ impl Column {
         column
     }
 }
-/// A chunk's 256 columns (`Column::from_chunk`), on the far-terrain worker.
+const IDENTITY_256: [u8; 256] = {
+    let mut table = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        table[i] = i as u8;
+        i += 1;
+    }
+    table
+};
+
+#[derive(Clone, Copy)]
+enum BoundaryLight<'a> {
+    Uniform(u8),
+    Slice(&'a [u8; 256]),
+}
+
+impl BoundaryLight<'_> {
+    #[inline(always)]
+    fn get(self, col: usize) -> u8 {
+        match self {
+            Self::Uniform(v) => v,
+            Self::Slice(slice) => slice[col],
+        }
+    }
+}
+
+enum SectionBlocks {
+    Empty,
+    Uniform { state: BlockStateId, emission: u8 },
+    Paletted,
+    Global,
+}
+
+#[inline(always)]
+fn kind_of(kinds: &[u8], state: u32) -> u8 {
+    kinds.get(state as usize).copied().unwrap_or(0)
+}
+
+#[inline(always)]
+fn resolve_kept(raw: u32, kinds: &[u8], water: Option<BlockStateId>) -> Option<(BlockStateId, u8)> {
+    let mut state = BlockStateId(raw);
+    let mut k = kind_of(kinds, raw);
+    if k & KEPT == 0 {
+        return None;
+    }
+    if k & WATERY != 0
+        && let Some(water) = water
+    {
+        state = water;
+        k = kinds[water.0 as usize];
+    }
+    Some((state, k >> 4))
+}
+
+#[inline(always)]
+fn max_light(a: u8, b: u8) -> u8 {
+    (a & 0xf0).max(b & 0xf0) | (a & 0x0f).max(b & 0x0f)
+}
+
+#[inline(always)]
+fn pack_span_light(light: u8, emission: u8) -> u16 {
+    u16::from(light & 0xf0) | (u16::from((light & 15).max(emission)) << 12)
+}
+
+#[inline(always)]
+fn face_light_at(
+    cur_layer: &[u8; 256],
+    down_layer: &[u8; 256],
+    up_layer: &[u8; 256],
+    x: usize,
+    z: usize,
+    col: usize,
+) -> u8 {
+    let mut light = cur_layer[col];
+    light = max_light(light, down_layer[col]);
+    light = max_light(light, up_layer[col]);
+    if x > 0 {
+        light = max_light(light, cur_layer[col - 1]);
+    }
+    if x < 15 {
+        light = max_light(light, cur_layer[col + 1]);
+    }
+    if z > 0 {
+        light = max_light(light, cur_layer[col - 16]);
+    }
+    if z < 15 {
+        light = max_light(light, cur_layer[col + 16]);
+    }
+    light
+}
+
+#[inline]
+fn unpack_section_light<'a>(
+    light: &'a crate::chunk::Light,
+    buf: &'a mut [u8; 4096],
+) -> &'a [u8; 4096] {
+    match light {
+        crate::chunk::Light::Full(a) => a,
+        other => {
+            other.copy_run(0, buf);
+            buf
+        }
+    }
+}
+
+#[inline]
+fn below_boundary<'a>(chunk: &'a Chunk, sy: usize, buf: &'a mut [u8; 256]) -> BoundaryLight<'a> {
+    if sy == 0 {
+        BoundaryLight::Uniform(0)
+    } else {
+        match &chunk.sections[sy - 1].light {
+            crate::chunk::Light::Uniform(v) => BoundaryLight::Uniform(*v),
+            crate::chunk::Light::Full(a) => BoundaryLight::Slice(&a.as_chunks::<256>().0[15]),
+            light => {
+                light.copy_run(15 << 8, buf);
+                BoundaryLight::Slice(buf)
+            }
+        }
+    }
+}
+
+#[inline]
+fn above_boundary<'a>(chunk: &'a Chunk, sy: usize, buf: &'a mut [u8; 256]) -> BoundaryLight<'a> {
+    if sy + 1 >= chunk.sections.len() {
+        BoundaryLight::Uniform(0xF0)
+    } else {
+        match &chunk.sections[sy + 1].light {
+            crate::chunk::Light::Uniform(v) => BoundaryLight::Uniform(*v),
+            crate::chunk::Light::Full(a) => BoundaryLight::Slice(&a.as_chunks::<256>().0[0]),
+            light => {
+                light.copy_run(0, buf);
+                BoundaryLight::Slice(buf)
+            }
+        }
+    }
+}
+
+#[inline]
+fn below_light_slice<'a>(chunk: &'a Chunk, sy: usize, buf: &'a mut [u8; 256]) -> &'a [u8; 256] {
+    if sy == 0 {
+        buf.fill(0);
+        buf
+    } else {
+        match &chunk.sections[sy - 1].light {
+            crate::chunk::Light::Full(a) => &a.as_chunks::<256>().0[15],
+            light => {
+                light.copy_run(15 << 8, buf);
+                buf
+            }
+        }
+    }
+}
+
+#[inline]
+fn above_light_slice<'a>(chunk: &'a Chunk, sy: usize, buf: &'a mut [u8; 256]) -> &'a [u8; 256] {
+    if sy + 1 >= chunk.sections.len() {
+        buf.fill(0xF0);
+        buf
+    } else {
+        match &chunk.sections[sy + 1].light {
+            crate::chunk::Light::Full(a) => &a.as_chunks::<256>().0[0],
+            light => {
+                light.copy_run(0, buf);
+                buf
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn push_uniform_column(
+    column: &mut Column,
+    min: i32,
+    state: BlockStateId,
+    biome: u16,
+    lights: [u16; 3],
+) {
+    let [l0, lm, l15] = lights;
+    let span = |a: i32, b: i32, light: u16| Span {
+        min: a as i16,
+        max: b as i16,
+        state,
+        biome,
+        light,
+    };
+    if l0 == lm && l15 == lm {
+        column.push(span(min, min + 16, lm));
+    } else {
+        column.push(span(min, min + 1, l0));
+        column.push(span(min + 1, min + 15, lm));
+        column.push(span(min + 15, min + 16, l15));
+    }
+}
+
+#[inline(always)]
+fn sweep_uniform_light(
+    columns: &mut [Column; 256],
+    min: i32,
+    biomes: &[u32; 64],
+    v: u8,
+    bounds: [BoundaryLight<'_>; 2],
+    mut resolve: impl FnMut(usize, usize) -> Option<(BlockStateId, u8)>,
+) {
+    let [below, above] = bounds;
+    for dy in 0..16usize {
+        let biome_y = (dy >> 2) << 4;
+        let y = (min + dy as i32) as i16;
+        let y_next = (min + dy as i32 + 1) as i16;
+        let boundary = match dy {
+            0 => below,
+            15 => above,
+            _ => BoundaryLight::Uniform(v),
+        };
+        match boundary {
+            BoundaryLight::Uniform(b) => {
+                let face = max_light(v, b);
+                for (col, column) in columns.iter_mut().enumerate() {
+                    let Some((state, emission)) = resolve(dy, col) else {
+                        continue;
+                    };
+                    let biome = biomes[biome_y | ((col >> 6) << 2) | ((col & 15) >> 2)] as u16;
+                    column.push(Span {
+                        min: y,
+                        max: y_next,
+                        state,
+                        biome,
+                        light: pack_span_light(face, emission),
+                    });
+                }
+            }
+            BoundaryLight::Slice(b) => {
+                for (col, column) in columns.iter_mut().enumerate() {
+                    let Some((state, emission)) = resolve(dy, col) else {
+                        continue;
+                    };
+                    let face = max_light(v, b[col]);
+                    let biome = biomes[biome_y | ((col >> 6) << 2) | ((col & 15) >> 2)] as u16;
+                    column.push(Span {
+                        min: y,
+                        max: y_next,
+                        state,
+                        biome,
+                        light: pack_span_light(face, emission),
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn sweep_nonuniform_light(
+    columns: &mut [Column; 256],
+    min: i32,
+    biomes: &[u32; 64],
+    light_layers: &[[u8; 256]],
+    bounds: [&[u8; 256]; 2],
+    mut resolve: impl FnMut(usize, usize) -> Option<(BlockStateId, u8)>,
+) {
+    let [below, above] = bounds;
+    for dy in 0..16usize {
+        let cur_layer = &light_layers[dy];
+        let down_layer = if dy == 0 {
+            below
+        } else {
+            &light_layers[dy - 1]
+        };
+        let up_layer = if dy == 15 {
+            above
+        } else {
+            &light_layers[dy + 1]
+        };
+        let biome_y = (dy >> 2) << 4;
+        let y = (min + dy as i32) as i16;
+        let y_next = (min + dy as i32 + 1) as i16;
+        for z in 0..16usize {
+            let row = z << 4;
+            let biome_yz = biome_y | ((z >> 2) << 2);
+            for x in 0..16usize {
+                let col = row | x;
+                let Some((state, emission)) = resolve(dy, col) else {
+                    continue;
+                };
+                let face = face_light_at(cur_layer, down_layer, up_layer, x, z, col);
+                columns[col].push(Span {
+                    min: y,
+                    max: y_next,
+                    state,
+                    biome: biomes[biome_yz | (x >> 2)] as u16,
+                    light: pack_span_light(face, emission),
+                });
+            }
+        }
+    }
+}
+
+#[inline(never)]
+fn summarize_global_section(
+    chunk: &Chunk,
+    sy: usize,
+    kinds: &[u8],
+    water: Option<BlockStateId>,
+    columns: &mut [Column; 256],
+) {
+    let section = &chunk.sections[sy];
+    let min = chunk.min_y() + sy as i32 * 16;
+    let mut blocks = [0u32; 4096];
+    let mut biomes = [0u32; 64];
+    let mut below_buf = [0u8; 256];
+    let mut above_buf = [0u8; 256];
+    section.blocks.unpack(&mut blocks);
+    section.biomes.unpack(&mut biomes);
+    let block_layers = blocks.as_chunks::<256>().0;
+    if let crate::chunk::Light::Uniform(v) = section.light {
+        let below = below_boundary(chunk, sy, &mut below_buf);
+        let above = above_boundary(chunk, sy, &mut above_buf);
+        sweep_uniform_light(columns, min, &biomes, v, [below, above], |dy, col| {
+            resolve_kept(block_layers[dy][col], kinds, water)
+        });
+    } else {
+        let mut light_buf = [0u8; 4096];
+        let light_slice = unpack_section_light(&section.light, &mut light_buf);
+        let below = below_light_slice(chunk, sy, &mut below_buf);
+        let above = above_light_slice(chunk, sy, &mut above_buf);
+        let light_layers = light_slice.as_chunks::<256>().0;
+        sweep_nonuniform_light(
+            columns,
+            min,
+            &biomes,
+            light_layers,
+            [below, above],
+            |dy, col| resolve_kept(block_layers[dy][col], kinds, water),
+        );
+    }
+}
+
+/// A chunk's 256 columns, summarized section by section on the far-terrain worker.
 pub(crate) fn summarize(chunk: &Chunk, kinds: &[u8]) -> Arc<[Column; 256]> {
     let water = water_source(kinds);
-    Arc::new(std::array::from_fn(|i| {
-        Column::from_chunk(chunk, kinds, water, (i & 15) as i32, (i >> 4) as i32)
-    }))
+    let mut columns: [Column; 256] = std::array::from_fn(|_| Column::default());
+    let mut pal_state = [BlockStateId(0); 256];
+    let mut pal_kept_emission = [0u8; 256];
+    let mut ids = [0u8; 4096];
+    let mut biomes = [0u32; 64];
+    let mut light_buf = [0u8; 4096];
+    let mut below_buf = [0u8; 256];
+    let mut above_buf = [0u8; 256];
+
+    let min_y = chunk.min_y();
+    for (sy, section) in chunk.sections.iter().enumerate() {
+        let min = min_y + sy as i32 * 16;
+        let section_blocks = if section.blocks.bits() == 0 {
+            match resolve_kept(section.blocks.get(0), kinds, water) {
+                Some((state, emission)) => SectionBlocks::Uniform { state, emission },
+                None => SectionBlocks::Empty,
+            }
+        } else if let Some(palette) = section.blocks.palette()
+            && section.blocks.bits() <= 8
+            && palette.len() <= 256
+        {
+            let mut any_kept = false;
+            let mut all_same = true;
+            let mut first_kept: Option<(BlockStateId, u8)> = None;
+            for (i, &raw) in palette.iter().enumerate() {
+                if let Some((state, emission)) = resolve_kept(raw, kinds, water) {
+                    any_kept = true;
+                    pal_state[i] = state;
+                    pal_kept_emission[i] = (emission << 4) | KEPT;
+                    match first_kept {
+                        None => first_kept = Some((state, emission)),
+                        Some(first) if first != (state, emission) => all_same = false,
+                        _ => {}
+                    }
+                } else {
+                    pal_kept_emission[i] = 0;
+                    all_same = false;
+                }
+            }
+            if !any_kept {
+                SectionBlocks::Empty
+            } else if all_same && let Some((state, emission)) = first_kept {
+                SectionBlocks::Uniform { state, emission }
+            } else if let Some(raw) = section.blocks.uniform() {
+                match resolve_kept(raw, kinds, water) {
+                    Some((state, emission)) => SectionBlocks::Uniform { state, emission },
+                    None => SectionBlocks::Empty,
+                }
+            } else {
+                SectionBlocks::Paletted
+            }
+        } else if let Some(raw) = section.blocks.uniform() {
+            match resolve_kept(raw, kinds, water) {
+                Some((state, emission)) => SectionBlocks::Uniform { state, emission },
+                None => SectionBlocks::Empty,
+            }
+        } else {
+            SectionBlocks::Global
+        };
+
+        match section_blocks {
+            SectionBlocks::Empty => continue,
+            SectionBlocks::Uniform { state, emission } => {
+                if let crate::chunk::Light::Uniform(v) = section.light {
+                    let below = below_boundary(chunk, sy, &mut below_buf);
+                    let above = above_boundary(chunk, sy, &mut above_buf);
+                    let lm = pack_span_light(v, emission);
+                    if let Some(biome) = section.biomes.uniform() {
+                        let biome = biome as u16;
+                        match (below, above) {
+                            (BoundaryLight::Uniform(b), BoundaryLight::Uniform(a)) => {
+                                let l0 = pack_span_light(max_light(v, b), emission);
+                                let l15 = pack_span_light(max_light(v, a), emission);
+                                if l0 == lm && l15 == lm {
+                                    let span = Span {
+                                        min: min as i16,
+                                        max: (min + 16) as i16,
+                                        state,
+                                        biome,
+                                        light: lm,
+                                    };
+                                    for column in &mut columns {
+                                        column.push(span);
+                                    }
+                                } else {
+                                    for column in &mut columns {
+                                        push_uniform_column(
+                                            column,
+                                            min,
+                                            state,
+                                            biome,
+                                            [l0, lm, l15],
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {
+                                for (col, column) in columns.iter_mut().enumerate() {
+                                    let l0 =
+                                        pack_span_light(max_light(v, below.get(col)), emission);
+                                    let l15 =
+                                        pack_span_light(max_light(v, above.get(col)), emission);
+                                    push_uniform_column(column, min, state, biome, [l0, lm, l15]);
+                                }
+                            }
+                        }
+                    } else {
+                        section.biomes.unpack(&mut biomes);
+                        for (col, column) in columns.iter_mut().enumerate() {
+                            let l0 = pack_span_light(max_light(v, below.get(col)), emission);
+                            let l15 = pack_span_light(max_light(v, above.get(col)), emission);
+                            let bcol = ((col >> 6) << 2) | ((col & 15) >> 2);
+                            let b = [
+                                biomes[bcol] as u16,
+                                biomes[16 | bcol] as u16,
+                                biomes[32 | bcol] as u16,
+                                biomes[48 | bcol] as u16,
+                            ];
+                            for (a, end, biome, light) in [
+                                (0, 1, b[0], l0),
+                                (1, 4, b[0], lm),
+                                (4, 8, b[1], lm),
+                                (8, 12, b[2], lm),
+                                (12, 15, b[3], lm),
+                                (15, 16, b[3], l15),
+                            ] {
+                                column.push(Span {
+                                    min: (min + a) as i16,
+                                    max: (min + end) as i16,
+                                    state,
+                                    biome,
+                                    light,
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    section.biomes.unpack(&mut biomes);
+                    let light_slice = unpack_section_light(&section.light, &mut light_buf);
+                    let below = below_light_slice(chunk, sy, &mut below_buf);
+                    let above = above_light_slice(chunk, sy, &mut above_buf);
+                    let light_layers = light_slice.as_chunks::<256>().0;
+                    sweep_nonuniform_light(
+                        &mut columns,
+                        min,
+                        &biomes,
+                        light_layers,
+                        [below, above],
+                        |_, _| Some((state, emission)),
+                    );
+                }
+            }
+            SectionBlocks::Paletted => {
+                section.blocks.unpack_ids_mapped(&mut ids, &IDENTITY_256);
+                section.biomes.unpack(&mut biomes);
+                let id_layers = ids.as_chunks::<256>().0;
+                if let crate::chunk::Light::Uniform(v) = section.light {
+                    let below = below_boundary(chunk, sy, &mut below_buf);
+                    let above = above_boundary(chunk, sy, &mut above_buf);
+                    sweep_uniform_light(
+                        &mut columns,
+                        min,
+                        &biomes,
+                        v,
+                        [below, above],
+                        |dy, col| {
+                            let pid = usize::from(id_layers[dy][col]);
+                            let ke = pal_kept_emission[pid];
+                            if ke == 0 {
+                                None
+                            } else {
+                                Some((pal_state[pid], ke >> 4))
+                            }
+                        },
+                    );
+                } else {
+                    let light_slice = unpack_section_light(&section.light, &mut light_buf);
+                    let below = below_light_slice(chunk, sy, &mut below_buf);
+                    let above = above_light_slice(chunk, sy, &mut above_buf);
+                    let light_layers = light_slice.as_chunks::<256>().0;
+                    sweep_nonuniform_light(
+                        &mut columns,
+                        min,
+                        &biomes,
+                        light_layers,
+                        [below, above],
+                        |dy, col| {
+                            let pid = usize::from(id_layers[dy][col]);
+                            let ke = pal_kept_emission[pid];
+                            if ke == 0 {
+                                None
+                            } else {
+                                Some((pal_state[pid], ke >> 4))
+                            }
+                        },
+                    );
+                }
+            }
+            SectionBlocks::Global => {
+                summarize_global_section(chunk, sy, kinds, water, &mut columns);
+            }
+        }
+    }
+
+    let mut air_state = None;
+    for (col, column) in columns.iter_mut().enumerate() {
+        let mut top_water = None;
+        for span in column.spans.iter().rev() {
+            if kind_of(kinds, span.state.0) & FLUID != 0 {
+                top_water.get_or_insert((i32::from(span.max), span.state));
+            } else {
+                column.surface = Some(Surface {
+                    height: i32::from(span.max),
+                    state: span.state,
+                    water: top_water,
+                    biome: span.biome,
+                });
+                break;
+            }
+        }
+        if column.surface.is_none()
+            && let Some((height, state)) = top_water
+        {
+            let air = *air_state.get_or_insert_with(|| {
+                BlockStateId(kinds.iter().position(|&k| k & AIR != 0).unwrap_or(0) as u32)
+            });
+            column.surface = Some(Surface {
+                height: min_y,
+                state: air,
+                water: Some((height, state)),
+                biome: chunk.biome((col & 15) as i32, height - 1, (col >> 4) as i32),
+            });
+        }
+    }
+    Arc::new(columns)
 }
 /// The water source state: the first plain kept fluid without light
 /// (`minecraft:water` comes before lava, and its level 0 first).
@@ -1292,7 +1862,7 @@ const AIR: u8 = 4;
 /// waterlogged blocks that aren't kept): far terrain draws water there, or
 /// kelp reaching the surface leaves holes in the sea.
 const WATERY: u8 = 8;
-/// What `Column::from_chunk` needs of each block state, read from the facts
+/// What `summarize` needs of each block state, read from the facts
 /// once: matching their names for every block made observing a chunk slow.
 pub(crate) fn state_kinds(facts: &BlockFacts) -> Vec<u8> {
     (0..facts.states.len())
@@ -8194,5 +8764,472 @@ mod tests {
         assert_eq!(fast.solid_looks, reference.solid_looks);
         assert!(fast.meshlets.is_empty());
         assert_eq!(fast.meshlets.capacity(), 0);
+    }
+
+    fn reference_summarize(chunk: &Chunk, kinds: &[u8]) -> [Column; 256] {
+        let water = water_source(kinds);
+        std::array::from_fn(|i| {
+            Column::from_chunk(chunk, kinds, water, (i & 15) as i32, (i >> 4) as i32)
+        })
+    }
+
+    fn assert_summarize_matches_reference(chunk: &Chunk, kinds: &[u8], label: &str) {
+        let actual = summarize(chunk, kinds);
+        let expected = reference_summarize(chunk, kinds);
+        for col in 0..256 {
+            assert_eq!(
+                actual[col],
+                expected[col],
+                "{label}: mismatch at column ({}, {})",
+                col & 15,
+                col >> 4
+            );
+        }
+    }
+
+    #[test]
+    fn summarize_matches_column_from_chunk_across_chunk_shapes() {
+        use crate::chunk::{BIOME_STRATEGY, ColumnLayout, Light, Section, block_strategy};
+        use horizon_core::paletted::PalettedContainer;
+
+        // 0: air, 1: non-kept grass/cave_air, 2: stone, 3: deepslate,
+        // 4: water, 5: kelp (watery), 6: seagrass (watery),
+        // 7: glowstone (emit 15), 8: lava (fluid + emit 15),
+        // 9: magma (emit 3), 10: non-kept torch (emit 14).
+        let kinds = [
+            AIR,
+            0,
+            KEPT,
+            KEPT,
+            KEPT | FLUID,
+            KEPT | FLUID | WATERY,
+            KEPT | FLUID | WATERY,
+            KEPT | (15 << 4),
+            KEPT | FLUID | (15 << 4),
+            KEPT | (3 << 4),
+            14 << 4,
+        ];
+
+        let sky_light = |block: u8, salt: usize| {
+            let arr: [u8; 4096] =
+                std::array::from_fn(|i| ((((i * 7 + salt) & 15) as u8) << 4) | (block & 15));
+            let light = Light::from_slice(&arr);
+            assert!(matches!(light, Light::Sky(..)));
+            light
+        };
+        let block_light = |sky: u8, salt: usize| {
+            let arr: [u8; 4096] =
+                std::array::from_fn(|i| ((sky & 15) << 4) | (((i * 11 + salt) & 15) as u8));
+            let light = Light::from_slice(&arr);
+            assert!(matches!(light, Light::Block(..)));
+            light
+        };
+        let full_light = |salt: usize| {
+            let arr: [u8; 4096] = std::array::from_fn(|i| {
+                ((((i * 5 + salt) & 15) as u8) << 4) | (((i * 13 + (i >> 4) + salt) & 15) as u8)
+            });
+            let light = Light::from_slice(&arr);
+            assert!(matches!(light, Light::Full(_)));
+            light
+        };
+
+        // 1. Empty zero-section chunk & all-air chunk.
+        let mut zero_sections = Chunk::empty(0, 0);
+        zero_sections.sections.clear();
+        assert_summarize_matches_reference(&zero_sections, &kinds, "zero sections");
+        assert_summarize_matches_reference(&Chunk::empty(0, 0), &kinds, "all-air chunk");
+
+        // 2. Multi-section chunk exercising every fast path & boundary transition:
+        //    - sy 0: uniform stone, Light::Uniform(0x00) at bottom boundary (below = 0x00)
+        //    - sy 1: uniform glowstone (emit 15), Light::Uniform(0x00), next to Light::Uniform(0x07)
+        //    - sy 2: uniform deepslate, Light::Uniform(0x07), mixed biomes (4 quart-Y bands)
+        //    - sy 3: uncompacted uniform stone (List palette with stale air) + Light::Sky
+        //    - sy 4: uniform stone + Light::Uniform(0x23) between Light::Sky and Light::Block
+        //    - sy 5: subterranean cave + emitting blocks + Light::Block (border/corner 7-neighbor)
+        //    - sy 6: ocean section of water + kelp + seagrass ONLY (all_same -> uniform kept!)
+        //    - sy 7: uncompacted uniform air (List palette with stale stone) + Light::Full
+        //    - sy 8: non-kept multi-block palette (air + grass + torch) + Light::Full
+        //    - sy 9: bridge over water + mixed surface + out-of-range block IDs + Light::Full
+        //    - sy 10: Palette::Global (>256 distinct states) + Light::Uniform(0x92)
+        //    - sy 11: Palette::Global (>256 distinct states) + Light::Full
+        //    - sy 12: uncompacted uniform Palette::Global + Light::Uniform(0x41)
+        //    - sy 13: uniform stone at top of chunk (above = 0xF0!) with Light::Uniform(0x00)
+        let layout = ColumnLayout::new(-64, 14 * 16).unwrap();
+        let mut sections = Vec::with_capacity(14);
+
+        // sy 0
+        sections.push(Section {
+            blocks: PalettedContainer::new(block_strategy(), 2),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 1),
+            light: Light::Uniform(0x00),
+        });
+        // sy 1: uniform glowstone (emission 15 masks neighbor block light 7)
+        sections.push(Section {
+            blocks: PalettedContainer::new(block_strategy(), 7),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 2),
+            light: Light::Uniform(0x00),
+        });
+        // sy 2: uniform deepslate with 4 quart-Y biomes and non-uniform above boundary
+        let mixed_biomes = PalettedContainer::from_values(
+            BIOME_STRATEGY,
+            &std::array::from_fn::<u32, 64, _>(|i| {
+                ((i >> 4) * 3 + (i & 3) + ((i >> 2) & 3) * 2) as u32
+            }),
+        );
+        sections.push(Section {
+            blocks: PalettedContainer::new(block_strategy(), 3),
+            biomes: mixed_biomes.clone(),
+            light: Light::Uniform(0x07),
+        });
+        // sy 3: uncompacted uniform stone (bits > 0, stale air) + Light::Sky
+        let mut uncompacted_stone = PalettedContainer::new(block_strategy(), 2);
+        uncompacted_stone.set(0, 0);
+        uncompacted_stone.set(0, 2);
+        assert!(uncompacted_stone.bits() > 0 && uncompacted_stone.uniform() == Some(2));
+        let mut uncompacted_biome = PalettedContainer::new(BIOME_STRATEGY, 5);
+        uncompacted_biome.set(0, 9);
+        uncompacted_biome.set(0, 5);
+        assert!(uncompacted_biome.bits() > 0 && uncompacted_biome.uniform() == Some(5));
+        sections.push(Section {
+            blocks: uncompacted_stone,
+            biomes: uncompacted_biome,
+            light: sky_light(2, 3),
+        });
+        // sy 4: uniform stone + Light::Uniform(0x23) between Sky below and Block above
+        sections.push(Section {
+            blocks: PalettedContainer::new(block_strategy(), 2),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 4),
+            light: Light::Uniform(0x23),
+        });
+        // sy 5: subterranean caves + magma/lava/glowstone + borders/corners + Light::Block
+        let cave_blocks: [u32; 4096] = std::array::from_fn(|i| {
+            let x = i & 15;
+            let z = (i >> 4) & 15;
+            let y = i >> 8;
+            if x == 0 || x == 15 || z == 0 || z == 15 {
+                if (x + y + z).is_multiple_of(3) { 2 } else { 0 }
+            } else if y == 0 || y == 15 {
+                if (x + z).is_multiple_of(2) { 9 } else { 8 }
+            } else if (x * 3 + y * 5 + z * 7).is_multiple_of(4) {
+                7
+            } else {
+                0
+            }
+        });
+        sections.push(Section {
+            blocks: Section::from_blocks(&cave_blocks),
+            biomes: mixed_biomes.clone(),
+            light: block_light(4, 5),
+        });
+        // sy 6: ocean section of ONLY water + kelp + seagrass (collapses to uniform water!)
+        let ocean_blocks: [u32; 4096] = std::array::from_fn(|i| match i % 3 {
+            0 => 4,
+            1 => 5,
+            _ => 6,
+        });
+        sections.push(Section {
+            blocks: Section::from_blocks(&ocean_blocks),
+            biomes: mixed_biomes.clone(),
+            light: sky_light(0, 6),
+        });
+        // sy 7: uncompacted uniform air (stale stone in list palette) + Light::Full
+        let mut uncompacted_air = PalettedContainer::new(block_strategy(), 0);
+        uncompacted_air.set(0, 2);
+        uncompacted_air.set(0, 0);
+        assert!(uncompacted_air.bits() > 0 && uncompacted_air.uniform() == Some(0));
+        sections.push(Section {
+            blocks: uncompacted_air,
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 6),
+            light: full_light(7),
+        });
+        // sy 8: non-kept multi-block list palette (air + grass + torch)
+        let nonkept_blocks: [u32; 4096] = std::array::from_fn(|i| match i % 3 {
+            0 => 0,
+            1 => 1,
+            _ => 10,
+        });
+        sections.push(Section {
+            blocks: Section::from_blocks(&nonkept_blocks),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 7),
+            light: full_light(8),
+        });
+        // sy 9: bridge over water + kelp + out-of-range block states (>= kinds.len())
+        let surface_blocks: [u32; 4096] = std::array::from_fn(|i| {
+            let x = i & 15;
+            let z = (i >> 4) & 15;
+            let y = i >> 8;
+            if y < 6 {
+                if x < 8 { 4 } else { 5 }
+            } else if y == 10 && (4..12).contains(&x) && (4..12).contains(&z) {
+                2
+            } else if y == 12 && x == 0 && z == 15 {
+                999
+            } else {
+                0
+            }
+        });
+        sections.push(Section {
+            blocks: Section::from_blocks(&surface_blocks),
+            biomes: mixed_biomes.clone(),
+            light: full_light(9),
+        });
+        // sy 10: Palette::Global (>256 distinct states) + Light::Uniform(0x92)
+        let mut global_a = PalettedContainer::new(block_strategy(), 0);
+        for i in 0..4096usize {
+            let state = if i < 300 {
+                i as u32
+            } else {
+                (i % (kinds.len() + 3)) as u32
+            };
+            global_a.set(i, state);
+        }
+        assert!(global_a.is_global());
+        sections.push(Section {
+            blocks: global_a,
+            biomes: mixed_biomes.clone(),
+            light: Light::Uniform(0x92),
+        });
+        // sy 11: Palette::Global + Light::Full
+        let mut global_b = PalettedContainer::new(block_strategy(), 0);
+        for i in 0..4096usize {
+            let state = if i < 280 {
+                (i + 5) as u32
+            } else {
+                ((i * 3) % (kinds.len() + 2)) as u32
+            };
+            global_b.set(i, state);
+        }
+        assert!(global_b.is_global());
+        sections.push(Section {
+            blocks: global_b,
+            biomes: mixed_biomes,
+            light: full_light(11),
+        });
+        // sy 12: uncompacted uniform Palette::Global (all entries overwritten to stone)
+        let mut global_uniform = PalettedContainer::new(block_strategy(), 0);
+        for i in 0..280u32 {
+            global_uniform.set(i as usize, i);
+        }
+        assert!(global_uniform.is_global());
+        for i in 0..4096usize {
+            global_uniform.set(i, 2);
+        }
+        assert!(global_uniform.is_global() && global_uniform.uniform() == Some(2));
+        sections.push(Section {
+            blocks: global_uniform,
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 11),
+            light: Light::Uniform(0x41),
+        });
+        // sy 13: top section uniform stone with Light::Uniform(0x00) -> above = 0xF0 lights dy = 15
+        sections.push(Section {
+            blocks: PalettedContainer::new(block_strategy(), 2),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 12),
+            light: Light::Uniform(0x00),
+        });
+
+        let chunk = Chunk::from_sections(0, 0, layout, &mut sections);
+        assert_summarize_matches_reference(&chunk, &kinds, "all fast paths and boundaries");
+
+        // 3. Fluid-only chunk (water + lava stacked, no solid below) with different kinds tables.
+        let fluid_layout = ColumnLayout::new(0, 32).unwrap();
+        let mut fluid_sections = vec![
+            Section {
+                blocks: Section::from_blocks(&std::array::from_fn(|i| {
+                    let y = i >> 8;
+                    if y < 6 {
+                        8
+                    } else if y < 12 {
+                        5
+                    } else {
+                        4
+                    }
+                })),
+                biomes: PalettedContainer::from_values(
+                    BIOME_STRATEGY,
+                    &std::array::from_fn::<u32, 64, _>(|i| (i + 10) as u32),
+                ),
+                light: sky_light(3, 13),
+            },
+            Section {
+                blocks: Section::from_blocks(&std::array::from_fn(|i| {
+                    if (i >> 8) < 5 { 4 } else { 0 }
+                })),
+                biomes: PalettedContainer::from_values(
+                    BIOME_STRATEGY,
+                    &std::array::from_fn::<u32, 64, _>(|i| (i + 80) as u32),
+                ),
+                light: Light::Uniform(0xF5),
+            },
+        ];
+        let fluid_chunk = Chunk::from_sections(0, 0, fluid_layout, &mut fluid_sections);
+        assert_summarize_matches_reference(&fluid_chunk, &kinds, "fluid-only standard kinds");
+
+        // Weird kinds: state 0 is KEPT, no water_source (lava has emission), AIR at index 3.
+        let weird_kinds = [
+            KEPT | (5 << 4),
+            KEPT | FLUID | WATERY,
+            KEPT | FLUID | (15 << 4),
+            AIR,
+            0,
+        ];
+        assert_eq!(water_source(&weird_kinds), None);
+        assert_summarize_matches_reference(&fluid_chunk, &weird_kinds, "state 0 kept, no water");
+
+        // No AIR bit at all in kinds table: the fluid-only surface falls back to state 0.
+        let mut no_air_kinds = kinds;
+        no_air_kinds[0] = 0;
+        assert_summarize_matches_reference(&fluid_chunk, &no_air_kinds, "fluid-only no AIR bit");
+        let surface = summarize(&fluid_chunk, &no_air_kinds)[0].surface;
+        assert_eq!(
+            surface.map(|s| (s.height, s.state, s.water)),
+            Some((0, BlockStateId(0), Some((21, BlockStateId(4))))),
+            "a fluid-only column keeps its water surface without an AIR state"
+        );
+
+        // Empty kinds table.
+        assert_summarize_matches_reference(&chunk, &[], "empty kinds table");
+
+        // 4. Custom layouts: extreme single-section (-2032, 16) where sy == 0 AND sy == last,
+        //    plus extended Overworld (-128, 448).
+        let single_layout = ColumnLayout::new(-2032, 16).unwrap();
+        let mut single_sections = vec![Section {
+            blocks: PalettedContainer::new(block_strategy(), 2),
+            biomes: PalettedContainer::new(BIOME_STRATEGY, 17),
+            light: Light::Uniform(0xF5),
+        }];
+        let single_chunk = Chunk::from_sections(0, 0, single_layout, &mut single_sections);
+        assert_summarize_matches_reference(&single_chunk, &kinds, "single section -2032/16");
+
+        let tall_layout = ColumnLayout::new(-128, 448).unwrap();
+        let mut tall_chunk = Chunk::with_layout(0, 0, tall_layout);
+        for x in 0..16 {
+            for z in 0..16 {
+                tall_chunk.set(x, -128, z, 3);
+                tall_chunk.set(x, 0, z, 4);
+                tall_chunk.set(x, 319, z, 7);
+            }
+        }
+        assert_summarize_matches_reference(&tall_chunk, &kinds, "tall layout -128/448");
+    }
+
+    #[test]
+    fn summarize_randomized_differential_fuzz() {
+        use crate::chunk::{BIOME_STRATEGY, ColumnLayout, Light, Section, block_strategy};
+        use horizon_core::paletted::PalettedContainer;
+
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        let kinds_tables: [&[u8]; 3] = [
+            &[
+                AIR,
+                0,
+                KEPT,
+                KEPT,
+                KEPT | FLUID,
+                KEPT | FLUID | WATERY,
+                KEPT | (15 << 4),
+                KEPT | FLUID | (15 << 4),
+                12 << 4,
+            ],
+            &[KEPT | (4 << 4), KEPT | FLUID | WATERY, AIR, 0],
+            &[0, KEPT | FLUID, KEPT | FLUID | WATERY],
+        ];
+        let layouts = [
+            ColumnLayout::new(-64, 64).unwrap(),
+            ColumnLayout::new(0, 80).unwrap(),
+            ColumnLayout::new(-128, 48).unwrap(),
+        ];
+
+        for (t_idx, &kinds) in kinds_tables.iter().enumerate() {
+            let n = kinds.len() as u32;
+            for trial in 0..6usize {
+                let layout = layouts[(t_idx + trial) % layouts.len()];
+                let mut sections = Vec::with_capacity(layout.sections());
+                for _ in 0..layout.sections() {
+                    let blocks = match next() % 7 {
+                        0 => PalettedContainer::new(block_strategy(), (next() as u32) % (n + 2)),
+                        1 => {
+                            let base = (next() as u32) % (n + 1);
+                            let stale = (base + 1) % (n + 1);
+                            let mut c = PalettedContainer::new(block_strategy(), base);
+                            c.set(0, stale);
+                            c.set(0, base);
+                            c
+                        }
+                        2 => {
+                            // Palette::Global section.
+                            let mut c = PalettedContainer::new(block_strategy(), 0);
+                            for i in 0..270u32 {
+                                c.set(i as usize, i);
+                            }
+                            for i in 270..4096usize {
+                                c.set(i, (next() as u32) % (n + 3));
+                            }
+                            c
+                        }
+                        _ => {
+                            let vals: [u32; 4096] =
+                                std::array::from_fn(|_| (next() as u32) % (n + 2));
+                            Section::from_blocks(&vals)
+                        }
+                    };
+                    let biomes = match next() % 4 {
+                        0 => PalettedContainer::new(BIOME_STRATEGY, (next() as u32) % 32),
+                        1 => {
+                            let b = (next() as u32) % 32;
+                            let mut c = PalettedContainer::new(BIOME_STRATEGY, b);
+                            c.set(0, (b + 1) % 32);
+                            c.set(0, b);
+                            c
+                        }
+                        2 => {
+                            let vals: [u32; 64] = std::array::from_fn(|_| (next() as u32) % 6);
+                            PalettedContainer::from_values(BIOME_STRATEGY, &vals)
+                        }
+                        _ => {
+                            // >8 distinct biomes -> Palette::Global for biomes.
+                            let vals: [u32; 64] = std::array::from_fn(|i| (i as u32) % 16);
+                            PalettedContainer::from_values(BIOME_STRATEGY, &vals)
+                        }
+                    };
+                    let light = match next() % 4 {
+                        0 => Light::Uniform((next() & 0xFF) as u8),
+                        1 => {
+                            let blk = (next() & 15) as u8;
+                            let arr: [u8; 4096] =
+                                std::array::from_fn(|_| (((next() & 15) as u8) << 4) | blk);
+                            Light::from_slice(&arr)
+                        }
+                        2 => {
+                            let sky = ((next() & 15) as u8) << 4;
+                            let arr: [u8; 4096] =
+                                std::array::from_fn(|_| sky | ((next() & 15) as u8));
+                            Light::from_slice(&arr)
+                        }
+                        _ => {
+                            let arr: [u8; 4096] = std::array::from_fn(|_| (next() & 0xFF) as u8);
+                            Light::from_slice(&arr)
+                        }
+                    };
+                    sections.push(Section {
+                        blocks,
+                        biomes,
+                        light,
+                    });
+                }
+                let chunk = Chunk::from_sections(0, 0, layout, &mut sections);
+                assert_summarize_matches_reference(
+                    &chunk,
+                    kinds,
+                    &format!("fuzz table={t_idx} trial={trial}"),
+                );
+            }
+        }
     }
 }
