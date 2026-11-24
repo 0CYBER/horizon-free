@@ -98,7 +98,6 @@
   "dragon_render": "#18133: dragon tests exit 101; Rust log not in the artifact",
   "portal_cooldown": "#18133: cooldown test fails; Rust log not in the artifact",
   "save_roundtrip": "#18133: level.dat gains fml and horizon keys",
-  "sculk": "#18133: catalyst XP orbs missing",
   "sculk_saved_fields": "#18133: placed sensor/shrieker vibration fields read back as 0",
   "seed_sync": "#18133: summoned armor stand gets a different UUID",
   "server_resource_pack": "#18133: extra config custom_payload horizon:payloads"
