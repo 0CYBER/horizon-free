@@ -858,6 +858,14 @@
   {
     "package": "horizon-core",
     "target": "lib",
+    "test": "paletted::tests::benchmark_pack_and_unpack_widths",
+    "path": "crates/horizon-core/src/paletted/tests.rs",
+    "reason": "microbenchmark; run with --ignored --nocapture",
+    "rationale": "Explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-core.txt: microbenchmark; run with --ignored --nocapture. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-core",
+    "target": "lib",
     "test": "paletted::tests::benchmark_palette_ids",
     "path": "crates/horizon-core/src/paletted.rs",
     "reason": "microbenchmark; run with --ignored --nocapture",
