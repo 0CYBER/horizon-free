@@ -1054,8 +1054,14 @@ fn clear_staging(folder: &Path, staging: &Path, target: Option<i32>) -> io::Resu
         }
         let live = folder.join(path.file_name().unwrap_or_default());
         if may_install(folder, staging, chunk, &path, &live, target)? {
-            // Its data on the disk before it replaces anything.
-            File::open(&path)?.sync_all()?;
+            // Its data on the disk before it replaces anything. Windows'
+            // `FlushFileBuffers` refuses a read-only handle (Access is
+            // denied); POSIX `fsync` takes one.
+            File::options()
+                .read(true)
+                .write(cfg!(windows))
+                .open(&path)?
+                .sync_all()?;
             fs::rename(&path, &live)?;
         } else {
             set_aside(folder, &path)?;
