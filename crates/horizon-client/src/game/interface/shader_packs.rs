@@ -516,6 +516,19 @@ impl Game<'_> {
                 }
             }
         }
+        // A pack running without the room in video memory for what it draws into, frame after
+        // frame, is turned off before the frames it gives up end the game (#13624). Its files
+        // are not remembered as refused: picked again, with room, it runs.
+        let out_of_room = self.renderer.as_ref();
+        let out_of_room = out_of_room.filter(|r| r.shader_pack_out_of_room());
+        if let Some(dimension) = out_of_room.and_then(|r| r.shader_pack_dimension()) {
+            self.shader_pack_off(
+                &selected,
+                dimension,
+                "video memory is full",
+                format!("Shader pack {selected} was turned off: video memory is full"),
+            );
+        }
         if picked.is_empty() {
             if horizon_client::sprites::labpbr_maps()
                 && self.rest_loader.is_none()
@@ -879,6 +892,13 @@ impl Game<'_> {
     fn shader_pack_failed(&mut self, name: &str, dimension: i32, error: &str) {
         let path = Self::shader_packs_dir().join(name);
         remember(&path, fingerprint(&path), false);
+        let said = format!("Shader pack {name} could not be loaded and was turned off");
+        self.shader_pack_off(name, dimension, error, said);
+    }
+
+    /// Turns off the pack `name`, loading or running: nothing runs in its place, what it held in
+    /// video memory is freed, it is no longer the picked pack, and the chat says `said`.
+    fn shader_pack_off(&mut self, name: &str, dimension: i32, error: &str, said: String) {
         log::error!("shader pack {name}: turned off: {error}");
         self.pack_ids = None;
         if let Some(renderer) = &mut self.renderer {
@@ -890,10 +910,7 @@ impl Game<'_> {
             self.settings.horizon.shader_pack.clear();
             self.settings.save(&Self::options_path());
         }
-        self.system_message(Text::colored(
-            format!("Shader pack {name} could not be loaded and was turned off"),
-            0xFF5555,
-        ));
+        self.system_message(Text::colored(said, 0xFF5555));
     }
 
     /// Whether the game's vignette draws: the option, unless the loaded pack turns it off.

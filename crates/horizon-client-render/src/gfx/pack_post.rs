@@ -36,6 +36,7 @@ mod packed;
 mod sky;
 
 mod flip_carry;
+mod targets;
 
 #[cfg(test)]
 mod indirect_tests;
@@ -825,6 +826,11 @@ pub struct PackPost {
     upscale: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
     /// The picture `final` draws while the world's size is not the window's.
     final_target: Option<FinalTarget>,
+    /// Frames in a row given up for want of video memory (`targets.rs`).
+    given_up: u32,
+    /// What a scaled screenshot's frame made without scopes of its own (`targets.rs`): the
+    /// images (bit n: image n) and the storage buffers, dropped where its scopes failed.
+    unchecked: (u64, bool),
     screen: wgpu::TextureFormat,
     uniforms: FrameUniforms,
 }
@@ -3575,6 +3581,8 @@ impl PackPost {
             copy,
             upscale,
             final_target: None,
+            given_up: 0,
+            unchecked: (0, false),
             screen,
             uniforms: {
                 let mut u = FrameUniforms::default();
@@ -4948,198 +4956,11 @@ impl PackPost {
             .chain(&mut self.shadow_comp);
         for pass in passes {
             pass.groups.clear();
+            pass.portal_groups.clear();
             for c in &mut pass.compute {
                 c.groups.clear();
+                c.portal_groups.clear();
             }
-        }
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, size: [u32; 2]) {
-        if pack_images::resize_images(device, &mut self.images, size) {
-            self.forget_groups();
-        }
-        self.buffers.resize(device, size);
-        if self.targets.as_ref().is_some_and(|t| t.size == size) {
-            return;
-        }
-        self.setup_pending = true;
-        self.rgb_unset = true;
-        // Free the old targets before making the new ones: a pack with large buffers can't
-        // hold both sets at once on a card it otherwise fits (a window resize ran out of video
-        // memory). The bind groups hold the old views too, and the GPU may still be using
-        // them, so wait for it; a resize is rare.
-        if self.targets.take().is_some() {
-            self.forget_groups();
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        }
-        let sizes: [[u32; 2]; BUFFERS] =
-            std::array::from_fn(|i| self.sizes[i].map_or(size, |s| s.resolve(size)));
-        let full_chain = |size: [u32; 2]| 32 - size[0].max(size[1]).max(1).leading_zeros();
-        let texture_sized = |label: &str, format, usage, levels, size: [u32; 2]| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: levels,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        };
-        let texture = |label: &str, format, usage| texture_sized(label, format, usage, 1, size);
-        let level = |t: &wgpu::Texture, level: u32| {
-            t.create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            })
-        };
-        let mut mips: [Option<[Mips; 2]>; BUFFERS] = Default::default();
-        let color = std::array::from_fn(|i| {
-            (self.used & 1 << i != 0).then(|| {
-                let label = format!("colortex{i}");
-                let mipped = self.mipped & 1 << i != 0;
-                let levels = if mipped { full_chain(sizes[i]) } else { 1 };
-                let mut attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
-                if self.storage & 1 << i != 0 {
-                    attachment |= wgpu::TextureUsages::STORAGE_BINDING;
-                    // Atomics on a texture need it made for them (Metal ignores them otherwise).
-                    if device.features().contains(wgpu::Features::TEXTURE_ATOMIC)
-                        && matches!(
-                            self.formats[i],
-                            wgpu::TextureFormat::R32Sint | wgpu::TextureFormat::R32Uint
-                        )
-                    {
-                        attachment |= wgpu::TextureUsages::STORAGE_ATOMIC;
-                    }
-                }
-                if self.copied & 1 << i != 0 {
-                    attachment |= wgpu::TextureUsages::COPY_SRC;
-                }
-                // A buffer that isn't cleared starts each frame with B copied back to A.
-                if i != 0 && self.clears[i].is_none() {
-                    attachment |= wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
-                }
-                let side = || texture_sized(&label, self.formats[i], attachment, levels, sizes[i]);
-                let a = side();
-                let sides = [
-                    a.clone(),
-                    if self.doubled & 1 << i != 0 {
-                        side()
-                    } else {
-                        a
-                    },
-                ];
-                if mipped && let Some((_, layout)) = self.down.get(&self.formats[i]) {
-                    mips[i] = Some(sides.each_ref().map(|t| {
-                        Mips {
-                            all: t.create_view(&Default::default()),
-                            levels: (1..levels)
-                                .map(|l| {
-                                    let group =
-                                        device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                            label: Some(&label),
-                                            layout,
-                                            entries: &[
-                                                wgpu::BindGroupEntry {
-                                                    binding: 0,
-                                                    resource: wgpu::BindingResource::TextureView(
-                                                        &level(t, l - 1),
-                                                    ),
-                                                },
-                                                wgpu::BindGroupEntry {
-                                                    binding: 2,
-                                                    resource: wgpu::BindingResource::Sampler(
-                                                        &self.linear,
-                                                    ),
-                                                },
-                                            ],
-                                        });
-                                    (level(t, l), group)
-                                })
-                                .collect(),
-                        }
-                    }));
-                }
-                sides.map(|t| level(&t, 0))
-            })
-        });
-        let depth32 = wgpu::TextureFormat::Depth32Float;
-        let depth_texture = texture(
-            "depthtex0",
-            depth32,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        );
-        let depth1 = self.depth1.then(|| {
-            let t = texture("depthtex1", depth32, wgpu::TextureUsages::COPY_DST);
-            let view = t.create_view(&Default::default());
-            (t, view)
-        });
-        let depth2 = self.depth2.then(|| {
-            let t = texture("depthtex2", depth32, wgpu::TextureUsages::COPY_DST);
-            let view = t.create_view(&Default::default());
-            (t, view)
-        });
-        let water_mask = self.water_mask.then(|| {
-            let t = texture(
-                "Shader pack water patches",
-                depth32,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
-            );
-            let view = t.create_view(&Default::default());
-            (t, view)
-        });
-        self.water_mask_dirty = true;
-        let scratch = std::array::from_fn(|i| {
-            (self.copied & 1 << i != 0).then(|| {
-                // A copy also read as an image before a dispatch.
-                let image = if self.storage & 1 << i != 0 {
-                    wgpu::TextureUsages::STORAGE_BINDING
-                } else {
-                    wgpu::TextureUsages::empty()
-                };
-                texture_sized(
-                    &format!("colortex{i} copy"),
-                    self.formats[i],
-                    wgpu::TextureUsages::COPY_DST | image,
-                    1,
-                    sizes[i],
-                )
-                .create_view(&Default::default())
-            })
-        });
-        let sink = texture(
-            "Shader pack sink",
-            SINK,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-        )
-        .create_view(&Default::default());
-        self.targets = Some(Targets {
-            size,
-            sink,
-            sizes,
-            scratch,
-            color,
-            depth: depth_texture.create_view(&Default::default()),
-            depth_texture,
-            depth1,
-            depth2,
-            water_mask,
-            mips,
-        });
-        self.forget_groups();
-        for pass in self.passes.iter().filter(|p| self.sizes_differ(p)) {
-            log::info!(
-                "shader pack: {}: writes buffers of different sizes at {}x{} (size.buffer); skipped",
-                pass.name,
-                size[0],
-                size[1]
-            );
         }
     }
 
@@ -5379,7 +5200,8 @@ impl PackPost {
     }
 
     /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
-    /// the result onto `screen`.
+    /// the result onto `screen`. `false` where video memory had no room for what the frame
+    /// draws into (`targets.rs`): nothing reached `screen`, and the frame is given up.
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         &mut self,
@@ -5395,8 +5217,10 @@ impl PackPost {
         window: [u32; 2],
         pages: &[TerrainPage],
         terrain: &mut TerrainDraw<'_>,
-    ) {
-        self.resize(device, size);
+    ) -> bool {
+        if !self.fit(device, queue, size, window) {
+            return false;
+        }
         // Last frame's water patches (or a new texture's zeros) out: depth 1 is no patch.
         if self.water_mask_dirty
             && let Some((_, view)) = self.targets.as_ref().and_then(|t| t.water_mask.as_ref())
@@ -5415,35 +5239,7 @@ impl PackPost {
             });
             self.water_mask_dirty = false;
         }
-        // A resolution scale leaves the picture smaller (or larger) than the window: the pack's
-        // `final` draws it at the picture's size, and one copy takes it to the window (#9291).
-        let final_view = if size != window && self.passes.iter().any(|p| p.group == Group::Final) {
-            if self.final_target.as_ref().is_none_or(|t| t.size != size) {
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Shader pack final"),
-                    size: wgpu::Extent3d {
-                        width: size[0],
-                        height: size[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: self.screen,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                self.final_target = Some(FinalTarget {
-                    size,
-                    view: texture.create_view(&Default::default()),
-                });
-            }
-            self.final_target.as_ref().map(|t| t.view.clone())
-        } else {
-            self.final_target = None;
-            None
-        };
+        let final_view = self.final_target.as_ref().map(|t| t.view.clone());
         if let Some((layout, ids, rects)) = &self.block_ids {
             // A page that grew has a new buffer.
             self.page_groups
@@ -5484,7 +5280,7 @@ impl PackPost {
         self.custom.world_frame(inputs.biome_known);
         self.uniforms.eval_custom(&mut self.custom);
         if self.targets.is_none() {
-            return;
+            return false;
         }
         // Images start the frame cleared, before the shadow pass writes them.
         if let Some(dump) = &mut self.dump {
@@ -5498,7 +5294,9 @@ impl PackPost {
             self.gpu.clear,
             &mut self.zeros,
         );
-        let Some(targets) = &self.targets else { return };
+        let Some(targets) = &self.targets else {
+            return false;
+        };
         // Every frame starts on A. A buffer that isn't cleared and ended the last frame on B has B
         // copied back to A, and B keeps what was last written into it: a model that fits Iris 1.11.7's
         // values in probe packs of our own (#9009), not a documented Iris rule. colortex0's A is
@@ -5891,6 +5689,7 @@ impl PackPost {
             rp.set_bind_group(0, &group, &[]);
             rp.draw(0..3, 0..1);
         }
+        true
     }
 }
 
@@ -6675,3 +6474,6 @@ mod sky_visibility_tests;
 
 #[cfg(test)]
 mod material_route_tests;
+
+#[cfg(test)]
+mod no_room_tests;

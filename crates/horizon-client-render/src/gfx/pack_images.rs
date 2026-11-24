@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use horizon_shaders::{BufferObject, CustomImage, Format, Kind};
-use wgpu::util::DeviceExt;
+
+use super::frame_targets;
 
 pub(super) struct PackImage {
     pub(super) def: CustomImage,
@@ -133,12 +134,28 @@ pub(super) fn makeable(
     Ok(())
 }
 
+/// Lets go of the images sized for another render size than `size`, which `resize_images` then
+/// makes again; whether there were any.
+pub(super) fn release_resized(images: &mut [PackImage], size: [u32; 2]) -> bool {
+    let mut released = false;
+    for image in images {
+        let relative = matches!(image.def.size, horizon_shaders::ImageSize::Relative(_));
+        if relative && image.view.is_some() && image.made_for != size {
+            image.reset_history();
+            released = true;
+        }
+    }
+    released
+}
+
 /// Makes the images that are missing or sized for another render size; whether it made any.
+/// `None` where video memory had no room for one (#13624): it is left without its textures, and
+/// made on the next frame.
 pub(super) fn resize_images(
     device: &wgpu::Device,
     images: &mut [PackImage],
     size: [u32; 2],
-) -> bool {
+) -> Option<bool> {
     let largest = device.limits().max_texture_dimension_2d;
     let mut made = false;
     for image in images {
@@ -179,21 +196,27 @@ pub(super) fn resize_images(
         } else {
             wgpu::TextureUsages::empty()
         };
-        image.view = Some(make(
-            wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC
-                | atomic,
-        ));
-        image.copy = image
-            .copied
-            .then(|| make(wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING));
-        image.before = image
-            .snapshotted
-            .then(|| make(wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING));
+        let side = wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::STORAGE_BINDING;
+        let views = frame_targets::made(device, frame_targets::Kind::Pack, || {
+            (
+                make(
+                    wgpu::TextureUsages::STORAGE_BINDING
+                        | wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::COPY_SRC
+                        | atomic,
+                ),
+                image.copied.then(|| make(side)),
+                image.snapshotted.then(|| make(side)),
+            )
+        });
+        let Some((view, copy, before)) = views else {
+            image.reset_history();
+            return None;
+        };
+        (image.view, image.copy, image.before) = (Some(view), copy, before);
         image.made_for = size;
     }
-    made
+    Some(made)
 }
 
 /// The most images a pack may have.
@@ -449,15 +472,35 @@ impl Buffers {
         }
     }
 
+    /// Lets go of the buffers when one depends on the render size and they were made for
+    /// another than `size`: `resize` then makes them again. Whether it did.
+    pub(super) fn release_resized(&mut self, size: [u32; 2]) -> bool {
+        let relative = self
+            .objects
+            .values()
+            .any(|o| matches!(o, BufferObject::PerPixel { .. }));
+        let outdated = relative && self.group.is_some() && self.made_for != size;
+        if outdated {
+            self.reset_history();
+        }
+        outdated
+    }
+
     /// Makes the buffers (again, when one depends on the render size and it changed): their
-    /// contents start zeroed and persist across frames.
-    pub(super) fn resize(&mut self, device: &wgpu::Device, size: [u32; 2]) {
+    /// contents start zeroed and persist across frames. `false` where video memory had no room
+    /// for them (#13624): none is kept, and they are made on the next frame.
+    pub(super) fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: [u32; 2],
+    ) -> bool {
         let relative = self
             .objects
             .values()
             .any(|o| matches!(o, BufferObject::PerPixel { .. }));
         if self.group.is_some() && (!relative || self.made_for == size) {
-            return;
+            return true;
         }
         let limits = device.limits();
         let largest = limits
@@ -465,55 +508,66 @@ impl Buffers {
             .min(limits.max_storage_buffer_binding_size)
             & !3;
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
-        self.buffers = self
-            .objects
-            .iter()
-            .map(|(binding, o)| {
-                let least = self.minimums.get(binding).copied().unwrap_or(0);
-                let wanted = buffer_size(o, size, least);
-                if wanted > largest {
-                    log::warn!(
-                        "shader pack: bufferObject.{binding} wants {wanted} bytes, this device \
-                         binds at most {largest}"
-                    );
-                }
-                let size = wanted.min(largest);
-                // A buffer the pack initializes from a file starts with the file's bytes, the
-                // rest of it zero.
-                match o.initial_data() {
-                    Some(data) => {
-                        let mut contents = data.to_vec();
-                        contents.resize(size as usize, 0);
-                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Shader pack buffer"),
-                            contents: &contents,
-                            usage,
-                        })
+        let made = frame_targets::made(device, frame_targets::Kind::Pack, || {
+            let buffers: Vec<_> = self
+                .objects
+                .iter()
+                .map(|(binding, o)| {
+                    let least = self.minimums.get(binding).copied().unwrap_or(0);
+                    let wanted = buffer_size(o, size, least);
+                    if wanted > largest {
+                        log::warn!(
+                            "shader pack: bufferObject.{binding} wants {wanted} bytes, this \
+                             device binds at most {largest}"
+                        );
                     }
-                    None => device.create_buffer(&wgpu::BufferDescriptor {
+                    let size = wanted.min(largest);
+                    let data = o.initial_data();
+                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("Shader pack buffer"),
                         size,
-                        usage,
+                        usage: match data {
+                            Some(_) => usage | wgpu::BufferUsages::COPY_DST,
+                            None => usage,
+                        },
                         mapped_at_creation: false,
-                    }),
-                }
-            })
-            .collect();
-        let entries: Vec<_> = self
-            .objects
-            .keys()
-            .zip(&self.buffers)
-            .map(|(&binding, b)| wgpu::BindGroupEntry {
-                binding,
-                resource: b.as_entire_binding(),
-            })
-            .collect();
-        self.group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Shader pack buffers"),
-            layout: &self.layout,
-            entries: &entries,
-        }));
+                    });
+                    // A buffer the pack initializes from a file starts with the file's bytes,
+                    // the rest of it zero as wgpu makes it: written through the queue, as a
+                    // buffer mapped at creation fails before a scope can see it had no room.
+                    // Only the file's bytes are staged, padded to the copy's 4.
+                    if let Some(data) = data.filter(|d| !d.is_empty()) {
+                        let mut contents = data[..data.len().min(size as usize)].to_vec();
+                        contents.resize(contents.len().next_multiple_of(4), 0);
+                        queue.write_buffer(&buffer, 0, &contents);
+                    }
+                    buffer
+                })
+                .collect();
+            let entries: Vec<_> = self
+                .objects
+                .keys()
+                .zip(&buffers)
+                .map(|(&binding, b)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: b.as_entire_binding(),
+                })
+                .collect();
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Shader pack buffers"),
+                layout: &self.layout,
+                entries: &entries,
+            });
+            (buffers, group)
+        });
+        let Some((buffers, group)) = made else {
+            self.reset_history();
+            return false;
+        };
+        self.buffers = buffers;
+        self.group = Some(group);
         self.made_for = size;
+        true
     }
 
     /// Whether the pack declares buffer `binding`.

@@ -7890,6 +7890,13 @@ impl Renderer {
         }
     }
 
+    /// The running `shaders/` pack has found no room in video memory for what it draws into for
+    /// too many frames in a row (`PackPost::out_of_room`): the game turns it off
+    /// (`set_shader_pack` without a pack), which frees what it holds, before the frames given
+    /// up end the game (`frame_given_up`).
+    pub fn shader_pack_out_of_room(&self) -> bool {
+        matches!(&self.pack_post, Some((_, Some(post))) if post.out_of_room())
+    }
     /// The dimension the shader pack was last set for.
     pub fn shader_pack_dimension(&self) -> Option<i32> {
         let loading = self.pack_loading.as_ref().map(|l| l.dimension);
@@ -12777,7 +12784,7 @@ impl Renderer {
                 indices: self.indices.clone(),
                 quads: cloud_quads,
             }));
-            post.run(
+            let drawn = post.run(
                 &self.device,
                 &self.queue,
                 &mut encoder,
@@ -12795,6 +12802,17 @@ impl Renderer {
             // here until the next shader-pack frame (or forever once the pack is off).
             self.pack_pages.clear();
             self.pack_post = Some((dimension, Some(post)));
+            // No room for what the pack draws into (#13624): it kept nothing that failed, and
+            // makes it on the next frame.
+            if !drawn {
+                return self.abandon_frame(frame_targets::Abandoned::grown(
+                    encoder,
+                    copies,
+                    surface_frame,
+                    fg_frames,
+                    backstop,
+                ));
+            }
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.external
@@ -13229,7 +13247,13 @@ impl Renderer {
         if checks.is_none() {
             self.given_up = 0;
         }
+        let screenshot = checks.is_some();
         let failed = checks.and_then(GpuChecks::pop);
+        // A pack's image or storage buffer of a size of its own, made in this frame without
+        // scopes of its own, stays invalid where the frame's scopes failed (#13624).
+        if screenshot && let Some((_, Some(post))) = &mut self.pack_post {
+            post.screenshot_checked(failed.is_some());
+        }
         if failed.is_some() {
             // A scaled screenshot's encoder hit a GPU error and may have been rejected:
             // invalidate incremental caches and re-upload on the next frame.

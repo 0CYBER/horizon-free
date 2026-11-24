@@ -23,7 +23,7 @@ fn rain_and_snow_leave_depth_alone_whatever_rain_depth_says() {
             let mut post = pack(&device, &queue, &adapter, program, property);
             // Retain the pipelines for another frame, then resize their targets.
             for size in [[6, 1], [6, 1], [12, 2]] {
-                post.resize(&device, size);
+                post.resize(&device, &queue, size);
                 let mut encoder = device.create_command_encoder(&Default::default());
                 let targets = post.targets.as_ref().unwrap();
                 let color = &targets.color[0].as_ref().unwrap()[0];

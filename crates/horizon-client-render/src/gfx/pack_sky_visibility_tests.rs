@@ -136,7 +136,7 @@ fn render_pack_sky(
     )
     .unwrap_or_else(|e| panic!("pack refused: {:?}", e.notes));
     post.copied |= 1;
-    post.resize(device, [8, 1]);
+    post.resize(device, queue, [8, 1]);
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let targets = post.targets.as_ref().unwrap();
