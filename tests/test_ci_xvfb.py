@@ -50,6 +50,43 @@ class XvfbTests(unittest.TestCase):
         display = json.loads(result.stdout)
         self.assertFalse(Path("/tmp/.X11-unix/X" + display["display"]).exists())
 
+    def test_display_held_only_by_an_xwayland_path_socket_is_skipped(self):
+        # A desktop's Xwayland can hold a display through the path socket `X<n>_` alone. Xvfb's own
+        # -displayfd search took such a display, replaced the session's socket and deleted it on exit.
+        sys.path.insert(0, str(WRAPPER.parent))
+        try:
+            import with_xvfb
+        finally:
+            sys.path.pop(0)
+        first = next(n for n in range(with_xvfb.FIRST, with_xvfb.FIRST + 1000) if not with_xvfb.taken(n))
+        os.makedirs("/tmp/.X11-unix", exist_ok=True)
+        held = Path(f"/tmp/.X11-unix/X{first}_")
+        with tempfile.TemporaryDirectory() as directory:
+            asked = Path(directory) / "asked"
+            server = Path(directory) / "Xvfb"
+            # Reports ready on -displayfd for the display it was given, records it, then waits to be stopped.
+            server.write_text(
+                f"#!{sys.executable}\n"
+                "import os, signal, sys\n"
+                f"open({str(asked)!r}, 'w').write(sys.argv[1])\n"
+                "fd = int(sys.argv[sys.argv.index('-displayfd') + 1])\n"
+                "os.write(fd, sys.argv[1][1:].encode() + b'\\n')\n"
+                "signal.pause()\n"
+            )
+            server.chmod(0o755)
+            held.touch()
+            try:
+                result = subprocess.run(
+                    [sys.executable, WRAPPER, sys.executable, "-c", "import os; print(os.environ['DISPLAY'])"],
+                    env=dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"]),
+                    text=True, capture_output=True, timeout=10,
+                )
+            finally:
+                held.unlink()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotEqual(asked.read_text(), f":{first}")
+            self.assertEqual(result.stdout.strip(), asked.read_text())
+
     def test_failed_server_never_runs_the_command(self):
         with tempfile.TemporaryDirectory() as directory:
             server = Path(directory) / "Xvfb"
